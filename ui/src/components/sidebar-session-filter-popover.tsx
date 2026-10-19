@@ -1,21 +1,24 @@
-import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import type { JSX } from "@solidjs/web";
-import { createEffect, onSettled, Show } from "solid-js";
+import { createUniqueId, onSettled, Show } from "solid-js";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import { occludeNativeBrowserSurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
-import { configureAnchoredPopup } from "./anchored-overlay.ts";
-import "./menu-surface.ts";
-
-const TABBABLE_SELECTOR =
-  "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]";
+import { listen } from "../lib/reactive/listener.ts";
+import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 
 // The sheet is modal: Tab and Shift+Tab wrap between its first and last tabbable controls.
-function keepSheetFocus(panel: HTMLElement, event: KeyboardEvent) {
-  const tabbable = [...panel.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)].filter(
-    (candidate) => candidate.tabIndex >= 0 && candidate.checkVisibility(),
-  );
+function keepSheetFocus(panel: HTMLElement, targets: readonly HTMLElement[], event: KeyboardEvent) {
+  const tabbable = targets
+    .filter(
+      (candidate) =>
+        panel.contains(candidate) &&
+        candidate.tabIndex >= 0 &&
+        !candidate.matches(":disabled") &&
+        !candidate.closest("[hidden]") &&
+        candidate.checkVisibility(),
+    )
+    .toSorted((left, right) =>
+      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+    );
   const boundary = event.shiftKey ? tabbable[0] : tabbable.at(-1);
   const target = event.shiftKey ? tabbable.at(-1) : tabbable[0];
   // A closing picker page may have handed focus back to its trigger.
@@ -27,138 +30,81 @@ function keepSheetFocus(panel: HTMLElement, event: KeyboardEvent) {
 }
 
 type SidebarSessionFilterPopoverProps = {
+  class?: string;
   anchor: HTMLElement | null;
   label: string;
-  initialFocusSelector: string;
+  initialFocus: () => HTMLElement | undefined;
+  focusTargets: () => readonly HTMLElement[];
   content: JSX.Element;
   onClose: (restoreFocus: boolean) => void;
 };
 
-function renderSidebarSessionFilterPopover(
-  props: SidebarSessionFilterPopoverProps,
-  host: HTMLElement,
-) {
-  host.style.display = "contents";
-  let popup: WaPopup | undefined;
+export function SidebarSessionFilterPopover(props: SidebarSessionFilterPopoverProps) {
+  let host!: HTMLElement;
+  let handle: PopoverHandle | undefined;
+  let disconnectKeydown: (() => void) | undefined;
   let focused = false;
-  let focusFrame: number | undefined;
-  const focusInitialControl = () => {
-    if (!focused) {
-      focused = true;
-      // A late reposition must not take focus from a control already chosen inside the panel.
-      if (host.contains(host.ownerDocument.activeElement)) {
-        return;
-      }
-      host.querySelector<HTMLElement>(props.initialFocusSelector)?.focus({ preventScroll: true });
-    }
-  };
-  const close = (restoreFocus: boolean) => props.onClose?.(restoreFocus);
-  const handleOutsidePointer = (event: PointerEvent) => {
-    const path = event.composedPath();
-    if (!path.includes(host) && (!props.anchor || !path.includes(props.anchor))) {
-      close(false);
-    }
-  };
   const handleKeydown = (event: KeyboardEvent) => {
-    if (event.key === "Escape" && !event.defaultPrevented) {
-      event.preventDefault();
-      event.stopPropagation();
-      close(true);
-    } else if (event.key === "Tab" && !event.defaultPrevented && isMobileNavLayout()) {
-      // SAFETY: This panel handler can have a retargeted currentTarget; its rendered panel exists.
-      keepSheetFocus(host.querySelector<HTMLElement>(".sidebar-session-filter-panel")!, event);
+    if (event.key === "Tab" && !event.defaultPrevented && isMobileNavLayout() && handle) {
+      keepSheetFocus(handle.overlay.surface, props.focusTargets(), event);
     }
   };
-  const handleFocusOut = (event: FocusEvent) => {
-    if (
-      event.relatedTarget instanceof Node &&
-      !host.contains(event.relatedTarget) &&
-      event.relatedTarget !== props.anchor
-    ) {
-      close(false);
+  onSettled(() => () => disconnectKeydown?.());
+  const focusInitialControl = () => {
+    if (focused) {
+      return;
+    }
+    focused = true;
+    // Opening must not take focus from a control already chosen inside the panel.
+    if (!host.contains(host.ownerDocument.activeElement)) {
+      props.initialFocus()?.focus({ preventScroll: true });
     }
   };
-  createEffect(
-    () => props.anchor,
-    (anchor) => {
-      if (popup && anchor) {
-        configureAnchoredPopup(popup, anchor, "bottom");
-      } else {
-        // Sheet controls settle after the outer panel commits.
-        focusFrame = requestAnimationFrame(focusInitialControl);
-      }
-      return () => {
-        if (focusFrame !== undefined) {
-          cancelAnimationFrame(focusFrame);
-        }
-      };
-    },
-  );
-  onSettled(() => {
-    occludeNativeBrowserSurface(host);
-    host.ownerDocument.addEventListener("pointerdown", handleOutsidePointer, true);
-    return () => host.ownerDocument.removeEventListener("pointerdown", handleOutsidePointer, true);
-  });
-  function Panel() {
-    return (
-      <div
-        class="sidebar-session-filter-panel"
-        tabindex={-1}
-        role="dialog"
-        aria-label={props.label ?? ""}
-        aria-modal={isMobileNavLayout() ? "true" : undefined}
-        onKeyDown={handleKeydown}
-        onFocusOut={handleFocusOut}
-      >
-        <div class="sidebar-session-filter-panel__grabber" aria-hidden="true" />
-        {props.content}
-      </div>
-    );
-  }
   return (
-    <>
-      <Show
-        when={isMobileNavLayout()}
-        fallback={
-          <wa-popup
-            ref={(element: WaPopup) => {
-              popup = element;
-            }}
-            active
-            onWa-reposition={focusInitialControl}
-          >
-            <Panel />
-          </wa-popup>
-        }
-      >
+    <openclaw-sidebar-session-filter-popover
+      ref={(element) => {
+        host = element;
+      }}
+      class={props.class}
+      style={{ display: "contents" }}
+    >
+      <Show when={isMobileNavLayout()}>
         <button
           type="button"
           class="sidebar-session-filter-panel__backdrop"
           tabindex={-1}
           aria-label={t("common.close")}
-          onClick={() => close(true)}
+          onClick={() => handle?.overlay.request(false, "return")}
         />
-        <openclaw-menu-surface>
-          <Panel />
-        </openclaw-menu-surface>
       </Show>
-    </>
+      <Popover
+        id={`sidebar-session-filter-${createUniqueId()}`}
+        anchor={props.anchor ?? host}
+        label={props.label}
+        class="sidebar-session-filter-popover sidebar-session-filter-panel"
+        placement="bottom-start"
+        open
+        dismissOutsidePointer={!isMobileNavLayout()}
+        dismissOutsideFocus={!isMobileNavLayout()}
+        ref={(value) => {
+          handle = value;
+          if (isMobileNavLayout()) {
+            value.overlay.surface.setAttribute("aria-modal", "true");
+          }
+          disconnectKeydown = listen(value.overlay.surface, "keydown", handleKeydown);
+        }}
+        onOpenChange={(open) => {
+          if (open) {
+            // Native picker bridges mount their own roots in the preceding microtask.
+            queueMicrotask(focusInitialControl);
+          } else {
+            props.onClose(false);
+          }
+        }}
+      >
+        <div class="sidebar-session-filter-panel__grabber" aria-hidden="true" />
+        {props.content}
+      </Popover>
+    </openclaw-sidebar-session-filter-popover>
   );
 }
-
-export const SidebarSessionFilterPopover = defineSolidBridge<SidebarSessionFilterPopoverProps>(
-  "openclaw-sidebar-session-filter-popover",
-  renderSidebarSessionFilterPopover,
-  {
-    properties: {
-      anchor: { default: null, attribute: false },
-      label: { default: "", attribute: false },
-      initialFocusSelector: {
-        default: '#sidebar-sessions-status input[type="radio"]:checked',
-        attribute: false,
-      },
-      content: { default: null, attribute: false },
-      onClose: { default: () => {}, attribute: false },
-    },
-  },
-);

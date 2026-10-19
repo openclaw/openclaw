@@ -1,4 +1,3 @@
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   createScopedDmSecurityResolver,
   createTopLevelChannelConfigAdapter,
@@ -8,7 +7,6 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import {
-  buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
   type ChannelPlugin,
@@ -23,8 +21,8 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { nostrSetupPlugin } from "./channel.setup.js";
 import type { NostrProfile } from "./config-schema.js";
-import { NostrConfigSchema } from "./config-schema.js";
 import {
   getActiveNostrBuses,
   nostrOutboundAdapter,
@@ -125,35 +123,12 @@ const nostrPluginOutboundAdapter: ChannelOutboundAdapter = {
 
 export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChannelPlugin({
   base: {
-    id: "nostr",
-    meta: {
-      id: "nostr",
-      label: "Nostr",
-      selectionLabel: "Nostr",
-      docsPath: "/channels/nostr",
-      docsLabel: "nostr",
-      blurb: "Decentralized DMs via Nostr relays (NIP-04)",
-      order: 100,
-    },
-    capabilities: {
-      chatTypes: ["direct"],
-      media: false,
-    },
-    reload: { configPrefixes: ["channels.nostr"] },
-    configSchema: buildChannelConfigSchema(NostrConfigSchema),
+    ...nostrSetupPlugin,
     setupContract: nostrSetupContract,
     setupWizard: nostrSetupWizard,
     config: {
+      ...nostrSetupPlugin.config,
       ...nostrConfigAdapter,
-      isConfigured: (account) => account.configured,
-      describeAccount: (account) =>
-        describeAccountSnapshot({
-          account,
-          configured: account.configured,
-          extra: {
-            publicKey: account.publicKey,
-          },
-        }),
     },
     messaging: {
       targetPrefixes: ["nostr"],

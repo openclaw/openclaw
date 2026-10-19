@@ -2,6 +2,7 @@ import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
   noteDoctorRepairResult,
@@ -167,6 +168,7 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
     onWarnings: (warnings) => recordDoctorHealthWarnings(ctx, [], warnings),
     ...(ctx.configResult.postSessionPluginMigration
       ? { postSessionPluginMigration: ctx.configResult.postSessionPluginMigration }
@@ -190,6 +192,7 @@ export async function runSessionTranscriptHeadersHealth(
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
   });
 }
 
@@ -202,6 +205,7 @@ export async function runSessionTranscriptLabelsHealth(
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
   });
 }
 
@@ -228,12 +232,28 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
     options: ctx.options,
     prompter: ctx.prompter,
   });
+  const { maybeRepairCronInferenceBindings } =
+    await import("../commands/doctor/cron/inference-binding-migration.js");
+  const inference = await maybeRepairCronInferenceBindings({
+    cfg: ctx.cfg,
+    env: ctx.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+  const { note } = await import("../../packages/terminal-core/src/note.js");
+  noteDoctorRepairResult(inference, note);
+  recordDoctorHealthWarnings(ctx, [], inference.warnings);
 }
 
 export async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles, noteSandboxScopeWarnings } =
     await import("../commands/doctor-sandbox.js");
-  await maybeRepairSandboxRegistryFiles(ctx.prompter);
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  await maybeRepairSandboxRegistryFiles(ctx.prompter, () => {
+    if (!maintenance) {
+      throw new Error("Retired sandbox registry repair requires exclusive maintenance ownership");
+    }
+    maintenance.assertOwnerCurrent();
+  });
   await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
   noteSandboxScopeWarnings(ctx.cfg);
 }

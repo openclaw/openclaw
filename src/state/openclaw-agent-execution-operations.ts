@@ -1,3 +1,4 @@
+import { loadAgentAuthProfileOperations } from "../agents/auth-profiles/store-agent.worker.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import type {
   SessionEntryReplacementCandidate,
@@ -24,11 +25,14 @@ import {
   type loadAgentTranscriptOperations,
   type TranscriptInitialization,
 } from "./openclaw-agent-execution-transcript.worker.js";
+import type { loadUsageCacheOperations } from "./openclaw-agent-execution-usage.worker.js";
 import type { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import type { WorkerOperationHandlers, WorkerOperations } from "./worker-operation-registry.js";
 
 type Handlers = WorkerOperationHandlers<AgentWorkerOperationContext>;
+
+export { loadAgentAuthProfileOperations };
 
 export async function loadAgentTranscriptReadOperations() {
   const [
@@ -352,6 +356,14 @@ export async function loadAgentCompoundOperations() {
   } satisfies Handlers;
 }
 
+export async function loadAgentEntryDeletionOperations() {
+  const deletion = await import("../config/sessions/session-entry-deletion.worker.js");
+  return {
+    "session.lifecycle.deletePlan": deletion.planSessionDeletionInAgentWorker,
+    "session.lifecycle.delete": deletion.deleteSessionEntryInAgentWorker,
+  } satisfies Handlers;
+}
+
 export async function loadAgentPurgeOperations() {
   const purge = await import("../config/sessions/session-agent-purge.worker.js");
   return {
@@ -398,16 +410,30 @@ export async function loadAgentTrajectoryOperations() {
   return {
     "trajectory.events.append": (
       input: Parameters<typeof kernel.appendSqliteTrajectoryRuntimeEventsWithWriter>[0],
-      { writeTransaction, admit },
+      { open, writeTransaction, admit },
     ) => {
-      kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, (label, write) =>
-        writeTransaction(label, "Trajectory append", (current) => {
-          const result = write(current);
-          deferSqliteWorkerCommitReceipt(current.db, result.receipt);
-          admit("commit");
-          return result;
-        }),
-      );
+      return kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(
+        input,
+        open(),
+        (label, write, receipt) =>
+          writeTransaction(
+            label,
+            "Trajectory append",
+            (current) => {
+              if (receipt) {
+                deferSqliteWorkerCommitReceipt(current.db, receipt);
+                admit("commit");
+                return write(current);
+              }
+              const result = write(current);
+              deferSqliteWorkerCommitReceipt(current.db, result.receipt);
+              admit("commit");
+              return result;
+            },
+            undefined,
+            receipt !== undefined,
+          ),
+      ).receipt.windowFacts;
     },
     "trajectory.retention.begin": (_input: undefined, { open }) => {
       return retention.beginTrajectoryRuntimeRetention(
@@ -643,42 +669,32 @@ export async function loadConversationRegistryOperations() {
   } satisfies Handlers;
 }
 
-export async function loadUsageCacheOperations() {
-  const [
-    { pruneSessionCostUsageRollupsInDatabase, writeSessionCostUsageRollupInDatabase },
-    { withSqliteDatabaseWriteScope },
-  ] = await Promise.all([
-    import("../infra/session-cost-usage-cache.kernel.js"),
-    import("../infra/sqlite-database-admission.js"),
-  ]);
-  // Usage cache and partition writes do not change resident session facts.
+export async function loadSessionRowBackfillOperations() {
+  const [{ backfillSessionRowTranscriptFieldsInDatabase }, { withSqliteDatabaseWriteScope }] =
+    await Promise.all([
+      import("../gateway/session-row-transcript-backfill.worker.js"),
+      import("../infra/sqlite-database-admission.js"),
+    ]);
   return {
-    "usageCache.writeRollup": (
-      input: Parameters<typeof writeSessionCostUsageRollupInDatabase>[1],
+    "session.rowTranscript.backfill": (
+      input: Parameters<typeof backfillSessionRowTranscriptFieldsInDatabase>[1],
       { writeTransaction, admit },
     ) =>
-      writeTransaction("session-cost-usage.rollup.write", "Usage cache", ({ db }) => {
-        const result = withSqliteDatabaseWriteScope(db, [], () =>
-          writeSessionCostUsageRollupInDatabase(db, input),
+      writeTransaction("session.rowTranscript.backfill", "Session row backfill", (database) => {
+        // Derived cache bytes do not invalidate transcript snapshots or session metadata.
+        const fields = withSqliteDatabaseWriteScope(database.db, [], () =>
+          backfillSessionRowTranscriptFieldsInDatabase(database, input),
         );
         admit("commit");
-        return result;
-      }),
-    "usageCache.prune": (
-      input: Parameters<typeof pruneSessionCostUsageRollupsInDatabase>[1],
-      { writeTransaction, admit },
-    ) =>
-      writeTransaction("session-cost-usage.rollup.prune", "Usage cache", ({ db }) => {
-        withSqliteDatabaseWriteScope(db, [], () =>
-          pruneSessionCostUsageRollupsInDatabase(db, input),
-        );
-        admit("commit");
+        return fields;
       }),
   } satisfies Handlers;
 }
 
 export type RegisteredAgentWorkerOperations = WorkerOperations<
-  Awaited<ReturnType<typeof loadUsageCacheOperations>> &
+  Awaited<ReturnType<typeof loadAgentAuthProfileOperations>> &
+    Awaited<ReturnType<typeof loadSessionRowBackfillOperations>> &
+    Awaited<ReturnType<typeof loadUsageCacheOperations>> &
     Awaited<ReturnType<typeof loadAgentVoiceSessionOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptReadOperations>> &
@@ -686,6 +702,7 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryPatchOperations>> &
     Awaited<ReturnType<typeof loadAgentCompoundOperations>> &
+    Awaited<ReturnType<typeof loadAgentEntryDeletionOperations>> &
     Awaited<ReturnType<typeof loadAgentPurgeOperations>> &
     Awaited<ReturnType<typeof loadAgentMaintenanceFinalizationOperations>> &
     Awaited<ReturnType<typeof loadAgentNativeBindingOperations>> &

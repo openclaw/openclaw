@@ -1,14 +1,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { createSqliteCommitReceipt } from "../../infra/sqlite-commit-receipt.js";
 import {
   prepareSqliteTransactionCommit,
   withSqlitePostCommitPublications,
 } from "../../infra/sqlite-post-commit.js";
 import {
-  assertTransactionUsable,
   runSqliteSingleStatementSync,
   runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
@@ -68,11 +69,11 @@ export function bindSqliteWorkerBackend(
     }
     return database;
   };
-  return {
+  return bindSqliteWorkerDatabase<SessionSharingWorkerOperations>(db, {
     execute(command) {
       const scope = { ...command.input.scope };
       const target = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(scope)));
-      const sameOwner = db.location()
+      const sameOwner = sqlPublicationAnchor(db).location()
         ? readDatabasePathIdentitySync(target).canonicalPath === context.databasePath
         : target === context.databasePath &&
           getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(resolveSqliteScope(scope)))?.db === db;
@@ -120,7 +121,7 @@ export function bindSqliteWorkerBackend(
           return runSqliteSingleStatementSync(db, () => {
             contribution.stage();
             deferSqliteWorkerCommitReceipt(db, candidate);
-            prepareSqliteTransactionCommit(db);
+            prepareSqliteTransactionCommit(sqlPublicationAnchor(db));
             contribution.statement();
             return contribution.result;
           });
@@ -131,7 +132,7 @@ export function bindSqliteWorkerBackend(
       let participantResult: SessionSharingWorkerOperations["participant"]["output"] | undefined;
       let membershipResult: MembershipPublication | undefined;
       let ownerResult: SessionSharingWorkerOperations["owner.assign"]["output"] | undefined;
-      return withSqlitePostCommitPublications(db, () =>
+      return withSqlitePostCommitPublications(sqlPublicationAnchor(db), () =>
         runSqliteWorkerTransactionSync(
           {
             ...context,
@@ -309,12 +310,5 @@ export function bindSqliteWorkerBackend(
         ),
       );
     },
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (db.isTransaction) {
-        throw new Error("Session collaboration transaction did not settle");
-      }
-    },
-    close() {},
-  };
+  });
 }

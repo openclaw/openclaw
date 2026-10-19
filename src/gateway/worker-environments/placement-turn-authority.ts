@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -87,9 +87,9 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
   applyPlacementReadPublication(owner, change, sequence);
   if (change.kind !== "tools" && (change.kind !== "claim" || !change.localOnly)) {
     owner.preservation = undefined;
+    owner.recoveryCandidatesEmpty = undefined;
   }
   if (change.kind !== "tools") {
-    owner.recoveryCandidatesEmpty = undefined;
     owner.projections.delete(change.sessionId);
     if (change.kind === "claim" && change.projection && !change.indeterminate) {
       retainProjection(owner, change.sessionId, change.projection);
@@ -228,7 +228,7 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
             ]),
           );
         }
-        throw changed();
+        throw new WorkerPlacementInventoryChangedError(new Set([sessionId]), changedMessage);
       }
     },
     release(this: void) {
@@ -310,7 +310,7 @@ export async function prepareSessionPlacementRead(
   }
 }
 
-function stageChange(db: DatabaseSync, change: ClaimChange): void {
+function stageChange(db: EngineConnection, change: ClaimChange): void {
   const owner = ownerFor(requireOpenClawStateDatabaseIdentity({ db }));
   if (
     !stageSqliteTransactionState(db, {
@@ -413,10 +413,7 @@ export function capturePlacementReplicaRead(identity: DatabasePathIdentity) {
     const byId = new Map(Array.from(records, (record) => [record.sessionId, record]));
     for (const sessionId of requestedIds ?? byId.keys()) {
       if ((owner.placements.get(sessionId)?.sequence ?? -1) <= sequence) {
-        owner.placements.set(sessionId, {
-          placement: freezeJsonSnapshot(byId.get(sessionId)),
-          sequence,
-        });
+        owner.placements.set(sessionId, { placement: byId.get(sessionId), sequence });
       }
     }
   };
@@ -424,9 +421,9 @@ export function capturePlacementReplicaRead(identity: DatabasePathIdentity) {
 
 /** Synchronous SDK reads consume committed writer receipts; cold reads use the async API. */
 export function readPlacementReplica(identity: DatabasePathIdentity, sessionId: string) {
-  const owner = owners.get(identity.key);
-  const published = owner?.placements.get(sessionId);
-  if (!owner?.active || !published || hasPendingPublication(owner, sessionId)) {
+  const owner = ownerFor(identity);
+  const published = owner.placements.get(sessionId);
+  if (!owner.active || !published || hasPendingPublication(owner, sessionId)) {
     return undefined;
   }
   return { placement: published.placement };
@@ -531,7 +528,7 @@ export function stagePlacementTurnToolWorkerPublication(
 }
 
 export function publishPlacementTurnToolState(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: { sessionId: string; claimId: string },
 ): void {
   stageChange(db, { kind: "tools", sessionId: identity.sessionId, claimId: identity.claimId });
@@ -614,7 +611,7 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
 
 /** Publish only an existing successful writer postimage; this performs no database read. */
 export function publishPlacementTurnClaimState(
-  db: DatabaseSync,
+  db: EngineConnection,
   record: WorkerSessionPlacementRecord,
   previousState?: WorkerSessionTurnClaimFacts["state"] | null,
 ): void {
@@ -629,7 +626,7 @@ export function publishPlacementTurnClaimState(
 }
 
 export function publishPlacementTurnClaimCleared(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
   previousState?: WorkerSessionTurnClaimFacts["state"] | null,
   retired?: true,
@@ -643,7 +640,7 @@ export function publishPlacementTurnClaimCleared(
 }
 
 export function publishPlacementWorkspaceResultState(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
   facts: WorkspaceResultPostimage | null,
 ): void {
@@ -651,7 +648,7 @@ export function publishPlacementWorkspaceResultState(
 }
 
 export function publishPlacementWorkspaceJournalState(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
   present: boolean,
 ): void {

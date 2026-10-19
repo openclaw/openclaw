@@ -6,6 +6,7 @@ import {
 import { resolveConversationInDatabase } from "../config/sessions/session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
+import { resolveWorkerVisibleHistoryProjection } from "../config/sessions/session-accessor.sqlite-history-projection.worker.js";
 import {
   readSessionTranscriptHistoryEventPageFromProjection,
   readTranscriptDisplayDeltaFromProjection,
@@ -26,6 +27,7 @@ import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
+import { hasSessionTranscriptEntryReceipt } from "../config/sessions/session-transcript-projection-facts-scope.js";
 import {
   readRecentTranscriptConversationText,
   type ReadRecentSessionConversationTextOptions,
@@ -102,10 +104,15 @@ export function createReadonlySessionHistoryReader(
     const result = withScopedOpenClawAgentDatabaseReadOnly(
       (database) =>
         readWithCanonicalSessionAdmission(database, () => {
-          // Repeat the original conditional row validation at every reader invocation,
-          // after dispatch. A current entry may name a successor; it never selects this transcript.
           const entryValidationKey = target.entryValidationKey;
-          if (entryValidationKey !== undefined) {
+          if (
+            entryValidationKey !== undefined &&
+            !hasSessionTranscriptEntryReceipt(
+              database,
+              target.transcript.sessionId,
+              entryValidationKey,
+            )
+          ) {
             readSessionEntryRow(database, entryValidationKey);
           }
           return read(database);
@@ -128,7 +135,10 @@ export function createReadonlySessionHistoryReader(
           databaseAgentId: target.database.agentId,
           path: target.database.path,
         },
-        read,
+        (projection) => {
+          projection.resolveVisibleHistory = resolveWorkerVisibleHistoryProjection;
+          return read(projection);
+        },
       ),
     );
     if (result.kind === "unavailable") {

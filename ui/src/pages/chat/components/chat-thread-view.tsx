@@ -1,4 +1,4 @@
-import { createEffect, createMemo, onCleanup } from "solid-js";
+import { Show, createMemo, onCleanup, onSettled } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   linkReaderPrefetchRef as createLinkReaderPrefetchRef,
@@ -19,23 +19,31 @@ import {
   anchorFromNavigationEvent,
   shouldHandleNavigationClick,
 } from "../../../lib/navigation-click.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
-import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
-import { ChatCommentPins } from "./chat-comment-pins.tsx";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
+import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
 import {
-  CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
-  renderChatHistoryBoundary,
-} from "./chat-history-boundary.ts";
+  getExpandedToolCards,
+  getExpandedUserMessages,
+  getExpansionStateVersion,
+  subscribeExpansionState,
+} from "../chat-thread.ts";
+import { ChatCommentPins } from "./chat-comment-pins.tsx";
+import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import {
+  getTranscriptState,
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
+  registerTranscriptElement,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
-import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import { ChatWelcome } from "./chat-welcome.tsx";
 
 const EMPTY_ENTRY_KEYS: ReadonlyMap<string, string> = new Map();
 
@@ -51,30 +59,70 @@ function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
 
 export function ChatThread(input: {
   props: ChatThreadProps;
-  transcript: ChatTranscriptController;
+  transcript: ChatTranscript;
+  bindViewport?: (element: HTMLDivElement) => () => void;
 }) {
   let root: HTMLDivElement | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
+  let stopHistory: (() => void)[] = [];
+  let releaseViewport: (() => void) | undefined;
+  // Retained transcript roots can settle before refs; bind native input at the ref.
   onCleanup(() => {
-    root?.removeEventListener("wheel", historyIntent);
-    root?.removeEventListener("touchstart", historyIntent);
-    root?.removeEventListener("touchmove", historyIntent);
+    stopHistory.forEach((stop) => stop());
+    releaseViewport?.();
   });
-  const current = createMemo(() =>
-    input.transcript.renderSession(input.props.sessionKey, (session) => {
-      const projection = projectChatTranscript(input.props, session);
-      // Empty shells establish the baseline for first-submission animation.
-      if (projection.isEmpty || projection.showLoadingSkeleton) {
-        session.entryAnimations.sync(
-          EMPTY_ENTRY_KEYS,
-          input.props.announceTranscript !== false &&
-            !projection.searchOpen &&
-            !input.props.loading,
-        );
-      }
-      return { session, projection };
-    }),
+  const paneId = createMemo(() => input.props.paneId);
+  onSettled(() => root && registerTranscriptElement(paneId(), root));
+  const search = createMemo(() =>
+    projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
+  const presentation = createMemo(
+    () =>
+      input.transcript.renderSession(input.props.sessionKey, (session) => ({
+        session,
+        maps: [
+          getExpandedToolCards(input.props.sessionKey),
+          getExpandedUserMessages(input.props.sessionKey),
+          session.expandedAssistantMessages,
+        ],
+      })),
+    {
+      // Session caches can replace maps while the retained pane stays mounted.
+      equals: (previous, next) =>
+        previous.session === next.session &&
+        previous.maps.every((value, index) => value === next.maps[index]),
+    },
+  );
+  const expansions = createMemo(() =>
+    presentation().maps.map((values) =>
+      projectSource(values, {
+        read: getExpansionStateVersion,
+        subscribe: subscribeExpansionState,
+        equality: Object.is,
+      }),
+    ),
+  );
+  const expansionVersions = createParkedProjection(
+    () => expansions().map((expansion) => expansion.read()),
+    () => {
+      const visible = input.props.transcriptVisible ?? true;
+      return typeof visible === "object" ? visible.isPresented() : visible;
+    },
+  );
+  const current = createMemo(() => {
+    const searchState = search().read();
+    const { session } = presentation();
+    const projection = projectChatTranscript(input.props, session, searchState);
+    expansionVersions();
+    // Empty shells establish the baseline for first-submission animation.
+    if (projection.isEmpty || projection.showLoadingSkeleton) {
+      session.entryAnimations.sync(
+        EMPTY_ENTRY_KEYS,
+        input.props.announceTranscript !== false && !projection.searchOpen && !input.props.loading,
+      );
+    }
+    return { session, projection };
+  });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
   const isEmpty = createMemo(() => current().projection.isEmpty);
   const searchOpen = createMemo(() => current().projection.searchOpen);
@@ -87,23 +135,17 @@ export function ChatThread(input: {
     Boolean(input.props.gatewayClient?.connected),
   ]);
   const markdownRef = createMarkdownBlocksRef(() => input.props.transcriptVisible ?? true);
-  createEffect(
-    () => [current(), input.props.fetchLinkFavicon] as const,
-    ([, fetchLinkFavicon]) => {
-      if (root) {
-        hydrateLinkFavicons(root, fetchLinkFavicon);
-      }
-    },
-  );
   const historyHeader = () =>
     input.props.historyPagination
       ? {
-          template: renderChatHistoryBoundary(input.props.historyPagination),
+          props: input.props.historyPagination,
           height: CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
         }
       : null;
-  const sentinel = () =>
-    input.props.historyPagination ? <div class="chat-history-sentinel" /> : undefined;
+  const historySentinel = (
+    <div class="chat-history-sentinel" ref={[elementRef(input.props.onHistorySentinelRef)]} />
+  );
+  const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
     if (routeLoading()) {
       return <LoadingState />;
@@ -112,14 +154,14 @@ export function ChatThread(input: {
       return (
         <div class="chat-thread-inner">
           {sentinel()}
-          {isEmpty() && !showLoadingSkeleton() ? (
-            <LitContent value={historyHeader()?.template} />
+          {isEmpty() && !showLoadingSkeleton() && input.props.historyPagination ? (
+            <ChatHistoryBoundary {...input.props.historyPagination} />
           ) : undefined}
           {showLoadingSkeleton() ? (
             <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
           ) : undefined}
           {isEmpty() && !showLoadingSkeleton() && !searchOpen() ? (
-            <LitContent value={renderWelcomeState({ ...input.props, onModelSetup: undefined })} />
+            <ChatWelcome {...input.props} onModelSetup={undefined} />
           ) : undefined}
           {isEmpty() && searchOpen() ? (
             <div class="agent-chat__empty">{t("chat.thread.noMatches")}</div>
@@ -139,11 +181,12 @@ export function ChatThread(input: {
       <div
         ref={(element) => {
           root = element;
+          releaseViewport = input.bindViewport?.(element);
           markdownRef(element);
           prefetchRef(element);
-          element.addEventListener("wheel", historyIntent, { passive: true });
-          element.addEventListener("touchstart", historyIntent, { passive: true });
-          element.addEventListener("touchmove", historyIntent, { passive: true });
+          stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
+            listen(element, type, historyIntent, { passive: true }),
+          );
         }}
         class={[
           "chat-thread",
@@ -200,10 +243,23 @@ export function ChatThread(input: {
             input.props.onOpenSessionLink?.(sessionTarget);
           }
         }}
-        onContextMenu={(event) => handleTranscriptContextMenu(event, input.props)}
-        onPointerUp={(event) => handleTranscriptPointerUp(event, input.props)}
+        onContextMenu={(event) =>
+          handleTranscriptContextMenu(
+            event,
+            input.props,
+            presentation().session.messageElements.elements.values(),
+          )
+        }
+        onPointerUp={(event) =>
+          handleTranscriptPointerUp(
+            event,
+            input.props,
+            presentation().session.messageElements.elements.values(),
+          )
+        }
       >
         <span
+          ref={[elementRef(input.props.onTranscriptAnnouncementRef)]}
           class="chat-transcript-announcement sr-only"
           role="status"
           aria-live={input.props.announceTranscript !== false ? "polite" : "off"}
@@ -220,13 +276,17 @@ export function ChatThread(input: {
           }}
         />
         {contents()}
-        {commentPins() ? (
-          <ChatCommentPins
-            attachments={input.props.commentAttachments}
-            sessionKey={input.props.sessionKey}
-            disabled={input.props.commentsDisabled ?? false}
-          />
-        ) : undefined}
+        <Show when={commentPins() ? getTranscriptState(paneId()) : undefined} keyed>
+          {(threadState) => (
+            <ChatCommentPins
+              threadState={threadState}
+              transcript={current().session}
+              attachments={input.props.commentAttachments}
+              sessionKey={input.props.sessionKey}
+              disabled={input.props.commentsDisabled ?? false}
+            />
+          )}
+        </Show>
       </div>
     </div>
   );

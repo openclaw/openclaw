@@ -13,7 +13,7 @@ import {
   googleChatApprovalCapability,
   shouldSuppressLocalGoogleChatExecApprovalPrompt,
 } from "./approval-native.js";
-import { createGoogleChatPluginBase, GOOGLECHAT_CHANNEL_ID } from "./channel-base.js";
+import { googlechatSetupPlugin, GOOGLECHAT_CHANNEL_ID } from "./channel-base.js";
 import {
   googlechatDirectoryAdapter,
   googlechatGroupsAdapter,
@@ -45,9 +45,8 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
 
 export const googlechatPlugin = createChatChannelPlugin({
   base: {
-    ...createGoogleChatPluginBase({
-      configSchema: buildChannelConfigSchema(GoogleChatConfigSchema),
-    }),
+    ...googlechatSetupPlugin,
+    configSchema: buildChannelConfigSchema(GoogleChatConfigSchema),
     approvalCapability: googleChatApprovalCapability,
     secrets: {
       secretTargetRegistryEntries,

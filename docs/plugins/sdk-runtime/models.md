@@ -122,6 +122,15 @@ Backend adapters retain protocol validation and special-mode handling.
     });
     ```
 
+    Direct-provider completions record credential failures using the same auth-profile
+    health policy as agent turns and try the next eligible profile. Each profile is
+    attempted at most once per completion. Explicit `model@profile` pins and
+    provider-bound credentials stay pinned. When the pool is exhausted, the last
+    provider error still resolves with `stopReason: "error"`; callers should check
+    that field before using the text. Successful requests clear the selected
+    profile's failure state for that model. Retries retain the original runtime
+    lease and repeat authorization checks before dispatch.
+
     `maxTokens` and `temperature` are advisory sampling hints. The selected
     provider, CLI, or harness applies them when its transport exposes an
     equivalent control and otherwise may ignore them. They do not weaken the

@@ -65,6 +65,7 @@ export type DesktopPanelToggleDetail = {
 };
 
 export type PortalPanelToggleDetail = {
+  requestId?: string;
   dock?: "bottom" | "right";
   open?: boolean;
   portalId?: string;

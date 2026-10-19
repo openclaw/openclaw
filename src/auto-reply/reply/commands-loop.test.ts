@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { handleLoopCommand } from "./commands-loop.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -87,6 +88,16 @@ describe("loop command", () => {
     expect(rewrittenBody(params)).toContain('pacing:{min:"1m",max:"1h"}');
     expect(rewrittenBody(params)).toContain('action:\\"next_check\\"');
     expect(rewrittenBody(params)).toContain('in:\\"<duration>\\"');
+  });
+
+  it("keeps every line of a multi-line loop prompt and a single-line job name", async () => {
+    const params = buildLoopParams(normalizeCommandBody("/loop 10m check these:\n- CI\n- deploy"));
+
+    expect(await handleLoopCommand(params, true)).toEqual({ shouldContinue: true });
+    expect(rewrittenBody(params)).toContain(`name:"${LOOP_PREFIX} check these: - CI - deploy"`);
+    expect(rewrittenBody(params)).toContain(
+      'message:"[loop check these: - CI - deploy] check these:\\n- CI\\n- deploy\\nDo the task',
+    );
   });
 
   it("rewrites /loop status as a conversation-scoped list work order", async () => {

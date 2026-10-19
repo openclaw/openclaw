@@ -111,6 +111,9 @@ function summarizeNodeEnvironment(
     status: node.connected ? "available" : "unavailable",
     ...(platform ? { platform } : {}),
     sessionHost: node.sessionHost === true,
+    ...(node.connected && node.workerHost?.deviceFolders === true
+      ? { workerHost: { deviceFolders: true as const } }
+      : {}),
     ...(node.workerSlots ? { workerSlots: { ...node.workerSlots } } : {}),
     ...(node.workerBundle ? { workerBundle: structuredClone(node.workerBundle) } : {}),
     ...(node.lastConnectedAtMs !== undefined ? { lastConnectedAtMs: node.lastConnectedAtMs } : {}),

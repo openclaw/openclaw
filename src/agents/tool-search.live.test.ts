@@ -14,7 +14,11 @@ import {
   type ContextEngineLogicalTurnLease,
 } from "./harness/context-engine-logical-turn.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
-import { isLiveTestEnabled, logLiveProgress } from "./live-test-helpers.js";
+import {
+  isLiveTestEnabled,
+  logLiveProgress,
+  useLiveTestRuntimeConfig,
+} from "./live-test-helpers.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 const liveOpenAiKey = collectProviderApiKeys("openai")[0];
@@ -201,6 +205,7 @@ module.exports = {
         },
       } satisfies OpenClawConfig;
       await state.writeConfig(config);
+      using _ = useLiveTestRuntimeConfig(config);
       const cache = createPluginCache();
       try {
         return await withPluginCache(cache, async () => {

@@ -32,7 +32,6 @@ export function createHostThawRecovery(deps: HostThawDeps): { tick: () => Promis
   let pendingChannelRestart:
     | { deadlineAtMs: number; loggedDeferral: boolean; reason?: string }
     | undefined;
-  let activeRecovery: Promise<void> | undefined;
 
   const runStep = async (label: string, step: () => void | Promise<void>) => {
     try {
@@ -135,28 +134,19 @@ export function createHostThawRecovery(deps: HostThawDeps): { tick: () => Promis
           };
         }
       }
-      if (!activeRecovery) {
-        expireChannelRestart();
-      }
+      expireChannelRestart();
       // Suspension/restart owns the closed period. Recovery must wait rather than
       // waking channels while the controller deliberately keeps the gateway quiet.
-      if (
-        (pendingFrozenMs === undefined && !pendingChannelRestart) ||
-        deps.isAdmissionClosed() ||
-        activeRecovery
-      ) {
+      if ((pendingFrozenMs === undefined && !pendingChannelRestart) || deps.isAdmissionClosed()) {
         return;
       }
       const frozenMs = pendingFrozenMs;
       pendingFrozenMs = undefined;
-      activeRecovery =
-        frozenMs === undefined ? restartChannels("deferred-retry") : recover(frozenMs);
       try {
-        await activeRecovery;
+        await (frozenMs === undefined ? restartChannels("deferred-retry") : recover(frozenMs));
       } finally {
         lastTickAtMs = deps.nowMs();
         lastCpuUsage = process.cpuUsage();
-        activeRecovery = undefined;
       }
     },
   };

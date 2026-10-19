@@ -144,7 +144,6 @@ async function waitForQrRenderCallCount(count: number) {
 }
 
 describe("login-qr", () => {
-  const rotatingAccountId = "rotating-qr";
   const concurrentAccountId = "concurrent-qr";
 
   beforeEach(() => {
@@ -179,45 +178,6 @@ describe("login-qr", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("restarts login once on status 515 and completes", async () => {
-    const beforeCredentialPersistence = vi.fn(async () => {});
-    waitForWaConnectionMock
-      // Baileys v7 wraps the error: { error: BoomError(515) }
-      .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
-      .mockResolvedValueOnce(undefined);
-    readWebAuthExistsForDecisionMock
-      .mockResolvedValueOnce({ outcome: "stable", exists: false })
-      .mockResolvedValue({ outcome: "stable", exists: true });
-
-    const start = await startWebLoginWithQr({
-      timeoutMs: 5000,
-      accountId: rotatingAccountId,
-      beforeCredentialPersistence,
-    });
-    expect(start.qrDataUrl).toBe(encodedQr("qr-data"));
-
-    const resultPromise = waitForWebLogin({
-      timeoutMs: 5000,
-      currentQrDataUrl: start.qrDataUrl,
-      accountId: rotatingAccountId,
-    });
-    await flushTasks();
-    await flushTasks();
-
-    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    expect(createWaSocketMock).toHaveBeenNthCalledWith(
-      2,
-      false,
-      false,
-      expect.objectContaining({ beforeCredentialPersistence: expect.any(Function) }),
-    );
-    const result = await resultPromise;
-
-    expect(result.connected).toBe(true);
-    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    expect(logoutWebMock).not.toHaveBeenCalled();
   });
 
   it("returns a replacement QR when status 408 happens before the first QR", async () => {
@@ -345,7 +305,7 @@ describe("login-qr", () => {
       authDir: expect.stringContaining(accountId),
       isLegacyAuthDir: false,
       runtime: expect.anything(),
-      beforeCredentialPersistence,
+      beforeCredentialPersistence: expect.any(Function),
     });
     expect(createWaSocketMock).toHaveBeenCalledWith(
       false,
@@ -356,6 +316,12 @@ describe("login-qr", () => {
 
   it("transfers credential writes to the exact active login instance", async () => {
     let hostActive = true;
+    let accountCurrent = true;
+    const assertCredentialPersistenceCurrent = () => {
+      if (!accountCurrent) {
+        throw new Error("account changed");
+      }
+    };
     const beforeCredentialPersistence = vi.fn(async () => {
       if (!hostActive) {
         throw new Error("plugin tool host authority is no longer active");
@@ -367,6 +333,7 @@ describe("login-qr", () => {
       timeoutMs: 5000,
       accountId: "active-operation-authority",
       beforeCredentialPersistence,
+      assertCredentialPersistenceCurrent,
     });
     expectScanQrResult(start);
     const operationGuard = createWaSocketMock.mock.calls[0]?.[2]?.beforeCredentialPersistence;
@@ -375,6 +342,10 @@ describe("login-qr", () => {
 
     hostActive = false;
     await expect(operationGuard?.()).resolves.toBeUndefined();
+
+    accountCurrent = false;
+    await expect(operationGuard?.()).rejects.toThrow("account changed");
+    accountCurrent = true;
 
     vi.useFakeTimers();
     vi.setSystemTime(Date.now() + 3 * 60_000 + 1);
@@ -386,6 +357,32 @@ describe("login-qr", () => {
     });
     await expect(operationGuard?.()).rejects.toThrow("WhatsApp login is no longer active");
   });
+
+  it.each(["unguarded", "stale", "current"])(
+    "handles a %s cached QR account binding",
+    async (binding) => {
+      const accountId = `cached-binding-${binding}`;
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("account changed");
+        }
+      };
+      waitForWaConnectionMock.mockImplementation(waitForever);
+      const first = await startWebLoginWithQr({
+        accountId,
+        ...(binding === "unguarded" ? {} : { assertCredentialPersistenceCurrent: assertCurrent }),
+      });
+      expectScanQrResult(first);
+      current = binding === "current";
+      const next = await startWebLoginWithQr({
+        accountId,
+        assertCredentialPersistenceCurrent: () => {},
+      });
+      expect(next.qrDataUrl).toBe(first.qrDataUrl);
+      expect(createWaSocketMock).toHaveBeenCalledTimes(binding === "current" ? 1 : 2);
+    },
+  );
 
   it("revalidates authority after auth inspection and before forced credential cleanup", async () => {
     const accountId = "revoked-force-fresh-qr";
@@ -627,34 +624,6 @@ describe("login-qr", () => {
       message: "WhatsApp auth state is still stabilizing. Retry login in a moment.",
     });
     expect(createWaSocketMock).not.toHaveBeenCalled();
-  });
-
-  it("does not report linked success when the socket opens before creds persistence stabilizes", async () => {
-    const accountId = "socket-open-before-persistence";
-    waitForWaConnectionMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          setTimeout(() => resolve(undefined), 20);
-        }),
-    );
-    readWebAuthExistsForDecisionMock
-      .mockResolvedValueOnce({ outcome: "stable", exists: false })
-      .mockResolvedValue({ outcome: "unstable" });
-
-    const start = await startWebLoginWithQr({
-      timeoutMs: 5000,
-      accountId,
-    });
-    expect(start.qrDataUrl).toBe("data:image/png;base64,encoded:qr-data");
-
-    const result = await waitForWebLogin({
-      timeoutMs: 5000,
-      currentQrDataUrl: start.qrDataUrl,
-      accountId,
-    });
-
-    expect(result.connected).toBe(false);
-    expect(result.message).toMatch(/retry/i);
   });
 
   it("reports a recovered linked session when saved auth has no active listener", async () => {

@@ -15,9 +15,11 @@ type TerminalOpenDeadline = {
   controller: AbortController;
 };
 
+/** Seeds the terminal-open deadline on the monotonic clock so an NTP step
+ *  cannot inflate or shrink the remaining open budget. */
 export function createTerminalOpenDeadline(): TerminalOpenDeadline {
   return {
-    expiresAtMs: Date.now() + TERMINAL_OPEN_DEADLINE_MS,
+    expiresAtMs: performance.now() + TERMINAL_OPEN_DEADLINE_MS,
     controller: new AbortController(),
   };
 }
@@ -33,7 +35,7 @@ export async function waitForTerminalOpenDeadline<T>(
     throw toErrorObject(deadline.controller.signal.reason, "Terminal open timed out");
   };
   const assertCurrent = () => {
-    if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
+    if (deadline.controller.signal.aborted || performance.now() >= deadline.expiresAtMs) {
       expire();
     }
   };
@@ -49,7 +51,7 @@ export async function waitForTerminalOpenDeadline<T>(
         throw toErrorObject(error, "Terminal open failed");
       }
     },
-    Math.max(0, deadline.expiresAtMs - Date.now()),
+    Math.max(0, deadline.expiresAtMs - performance.now()),
     expire,
     { signal: deadline.controller.signal, onAbort: expire },
   );

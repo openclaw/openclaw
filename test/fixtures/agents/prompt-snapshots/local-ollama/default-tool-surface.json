@@ -1,0 +1,134 @@
+{
+  "scope": "Native local Ollama with tools.toolSearch unset; fixture schemas, not provider wire payloads",
+  "tools": [
+    {
+      "name": "tool_search",
+      "description": "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action; use tool_describe only when you need its input schema.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Single search query, in English. A non-empty query joins a non-empty batch first. Null or blank is ignored beside a non-empty batch."
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Maximum number of single-search results. Omitted or null uses the default. With only batch queries, omit this or set it to null; set limits on each batch entry."
+          },
+          "queries": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["query"],
+                  "properties": {
+                    "query": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 512,
+                      "description": "Search query, in English. Describe the capability you need."
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Maximum results for this query. Defaults to 5 when omitted."
+                    }
+                  }
+                },
+                "maxItems": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Independent searches. Prefer this alone for several searches; a non-empty query beside it runs as the first entry. Their effective limits may total at most 50; an omitted item limit counts as 5. The serialized query strings may use at most 512 UTF-8 bytes in total."
+          }
+        }
+      }
+    },
+    {
+      "name": "tool_describe",
+      "description": "Load the full schema and metadata for one search result when its input is not already clear.",
+      "parameters": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Tool search result id or tool name."
+          }
+        }
+      }
+    },
+    {
+      "name": "dispatch_action",
+      "description": "Call an exact Tool Search result id or name through OpenClaw.",
+      "parameters": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Tool search result id or tool name."
+          },
+          "args": {
+            "type": "object",
+            "patternProperties": {
+              "^.*$": {}
+            },
+            "description": "Tool input."
+          }
+        }
+      }
+    },
+    {
+      "name": "web_search",
+      "description": "",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "web_fetch",
+      "description": "",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "memory_search",
+      "description": "",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "memory_get",
+      "description": "",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ],
+  "toolSchemaDirectoryPrompt": "Available deferred-schema tools:\n- sessions_list (core): No description.\n\nPolicy-approved MCP and client tools may also be discoverable through search.\nUse tool_search for a compact input signature or tool_describe for a full schema. Deferred names are not directly callable. Call dispatch_action with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly."
+}

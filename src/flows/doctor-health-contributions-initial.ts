@@ -34,6 +34,7 @@ import {
   legacyOwnedRepair,
   recordDoctorHealthWarnings,
 } from "./doctor-health-contribution.js";
+import { appContainerSpawnCheck, nativeStatusCheck } from "./doctor-native-status-check.js";
 
 function coreHealthRunner(checkId: string): DoctorHealthContribution["run"] {
   return async (ctx) => {
@@ -80,6 +81,9 @@ export function resolveInitialDoctorHealthContributions(params: {
         },
       },
     }),
+    createDoctorHealthContribution("doctor:native-status", "Native helpers and child pipes", {
+      healthChecks: [appContainerSpawnCheck, nativeStatusCheck],
+    }),
     createDoctorHealthContribution("doctor:node-runtime", "Node runtime", {
       healthCheckIds: ["core/doctor/node-runtime"],
       async run(ctx) {
@@ -95,16 +99,14 @@ export function resolveInitialDoctorHealthContributions(params: {
       healthChecks: {
         description: "Selected database engines and experimental PostgreSQL limitations.",
         async detect(ctx) {
-          const { collectDatabaseEngineHealthFindings } =
+          const { collectDoctorDatabaseEngineHealthFindings } =
             await import("../commands/doctor-database-engine.js");
-          return collectDatabaseEngineHealthFindings(ctx.cfg);
+          return collectDoctorDatabaseEngineHealthFindings(ctx.cfg, { env: ctx.env });
         },
       },
       async run(ctx) {
-        const { noteDatabaseEngines, collectDatabaseEngineHealthFindings } =
-          await import("../commands/doctor-database-engine.js");
-        noteDatabaseEngines(ctx.cfg);
-        recordDoctorHealthWarnings(ctx, collectDatabaseEngineHealthFindings(ctx.cfg));
+        const { noteDatabaseEngines } = await import("../commands/doctor-database-engine.js");
+        recordDoctorHealthWarnings(ctx, await noteDatabaseEngines(ctx.cfg, { env: ctx.env }));
       },
     }),
     createDoctorHealthContribution("doctor:auth-profile-migration", "Auth profile migration", {

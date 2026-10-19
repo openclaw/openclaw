@@ -56,6 +56,7 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
       },
       databases: [database],
       archiveStorePaths: [database.path],
+      stores: [{ agentId: database.agentId, storePath: database.path, database }],
       operation: { kind: "refresh", pricingFingerprint: "synthetic" },
     };
     nativePosts.observe = (worker, message) => {
@@ -80,9 +81,9 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
       refreshing,
       "Usage refresh did not finish worker preparation",
     );
-    const task = worker.postMessage.mock.calls.find(([message]) => message.input === request)?.[0];
+    const task = worker.posted.mock.calls.find(([message]) => message.input === request)?.[0];
     assert(task);
-    worker.postMessage.mockImplementation((message) => {
+    worker.posted.mockImplementation((message) => {
       if (message.responseId !== undefined) {
         queueMicrotask(() => {
           worker.emit("message", {
@@ -110,10 +111,10 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
     // The old refresh permit strands this dispatch behind its own queued host write.
     expect(readDispatched).toBe(true);
     const readerWorker = nativeWorkers.find((candidate) =>
-      candidate.postMessage.mock.calls.some(([message]) => message.input === "origin-rows"),
+      candidate.posted.mock.calls.some(([message]) => message.input === "origin-rows"),
     );
     assert(readerWorker);
-    const read = readerWorker.postMessage.mock.calls.find(
+    const read = readerWorker.posted.mock.calls.find(
       ([message]) => message.input === "origin-rows",
     )?.[0];
     assert(read);

@@ -21,6 +21,7 @@ export function ModelSetupSuccessDialog(props: {
   firstRun: boolean;
   returnToModels?: boolean;
 }) {
+  let openChatButton!: HTMLButtonElement;
   const providerId = createMemo(() => providerIdFromModelRef(props.activation.modelRef));
   const providerIconId = createMemo(() =>
     providerId() && hasProviderBrandIcon(providerId()!) ? providerId() : null,
@@ -45,6 +46,7 @@ export function ModelSetupSuccessDialog(props: {
   return (
     <>
       <openclaw-modal-dialog
+        prop:initialFocus={() => openChatButton}
         label={title()}
         description={description()}
         onModal-cancel={() => props.onClose()}
@@ -99,7 +101,7 @@ export function ModelSetupSuccessDialog(props: {
               </>
             )}
           </div>
-          <footer class="model-setup-success__actions">
+          <openclaw-modal-actions class="model-setup-success__actions">
             {props.returnToModels && !utility() ? undefined : (
               <>
                 {" "}
@@ -108,11 +110,19 @@ export function ModelSetupSuccessDialog(props: {
                 </button>{" "}
               </>
             )}
-            <button type="button" class="btn primary" autofocus onClick={() => props.onOpenChat()}>
+            <button
+              ref={(element) => {
+                openChatButton = element;
+              }}
+              type="button"
+              class="btn primary"
+              autofocus
+              onClick={() => props.onOpenChat()}
+            >
               {props.returnToModels && !utility() ? undefined : <Icon name="messageSquare" />}{" "}
               {actionLabel()}
             </button>
-          </footer>
+          </openclaw-modal-actions>
         </section>
       </openclaw-modal-dialog>
     </>

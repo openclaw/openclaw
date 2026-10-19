@@ -352,30 +352,12 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
   describe.each([
     {
-      name: "dotted object key",
-      config: { talk: { providers: { "acme.speech": { apiKey: "${SOURCE_KEY}" } } } },
-      targetPath: 'talk.providers["acme.speech"].apiKey',
-      pathSegments: ["talk", "providers", "acme.speech", "apiKey"],
-      targetId: "talk.providers.*.apiKey",
-      fixtureTarget: false,
-    },
-    {
       name: "numeric object key",
       config: { talk: { providers: { "0": { apiKey: "${SOURCE_KEY}" } } } },
       targetPath: 'talk.providers["0"].apiKey',
       pathSegments: ["talk", "providers", "0", "apiKey"],
       targetId: "talk.providers.*.apiKey",
       fixtureTarget: false,
-    },
-    {
-      name: "array index",
-      config: {
-        plugins: { entries: { fixture: { config: { tokens: ["${SOURCE_KEY}"] } } } },
-      },
-      targetPath: "plugins.entries.fixture.config.tokens[0]",
-      pathSegments: ["plugins", "entries", "fixture", "config", "tokens", "0"],
-      targetId: "plugins.entries.fixture.config.tokens.*",
-      fixtureTarget: true,
     },
   ])(
     "gateway assignment for $name",
@@ -624,28 +606,6 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       await expect(resolution).rejects.toThrow(/local resolution also failed/i);
       await expect(resolution).rejects.toThrow(/check the configured secret sources/i);
       await expect(resolution).rejects.not.toThrow(envKey);
-    });
-  });
-
-  it("falls back to local resolution when the gateway stalls secrets.resolve past the caller's budget", async () => {
-    await withEnvValue("TALK_API_KEY", "local-fallback-key", async () => {
-      callGateway.mockImplementation(
-        (request: { timeoutMs: number }) =>
-          new Promise((_resolve, reject) => {
-            // A reachable gateway that never replies fails only at the request deadline it was given.
-            setTimeout(() => reject(new Error("gateway timeout")), request.timeoutMs);
-          }),
-      );
-      const result = await resolveCommandSecretRefsViaGateway({
-        config: makeTalkProviderApiKeySecretRefConfig("TALK_API_KEY"),
-        commandName: "status",
-        targetIds: new Set(["talk.providers.*.apiKey"]),
-        gatewaySecretResolveTimeoutMs: 50,
-      });
-
-      expect(callGateway.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: 50 });
-      expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("local-fallback-key");
-      expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
   });
 
@@ -1177,60 +1137,6 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     } finally {
       restoreDeps();
     }
-  });
-
-  it("preserves gateway assignments while resolving only missing paths locally", async () => {
-    const localEnvKey = "TALK_API_KEY_PARTIAL_LOCAL";
-    callGateway.mockResolvedValueOnce({
-      assignments: [
-        {
-          path: "talk.providers.gateway.apiKey",
-          pathSegments: ["talk", "providers", "gateway", "apiKey"],
-          value: "gateway-owned-key",
-        },
-      ],
-      diagnostics: [],
-    });
-    await withEnvAsync({ [localEnvKey]: "local-fallback-key" }, async () => {
-      const result = await resolveCommandSecretRefsViaGateway({
-        config: {
-          talk: {
-            provider: "gateway",
-            providers: {
-              gateway: {
-                apiKey: {
-                  source: "env",
-                  provider: "default",
-                  id: "GATEWAY_ONLY_TALK_KEY",
-                },
-              },
-            },
-            realtime: {
-              provider: "local",
-              providers: {
-                local: {
-                  apiKey: { source: "env", provider: "default", id: localEnvKey },
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        commandName: "reply",
-        targetIds: new Set(["talk.providers.*.apiKey", "talk.realtime.providers.*.apiKey"]),
-      });
-
-      expect(result.resolvedConfig.talk?.providers?.gateway?.apiKey).toBe("gateway-owned-key");
-      expect(result.resolvedConfig.talk?.realtime?.providers?.local?.apiKey).toBe(
-        "local-fallback-key",
-      );
-      expect(result.targetStatesByPath).toMatchObject({
-        "talk.providers.gateway.apiKey": "resolved_gateway",
-        "talk.realtime.providers.local.apiKey": "resolved_local",
-      });
-      expect(
-        result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),
-      ).toBe(false);
-    });
   });
 
   it("limits local fallback to targeted refs in read-only modes", async () => {

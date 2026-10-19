@@ -30,12 +30,10 @@ import {
   registerOpenClawAgentDatabaseAsyncResource,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
-import {
-  withOpenClawAgentDatabaseRuntime,
-  type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -89,7 +87,7 @@ export function captureSessionManagerWriteAssertion(manager: object): (() => voi
 }
 
 export type SessionManagerWriteAdmission = {
-  database: OpenClawAgentDatabase | SessionManagerIncognitoDatabase;
+  database: OpenClawAgentDatabaseExecution | SessionManagerIncognitoDatabase;
   options: OpenClawAgentDatabaseOptions;
   assertCurrent(): void;
 };
@@ -126,7 +124,7 @@ export function runSessionManagerWrite<T>(
   );
 }
 
-/** Native maintenance and unbound SDK writes retain their existing storage admission. */
+/** Awaited maintenance and unbound SDK writes retain the worker's storage admission. */
 export function withSessionManagerWrite<T>(
   manager: Pick<SessionManagerCore, "getSessionTarget" | "getSessionId">,
   write: (admission?: SessionManagerWriteAdmission) => T | Promise<T>,
@@ -194,25 +192,24 @@ async function withSessionManagerDatabaseWrite<T>(
   const options = toDatabaseOptions(resolveSqliteReadScope(identity));
   options.env = captureSessionTranscriptStorageEnvironment(options.env ?? process.env);
   options.path = resolveOpenClawAgentSqlitePath(options);
-  return await runSessionManagerWrite(manager, () =>
-    runOpenClawAgentWriteAdmission(
-      options,
-      () =>
-        withOpenClawAgentDatabaseRuntime(
-          options,
-          (database) => {
-            assertManager();
-            // Each native kernel or worker command still validates live authority at commit.
-            return write({ database, options, assertCurrent });
-          },
-          assertCurrent,
-        ),
-      true,
-      undefined,
-      undefined,
-      "session-manager.write",
-    ),
-  );
+  const database = captureOpenClawAgentDatabaseExecution(options);
+  try {
+    return await runSessionManagerWrite(manager, () =>
+      runOpenClawAgentWriteAdmission(
+        options,
+        () => {
+          assertManager();
+          return write({ database, options, assertCurrent });
+        },
+        true,
+        undefined,
+        undefined,
+        "session-manager.write",
+      ),
+    );
+  } finally {
+    await database.release();
+  }
 }
 
 export function appendSessionTranscriptNote(
@@ -265,7 +262,8 @@ export async function appendSessionTranscriptNote(
     return await withSessionManagerWrite(
       { getSessionTarget: () => captured, getSessionId: () => captured.sessionId },
       async (admission) => {
-        const actor = admission && !("db" in admission.database) ? admission.database : undefined;
+        const actor =
+          admission && "withMetadata" in admission.database ? admission.database : undefined;
         if (!actor || !admission) {
           throw new Error("Missing memory session write admission");
         }

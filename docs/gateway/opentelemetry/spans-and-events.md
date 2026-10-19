@@ -36,6 +36,7 @@ OpenTelemetry metrics or change Prometheus metric labels.
   - `openclaw.model_call.usage.*` and `gen_ai.usage.*` when the result carries usage for that request or aggregate turn
   - Cache-write totals remain in `openclaw.model_call.usage.cache_creation_input_tokens` and `gen_ai.usage.cache_creation.input_tokens`. When reported, `openclaw.model_call.usage.cache_creation_input_tokens_1h` and `gen_ai.usage.input_cache_creation_1h` carry the one-hour bucket verbatim; `openclaw.model_call.usage.cache_creation_input_tokens_5m` and `gen_ai.usage.input_cache_creation_5m` carry the five-minute bucket verbatim. Each TTL-specific attribute is omitted when the provider does not report that bucket.
   - Span event `openclaw.provider.request` with attribute `openclaw.upstreamRequestIdHash` (bounded, hash-based) when the upstream provider result exposes a request id; raw ids are never exported
+  - Codex turn span event `openclaw.model.response.observed` with `openclaw.upstreamRequestIdHash`, `openclaw.model_response.timestamp_source = receipt`, `openclaw.model_response.usage_source = native-normalized`, `openclaw.model_response.usage_scope = response`, and known `openclaw.model_call.usage.*` / `gen_ai.usage.*` fields. It records an untimed native response observation and does not increment usage metrics.
   - With `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, request spans use the latest GenAI inference span name `{gen_ai.operation.name} {gen_ai.request.model}`. Turn spans use `invoke_agent` because OpenClaw does not claim a native agent name from the opaque CLI boundary. Both use `CLIENT` span kind instead of `openclaw.model.call`.
 - `openclaw.harness.run`
   - `openclaw.harness.id`, `openclaw.harness.plugin`, `openclaw.outcome`, `openclaw.provider`, `openclaw.model`, `openclaw.channel`, optional `openclaw.agent`
@@ -114,6 +115,9 @@ the diagnostics-otel plugin does not export them as standalone OTLP signals.
 Event kinds and `run.execution_phase.phase` values are additive. TypeScript
 consumers should keep default branches instead of assuming either union is
 permanently exhaustive.
+
+Events with no interested subscriber or tracing exporter are discarded before
+payload enrichment and queuing; they are not buffered for future subscribers.
 
 `agent.commentary` records completed preambles, not text deltas. It carries the
 original agent-event sequence and timestamp and attaches to the active harness

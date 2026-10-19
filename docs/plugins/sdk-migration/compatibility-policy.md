@@ -18,22 +18,90 @@ External-plugin compatibility work follows this order:
 3. Emit a diagnostic or warning naming the old path and replacement.
 4. Cover both paths in tests.
 5. Document the deprecation and migration path.
-6. Remove only after the announced migration window, usually in a major
-   release.
+6. Remove only after the announced migration window, in the designated ordinary
+   stable release.
 
-SQLite and SDK writer migrations use one shared runtime warning budget per plugin
-identity and deprecated capability family per Gateway process. Warnings occur on
-actual legacy use, never import, and survive plugin reloads. They name the invoked
-method, supported replacement, current compatibility promise, and “removed in the
-next Plugin SDK major.” Unknown direct SDK consumers share one bounded SDK-level
-warning per family. Diagnostics contain no database paths, credentials, payloads,
-or stack dumps. This policy replaces the earlier no-new-runtime-warnings rule for
-these writer migrations; documentation-only reader records retain their own policy.
+For the [synchronous SQLite APIs](/plugins/sdk-migration/sqlite-async), the final
+compatibility day is **2026-12-31**. Removal ships in the **first January 2027
+stable release**, without a Plugin SDK major version. Other compatibility
+records retain their own separately announced windows.
+
+Synchronous SQLite migrations emit one runtime warning per plugin identity,
+deprecated capability family, and method per Gateway process. Other SDK writer
+migrations retain one warning per plugin identity and capability family. Warnings
+occur on actual legacy use, never import, and survive plugin reloads. They name
+the invoked method, supported replacement, current compatibility promise, and
+removal release. Unknown direct SDK consumers share an SDK-level budget with the
+same family and method rules. Diagnostics contain no database paths, credentials,
+payloads, or stack dumps. This policy replaces the earlier no-new-runtime-warnings
+rule for these migrations; unrelated documentation-only records retain their own
+policy.
 
 Synchronous compatibility writers that retain native adapters still commit before
 returning. Retired adapters reject calls as documented in their records below.
-Awaited mutations complete only after committed facts have been installed. SessionManager and its
-extension/provider adapters share the session-persistence warning budget.
+Awaited mutations complete only after committed facts have been installed.
+SessionManager and its extension/provider adapters share the session-persistence
+family, with a separate warning for each deprecated method.
+
+### Session-controller cutover exception
+
+The session-controller cutover has three explicitly approved immediate breaks,
+without compatibility aliases or a deprecation window:
+
+- Session-keyed `setActiveEmbeddedRun(...)` requires a host-admitted harness
+  attempt. Unadmitted calls throw `AgentHarnessPreflightError` with code
+  `SESSION_CONTROLLER_ADMISSION_REQUIRED` and migration guidance.
+- Gateway handler context no longer exposes mutable `chatAbortControllers` or
+  `chatQueuedTurns` maps. Compose authorized Gateway methods and read session
+  projections instead of mutating session ownership.
+- `AgentTurnStartOwner.observe()` replaces `expiresAtMs` with
+  `startDeadlineAtMs`, which describes the controller's execution-start budget.
+  It is optional and nullable; it is not an execution-authority expiry.
+
+Reading a removed map or the old observation property fails with code
+`PLUGIN_CAPABILITY_REMOVED` and identifies the removed capability. Follow the
+[session-controller migration](/plugins/sdk-migration#session-keyed-harness-registration)
+before upgrading. This exception does not change other compatibility records,
+including Gateway placement and publication services, opaque model-request
+generation identity, or the `recoveringModelAttempt` result from
+`abortAndDrainAgentHarnessRun`.
+
+With `forceClear: true`, `abortAndDrainAgentHarnessRun` asks the session controller
+to revoke the captured writer's authority. `forceCleared: true` records that
+successful cleanup; `drained` remains false while the backend is still settling.
+Cleanup preserves committed outcomes and successor sessions. If the writer cannot
+be safely revoked, `forceCleared` stays false and its custody remains retained.
+
+### Channel prepared tool policy
+
+`BuildChannelInboundEventContextParams.access.toolPolicy` and
+`MsgContext.ConversationToolPolicy` are deprecated as of October 12, 2026.
+They remain source-compatible until a **later stable release**, after a separately
+announced deprecation window and explicit maintainer approval for removal. No
+removal date is set; the `stable-deprecation-period` gate does not itself authorize
+removal. The synchronous SQLite cutoff does not apply to these fields. Legacy use
+emits the bounded `DEP_CHANNEL_PREPARED_TOOL_POLICY` warning.
+
+The compatibility adapter retains the supplied policy for the **original external
+request**, including time waiting in its queued turn. That snapshot does not
+refresh when configuration changes. It remains local to that execution and is not
+copied into requester provenance or passed to a new delegation.
+
+Move configuration-derived policy to `security.resolveDirectToolPolicy` for direct
+conversations or `groups.resolveToolPolicy` for shared conversations. The host calls
+these adapters at execution admission with current configuration and preserved
+authenticated sender, account, and conversation facts. An admitted execution keeps
+that prepared policy; a newly admitted delegated execution resolves policy again
+for its original requester at the destination. These callbacks do not change the
+separate spawned-child authority envelope contract.
+
+Bundled Telegram direct messages use `security.resolveDirectToolPolicy`; X guest
+mentions use their existing `groups.resolveToolPolicy` adapter. External
+plugins still supplying the deprecated field retain snapshot behavior, so fresh
+configuration at admission requires migrating that producer. A plugin with a
+restriction supplied by an external authority must define its original-request
+lifetime with that authority; the deprecated field does not grant an indefinite
+restriction over descendant work.
 
 ### Harness deletion companions
 
@@ -42,7 +110,7 @@ Gateway operation, OpenClaw commits file-backed session deletion in its worker b
 calling the opaque `commit` callback. It does not invoke the opaque `rollback`
 callback when that database transaction fails, because the companion has not
 been changed. Legacy use emits one deprecation warning per plugin and callback
-family. The unbound callback contract is removed in the next Plugin SDK major.
+family. Removing the unbound callback contract requires an announced stable-release window.
 
 Wrap best-effort external cleanup in `createNativeSessionCommitFinalizer` from
 `openclaw/plugin-sdk/agent-harness-session-runtime`. A failed legacy callback is
@@ -58,6 +126,13 @@ maintenance retains its admitted native transaction, as does the process-local
 incognito owner during its separate migration.
 
 ### Retained helper contracts
+
+The question-reaction helpers in `openclaw/plugin-sdk/question-gateway-runtime`
+remain available for existing third-party plugins without a contract change. Bundled
+channels no longer use question reactions. New integrations should declare
+native question input through
+[`agentPrompt.questionInputMode`](/plugins/sdk-channel-plugins#what-your-plugin-owns)
+or let the agent ask in plain text. No removal date has been announced.
 
 `openclaw/plugin-sdk/sandbox.resolveSandboxRuntimeStatus` is deprecated. Await
 `resolveSandboxRuntimeStatusAsync` for a session lookup, or use
@@ -76,8 +151,8 @@ The `transcript-lock-sync-message-preparation` and
 targets with their original transaction ordering. One deprecation warning is
 emitted per plugin for this family. Incognito and actor-bound targets reject the
 old form with an actionable replacement error. The old exports and fields remain
-available to compile existing plugins and will be removed at the **next Plugin SDK
-major**. Incognito targets use the memory actor. Durable stored data, schema,
+available to compile existing plugins through **2026-12-31** and will be removed
+in the **first January 2027 stable release**. Incognito targets use the memory actor. Durable stored data, schema,
 retention, and update behavior are unchanged.
 
 Discord and llama.cpp retain their declared OpenClaw 2026.9.2 host support.
@@ -132,6 +207,20 @@ helper still mounts, but its link never renders. Plugins built against
 2026.10.1 keep loading. Render a custom accessory instead. The
 `plugin-sdk-session-header-link` record allows removal after 2027-01-12.
 
+### Private runtime facade exports
+
+Some `openclaw/plugin-sdk/*` subpaths ship as JavaScript-only runtime facades
+without a `types` export condition. They are not a typed third-party contract,
+but published plugins still import named helpers from them, and a missing name
+fails ESM linking so the whole plugin stops loading. OpenClaw 2026.10.5 betas
+removed some of these names. Exports with published external importers are
+restored and deprecated under the `plugin-sdk-private-runtime-shipped-exports`
+record, which lists each `subpath.name` surface and allows removal after
+2027-01-15. Examples include `readApprovalReactionDeliveryMetadata` from
+`approval-reaction-runtime`, web-search credential setters from
+`provider-web-search`, and `wrapWebContent` from `provider-web-fetch`. Move to
+a typed public subpath that exports the helper, or keep a plugin-local copy.
+
 ### Harness tool construction
 
 Harnesses should await `params.hostCapabilities.createToolSurfaceAsync(options,
@@ -147,7 +236,7 @@ authority and private bindings.
 The synchronous `createToolSurface` and `createOpenClawCodingTools` contracts
 shipped in OpenClaw 2026.9.8 remain available with their existing arguments,
 array results, and completion timing. TypeScript marks them deprecated for
-removal at the next Plugin SDK major, subject to explicit breaking-release
+removal in a later stable release after the announced window, subject to explicit maintainer
 approval. Bundled callers use the awaited factories. This migration changes no
 stored data, schema, retention, or update behavior.
 
@@ -174,8 +263,8 @@ migration.
 
 The Gateway context exposed by `GatewayRequestHandlerOptions` from `core` and
 `gateway-runtime`, and by `getPluginRuntimeGatewayRequestScope()` from
-`plugin-runtime`, retains deprecated placement signatures through the next
-Plugin SDK major. Placement reads and writes now use the existing shared-state
+`plugin-runtime`, retains deprecated placement signatures until their separately
+announced ordinary stable removal release. Placement reads and writes now use the existing shared-state
 workers; the native synchronous database paths are retired.
 
 `workerSessionPlacementService.get` and `getMany` read only committed in-process
@@ -231,7 +320,7 @@ and update behavior are unchanged.
 deprecated as of October 3, 2026. Await `readChannelAllowFromStore` from the same
 subpath with the same channel, environment, and optional account ID. Both APIs
 shipped in OpenClaw 2026.9.8; the synchronous API keeps its signature and native
-behavior until the next Plugin SDK major and explicit breaking-release approval.
+behavior until an announced later stable release and explicit maintainer approval.
 
 The async API and bundled channel callers read current allowlist rows in the
 shared-state worker. Account normalization, entry ordering, and ingress policy
@@ -239,7 +328,8 @@ gates are unchanged. A missing store returns an empty allowlist without creating
 storage; boot and Doctor own initialization and migrations. Read failures
 propagate to the caller, and ingress still blocks requests on read failure. Prepared
 entries do not replace current message or channel authority. No schema, retention,
-or update migration is required, and no runtime warning is emitted.
+or update migration is required. Synchronous allowlist reads emit the bounded
+`channel-pairing-sync-allowlist` deprecation warning.
 
 ### Inbound envelope timestamps
 
@@ -259,7 +349,7 @@ still suppresses timestamps for history entries. Prepared timestamps describe
 activity and never replace current channel or session authority.
 
 The synchronous timestamp and envelope APIs shipped in OpenClaw 2026.9.8 remain
-deprecated compatibility until the next Plugin SDK major and explicit breaking-release
+deprecated compatibility until an announced later stable release and explicit maintainer
 approval. Calling `readSessionUpdatedAt` through either the SDK subpath or
 `runtime.channel.session` emits the same deprecation warning. The compatibility
 window includes the callback-based `inbound-envelope` helpers and
@@ -289,8 +379,8 @@ progress adapters use `adoptProgressDraft(draft)` instead: they keep the card an
 its rendering, and the host pushes prepared items and retires the card once. See
 [progress card handoff](/plugins/sdk-channel-plugins/status-and-media#progress-card-handoff).
 
-The receipt type shipped in OpenClaw 2026.9.8 stays source-compatible until the
-next Plugin SDK major and explicit breaking-release approval. The host never
+The receipt type shipped in OpenClaw 2026.9.8 stays source-compatible until an
+announced later stable release with explicit removal approval. The host never
 offers it, so a published adapter that checks for it keeps ordinary waiting-reply
 delivery and the host never receives a receipt. Telegram, the only bundled
 adopter, uses the draft handoff. No schema, stored data, retention, or update
@@ -310,9 +400,10 @@ The awaited helper reads watched-session and session-entry facts in the existing
 database workers. It preserves prompt bytes, ordering, limits, tool availability,
 and visibility gates, and never falls back to caller-thread database reads.
 Bundled harnesses use the awaited helper. The released synchronous helper keeps
-its `string | undefined` result and behavior until the next Plugin SDK major and
-explicit breaking-release approval. JSDoc and the compatibility registry record
-the deprecation; no runtime warning, schema migration, or update change is needed.
+its `string | undefined` result and behavior until an announced later stable release and
+explicit maintainer approval. JSDoc and the compatibility registry record
+the deprecation, and legacy calls emit a bounded migration warning. No schema
+migration or update change is needed.
 
 ### Reply tool authority preparation
 
@@ -350,10 +441,12 @@ callback and can add the optional awaited companion. Legacy external V2
 dispatchers retain fresh native policy checks. Retained commit guards for
 store-bound secret answers still recheck their original session owner.
 
-Removal requires the next Plugin SDK major and explicit breaking-release
-approval. TypeScript annotations and migration documentation provide diagnostics;
-there is no runtime warning. Stored data, schema, retention, and update behavior
-are unchanged.
+Removal requires an announced later stable release and explicit maintainer
+approval. TypeScript annotations and migration documentation cover the whole
+contract; legacy preparation and injection fallbacks also emit bounded warnings.
+SQL-free prepared projections and live effect assertions are shared with the
+supported path and do not warn merely because those methods exist. Stored data,
+schema, retention, and update behavior are unchanged.
 
 ### Harness attempt result migration
 
@@ -384,17 +477,17 @@ getter, `shouldSendFullToolDetails` remains a dispatch-time boolean, and
 Core and bundled callers use the [awaited replacements](/plugins/sdk-migration/how-to-migrate#await-session-observer-and-progress-visibility).
 The released ACP hook helper still accepts boolean-only events from external
 callers; host-created events provide fresh awaited predicates. Deprecated native
-reads remain compatibility debt until the next Plugin SDK major and explicit
-breaking-release approval. JSDoc and the compatibility registry record the
-deprecation without runtime warnings. Schemas, retained data, and update behavior
-are unchanged.
+reads remain compatibility debt until an announced later stable release and explicit
+maintainer approval. JSDoc and the compatibility registry record the
+deprecation, and use of legacy observers or visibility callbacks emits bounded
+migration warnings. Schemas, retained data, and update behavior are unchanged.
 
 ### Mention Inbox persistence
 
 The `mention-inbox-sync-persistence` record retains the TypeScript signatures of
 `mentionInbox.list(client)`, `mentionInbox.dismiss(client, ids)`,
 `mentionInbox.recordCommittedInput(input)`, and `mentionInbox.invalidate(sessionKey)`
-until the next Plugin SDK major. Their native synchronous persistence adapters
+until their separately announced ordinary stable removal release. Their native synchronous persistence adapters
 were retired on October 11, 2026 so Gateway database work runs only in workers.
 `list` and `dismiss` now return an `UNAVAILABLE` result with migration guidance;
 `invalidate` throws an error with the same guidance. These rejected calls do not
@@ -418,8 +511,8 @@ The October 3, 2026 `model-account-connect-sync-persistence` record retains the
 seven synchronous `modelAccountConnectService` methods shipped in 2026.9.8:
 `listLinks`, `link`, `unlink`, `list`, `select`, `status`, and `cancel`. They remain
 available through the Gateway Plugin SDK context with their existing arguments,
-return envelopes, and immediate completion until the next Plugin SDK major and
-explicit breaking-release approval. In particular, the released action shape
+return envelopes, and immediate completion until an announced later stable release and
+explicit maintainer approval. In particular, the released action shape
 `{ owner: string; assertCurrent: () => void }` remains source-compatible.
 
 Core and bundled callers use the corresponding `Async` methods; see
@@ -434,8 +527,9 @@ credential storage, retention, and update behavior are unchanged.
 The October 1, 2026 records `session-manager-sync-persistence`,
 `extension-session-sync-persistence`, and `provider-replay-sync-persistence`
 retain the shipped synchronous transcript contracts as named third-party
-compatibility adapters. Their removal gate is `next-plugin-sdk-major`, with no
-calendar removal date. Existing exports and immediate return values remain
+compatibility adapters. Their final compatibility day is 2026-12-31, with
+removal in the first January 2027 stable release and no Plugin SDK major version.
+Existing exports and immediate return values remain
 available while plugins migrate; synchronous SessionManager methods and their extension/provider adapters share
 one warning per plugin and session-persistence family per process.
 
@@ -445,7 +539,7 @@ types. Bundled code uses the awaited contracts. File-backed writes reuse the
 shared worker writer; incognito uses the session actor's memory backend.
 Synchronous incognito persistence refuses access and names its awaited
 replacement. Schemas, persisted bytes, and supported update paths are unchanged.
-Removal still requires explicit breaking-release approval.
+Removal follows the announced window and the shipped-surface gates.
 
 ### Reply run-start transcript facts
 
@@ -467,8 +561,8 @@ The deprecated `onAgentRunStart` retains the callback shipped in OpenClaw
 optional fourth transcript-facts argument. Released callbacks and producers that
 omit later arguments remain supported. Legacy invocation emits one
 `DEP_SESSION_PERSISTENCE` warning per plugin and callback family per process.
-The Gateway's omitted-facts synchronous read stays until the next Plugin SDK
-major and explicit breaking-release approval. Schemas, retained data, and update
+The Gateway's omitted-facts synchronous read stays until an announced later stable
+release and explicit maintainer approval. Schemas, retained data, and update
 behavior are unchanged.
 
 ### Agent execution preparation compatibility
@@ -481,12 +575,12 @@ supported. The publication source also accepts the execution object shape shippe
 in `v2026.9.9`. The `v2026.10.1-beta.1` shape retains its callable
 `capturePreparedGenerationClaim` method in parameter-derived types; internal
 native-adoption capabilities are not required from plugins. Ordinary preparation
-reuses a completed native generation; host
-admission can request current schema proof through an optional third argument.
+and host admission reuse a completed native generation and its published schema
+facts. The two-argument contract is also unchanged in `v2026.10.3`.
 
 The `agent-execution-preparation-released-signature` compatibility record is
 active, with no deprecation warning or required migration. Breaking the released
-contract requires an explicitly approved Plugin SDK major release. Schemas,
+contract requires a separately approved and announced compatibility window. Schemas,
 stored data, and update behavior are unchanged.
 
 ### ACP metadata binding compatibility
@@ -500,7 +594,7 @@ supply internal incognito actor bindings.
 The `acp-session-metadata-released-signatures` compatibility record is active:
 these APIs remain supported, with no deprecation warning or required migration.
 Worker activation must preserve them; changing these released contracts requires
-an explicitly approved Plugin SDK major release.
+a separately approved and announced compatibility window.
 
 The synchronous `readAcpSessionEntry` export remains available for the
 `v2026.9.4` contract, but is deprecated. Await `readAcpSessionEntryAsync` to read
@@ -535,10 +629,10 @@ production-private `agent-harness-session-runtime` initializer also retains its
 synchronous `prepare().link(input)` method for released official harnesses.
 
 The `session-upstream-links-sync-persistence` compatibility record deprecates
-those methods without runtime warnings. Core and bundled callers await
+those methods, and legacy calls emit bounded migration warnings. Core and bundled callers await
 `upsertSessionUpstreamLinkAsync`, `deleteSessionUpstreamLinkAsync`, or the
-initializer's `linkAsync`. The synchronous contracts remain until the next
-Plugin SDK major and explicit breaking-release approval. See
+initializer's `linkAsync`. The synchronous contracts remain until an announced
+later stable release and explicit maintainer approval. See
 [await session upstream links](/plugins/sdk-migration/how-to-migrate#await-session-upstream-links).
 
 ### Native session generation authority
@@ -569,8 +663,9 @@ synchronous `readBinding` callback for released harnesses. Use the prepared
 resolver when binding reads use worker-owned plugin state.
 
 These legacy methods share the bounded `native-session-binding` deprecation
-warning. Remove deprecated methods only after supported published official
-harness readers have migrated and the deprecation window has elapsed. This preserves installed harnesses
+warning. They remain until the
+announced later stable release, migration of supported published official harness readers,
+and explicit maintainer approval. This preserves installed harnesses
 across host upgrades without extending the private subpath into a public SDK.
 
 ### Model-provider result compatibility
@@ -627,7 +722,7 @@ Incognito reads use committed facts from the session actor's memory backend.
 
 Bundled memory search and memory-forget use the awaited readers. The synchronous
 exports retain their durable signatures and behavior for existing consumers until removal
-at the next Plugin SDK major. Deprecation is communicated through JSDoc and the
+in an announced later stable release. Deprecation is communicated through JSDoc and the
 compatibility registry, and a runtime warning once per plugin and reader family.
 The retained synchronous selector can still query participant rows on the calling
 thread; its awaited replacement keeps that work in the session worker.
@@ -647,7 +742,7 @@ period and may be removed in a later release. Main-thread calls emit one shared 
 per plugin. Batch transcript statistics now offer
 `readTranscriptStatsBatchReadOnlyAsync`; `session-store-runtime` offers
 `readTranscriptStatsAsync` for individual transcripts. Their synchronous
-predecessors retain their signatures until the next Plugin SDK major and warn
+predecessors retain their signatures until an announced later stable release and warn
 on main-thread use. Worker-local statistics kernels remain synchronous.
 Use `statSessionEntry` for awaited file or transcript metadata. The deprecated
 `statSessionEntrySync` warns when it reads SQLite on the host; supplying prepared
@@ -671,8 +766,8 @@ At registration, every statusless result from an older external memory manager
 preserves its legacy successful-read semantics and becomes `status: "ok"`,
 including empty results without range metadata. Only an explicit
 `status: "not_found"` reports absence. New producers must emit that status for
-missing files; registered-input normalization remains available through the
-next Plugin SDK major.
+missing files; registered-input normalization remains available until an
+announced ordinary stable removal release.
 
 ### Runtime config snapshot reads
 
@@ -715,6 +810,16 @@ Plan-based migrations can use
 `definePluginDoctorMigrationFromPlans(...)` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
+
+For legacy SQLite migrations, declare
+`sqliteOnly: { family: "state" }` (or the destination's other configurable
+database family) on `PluginDoctorStateMigration`. The host runs detection before
+porting that family to PostgreSQL and refuses pending work with
+`openclaw doctor --fix` guidance. When the family's effective engine is already
+PostgreSQL, the host skips detection, repair, and backup-resource callbacks and
+records an intentional non-outcome. An optional `postgresNote` in `sqliteOnly`
+can explain retained legacy artifacts or rebuilding from authoritative sources.
+Migrations without this declaration keep their existing behavior.
 
 Migrations may supply a read-only `collectBackupResources` callback, including
 through `definePluginDoctorMigrationFromPlans(...)`. Return absolute paths with
@@ -785,7 +890,7 @@ reader sweep finds no remaining users.
 
 ### AuthStorage SQLite migration
 
-`AuthStorage.forAgent(agentDir)` is the standard constructor for host session
+`await AuthStorage.forAgentAsync(agentDir)` is the standard constructor for host session
 storage. It persists provider-default credentials through the agent's
 `openclaw-agent.sqlite` auth-profile rows and never creates `auth.json`.
 Harness plugins receive the prepared storage instance as `params.authStorage`.
@@ -793,17 +898,40 @@ Harness plugins receive the prepared storage instance as `params.authStorage`.
 `AuthStorage.create(authPath)` remains as a named deprecated adapter for
 existing plugins. The path is used only to derive the owning agent directory;
 the adapter reads and writes SQLite, not the named JSON file. Migrate to
-`forAgent(...)` now. The path-taking form emits
-`AUTH_STORAGE_CREATE_DEPRECATED` and is eligible for removal after
-2026-10-01, provided the published-plugin reader sweep is clean.
+`await AuthStorage.forAgentAsync(...)` now. The path-taking form emits
+`AUTH_STORAGE_CREATE_DEPRECATED`. The earlier October review condition is
+superseded by the common synchronous SQLite compatibility window: the final
+compatibility day is 2026-12-31, with removal in the first January 2027 stable
+release and no Plugin SDK major version.
 
 `FileAuthStorageBackend` is an internal SQLite-backed adapter, not an exported
 Plugin SDK backend. It is not available as a named import from
 `openclaw/plugin-sdk/agent-sessions`. Harness plugins should use the
 host-prepared `params.authStorage`; host code that constructs storage should
-use `AuthStorage.forAgent(agentDir)`. The internal adapter emits
+use `await AuthStorage.forAgentAsync(agentDir)`. The internal adapter emits
 `FILE_AUTH_STORAGE_BACKEND_DEPRECATED` and never reads or writes the legacy
 file. Its internal deprecation window does not preserve the former SDK import.
+
+### Auth display-path compatibility
+
+Public physical database-path displays are retired after 2026-12-31. External
+plugins should display provider/profile identifiers instead; there is no public
+async replacement for `resolveAuthStorePathForDisplay`.
+
+Bundled plugins can await `AuthStorage.resolvePathForDisplayAsync` from the private
+`openclaw/plugin-sdk/agent-sessions` surface. Like the deprecated synchronous helper,
+it chooses the agent-local database when that auth store exists, otherwise the shared store.
+`resolveProviderAuthProfileMetadataAsync` returns profile/account identifiers,
+not the selected database path, so it is not an equivalent replacement.
+
+The bundled Hermes migration uses this distinction in auth and secret preview
+targets (`database-path#profileId`), including profiles that do not exist yet.
+The source callers are `extensions/migrate-hermes/auth.ts` and
+`extensions/migrate-hermes/secrets.ts`; selected-store behavior is covered by
+`src/agents/auth-profiles/paths-direct-import.test.ts`. The private static method
+uses the canonical awaited resolver without constructing `AuthStorage` or loading
+credentials. The synchronous helper remains compatible through 2026-12-31 and
+is removed in the first January 2027 stable release.
 
 If a manifest field is still accepted, keep using it until docs and
 diagnostics say otherwise. New code should prefer the documented replacement;
@@ -950,11 +1078,12 @@ September 1. `removal-pending` records are separate: they become due for review
 at 00:00 UTC on their `removeAfter` date and are reported with blockers, but do
 not trigger this fail flag. Neither state authorizes automatic removal.
 
-Deprecated records normally have an explicit `removeAfter` date. A contract
-tied to a version boundary instead declares a `removalGate`;
-`next-plugin-sdk-major` is an approved major-version gate, not a pending owner
-decision, and is never date-eligible. A record with neither field appears as
-`no-date` and remains ineligible until its owner publishes a gate. The report
+Deprecated async migration records use `stable-deprecation-period` while the
+owning maintainer prepares an ordinary stable release window. Leave `removeAfter`
+unset until the final compatibility date is approved and announced. Neither this
+gate nor a source-only deprecation authorizes removal; the replacement and
+deprecation must ship in stable first. A record with neither field appears as
+`no-date` and remains ineligible. The report
 displays either the date or named gate, counts local code/doc references, lists
 `removal-pending` records with their blockers and surface-token reader
 references, and summarizes the private memory-host SDK bridge. Those reader
@@ -971,14 +1100,18 @@ existing operations instead of reopening the state store.
 
 The released `resolveTtsPrefsPath(config)` call still returns a `string`
 synchronously, but is deprecated and emits a bounded warning when it needs
-legacy resolution. `buildTtsSystemPromptHint(config, agentId, options)` retains
+legacy resolution. It uses only the machine path already admitted by the
+asynchronous owner; before preparation, it falls back to the default path after
+checking explicit config and the environment. It never opens SQLite, and
+in-process machine-state writes update its admitted path.
+`buildTtsSystemPromptHint(config, agentId, options)` retains
 its synchronous return value; hosts pass prepared preferences to keep it free
 of state-store reads. The asynchronous `maybeApplyTtsToPayload` call continues
 to prepare preferences when none are supplied.
 
 The `tts-preferences-sync-resolution` compatibility record retains the released
-signatures until the next Plugin SDK major, migration of published plugin
-readers, and explicit approval of a breaking release. Preference files, stored
+signatures until an announced later stable release, migration of published plugin
+readers, and explicit maintainer approval. Preference files, stored
 data, and update behavior are unchanged.
 
 ### Media legacy projection
@@ -1026,3 +1159,39 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
 `openclaw/plugin-sdk/media-local-roots`. The
 `openclaw/plugin-sdk/agent-media-payload` facade and its
 `buildAgentMediaPayload(...)` projection are deprecated.
+
+### Cron store path resolution
+
+Await `resolveCronStorePathAsync(storePath?)` from
+`openclaw/plugin-sdk/cron-store-runtime` before calling `loadCronStore` or
+`saveCronStore`. The resolver reads the machine-owned cron partition through the
+shared-state worker; an explicit path still takes precedence.
+
+The `cron-store-sync-path` compatibility record retains
+`resolveCronStorePath(storePath?)` with its synchronous return value until a
+later stable release. Legacy calls
+emit one bounded `DEP_PLUGIN_SDK` warning per plugin and capability family.
+Stored cron data, partition selection, and update behavior are unchanged.
+
+### Session transcript search views
+
+Await `loadCombinedSessionStoreForGatewayAsync(config, options)` from
+`openclaw/plugin-sdk/session-transcript-hit` when preparing a transcript search
+view. It reads the same complete session entries through the existing database
+workers and excludes incognito sessions.
+
+The synchronous `loadCombinedSessionStoreForGateway(config, options)` keeps its
+return shape for installed plugins and emits a bounded deprecation warning.
+Bundled plugins use the asynchronous replacement. The synchronous export is
+scheduled for removal in a later stable release.
+
+### Web search provider lists
+
+Await `runtime.webSearch.listProvidersAsync({ config })` when listing available
+web-search providers. It prepares machine-owned discovery policy through the
+shared-state worker before applying the existing provider selection rules.
+
+The synchronous `runtime.webSearch.listProviders({ config })` keeps its return
+shape for installed plugins and emits one bounded `DEP_PLUGIN_SDK` warning per
+plugin and capability family. It is scheduled for removal in a later stable release after deprecation. Native synchronous discovery remains for offline CLI/Doctor preparation
+and this compatibility method; Gateway web-search preparation uses the async owner.

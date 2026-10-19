@@ -8,19 +8,12 @@ import type {
 } from "openclaw/plugin-sdk/music-generation";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import {
-  assertOkOrThrowHttpError,
-  createProviderOperationDeadline,
-  postJsonRequest,
-  resolveProviderOperationTimeoutMs,
-  type ProviderOperationDeadline,
-} from "openclaw/plugin-sdk/provider-http";
+import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
 import {
   asOptionalRecord,
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
 
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview";
@@ -185,28 +178,7 @@ function processOpenRouterSseLine(line: string, result: OpenRouterAudioStreamAcc
   return false;
 }
 
-function resolveOpenRouterStreamRemainingMs(deadline: ProviderOperationDeadline): number {
-  return resolveProviderOperationTimeoutMs({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-}
-
-async function readOpenRouterStreamChunk(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  deadline: ProviderOperationDeadline,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  const timeoutMs = resolveOpenRouterStreamRemainingMs(deadline);
-  return await withTimeout(reader.read(), timeoutMs, {
-    createError: () => new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`),
-  });
-}
-
-async function readOpenRouterAudioStream(
-  response: Response,
-  deadline: ProviderOperationDeadline,
-  maxBytes: number,
-) {
+async function readOpenRouterAudioStream(response: Response, maxBytes: number) {
   if (!response.body) {
     throw new Error("OpenRouter music generation response missing stream body");
   }
@@ -225,7 +197,7 @@ async function readOpenRouterAudioStream(
   let pendingBytes = 0;
   try {
     for (;;) {
-      const { value, done } = await readOpenRouterStreamChunk(reader, deadline);
+      const { value, done } = await reader.read();
       if (done) {
         break;
       }
@@ -260,7 +232,6 @@ async function readOpenRouterAudioStream(
         lineFragments.push(chunk.slice(start));
       }
     }
-    resolveOpenRouterStreamRemainingMs(deadline);
     lineFragments.push(decoder.decode());
     const buffer = lineFragments.join("");
     pendingBytes = Buffer.byteLength(buffer, "utf8");
@@ -283,7 +254,9 @@ async function readOpenRouterAudioStream(
     void reader.cancel().catch(() => {});
     try {
       reader.releaseLock();
-    } catch {}
+    } catch {
+      // A timed-out read can still be pending while transport cancellation settles.
+    }
   }
 }
 
@@ -330,12 +303,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
         });
       const model = normalizeOptionalString(req.model) ?? DEFAULT_OPENROUTER_MUSIC_MODEL;
       const format = req.format ?? "wav";
-      const requestedTimeoutMs = resolvePositiveTimerTimeoutMs(req.timeoutMs, DEFAULT_TIMEOUT_MS);
-      const streamDeadline = createProviderOperationDeadline({
-        timeoutMs: requestedTimeoutMs,
-        label: "OpenRouter music generation",
-      });
-      const timeoutMs = resolveOpenRouterStreamRemainingMs(streamDeadline);
+      const timeoutMs = resolvePositiveTimerTimeoutMs(req.timeoutMs, DEFAULT_TIMEOUT_MS);
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/chat/completions`,
         headers,
@@ -356,7 +324,6 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
         await assertOkOrThrowHttpError(response, "OpenRouter music generation failed");
         const streamResult = await readOpenRouterAudioStream(
           response,
-          streamDeadline,
           resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
         );
         if (streamResult.audioBuffer.byteLength === 0) {
@@ -378,6 +345,13 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
             requestedFormat: format,
           },
         };
+      } catch (error) {
+        if (error instanceof Error && error.name === "TimeoutError") {
+          throw new Error(`OpenRouter music generation timed out after ${timeoutMs}ms`, {
+            cause: error,
+          });
+        }
+        throw error;
       } finally {
         await release();
       }

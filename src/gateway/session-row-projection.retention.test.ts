@@ -46,11 +46,9 @@ it("collects superseded resident rows and their materializations after metadata 
       for (const opts of [{}, { agentId: "main" }, { configuredAgentsOnly: true }]) {
         for (const activeOnly of [false, true]) {
           selections.push(
-            ...prepareSessionRowSelection(
-              projection,
-              { ...opts, activeOnly },
-              { ordered: true },
-            ).entries.map((pair) => new WeakRef(pair)),
+            ...prepareSessionRowSelection(projection, { ...opts, activeOnly }, { ordered: true })
+              .entries("all")
+              .map((pair) => new WeakRef(pair)),
           );
         }
       }
@@ -79,6 +77,7 @@ it("collects superseded resident rows and their materializations after metadata 
     }
     try {
       await projection.ensureMaterialized();
+      await captureList(0);
       for (let revision = 1; revision <= 4; revision++) {
         refreshEntries(revision);
         await projection.ensureMaterialized();

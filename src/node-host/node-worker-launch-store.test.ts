@@ -19,6 +19,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import {
@@ -201,7 +202,7 @@ describe("node worker launch admitted schema", () => {
           runSqliteReadOperationSync(db, () => readNodeWorkerLaunchReceipt(db, receipt.launchId)),
         ).toEqual(receipt);
         const reads = trackSqliteStatementExecutions(
-          db,
+          requireNativeSqliteDatabase(db),
           ["schema", "dataVersion", "launch"],
           (sql) => {
             if (/sqlite_(?:schema|master)/iu.test(sql)) {
@@ -555,8 +556,13 @@ describe("node worker terminal ownership", () => {
       const admission = vi
         .spyOn(operationAdmission, "requestSqliteWorkerOperationAdmission")
         .mockImplementation(() => {});
-      const reads = trackSqliteStatementExecutions(database, ["launch"], (sql) =>
-        sql.startsWith("select ") && sql.includes('from "node_worker_launches"') ? "launch" : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database),
+        ["launch"],
+        (sql) =>
+          sql.startsWith("select ") && sql.includes('from "node_worker_launches"')
+            ? "launch"
+            : null,
       );
       let terminal: ReturnType<NodeWorkerLaunchKernel["finishCancelled"]>;
       try {

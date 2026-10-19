@@ -16,11 +16,10 @@ import {
   TestBrowserPanelHost,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
 
 setupBrowserPanelTestCleanup();
 
-describe("BrowserPanelController tab and lifecycle ownership", () => {
+describe("BrowserPanel tab and lifecycle ownership", () => {
   it("keeps rejected capture state and replaces stale feedback with the limit error", async () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       drawImage: vi.fn(),
@@ -578,7 +577,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       throw new Error(`Unexpected browser route: ${envelope.path}`);
     });
     const inspectedHost = new TestBrowserPanelHost(inspected.client);
-    const inspectedController = new BrowserPanelController(inspectedHost);
+    const inspectedController = inspectedHost.createPanel();
     inspectedController.activeTargetId = "stable-tab";
     inspectedController.view = createView("stable-tab");
     inspectedController.setMode("inspect");
@@ -610,10 +609,10 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       throw new Error(`Unexpected browser route: ${envelope.path}`);
     });
     const wheeledHost = new TestBrowserPanelHost(wheeled.client);
-    const wheeledController = new BrowserPanelController(wheeledHost);
+    const wheeledController = wheeledHost.createPanel();
     wheeledController.activeTargetId = "stable-tab";
     wheeledController.view = createView("stable-tab");
-    wheeledController.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
+    wheeledController.input.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
 
     void wheeledController.openUrl("https://example.test/destination", { newTab: false });
     await vi.advanceTimersByTimeAsync(150);
@@ -648,7 +647,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       throw new Error(`Unexpected browser route: ${envelope.path}`);
     });
     const host = new TestBrowserPanelHost(client);
-    const controller = new BrowserPanelController(host);
+    const controller = host.createPanel();
     const previousView = createView("stable-tab", "https://example.test/previous");
     controller.activeTargetId = "stable-tab";
     controller.view = previousView;
@@ -658,7 +657,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     expect(controller.loading).toBe(true);
 
     host.isConnected = false;
-    controller.hostDisconnected();
+    controller.suspendView();
     expect(controller.loading).toBe(false);
 
     host.isConnected = true;
@@ -729,7 +728,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       const previous = createBrowserClient(async () => await previousInspection.promise);
       const replacement = createBrowserClient(async () => ({ running: true, tabs: [] }));
       const host = new TestBrowserPanelHost(previous.client);
-      const controller = new BrowserPanelController(host);
+      const controller = host.createPanel();
       controller.activeTargetId = "tab-a";
       controller.view = createView("tab-a");
       controller.setMode("inspect");
@@ -750,31 +749,4 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       expect(controller.errorText).toBeNull();
     },
   );
-  it("preserves normal coalesced wheel actions on their original tab", async () => {
-    vi.useFakeTimers();
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/act") {
-        return { result: true };
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "tab-a");
-
-    controller.handleWheel(new WheelEvent("wheel", { deltaX: 2, deltaY: 10, cancelable: true }));
-    controller.handleWheel(new WheelEvent("wheel", { deltaX: 3, deltaY: 20, cancelable: true }));
-    await vi.advanceTimersByTimeAsync(150);
-
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({
-        method: "POST",
-        path: "/act",
-        body: expect.objectContaining({
-          kind: "evaluate",
-          targetId: "tab-a",
-          fn: expect.stringContaining("window.scrollBy(5, 30)"),
-        }),
-      }),
-    );
-  });
 });

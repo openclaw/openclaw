@@ -17,7 +17,6 @@ import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.j
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 export type PreparedModelCatalogWorkerInput = Readonly<{
-  generationFingerprint: string;
   remoteCatalog: ActiveRemoteModelCatalog | null;
   input: PreparedModelRuntimeInput & { env: NodeJS.ProcessEnv };
   sourceConfigForSecrets: PreparedModelRuntimeInput["config"];
@@ -62,7 +61,6 @@ export type PreparedModelWorkerOutcome =
   | Readonly<
       PreparedModelRuntimeAuth & {
         status: "ok";
-        generationFingerprint: string;
         credentials: Readonly<AuthStorageData>;
       } & (
           | {
@@ -70,16 +68,10 @@ export type PreparedModelWorkerOutcome =
               snapshot: ModelCatalogSnapshot;
               runtimeModels: Map<string, Model[]>;
               providerExpiries: Map<string, number>;
-              hookRows: Map<string, Set<string>>;
               configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
               providerAuthLabels: ModelCatalogAuthLabels;
             }
           | { kind: "auth-refresh" }
         )
     >
-  | Readonly<{
-      status: "generation-mismatch";
-      generationFingerprint: string;
-      reconstructedFingerprint: string;
-    }>
   | Readonly<{ status: "failed"; error: string }>;

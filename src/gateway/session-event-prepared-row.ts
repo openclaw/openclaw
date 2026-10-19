@@ -89,11 +89,8 @@ function createPublicationOwner(projection: SessionRowProjection) {
               },
               options,
             );
-            if (prepared.kind === "pending") {
+            if (prepared !== deferred) {
               return prepared;
-            }
-            if (prepared.value !== deferred) {
-              return { kind: "complete" as const, value: prepared.value };
             }
             // Prepared views expire synchronously; reacquire facts and authority after yielding.
             await yieldUntil;

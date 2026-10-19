@@ -41,7 +41,7 @@ function sandboxRoleClient(role: "view" | "write"): GatewayClient {
 
 describe("session sharing sandbox requirements", () => {
   it("denies sandbox-required members host execution without changing session provenance", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg: OpenClawConfig = {
         gateway: {
           roles: {

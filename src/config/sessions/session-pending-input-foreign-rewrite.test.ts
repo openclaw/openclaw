@@ -18,10 +18,12 @@ import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.js";
 import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+
 it.each([false, true])(
   "retains foreign input authority through transcript rewrite (revoked: %s)",
   async (revoked) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(profileState, async (state) => {
       const cfg = rolePolicyConfig();
       setRuntimeConfigSnapshot(cfg);
       ensureUserProfilesSchema({});

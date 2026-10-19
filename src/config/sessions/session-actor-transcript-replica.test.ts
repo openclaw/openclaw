@@ -5,10 +5,10 @@ import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.
 import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
 import type { SessionActorHotState } from "./session-actor-state.types.js";
 import {
-  advanceSessionActorTranscriptReplica,
-  readSessionActorTranscriptContext,
-  rewriteSessionActorTranscriptReplica,
-  seedSessionActorTranscriptContext,
+  advanceSessionActorTranscriptReplica as advance,
+  readSessionActorTranscriptContext as readContext,
+  rewriteSessionActorTranscriptReplica as rewrite,
+  seedSessionActorTranscriptContext as seed,
 } from "./session-actor-transcript-replica.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
 
@@ -81,7 +81,15 @@ function fixture() {
   return { hot, rows, prepared };
 }
 
-function append(hot: SessionActorHotState, row: SessionActorTranscriptRow, payload = true) {
+function append(
+  hot: SessionActorHotState,
+  row: SessionActorTranscriptRow = {
+    rawSeq: 3,
+    event: message("next-user", "reply", "user"),
+    serializedBytes: 400,
+  },
+  payload = true,
+) {
   const after = structuredClone(hot);
   after.version = { ...after.version, sequence: after.version.sequence + 1 };
   after.transcript.version.rawSeq = row.rawSeq;
@@ -108,29 +116,40 @@ describe("actor transcript context replica", () => {
     const { hot, prepared } = fixture();
     delete prepared.residentRows;
     prepared.snapshot.truncated = true;
-    const retained = seedSessionActorTranscriptContext(undefined, hot, prepared, limits);
-    const result = readSessionActorTranscriptContext(retained, hot, limits);
+    const retained = seed(undefined, hot, prepared, limits);
+    const result = readContext(retained, hot, limits);
     expect(result).toEqual(prepared);
     result?.snapshot.events.splice(0);
-    expect(readSessionActorTranscriptContext(retained, hot, limits)).toEqual(prepared);
-    expect(
-      readSessionActorTranscriptContext(retained, hot, { ...limits, maxEvents: 7 }),
-    ).toBeUndefined();
+    expect(readContext(retained, hot, limits)).toEqual(prepared);
+    expect(readContext(retained, hot, { ...limits, maxEvents: 7 })).toBeUndefined();
     const changed = structuredClone(hot);
     changed.transcript.version.updatedAt = 99;
-    expect(readSessionActorTranscriptContext(retained, changed, limits)).toBeUndefined();
+    expect(readContext(retained, changed, limits)).toBeUndefined();
+  });
+
+  it("retains only the bounded window when a worker read cannot seed a complete path", () => {
+    const { hot, prepared } = fixture();
+    prepared.snapshot.truncated = true;
+    delete prepared.snapshot.completeActivePath;
+    prepared.transcript = { anchors: [] };
+    const expected = structuredClone(prepared.snapshot);
+    const retained = seed(undefined, hot, prepared, limits);
+    prepared.snapshot.events.length = 0;
+    const read = readContext(retained, hot, limits);
+    expect(read).toEqual({ kind: "bounded", snapshot: expected });
+    read?.snapshot.events.splice(0);
+    expect(readContext(retained, hot, limits)).toEqual({
+      kind: "bounded",
+      snapshot: expected,
+    });
   });
 
   it("advances a complete linear path using the receipt's stored byte sizes", () => {
     const { hot, prepared } = fixture();
-    const retained = seedSessionActorTranscriptContext(undefined, hot, prepared, limits);
-    const outcome = append(hot, {
-      rawSeq: 3,
-      event: message("next-user", "reply", "user"),
-      serializedBytes: 400,
-    });
-    const advanced = advanceSessionActorTranscriptReplica(retained, outcome);
-    const result = readSessionActorTranscriptContext(advanced, outcome.receipt.postimage, limits);
+    const retained = seed(undefined, hot, prepared, limits);
+    const outcome = append(hot);
+    const advanced = advance(retained, outcome);
+    const result = readContext(advanced, outcome.receipt.postimage, limits);
     expect(result?.snapshot.events).toEqual([
       ...prepared.snapshot.events,
       message("next-user", "reply", "user"),
@@ -143,11 +162,7 @@ describe("actor transcript context replica", () => {
 
   it("completes a fenced cold path from the receipt without replaying the current user", () => {
     const { hot, prepared } = fixture();
-    const outcome = append(hot, {
-      rawSeq: 3,
-      event: message("next-user", "reply", "user"),
-      serializedBytes: 400,
-    });
+    const outcome = append(hot);
     const current = outcome.receipt.postimage;
     const admission: UserTurnTranscriptAdmissionReceipt = {
       agentId: "main",
@@ -166,39 +181,28 @@ describe("actor transcript context replica", () => {
     prepared.snapshot.totalEvents = 3;
     prepared.snapshot.transcriptMutationAt = 2;
     delete prepared.snapshot.completeActivePath;
-    const retained = seedSessionActorTranscriptContext(
-      advanceSessionActorTranscriptReplica(undefined, outcome),
-      current,
-      prepared,
-      limits,
-      admission,
-    );
-    const fenced = readSessionActorTranscriptContext(retained, current, limits, admission);
+    const retained = seed(advance(undefined, outcome), current, prepared, limits, admission);
+    const fenced = readContext(retained, current, limits, admission);
     expect(fenced?.snapshot.events).toEqual(prepared.snapshot.events);
     expect(fenced?.snapshot.serializedBytes).toBe(600);
     expect(fenced?.snapshot.totalEvents).toBe(3);
     expect(fenced?.snapshot.activeLeafEntryId).toBe("reply");
     expect(fenced?.snapshot.completeActivePath).toBeUndefined();
-    expect(
-      readSessionActorTranscriptContext(retained, current, limits)?.snapshot.events,
-    ).toHaveLength(4);
+    expect(readContext(retained, current, limits)?.snapshot.events).toHaveLength(4);
   });
 
   it("keeps rewritten metadata within the retained context and tail byte limits", () => {
     const { hot, prepared } = fixture();
     const event = message("next-user", "reply", "user");
     const appended = append(hot, { rawSeq: 3, event, serializedBytes: 400 });
-    const retained = advanceSessionActorTranscriptReplica(
-      seedSessionActorTranscriptContext(undefined, hot, prepared, limits),
-      appended,
-    );
+    const retained = advance(seed(undefined, hot, prepared, limits), appended);
     const rewritten = {
       ...event,
       message: { ...event.message, __openclaw: { steerTargetRunId: "x".repeat(512 * 1024) } },
     };
     const postimage = structuredClone(appended.receipt.postimage);
     postimage.transcript.version.updatedAt = 3;
-    const next = rewriteSessionActorTranscriptReplica(retained, {
+    const next = rewrite(retained, {
       before: appended.receipt.postimage.transcript.version,
       postimage,
       rows: [
@@ -209,26 +213,26 @@ describe("actor transcript context replica", () => {
         },
       ],
     });
-    expect(readSessionActorTranscriptContext(next, postimage, limits)).toBeUndefined();
+    expect(readContext(next, postimage, limits)).toBeUndefined();
     expect(next?.tail).toEqual({ events: [], coveredAfterSeq: 3 });
   });
 
   it("detaches the retained path from seed input and returned payload mutations", () => {
     const { hot, prepared } = fixture();
-    const retained = seedSessionActorTranscriptContext(undefined, hot, prepared, limits);
+    const retained = seed(undefined, hot, prepared, limits);
     const first = prepared.snapshot.events[1];
     if (!isRecord(first)) {
       throw new Error("Expected a message fixture");
     }
     first.id = "mutated-input";
-    const read = readSessionActorTranscriptContext(retained, hot, limits);
+    const read = readContext(retained, hot, limits);
     expect(read?.snapshot.events[1]).toEqual(message("user", null, "user"));
     const returned = read?.snapshot.events[1];
     if (!isRecord(returned)) {
       throw new Error("Expected a retained message");
     }
     returned.id = "mutated-output";
-    expect(readSessionActorTranscriptContext(retained, hot, limits)?.snapshot.events[1]).toEqual(
+    expect(readContext(retained, hot, limits)?.snapshot.events[1]).toEqual(
       message("user", null, "user"),
     );
   });
@@ -255,7 +259,7 @@ describe("actor transcript context replica", () => {
       maxBytes: reason === "bytes" ? 650 : limits.maxBytes,
       maxEvents: reason === "count" || reason === "headerless count" ? 2 : limits.maxEvents,
     };
-    const retained = seedSessionActorTranscriptContext(undefined, hot, prepared, selectedLimits);
+    const retained = seed(undefined, hot, prepared, selectedLimits);
     const outcome = append(
       hot,
       {
@@ -277,9 +281,7 @@ describe("actor transcript context replica", () => {
       },
       reason !== "missing receipt",
     );
-    const advanced = advanceSessionActorTranscriptReplica(retained, outcome);
-    expect(
-      readSessionActorTranscriptContext(advanced, outcome.receipt.postimage, selectedLimits),
-    ).toBeUndefined();
+    const advanced = advance(retained, outcome);
+    expect(readContext(advanced, outcome.receipt.postimage, selectedLimits)).toBeUndefined();
   });
 });

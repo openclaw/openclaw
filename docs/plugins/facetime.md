@@ -27,7 +27,7 @@ developer-tools access, or macOS privacy permissions automatically.
 ## Requirements
 
 - An Apple Silicon Mac running macOS 14.4 or later.
-- OpenClaw 2026.9.4 or later.
+- The current OpenClaw host release, matching the bundled plugin.
 - FaceTime signed in to your Apple Account on the Gateway Mac.
 - Full Xcode installed at `/Applications/Xcode.app`.
 - The FaceTime plugin and matching signed native companion.

@@ -17,12 +17,14 @@ import {
   REMOTE_WORKSPACE_MANIFEST_JS,
 } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import { executeGitCommandBuffered, executeGitCommandBytes } from "../infra/git-exec.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES } from "../worker/node-workspace-protocol.js";
+import {
+  NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
+  projectNodeWorkerWorkspaceExecResult,
+  type NodeWorkerWorkspaceExecResult,
+} from "../worker/node-workspace-protocol.js";
 
 export const TRANSFER_TIMEOUT_MS = 10 * 60_000;
-const commandLog = createSubsystemLogger("node-host/worker-workspace");
 const NODE_MANIFEST_MEMO_BYTES = NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES - 4096;
 const boundedManifestScript = createRemoteWorkspaceManifestScript(NODE_MANIFEST_MEMO_BYTES);
 
@@ -182,9 +184,24 @@ export async function captureManifest(params: {
   }
   const envelope = parseRemoteWorkspaceManifestEnvelope(stdout);
   replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, envelope.memo);
-  commandLog.debug("node worker manifest capture completed", {
-    workspaceDir: params.workspaceDir,
-    ...envelope.metrics,
-  });
   return envelope.manifestRef;
+}
+
+export function projectWorkspaceOperationResult(
+  workspaceDir: string,
+  stdout: string,
+  argv?: readonly string[],
+): NodeWorkerWorkspaceExecResult {
+  return projectNodeWorkerWorkspaceExecResult(
+    workspaceDir,
+    {
+      stdout,
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    },
+    argv,
+  );
 }

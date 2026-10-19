@@ -5,6 +5,7 @@ import { reportCommittedInlineAuthFailure } from "./constants.js";
 import { observeCachedCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import { assertAuthProfileMigrationStateAtDatabasePath } from "./legacy-source-diagnostic.js";
 import { resolveRuntimeStoreKey } from "./mutation-lineage.js";
+import { getPreparedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { buildPersistedAuthProfileSecretsStore, mergeAuthProfileStores } from "./persisted.js";
 import {
   captureRuntimeAuthProfileLegacyCandidates,
@@ -190,6 +191,9 @@ export function createRuntimeAuthProfileSnapshotSelection(
   function getRuntimeAuthProfileStoreSnapshotCore(
     agentDir?: string,
   ): RuntimeAuthProfileStore | undefined {
+    if (!agentDir && !getPreparedSharedAuthStoreOwnership(process.env)) {
+      return undefined;
+    }
     return getRuntimeAuthProfileStoreSnapshotAtDatabasePath(resolveRuntimeStoreKey(agentDir));
   }
 
@@ -212,6 +216,12 @@ export function createRuntimeAuthProfileSnapshotSelection(
     inheritedAuthDir?: string,
     env?: NodeJS.ProcessEnv,
   ): RuntimeAuthProfileStore | undefined {
+    if (
+      (!agentDir || !inheritedAuthDir) &&
+      !getPreparedSharedAuthStoreOwnership(env ?? process.env)
+    ) {
+      return undefined;
+    }
     const inheritedKey = resolveRuntimeStoreKey(inheritedAuthDir, env);
     const requestedKey = resolveRuntimeStoreKey(agentDir, env);
     const inherited = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(inheritedKey);

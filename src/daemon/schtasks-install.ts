@@ -257,6 +257,10 @@ async function activateScheduledTask(
       throw new Error("Scheduled Task registration change did not confirm completion.");
     }
     updating = change.code === 0;
+    if (updating) {
+      // This changes the registration before XML publication can fail.
+      await params.registration?.recordRegistration();
+    }
   }
 
   // Re-apply the full XML so existing tasks inherit both false battery flags (#59299).
@@ -409,10 +413,18 @@ export async function installScheduledTask(
       });
     }
     if (!args.definitionTransaction) {
-      restoreTask = await backupScheduledTaskDefinition(
-        activationEnv,
-        resolveTaskScriptPath(resolveScheduledTaskRenderEnv(args.env, args.environment)),
+      const scriptPath = resolveTaskScriptPath(
+        resolveScheduledTaskRenderEnv(args.env, args.environment),
       );
+      restoreTask = await backupScheduledTaskDefinition(activationEnv, scriptPath);
+      if (restoreTask.registered) {
+        writeFormattedLines(args.stdout, [
+          {
+            label: "Recovery backups",
+            value: `${scriptPath}.task.xml.bak and launcher .bak files beside it are retained for recovery`,
+          },
+        ]);
+      }
     }
     staged = await writeScheduledTaskScript(args, async (files) => {
       recovery = files;

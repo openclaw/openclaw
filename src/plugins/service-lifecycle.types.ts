@@ -1,8 +1,39 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayPluginEventBroadcastFn } from "../gateway/server-broadcast-types.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import type { OpenClawPluginServiceContext } from "./plugin-registration.types.js";
 import type { PluginRegistry, PluginServiceRegistration } from "./registry-types.js";
+import type { PluginServiceCronHost } from "./service-cron.js";
 import type { PluginServiceSchedulerOwner } from "./service-scheduler.js";
+
+type PluginServiceStopResult = { errors: readonly unknown[] };
+
+export type PluginServicesHandle = {
+  reload: (config: OpenClawConfig, serviceIds: ReadonlySet<string>) => Promise<void>;
+  stop: (options?: {
+    strict: true;
+    deadlineAtMs?: number;
+    pluginIds?: ReadonlySet<string>;
+  }) => Promise<void | PluginServiceStopResult>;
+};
+
+export type StartPluginServicesParams = {
+  scheduler: GatewayScheduler;
+  registry: PluginRegistry;
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  startupTrace?: NonNullable<OpenClawPluginServiceContext["startupTrace"]>;
+  broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
+  getCronService?: () => PluginServiceCronHost | null | undefined;
+  oneShotStopTimeouts?: { eventDrainMs: number; serviceStopMs: number };
+  previous?: PluginServicesHandle | null;
+  deferStartForPluginIds?: ReadonlySet<string>;
+} & (
+  | { throwOnStartError: true; onHandle: (handle: PluginServicesHandle) => void }
+  | { throwOnStartError?: false; onHandle?: (handle: PluginServicesHandle) => void }
+);
 
 /** An issued service attempt retains cleanup custody across registry handoffs. */
 export type OwnedPluginService = {
@@ -17,6 +48,7 @@ export type OwnedPluginService = {
   startupConsumer?: PluginInstanceConsumer;
   stopping?: Promise<unknown>;
   reloading?: Promise<void>;
+  pendingReload?: OpenClawConfig;
   cleaned: boolean;
   cleanupErrors: unknown[];
   cleanupReporting?: Promise<unknown>;
@@ -34,4 +66,5 @@ export type PluginServicesOwner = {
   registrations: Set<PluginServiceRegistration>;
   stopped: Set<PluginServiceRegistration>;
   closed: boolean;
+  resumeReload?: (entry: OwnedPluginService) => void;
 };

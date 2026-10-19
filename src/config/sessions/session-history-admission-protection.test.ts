@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, onTestFinished } from "vitest";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
 
 it("reads only admitted entry payloads while protecting normalized keys and every generation", async () => {
@@ -67,7 +67,7 @@ it("reads only admitted entry payloads while protecting normalized keys and ever
     );
   }
   const storePath = "synthetic-admission-protection";
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
     scope: storePath,
     identities,
     assertAllowed: () => {},
@@ -115,7 +115,7 @@ it.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)(
       expected.add(identity);
     }
     const storePath = `synthetic-raw-admission-${encoding}`;
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities,
       assertAllowed: () => {},

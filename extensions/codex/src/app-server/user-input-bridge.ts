@@ -160,17 +160,15 @@ export function createCodexUserInputBridge(params: {
         return undefined;
       }
       const mode = readOwnDataString(request.params, "mode");
-      const requestSnapshot = structuredInput.snapshot(request.params, {
+      const snapshot = structuredInput.snapshot(request.params, {
         richForm: mode === "openaiForm" || mode === "openai/form",
       });
-      if (
-        structuredInput.isRecord(requestSnapshot) &&
-        readOwnDataString(requestSnapshot, "threadId") !== params.threadId
-      ) {
+      const requestSnapshot = structuredInput.isRecord(snapshot) ? snapshot : undefined;
+      if (requestSnapshot && readOwnDataString(requestSnapshot, "threadId") !== params.threadId) {
         return undefined;
       }
       const { compileCodexOrdinaryElicitation } = await import("./elicitation-input.js");
-      const compiled = structuredInput.isRecord(requestSnapshot)
+      const compiled = requestSnapshot
         ? compileCodexOrdinaryElicitation({ snapshot: requestSnapshot, turnId: params.turnId })
         : {
             kind: "compiled" as const,
@@ -190,9 +188,7 @@ export function createCodexUserInputBridge(params: {
           failureValue: declineElicitation("OpenClaw could not handle this elicitation."),
           run: async (signal) => {
             const resource =
-              params.prepareResourceContext &&
-              structuredInput.isRecord(requestSnapshot) &&
-              hasResourceInput(requestSnapshot)
+              params.prepareResourceContext && requestSnapshot && hasResourceInput(requestSnapshot)
                 ? await params.prepareResourceContext({
                     requestId: request.id,
                     snapshot: requestSnapshot,
@@ -202,7 +198,7 @@ export function createCodexUserInputBridge(params: {
             try {
               signal.throwIfAborted();
               const withResources =
-                resource && structuredInput.isRecord(requestSnapshot)
+                resource && requestSnapshot
                   ? compileCodexOrdinaryElicitation({
                       snapshot: requestSnapshot,
                       turnId: params.turnId,

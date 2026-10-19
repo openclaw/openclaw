@@ -1,10 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { addAbortListener } from "node:events";
 import path from "node:path";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
 import { retainSqliteWorkerErrorCode } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
@@ -13,11 +14,9 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { notifyListeners } from "../shared/listeners.js";
 import * as creationClaims from "./agent-creation-claim.js";
-import {
-  AgentDatabaseExecutionAdmissionClosedError,
-  AgentDatabaseSchemaAdmissionChangedError,
-} from "./agent-database-admission-error.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import { captureAgentDatabaseAdmission } from "./agent-database-admission.js";
 import {
   assertAgentDeletionExecutionCleanupAccess,
@@ -43,9 +42,9 @@ import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-
 import {
   type AgentDatabaseExecutionPreparedTarget,
   assertBorrowedAgentDatabaseFileIdentity,
-  captureBorrowedAgentDatabaseGenerationClaim,
   captureNativeAgentDatabaseExecutionIdentity,
   supportsAgentDatabaseExecutionScope,
+  toAgentExecutionConstraints,
 } from "./openclaw-agent-execution-scope.js";
 import { createAgentDatabaseAcceptedWork } from "./openclaw-agent-execution-work.js";
 import {
@@ -86,6 +85,7 @@ export function createAgentDatabaseExecution(
   const lifetime = new AgentDatabaseExecutionLifetime();
   let borrowers = 0;
   const acceptedWork = createAgentDatabaseAcceptedWork();
+  const terminalListeners = new Set<(reason: Error) => void>();
   let creationIdentity = expectedCreationIdentity;
   let creationBorrowers = 0;
   let generation: AgentDatabaseNativeGeneration | undefined;
@@ -121,6 +121,19 @@ export function createAgentDatabaseExecution(
     } catch {
       // The resource owner still retains the cleanup failure.
     }
+  };
+  const reportTerminal = (error: unknown) => {
+    if (terminalListeners.size === 0) {
+      return;
+    }
+    const reason = error instanceof Error ? error : new Error(formatErrorMessage(error));
+    const listeners = [...terminalListeners];
+    terminalListeners.clear();
+    // Never join this notification from close/run: their accepted work must settle first.
+    void Promise.resolve().then(async () => {
+      await Promise.allSettled(acceptedWork.pending.keys());
+      notifyListeners(listeners, reason);
+    });
   };
   const finishRetirement = () => {
     lifetime.retire();
@@ -190,9 +203,7 @@ export function createAgentDatabaseExecution(
     createIfMissing = false,
     creatingTarget?: DatabasePathIdentity,
     signal?: AbortSignal,
-    readmitSchema = false,
     contentionDeadline?: number,
-    schemaReadmitted = false,
   ): Promise<T | undefined> {
     const pending = agentDatabaseLifecycle.pending.get(pathname);
     if (pending) {
@@ -204,6 +215,11 @@ export function createAgentDatabaseExecution(
       }
       await pending.promise;
       pending.controller.signal.throwIfAborted();
+      assertCallerCurrent();
+    }
+    const nativeOpen = generation?.getPendingNativeOpen();
+    if (nativeOpen) {
+      await racePromiseWithAbortSignal(nativeOpen, signal, (aborted) => aborted.reason);
       assertCallerCurrent();
     }
     if (nativeClosing) {
@@ -230,8 +246,9 @@ export function createAgentDatabaseExecution(
             throw new Error("Agent cleanup no longer owns its original execution reference");
           }
         },
-        expectedIdentity ?? fileIdentity,
+        expectedIdentity ?? fileIdentity ?? toAgentExecutionConstraints(identity).expectedIdentity,
         acceptFileIdentity,
+        reportTerminal,
         fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
         creationClaim?.witness,
       );
@@ -249,27 +266,23 @@ export function createAgentDatabaseExecution(
         assertCallerCurrent,
         createIfMissing,
         signal,
-        readmitSchema,
       );
       // A peer's intentional native close can finish while this admitted operation settles.
       if (generation === current && !nativeClosing && current.failure()) {
-        await owner.close().catch(reportCleanupFailure);
+        await closeNative(current).catch(reportCleanupFailure);
       }
       return result;
     } catch (error) {
       const nativeFailure = current.failure();
       const contended = !entered && isSqliteLockError(error);
-      const schemaChanged =
-        !entered &&
-        !schemaReadmitted &&
-        nativeFailure !== "native" &&
-        error instanceof AgentDatabaseSchemaAdmissionChangedError;
-      if (generation === current && (nativeFailure || retireNativeOnFailure || schemaChanged)) {
+      if (generation === current && (nativeFailure || retireNativeOnFailure)) {
         try {
           if (nativeFailure === "native" && !contended && !nativeClosing) {
+            reportTerminal(error);
             await owner.close();
           } else {
-            // The rejected broker scope has settled; only its captured native owner is retired.
+            // A lost carrier invalidates native claims, not other chats' logical borrowers.
+            // The failed operation stays failed; only later work can open a fresh generation.
             await closeNative(current);
           }
         } catch (cleanupError) {
@@ -280,26 +293,6 @@ export function createAgentDatabaseExecution(
             error,
           );
         }
-      }
-      if (schemaChanged) {
-        // Fresh proof can recover a refused publication; an entered operation is never replayed.
-        assertCurrent();
-        source.assertCurrent();
-        assertCallerCurrent();
-        signal?.throwIfAborted();
-        return run(
-          source,
-          operation,
-          assertCallerCurrent,
-          expectedIdentity,
-          retireNativeOnFailure,
-          createIfMissing,
-          creatingTarget,
-          signal,
-          readmitSchema,
-          contentionDeadline,
-          true,
-        );
       }
       if (contended) {
         const deadline =
@@ -327,9 +320,7 @@ export function createAgentDatabaseExecution(
             createIfMissing,
             creatingTarget,
             signal,
-            readmitSchema,
             deadline,
-            schemaReadmitted,
           );
         }
       }
@@ -345,6 +336,7 @@ export function createAgentDatabaseExecution(
     get creationIdentity() {
       return creationIdentity;
     },
+    getPendingPreparation: () => generation?.getPendingPreparation(),
     borrow(borrowedPath, expected, creating, requestedPath) {
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
@@ -406,11 +398,20 @@ export function createAgentDatabaseExecution(
         cleanup?.assertCurrentHost();
         assertReferenceCurrent();
       };
-      const captureGenerationClaim = () =>
-        captureBorrowedAgentDatabaseGenerationClaim(assertBorrowed, () => generation);
+      const captureGenerationClaim = () => {
+        assertBorrowed();
+        if (!generation) {
+          throw new Error("Agent database execution has no admitted generation");
+        }
+        return generation.captureClaim(assertBorrowed);
+      };
       const borrowed: OpenClawAgentDatabaseExecution = {
         agentId,
         path: borrowedPath,
+        onTerminal(listener) {
+          terminalListeners.add(listener);
+          return () => terminalListeners.delete(listener);
+        },
         get fileIdentity() {
           assertBorrowed();
           return fileIdentity;
@@ -453,7 +454,7 @@ export function createAgentDatabaseExecution(
           }
           return captureGenerationClaim();
         },
-        async prepare(source, signal, preparationOptions) {
+        async prepare(source, signal) {
           assertBorrowed();
           assertCreationReference(true);
           const result = run(
@@ -468,7 +469,6 @@ export function createAgentDatabaseExecution(
             true,
             creatingTarget,
             signal,
-            preparationOptions?.readmitSchema,
           );
           acceptedWork.pending.set(result, { borrower });
           void result.finally(() => acceptedWork.pending.delete(result)).catch(() => undefined);
@@ -499,7 +499,20 @@ export function createAgentDatabaseExecution(
             }
             return await execute();
           } catch (error) {
-            if (runOptions?.retireNativeOnFailure && capturedGeneration) {
+            let retireNative = runOptions?.retireNativeOnFailure === true;
+            if (capturedGeneration && generation === capturedGeneration && fileIdentity) {
+              try {
+                // A caller refusal preserves co-users; loss of our own physical file cannot.
+                assertExistingDatabaseIdentity(
+                  fileIdentity.nativeLocation,
+                  `file:${fileIdentity.physicalIdentity}`,
+                  fileIdentity.birthtime,
+                );
+              } catch {
+                retireNative = true;
+              }
+            }
+            if (retireNative && capturedGeneration) {
               try {
                 await closeNative(capturedGeneration);
               } catch (cleanupError) {
@@ -569,7 +582,7 @@ export function createAgentDatabaseExecution(
                     return;
                   }
                   void owner.closeIdle().catch(reportCleanupFailure);
-                }, SQLITE_IDLE_HANDLE_TTL_MS),
+                }, resolveAgentDatabaseIdleHandleTtlMs()),
               );
               idleTimer = timer;
               timer.unref();
@@ -624,6 +637,9 @@ export function createAgentDatabaseExecution(
     lifetime.revoke();
     acceptedWork.cancelReadAdmissions();
     clearIdleTimer();
+    reportTerminal(
+      new AgentDatabaseExecutionAdmissionClosedError("Agent database execution admission revoked"),
+    );
   };
   const unregisterAgent = () => {
     for (const [alias, unregister] of aliases) {
@@ -667,6 +683,9 @@ export function createAgentDatabaseExecution(
     unregisterShared = registerOpenClawStateDatabaseAsyncResource({
       close: async (sharedIdentity) => {
         if (!sharedIdentity || sharedIdentity.key === context.admission.identity.key) {
+          reportTerminal(
+            new AgentDatabaseExecutionAdmissionClosedError("Agent database state admission closed"),
+          );
           await acceptedWork.closeAccepted(() => owner.close());
         }
       },

@@ -3,9 +3,9 @@ import { captureSessionEntryCurrentCheckAsyncInternal } from "../../../config/se
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import { warnPluginSdkDeprecation } from "../../../plugins/sdk-deprecation.js";
 import {
-  createNativeSessionBindingAuthority,
+  createNativeSessionBindingAuthorityInternal,
   createPreparedNativeSessionBindingAuthority,
-  combineNativeSessionBindingAuthority,
+  combineNativeSessionBindingAuthorityInternal,
   combinePreparedNativeSessionBindingAuthority,
   readNativeSessionBindingEntries,
   type NativeSessionBindingAuthority,
@@ -18,7 +18,7 @@ import type {
 } from "./binding-generation.js";
 
 /**
- * @deprecated Use resolvePreparedNativeSessionBinding and release its capture.
+ * @deprecated Use resolvePreparedNativeSessionBinding and release its capture; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31.
  */
 export async function resolveNativeSessionBindingWithAuthority<TBinding>(
   params: NativeSessionBindingResolveOptions<TBinding> & {
@@ -150,15 +150,15 @@ async function resolveNativeSessionBindingOwner<TBinding>(
   };
   assertAdmissionCurrent();
   const captured = params.target?.sessionKey?.trim()
-    ? await prepareNativeSessionGenerationAuthority({
+    ? await prepareNativeSessionGenerationAuthorityInternal({
         ...params,
         target: params.target,
         assertCurrent: assertAdmissionCurrent,
       })
     : undefined;
-  const authority = combineNativeSessionBindingAuthority(
+  const authority = combineNativeSessionBindingAuthorityInternal(
     params.authority,
-    captured?.authority ?? createNativeSessionBindingAuthority([], assertAdmissionCurrent),
+    captured?.authority ?? createNativeSessionBindingAuthorityInternal([], assertAdmissionCurrent),
   );
   let binding = await readBinding(authority, captured?.previousSessionId);
   if (!binding && captured && params.target && params.generation) {
@@ -311,8 +311,19 @@ export type RetainedNativeSessionGenerationAuthority = Awaited<
   ReturnType<typeof retainNativeSessionGenerationAuthority>
 >;
 
-/** @deprecated Use retainNativeSessionGenerationAuthority and release its capture. */
+/** @deprecated Use retainNativeSessionGenerationAuthority and release its capture; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
 export async function prepareNativeSessionGenerationAuthority(
+  params: NativeSessionGenerationParams,
+) {
+  warnPluginSdkDeprecation({
+    family: "native-session-binding",
+    method: "prepareNativeSessionGenerationAuthority",
+    replacement: "retainNativeSessionGenerationAuthority",
+  });
+  return prepareNativeSessionGenerationAuthorityInternal(params);
+}
+
+async function prepareNativeSessionGenerationAuthorityInternal(
   params: NativeSessionGenerationParams,
 ) {
   const read = {
@@ -340,7 +351,7 @@ export async function prepareNativeSessionGenerationAuthority(
   const current = entry?.sessionId === params.target.sessionId;
   const state = entry === undefined ? "ephemeral" : current ? "current" : "superseded";
   const previousSessionId = current ? entry?.previousSessionId : undefined;
-  const authority = createNativeSessionBindingAuthority(
+  const authority = createNativeSessionBindingAuthorityInternal(
     state === "current"
       ? [
           {

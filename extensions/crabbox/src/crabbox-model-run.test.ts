@@ -1,15 +1,25 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { promisify } from "node:util";
 import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import type { ConfiguredModelEgress } from "openclaw/plugin-sdk/secret-egress-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CRABBOX_MIN_VERSION, resolveManagedCrabboxBinaryPath } from "./crabbox-managed-binary.js";
 
-const mocks = vi.hoisted(() => ({ run: vi.fn(), withEgress: vi.fn() }));
-vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runCommandWithTimeout: mocks.run }));
+const mocks = vi.hoisted(() => ({ run: vi.fn(), version: vi.fn(), withEgress: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandWithTimeout: (argv: string[], params: CommandOptions) =>
+    (argv[1] === "--version" ? mocks.version : mocks.run)(argv, params),
+}));
 vi.mock("openclaw/plugin-sdk/secret-egress-runtime", () => ({
   withConfiguredModelEgress: mocks.withEgress,
 }));
 const { runCrabboxModelCommand } = await import("./crabbox-model-run.js");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 const execFileAsync = promisify(execFile);
 const capabilityHelp = "  -upstream-proxy-env string\n";
 const egress: ConfiguredModelEgress = {
@@ -33,11 +43,27 @@ function result(stdout = "", code = 0): SpawnResult {
 }
 beforeEach(() => {
   mocks.run.mockReset();
+  mocks.version.mockReset().mockResolvedValue(result(CRABBOX_MIN_VERSION));
   mocks.withEgress.mockReset();
   mocks.withEgress.mockImplementation(async (_options, run) => await run(egress));
 });
 
 describe("Crabbox protected model command", () => {
+  it("upgrades an outdated executable before capability and credential use", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-model-managed-"));
+    const binary = resolveManagedCrabboxBinaryPath();
+    await fs.mkdir(path.dirname(binary), { recursive: true });
+    await fs.writeFile(binary, CRABBOX_MIN_VERSION);
+    mocks.version.mockImplementation(async ([candidate]: string[]) =>
+      result(candidate === options.binary ? "0.76.0" : CRABBOX_MIN_VERSION),
+    );
+    mocks.run.mockResolvedValueOnce(result(capabilityHelp)).mockResolvedValueOnce(result("done"));
+
+    await expect(runCrabboxModelCommand(options)).resolves.toMatchObject({ stdout: "done" });
+    expect(mocks.run.mock.calls.map(([argv]) => argv[0])).toEqual([binary, binary]);
+    expect(mocks.withEgress).toHaveBeenCalledOnce();
+  });
+
   it("preserves command output returned to the caller", async () => {
     const output = {
       ...result("API_TOKEN = computeToken()\n"),

@@ -137,6 +137,23 @@ and does not change admission, ordering, or warning thresholds.
 The Gateway records a bounded, payload-free stability stream by default when
 diagnostics are enabled. It captures operational facts, not content.
 
+Child-process spawn samples use bounded command families and operation labels.
+Known owners distinguish agent exec launches (`agent.exec`), shell environment
+snapshots (`shell.snapshot`), and service relay helpers (`service.relay`).
+Additional owners distinguish CLI backends (`agent.cli`), isolated file reads
+(`agent.file-read`), service-manager commands (`service.manager`), native worktree
+writes (`worktree.filesystem`), retired checkout deletion (`worktree.cleanup`),
+and temporary pack cleanup (`worktree.maintenance`).
+Relays launched for agent exec retain `agent.exec` as their owner.
+Native PTY exec launches use the same counter after successful admission.
+Windows PTYs publish their PID asynchronously, so attribution waits for the first
+output or exit without delaying the terminal.
+Unscoped launches use fixed classifications such as `unscoped.shell-command`,
+`unscoped.runtime`, or `unscoped.gh`; arguments, script text,
+and paths never become labels. Linux OOM-protection exec wrappers report the
+logical target command, since the spawn broker can omit the wrapper shell.
+Counts represent successful admitted launches, not a census of grandchildren.
+
 Gateway RPC diagnostics retain exact core and registered plugin method names,
 including `node.invoke.result` and `workboard.cards.list`; unregistered request
 names fold into `other` (dedicated worker ingress uses `unknown`). The method
@@ -145,6 +162,13 @@ by caller-supplied names. The Prometheus exporter retains its shared 2,048-sampl
 cap across counters, gauges, and histograms; a fully observed method uses up to
 five samples. Watch `openclaw_prometheus_series_dropped_total` for incomplete
 coverage. See [Prometheus metrics](/gateway/prometheus) for timing semantics.
+
+Requester completion warnings include the underlying error name and message.
+`requester settle wake failed`, `failed to persist requester settle wake rejection`,
+and `failed to publish requester settle dispatch` report failures at the lifecycle
+owner on each failed attempt. These replace the former sustained requester-wake
+commit warning; retained settlement receipts retry through the existing sweep
+without redelivering a completed result.
 
 The existing diagnostic heartbeat debug log includes `nextWakeAtMs`, the earliest
 pending wake time in the Gateway scheduler as a Unix timestamp in milliseconds
@@ -174,19 +198,26 @@ no tracked work is active. Other idle liveness samples remain diagnostic events
 without escalating to a warning.
 
 The Gateway also emits an always-on `main-thread stall` warning after a synchronous
-callback blocks for more than one second. Each line names the longest-running
-known task segment from scheduled jobs, diagnostic phases, timeline spans, or
+callback blocks for at least 250 milliseconds. Each line names the longest-running
+known task segment from RPC handlers, scheduled jobs, diagnostic phases, timeline spans, or
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
-does not count as task execution. A task label expires when its callback returns
-or its returned promise settles; detached work does not retain a completed startup
-phase's label. Unknown callbacks use `task=unattributed`;
-process suspension can also produce an unattributed delay. Reporting is bounded
-to eight pending stalls, with an omitted count if that limit is exceeded. This
-requires neither an inspector connection nor a sampling profiler.
-
-Detailed attribution of asynchronous continuations requires Node's `async_hooks`
-callback boundaries. Bun currently reports explicit synchronous task scopes and
-otherwise retains unattributed delay warnings.
+does not count as task execution. Labels cover the synchronous portion of explicit
+task scopes. Asynchronous continuations and unknown callbacks use best-effort unattributed
+delay warnings from the event-loop sampler; the Gateway does not install
+process-wide async hooks to time every promise continuation. During healthy idle
+windows, the native histogram is disabled: an unscoped stall that finishes before
+the next sampling deadline can go unreported. Explicit task scopes and overdue
+idle wakes remain observable. Process suspension
+can also produce an unattributed delay. Reporting is bounded to eight pending
+named stalls per sampling window, with an omitted count if that limit is exceeded.
+With the Prometheus plugin enabled, `openclaw_gateway_main_thread_stall_seconds`
+records these callback durations by `task`; its `_count` counts observed stalls.
+`openclaw_gateway_main_thread_stalls_dropped_total` counts observations omitted
+by the pending limit. Unattributed event-loop window delays remain a separate
+metric because a delayed window can contain several short callbacks rather than
+one blocking task. RPC labels remain available even with diagnostics disabled.
+These warnings
+require neither an inspector connection nor a sampling profiler.
 
 Startup phases emit `diagnostic.phase.completed` events with wall-clock and
 whole-process CPU timing, including worker and native threads. Phase CPU can
@@ -289,9 +320,10 @@ node scripts/diagnostic-writer-occupancy.mts gateway.log --json \
 
 The report splits observed reservation and queue-wait intervals into UTC minutes,
 ranks operation categories, and lists the longest observed reservations. Native
-transaction phases appear separately: `hostAdmissionWaitMs` measures time awaiting
-the host, while `sqlMs` is the remaining execution time, including JavaScript
-processing. Do not add transaction time to enclosing reservation time.
+transaction phases appear separately. `hostAdmissionWaitMs` measures waits for
+transaction authority, while `databaseAdmissionWaitMs` measures database metadata
+exchanges with the host. `sqlMs` is the remaining execution time, including
+JavaScript processing. Do not add transaction time to enclosing reservation time.
 
 This is a warning census, not complete writer utilization. Fast operations are
 absent, `direct` reservations do not identify their underlying command, and logs
@@ -350,12 +382,25 @@ The result contains `profile` in V8 CPU-profile format, `requestedDurationMs`,
 `actualDurationMs`, `startBlockedMs`, `samplingIntervalMicros`, `redactedNodeCount`, and
 `sampleLossCount: null` because the native profilers do not expose an explicit lost-sample count.
 Node samples V8; Bun samples JavaScriptCore and returns the same profile format.
-The complete result is limited to 1 MiB; larger profiles fail without truncating
-nodes or samples. Code locations inside the OpenClaw package use `openclaw:` paths;
+The complete result is limited to 1 MiB. When the full graph exceeds that limit,
+the result contains `summary` instead of `profile`, with `truncated: true`,
+`originalNodeCount`, `sampleCount`, and `omittedSampleCount`. Each summary row
+contains a leaf-first `stack` of up to eight frames and its recorded `sampleCount`.
+If those frames contain no OpenClaw code, the nearest `openclaw:` caller toward
+the root is appended when available, for at most nine frames. `elidedFrameCount`
+counts frames skipped between the first eight frames and that appended caller;
+it is zero when there is no gap. Stacks with identical frames and elision counts
+are combined; the most sampled stacks come first, with at most
+128 rows within the same byte limit. These counts are samples, not exact CPU time.
+This preserves useful attribution during busy startup windows, when deep stacks
+and V8 deoptimization samples can enlarge the graph despite the sampling interval.
+The input limits of 16,384 nodes and 65,536 samples still apply; captures exceeding
+either limit remain unavailable to bound processing work.
+Code locations inside the OpenClaw package use `openclaw:` paths;
 Node builtin locations use `node:` paths. External paths, eval labels, and other
 unrecognized names are redacted. Bounded code-symbol names at recognized locations
 are retained; their syntax does not prove that a computed name is public. Review
-the profile before sharing it. Graph edges, native signed script IDs, and sample order remain intact. V8 can
+the profile before sharing it. Full profiles retain graph edges, native signed script IDs, and sample order. V8 can
 emit samples out of timestamp order, so signed time deltas are preserved for profile
 viewers to reconstruct timestamps and order samples.
 
@@ -378,12 +423,16 @@ attribute capture-induced stalls when analyzing an individual capture; it cannot
 be subtracted from aggregate event-loop maxima or percentiles. The measurement
 reports the cost; it does not prevent or interrupt the native stall.
 
-From a source checkout, attribute native self samples to their nearest JavaScript
-parent with:
+For a full `profile` result, a source checkout can attribute native self samples
+to their nearest JavaScript parent with:
 
 ```bash
 node scripts/diagnostic-cpu-native-parents.mts cpu-1.json cpu-2.json
 ```
+
+This analyzer requires a full profile. For a truncated result, inspect its
+`summary` rows directly: each `stack` starts at the sampled function and continues
+through its nearest callers, with `sampleCount` recording how often it was sampled.
 
 The script accepts saved RPC results or raw V8 profiles and prints the top 20
 parents for each capture. Add `--json` for all parent rows. Percentages use elapsed
@@ -522,7 +571,7 @@ JavaScript isolate without taking a whole-heap snapshot:
 ```bash
 openclaw gateway call diagnostics.heapProfile --params '{}' --timeout 30000 --json
 openclaw gateway call diagnostics.heapProfile --params '{"durationMs":10000,"samplingIntervalBytes":32768}' --timeout 45000 --json
-openclaw gateway call diagnostics.heapProfile --params '{"includeObjectsCollectedByMajorGC":true,"includeObjectsCollectedByMinorGC":true}' --timeout 30000 --json
+openclaw gateway call diagnostics.heapProfile --params '{"includeCollected":true}' --timeout 30000 --json
 ```
 
 The RPC supports Node and OpenClaw's Bun runtime. It defaults to five seconds and an average sampling interval of
@@ -534,7 +583,8 @@ collect more samples at greater CPU and memory cost. Choose a CLI timeout longer
 than the requested capture. The critical-memory warning points to this RPC;
 pressure never starts a capture automatically.
 
-The optional booleans `includeObjectsCollectedByMajorGC` and
+`includeCollected: true` enables both collected-object flags. Explicit per-GC
+flags override the shorthand. The optional booleans `includeObjectsCollectedByMajorGC` and
 `includeObjectsCollectedByMinorGC` both default to `false`. Enable both to retain
 samples of objects collected during the window and attribute transient allocation
 churn. Retaining collected samples can increase profiler memory use.
@@ -678,6 +728,29 @@ memory, so do not add those values together. Other direct workers use native hea
 statistics and leave ArrayBuffer bytes unavailable. Nested workers are outside
 the parent registry's coverage.
 
+The prepared-model catalog worker also reports `workerHeaps[].retainedData`: bounded, size-only
+censuses with fixed structure labels, entry counts, approximate bytes, and
+aggregate generation, provider, and account counts where applicable. They never
+include catalog contents, object keys, provider or account identities, or secrets.
+The census uses the existing worker-memory sampling channel; it does not take a
+heap snapshot. Byte counts estimate owner-held data, not V8 retained size; shared
+objects are counted once within each structure, and structures can overlap.
+`stringBytes` estimates string payload bytes, while `objects` counts traversed
+objects. Coverage includes the named structures, not module runtime or closure roots.
+`truncated: true` means the estimator reached its work bound or skipped opaque
+values (proxies, accessors, or custom instances), so that estimate is partial.
+Only plain records and arrays are traversed; plugin iterators and accessors never run. Native-only fallback samples omit the census until the worker responds.
+`catalog-static` counts retained provider records without reading plugin-owned model arrays.
+`catalog-source` covers shared cached provider payloads, which may already be
+normalized. `catalog-request` rows count pending cache loads and active worker
+tasks separately. Pending loads have zero-byte estimates because their state is
+opaque; active task inputs are measured.
+Read the latest sampled census through the existing diagnostics CLI:
+
+```bash
+openclaw gateway stability --type diagnostic.memory.sample --limit 1 --json
+```
+
 `workerHeapSampledCount` and `workerArrayBuffersSampledCount` show coverage against
 `workerCount`. `workerMemoryCoverage` is `complete`, `partial`, or `unavailable`
 for direct workers. Before the first sample or after a sample expires, missing
@@ -689,6 +762,10 @@ refresh its heap and external counters; ArrayBuffer coverage remains unavailable
 until the worker responds. Memory pressure warnings include these counters and the external-memory
 limit caveat; Node does not provide a worker limit for external/native allocations.
 
+Linux samples add anonymous-page counters asynchronously. Worker sample ages
+include that delay; coverage and heap counters describe acquisition. These fields
+are not an atomic process snapshot.
+
 Critical memory pressure retires idle workers through their existing cleanup owners,
 including when diagnostic event collection is disabled. Warnings do not retire
 workers. Retirement requests are asynchronous, skip active work, and keep native
@@ -698,11 +775,135 @@ No stored data, database schema, or update procedure changes.
 
 When a task pool recreates an idle-retired Worker within five minutes, it keeps
 one replacement warm for five minutes of inactivity. Other slots retain their
-normal idle timeout. Node Code Mode likewise retains at most one completed
+normal idle timeout. Git metadata readers use a two-minute idle timeout so the
+one-minute PR polling and repository-discovery refreshes can reuse both readers.
+Node Code Mode likewise retains at most one completed
 Worker for five minutes, reusing it only when its runtime entry and heap limit
-match. Warm task workers still collect released payloads in place; critical
+match. Code Mode relies on V8's normal garbage collection rather than inspector
+collection at idle task boundaries. Other warm task workers still collect released payloads in place; critical
 pressure, cancellation, rotation, and shutdown retain their existing cleanup
 paths. No configuration setting is needed.
+
+## Garbage collection metrics
+
+The [GC histogram](/gateway/prometheus#garbage-collection-duration) separates minor
+scavenges, major mark/sweep/compact collections, incremental work, and weak-reference
+processing. Counts and elapsed durations are grouped by main thread or bounded
+worker script kind, without per-GC log lines. Instrumented workers use their
+existing memory telemetry port and observe GC only while an exporter is interested.
+One native `GCProfiler` per isolate supplies batches on a one-second timer, shared
+with the Code Mode thrash guard. It does not schedule JavaScript after each GC:
+per-collection `PerformanceObserver` delivery can keep an idle worker collecting.
+Native counts and durations remain exact; callback flags are unavailable, so the
+`reason` label is `other`.
+Worker GC batches ride the next heap sample (normally every 30 seconds), with a
+flush after 256 pending samples or on orderly worker shutdown. Individual collection counts and durations
+are preserved; worker histogram updates can lag by one sampling interval.
+Workers without that port are not covered; a missing series does not mean zero GC.
+
+Node Code Mode also warns when an isolate exceeds 600 major collections per minute
+across an observation window of at least 10 seconds, at most once per worker per
+minute. `Code Mode worker GC storm` records the reusable metric `workerSlot`, native
+`workerThreadId`, pool `workerId`, current Code Mode `runId`, a 16-character SHA-256
+`sessionKeyHash`, lifetime `cellCount`, `activeCellCount`, and distinct pending
+`bridgeMethods`. Parked cells retain attribution; completed cells clear it. Idle
+warnings have no current run. Slots above the 64-worker metric bound are omitted.
+The record includes the window count and duration plus isolate-local `heapUsed`,
+`heapTotal`, `external`, `arrayBuffers`, and `heapSizeLimitBytes`. ArrayBuffers are
+included in external memory. These warnings use the existing memory port and do
+not require an exporter; they contain no guest source, arguments, or results.
+Attribution describes the cell active when the sampler delivers the batch, not
+proof that the cell caused every collection in the window. The sampler cannot
+report while synchronous guest execution blocks its event loop.
+
+The first storm starts a five-second allocation and CPU capture in the affected
+worker, at most once per worker per hour (failed attempts also consume the hour).
+Heap sampling uses a 256 KiB interval and includes objects collected by both major
+and minor GC, so short-lived allocation churn remains visible. CPU sampling uses
+a 10 ms interval over the same window. CPU and allocation profiling start only
+after a storm; periodic GC sampling remains active. Active tracing, debugging,
+or profiling can make capture unavailable.
+
+The Gateway writes sanitized results to `<state>/diagnostics/code-mode-gc-*`
+as `.heapprofile.json` and `.cpuprofile.json`. The completion warning lists
+`profileFiles`; failures report `captureStatus: "unavailable"` and a fixed
+`captureReason`. Files contain sampled stacks, counters, and timing, not guest
+source, arguments, results, or heap objects. Unknown/guest frame names and URLs
+are redacted using the profiling RPC policy. Each result is bounded to 1 MiB;
+the Gateway retains at most 20 storm profile files globally, with owner-only
+permissions. Other diagnostic artifacts are untouched. These files are not
+automatically included in support exports. The existing profiling RPCs still
+target the main isolate. Capture duration can exceed five seconds if synchronous
+guest work blocks the worker's event loop; retiring the worker can interrupt capture.
+
+## Outbound WebSocket event traffic
+
+The [Prometheus exporter](/gateway/prometheus) records
+`openclaw_gateway_ws_events_total{event}` and
+`openclaw_gateway_ws_event_bytes_total{event}` for outbound event frames accepted
+by the WebSocket sender. Each receiving socket contributes one frame and its full
+encoded JSON size, so fan-out is visible. Bytes are UTF-8 payload bytes before
+WebSocket framing or compression; acceptance does not prove delivery to the client.
+`openclaw_gateway_ws_event_wire_bytes_total{event}` records payload bytes handed
+to the socket after the codec: deflated bytes when compressed, raw bytes otherwise.
+It excludes WebSocket, TLS, and TCP headers. Compression completion can report
+these bytes after the corresponding raw-frame observation. Direct local delivery
+contributes its raw payload size.
+`openclaw_gateway_ws_event_frame_bytes{event,le}` counts accepted raw frames in
+cumulative byte-size buckets: `256`, `512`, `1024`, `2048`, `4096`, `8192`,
+`16384`, `65536`, and `+Inf`. Each frame contributes to every matching upper
+bound, so the buckets support p50/p90 estimates with `histogram_quantile`.
+The event label contains only known protocol names, with `other` for unknown
+names. Payload content and session, user, and connection identifiers are excluded.
+The sender batches observations by event name within one event-loop turn,
+preserving the per-socket frame and byte totals without exporting every send
+as a separate diagnostic event.
+`openclaw_gateway_ws_operator_connections` reports the current authenticated
+operator socket count without labels, updating on connect/disconnect and every
+30 seconds to refresh late-starting exporters or recover dropped snapshots.
+OpenTelemetry exports the corresponding
+`openclaw.gateway.ws.events`, `openclaw.gateway.ws.event_bytes`,
+`openclaw.gateway.ws.event_wire_bytes`, `openclaw.gateway.ws.event_frame_bytes`, and
+`openclaw.gateway.ws.operator_connections` metrics.
+
+`openclaw_gateway_ws_presence_frames_total{mode}` and
+`openclaw_gateway_ws_presence_bytes_total{mode}` split presence traffic into
+`delta`, `reset` (full snapshots for capable clients), and `legacy` (full frames
+without delta negotiation). OpenTelemetry exports
+`openclaw.gateway.ws.presence_frames` and `openclaw.gateway.ws.presence_bytes`
+with the `openclaw.gateway.ws.mode` attribute. Counts and bytes use the same
+per-socket send acceptance and batching as the aggregate counters.
+
+`openclaw_gateway_ws_session_event_frames_total{event,reason,delivery}` and
+`openclaw_gateway_ws_session_event_bytes_total{event,reason,delivery}` add session
+traffic attribution. OpenTelemetry exports
+`openclaw.gateway.ws.session_event_frames` and
+`openclaw.gateway.ws.session_event_bytes` with `openclaw.gateway.ws.event`,
+`openclaw.gateway.ws.reason`, and `openclaw.gateway.ws.delivery` attributes.
+
+The session counters use `event`, `reason`, and `delivery`. `event` is only
+`sessions.changed` or `session.message`. For `sessions.changed`, `reason` is the
+producer's reason (or lifecycle phase when no reason is present):
+`abort`, `activity-summary`, `agent.input.settled`, `agent.run.started`,
+`archive`, `board`, `branch-switch`, `chat.dispatch-error`, `chat.title`,
+`cleanup`, `compact`, `create`, `cron-continuation`, `delete`, `dispatch`,
+`fork`, `github-publication`, `goal`, `groups`, `involvement`, `move`, `new`,
+`owner`, `participants`, `patch`, `placement`, `plugin-patch`, `progress-card-reset`,
+`project`, `reclaim`, `recovery`, `reset`, `rewind`, `run-capacity`, `send`,
+`sharing`, `steer`, `subagent-status`, `swarm-note`, `title`, `unarchive`,
+`update`, `updated`, `worker-disk-space`, and `worker-runtime-install`.
+Lifecycle phases are `start`, `model`, `end`, `error`, and `message`.
+For `session.message`, `reason` is the message role: `user`, `assistant`, `system`,
+`developer`, `tool`, or `toolResult`; an absent role uses `message`.
+Unknown reasons, phases, and roles use `other`.
+`delivery="subscribed"` means the recipient holds an exact
+`sessions.messages.subscribe` subscription for that session, including its
+producer-resolved alias; all other recipients use `delivery="roster"`.
+This describes subscription membership, not whether a tab is visible or a peer
+acknowledged receipt. Keyless roster invalidations use `roster`.
+The counters reuse the existing encoded byte length without serializing again,
+and batch by label set within the same event-loop turn. No message content,
+IDs, or session keys enter the labels. Existing event counter labels stay unchanged.
 
 ## RPC response size and heap changes
 
@@ -718,7 +919,65 @@ include `source`, `rowMode` (`compact` or `full`), `limit`, `offset`, and
 `filterKind`. The caller source is a bounded Control UI tag or `unspecified`;
 filter kinds contain parameter names, never search text, identities, or paths.
 The optimized WebSocket journal also records fast `sessions.list` responses of
-at least 200 KiB. Metric labels remain unchanged.
+at least 200 KiB. `openclaw_sessions_list_requests_total` counts requests by
+`client_kind`, `source`, `caller_source`, `row_mode`, and `filter`;
+`openclaw_sessions_list_response_bytes_total` attributes successful response
+bytes to the same dimensions plus `rows_outcome` (`unchanged`, `delta`,
+`full-no-base`, `full-with-base`, or `not-sidebar`). Sidebar replies and other
+row modes that opt into conditional replies use `full-no-base` when the request
+omits `ifRowsRevision` or sends an empty initial token; `full-with-base` covers
+stale or evicted bases and the rare case where every row changed. Attribution
+uses the request and existing response fields without changing the protocol payload.
+`not-sidebar` covers non-sidebar calls that omit the conditional parameter.
+
+`openclaw_sessions_list_baseline_retirements_total{cause}` counts one event per
+view-cache clear or eviction that retires conditional rows or history, not rows or
+views removed. Selection-only views and non-sidebar views without conditional
+reads do not count; an empty conditional row list is still a baseline. Its bounded
+causes are `projection-revision`, `config`, `identity`, `selection-reset`,
+`view-evicted`, and `history-evicted`. Views are evicted in least-recently-used
+order at 512 cache slots or 32 MiB estimated retention per projection; each view
+retains at most 32 prior row generations.
+For invalidations observed together on a read, config wins over identity, then
+projection revision; selection resets count where they clear the cache.
+
+`openclaw_sessions_list_base_misses_total{reason}` separates successful
+`full-with-base` conditional replies into `unknown-base` (no eligible base in history)
+and `all-rows-changed` (base found, delta not smaller, including an empty list).
+Unknown bases can follow a restart, eviction, or a non-delta revision token;
+correlate them with retirement counters and `openclaw_gateway_build_info` rather
+than treating every miss as a restart. The reason is carried out-of-band through
+shared responses, without adding wire fields or inspecting rows again. Both
+counters use the existing bounded asynchronous diagnostics path. OpenTelemetry
+names are `openclaw.sessions.list.baseline_retirements` and
+`openclaw.sessions.list.base_misses`, with the same labels.
+
+`openclaw_session_event_rows_retained_entries` and
+`openclaw_session_event_rows_retained_bytes` report aggregate count and estimated
+memory for the field-hash vectors retained by session-event connections. Both
+gauges have no labels and return to zero when the last retained connection state
+is cleared. OpenTelemetry names are `openclaw.session_event_rows_retained_entries`
+and `openclaw.session_event_rows_retained_bytes`. Charges cover vectors and their
+identities; they do not retain or charge copies of the presented session rows.
+
+`openclaw_session_event_rows_reset_total{cause}` counts retained wire baselines
+retired, including each baseline in a connection-wide reset. Its bounded causes
+are `close`, `delivery-lost`, `generation`, `evicted`, and `projection`. Empty
+resets do not increment it. Ordinary session-fact changes and list reads invalidate
+ancestor certification without retiring wire baselines, so they do not increment
+this counter. The OpenTelemetry name is `openclaw.session_event_rows_reset`, with
+the same `cause` label. Like the retention gauges, it uses the existing bounded
+asynchronous diagnostics path and records no session or connection identifiers.
+
+`openclaw_chat_history_requests_total` and
+`openclaw_chat_history_response_bytes_total` attribute successful `chat.history`
+responses by `client_kind`, `source`, `shape`, `limit_bucket`, and `outcome`.
+Shapes distinguish receipt recovery, pending-input paging, older pages, cursor
+reads, message-anchored windows, and tail reads; outcomes are `delta`, `reset`, or
+`page`. Both byte counters
+reuse the encoded frame size above without serializing again or inspecting rows.
+Only bounded labels are recorded, never parameter values, identifiers, or text.
+See [Prometheus metrics](/gateway/prometheus) for bucket and precedence rules.
 
 `openclaw_gateway_rpc_handler_heap_delta_bytes` samples main-thread
 `process.memoryUsage().heapUsed` immediately around handler execution. A sample

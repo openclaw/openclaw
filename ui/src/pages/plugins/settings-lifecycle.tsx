@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { Icon } from "../../components/solid/icon.tsx";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
@@ -17,10 +16,7 @@ type PluginLifecycleProps = {
   onUninstall: (pluginId: string, rowKey: string) => void;
   onAskPlugin?: () => void;
 };
-export function renderPluginLifecycle(
-  props: PluginLifecycleProps,
-  plugin: PluginCatalogItem,
-): JSX.Element {
+export function renderPluginLifecycle(props: PluginLifecycleProps, plugin: PluginCatalogItem) {
   const key = pluginRowKey(plugin.id);
   const pending = props.busy[key];
   const busy = Boolean(pending);
@@ -37,7 +33,7 @@ export function renderPluginLifecycle(
     <ReasonedDisabledControl reason={blockedReason}>
       <button
         type="button"
-        class={`btn oc-action ${className}`}
+        class={["btn oc-action", className]}
         disabled={!blockedReason && (!allowed || busy)}
         aria-disabled={!allowed || busy ? "true" : undefined}
         aria-label={`${label} ${plugin.name}`}
@@ -48,11 +44,7 @@ export function renderPluginLifecycle(
           }
         }}
       >
-        {pending === kind ? (
-          <>
-            <span class="btn__spinner" aria-hidden="true" />
-          </>
-        ) : null}
+        {pending === kind ? <span class="btn__spinner" aria-hidden="true" /> : null}
         {label}
       </button>
     </ReasonedDisabledControl>

@@ -11,7 +11,7 @@ export type PdfExtractedImage = DocumentExtractedImage;
 /** Text and extracted image payloads returned by PDF extraction callers. */
 export type PdfExtractedContent = DocumentExtractionResult;
 
-/** Extracts PDF content through the configured document extractor without exposing its owner id. */
+/** Extracts PDF content through the configured document extractor. */
 export async function extractPdfContent(
   params: Omit<DocumentExtractionRequest, "mimeType"> & { config?: OpenClawConfig },
 ): Promise<PdfExtractedContent> {
@@ -25,6 +25,5 @@ export async function extractPdfContent(
       "PDF extraction disabled or unavailable: enable the document-extract plugin to process application/pdf files.",
     );
   }
-  const { extractor: _extractor, ...content } = extracted;
-  return content;
+  return extracted;
 }

@@ -162,7 +162,7 @@
     },
     "mode": {
       "label": "Recall Mode",
-      "help": "Escalate runs deep recall only for recall-intent messages without a strong deterministic hit. Always preserves blocking recall on every eligible turn. Off disables deep recall while keeping deterministic trigger recall available."
+      "help": "Escalate runs deep recall only for recall-intent messages without a strong direct-search hit. Always preserves blocking recall on every eligible turn. Off disables deep recall while keeping direct trigger recall available."
     },
     "agents": {
       "label": "Target Agents",
@@ -237,12 +237,12 @@
       "help": "Emit active memory timing and result logs."
     },
     "circuitBreakerMaxTimeouts": {
-      "label": "Circuit Breaker Max Timeouts",
+      "label": "Consecutive Timeout Limit",
       "help": "Skip recall after this many consecutive timeouts for the same agent/model. Resets on a successful recall or after the cooldown expires. Default: 3."
     },
     "circuitBreakerCooldownMs": {
-      "label": "Circuit Breaker Cooldown (ms)",
-      "help": "How long to skip recall after the circuit breaker trips, in milliseconds. Default: 60000 (1 minute)."
+      "label": "Recall Pause After Timeouts (ms)",
+      "help": "How long to skip recall after the timeout limit is reached, in milliseconds. Default: 60000 (1 minute)."
     },
     "persistTranscripts": {
       "label": "Persist Transcripts",

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   withSqliteDatabaseWriteScope,
   sqliteSessionIdWriteScope,
@@ -10,7 +10,7 @@ import type { SessionTranscriptAuthority } from "./session-transcript-authority.
 type PublishTranscript = (authority: SessionTranscriptAuthority) => SessionTranscriptAuthority;
 let current:
   | {
-      database: DatabaseSync;
+      database: EngineConnection;
       state: SessionActorStoredState;
       publishTranscript?: PublishTranscript;
     }
@@ -18,7 +18,7 @@ let current:
 
 /** Lends a private working copy only for the writer's synchronous transaction. */
 export function withSessionActorTransactionState<T>(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   state: SessionActorStoredState,
   run: () => T,
   publishTranscript?: PublishTranscript,
@@ -49,7 +49,7 @@ export function withSessionActorTransactionState<T>(
 
 /** Enrich the mutation owner's one final authority receipt before it is published. */
 export function prepareSessionActorTranscriptAuthority(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   authority: SessionTranscriptAuthority,
 ): SessionTranscriptAuthority {
   return current?.database === database.db && current.publishTranscript
@@ -59,7 +59,7 @@ export function prepareSessionActorTranscriptAuthority(
 
 /** Unbound native and SDK callers keep their existing database readers. */
 export function readSessionActorTransactionState(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   target?: { sessionKey?: string; sessionId?: string },
 ): SessionActorStoredState | undefined {
   const scope = current;

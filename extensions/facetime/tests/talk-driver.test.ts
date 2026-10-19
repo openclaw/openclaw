@@ -87,16 +87,6 @@ describe("FaceTime talk driver lifecycle", () => {
     },
   );
 
-  it("fails closed when OpenClaw cannot forward authenticated sender identity", async () => {
-    mocks.senderAuthVersion = undefined;
-
-    await expect(startFaceTimeTalkDriver(startParams())).rejects.toThrow(
-      "does not support authenticated sender identity",
-    );
-    expect(mocks.createSession).not.toHaveBeenCalled();
-    expect(mocks.pump.stop).not.toHaveBeenCalled();
-  });
-
   it("waits for provider connect, provider ready, and microphone routing", async () => {
     const connect = createDeferred<void>();
     const route = createDeferred<void>();

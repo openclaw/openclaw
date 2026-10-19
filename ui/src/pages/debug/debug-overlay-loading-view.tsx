@@ -8,7 +8,7 @@ import {
 export function DebugOverlaySectionLoading(props: { id: DebugOverlaySectionId }) {
   return (
     <div
-      class={`debug-overlay__placeholder debug-overlay__placeholder--${props.id}`}
+      class={["debug-overlay__placeholder", `debug-overlay__placeholder--${props.id}`]}
       role="status"
       aria-label={t("common.loading")}
     >

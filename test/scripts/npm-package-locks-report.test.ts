@@ -23,91 +23,90 @@ const dependency = {
   resolved: "https://registry.npmjs.org/fixture/-/fixture-1.0.0.tgz",
   integrity: "sha512-fixture",
 };
+const npmPath = "node_modules/npm";
+const nestedPath = `${npmPath}/node_modules/foo/node_modules/bar`;
+type Lock = ReturnType<typeof lockFor>;
 
-function sourceFixture() {
+function sourceFixture(packages: Record<string, Record<string, unknown>>) {
   const root = tempDirs.make("openclaw-npm-lock-report-");
   mkdirSync(path.join(root, "extensions"));
   mkdirSync(path.join(root, "packages"));
   writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
-  const writePackage = (dir: string, fields: Record<string, unknown>) => {
+  for (const [dir, fields] of Object.entries(packages)) {
     mkdirSync(path.join(root, dir), { recursive: true });
     writeFileSync(
       path.join(root, dir, "package.json"),
-      JSON.stringify({ version: "2026.9.1", ...fields }),
+      JSON.stringify({
+        name: dir === "." ? "openclaw" : `@openclaw/${path.basename(dir)}`,
+        version: "2026.9.1",
+        dependencies: { fixture: "1.0.0" },
+        ...fields,
+      }),
     );
-  };
-  return { root, writePackage };
-}
-
-function fixture() {
-  const { root, writePackage } = sourceFixture();
-  writePackage(".", { name: "openclaw", dependencies: { fixture: "1.0.0" } });
-  // Reverse creation order ensures discovery, not fixture order, owns sorting.
-  writePackage("packages/zulu", {
-    name: "@openclaw/zulu",
-    optionalDependencies: { fixture: "1.0.0" },
-    openclaw: { release: { publishToNpm: true, bundleRuntimeDependencies: true } },
-  });
-  writePackage("extensions/beta", {
-    name: "@openclaw/beta",
-    dependencies: { fixture: "1.0.0" },
-    openclaw: { release: { publishToNpm: true } },
-  });
-  writePackage("extensions/acpx", {
-    name: "@openclaw/acpx",
-    dependencies: { fixture: "1.0.0" },
-    openclaw: { release: { publishToNpm: true, bundleRuntimeDependencies: false } },
-  });
-  writePackage("extensions/empty", {
-    name: "@openclaw/empty",
-    devDependencies: { fixture: "1.0.0" },
-    openclaw: { release: { publishToNpm: true } },
-  });
-  writePackage("extensions/private", {
-    name: "@openclaw/private",
-    dependencies: { fixture: "1.0.0" },
-    openclaw: { release: { publishToNpm: false } },
-  });
+  }
   return root;
 }
 
-function lockFor(packageDir: string) {
-  const manifest = JSON.parse(readFileSync(path.join(packageDir, "package.json"), "utf8"));
-  return {
-    name: manifest.name,
-    version: manifest.version,
-    lockfileVersion: 3,
-    requires: true,
-    packages: {
-      "": { name: manifest.name, version: manifest.version },
-      "node_modules/fixture": { ...dependency },
-    },
-  };
+function fixture() {
+  const packages: Record<string, Record<string, unknown>> = { ".": {} };
+  // Reverse creation order ensures discovery, not fixture order, owns sorting.
+  for (const [dir, dependencyKind, publishToNpm, bundleRuntimeDependencies] of [
+    ["packages/zulu", "optionalDependencies", true, true],
+    ["extensions/beta", "dependencies", true, undefined],
+    ["extensions/acpx", "dependencies", true, false],
+    ["extensions/empty", "devDependencies", true, undefined],
+    ["extensions/private", "dependencies", false, undefined],
+  ] as const) {
+    packages[dir] = {
+      dependencies: undefined,
+      [dependencyKind]: { fixture: "1.0.0" },
+      openclaw: { release: { publishToNpm, bundleRuntimeDependencies } },
+    };
+  }
+  return sourceFixture(packages);
 }
 
-function bundledLockFor(packageDir: string) {
-  const lock = lockFor(packageDir);
+function lockFor(packageDir: string, bundled = false) {
+  const { name, version } = JSON.parse(readFileSync(path.join(packageDir, "package.json"), "utf8"));
   const packages: Record<string, Record<string, unknown>> = {
-    ...lock.packages,
-    "node_modules/npm": {
-      version: "11.20.0",
-      resolved: "https://registry.npmjs.org/npm/-/npm-11.20.0.tgz",
-      integrity: "sha512-fixture-npm",
-    },
-    // Reverse path order exercises report sorting, including scoped packages.
-    "node_modules/npm/node_modules/foo/node_modules/bar": { version: "2.0.0", inBundle: true },
-    "node_modules/npm/node_modules/foo": { version: "1.0.0", inBundle: true },
-    "node_modules/npm/node_modules/@gar/promise-retry": { version: "1.0.3", inBundle: true },
+    "": { name, version },
+    "node_modules/fixture": { ...dependency },
   };
-  return { ...lock, packages };
+  if (bundled) {
+    Object.assign(packages, {
+      "node_modules/npm": {
+        version: "11.20.0",
+        resolved: "https://registry.npmjs.org/npm/-/npm-11.20.0.tgz",
+        integrity: "sha512-fixture-npm",
+      },
+      // Reverse path order exercises report sorting, including scoped packages.
+      [nestedPath]: { version: "2.0.0", inBundle: true },
+      "node_modules/npm/node_modules/foo": { version: "1.0.0", inBundle: true },
+      "node_modules/npm/node_modules/@gar/promise-retry": { version: "1.0.3", inBundle: true },
+    });
+  }
+  return { name, version, lockfileVersion: 3, requires: true, packages };
+}
+
+function mockLocks(build: (dir: string) => unknown) {
+  vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
+    packageDirs.map((dir) => JSON.stringify(build(dir))),
+  );
+}
+
+async function rejectsLock(change: (lock: Lock) => void, error: string | RegExp, bundled = false) {
+  mockLocks((dir) => {
+    const lock = lockFor(dir, bundled);
+    change(lock);
+    return lock;
+  });
+  await expect(generateNpmPackageLocksReport({ rootDir: fixture() })).rejects.toThrow(error);
 }
 
 describe("npm package-lock release report", () => {
   beforeEach(() => {
     vi.mocked(execFileSync).mockClear();
-    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
-      packageDirs.map((dir) => JSON.stringify(lockFor(dir))),
-    );
+    mockLocks(lockFor);
   });
 
   it("binds the exact schema, sorted runtime package coverage and hashes to the source root", async () => {
@@ -122,34 +121,22 @@ describe("npm package-lock release report", () => {
       pnpmLockSha256: hash("lockfileVersion: '9.0'\n"),
       lockfileVersion: 3,
       packagesWithOmittedWorkspaceDependencies: 0,
-      packages: [
-        [".", "openclaw", false, 1, 0],
-        ["extensions/acpx", "@openclaw/acpx", false, 1, 0],
-        ["extensions/beta", "@openclaw/beta", true, 1, 0],
-        ["packages/zulu", "@openclaw/zulu", true, 0, 1],
-      ].map(
-        ([
+      packages: [".", "extensions/acpx", "extensions/beta", "packages/zulu"].map((packageDir) => {
+        const lock = lockFor(path.join(rootDir, packageDir));
+        return {
           packageDir,
-          name,
-          bundleRuntimeDependencies,
-          dependencyCount,
-          optionalDependencyCount,
-        ]) => {
-          const lock = lockFor(path.join(rootDir, String(packageDir)));
-          return {
-            packageDir,
-            name,
-            version: "2026.9.1",
-            bundleRuntimeDependencies,
-            dependencyCount,
-            optionalDependencyCount,
-            omittedWorkspaceDependencies: [],
-            bundledDependencies: [],
-            lockSha256: hash(`${JSON.stringify(lock, null, 2)}\n`),
-            lock,
-          };
-        },
-      ),
+          name: packageDir === "." ? "openclaw" : `@openclaw/${path.basename(packageDir)}`,
+          version: "2026.9.1",
+          bundleRuntimeDependencies:
+            packageDir === "extensions/beta" || packageDir === "packages/zulu",
+          dependencyCount: packageDir === "packages/zulu" ? 0 : 1,
+          optionalDependencyCount: packageDir === "packages/zulu" ? 1 : 0,
+          omittedWorkspaceDependencies: [],
+          bundledDependencies: [],
+          lockSha256: hash(`${JSON.stringify(lock, null, 2)}\n`),
+          lock,
+        };
+      }),
     });
     expect(new Date(report.generatedAt).toISOString()).toBe(report.generatedAt);
     expect(execFileSync).toHaveBeenCalledWith("git", ["rev-parse", "HEAD"], {
@@ -166,218 +153,151 @@ describe("npm package-lock release report", () => {
   });
 
   it("marks only the root and gateway client partial in the release-split fixture", async () => {
-    const { root, writePackage } = sourceFixture();
-    writePackage(".", {
-      name: "openclaw",
-      dependencies: { "@openclaw/ai": "workspace:*", fixture: "1.0.0" },
-    });
-    writePackage("packages/gateway-client", {
-      name: "@openclaw/gateway-client",
-      dependencies: { "@openclaw/gateway-protocol": "workspace:*", fixture: "1.0.0" },
-      openclaw: { release: { publishToNpm: true } },
-    });
-    const locklessPlugins = ["acpx"];
-    for (const plugin of locklessPlugins) {
-      writePackage(`extensions/${plugin}`, {
-        name: `@openclaw/${plugin}`,
-        dependencies: { fixture: "1.0.0" },
+    const root = sourceFixture({
+      ".": { dependencies: { "@openclaw/ai": "workspace:*", fixture: "1.0.0" } },
+      "packages/gateway-client": {
+        dependencies: { "@openclaw/gateway-protocol": "workspace:*", fixture: "1.0.0" },
+        openclaw: { release: { publishToNpm: true } },
+      },
+      "extensions/acpx": {
         devDependencies: { "@openclaw/plugin-sdk": "workspace:*" },
         openclaw: { release: { publishToNpm: true, bundleRuntimeDependencies: false } },
-      });
-    }
-    const report = await generateNpmPackageLocksReport({ rootDir: root });
-    expect(report.packageVersion).toBe("2026.9.1");
-    expect(report.packagesWithOmittedWorkspaceDependencies).toBe(2);
-    expect(
-      report.packages
-        .filter((entry) => entry.omittedWorkspaceDependencies.length > 0)
-        .map((entry) => ({
-          name: entry.name,
-          omittedWorkspaceDependencies: entry.omittedWorkspaceDependencies,
-        })),
-    ).toEqual([
-      { name: "openclaw", omittedWorkspaceDependencies: ["@openclaw/ai"] },
-      {
-        name: "@openclaw/gateway-client",
-        omittedWorkspaceDependencies: ["@openclaw/gateway-protocol"],
       },
-    ]);
-    expect(
-      report.packages
-        .filter((entry) => entry.packageDir !== "." && !entry.bundleRuntimeDependencies)
-        .map((entry) => ({
-          name: entry.name,
-          omittedWorkspaceDependencies: entry.omittedWorkspaceDependencies,
-        })),
-    ).toEqual(
-      locklessPlugins.map((plugin) => ({
-        name: `@openclaw/${plugin}`,
-        omittedWorkspaceDependencies: [],
-      })),
-    );
+    });
+    const report = await generateNpmPackageLocksReport({ rootDir: root });
+    expect(report).toMatchObject({
+      packageVersion: "2026.9.1",
+      packagesWithOmittedWorkspaceDependencies: 2,
+      packages: [
+        { name: "openclaw", omittedWorkspaceDependencies: ["@openclaw/ai"] },
+        {
+          name: "@openclaw/acpx",
+          bundleRuntimeDependencies: false,
+          omittedWorkspaceDependencies: [],
+        },
+        {
+          name: "@openclaw/gateway-client",
+          bundleRuntimeDependencies: true,
+          omittedWorkspaceDependencies: ["@openclaw/gateway-protocol"],
+        },
+      ],
+    });
   });
 
   it("sorts and deduplicates runtime omissions without including dev or peer references", async () => {
-    const { root, writePackage } = sourceFixture();
-    writePackage(".", {
-      name: "openclaw",
-      dependencies: { zeta: "workspace:*", alpha: "workspace:^", fixture: "1.0.0" },
-      optionalDependencies: { middle: "workspace:~", alpha: "workspace:^" },
-      devDependencies: { development: "workspace:*" },
-      peerDependencies: { peer: "workspace:*" },
+    const root = sourceFixture({
+      ".": {
+        dependencies: { zeta: "workspace:*", alpha: "workspace:^", fixture: "1.0.0" },
+        optionalDependencies: { middle: "workspace:~", alpha: "workspace:^" },
+        devDependencies: { development: "workspace:*" },
+        peerDependencies: { peer: "workspace:*" },
+      },
     });
     const report = await generateNpmPackageLocksReport({ rootDir: root });
-    expect(report.packagesWithOmittedWorkspaceDependencies).toBe(1);
-    expect(report.packages[0]!.omittedWorkspaceDependencies).toEqual(["alpha", "middle", "zeta"]);
+    expect(report).toMatchObject({
+      packagesWithOmittedWorkspaceDependencies: 1,
+      packages: [{ omittedWorkspaceDependencies: ["alpha", "middle", "zeta"] }],
+    });
   });
 
   it("rejects an omission claim when the generated lock resolves that workspace package", async () => {
-    const { root, writePackage } = sourceFixture();
-    writePackage(".", { name: "openclaw", dependencies: { "@openclaw/ai": "workspace:*" } });
-    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
-      packageDirs.map((dir) => {
-        const lock = lockFor(dir);
-        Object.assign(lock.packages, { "node_modules/@openclaw/ai": dependency });
-        return JSON.stringify(lock);
-      }),
-    );
+    const root = sourceFixture({ ".": { dependencies: { "@openclaw/ai": "workspace:*" } } });
+    mockLocks((dir) => {
+      const lock = lockFor(dir);
+      Object.assign(lock.packages, { "node_modules/@openclaw/ai": dependency });
+      return lock;
+    });
     await expect(generateNpmPackageLocksReport({ rootDir: root })).rejects.toThrow(
       ".: npm lock contains omitted workspace dependency @openclaw/ai",
     );
   });
 
   it("records sorted bundled dependencies with their verified carrier without changing lock bytes", async () => {
-    const { root, writePackage } = sourceFixture();
-    writePackage(".", { name: "openclaw", dependencies: { npm: "11.20.0" } });
-    const lock = bundledLockFor(root);
+    const root = sourceFixture({ ".": { dependencies: { npm: "11.20.0" } } });
+    const lock = lockFor(root, true);
     const lockBytes = `${JSON.stringify(lock, null, 2)}\n`;
     vi.mocked(generateNpmPackageLocks).mockResolvedValue([lockBytes]);
 
     const report = await generateNpmPackageLocksReport({ rootDir: root });
     expect(report.packages[0]).toMatchObject({
       bundledDependencies: [
-        {
-          path: "node_modules/npm/node_modules/@gar/promise-retry",
-          name: "@gar/promise-retry",
-          version: "1.0.3",
-          parent: "node_modules/npm",
-        },
-        {
-          path: "node_modules/npm/node_modules/foo",
-          name: "foo",
-          version: "1.0.0",
-          parent: "node_modules/npm",
-        },
-        {
-          path: "node_modules/npm/node_modules/foo/node_modules/bar",
-          name: "bar",
-          version: "2.0.0",
-          parent: "node_modules/npm",
-        },
-      ],
+        ["@gar/promise-retry", "@gar/promise-retry", "1.0.3"],
+        ["foo", "foo", "1.0.0"],
+        ["foo/node_modules/bar", "bar", "2.0.0"],
+      ].map(([suffix, name, version]) => ({
+        path: `node_modules/npm/node_modules/${suffix}`,
+        name,
+        version,
+        parent: npmPath,
+      })),
       lockSha256: hash(lockBytes),
     });
     expect(`${JSON.stringify(report.packages[0]!.lock, null, 2)}\n`).toBe(lockBytes);
   });
 
-  it.each<{
-    label: string;
-    bundled?: boolean;
-    change: (lock: ReturnType<typeof bundledLockFor>) => void;
-    error: string | RegExp;
-  }>([
+  it.each([
     ...[
-      { carrier: "node_modules/npm", metadata: { ...dependency, integrity: undefined } },
-      { carrier: "node_modules/npm", metadata: { ...dependency, resolved: undefined } },
-      { carrier: "node_modules/npm", metadata: { ...dependency, dev: true } },
-      { carrier: "node_modules/npm", metadata: { ...dependency, link: true } },
-      { carrier: "node_modules/npm", metadata: { ...dependency, resolved: "file:npm.tgz" } },
-      { carrier: "node_modules/npm", metadata: undefined },
-      { carrier: "node_modules/npm/node_modules/foo", metadata: undefined },
-      { carrier: "node_modules/npm/node_modules/foo", metadata: { version: "1.0.0" } },
-    ].map(({ carrier, metadata }) => ({
-      label: `unverifiable carrier ${carrier}: ${JSON.stringify(metadata)}`,
-      bundled: true,
-      change: (lock: ReturnType<typeof bundledLockFor>) => {
-        if (metadata) {
-          lock.packages[carrier] = metadata;
-        } else {
-          delete lock.packages[carrier];
-        }
-      },
-      error: `.: bundled npm lock entry node_modules/npm/node_modules/foo/node_modules/bar has unverifiable carrier ${carrier}`,
-    })),
-    {
-      label: "top-level bundle without a carrier",
-      change: (lock) => {
-        lock.packages["node_modules/fixture"] = { version: "1.0.0", inBundle: true };
-      },
-      error: ".: bundled npm lock entry node_modules/fixture has unverifiable carrier <root>",
-    },
-    ...[
-      { dev: true },
-      { link: true },
-      { resolved: "file:local.tgz" },
-      { version: undefined },
-      { version: "" },
-      { version: 1 },
-    ].map((invalid) => ({
-      label: `unsupported bundled entry: ${JSON.stringify(invalid)}`,
-      bundled: true,
-      change: (lock: ReturnType<typeof bundledLockFor>) => {
-        Object.assign(
-          lock.packages["node_modules/npm/node_modules/foo/node_modules/bar"]!,
-          invalid,
-        );
-      },
-      error: ".: unsupported npm lock entry node_modules/npm/node_modules/foo/node_modules/bar",
-    })),
-    ...[
-      { dev: true },
-      { link: true },
-      { resolved: "file:local.tgz" },
-      { resolved: "workspace:*" },
-      { resolved: "git+https://example.com/repo" },
-      { resolved: "git:repo" },
-      { resolved: "ssh:repo" },
-      { resolved: "https://github.com/org/repo" },
-      { resolved: "" },
+      { integrity: undefined },
       { resolved: undefined },
+      { dev: true },
+      { link: true },
+      { resolved: "file:npm.tgz" },
+    ].map((invalid) => ({ carrier: npmPath, metadata: { ...dependency, ...invalid } })),
+    { carrier: npmPath, metadata: undefined },
+    { carrier: `${npmPath}/node_modules/foo`, metadata: undefined },
+    { carrier: `${npmPath}/node_modules/foo`, metadata: { version: "1.0.0" } },
+  ])("rejects unverifiable carrier $carrier: $metadata", async ({ carrier, metadata }) => {
+    await rejectsLock(
+      (lock) => Object.assign(lock.packages, { [carrier]: metadata }),
+      `.: bundled npm lock entry ${nestedPath} has unverifiable carrier ${carrier}`,
+      true,
+    );
+  });
+
+  it("rejects a top-level bundle without a carrier", async () => {
+    await rejectsLock((lock) => {
+      lock.packages["node_modules/fixture"] = { version: "1.0.0", inBundle: true };
+    }, ".: bundled npm lock entry node_modules/fixture has unverifiable carrier <root>");
+  });
+
+  it.each([
+    ...[{ dev: true }, { link: true }, { resolved: "file:local.tgz" }].flatMap((invalid) =>
+      [false, true].map((bundled) => ({ invalid, bundled })),
+    ),
+    ...[undefined, "", 1].map((version) => ({ invalid: { version }, bundled: true })),
+    ...[
+      "workspace:*",
+      "git+https://example.com/repo",
+      "git:repo",
+      "ssh:repo",
+      "https://github.com/org/repo",
+      "",
+      undefined,
+    ].map((resolved) => ({ invalid: { resolved }, bundled: false })),
+    ...[
       { integrity: "" },
       { integrity: undefined },
       { inBundle: "true", integrity: undefined },
-    ].map((invalid) => ({
-      label: `nonportable or incomplete entry: ${JSON.stringify(invalid)}`,
-      change: (lock: ReturnType<typeof bundledLockFor>) => {
-        Object.assign(lock.packages["node_modules/fixture"]!, invalid);
-      },
-      error: ".: unsupported npm lock entry node_modules/fixture",
-    })),
-    ...["name", "version", "lockfileVersion", "rootName", "rootVersion", "rootDev"].map(
-      (field) => ({
-        label: `mismatched identity or root metadata: ${field}`,
-        change: (lock: ReturnType<typeof bundledLockFor>) => {
-          if (field === "rootName") {
-            lock.packages[""]!.name = "wrong";
-          } else if (field === "rootVersion") {
-            lock.packages[""]!.version = "wrong";
-          } else if (field === "rootDev") {
-            Object.assign(lock.packages[""]!, { dev: true });
-          } else {
-            Object.assign(lock, { [field]: "wrong" });
-          }
-        },
-        error: /\.:/u,
-      }),
-    ),
-  ])("rejects $label", async ({ bundled, change, error }) => {
-    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
-      packageDirs.map((dir) => {
-        const lock = bundled ? bundledLockFor(dir) : lockFor(dir);
-        change(lock);
-        return JSON.stringify(lock);
-      }),
+    ].map((invalid) => ({ invalid, bundled: false })),
+  ])("rejects unsupported entry $invalid (bundled=$bundled)", async ({ invalid, bundled }) => {
+    const lockPath = bundled ? nestedPath : "node_modules/fixture";
+    await rejectsLock(
+      (lock) => Object.assign(lock.packages[lockPath]!, invalid),
+      `.: unsupported npm lock entry ${lockPath}`,
+      bundled,
     );
-    await expect(generateNpmPackageLocksReport({ rootDir: fixture() })).rejects.toThrow(error);
   });
+
+  it.each(["name", "version", "lockfileVersion", "rootName", "rootVersion", "rootDev"])(
+    "rejects mismatched identity or root metadata %s",
+    async (field) => {
+      await rejectsLock((lock) => {
+        const isRoot = field.startsWith("root");
+        const key = isRoot ? field.slice(4).toLowerCase() : field;
+        Object.assign(isRoot ? lock.packages[""]! : lock, {
+          [key]: key === "dev" ? true : "wrong",
+        });
+      }, /\.:/u);
+    },
+  );
 });

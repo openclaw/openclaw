@@ -1,29 +1,34 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { getEnvironmentData, threadId } from "node:worker_threads";
+import { threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { notifyListeners } from "../shared/listeners.js";
 import { hasErrnoCode } from "./errno.js";
-import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
+import {
+  isPostgresSqlConnection,
+  sqlPublicationAnchor,
+  type PostgresSqlConnection,
+  type EngineConnection,
+} from "./sql-connection.js";
+import {
+  installSqliteDatabaseAdmissions,
+  sqliteDatabaseAdmissionState as state,
+} from "./sqlite-database-admission-context.js";
+import { createSqliteDatabaseAdmissionReader } from "./sqlite-database-admission-read.js";
 import {
   SqliteDatabaseGenerationSlot,
-  SqliteDatabaseAdmissionRegistry,
-  hasSqliteDatabaseSchemaAdmission,
-  type SqliteDatabaseAdmissionCursor,
-  readSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissionIdentity as identity,
   readSqliteDatabaseFactRevision,
   readSqliteDatabaseGeneration,
   advanceSqliteDatabaseGeneration,
   publishSqliteDatabaseFact,
+  admitSqliteDatabaseFactValue,
+  revokeSqliteDatabaseAdmissionFacts,
   isSqliteDatabaseAdmissionRetired as isRetired,
-  isSqliteDatabaseAdmissionFactCurrent as valid,
   type Admission,
-  type SqliteDatabaseAdmissions,
+  type AdmissionFactValue,
   type SqliteDatabaseAdmissionKey,
-  type SqliteDatabaseAdmissionExchange as Exchange,
   type StagedAdmissionFact,
 } from "./sqlite-database-admission-record.js";
 import {
@@ -33,7 +38,6 @@ import {
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
-import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export {
   readSqliteDatabaseAdmissions,
@@ -46,29 +50,27 @@ export type {
 } from "./sqlite-database-admission-record.js";
 export { beginSqliteDatabaseAdmissionOperation } from "./sqlite-native-admission.js";
 
-const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissions"), () => ({
-  registry: new SqliteDatabaseAdmissionRegistry(),
-  connections: new WeakMap<DatabaseSync, Admission>(),
-  openedIdentities: new WeakMap<DatabaseSync, string>(),
-  unproven: new WeakSet<DatabaseSync>(),
-  suspended: new WeakSet<DatabaseSync>(),
-  local: new WeakMap<DatabaseSync, Map<string, StagedAdmissionFact>>(),
-  rolledBack: new WeakSet<DatabaseSync>(),
-  dataWriters: new WeakMap<DatabaseSync, Admission | undefined>(),
-  localWriteRevisions: new WeakMap<DatabaseSync, number>(),
-  writeListeners: new WeakMap<Admission, Set<() => void>>(),
-  ddlRevisions: new WeakMap<DatabaseSync, number>(),
-  schemaDirty: new WeakSet<DatabaseSync>(),
-  localSchemaRevisions: new Map<string, number>(),
-  misses: new WeakMap<Admission, Map<string, number>>(),
-  exchange: new AsyncLocalStorage<Exchange>(),
-  exchanging: false,
-  publication: 0,
-  seals: new SqliteDatabaseCleanCloseSeals(publishFact, {
-    retain: (record) => state.registry.changeReferences(record, 1),
-    release: releaseReference,
-  }),
-}));
+export {
+  captureSqliteDatabaseAdmissions,
+  installSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionExchange,
+  canShareSqliteDatabaseAdmissions,
+} from "./sqlite-database-admission-context.js";
+
+// Native admission owns restart proof; transport only needs the shared runtime facts.
+const seals = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteDatabaseCleanCloseSeals"),
+  () =>
+    new SqliteDatabaseCleanCloseSeals(publishFact, {
+      retain: (record) => state.registry.changeReferences(record, 1),
+      release: releaseReference,
+      publish: (record) => state.registry.publish(record),
+    }),
+);
+
+/** Independent readers have no writer-fact relay; retain facts only with their native readers. */
+export const useConnectionScopedSqliteDatabaseAdmissionFacts = (): void =>
+  state.registry.useConnectionScopedFacts();
 
 export function readSqliteDatabaseCleanClose(location: string): boolean {
   const currentIdentity = prepareSqliteDatabaseAdmission(location);
@@ -82,7 +84,7 @@ export function readSqliteDatabaseCleanClose(location: string): boolean {
 
 /** Maintenance can invalidate restart proof while retaining its freshly checked runtime facts. */
 export function invalidateSqliteDatabaseCleanClose(location: string): void {
-  state.seals.invalidate(location, pathAdmission(location));
+  seals.invalidate(location, pathAdmission(location));
 }
 
 export function readSqliteDatabaseIntegrityVerification(
@@ -95,37 +97,65 @@ export function readSqliteDatabaseIntegrityVerification(
   return verifiedAt === undefined ? undefined : { verifiedAt };
 }
 
+/** Consume the admission owner's first-load diagnostic, including in worker isolates. */
+export function readSqliteDatabaseCleanCloseRefusal(database: EngineConnection) {
+  return admission(sqlPublicationAnchor(database))?.cleanCloseRefusal;
+}
+
 export function recordSqliteDatabaseIntegrity(db: DatabaseSync, verifiedAt = Date.now()): void {
   publishSqliteDatabaseAdmission(db, integrityVerificationKey, verifiedAt);
 }
 
 /** Capture admitted facts before close; publish only after successful TRUNCATE and native close. */
 export function prepareSqliteDatabaseCleanClose(database: DatabaseSync) {
-  return state.seals.prepare(
+  return seals.prepare(
     database,
     admission(database),
     getSqliteDatabaseAdmission(database, integrityVerificationKey),
   );
 }
 
+const reader = createSqliteDatabaseAdmissionReader({
+  state,
+  admission,
+  pathAdmission,
+  exchange,
+  publishFact,
+  retain: retainReference,
+  release: releaseReference,
+});
+export const {
+  getSqliteDatabaseAdmission,
+  getSqliteDatabaseSchemaRevision,
+  getOrLoadSqliteDatabaseAdmissionForPath,
+  hasSqliteDatabaseSchemaAdmissionForPath,
+  getSqliteDatabaseAdmissionIdentityForPath,
+  hasSqliteDatabaseSchemaAdmissionForIdentity,
+} = reader;
+
 const scopedWrites = createSqliteDatabaseWriteReceipts({
   admission,
   pathAdmission,
+  retain: retainReference,
+  release: releaseReference,
+  writeListeners: state.writeListeners,
   readRevision: readSqliteDatabaseWriteRevision,
   writer: (database) => state.dataWriters.get(database),
   suspended: (database) => state.suspended.has(database),
-  exchange,
-  publish(record) {
-    state.registry.publish(record);
+  publish(record, keys) {
+    state.registry.publish(record, keys);
     exchange(record);
   },
 });
 export const {
+  onSqliteDatabaseWriteSettled,
   retireSqliteDatabaseWriteScopes,
+  retainSqliteDatabaseWriteScopesForPath,
   withSqliteDatabaseWriteScope,
   withoutSqliteDatabaseWriteScope,
   readSqliteDatabaseScopedWriteToken,
   readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabaseScopedWriteTokensForPath,
   readSqliteDatabasePendingScopedWriteToken,
   readSqliteDatabaseWriteTokenForPath,
   readSqliteDatabasePendingWriteToken,
@@ -140,14 +170,18 @@ function exchange(target: string | Admission, create?: boolean): void {
   state.exchanging = true;
   try {
     const scope = typeof target === "string" ? { location: target } : { admissions: [target] };
-    const retired = typeof target !== "string" && isRetired(target);
+    const admissions = state.registry.captureExchange(scope, target);
     installSqliteDatabaseAdmissions(
       current(
-        retired ? [target] : captureSqliteDatabaseAdmissions(undefined, scope),
-        retired ? undefined : typeof target === "string" ? target : target.location,
+        admissions,
+        // Publications already name their generation; only opens request pathname discovery.
+        typeof target === "string" ? target : undefined,
         create,
       ),
     );
+  } catch (error) {
+    state.registry.resetExchangeCursor();
+    throw error;
   } finally {
     state.exchanging = false;
   }
@@ -163,7 +197,7 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
   const previous = state.registry.records.get(key);
   if (previous && !isRetired(previous)) {
     state.registry.observeLocation(location, key);
-    state.seals.load(previous);
+    seals.load(previous);
     return;
   }
   // A worker's unmanaged descriptors close on exit and can release sibling SQLite POSIX locks.
@@ -171,7 +205,7 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
   if (threadId !== 0) {
     return;
   }
-  const descriptor = state.registry.descriptors.get(key) ?? fs.openSync(location, "r");
+  const descriptor = state.registry.descriptors.get(key)?.descriptor ?? fs.openSync(location, "r");
   // Never close a source descriptor while another native connection may hold POSIX locks.
   const opened = fs.fstatSync(descriptor, { bigint: true });
   if (!opened.isFile() || identity(opened) !== key) {
@@ -183,7 +217,7 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
     opened,
   );
   state.registry.observeLocation(location, record.identity);
-  state.seals.load(record);
+  seals.load(record);
 }
 
 function pathAdmission(location: string): Admission | undefined {
@@ -193,7 +227,7 @@ function pathAdmission(location: string): Admission | undefined {
     retained = state.registry.forLocation(location);
   }
   if (retained) {
-    state.seals.load(retained);
+    seals.load(retained);
     return retained;
   }
   try {
@@ -279,7 +313,7 @@ export function prepareSqliteDatabaseAdmission(
         descriptor,
         opened,
       );
-      state.seals.markCreated(record);
+      seals.markCreated(record);
       if (prepareSqliteDatabaseAdmission(filename) !== record.identity) {
         throw new Error("SQLite database changed identity during file creation", { cause: error });
       }
@@ -385,12 +419,18 @@ function retainConnection(database: DatabaseSync, record: Admission): Admission 
   }
 }
 
-/** Native close has settled; keep only descriptor custody, never the closed database's payloads. */
+/** Native close retires row receipts while descriptor custody retains opted-in physical facts. */
 export function releaseSqliteDatabaseAdmission(database: DatabaseSync): void {
   const record = state.connections.get(database);
   if (state.openedIdentities.delete(database) && record) {
     state.local.delete(database);
     releaseReference(record);
+  }
+}
+
+function retainReference(record: Admission): void {
+  if (state.registry.changeReferences(record, 1)) {
+    exchange(record);
   }
 }
 
@@ -401,88 +441,10 @@ function releaseReference(record: Admission): void {
   }
 }
 
-export function getSqliteDatabaseAdmission<T>(
-  database: DatabaseSync,
-  key: SqliteDatabaseAdmissionKey<T>,
-  options: { existingOnly?: boolean } = {},
-): T | undefined {
-  if (!database.isOpen || state.suspended.has(database)) {
-    return undefined;
-  }
-  const record = admission(database, options.existingOnly !== true);
-  if (!record) {
-    return undefined;
-  }
-  const local =
-    getSqliteNativeAdmissionFacts(database)?.get(key.name) ??
-    state.local.get(database)?.get(key.name);
-  if (
-    local &&
-    local.revision === readSqliteDatabaseFactRevision(record, local.schemaDependent) &&
-    (!local.schemaDependent || local.ddlRevision === (state.ddlRevisions.get(database) ?? 0))
-  ) {
-    return key.read(local.value);
-  }
-  if (key.schemaDependent && state.schemaDirty.has(database)) {
-    return undefined;
-  }
-  if (state.rolledBack.has(database)) {
-    if (database.isTransaction) {
-      return undefined;
-    }
-    state.rolledBack.delete(database);
-  }
-  let fact = record.facts.get(key.name);
-  if (!fact || !valid(record, fact)) {
-    if (key.writer === "host") {
-      if (
-        database.isTransaction ||
-        threadId === 0 ||
-        record.hostRevision === readSqliteDatabaseGeneration(record, "hostRevision")
-      ) {
-        return undefined;
-      }
-      exchange(record);
-      fact = record.facts.get(key.name);
-      return fact && valid(record, fact) ? key.read(fact.value) : undefined;
-    }
-    const revision = readSqliteDatabaseGeneration(record, "publicationRevision");
-    const misses = state.misses.get(record) ?? new Map<string, number>();
-    state.misses.set(record, misses);
-    if (!database.isTransaction && misses.get(key.name) !== revision) {
-      exchange(record);
-      fact = record.facts.get(key.name);
-      misses.set(key.name, readSqliteDatabaseGeneration(record, "publicationRevision"));
-    }
-  }
-  return fact && valid(record, fact) ? key.read(fact.value) : undefined;
-}
-
-export function getOrLoadSqliteDatabaseAdmissionForPath<T>(
-  location: string,
-  key: SqliteDatabaseAdmissionKey<T>,
-  load: () => T | undefined,
-): T | undefined {
-  const record = pathAdmission(location);
-  const fact = record?.facts.get(key.name);
-  const cached = record && fact && valid(record, fact) ? key.read(fact.value) : undefined;
-  if (cached !== undefined) {
-    return cached;
-  }
-  const generation = record
-    ? readSqliteDatabaseFactRevision(record, key.schemaDependent)
-    : undefined;
-  const value = load();
-  if (record && generation !== undefined && value !== undefined) {
-    publishFact(record, key, value, generation);
-  }
-  return value;
-}
-
 function publishFact<T>(
   record: Admission,
-  key: Pick<SqliteDatabaseAdmissionKey<T>, "name" | "schemaDependent" | "writer">,
-  value: T,
+  key: Pick<SqliteDatabaseAdmissionKey<T>, "name" | "schemaDependent" | "lifetime" | "writer">,
+  value: AdmissionFactValue,
   revision: number,
 ): void {
   if (key.writer === "host" && threadId !== 0) {
@@ -506,30 +468,16 @@ export function beginSqliteDatabaseWrite(database: DatabaseSync, unscoped = fals
   ) {
     // Unlink before effect. A crash/torn publication can only force revalidation;
     // changed WAL or file metadata rejects any unlink lost during power failure.
-    state.seals.invalidate(record.location, record);
+    seals.invalidate(record.location, record);
   }
   scopedWrites.begin(database, unscoped);
   if (state.dataWriters.has(database)) {
     return;
   }
-  state.dataWriters.set(database, admission(database));
-}
-
-/** Local sibling writers notify maintenance after publishing their shared write revision. */
-export function onSqliteDatabaseWriteSettled(
-  database: DatabaseSync,
-  listener: () => void,
-): (() => void) | undefined {
-  const record = admission(database);
-  if (!record) {
-    return undefined;
+  state.dataWriters.set(database, record);
+  if (record) {
+    Atomics.add(new Int32Array(record.references.get(threadId)!), 1, 1);
   }
-  let listeners = state.writeListeners.get(record);
-  if (!listeners) {
-    listeners = new Set();
-    state.writeListeners.set(record, listeners);
-  }
-  return registerListener(listeners, listener);
 }
 
 /** Native settlement invalidates row caches, including failed or rolled-back writes. */
@@ -543,6 +491,8 @@ export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
   scopedWrites.finish(database, record);
   if (record) {
     advanceSqliteDatabaseGeneration(record, "writeRevision");
+    // Clear only after publishing both receipts; a native COMMIT can outlive its worker.
+    Atomics.sub(new Int32Array(record.references.get(threadId)!), 1, 1);
     const listeners = state.writeListeners.get(record);
     if (listeners) {
       notifyListeners(listeners, undefined);
@@ -551,7 +501,8 @@ export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
 }
 
 /** Ordinary reads consume the last committed writer revision without a writer census. */
-export function readSqliteDatabaseWriteRevision(database: DatabaseSync): number | undefined {
+export function readSqliteDatabaseWriteRevision(connection: EngineConnection): number | undefined {
+  const database = sqlPublicationAnchor(connection);
   if (!database.isOpen || state.suspended.has(database)) {
     return undefined;
   }
@@ -566,34 +517,46 @@ export function readSqliteDatabaseWriteRevision(database: DatabaseSync): number 
 }
 
 /** TEMP-trigger owners already see their own writes and only need sibling settlement. */
-export function readSqliteDatabaseSiblingWriteRevision(database: DatabaseSync): number | undefined {
+export function readSqliteDatabaseSiblingWriteRevision(
+  connection: EngineConnection,
+): number | undefined {
+  const database = sqlPublicationAnchor(connection);
   const revision = readSqliteDatabaseWriteRevision(database);
   return revision === undefined
     ? undefined
     : (revision - (state.localWriteRevisions.get(database) ?? 0)) | 0;
 }
 
-/** A stopped worker may have committed before delivering its row-cache receipt. */
+/** Settle interrupted native writes before releasing the departed worker's handles. */
 export function trackSqliteDatabaseAdmissionWorker(worker: {
   readonly threadId: number;
   once(event: "exit", listener: (code: number | undefined) => void): unknown;
 }): void {
   const owner = worker.threadId;
-  worker.once("exit", (code) => state.registry.releaseWorker(owner, code));
+  worker.once("exit", () => {
+    for (const record of state.registry.records.values()) {
+      scopedWrites.settleWorker(record, owner);
+    }
+    state.registry.releaseWorker(owner);
+  });
 }
 
-export function hasPendingSqliteDatabaseSchemaMutation(database: DatabaseSync): boolean {
-  return database.isTransaction && state.schemaDirty.has(database);
+export function hasPendingSqliteDatabaseSchemaMutation(
+  database: DatabaseSync | PostgresSqlConnection,
+): boolean {
+  const anchor = sqlPublicationAnchor(database);
+  return database.isTransaction && state.schemaDirty.has(anchor);
 }
 
 export function publishSqliteDatabaseAdmission<T>(
-  database: DatabaseSync,
+  database: DatabaseSync | PostgresSqlConnection,
   key: SqliteDatabaseAdmissionKey<T>,
   value: T,
   options: { schemaRevision?: number } = {},
 ): void {
-  const record = admission(database);
-  if (!record || isRetired(record) || state.suspended.has(database)) {
+  const anchor = sqlPublicationAnchor(database);
+  const record = admission(anchor, !database.isTransaction);
+  if (!record || isRetired(record) || state.suspended.has(anchor)) {
     return;
   }
   if (key.writer === "host" && threadId !== 0) {
@@ -602,26 +565,29 @@ export function publishSqliteDatabaseAdmission<T>(
   const revision =
     (key.schemaDependent ? options.schemaRevision : undefined) ??
     readSqliteDatabaseFactRevision(record, key.schemaDependent);
-  const native = getSqliteNativeAdmissionFacts(database);
+  const native = isPostgresSqlConnection(database)
+    ? undefined
+    : getSqliteNativeAdmissionFacts(database);
+  const admitted = admitSqliteDatabaseFactValue(key, value);
   if (!native && !database.isTransaction) {
-    publishFact(record, key, value, revision);
+    publishFact(record, key, admitted, revision);
     return;
   }
   const staged: StagedAdmissionFact = {
-    value,
+    ...admitted,
     revision,
     schemaDependent: key.schemaDependent === true,
-    ddlRevision: state.ddlRevisions.get(database) ?? 0,
+    ddlRevision: state.ddlRevisions.get(anchor) ?? 0,
   };
   if (native) {
     native.set(key.name, staged);
     return;
   }
-  const local = state.local.get(database) ?? new Map<string, StagedAdmissionFact>();
-  state.local.set(database, local);
+  const local = state.local.get(anchor) ?? new Map<string, StagedAdmissionFact>();
+  state.local.set(anchor, local);
   const previous = local.get(key.name);
   const restore = () => {
-    if (state.local.get(database) !== local) {
+    if (state.local.get(anchor) !== local) {
       return;
     }
     if (previous === undefined) {
@@ -630,18 +596,17 @@ export function publishSqliteDatabaseAdmission<T>(
       local.set(key.name, previous);
     }
   };
-  stageSqliteTransactionState(database, {
+  stageSqliteTransactionState(anchor, {
     stage: () => local.set(key.name, staged),
     rollback: restore,
     commit: () => {
-      if (state.local.get(database) === local && local.get(key.name) === staged) {
+      if (state.local.get(anchor) === local && local.get(key.name) === staged) {
         local.delete(key.name);
         if (
           staged.revision === readSqliteDatabaseFactRevision(record, staged.schemaDependent) &&
-          (!staged.schemaDependent ||
-            staged.ddlRevision === (state.ddlRevisions.get(database) ?? 0))
+          (!staged.schemaDependent || staged.ddlRevision === (state.ddlRevisions.get(anchor) ?? 0))
         ) {
-          publishFact(record, key, value, staged.revision);
+          publishFact(record, key, staged, staged.revision);
         }
       }
     },
@@ -649,21 +614,24 @@ export function publishSqliteDatabaseAdmission<T>(
 }
 
 /** Track uncommitted DDL separately so it cannot revive a receipt validated before a later change. */
-export function invalidateLocalSqliteSchemaAdmissions(database: DatabaseSync): void {
-  const revision = state.ddlRevisions.get(database) ?? 0;
-  const dirty = state.schemaDirty.has(database);
+export function invalidateLocalSqliteSchemaAdmissions(
+  database: DatabaseSync | PostgresSqlConnection,
+): void {
+  const anchor = sqlPublicationAnchor(database);
+  const revision = state.ddlRevisions.get(anchor) ?? 0;
+  const dirty = state.schemaDirty.has(anchor);
   const stage = () => {
-    state.ddlRevisions.set(database, revision + 1);
-    state.schemaDirty.add(database);
+    state.ddlRevisions.set(anchor, revision + 1);
+    state.schemaDirty.add(anchor);
   };
   if (
-    !stageSqliteTransactionState(database, {
+    !stageSqliteTransactionState(anchor, {
       stage,
       commit: () => {},
       rollback: () => {
-        state.ddlRevisions.set(database, revision);
+        state.ddlRevisions.set(anchor, revision);
         if (!dirty) {
-          state.schemaDirty.delete(database);
+          state.schemaDirty.delete(anchor);
         }
       },
     })
@@ -673,9 +641,15 @@ export function invalidateLocalSqliteSchemaAdmissions(database: DatabaseSync): v
 }
 
 /** Raw rollback cannot restore staging boundaries; require new facts in any remaining transaction. */
-export function discardSqliteDatabaseTransactionAdmissions(database: DatabaseSync): void {
-  const record = admission(database, false);
-  for (const pending of [getSqliteNativeAdmissionFacts(database), state.local.get(database)]) {
+export function discardSqliteDatabaseTransactionAdmissions(
+  database: DatabaseSync | PostgresSqlConnection,
+): void {
+  const anchor = sqlPublicationAnchor(database);
+  const record = admission(anchor, false);
+  for (const pending of [
+    isPostgresSqlConnection(database) ? undefined : getSqliteNativeAdmissionFacts(database),
+    state.local.get(anchor),
+  ]) {
     for (const key of pending?.keys() ?? []) {
       const previous = record?.facts.get(key);
       if (previous) {
@@ -684,26 +658,29 @@ export function discardSqliteDatabaseTransactionAdmissions(database: DatabaseSyn
     }
     pending?.clear();
   }
-  state.local.delete(database);
-  state.rolledBack.add(database);
+  state.local.delete(anchor);
+  state.rolledBack.add(anchor);
   if (!database.isTransaction) {
-    state.schemaDirty.delete(database);
+    state.schemaDirty.delete(anchor);
   }
 }
 
 /** The DDL owner advances committed format and acknowledges only its final validated receipts. */
-export function publishSqliteDatabaseSchemaChange(database: DatabaseSync): void {
-  const record = admission(database, false);
+export function publishSqliteDatabaseSchemaChange(
+  database: DatabaseSync | PostgresSqlConnection,
+): void {
+  const anchor = sqlPublicationAnchor(database);
+  const record = admission(anchor, false);
   if (record) {
     const previous = advanceSqliteDatabaseGeneration(record, "schemaRevision");
-    const ddlRevision = state.ddlRevisions.get(database) ?? 0;
-    for (const fact of state.local.get(database)?.values() ?? []) {
+    const ddlRevision = state.ddlRevisions.get(anchor) ?? 0;
+    for (const fact of state.local.get(anchor)?.values() ?? []) {
       if (fact.schemaDependent && fact.revision === previous && fact.ddlRevision === ddlRevision) {
         fact.revision = previous + 1;
       }
     }
   } else {
-    const fileIdentity = state.openedIdentities.get(database);
+    const fileIdentity = state.openedIdentities.get(anchor);
     if (fileIdentity) {
       // Unhosted threads still share committed schema changes between their own handles.
       state.localSchemaRevisions.set(
@@ -713,18 +690,15 @@ export function publishSqliteDatabaseSchemaChange(database: DatabaseSync): void 
     }
   }
   if (!database.isTransaction) {
-    state.schemaDirty.delete(database);
+    state.schemaDirty.delete(anchor);
   }
 }
 
 function revoke(record: Admission | undefined, location = record?.location): void {
   if (location) {
-    state.seals.invalidate(location, record);
+    seals.invalidate(location, record);
   }
-  if (record) {
-    advanceSqliteDatabaseGeneration(record, "schemaRevision");
-    advanceSqliteDatabaseGeneration(record, "factRevision");
-  }
+  revokeSqliteDatabaseAdmissionFacts(record);
 }
 
 export function revokeSqliteDatabaseAdmissions(database: DatabaseSync): void {
@@ -753,75 +727,10 @@ export function retireSqliteDatabaseAdmissionForPath(
   }
 }
 
-export function getSqliteDatabaseSchemaRevision(database: DatabaseSync): number | undefined {
-  const record = admission(database);
-  if (record) {
-    return readSqliteDatabaseGeneration(record, "schemaRevision");
-  }
-  const fileIdentity = state.openedIdentities.get(database);
-  return fileIdentity ? (state.localSchemaRevisions.get(fileIdentity) ?? 0) : undefined;
-}
-
 export function suspendSqliteDatabaseAdmission(database: DatabaseSync, suspended: boolean): void {
   if (suspended) {
     state.suspended.add(database);
   } else {
     state.suspended.delete(database);
   }
-}
-
-export function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boolean {
-  return hasSqliteDatabaseSchemaAdmission(pathAdmission(location));
-}
-
-/** Admission owns the descriptor's immutable identity; callers do not re-stat its pathname. */
-export function getSqliteDatabaseAdmissionIdentityForPath(
-  location: string,
-): DatabaseFileIdentity | undefined {
-  return state.registry.forLocation(location)?.physicalIdentity;
-}
-
-/** Consume the already captured physical identity without another filesystem lookup. */
-export function hasSqliteDatabaseSchemaAdmissionForIdentity(
-  physicalIdentity: DatabaseFileIdentity,
-): boolean {
-  return state.registry.hasSchemaAdmissionForIdentity(physicalIdentity);
-}
-
-export function captureSqliteDatabaseAdmissions(
-  cursor?: SqliteDatabaseAdmissionCursor,
-  scope?: { location?: string; admissions?: SqliteDatabaseAdmissions },
-): SqliteDatabaseAdmissions {
-  if (!scope) {
-    return state.registry.capture(cursor);
-  }
-  const identities = new Set(scope.admissions?.map((record) => record.identity));
-  if (scope.location !== undefined) {
-    const observed = state.registry.forLocation(scope.location)?.identity;
-    if (observed) {
-      identities.add(observed);
-    }
-  }
-  return state.registry.capture(cursor, identities);
-}
-
-export function installSqliteDatabaseAdmissions(admissions: SqliteDatabaseAdmissions): void {
-  state.registry.install(admissions);
-}
-
-export function withSqliteDatabaseAdmissionExchange<T>(
-  exchangeOwner: Exchange,
-  operation: () => T,
-): T {
-  return state.exchange.run(exchangeOwner, operation);
-}
-
-/** Unsupported worker hosts retain native validation instead of waiting for unpublished facts. */
-export function canShareSqliteDatabaseAdmissions(): boolean {
-  return threadId === 0 || state.exchange.getStore() !== undefined;
-}
-
-const inherited = readSqliteDatabaseAdmissions(getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY));
-if (inherited) {
-  installSqliteDatabaseAdmissions(inherited);
 }

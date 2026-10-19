@@ -102,8 +102,10 @@ warm a candidate's worker caches before cutover by booting and cleanly stopping 
 state, a loopback port, the runtime user, and the same cache root. Warm it at its
 final release path: moving the release after warming can prevent Node from
 reusing its entries. Recent build caches coexist, including the serving release
-and a prepared candidate. Cleanup bounds the combined cache to 512 MiB and
-expires bytecode older than seven days.
+and a prepared candidate. Detached cleanup targets 512 MiB and 4,096 files across
+the combined cache, expires bytecode older than seven days, and continues after
+short commands exit. Large backlogs are pruned over bounded passes; see the
+[maintenance policy](/help/environment#temporary-compile-cache).
 
 ## OpenAI-compatible endpoints
 
@@ -242,6 +244,8 @@ On macOS, `gateway stop` uses `launchctl bootout` and verifies that the LaunchAg
 If shutdown cannot be verified, the command fails with the exact `launchctl bootout gui/<uid>/<label>` command to run from an external terminal in the service owner's logged-in macOS session. A free Gateway port alone does not prove that the service is stopped.
 
 LaunchAgent labels are `ai.openclaw.gateway` (default) or `ai.openclaw.<profile>` (named profile). `openclaw doctor` audits and repairs service config drift.
+
+On macOS, service restarts preserve multiline environment values, including PEM keys, embedded quotes, and trailing newlines. If an older restart already truncated a value in the generated service environment, another restart cannot reconstruct it. Restore the complete value in its authored configuration or environment and reinstall with `openclaw gateway install --force`.
 
 ### Existing system LaunchDaemons
 

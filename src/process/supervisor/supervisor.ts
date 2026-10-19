@@ -633,7 +633,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         startedAtMs,
         stdin: adapter.stdin,
         wait: () => waitPromise,
-        ...(adapter.waitForExtinction && { waitForExtinction: () => cleanup.promise }),
+        waitForExtinction: () => cleanup.promise,
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);
         },

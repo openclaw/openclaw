@@ -53,7 +53,7 @@ describe("assistant stream snapshots", () => {
       message,
     );
 
-    expect(snapshot.rawText).toBe("<final>Hello \nworld  </final>");
+    expect(snapshot.rawText).toBe("<final>Hello world  </final>");
     expect(snapshot.blockText).toBe("Hello \nworld  ");
     first.text = "Changed first block";
     second.text = "Changed second block";

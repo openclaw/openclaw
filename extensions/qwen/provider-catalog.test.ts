@@ -86,7 +86,7 @@ describe("qwen provider catalog", () => {
 });
 
 describe("qwen token plan provider catalog", () => {
-  it("advertises current plan models while retaining the deprecated compatibility row", () => {
+  it("advertises current plan models without the retired compatibility row", () => {
     const provider = buildQwenTokenPlanProvider();
     const models = provider.models;
     const modelIds = models.map((model) => model.id);
@@ -98,7 +98,6 @@ describe("qwen token plan provider catalog", () => {
       "qwen3.8-max",
       "qwen3.8-flash",
       "qwen3.6-plus",
-      "qwen3-coder-next",
       "kimi-k2.5",
       "glm-5",
       "MiniMax-M2.5",
@@ -106,10 +105,6 @@ describe("qwen token plan provider catalog", () => {
     const manifestModels = manifest.modelCatalog.providers["qwen-token-plan"].models as Array<
       Record<string, unknown>
     >;
-    expect(manifestModels.find((model) => model.id === "qwen3-coder-next")).toMatchObject({
-      status: "deprecated",
-      replacedBy: QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
-    });
     expect(models.every((model) => model.reasoning)).toBe(true);
     expect(manifestModels.map((model) => model.id)).toEqual(modelIds);
     expect(manifest.modelCatalog.discovery["qwen-token-plan"]).toBe("refreshable");
@@ -118,10 +113,6 @@ describe("qwen token plan provider catalog", () => {
   it("uses current model limits instead of the stale contributor catalog", () => {
     const models = buildQwenTokenPlanProvider().models;
 
-    expect(models.find((model) => model.id === "qwen3-coder-next")).toMatchObject({
-      contextWindow: 262_144,
-      maxTokens: 65_536,
-    });
     expect(models.find((model) => model.id === "kimi-k2.5")?.maxTokens).toBe(98_304);
     expect(models.find((model) => model.id === "MiniMax-M2.5")).toMatchObject({
       contextWindow: 196_608,

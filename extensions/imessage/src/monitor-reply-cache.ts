@@ -149,10 +149,10 @@ function buildReplyCacheEntry(
     messageId,
     shortId,
     timestamp: entry.timestamp,
-    ...(typeof entry.chatGuid === "string" ? { chatGuid: entry.chatGuid } : {}),
-    ...(typeof entry.chatIdentifier === "string" ? { chatIdentifier: entry.chatIdentifier } : {}),
-    ...(typeof entry.chatId === "number" ? { chatId: entry.chatId } : {}),
-    ...(typeof entry.isFromMe === "boolean" ? { isFromMe: entry.isFromMe } : {}),
+    ...(entry.chatGuid !== undefined ? { chatGuid: entry.chatGuid } : {}),
+    ...(entry.chatIdentifier !== undefined ? { chatIdentifier: entry.chatIdentifier } : {}),
+    ...(entry.chatId !== undefined ? { chatId: entry.chatId } : {}),
+    ...(entry.isFromMe !== undefined ? { isFromMe: entry.isFromMe } : {}),
   };
 }
 

@@ -1,21 +1,35 @@
-// Sandbox backend registry tests cover pluggable backend factory and manager
-// lifecycle hooks.
 import { describe, expect, it, vi } from "vitest";
-import {
+import * as backend from "./backend.js";
+import type { ReservedSandboxBackendFactoryV1 } from "./backend.types.js";
+import { resolveSandboxConfigForAgent as resolveTestSandboxConfig } from "./config.js";
+const {
   getSandboxBackendCapabilities,
   getSandboxBackendFactory,
   getSandboxBackendManager,
   getSandboxBackendWorkdirResolver,
   registerSandboxBackend,
-} from "./backend.js";
-import type { ReservedSandboxBackendFactoryV1 } from "./backend.types.js";
-import { resolveSandboxConfigForAgent as resolveTestSandboxConfig } from "./config.js";
+} = backend;
+const hooks = (id: string, api = backend) => [
+  api.getSandboxBackendFactory(id),
+  api.getSandboxBackendManager(id),
+  api.getSandboxBackendWorkdirResolver(id),
+];
+
+function expectHooks(id: string, expected: ReturnType<typeof hooks>, api = backend) {
+  hooks(id, api).forEach((value, index) => expect(value).toBe(expected[index]));
+}
+
+const paramsFor = (cfg = resolveTestSandboxConfig(), scopeKey = "test") => ({
+  cfg,
+  sessionKey: scopeKey,
+  scopeKey,
+  workspaceDir: "/workspace",
+  agentWorkspaceDir: "/workspace",
+});
 
 function createGenerationRegistration(label: string) {
   return {
-    factory: async () => {
-      throw new Error(`unused sandbox backend ${label}`);
-    },
+    factory: () => Promise.reject(new Error(`unused sandbox backend ${label}`)),
     manager: {
       describeRuntime: async () => ({ running: true, configLabelMatch: true }),
       removeRuntime: async () => {},
@@ -34,17 +48,8 @@ describe("sandbox backend registry", () => {
       reserveRuntimeId: () => "reserved-runtime",
     });
     try {
-      const invoke = getSandboxBackendFactory("reserved-authority");
-      if (!invoke) {
-        throw new Error("Expected the registered backend factory.");
-      }
-      const params = {
-        cfg: resolveTestSandboxConfig(),
-        sessionKey: "test",
-        scopeKey: "test",
-        workspaceDir: "/workspace",
-        agentWorkspaceDir: "/workspace",
-      };
+      const invoke = getSandboxBackendFactory("reserved-authority")!;
+      const params = paramsFor();
       const assertRuntimeCurrent = vi.fn(() => {});
       for (const incomplete of [
         params,
@@ -85,9 +90,7 @@ describe("sandbox backend registry", () => {
     expect(getSandboxBackendCapabilities("ssh")?.readOnlyResourceMounts).not.toBe(true);
 
     const restore = registerSandboxBackend("test-capabilities", {
-      factory: async () => {
-        throw new Error("not used");
-      },
+      factory: createGenerationRegistration("capabilities").factory,
       capabilities: { readOnlyResourceMounts: true },
     });
     try {
@@ -101,31 +104,22 @@ describe("sandbox backend registry", () => {
   it.each(["docker", "podman", "ssh"] as const)(
     "preserves %s overrides through repeated module reloads and restores its defaults",
     async (backendId) => {
-      const defaults = {
-        factory: getSandboxBackendFactory(backendId),
-        manager: getSandboxBackendManager(backendId),
-        resolveWorkdir: getSandboxBackendWorkdirResolver(backendId),
-      };
+      const defaults = hooks(backendId);
       const registration = createGenerationRegistration(backendId);
       const restore = registerSandboxBackend(backendId, registration);
 
       try {
+        const { factory, manager, resolveWorkdir } = registration;
         for (let reload = 0; reload < 2; reload++) {
           vi.resetModules();
           const fresh = await import("./backend.js");
-          expect(fresh.getSandboxBackendFactory(backendId)).toBe(registration.factory);
-          expect(fresh.getSandboxBackendManager(backendId)).toBe(registration.manager);
-          expect(fresh.getSandboxBackendWorkdirResolver(backendId)).toBe(
-            registration.resolveWorkdir,
-          );
+          expectHooks(backendId, [factory, manager, resolveWorkdir], fresh);
         }
       } finally {
         restore();
       }
 
-      expect(getSandboxBackendFactory(backendId)).toBe(defaults.factory);
-      expect(getSandboxBackendManager(backendId)).toBe(defaults.manager);
-      expect(getSandboxBackendWorkdirResolver(backendId)).toBe(defaults.resolveWorkdir);
+      expectHooks(backendId, defaults);
 
       const fresh = await import("./backend.js");
       const container = await import("./docker-backend.js");
@@ -140,13 +134,7 @@ describe("sandbox backend registry", () => {
       expect(fresh.getSandboxBackendManager(backendId)).toBe(manager);
       const cfg = resolveSandboxConfigForAgent();
       const scopeKey = "agent:registry-test:main";
-      const workdir = fresh.getSandboxBackendWorkdirResolver(backendId)?.({
-        cfg,
-        sessionKey: scopeKey,
-        scopeKey,
-        workspaceDir: "/workspace",
-        agentWorkspaceDir: "/workspace",
-      });
+      const workdir = fresh.getSandboxBackendWorkdirResolver(backendId)?.(paramsFor(cfg, scopeKey));
       expect(workdir).toBe(
         backendId === "ssh"
           ? ssh.resolveSshRuntimePaths(cfg.ssh.workspaceRoot, scopeKey).remoteWorkspaceDir
@@ -159,91 +147,71 @@ describe("sandbox backend registry", () => {
     const registration = createGenerationRegistration("docker");
     const restore = registerSandboxBackend("docker", registration.factory);
     try {
-      expect(getSandboxBackendFactory("docker")).toBe(registration.factory);
-      expect(getSandboxBackendManager("docker")).toBeNull();
-      expect(getSandboxBackendWorkdirResolver("docker")).toBeNull();
+      expectHooks("docker", [registration.factory, null, null]);
     } finally {
       restore();
     }
   });
 
+  it("restores distinct entries when the same registration object is installed twice", () => {
+    const backendId = "test-repeated-registration";
+    const shared = createGenerationRegistration("shared");
+    const middle = createGenerationRegistration("middle");
+    const first = registerSandboxBackend(backendId, shared);
+    const second = registerSandboxBackend(backendId, middle);
+    const third = registerSandboxBackend(backendId, shared);
+    try {
+      third();
+      expect(getSandboxBackendFactory(backendId)).toBe(middle.factory);
+      expect(getSandboxBackendManager(backendId)).toBe(middle.manager);
+      expect(getSandboxBackendWorkdirResolver(backendId)).toBe(middle.resolveWorkdir);
+      first();
+      expect(getSandboxBackendFactory(backendId)).toBe(middle.factory);
+      second();
+      expect(getSandboxBackendFactory(backendId)).toBeNull();
+      third();
+      expect(getSandboxBackendFactory(backendId)).toBeNull();
+    } finally {
+      third();
+      second();
+      first();
+    }
+  });
+
   it.each([
-    {
-      scenario: "older registration retires first",
-      generations: ["A", "B"],
-      disposalOrder: [
-        ["A", "B"],
-        ["B", null],
-      ],
-    },
-    {
-      scenario: "active registration restores its live predecessor",
-      generations: ["A", "B"],
-      disposalOrder: [
-        ["B", "A"],
-        ["A", null],
-      ],
-    },
-    {
-      scenario: "active registration skips every retired predecessor",
-      generations: ["A", "B", "C"],
-      disposalOrder: [
-        ["B", "C"],
-        ["A", "C"],
-        ["C", null],
-      ],
-    },
-    {
-      scenario: "active registration restores the newest unretired predecessor",
-      generations: ["A", "B", "C"],
-      disposalOrder: [
-        ["B", "C"],
-        ["C", "A"],
-        ["A", null],
-      ],
-    },
-    {
-      scenario: "repeated stale disposal never restores retired authority",
-      generations: ["A", "B"],
-      disposalOrder: [
-        ["B", "A"],
-        ["A", null],
-        ["B", null],
-      ],
-    },
-  ] as const)(
-    "preserves all backend authority when $scenario",
-    ({ generations, disposalOrder }) => {
-      const backendId = "test-generation-ownership";
-      const registrations = new Map<string, ReturnType<typeof createGenerationRegistration>>();
-      const disposers = new Map<string, () => void>();
+    ["older retires first", ["A", "B"], ["B", null]],
+    ["restore predecessor", ["B", "A"], ["A", null]],
+    ["skip retired predecessors", ["B", "A", "C"], ["C", "C", null]],
+    ["restore newest predecessor", ["B", "C", "A"], ["C", "A", null]],
+    ["repeat stale disposal", ["B", "A", "B"], ["A", null, null]],
+  ] as const)("preserves all backend authority: %s", (_scenario, dispose, active) => {
+    const generations = [...new Set(dispose)].toSorted();
+    const backendId = "test-generation-ownership";
+    const registrations = new Map<string, ReturnType<typeof createGenerationRegistration>>();
+    const disposers = new Map<string, () => void>();
 
-      try {
-        for (const label of generations) {
-          const registration = createGenerationRegistration(label);
-          registrations.set(label, registration);
-          disposers.set(label, registerSandboxBackend(backendId, registration));
-        }
-
-        for (const [disposedLabel, expectedLabel] of disposalOrder) {
-          const dispose = disposers.get(disposedLabel);
-          if (!dispose) {
-            throw new Error(`missing sandbox registration disposer ${disposedLabel}`);
-          }
-          dispose();
-
-          const expected = expectedLabel ? registrations.get(expectedLabel) : undefined;
-          expect(getSandboxBackendFactory(backendId)).toBe(expected?.factory ?? null);
-          expect(getSandboxBackendManager(backendId)).toBe(expected?.manager ?? null);
-          expect(getSandboxBackendWorkdirResolver(backendId)).toBe(
-            expected?.resolveWorkdir ?? null,
-          );
-        }
-      } finally {
-        for (const dispose of Array.from(disposers.values()).toReversed()) {
-          dispose();
-        }
+    try {
+      for (const label of generations) {
+        const registration = createGenerationRegistration(label);
+        registrations.set(label, registration);
+        disposers.set(label, registerSandboxBackend(backendId, registration));
       }
-    },
-  );
+
+      for (const [index, disposedLabel] of dispose.entries()) {
+        const expectedLabel = active[index];
+        disposers.get(disposedLabel)!();
+
+        const expected = expectedLabel ? registrations.get(expectedLabel) : undefined;
+        expectHooks(backendId, [
+          expected?.factory ?? null,
+          expected?.manager ?? null,
+          expected?.resolveWorkdir ?? null,
+        ]);
+      }
+    } finally {
+      for (const retire of Array.from(disposers.values()).toReversed()) {
+        retire();
+      }
+    }
+  });
 });

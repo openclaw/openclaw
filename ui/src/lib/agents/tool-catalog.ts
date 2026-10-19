@@ -2,6 +2,9 @@ import { listCoreToolSections } from "../../../../src/agents/tool-catalog.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../../../src/agents/tools/automations-tool-name.js";
 import type { ToolCatalogProfile, ToolsCatalogResult } from "../../api/types.ts";
 import { t, translateActive } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+
+registerSettingsEnglish();
 
 export type AgentToolEntry = {
   id: string;
@@ -58,19 +61,8 @@ export function resolveToolSections(
     return toolsCatalogResult.groups.map((group) => {
       const labelId = CORE_GROUP_LABEL_IDS.get(group.id);
       return {
-        id: group.id,
+        ...group,
         label: labelId ? t(`agents.toolCatalog.groups.${labelId}`) : group.label,
-        source: group.source,
-        pluginId: group.pluginId,
-        tools: group.tools.map((tool) => ({
-          id: tool.id,
-          label: tool.label,
-          description: tool.description,
-          source: tool.source,
-          pluginId: tool.pluginId,
-          optional: tool.optional,
-          defaultProfiles: [...tool.defaultProfiles],
-        })),
       };
     });
   }

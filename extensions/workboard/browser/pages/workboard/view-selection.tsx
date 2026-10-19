@@ -620,7 +620,7 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
             );
           }}
         </Show>
-        <div class="workboard-modal__actions">
+        <openclaw-modal-actions class="workboard-modal__actions">
           <button class="btn" type="button" autofocus disabled={state().bulkSaving} onClick={close}>
             {t("common.cancel")}
           </button>
@@ -638,7 +638,7 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
               ? t("workboard.bulkApplying")
               : t(draft().kind === "delete" ? "workboard.bulkDelete" : "workboard.bulkApply")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </form>
       <WorkboardErrorToast
         owner={state()}

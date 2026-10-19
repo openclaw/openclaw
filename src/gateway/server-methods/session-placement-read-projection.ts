@@ -6,6 +6,7 @@ import { projectSessionActivitySummary } from "../session-activity-summary-state
 import { sessionModelRevision } from "../session-model-revision.js";
 import { isSessionPermissionChangePending } from "../session-permission-change.js";
 import type { SessionRowPlacementFactsReader } from "../session-row-placement-projection.types.js";
+import type { GatewaySessionRow } from "../session-utils.types.js";
 import {
   projectWorkerPlacementMove,
   projectWorkerSessionPlacement,
@@ -83,8 +84,8 @@ export function readSessionRowFacts(params: {
   };
   let placementFacts = readPlacementFacts();
   let activitySummaryFacts = params.databaseFacts;
-  const readActivitySummary = () =>
-    projectSessionActivitySummary({
+  const readActivitySummary = () => {
+    const summary = projectSessionActivitySummary({
       key,
       agentId,
       cfg,
@@ -92,12 +93,27 @@ export function readSessionRowFacts(params: {
       enabled: activitySummaryEnabled,
       watermark: activitySummaryFacts.activitySummaryWatermark,
     });
+    return summary && Object.freeze(summary);
+  };
   let activitySummary = readActivitySummary();
+  let unplaced:
+    | Readonly<
+        Pick<
+          GatewaySessionRow,
+          | "sessionModelRevision"
+          | "permissionModePending"
+          | "activitySummary"
+          | "placement"
+          | "placementMove"
+        >
+      >
+    | undefined;
   return {
     hasBoard: params.databaseFacts.hasBoard,
     refreshActivitySummary(databaseFacts = activitySummaryFacts) {
       activitySummaryFacts = databaseFacts;
       activitySummary = readActivitySummary();
+      unplaced = undefined;
     },
     present: () => {
       const currentSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
@@ -115,6 +131,21 @@ export function readSessionRowFacts(params: {
         failedRecoveryAction,
         retryOnSend,
       } = placementFacts;
+      const permissionModePending = isSessionPermissionChangePending(entry.sessionId);
+      if (!placement && !move) {
+        if (
+          !unplaced ||
+          unplaced.permissionModePending !== permissionModePending ||
+          unplaced.sessionModelRevision !== revision
+        ) {
+          unplaced = Object.freeze({
+            sessionModelRevision: revision,
+            permissionModePending,
+            activitySummary,
+          });
+        }
+        return unplaced;
+      }
       return {
         sessionModelRevision: revision,
         ...(placement
@@ -143,8 +174,8 @@ export function readSessionRowFacts(params: {
             }
           : {}),
         ...(move ? { placementMove: projectWorkerPlacementMove(move) } : {}),
-        permissionModePending: isSessionPermissionChangePending(entry.sessionId),
-        activitySummary: activitySummary ? { ...activitySummary } : undefined,
+        permissionModePending,
+        activitySummary,
       };
     },
   };

@@ -9,28 +9,22 @@ import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
+import {
+  catalogHost,
+  catalogProvider as provider,
+  expectCatalog,
+} from "./session-catalog.fixtures.test-support.js";
 
 // mock-isolation: HOME policy uses the real home path but must not open its profile database.
-vi.mock("../../state/user-profiles.js", () => ({
-  hasMultipleSessionSharingIdentities: vi.fn(() => false),
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: vi.fn(() => false),
+  readResidentUserProfileAliases: (id: string) => new Set([id]),
 }));
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
 const { listActiveSessionCatalogs } = await import("../../plugins/session-catalog-active.js");
 let projection: ReturnType<typeof createSessionRowProjectionFixture>;
-
-function provider(
-  id: string,
-  overrides: Partial<SessionCatalogProvider> = {},
-): SessionCatalogProvider {
-  return {
-    id,
-    label: id.toUpperCase(),
-    list: vi.fn(async () => []),
-    read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-    ...overrides,
-  };
-}
 
 function registerCatalog(registry: PluginRegistry, catalog: SessionCatalogProvider) {
   registry.sessionCatalogs.push({ pluginId: catalog.id, source: "test", provider: catalog });
@@ -108,21 +102,13 @@ describe("session catalog Gateway HOME isolation", () => {
   });
 
   it("suppresses only process-HOME local hosts for a named profile", async () => {
-    const localHost = {
-      hostId: "gateway:local",
-      label: "Local",
-      kind: "gateway" as const,
-      connected: true,
-      sessions: [],
-    };
-    const nodeHost = {
+    const localHost = catalogHost();
+    const nodeHost = catalogHost({
       hostId: "node:devbox",
       label: "Devbox",
-      kind: "node" as const,
-      connected: true,
+      kind: "node",
       nodeId: "devbox",
-      sessions: [],
-    };
+    });
     const list = vi.fn(async (query: Parameters<SessionCatalogProvider["list"]>[0]) => [
       ...(query.allowProcessHomeFallback === false ? [] : [localHost]),
       nodeHost,
@@ -133,9 +119,7 @@ describe("session catalog Gateway HOME isolation", () => {
     const defaultRespond = await withProfile(undefined, () =>
       call("sessions.catalog.list", {}, logGateway),
     );
-    expect(defaultRespond).toHaveBeenCalledWith(true, {
-      catalogs: [expect.objectContaining({ id: "claude", hosts: [localHost, nodeHost] })],
-    });
+    expectCatalog(defaultRespond, { id: "claude", hosts: [localHost, nodeHost] });
 
     const respond = await withProfile("dev", () => call("sessions.catalog.list", {}, logGateway));
     await withProfile("dev", () =>
@@ -143,9 +127,7 @@ describe("session catalog Gateway HOME isolation", () => {
     );
 
     expect(list).toHaveBeenCalledTimes(3);
-    expect(respond).toHaveBeenCalledWith(true, {
-      catalogs: [expect.objectContaining({ id: "claude", hosts: [nodeHost] })],
-    });
+    expectCatalog(respond, { id: "claude", hosts: [nodeHost] });
     expect(logGateway.warn).toHaveBeenCalledOnce();
     expect(logGateway.warn).toHaveBeenCalledWith(
       "external session catalog HOME fallback skipped: isolated state; configure an explicit root to enable",
@@ -154,13 +136,7 @@ describe("session catalog Gateway HOME isolation", () => {
   });
 
   it("binds HOME isolation into the internal read-only catalog facade", async () => {
-    const localHost = {
-      hostId: "gateway:local",
-      label: "Local",
-      kind: "gateway" as const,
-      connected: true,
-      sessions: [],
-    };
+    const localHost = catalogHost();
     const list = vi.fn(async (request: { allowProcessHomeFallback?: boolean }) =>
       request.allowProcessHomeFallback === false ? [] : [localHost],
     );
@@ -172,31 +148,27 @@ describe("session catalog Gateway HOME isolation", () => {
     });
     registerCatalog(activeRegistry, provider("test", { list, read }));
 
-    await withProfile(undefined, async () => {
-      const [catalog] = listActiveSessionCatalogs();
-      expect(catalog?.processHomeFallbackAllowed).toBe(true);
-      await expect(catalog?.list({})).resolves.toEqual([localHost]);
-      await expect(
-        catalog?.read({ hostId: "gateway:local", threadId: "known-thread" }),
-      ).resolves.toMatchObject({ threadId: "known-thread" });
-    });
-    await withProfile("dev", async () => {
-      const [catalog] = listActiveSessionCatalogs();
-      expect(catalog?.processHomeFallbackAllowed).toBe(false);
-      await expect(catalog?.list({})).resolves.toEqual([]);
-      await expect(
-        catalog?.read({ hostId: "gateway:local", threadId: "known-thread" }),
-      ).rejects.toThrow("local Test sessions are unavailable in isolated state");
-    });
-
-    expect(list.mock.calls.map(([request]) => request.allowProcessHomeFallback)).toEqual([
-      true,
-      false,
-    ]);
-    expect(read.mock.calls.map(([request]) => request.allowProcessHomeFallback)).toEqual([
-      true,
-      false,
-    ]);
+    for (const profile of [undefined, "dev"]) {
+      await withProfile(profile, async () => {
+        const [catalog] = listActiveSessionCatalogs();
+        expect(catalog?.processHomeFallbackAllowed).toBe(!profile);
+        await expect(catalog?.list({})).resolves.toEqual(profile ? [] : [localHost]);
+        const reading = expect(
+          catalog?.read({ hostId: "gateway:local", threadId: "known-thread" }),
+        );
+        if (profile) {
+          await reading.rejects.toThrow("local Test sessions are unavailable in isolated state");
+        } else {
+          await reading.resolves.toMatchObject({ threadId: "known-thread" });
+        }
+      });
+    }
+    for (const operation of [list, read]) {
+      expect(operation.mock.calls.map(([request]) => request.allowProcessHomeFallback)).toEqual([
+        true,
+        false,
+      ]);
+    }
   });
 
   it.each([

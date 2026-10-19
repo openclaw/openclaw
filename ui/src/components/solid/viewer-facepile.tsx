@@ -1,9 +1,11 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, onCleanup, onSettled, Show } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
 } from "../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
+import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { sessionParticipantIdentityKey } from "../../lib/chat/sender-label.ts";
 import { resolveAvatar } from "../../lib/identity-avatar.ts";
 import {
@@ -11,10 +13,12 @@ import {
   projectPresenceViewers,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
+import { projectAgentIdentity, projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { personActivityLink, type PersonActivityRouting } from "../person-activity-link.ts";
-import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
+import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 import "../tooltip.ts";
@@ -43,11 +47,16 @@ export function ViewerAvatarContent(props: ViewerAvatarProps) {
     username: props.user?.email,
     profileAvatarUrl: props.user?.avatarUrl,
   }));
+  const presentation = createIdentityAvatarPresentation(view);
   return (
     <Show when={props.user}>
       <span
-        ref={identityAvatarState(view)}
-        class={["viewer-avatar", `viewer-avatar--${props.variant ?? "session"}`]}
+        data-avatar-state={presentation.state()}
+        class={[
+          "viewer-avatar",
+          `viewer-avatar--${props.variant ?? "session"}`,
+          presentation.classes(),
+        ]}
         data-viewer-id={props.markAsViewer !== false ? props.user?.id : undefined}
         aria-label={
           props.variant === "profile"
@@ -56,7 +65,7 @@ export function ViewerAvatarContent(props: ViewerAvatarProps) {
         }
       >
         <Show when={Boolean(view().imageUrl)}>
-          <IdentityAvatarImage view={view()} fallbackSelector=".viewer-avatar" />
+          <IdentityAvatarImage view={view()} onStateChange={presentation.onStateChange} />
         </Show>
         <span
           class={view().imageUrl ? "viewer-avatar__fallback" : undefined}
@@ -80,6 +89,7 @@ export type ViewerFacepileProps = {
   maxVisible?: number;
   totalCount?: number;
   personActivity?: PersonActivityRouting;
+  registerLink?: (element: HTMLAnchorElement) => (() => void) | undefined;
 };
 
 export function ViewerFacepileContent(props: ViewerFacepileProps) {
@@ -123,15 +133,12 @@ export function ViewerFacepileContent(props: ViewerFacepileProps) {
           }
         >
           {(user) => (
-            <openclaw-tooltip prop:content={presenceViewerLabel(user())}>
-              <span class="viewer-facepile__tooltip-anchor">
-                <FacepilePerson
-                  user={user()}
-                  markAsViewer={!props.staticParticipants}
-                  routing={props.personActivity}
-                />
-              </span>
-            </openclaw-tooltip>
+            <FacepilePerson
+              user={user()}
+              markAsViewer={!props.staticParticipants}
+              routing={props.personActivity}
+              registerLink={props.registerLink}
+            />
           )}
         </For>
         <Show when={overflowCount() > 0}>
@@ -150,76 +157,124 @@ function FacepilePerson(props: {
   user: FacepileUser;
   markAsViewer: boolean;
   routing?: PersonActivityRouting;
+  registerLink?: ViewerFacepileProps["registerLink"];
 }) {
   const link = createMemo(() =>
     props.user.identity?.type === "profile"
       ? personActivityLink(props.user.identity.id, props.routing, presenceViewerLabel(props.user))
       : null,
   );
-  const avatar = (
+  const avatar = <ParticipantAvatar user={props.user} markAsViewer={props.markAsViewer} />;
+  let profileLink: HTMLAnchorElement | undefined;
+  return (
+    <openclaw-tooltip
+      prop:content={presenceViewerLabel(props.user)}
+      prop:descriptionTarget={link() ? () => profileLink ?? null : undefined}
+    >
+      <span class="viewer-facepile__tooltip-anchor">
+        <Show when={link()} fallback={avatar}>
+          {(target) => {
+            let anchor!: HTMLAnchorElement;
+            onSettled(() => props.registerLink?.(anchor));
+            return (
+              <a
+                ref={(element) => {
+                  anchor = element;
+                  profileLink = element;
+                }}
+                class="person-activity-avatar-link"
+                href={target().href}
+                onClick={(event) => target().open(event)}
+              >
+                {avatar}
+              </a>
+            );
+          }}
+        </Show>
+      </span>
+    </openclaw-tooltip>
+  );
+}
+
+export function ParticipantAvatar(props: {
+  user: FacepileUser;
+  markAsViewer?: boolean;
+  label?: string;
+  "aria-hidden"?: "true";
+}) {
+  const agent = () => {
+    const identity = props.user.identity;
+    return identity?.type === "agent" ? identity : undefined;
+  };
+  return (
     <Show
-      when={props.user.identity?.type === "agent" ? props.user.identity : undefined}
+      when={agent()}
       fallback={
         <ViewerAvatar
           user={props.user}
-          identity={props.user.identity}
           markAsViewer={props.markAsViewer}
           variant="session"
+          aria-hidden={props["aria-hidden"]}
         />
       }
     >
-      {(identity) => (
-        <AgentViewerAvatar
-          user={props.user}
-          identity={identity()}
-          markAsViewer={props.markAsViewer}
-        />
-      )}
-    </Show>
-  );
-  return (
-    <Show when={link()} fallback={avatar}>
-      {(target) => (
-        <a
-          class="person-activity-avatar-link"
-          href={target().href}
-          onClick={(event) => target().open(event)}
-        >
-          {avatar}
-        </a>
-      )}
+      {(identity) => {
+        const app = useOptionalApplication();
+        const agents = app ? projectAgents(app.agents) : undefined;
+        const agentIdentity = app
+          ? projectAgentIdentity({
+              identities: app.agentIdentity,
+              get agentId() {
+                return identity().id;
+              },
+            })
+          : undefined;
+        const avatar = createMemo(() => {
+          const rosterAgent = agents
+            ?.read()
+            .agentsList?.agents.find((entry) => entry.id === identity().id);
+          const hydrated = agentIdentity?.read();
+          const resolved = resolveAvatar({
+            identity: identity(),
+            id: props.user.id,
+            name: props.user.name,
+            profileAvatarUrl: props.user.avatarUrl,
+          });
+          return {
+            id: identity().id,
+            avatar: hydrated
+              ? resolveAgentAvatarUrl(rosterAgent ?? {}, hydrated)
+              : (resolveAgentAvatarUrl(rosterAgent ?? {}) ??
+                (resolved.kind === "profile" ? resolved.url : null)),
+            textAvatar: resolveAgentTextAvatar(rosterAgent ?? {}, hydrated),
+          };
+        });
+        return (
+          <span
+            class="viewer-avatar viewer-avatar--session"
+            aria-label={props.label ?? presenceViewerLabel(props.user)}
+            data-viewer-id={props.markAsViewer ? props.user.id : undefined}
+          >
+            <AgentIdentityAvatar agent={avatar()} />
+          </span>
+        );
+      }}
     </Show>
   );
 }
 
-export function AgentViewerAvatar(props: {
-  user: Pick<PresenceViewer, "id" | "name" | "email" | "avatarUrl">;
-  identity: Extract<SessionParticipantIdentity, { type: "agent" }>;
-  markAsViewer?: boolean;
-  label?: string;
-}) {
-  const avatar = createMemo(() => {
-    const resolved = resolveAvatar({
-      identity: props.identity,
-      id: props.user.id,
-      name: props.user.name,
-      profileAvatarUrl: props.user.avatarUrl,
-    });
-    return resolved.kind === "profile" ? resolved.url : null;
-  });
-  return (
-    <span
-      class="viewer-avatar viewer-avatar--session"
-      aria-label={props.label ?? presenceViewerLabel(props.user)}
-      data-viewer-id={props.markAsViewer ? props.user.id : undefined}
-    >
-      <AgentIdentityAvatar agent={{ id: props.identity.id, avatar: avatar() }} />
-    </span>
+type ViewerAvatarElement = SolidBridgeElement<ViewerAvatarProps>;
+type ViewerFacepileElement = SolidBridgeElement<ViewerFacepileProps>;
+
+const mountedFacepiles = new Map<HTMLElement, ViewerFacepileProps>();
+
+export function mountedViewerSessionKeys(root: HTMLElement): ReadonlySet<string> {
+  return new Set(
+    [...mountedFacepiles].flatMap(([element, props]) =>
+      root.contains(element) ? [props.sessionKey ?? ""] : [],
+    ),
   );
 }
-
-export type ViewerAvatarElement = SolidBridgeElement<ViewerAvatarProps>;
-export type ViewerFacepileElement = SolidBridgeElement<ViewerFacepileProps>;
 
 export const ViewerAvatar = defineSolidBridge<ViewerAvatarProps>(
   "openclaw-viewer-avatar",
@@ -237,10 +292,12 @@ export const ViewerAvatar = defineSolidBridge<ViewerAvatarProps>(
   },
 );
 
-defineSolidBridge<ViewerFacepileProps>(
+export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
   "openclaw-viewer-facepile",
   (props, host) => {
     host.style.display = "contents";
+    mountedFacepiles.set(host, host);
+    onCleanup(() => mountedFacepiles.delete(host));
     return <ViewerFacepileContent {...props} />;
   },
   {
@@ -255,6 +312,7 @@ defineSolidBridge<ViewerFacepileProps>(
       maxVisible: { default: 3, attribute: "max-visible", type: Number },
       totalCount: { default: undefined, attribute: false },
       personActivity: { default: undefined, attribute: false },
+      registerLink: { default: undefined, attribute: false },
     },
   },
 );

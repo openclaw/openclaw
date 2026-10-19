@@ -126,40 +126,45 @@ it.for(["unrelated", "same session"] as const)(
         }
         return result;
       });
+      const wrapExecution = (borrowed: OpenClawAgentDatabaseExecution) => {
+        if (!producerScope.getStore()) {
+          return borrowed;
+        }
+        const runExisting: typeof borrowed.runExisting = (source, operation, options) =>
+          borrowed.runExisting(
+            source,
+            (scope) => {
+              const wrapped: AgentDatabaseExecutionScope = {
+                async execute(command, commandOptions) {
+                  const value = await scope.execute(command, commandOptions);
+                  if (command.type === "session.entries.replace" && !nativeReplyPending) {
+                    // The real write has replied; its owner still retains publication custody.
+                    nativeReplyPending = true;
+                    nativeReplyHeld.resolve();
+                    await releaseNativeReply.promise;
+                  }
+                  return value;
+                },
+              };
+              return operation(wrapped);
+            },
+            options,
+          );
+        return new Proxy(borrowed, {
+          get(original, key, receiver) {
+            return key === "runExisting" ? runExisting : Reflect.get(original, key, receiver);
+          },
+        });
+      };
       const captureExecution = executionOwner.captureOpenClawAgentDatabaseExecution;
       vi.spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution").mockImplementation(
-        (...args) => {
-          const borrowed = captureExecution(...args);
-          if (!producerScope.getStore()) {
-            return borrowed;
-          }
-          const runExisting: typeof borrowed.runExisting = (source, operation, options) =>
-            borrowed.runExisting(
-              source,
-              (scope) => {
-                const wrapped: AgentDatabaseExecutionScope = {
-                  async execute(command, commandOptions) {
-                    const value = await scope.execute(command, commandOptions);
-                    if (command.type === "session.entries.replace" && !nativeReplyPending) {
-                      // The real write has replied; its owner still retains publication custody.
-                      nativeReplyPending = true;
-                      nativeReplyHeld.resolve();
-                      await releaseNativeReply.promise;
-                    }
-                    return value;
-                  },
-                };
-                return operation(wrapped);
-              },
-              options,
-            );
-          return new Proxy(borrowed, {
-            get(original, key, receiver) {
-              return key === "runExisting" ? runExisting : Reflect.get(original, key, receiver);
-            },
-          });
-        },
+        (...args) => wrapExecution(captureExecution(...args)),
       );
+      const capturePreparation = executionOwner.captureOpenClawAgentDatabasePreparationExecution;
+      vi.spyOn(
+        executionOwner,
+        "captureOpenClawAgentDatabasePreparationExecution",
+      ).mockImplementation((...args) => wrapExecution(capturePreparation(...args)));
       producer = runOutsideAsyncWorkScope(() =>
         runWithGatewayIndependentRootWorkAdmission(
           () =>

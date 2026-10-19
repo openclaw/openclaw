@@ -198,10 +198,10 @@ function createFixture(
           break;
         }
         case "upload":
-          if (!(init?.body instanceof Blob)) {
+          if (init?.body == null) {
             throw new Error("Expected the Tlon image upload body");
           }
-          expect(Buffer.from(await init.body.arrayBuffer())).toEqual(IMAGE);
+          expect(Buffer.from(await new Response(init.body).arrayBuffer())).toEqual(IMAGE);
           response = new Response(
             new ReadableStream<Uint8Array>({ cancel: account.uploadCanceled }),
             {

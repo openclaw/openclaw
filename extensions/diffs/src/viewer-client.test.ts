@@ -73,6 +73,7 @@ function renderCard(overrides: Partial<DiffViewerPayload> = {}): void {
 }
 
 beforeEach(() => {
+  vi.resetModules();
   document.body.innerHTML = "";
   delete document.documentElement.dataset.openclawDiffsError;
   delete document.documentElement.dataset.openclawDiffsReady;
@@ -91,71 +92,6 @@ describe("createToolbarButton icon safety", () => {
         false,
       );
     }
-  });
-});
-
-describe("hydrateViewer", () => {
-  it("continues hydrating later cards when one card throws", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    renderCard();
-    renderCard();
-    fileDiffHydrateMock.mockImplementationOnce(() => {
-      throw new Error("broken card");
-    });
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
-    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      "Skipping diff card that failed to hydrate",
-      expect.any(Error),
-    );
-    expect(document.documentElement.dataset.openclawDiffsError).toBeUndefined();
-    warn.mockRestore();
-  });
-
-  it("does not retain controllers when initial state application throws", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    renderCard();
-    renderCard();
-    fileDiffSetOptionsMock.mockImplementationOnce(() => {
-      throw new Error("broken options");
-    });
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
-    expect(fileDiffSetOptionsMock).toHaveBeenCalledTimes(2);
-    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      "Skipping diff card that failed to hydrate",
-      expect.any(Error),
-    );
-    expect(document.documentElement.dataset.openclawDiffsError).toBeUndefined();
-    warn.mockRestore();
-  });
-
-  it("replaces stale controllers when hydrating the current cards again", async () => {
-    renderCard();
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    document.body.innerHTML = "";
-    renderCard();
-    await hydrateViewer();
-
-    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
-    const currentOptions = fileDiffSetOptionsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    const renderHeaderMetadata = currentOptions.renderHeaderMetadata as () => HTMLElement;
-    fileDiffRerenderMock.mockClear();
-
-    renderHeaderMetadata().querySelector<HTMLButtonElement>("button")?.click();
-
-    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
   });
 });
 

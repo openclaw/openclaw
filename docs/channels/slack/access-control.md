@@ -149,6 +149,8 @@ restart the Slack monitor. The Gateway remains running.
     - unresolved channel-name entries are kept as configured but ignored for routing by default
     - inbound authorization and channel routing are ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
 
+    Per-channel `tools`/`toolsBySender`/`requireMention` follow the same rule: resolved names bind to channel IDs, so a renamed channel never inherits another channel's name entry unless direct name matching is explicitly enabled.
+
     <Warning>
     Name-based keys (`#channel-name` or `channel-name`) depend on successful Slack lookup to resolve a stable channel ID. Under `groupPolicy: "allowlist"`, unresolved names are denied unless `dangerouslyAllowNameMatching` explicitly enables direct name matching.
 
@@ -209,8 +211,10 @@ restart the Slack monitor. The Gateway remains running.
     - `skills`
     - `systemPrompt`
     - `tools`, `toolsBySender`
-    - `toolsBySender` key format: `channel:`, `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
-      (run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries)
+    - `toolsBySender` key format: `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
+      (run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries; prefer
+      `id:` keys when granting extra tools because `username:` and `name:` match mutable sender
+      attributes)
 
     <a id="bot-created-threads" />
     `requireMentionInBotThreads` overrides mention gating only in threads whose root message was sent by this bot. Set it to `false` to allow unmentioned replies there while keeping `requireMention: true` for the rest of the channel. Set it to `true` to require a mention in those threads even when implicit reply or thread-participation mentions are enabled. Authorized text commands keep their existing bypass.

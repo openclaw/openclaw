@@ -1,17 +1,17 @@
-import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type {
-  CodexThread,
-  CodexThreadStatus,
-  CodexThreadTurnsListResponse,
-} from "./app-server/protocol.js";
+import {
+  asFiniteNumber,
+  isRecord,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
+import type { CodexThreadTurnsListResponse } from "./app-server/protocol.js";
 import {
   CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES,
   CODEX_INTERACTIVE_THREAD_SOURCE_KINDS,
 } from "./app-server/protocol.js";
 import { detachCodexCatalogString } from "./session-catalog-limits.js";
 import type {
+  CodexCatalogNativeThread,
   CodexSessionCatalogError,
   CodexSessionCatalogPage,
   CodexSessionCatalogPageParams,
@@ -90,17 +90,14 @@ export function selectCodexCatalogPreviewInput(value: string): string {
 
 /** Detach the small preview from V8's potentially large sliced-string backing store. */
 export function truncateCodexCatalogPreview(
-  value: unknown,
+  value: string,
   sanitize: typeof sanitizeTerminalText,
 ): string {
-  const preview =
-    typeof value === "string"
-      ? boundedCatalogString(
-          sanitize(value.replace(/\s+/g, " ")),
-          MAX_SESSION_PREVIEW_LENGTH,
-          "truncate",
-        )
-      : undefined;
+  const preview = boundedCatalogString(
+    sanitize(value.replace(/\s+/g, " ")),
+    MAX_SESSION_PREVIEW_LENGTH,
+    "truncate",
+  );
   return Buffer.from(preview ?? "", "utf8").toString("utf8");
 }
 
@@ -123,7 +120,7 @@ export function codexCatalogThreadName(value: unknown): string | null | undefine
 }
 
 export function codexCatalogThreadStatus(
-  status: CodexThreadStatus | null | undefined,
+  status: Record<string, unknown> | null | undefined,
 ): Pick<CodexSessionCatalogSession, "status" | "activeFlags"> {
   const activeFlags: string[] = [];
   if (status?.type === "active" && Array.isArray(status.activeFlags)) {
@@ -144,8 +141,8 @@ export function codexCatalogThreadStatus(
 }
 
 export function toCatalogSession(
-  thread: CodexThread,
-  preparedPreview: string | undefined,
+  thread: CodexCatalogNativeThread,
+  preparedPreview: string | null | undefined,
 ): CodexSessionCatalogSession | undefined {
   // Codex models Atlas and ChatGPT as custom sources but includes both in its
   // interactive default. Normalize those objects for the string-only catalog.
@@ -153,37 +150,23 @@ export function toCatalogSession(
   if (!source) {
     return undefined;
   }
-  const threadId = boundedCatalogString(thread.id, MAX_SESSION_ID_LENGTH);
-  if (!threadId) {
-    return undefined;
-  }
-  const gitInfo = isRecord(thread.gitInfo) ? thread.gitInfo : undefined;
-  const sessionId = boundedCatalogString(thread.sessionId, MAX_SESSION_ID_LENGTH);
-  const name = codexCatalogThreadName(thread.name);
+  const { id: threadId, sessionId, name, cwd, modelProvider, cliVersion } = thread;
   const fallbackName = name ? undefined : preparedPreview;
-  const cwd = boundedCatalogString(thread.cwd, MAX_CWD_LENGTH);
-  const modelProvider = boundedCatalogString(thread.modelProvider, MAX_METADATA_LENGTH, "truncate");
-  const cliVersion = boundedCatalogString(thread.cliVersion, MAX_METADATA_LENGTH, "truncate");
-  const gitBranch = boundedCatalogString(gitInfo?.branch, MAX_METADATA_LENGTH, "truncate");
+  const gitBranch = thread.gitInfo?.branch;
+  const activeFlags = thread.status?.type === "active" ? thread.status.activeFlags : undefined;
   return {
     threadId,
-    ...codexCatalogThreadStatus(thread.status),
+    status: thread.status?.type ?? "notLoaded",
+    ...(thread.catalogError ? { catalogError: thread.catalogError } : {}),
+    ...(activeFlags?.length ? { activeFlags } : {}),
     archived: false,
     ...(sessionId ? { sessionId } : {}),
     ...(thread.name === null ? { name: null } : name ? { name } : {}),
     ...(fallbackName ? { fallbackName } : {}),
     ...(cwd ? { cwd } : {}),
-    ...(typeof thread.createdAt === "number" && Number.isFinite(thread.createdAt)
-      ? { createdAt: thread.createdAt }
-      : {}),
-    ...(typeof thread.updatedAt === "number" && Number.isFinite(thread.updatedAt)
-      ? { updatedAt: thread.updatedAt }
-      : {}),
-    ...(typeof thread.recencyAt === "number" && Number.isFinite(thread.recencyAt)
-      ? { recencyAt: thread.recencyAt }
-      : thread.recencyAt === null
-        ? { recencyAt: null }
-        : {}),
+    ...(thread.createdAt != null ? { createdAt: thread.createdAt } : {}),
+    ...(thread.updatedAt != null ? { updatedAt: thread.updatedAt } : {}),
+    ...(thread.recencyAt !== undefined ? { recencyAt: thread.recencyAt } : {}),
     source,
     ...(modelProvider ? { modelProvider } : {}),
     ...(cliVersion ? { cliVersion } : {}),
@@ -395,6 +378,12 @@ function parseCatalogSession(value: unknown): CodexSessionCatalogSession {
     if (parsed !== undefined) {
       session[key] = parsed;
     }
+  }
+  if (value.catalogError !== undefined) {
+    if (value.catalogError !== "oversized-thread") {
+      throw new Error("Codex session catalog returned an invalid degraded marker");
+    }
+    session.catalogError = value.catalogError;
   }
   if (activeFlags?.length) {
     session.activeFlags = activeFlags;

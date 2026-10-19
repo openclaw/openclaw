@@ -10,7 +10,7 @@ import {
   withReadySessionRows,
   type SessionRowReadView,
   type SessionRowPreparationOptions,
-  type withPreparedSessionRows,
+  type SessionRowSelectionPreparationOptions,
 } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
 import {
@@ -178,7 +178,7 @@ export function createSessionRowAncestorReads(owner: {
   referenced: (reference: string) => records.Row | undefined;
   lookup: (query: records.Lookup) => records.Row | undefined;
   prepareExactRows: (queries: readonly records.Lookup[]) => Promise<void> | undefined;
-  prepareSelection: () => Promise<void> | undefined;
+  prepareSelection: (options?: SessionRowSelectionPreparationOptions) => Promise<void> | undefined;
   retainExactPreparation: () => () => void;
   retainArchiveRows: () => { update: (ids: readonly string[]) => void; release: () => void };
   describe: SessionRowReadView["describe"];
@@ -214,7 +214,7 @@ export function createSessionRowAncestorReads(owner: {
       queries: (config: records.Inputs["cfg"]) => readonly records.Lookup[],
       consume: (read: SessionRowReadView) => T,
       options?: SessionRowPreparationOptions,
-    ): ReturnType<typeof withPreparedSessionRows<T>> {
+    ): Promise<T> {
       const selected = options?.includeAncestors
         ? (config: records.Inputs["cfg"]) => {
             const targets = queries(config);
@@ -287,13 +287,15 @@ export function createSessionRowAncestorReads(owner: {
                 }
                 return consume(read);
               },
-              options?.selection ? owner.prepareSelection : undefined,
+              options?.selection
+                ? () =>
+                    owner.prepareSelection(
+                      typeof options.selection === "object" ? options.selection : undefined,
+                    )
+                : undefined,
             );
-            if (prepared.kind === "pending") {
+            if (prepared !== membershipPending) {
               return prepared;
-            }
-            if (prepared.value !== membershipPending) {
-              return { kind: "complete", value: prepared.value };
             }
           } catch (error) {
             if (!(error instanceof SessionRowFactsPending)) {

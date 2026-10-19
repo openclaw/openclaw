@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
-  assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
@@ -8,10 +7,7 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
-import type {
-  AgentDatabaseExecutionScope,
-  OpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import type { SessionTranscriptExecutionReadResult } from "./session-transcript-execution-read.types.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
@@ -81,7 +77,6 @@ export function runLockedSessionTranscriptRead<T>(
     signal?.throwIfAborted();
     locked.assertCurrent();
     locked.claim.assertCurrent();
-    assertExistingDatabaseIdentity(pathname, identity.key, identity.birthtime);
     if (`file:${locked.claim.identity}` !== identity.key) {
       throw new Error("Transcript reader belongs to another locked database generation");
     }
@@ -98,25 +93,11 @@ export function runLockedSessionTranscriptRead<T>(
 
 /** Ordinary reads use WAL snapshots; an active transcript lock lends its ordered connection. */
 export function createPreparedSessionTranscriptReads(params: {
-  execution: OpenClawAgentDatabaseExecution;
-  claim: AgentDatabaseGenerationClaim;
   expectedIdentity: DatabasePathIdentity;
   assertCurrent: () => void;
   reader: PreparedSessionTranscriptReads;
 }): PreparedSessionTranscriptReads {
-  const { execution, claim, expectedIdentity } = params;
-  const assertCurrent = () => {
-    params.assertCurrent();
-    claim.assertCurrent();
-    assertExistingDatabaseIdentity(
-      execution.path,
-      expectedIdentity.key,
-      expectedIdentity.birthtime,
-    );
-    if (`file:${claim.identity}` !== expectedIdentity.key) {
-      throw new Error("Transcript reader belongs to another prepared database generation");
-    }
-  };
+  const { expectedIdentity } = params;
   const read = async <T>(
     operation: (
       worker: AgentDatabaseExecutionScope,
@@ -125,24 +106,20 @@ export function createPreparedSessionTranscriptReads(params: {
     signal?: AbortSignal,
   ): Promise<T> => {
     signal?.throwIfAborted();
-    assertCurrent();
+    params.assertCurrent();
     const locked = findLockedTranscriptReads(expectedIdentity);
     if (locked) {
       return locked.queue(async () => {
         signal?.throwIfAborted();
-        assertCurrent();
+        params.assertCurrent();
         locked.assertCurrent();
         locked.claim.assertCurrent();
-        if (
-          locked.claim.identity !== claim.identity ||
-          locked.claim.incarnation !== claim.incarnation
-        ) {
+        if (`file:${locked.claim.identity}` !== expectedIdentity.key) {
           throw new Error("Transcript reader belongs to another locked database generation");
         }
         const result = await operation(locked.worker);
         signal?.throwIfAborted();
         locked.assertCurrent();
-        assertCurrent();
         if (!result.ok) {
           throw decodeSessionTranscriptWorkerReadError(result.error);
         }
@@ -151,62 +128,56 @@ export function createPreparedSessionTranscriptReads(params: {
     }
     const result = await snapshot();
     signal?.throwIfAborted();
-    assertCurrent();
     return result;
   };
+  const reader =
+    <Input extends object, Value>(
+      snapshot: (input: Input, signal?: AbortSignal) => Promise<Value>,
+      operation: (
+        worker: AgentDatabaseExecutionScope,
+        input: Input,
+        signal?: AbortSignal,
+      ) => Promise<SessionTranscriptExecutionReadResult<Value>>,
+    ) =>
+    (input: Input, signal?: AbortSignal) =>
+      read(
+        (worker) => operation(worker, input, signal),
+        () => snapshot({ ...input, expectedIdentity }, signal),
+        signal,
+      );
   return {
-    readWatermark: (input) =>
-      read(
-        (worker) =>
-          worker.execute({
-            type: "session.transcript.watermark.read",
-            input: { ...input, expectedIdentity },
-          }),
-        () => params.reader.readWatermark({ ...input, expectedIdentity }),
+    readWatermark: reader(params.reader.readWatermark, (worker, input) =>
+      worker.execute({
+        type: "session.transcript.watermark.read",
+        input: { ...input, expectedIdentity },
+      }),
+    ),
+    readRawDelta: reader(params.reader.readRawDelta, (worker, input, signal) =>
+      worker.execute(
+        { type: "session.transcript.rawDelta.read", input: { ...input, expectedIdentity } },
+        { signal },
       ),
-    readRawDelta: (input, signal) =>
-      read(
-        (worker) =>
-          worker.execute(
-            { type: "session.transcript.rawDelta.read", input: { ...input, expectedIdentity } },
-            { signal },
-          ),
-        () => params.reader.readRawDelta({ ...input, expectedIdentity }, signal),
-        signal,
+    ),
+    readVisibleDelta: reader(params.reader.readVisibleDelta, (worker, input, signal) =>
+      worker.execute(
+        { type: "session.transcript.visibleDelta.read", input: { ...input, expectedIdentity } },
+        { signal },
       ),
-    readVisibleDelta: (input, signal) =>
-      read(
-        (worker) =>
-          worker.execute(
-            { type: "session.transcript.visibleDelta.read", input: { ...input, expectedIdentity } },
-            { signal },
-          ),
-        () => params.reader.readVisibleDelta({ ...input, expectedIdentity }, signal),
-        signal,
+    ),
+    readSessionMemoryCapture: reader(
+      params.reader.readSessionMemoryCapture,
+      (worker, input, signal) =>
+        worker.execute(
+          { type: "session.transcript.memoryCapture.read", input: { ...input, expectedIdentity } },
+          { signal },
+        ),
+    ),
+    readAnchors: reader(params.reader.readAnchors, (worker, input, signal) =>
+      worker.execute(
+        { type: "session.transcript.anchors.read", input: { ...input, expectedIdentity } },
+        { signal },
       ),
-    readSessionMemoryCapture: (input, signal) =>
-      read(
-        (worker) =>
-          worker.execute(
-            {
-              type: "session.transcript.memoryCapture.read",
-              input: { ...input, expectedIdentity },
-            },
-            { signal },
-          ),
-        () => params.reader.readSessionMemoryCapture({ ...input, expectedIdentity }, signal),
-        signal,
-      ),
-    readAnchors: (input, signal) =>
-      read(
-        (worker) =>
-          worker.execute(
-            { type: "session.transcript.anchors.read", input: { ...input, expectedIdentity } },
-            { signal },
-          ),
-        () => params.reader.readAnchors({ ...input, expectedIdentity }, signal),
-        signal,
-      ),
+    ),
     readColdMetadata: async (input, signal) => ({
       kind: "cold-metadata",
       archive: await read(

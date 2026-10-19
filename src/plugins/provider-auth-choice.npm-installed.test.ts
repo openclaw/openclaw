@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import type http from "node:http";
 import path from "node:path";
@@ -142,9 +143,7 @@ it.each([
                 extensionsDir: path.join(stateDir, "extensions"),
               });
         expect(result.ok, JSON.stringify(result)).toBe(true);
-        if (!result.ok) {
-          throw new Error(result.error);
-        }
+        assert.ok(result.ok);
         await seedInstalledPluginIndex(
           {
             [pluginId]: {
@@ -168,15 +167,18 @@ it.each([
           installed: true,
           status: "installed",
         }));
+        const authContext = {
+          config,
+          workspaceDir,
+          agentId: "main",
+          agentDir: path.join(stateDir, "agents", "main", "agent"),
+        };
         for (const { choiceId } of choices) {
           const prompter = createWizardPrompter();
           await prepareAuthChoiceLoadedPluginProvider(
             {
               authChoice: choiceId,
-              config,
-              workspaceDir,
-              agentId: "main",
-              agentDir: path.join(stateDir, "agents", "main", "agent"),
+              ...authContext,
               prompter,
               runtime: createNonExitingRuntime(),
               setDefaultModel: false,
@@ -197,18 +199,12 @@ it.each([
               options.find((option) => option.value === authChoice) ??
               options.find((option) => option.value === pluginId) ??
               options.find((option) => option.value === "__more");
-            if (!selected) {
-              throw new Error("Unexpected configure selection");
-            }
+            assert.ok(selected, "Unexpected configure selection");
             return selected.value;
           },
         });
         modelPicker.mockResolvedValue({ models: undefined });
-        await promptAuthConfig(config, createNonExitingRuntime(), prompter, {
-          agentId: "main",
-          agentDir: path.join(stateDir, "agents", "main", "agent"),
-          workspaceDir,
-        });
+        await promptAuthConfig(config, createNonExitingRuntime(), prompter, authContext);
         expect(install, authChoice).not.toHaveBeenCalled();
         expect(prompter.text).toHaveBeenCalledWith({ message: authChoice });
         expect(modelPicker).toHaveBeenCalledOnce();

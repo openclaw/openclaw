@@ -1,4 +1,5 @@
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
   createPluginCache,
@@ -15,7 +16,10 @@ import {
   appendLowerPrecedenceSkillRecords,
   mergeSkillRecords,
 } from "../loading/skill-precedence.js";
+import type { SkillSourceReadBatch } from "../loading/skill-root-loader.js";
 import { buildSkillSnapshotProjection } from "../loading/skill-snapshot-projection.js";
+import { tryRealpath } from "../loading/symlink-targets.js";
+import { resolveWorkspaceSkillDirectories } from "../loading/workspace-skill-roots.js";
 import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
@@ -85,6 +89,7 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
   }
   // Share physical inventory facts across workspaces, then discard them for the next pass.
   const pluginCache = createPluginCache();
+  const sourceReads = new Map<string, SkillSourceReadBatch>();
   const plans = new Map<string, ReturnType<typeof resolveInputPlan>>();
   const selectPlan = (sourceInput: SkillsSourcePlanInput) => {
     const key = JSON.stringify(sourceInput);
@@ -109,16 +114,43 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
             ? splitSkillSourcePlan(resolvedPlan).gatewayPlan
             : resolvedPlan,
       };
-      const sources = readWorkspaceSkillSources(sourceRequest);
+      const environmentKey = JSON.stringify(environment);
+      let batch = sourceReads.get(environmentKey);
+      if (!batch) {
+        batch = new Map();
+        sourceReads.set(environmentKey, batch);
+      }
+      const sources = readWorkspaceSkillSources(sourceRequest, batch);
       const entries = mergeSkillRecords(sources.entries, key, []);
       appendLowerPrecedenceSkillRecords(
         entries,
         mergeSkillRecords(sources.executionEntries, key, []),
         () => {},
       );
+      // Generated plugin links are shared outputs; watch their canonical sources instead.
+      const watchDirectories = new Set([
+        ...sourceRequest.sourcePlan.roots.map((root) => root.dir),
+        ...(sourceRequest.executionWorkspaceDir
+          ? resolveWorkspaceSkillDirectories(sourceRequest.executionWorkspaceDir).map(
+              (root) => root.dir,
+            )
+          : []),
+      ]);
+      const physicalRoots = [...watchDirectories].map((directory) => tryRealpath(directory));
+      // Workspace entries retain configured paths; watch their admitted physical targets.
+      for (const { skill } of [...sources.entries, ...sources.executionEntries]) {
+        const target = tryRealpath(skill.baseDir);
+        if (
+          target &&
+          !physicalRoots.some((directory) => directory && isPathInside(directory, target))
+        ) {
+          watchDirectories.add(target);
+        }
+      }
       return {
         key,
         sources,
+        watchDirectories: [...watchDirectories],
         plan: selection.plan ? resolvedPlan : undefined,
         fingerprint: sha256Hex(JSON.stringify([entries, sources.runtime])),
       };

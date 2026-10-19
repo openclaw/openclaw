@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteCommitReceipt, SqliteCommittedFact } from "../infra/sqlite-commit-receipt.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../infra/sqlite-worker-contract.js";
 import {
@@ -8,6 +8,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../infra/sqlite-worker-operation-settlement.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { GitHubPublicationSessionLifecycle } from "./github-publication-read.types.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
@@ -92,14 +93,18 @@ function ownerFor(identity: string) {
   return owner;
 }
 
-githubPublicationReceipts.subscribeFacts((change) => {
+githubPublicationReceipts.subscribeFacts((change, deletionPending) => {
   const identity = change.kind === "committed" ? change.receipt.source.identity : change.identity;
   if (typeof identity !== "string") {
     return;
   }
   const owner = ownerFor(identity);
   if (change.kind === "pending") {
-    owner.pending.add(change.operationId);
+    // Bindings are immutable: inserts and status writes cannot revoke an existing one.
+    // Only deletion must deny use before its tombstone arrives. Unknown outcomes still fence below.
+    if (deletionPending) {
+      owner.pending.add(change.operationId);
+    }
   } else if (change.kind === "settled") {
     owner.pending.delete(change.operationId);
   } else if (change.kind === "unknown") {
@@ -177,13 +182,13 @@ export function captureGitHubPublicationLifecycle(
 }
 
 export function deferGitHubPublicationDeletionReceipt(
-  db: DatabaseSync,
+  db: EngineConnection,
   tombstones: ReadonlyMap<string, { kind: "absent" }>,
 ): void {
-  const receipt = publication.receipt(db, tombstones);
+  const receipt = publication.receipt(sqlPublicationAnchor(db), tombstones);
   // Historical cleanup is unbounded; receipt transport must not prevent its durable deletion.
   deferSqliteWorkerCommitReceipt(
-    db,
+    sqlPublicationAnchor(db),
     serialize(receipt).byteLength <= SQLITE_WORKER_MAX_MESSAGE_BYTES
       ? receipt
       : { kind: "unknown", identity: receipt.source.identity },
@@ -193,10 +198,10 @@ export function deferGitHubPublicationDeletionReceipt(
 
 /** Capture the same authority rows as native writes, including their lifecycle sidecars. */
 export function captureGitHubPublicationWorkerReceipt<T extends object>(
-  db: DatabaseSync,
+  db: EngineConnection,
   write: () => T,
 ): T & { authority: GitHubPublicationAuthorityReceipt } {
-  const { result, receipt: authority } = publication.capture(db, write);
+  const { result, receipt: authority } = publication.capture(sqlPublicationAnchor(db), write);
   const receipt: T & { authority: GitHubPublicationAuthorityReceipt } = { ...result, authority };
   if (serialize(receipt).byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
     receipt.authority = { kind: "unknown", identity: authority.source.identity };
@@ -205,7 +210,7 @@ export function captureGitHubPublicationWorkerReceipt<T extends object>(
 }
 
 function stageGitHubPublicationRow<Kind extends keyof Rows>(
-  db: DatabaseSync,
+  db: EngineConnection,
   kind: Kind,
   row: Rows[Kind] & Partial<Record<PresentationColumn, string | null>>,
 ): void {
@@ -213,7 +218,9 @@ function stageGitHubPublicationRow<Kind extends keyof Rows>(
   delete value.title;
   delete value.body;
   delete value.next_action;
-  publication.stagePostimages(db, [[JSON.stringify([kind, row.request_id]), value]]);
+  publication.stagePostimages(sqlPublicationAnchor(db), [
+    [JSON.stringify([kind, row.request_id]), value],
+  ]);
 }
 
 /** The deletion worker sends tombstones, including lifecycle rows, before its ordinary reply. */
@@ -261,17 +268,12 @@ function withGitHubPublicationReceipt(
     } finally {
       lifecycleOwner.pendingDeletion = previousDeletion;
     }
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        if (owner.admission.settlement) {
-          const confirmed = owner.admission.settlement.kind === "completed";
-          pending.finish(confirmed, confirmed && !owner.admission.committed);
-        }
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      if (owner.admission.settlement) {
+        const confirmed = owner.admission.settlement.kind === "completed";
+        pending.finish(confirmed, confirmed && !owner.admission.committed);
       }
-    };
+    });
     void operation.settled.then((outcome) => {
       const known = outcome.kind !== "unknown";
       pending.finish(known, known && !owner.admission.committed);

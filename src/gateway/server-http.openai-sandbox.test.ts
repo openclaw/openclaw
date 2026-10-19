@@ -54,7 +54,11 @@ let ownerListener: Awaited<ReturnType<typeof reserveTestPortListener>>;
 let releaseProfileCatalog: (() => void) | undefined;
 
 beforeAll(async () => {
-  state = await createOpenClawTestState({ label: "http-session-sandbox", scenario: "minimal" });
+  state = await createOpenClawTestState({
+    label: "http-session-sandbox",
+    scenario: "minimal",
+    prepareProfileCatalog: true,
+  });
   cfg = {
     agents: {
       entries: { main: {} },
@@ -234,7 +238,13 @@ describe.each(endpointCases)("$name session sandbox boundary", (endpoint) => {
       if (!sandbox) {
         executeHostTool();
       }
-      return { payloads: [{ text: "execution started" }], meta: { durationMs: 0 } };
+      return {
+        payloads: [{ text: "execution started" }],
+        meta: {
+          durationMs: 0,
+          terminalReply: { disposition: "visible", text: "execution started" },
+        },
+      };
     });
 
     const response = await post({ endpoint, sessionKey });

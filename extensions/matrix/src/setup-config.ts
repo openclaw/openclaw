@@ -110,7 +110,7 @@ export function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): Co
 
   const nextAccount: Record<string, unknown> = { ...accounts[resolvedTargetAccountId] };
   for (const key of keysToMove) {
-    nextAccount[key] = structuredClone(base[key]);
+    nextAccount[key] = base[key];
   }
   return patchTopLevelChannelConfigSection({
     cfg,

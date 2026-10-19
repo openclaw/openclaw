@@ -201,7 +201,7 @@ async function canDiscoverDeepInfra(options?: DeepInfraDiscoveryOptions): Promis
   const env = options?.env ?? process.env;
   const fromEnv = env.DEEPINFRA_API_KEY;
   return (
-    (typeof fromEnv === "string" && fromEnv.trim() !== "") ||
+    Boolean(fromEnv?.trim()) ||
     (await isProviderApiKeyConfiguredAsync({ provider: "deepinfra", agentDir: options?.agentDir }))
   );
 }

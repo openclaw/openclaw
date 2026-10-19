@@ -94,8 +94,9 @@ describe("opened tool rows across a handoff", () => {
 
     expect(expanded.get("stored-row:toolcard:0")).toBe(true);
     expect(expanded.get(`activity:${stored[0]!.key}`)).toBe(true);
-    expect(expanded.has("live-row:toolcard:0")).toBe(false);
-    expect(expanded.has(`activity:${live[0]!.key}`)).toBe(false);
+    // Another pane can still hold the live history window.
+    expect(expanded.get("live-row:toolcard:0")).toBe(true);
+    expect(expanded.get(`activity:${live[0]!.key}`)).toBe(true);
   });
 
   it("does not carry an opened row between messages that reuse one call id", () => {

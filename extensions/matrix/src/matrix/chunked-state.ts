@@ -40,7 +40,7 @@ export async function readMatrixStateChunks<T>(
   keys: string[],
   kind: string,
 ): Promise<string[] | null> {
-  // lookupMany is optional on the published host floor.
+  // Doctor supplies the published V1 store contract, where lookupMany is optional.
   const records = await store.lookupMany?.(keys);
   const chunks: string[] = [];
   for (let index = 0; index < keys.length; index += 1) {

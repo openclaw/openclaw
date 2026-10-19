@@ -3,14 +3,9 @@ import { asPositiveFiniteNumber as resolvePositiveContextTokens } from "@opencla
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
-  buildAgentRunTerminalReplySnapshot,
-  normalizeAgentRunTerminalReplySnapshot,
-} from "../../agents/agent-run-terminal-reply.js";
-import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
 } from "../../agents/embedded-agent-runner/terminal-tool-failure.js";
-import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import {
   resolveProjectedSessionContextTokens,
@@ -56,14 +51,7 @@ export async function finalizeCronRun(params: {
 }): Promise<RunCronAgentTurnResult> {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
-  const replyDisposition = (
-    normalizeAgentRunTerminalReplySnapshot(finalRunResult.meta?.terminalReply) ??
-    buildAgentRunTerminalReplySnapshot({
-      visibleText: finalRunResult.meta?.finalAssistantVisibleText,
-      rawText: finalRunResult.meta?.finalAssistantRawText,
-      terminalReplyKind: finalRunResult.meta?.terminalReplyKind,
-    })
-  ).disposition;
+  const replyDisposition = finalRunResult.meta?.terminalReply?.disposition ?? "empty";
   const payloads = finalRunResult.payloads ?? [];
   const cleanupRunSession = async (reason: string) => {
     await cleanupCronRunSessionAfterRun({
@@ -191,7 +179,8 @@ export async function finalizeCronRun(params: {
     payloads,
     runLevelError: finalRunResult.meta?.error,
     failureSignal: finalRunResult.meta?.failureSignal,
-    finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
+    finalAssistantVisibleText:
+      replyDisposition === "visible" ? finalRunResult.meta?.finalAssistantVisibleText : undefined,
     preferFinalAssistantVisibleText: (
       await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel, {
         deliveryRequested: prepared.deliveryRequested,
@@ -283,8 +272,7 @@ export async function finalizeCronRun(params: {
     });
   };
   const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
-  const heartbeatOnlyResponse =
-    prepared.deliveryRequested && !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
+  const heartbeatOnlyResponse = !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
   const heartbeatControlOnlyResponse =
     heartbeatOnlyResponse &&
     (deliveryDisposition.kind === "empty" ||
@@ -301,15 +289,13 @@ export async function finalizeCronRun(params: {
     summary = undefined;
     outputText = undefined;
   }
-  const skipHeartbeatDelivery = heartbeatOnlyResponse && !spawnOnlyHandoff;
+  const skipHeartbeatDelivery =
+    prepared.deliveryRequested && heartbeatOnlyResponse && !spawnOnlyHandoff;
   const sourceDeliveryOutcome = resolveSourceDeliveryOutcome(prepared.sourceDelivery, {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
   });
-  const hasIntentionalSilentReply =
-    finalRunResult.meta?.terminalReplyKind === "silent-empty" ||
-    isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantRawText) ||
-    isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantVisibleText);
+  const hasIntentionalSilentReply = replyDisposition === "silent";
   if (hasFatalStructuredErrorPayload && prepared.deliveryRequested) {
     // Structured run error payloads belong in cron state and failure alerts,
     // not the normal completion announce path where provider JSON can leak.

@@ -1,4 +1,3 @@
-// Stores and broadcasts agent lifecycle and streaming events.
 import { isDefinitiveRunLifecycle } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -26,6 +25,7 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
 } from "./agent-run-registry.js";
 import type { AgentRunContext, AgentRunEventState } from "./agent-run-registry.types.js";
+import { captureAgentRunTerminalPersistence } from "./agent-run-terminal-writes.js";
 import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
 export type {
@@ -113,20 +113,25 @@ export function withAgentRunLifecycleGeneration<T>(lifecycleGeneration: string, 
 }
 
 type AgentTerminalEventData = Record<string, unknown> & { phase: "end" | "error" };
+type AgentTerminalEventReservation = {
+  publish: (data: AgentTerminalEventData) => void;
+  release: () => void;
+};
 
 /** Reserves client terminal publication without advancing execution settlement. */
 export function reserveAgentTerminalEvent(
   identity: Omit<AgentEventPayload, "seq" | "ts" | "stream" | "data">,
-): (data: AgentTerminalEventData) => void {
+): AgentTerminalEventReservation {
   const { runId } = identity;
   const context = getAgentRunContext(runId);
+  const terminalPersistence = captureAgentRunTerminalPersistence(runId);
   return withAgentRunLifecycleGeneration(captureAgentRunLifecycleGeneration(runId), () => {
     if (context) {
       recordAgentEventRouting(runId, context);
     }
     const resolved = resolveAgentEventRouting(identity);
     if (!resolved) {
-      return () => {};
+      return { publish: () => {}, release: () => {} };
     }
     const state = getAgentEventState();
     const runState = resolved.routing?.eventState ?? state.runs.get(runId) ?? { seq: 0 };
@@ -138,18 +143,32 @@ export function reserveAgentTerminalEvent(
     const storage = getAgentEventExecutionContext();
     const scope = storage.getStore()!;
     let pending = true;
-    return (data: AgentTerminalEventData) => {
-      if (pending) {
+    return {
+      publish: (data: AgentTerminalEventData) => {
+        if (pending) {
+          pending = false;
+          storage.run(scope, () =>
+            dispatchAgentEvent(
+              { ...identity, stream: "lifecycle", data },
+              undefined,
+              undefined,
+              publication,
+              undefined,
+              undefined,
+              terminalPersistence,
+            ),
+          );
+        }
+      },
+      release: () => {
+        if (!pending) {
+          return;
+        }
         pending = false;
-        storage.run(scope, () =>
-          dispatchAgentEvent(
-            { ...identity, stream: "lifecycle", data },
-            undefined,
-            undefined,
-            publication,
-          ),
-        );
-      }
+        if (runState.terminalPublication === publication) {
+          delete runState.terminalPublication;
+        }
+      },
     };
   });
 }
@@ -404,6 +423,7 @@ function enrichAgentEvent(
   reservedPublication?: symbol,
   assistantSource?: AgentAssistantSourceReceipt,
   assistantProjection?: AgentAssistantProjection,
+  terminalPersistence?: AgentEventRuntimePayload["terminalPersistence"],
 ): AgentEventRuntimePayload | undefined {
   const resolved = resolveAgentEventRouting(event, claimId, expectedContext);
   if (!resolved || hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
@@ -516,6 +536,14 @@ function enrichAgentEvent(
     });
   }
   Object.defineProperties(enriched, {
+    terminalPersistence: {
+      value:
+        terminalPersistence ??
+        (event.stream === "lifecycle" && isDefinitiveRunLifecycle({ phase: data.phase, data })
+          ? captureAgentRunTerminalPersistence(event.runId, context ?? capturedOwner)
+          : undefined),
+      enumerable: false,
+    },
     assistantSource: { value: assistantSource, enumerable: false },
     assistantProjection: { value: assistantProjection, enumerable: false },
   });
@@ -555,6 +583,7 @@ function dispatchAgentEvent(
   reservedPublication?: symbol,
   assistantSource?: AgentAssistantSourceReceipt,
   assistantProjection?: AgentAssistantProjection,
+  terminalPersistence?: AgentEventRuntimePayload["terminalPersistence"],
 ): boolean {
   const state = getAgentEventState();
   const enriched = enrichAgentEvent(
@@ -565,6 +594,7 @@ function dispatchAgentEvent(
     reservedPublication,
     assistantSource,
     assistantProjection,
+    terminalPersistence,
   );
   if (!enriched) {
     return false;
@@ -577,31 +607,33 @@ function dispatchAgentEvent(
   const deliveries = new Map<AgentEventRegistration, () => boolean>();
   // Capture registrations before callbacks can replace them. New subscriptions
   // during this emission have no captured delivery authority until the next event.
-  notifyListeners(
-    registrations.map((registration) => () => {
+  for (const registration of registrations) {
+    try {
       if (registration.captureDelivery) {
         deliveries.set(registration, registration.captureDelivery(enriched));
       }
-    }),
-    enriched,
-  );
-  notifyListeners(
-    registrations.map((registration) => (deliveredEvent: AgentEventRuntimePayload) => {
+    } catch {
+      // A failed capture must not prevent delivery to other registrations.
+    }
+  }
+  for (const registration of registrations) {
+    try {
       if (
         state.listeners.get(registration.listener) !== registration &&
         runListeners?.get(registration.listener) !== registration
       ) {
-        return;
+        continue;
       }
       const isDeliveryCurrent = deliveries.get(registration);
       if (!registration.captureDelivery) {
-        registration.listener(deliveredEvent);
+        registration.listener(enriched);
       } else if (isDeliveryCurrent?.()) {
-        registration.listener(deliveredEvent, isDeliveryCurrent);
+        registration.listener(enriched, isDeliveryCurrent);
       }
-    }),
-    enriched,
-  );
+    } catch {
+      // Match ordinary listener delivery: isolate each subscriber's failure.
+    }
+  }
   return true;
 }
 

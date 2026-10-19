@@ -7,6 +7,7 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   retireSqliteDatabaseWriteScopes,
   sqliteSessionIdWriteScope,
@@ -75,6 +76,7 @@ export function readReferencedSessionIds(
     return new Set();
   }
   const db = getSessionKysely(database.db);
+  const postgres = isPostgresSqlConnection(database.db);
   // Only push down keys unchanged by Node/SQLite text conversion; retain exact membership below.
   const excludedKeys = [...excludedSessionKeys].filter(
     (key) => toUSVString(key) === key && !key.includes("\0") && !/[\uFFFE\uFFFF]/u.test(key),
@@ -98,9 +100,10 @@ export function readReferencedSessionIds(
     query = query.where((eb) =>
       eb.or([
         eb.or(
-          candidateSessionIds.map(
-            (candidate) =>
-              /* kysely-allow-raw: substring narrowing retains trimmed current IDs. */ sql<boolean>`instr(current_session_id, ${candidate}) > 0`,
+          candidateSessionIds.map((candidate) =>
+            postgres
+              ? /* kysely-allow-raw: PostgreSQL substring narrowing retains trimmed current IDs. */ sql<boolean>`strpos(current_session_id, ${candidate}) > 0`
+              : /* kysely-allow-raw: substring narrowing retains trimmed current IDs. */ sql<boolean>`instr(current_session_id, ${candidate}) > 0`,
           ),
         ),
         eb("has_optional_references", "=", 1),
@@ -127,7 +130,13 @@ export function readReferencedSessionIds(
         "entry_json",
       ),
     );
-  const rows = iterateSqliteQuerySync(database.db, referenceQuery);
+  // PostgreSQL uses the canonical entry parser; the native JSON projection is SQLite-specific.
+  const rows = iterateSqliteQuerySync(
+    database.db,
+    postgres
+      ? query.select((eb) => ["entry_json", eb.val(null).as("atom"), eb.val(null).as("fullkey")])
+      : referenceQuery,
+  );
   const sessionIds = new Set<string>();
   const candidates = candidateSessionIds ? new Set(candidateSessionIds) : undefined;
   const addReference = (sessionId: string) => {

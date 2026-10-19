@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { patchSessionEntryWithKey } from "../../config/sessions/session-accessor.js";
 import { readLegacyAcpMigrationContext } from "../../config/sessions/session-accessor.sqlite-acp-provenance.js";
 import {
@@ -11,6 +10,7 @@ import {
   legacyAcpMigrationBindingMatches,
   recordLegacyAcpMigrationCompletion,
 } from "../../infra/legacy-acp-migration-source.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type { AcpSessionControlBinding } from "./session-meta-control.types.js";
@@ -25,7 +25,7 @@ import type {
 } from "./session-meta-write.types.js";
 
 function consumeLegacyAcpMigrationSources(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   agentId?: string;
   storePath: string;
   sessionKey: string;

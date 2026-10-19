@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type HelloOk,
   validateSessionsDescribeParams,
   validateSessionsListParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { GatewayClientOptions } from "../gateway/client.js";
 import { createClientTestIdentity } from "../gateway/client.test-support.js";
 import { ChatLog } from "./components/chat-log.js";
 import { withGatewayChatConnection } from "./gateway-chat.test-support.js";
@@ -30,13 +30,23 @@ import type { ChatEvent, TuiHistoryLoadResult } from "./tui-types.js";
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
 const { GatewayClient, GatewayClientRequestError } = await import("../gateway/client.js");
+const connection = { url: "ws://127.0.0.1:18789", token: "test-token" };
+const model = (id: string, name = id) => ({ provider: "fixture", id, name });
 
 function createClient() {
-  return new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+  return new GatewayChatClient(connection);
 }
 
 function mockRequest(response?: unknown) {
   return vi.spyOn(GatewayClient.prototype, "request").mockResolvedValue(response);
+}
+
+function mockClient(response?: unknown) {
+  return { request: mockRequest(response), client: createClient() };
+}
+
+function expectRequests(request: { mock: { calls: unknown[][] } }, ...calls: unknown[][]) {
+  expect(request.mock.calls).toEqual(calls);
 }
 
 function hello(
@@ -62,108 +72,79 @@ function legacyParameterError(method: string, parameter: string) {
   });
 }
 
-async function captureClient(request: (method: string, params?: unknown) => Promise<unknown>) {
-  const callbacks: GatewayClientOptions[] = [];
-  vi.resetModules();
-  vi.doMock("../gateway/client.js", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("../gateway/client.js")>()),
-    GatewayClient: class {
-      request = request;
-      constructor(options: GatewayClientOptions) {
-        callbacks.push(options);
-      }
-    },
-  }));
-  onTestFinished(() => {
-    vi.doUnmock("../gateway/client.js");
-    vi.resetModules();
+function startupError(message: string, details: Record<string, string>) {
+  return new GatewayClientRequestError({
+    code: "UNAVAILABLE",
+    message,
+    details,
+    retryable: true,
+    retryAfterMs: 250,
   });
-  const { GatewayChatClient: Client } = await import("./gateway-chat.js");
-  return { Client, callbacks };
 }
 
-describe("GatewayChatClient", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-
-  it("preserves availability from the published model catalog", async () => {
-    const models = [
-      {
-        provider: "fixture",
-        id: "waiting",
-        name: "Waiting",
-        available: false,
-        unavailableReason: "cooldown",
-      },
-      { provider: "fixture", id: "unknown", name: "Unknown" },
-    ];
-    const request = mockRequest({ models });
-    const client = createClient();
-    client.hello = hello(["models.list"], undefined, [GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG]);
-    expect(await client.listModels({ agentId: "work" })).toEqual(models);
-    expect(request).toHaveBeenCalledExactlyOnceWith("models.list", {
-      agentId: "work",
-      includeDetails: true,
-    });
-  });
-
-  it("isolates session-scoped catalogs only when the Gateway advertises them", async () => {
-    const request = mockRequest()
-      .mockResolvedValueOnce({
-        models: [{ provider: "fixture", id: "first", name: "First" }],
-      })
-      .mockResolvedValueOnce({
-        models: [{ provider: "fixture", id: "second", name: "Second" }],
+function mockSessions(
+  sessions: TuiSessionList["sessions"],
+  defaults: TuiSessionDescription["defaults"],
+) {
+  return vi.spyOn(GatewayClient.prototype, "request").mockImplementation(async (method, params) => {
+    if (method === "sessions.describe" && validateSessionsDescribeParams(params)) {
+      return { session: sessions.find((row) => row.key === params.key) ?? null };
+    }
+    if (method === "sessions.list" && validateSessionsListParams(params)) {
+      const search = params.search ?? "";
+      const matches = sessions.filter(
+        (row) => row.key.includes(search) || row.label?.includes(search),
+      );
+      return makeTuiSessionList({
+        sessions: matches.slice(params.offset ?? 0, params.limit),
+        defaults,
       });
-    const client = createClient();
-    client.hello = hello(["models.list"], undefined, [
-      GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
-      GATEWAY_SERVER_CAPS.SESSION_SCOPED_MODEL_CATALOG,
-    ]);
-
-    await client.listModels({ agentId: "work", sessionKey: "agent:work:first" });
-    await client.listModels({ agentId: "work", sessionKey: "agent:work:second" });
-
-    expect(request).toHaveBeenNthCalledWith(1, "models.list", {
-      agentId: "work",
-      sessionKey: "agent:work:first",
-      includeDetails: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
-      agentId: "work",
-      sessionKey: "agent:work:second",
-      includeDetails: true,
-    });
-    expect(
-      client.getKnownModels({ agentId: "work", sessionKey: "agent:work:first" })?.[0]?.id,
-    ).toBe("first");
-    expect(
-      client.getKnownModels({ agentId: "work", sessionKey: "agent:work:second" })?.[0]?.id,
-    ).toBe("second");
+    }
+    throw new Error(`Unexpected request: ${method}`);
   });
+}
 
-  it("keeps session keys off requests to older Gateways", async () => {
-    const request = mockRequest({
-      models: [{ provider: "fixture", id: "shared", name: "Shared" }],
-    });
-    const client = createClient();
-    client.hello = hello(["models.list"], undefined, [GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG]);
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
-    await client.listModels({ agentId: "work", sessionKey: "agent:work:first" });
-
-    expect(request).toHaveBeenCalledExactlyOnceWith("models.list", {
-      agentId: "work",
-      includeDetails: true,
-    });
-    expect(
-      client.getKnownModels({ agentId: "work", sessionKey: "agent:work:second" })?.[0]?.id,
-    ).toBe("shared");
-  });
+describe("GatewayChatClient", () => {
+  it.each([true, false])(
+    "scopes model catalogs by negotiated session support: %s",
+    async (sessionScoped) => {
+      const first = { ...model("first", "First"), available: false, unavailableReason: "cooldown" };
+      const { request, client } = mockClient({ models: [{ ...first }] });
+      client.hello = hello(["models.list"], undefined, [
+        GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
+        ...(sessionScoped ? [GATEWAY_SERVER_CAPS.SESSION_SCOPED_MODEL_CATALOG] : []),
+      ]);
+      const scope = (suffix: string) => ({ agentId: "work", sessionKey: `agent:work:${suffix}` });
+      await client.listModels(scope("first"));
+      const params = { agentId: "work", includeDetails: true };
+      expectRequests(request, [
+        "models.list",
+        { ...params, ...(sessionScoped ? { sessionKey: scope("first").sessionKey } : {}) },
+      ]);
+      expect(client.getKnownModels(scope("first"))?.[0]).toEqual(first);
+      if (sessionScoped) {
+        request.mockResolvedValueOnce({ models: [model("second", "Second")] });
+        await client.listModels(scope("second"));
+        expect(request).toHaveBeenNthCalledWith(2, "models.list", {
+          ...params,
+          sessionKey: scope("second").sessionKey,
+        });
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(client.getKnownModels(scope("first"))?.[0]).toEqual(first);
+      }
+      expect(client.getKnownModels(scope("second"))?.[0]?.id).toBe(
+        sessionScoped ? "second" : "first",
+      );
+    },
+  );
 
   it("retains agent-scoped choices during a held refresh but cannot republish after stop", async () => {
-    const models = [{ provider: "fixture", id: "known", name: "Known" }];
+    const models = [model("known", "Known")];
     const held = createDeferred<{ models: typeof models }>();
     mockRequest().mockResolvedValueOnce({ models }).mockReturnValueOnce(held.promise);
     const client = createClient();
@@ -174,7 +155,7 @@ describe("GatewayChatClient", () => {
       expect(client.getKnownModels({ agentId: "work" })).toEqual(models);
       expect(client.getKnownModels({ agentId: "main" })).toBeUndefined();
       await client.stop();
-      held.resolve({ models: [{ provider: "fixture", id: "obsolete", name: "Obsolete" }] });
+      held.resolve({ models: [model("obsolete", "Obsolete")] });
       await Promise.all([refresh, sharedRefresh]);
       expect(client.getKnownModels({ agentId: "work" })).toBeUndefined();
     } finally {
@@ -183,52 +164,48 @@ describe("GatewayChatClient", () => {
   });
 
   it("keeps rows through sign-in and restores the highlighted model after policy retirement", async () => {
-    const models = ["first", "current", "highlighted"].map((id) => ({
-      provider: "fixture",
-      id,
-      name: id,
-    }));
+    const models = ["first", "current", "highlighted"].map((id) => model(id));
     const held = createDeferred<{ models: typeof models }>();
     const request = vi.fn().mockResolvedValueOnce({ models }).mockReturnValue(held.promise);
-    const { Client, callbacks } = await captureClient(request);
-    const client = new Client({ url: "ws://127.0.0.1:18789", token: "test-token" });
-    const onEvent = callbacks[0]?.onEvent;
-    assert(onEvent);
-    try {
-      await client.listModels({ agentId: "main" });
-      const harness = createTuiCommandHandlersHarness({
-        getKnownModels: (opts) => client.getKnownModels(opts),
-        listModels: vi.fn((opts) => client.listModels(opts)),
-        sessionInfo: { modelProvider: "fixture", model: "current" },
-      });
-      client.onModelsChanged = harness.client.onModelsChanged;
-      await harness.handleCommand("/models");
-      const selector = firstMockArg(harness.openOverlay, "openOverlay") as {
-        handleInput(data: string): void;
-        render(width: number): string[];
-      };
-      selector.handleInput("\u001b[B");
-      selector.handleInput("\u001b[B");
-      onEvent({ type: "event", event: "config.changed", payload: {} });
-      expect(selector.render(100).join("\n")).not.toContain("Checking models...");
-      expect(selector.render(100).join("\n")).toContain("fixture/highlighted");
-      onEvent({
-        type: "event",
-        event: "chat.metadata.changed",
-        payload: { modelSelectionChanged: true },
-      });
-      expect(selector.render(100).join("\n")).toContain("Checking models...");
-      held.resolve({ models });
-      await client.listModels({ agentId: "main" });
-      selector.handleInput("\r");
-      await flushAsyncSelect();
-      expect(harness.patchSession).toHaveBeenCalledWith({
-        key: "agent:main:main",
-        model: "fixture/highlighted",
-      });
-    } finally {
-      held.resolve({ models });
-    }
+    await withGatewayChatConnection(request, async (client, callbacks) => {
+      const onEvent = callbacks.onEvent;
+      assert(onEvent);
+      try {
+        await client.listModels({ agentId: "main" });
+        const harness = createTuiCommandHandlersHarness({
+          getKnownModels: (opts) => client.getKnownModels(opts),
+          listModels: vi.fn((opts) => client.listModels(opts)),
+          sessionInfo: { modelProvider: "fixture", model: "current" },
+        });
+        client.onModelsChanged = harness.client.onModelsChanged;
+        await harness.handleCommand("/models");
+        const selector = firstMockArg(harness.openOverlay, "openOverlay") as {
+          handleInput(data: string): void;
+          render(width: number): string[];
+        };
+        selector.handleInput("\u001b[B");
+        selector.handleInput("\u001b[B");
+        onEvent({ type: "event", event: "config.changed", payload: {} });
+        expect(selector.render(100).join("\n")).not.toContain("Checking models...");
+        expect(selector.render(100).join("\n")).toContain("fixture/highlighted");
+        onEvent({
+          type: "event",
+          event: "chat.metadata.changed",
+          payload: { modelSelectionChanged: true },
+        });
+        expect(selector.render(100).join("\n")).toContain("Checking models...");
+        held.resolve({ models });
+        await client.listModels({ agentId: "main" });
+        selector.handleInput("\r");
+        await flushAsyncSelect();
+        expect(harness.patchSession).toHaveBeenCalledWith({
+          key: "agent:main:main",
+          model: "fixture/highlighted",
+        });
+      } finally {
+        held.resolve({ models });
+      }
+    });
   });
 
   it("waits for gateway transport teardown on stop", async () => {
@@ -250,95 +227,87 @@ describe("GatewayChatClient", () => {
   });
 
   it("requests TUI operator scopes and forwards one connect failure per socket", async () => {
-    const { Client, callbacks } = await captureClient(async () => {
-      throw new Error("unexpected request");
-    });
-    const client = new Client({
+    const remote = {
       url: "wss://remote.example/rpc",
       deviceAuthScope: "wss://remote.example/rpc",
       sshTunnel: { target: "me@studio", remotePort: 18789 },
       token: "test-token",
       tlsFingerprint: "sha256:11:22:33:44",
       preauthHandshakeTimeoutMs: 30_000,
-    });
-    const onConnectError = vi.fn();
-    const onDisconnected = vi.fn();
-    client.onConnectError = onConnectError;
-    client.onDisconnected = onDisconnected;
-    const connectError = new GatewayClientRequestError({
-      code: "INVALID_REQUEST",
-      message: "pairing required",
-      details: { code: "PAIRING_REQUIRED", requestId: "pair-1" },
-    });
-    const options = callbacks[0];
-    assert(options);
-    expect(options).toMatchObject({
-      clientName: "openclaw-tui",
-      mode: "ui",
-      scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
-      deviceAuthScope: "wss://remote.example/rpc",
-      sshTunnel: { target: "me@studio", remotePort: 18789 },
-      tlsFingerprint: "sha256:11:22:33:44",
-      preauthHandshakeTimeoutMs: 30_000,
-      notifyOnStartupRetry: true,
-    });
-    expect(options).not.toHaveProperty("deviceIdentity");
-
-    options.onConnectError?.(connectError);
-    options.onConnectError?.(new Error("duplicate failure for the same socket"));
-    options.onClose?.(1008, "pairing required");
-
-    expect(onConnectError).toHaveBeenCalledExactlyOnceWith(connectError);
-    expect(connectError.message).toContain("Pairing request sent.");
-    expect(connectError.message).toContain("Control UI (Settings -> Devices)");
-    expect(connectError.message).toContain("openclaw devices approve --latest");
-    expect(connectError.details).toEqual({ code: "PAIRING_REQUIRED", requestId: "pair-1" });
-    expect(onDisconnected).not.toHaveBeenCalled();
-
-    const retryError = new Error("retry failed");
-    options.onConnectError?.(retryError);
-    expect(onConnectError).toHaveBeenNthCalledWith(2, retryError);
-    options.onConnectError?.(new Error("duplicate within the retry socket"));
-    expect(onConnectError).toHaveBeenCalledTimes(2);
-    options.onHelloOk?.(hello());
-    await client.waitForReady();
-    options.onConnectError?.(retryError);
-    expect(onConnectError).toHaveBeenNthCalledWith(3, retryError);
-
-    options.onHelloOk?.(hello());
-    onDisconnected.mockClear();
-    client.onConnectError = (error) => {
-      onConnectError(error);
-      client.onConnectError = undefined;
     };
-    (
-      client as unknown as { notifyUnclosedConnectError: (error: Error) => void }
-    ).notifyUnclosedConnectError(new Error("one-shot structured failure"));
-    expect(onDisconnected).not.toHaveBeenCalled();
+    await withGatewayChatConnection(
+      async () => {
+        throw new Error("unexpected request");
+      },
+      async (client, options) => {
+        const onConnectError = vi.fn();
+        const onDisconnected = vi.fn();
+        client.onConnectError = onConnectError;
+        client.onDisconnected = onDisconnected;
+        const connectError = new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "pairing required",
+          details: { code: "PAIRING_REQUIRED", requestId: "pair-1" },
+        });
+        expect(options).toMatchObject({
+          clientName: "openclaw-tui",
+          mode: "ui",
+          scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
+          ...remote,
+          notifyOnStartupRetry: true,
+        });
+        expect(options).not.toHaveProperty("deviceIdentity");
 
-    options.onHelloOk?.(hello());
-    onConnectError.mockClear();
-    onDisconnected.mockClear();
-    client.onConnectError = onConnectError;
-    const startupError = new GatewayClientRequestError({
-      code: "UNAVAILABLE",
-      message: "gateway starting; retry shortly",
-      details: { reason: "startup-sidecars" },
-      retryable: true,
-      retryAfterMs: 250,
-    });
-    options.onConnectError?.(startupError);
-    options.onClose?.(1013, "gateway starting");
+        options.onConnectError?.(connectError);
+        options.onConnectError?.(new Error("duplicate failure for the same socket"));
+        options.onClose?.(1008, "pairing required");
 
-    expect(onConnectError).not.toHaveBeenCalled();
-    expect(onDisconnected).toHaveBeenCalledExactlyOnceWith("gateway starting");
+        expect(onConnectError).toHaveBeenCalledExactlyOnceWith(connectError);
+        expect(connectError.message).toContain("Pairing request sent.");
+        expect(connectError.message).toContain("Control UI (Settings -> Devices)");
+        expect(connectError.message).toContain("openclaw devices approve --latest");
+        expect(connectError.details).toEqual({ code: "PAIRING_REQUIRED", requestId: "pair-1" });
+        expect(onDisconnected).not.toHaveBeenCalled();
 
-    onDisconnected.mockClear();
-    client.onConnectError = undefined;
-    options.onConnectError?.(startupError);
-    options.onClose?.(1013, "gateway starting");
+        const retryError = new Error("retry failed");
+        options.onConnectError?.(retryError);
+        expect(onConnectError).toHaveBeenNthCalledWith(2, retryError);
+        options.onConnectError?.(new Error("duplicate within the retry socket"));
+        expect(onConnectError).toHaveBeenCalledTimes(2);
+        options.onHelloOk?.(hello());
+        await client.waitForReady();
+        options.onConnectError?.(retryError);
+        expect(onConnectError).toHaveBeenNthCalledWith(3, retryError);
 
-    expect(onDisconnected).toHaveBeenCalledExactlyOnceWith("gateway starting");
+        options.onHelloOk?.(hello());
+        onDisconnected.mockClear();
+        client.onConnectError = (error) => {
+          onConnectError(error);
+          client.onConnectError = undefined;
+        };
+        (
+          client as unknown as { notifyUnclosedConnectError: (error: Error) => void }
+        ).notifyUnclosedConnectError(new Error("one-shot structured failure"));
+        expect(onDisconnected).not.toHaveBeenCalled();
+
+        options.onHelloOk?.(hello());
+        onConnectError.mockClear();
+        onDisconnected.mockClear();
+        client.onConnectError = onConnectError;
+        const unavailable = startupError("gateway starting; retry shortly", {
+          reason: "startup-sidecars",
+        });
+        for (const handler of [onConnectError, undefined]) {
+          onDisconnected.mockClear();
+          client.onConnectError = handler;
+          options.onConnectError?.(unavailable);
+          options.onClose?.(1013, "gateway starting");
+          expect(onConnectError).not.toHaveBeenCalled();
+          expect(onDisconnected).toHaveBeenCalledExactlyOnceWith("gateway starting");
+        }
+      },
+      remote,
+    );
   });
 
   it("surfaces loopback block-mode start failures through disconnect handler", async () => {
@@ -356,10 +325,7 @@ describe("GatewayChatClient", () => {
     });
     const disconnected = createDeferred<string>();
     const onDisconnected = vi.fn(disconnected.resolve);
-    const client = new CurrentGatewayChatClient({
-      url: "ws://127.0.0.1:18789",
-      token: "test-token",
-    });
+    const client = new CurrentGatewayChatClient(connection);
     client.onDisconnected = onDisconnected;
 
     try {
@@ -381,15 +347,11 @@ describe("GatewayChatClient", () => {
     vi.useFakeTimers();
 
     const client = createClient();
-    const startupError = new GatewayClientRequestError({
-      code: "UNAVAILABLE",
-      message: "chat.history unavailable during gateway startup",
-      details: { method: "chat.history" },
-      retryable: true,
-      retryAfterMs: 250,
+    const unavailable = startupError("chat.history unavailable during gateway startup", {
+      method: "chat.history",
     });
     const request = mockRequest()
-      .mockRejectedValueOnce(startupError)
+      .mockRejectedValueOnce(unavailable)
       .mockResolvedValueOnce({ messages: [] });
 
     const historyPromise = client.loadHistory({ sessionKey: "main", limit: 200 });
@@ -399,7 +361,7 @@ describe("GatewayChatClient", () => {
     expect(request).toHaveBeenCalledTimes(2);
 
     const baselineTimerCount = vi.getTimerCount();
-    request.mockRejectedValueOnce(startupError).mockRejectedValueOnce(startupError);
+    request.mockRejectedValueOnce(unavailable).mockRejectedValueOnce(unavailable);
     const pendingHistory = Promise.all([
       client.loadHistory({ sessionKey: "first" }).catch((error: unknown) => error),
       client.loadHistory({ sessionKey: "second" }).catch((error: unknown) => error),
@@ -424,86 +386,94 @@ describe("GatewayChatClient", () => {
   });
 
   it("passes selected-agent global scope through chat methods", async () => {
-    const client = createClient();
-    const request = mockRequest({ messages: [] });
-
-    await client.sendChat({
-      sessionKey: "global",
-      agentId: "work",
-      message: "hello",
-      runId: "run-global-work",
-    });
-    await client.loadHistory({ sessionKey: "global", agentId: "work", limit: 50 });
-    await client.abortChat({ sessionKey: "global", agentId: "work", runId: "run-global-work" });
+    vi.useFakeTimers();
+    const { client, request } = mockClient({ messages: [] });
+    const scope = { sessionKey: "global", agentId: "work" };
+    const runId = "run-global-work";
+    await client.sendChat({ ...scope, message: "hello", runId });
+    await client.loadHistory({ ...scope, limit: 50 });
+    await client.abortChat({ ...scope, runId });
     await client.listModels({ agentId: "work" });
 
-    expect(request).toHaveBeenNthCalledWith(1, "chat.send", {
-      sessionKey: "global",
-      agentId: "work",
-      message: "hello",
-      thinking: undefined,
-      deliver: undefined,
-      timeoutMs: undefined,
-      idempotencyKey: "run-global-work",
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
-      sessionKey: "global",
-      agentId: "work",
-      limit: 50,
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "chat.abort", {
-      sessionKey: "global",
-      agentId: "work",
-      runId: "run-global-work",
-    });
-    expect(request).toHaveBeenNthCalledWith(4, "models.list", { agentId: "work" });
+    expectRequests(
+      request,
+      [
+        "chat.send",
+        {
+          ...scope,
+          message: "hello",
+          thinking: undefined,
+          deliver: undefined,
+          timeoutMs: undefined,
+          idempotencyKey: runId,
+        },
+        {
+          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
+        },
+      ],
+      ["chat.history", { ...scope, limit: 50 }],
+      ["chat.abort", { ...scope, runId }],
+      ["models.list", { agentId: "work" }],
+    );
   });
 
   it("retries session aborts without side-run preservation on older Gateways", async () => {
-    const client = createClient();
-    const request = mockRequest()
+    const { client, request } = mockClient();
+    const result = { ok: true, aborted: true, runIds: ["run-main"] };
+    request
       .mockRejectedValueOnce(legacyParameterError("chat.abort", "preserveSideRuns"))
-      .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["run-main"] });
+      .mockResolvedValueOnce(result);
 
-    await expect(client.abortChat({ sessionKey: "main" })).resolves.toEqual({
-      ok: true,
-      aborted: true,
-      runIds: ["run-main"],
-    });
-    expect(request).toHaveBeenNthCalledWith(1, "chat.abort", {
-      sessionKey: "main",
-      preserveSideRuns: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", { sessionKey: "main" });
+    await expect(client.abortChat({ sessionKey: "main" })).resolves.toEqual(result);
+    expectRequests(
+      request,
+      ["chat.abort", { sessionKey: "main", preserveSideRuns: true }],
+      ["chat.abort", { sessionKey: "main" }],
+    );
   });
 
   it.each([true, false])(
     "retries legacy creation with succeedsParent=%s",
     async (succeedsParent) => {
-      const client = createClient();
-      const request = mockRequest()
+      vi.useFakeTimers();
+      const { client, request } = mockClient();
+      const result = { ok: true, key: "agent:main:tui-next" };
+      request
         .mockRejectedValueOnce(legacyParameterError("sessions.create", "succeedsParent"))
-        .mockResolvedValueOnce({ ok: true, key: "agent:main:tui-next" });
+        .mockResolvedValueOnce(result);
       const opts = {
         key: "tui-next",
         ...(succeedsParent ? {} : { agentId: "main" }),
         parentSessionKey: "agent:main:main",
         succeedsParent,
       };
-      await expect(client.createSession(opts)).resolves.toEqual({
-        ok: true,
-        key: "agent:main:tui-next",
-      });
-      expect(request).toHaveBeenNthCalledWith(1, "sessions.create", {
-        ...opts,
-        emitCommandHooks: true,
-      });
+      await expect(client.createSession(opts)).resolves.toEqual(result);
+      expect(request).toHaveBeenNthCalledWith(
+        1,
+        "sessions.create",
+        {
+          ...opts,
+          emitCommandHooks: true,
+        },
+        {
+          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
+        },
+      );
       expect(request).toHaveBeenNthCalledWith(
         2,
         "sessions.create",
         succeedsParent
           ? { key: "tui-next", parentSessionKey: "agent:main:main", emitCommandHooks: true }
           : { key: "tui-next", agentId: "main" },
+        {
+          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
+        },
       );
     },
   );
@@ -517,7 +487,6 @@ describe("GatewayChatClient", () => {
   });
 
   it("lists gateway commands through commands.list", async () => {
-    const client = createClient();
     const command = {
       name: "tts",
       textAliases: ["/tts"],
@@ -526,39 +495,32 @@ describe("GatewayChatClient", () => {
       scope: "both",
       acceptsArgs: false,
     };
-    const request = mockRequest({ commands: [command] });
+    const { client, request } = mockClient({ commands: [command] });
+    const opts = { agentId: "main", provider: "discord", scope: "text" as const };
 
-    await expect(
-      client.listCommands({ agentId: "main", provider: "discord", scope: "text" }),
-    ).resolves.toEqual([command]);
-    expect(request).toHaveBeenCalledWith("commands.list", {
-      agentId: "main",
-      provider: "discord",
-      scope: "text",
-    });
+    await expect(client.listCommands(opts)).resolves.toEqual([command]);
+    expect(request).toHaveBeenCalledWith("commands.list", opts);
   });
 
   it("lists and resolves plugin approvals through the gateway", async () => {
-    const client = createClient();
+    const { client, request } = mockClient();
     const pending = [{ id: "plugin:skill-1" }];
-    const request = mockRequest()
-      .mockResolvedValueOnce(pending)
-      .mockResolvedValueOnce({ ok: true });
+    request.mockResolvedValueOnce(pending).mockResolvedValueOnce({ ok: true });
 
     await expect(client.listPluginApprovals()).resolves.toEqual(pending);
     await expect(client.resolvePluginApproval("plugin:skill-1", "allow-once")).resolves.toEqual({
       ok: true,
     });
 
-    expect(request).toHaveBeenNthCalledWith(1, "plugin.approval.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "plugin.approval.resolve", {
-      id: "plugin:skill-1",
-      decision: "allow-once",
-    });
+    expectRequests(
+      request,
+      ["plugin.approval.list", {}],
+      ["plugin.approval.resolve", { id: "plugin:skill-1", decision: "allow-once" }],
+    );
   });
 
   it("requests a new non-worktree session even without mode capabilities", async () => {
-    const client = createClient();
+    const { client, request } = mockClient();
     const suggestion = {
       id: "task_1",
       title: "Investigate a restarting service",
@@ -569,10 +531,12 @@ describe("GatewayChatClient", () => {
       agentId: "main",
       createdAt: 1_000,
     };
-    const request = mockRequest()
+    const accepted = { taskId: "task_1", key: "agent:main:task" };
+    const dismissed = { taskId: "task_2", dismissed: true };
+    request
       .mockResolvedValueOnce({ suggestions: [suggestion] })
-      .mockResolvedValueOnce({ taskId: "task_1", key: "agent:main:task" })
-      .mockResolvedValueOnce({ taskId: "task_2", dismissed: true });
+      .mockResolvedValueOnce(accepted)
+      .mockResolvedValueOnce(dismissed);
     client.hello = hello([
       "taskSuggestions.list",
       "taskSuggestions.accept",
@@ -580,22 +544,15 @@ describe("GatewayChatClient", () => {
     ]);
 
     await expect(client.listTaskSuggestions()).resolves.toEqual([suggestion]);
-    await expect(client.acceptTaskSuggestion("task_1")).resolves.toEqual({
-      taskId: "task_1",
-      key: "agent:main:task",
-    });
-    await expect(client.dismissTaskSuggestion("task_2")).resolves.toEqual({
-      taskId: "task_2",
-      dismissed: true,
-    });
+    await expect(client.acceptTaskSuggestion("task_1")).resolves.toEqual(accepted);
+    await expect(client.dismissTaskSuggestion("task_2")).resolves.toEqual(dismissed);
 
-    expect(request).toHaveBeenNthCalledWith(1, "taskSuggestions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "taskSuggestions.accept", {
-      taskId: "task_1",
-      mode: "local",
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "taskSuggestions.dismiss", { taskId: "task_2" });
-    expect(request).toHaveBeenCalledTimes(3);
+    expectRequests(
+      request,
+      ["taskSuggestions.list", {}],
+      ["taskSuggestions.accept", { taskId: "task_1", mode: "local" }],
+      ["taskSuggestions.dismiss", { taskId: "task_2" }],
+    );
   });
 
   it("derives task suggestion actions from negotiated methods and scopes", () => {
@@ -642,119 +599,57 @@ describe("GatewayChatClient session description", () => {
       selected,
     ];
     const defaults = { model: "default-model", modelProvider: "openai", contextTokens: 16000 };
-    const request = vi
-      .spyOn(GatewayClient.prototype, "request")
-      .mockImplementation(async (method, params) => {
-        if (method === "sessions.describe" && validateSessionsDescribeParams(params)) {
-          return { session: rows.find((row) => row.key === params.key) ?? null };
-        }
-        if (method === "sessions.list" && validateSessionsListParams(params)) {
-          const search = params.search ?? "";
-          const matches = rows.filter(
-            (row) => row.key.includes(search) || row.label?.includes(search),
-          );
-          return makeTuiSessionList({
-            sessions: matches.slice(params.offset ?? 0, params.limit),
-            defaults,
-          });
-        }
-        throw new Error(`Unexpected request: ${method}`);
-      });
-    try {
-      const client = new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
-      const state = createBaseState({ currentSessionKey: sessionKey, currentAgentId: "work" });
-      const { refreshSessionInfo } = createTestSessionActions({ client, state });
-
-      await refreshSessionInfo();
-
-      expect(state.currentSessionId).toBe("selected-session");
-      expect(state.sessionInfo).toMatchObject({
-        model: "selected-model",
-        modelProvider: "openai",
-        contextTokens: 16000,
-      });
-    } finally {
-      request.mockRestore();
-    }
+    mockSessions(rows, defaults);
+    const state = createBaseState({ currentSessionKey: sessionKey, currentAgentId: "work" });
+    const { refreshSessionInfo } = createTestSessionActions({ client: createClient(), state });
+    await refreshSessionInfo();
+    expect(state).toMatchObject({
+      currentSessionId: "selected-session",
+      sessionInfo: { model: "selected-model", modelProvider: "openai", contextTokens: 16000 },
+    });
   });
 
   it("excludes phantom sessions from exact metadata reads", async () => {
     const session = { key: "agent:work:sessions", sessionId: " " };
     const defaults = { model: "work-default" };
-    const request = vi
-      .spyOn(GatewayClient.prototype, "request")
-      .mockImplementation(async (method) => {
-        if (method === "sessions.describe") {
-          return { session };
-        }
-        if (method === "sessions.list") {
-          return makeTuiSessionList({ defaults });
-        }
-        throw new Error(`Unexpected request: ${method}`);
-      });
-    try {
-      const client = new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
-      await expect(client.describeSession({ sessionKey: session.key })).resolves.toEqual({
-        session: null,
-        defaults,
-      });
-      expect(request).toHaveBeenCalledWith(
-        "sessions.describe",
-        { key: session.key },
-        { signal: expect.any(AbortSignal) },
-      );
-      expect(request).toHaveBeenCalledWith(
-        "sessions.list",
-        { agentId: "work", limit: 1 },
-        { signal: expect.any(AbortSignal) },
-      );
-    } finally {
-      request.mockRestore();
-    }
+    const request = mockSessions([session], defaults);
+    await expect(createClient().describeSession({ sessionKey: session.key })).resolves.toEqual({
+      session: null,
+      defaults,
+    });
+    expectRequests(
+      request,
+      ["sessions.describe", { key: session.key }, { signal: expect.any(AbortSignal) }],
+      ["sessions.list", { agentId: "work", limit: 1 }, { signal: expect.any(AbortSignal) }],
+    );
   });
 });
 
 const metadataSessionKey = "agent:work:notes";
-const oldDescription = {
-  session: { key: metadataSessionKey, sessionId: "old-session", model: "old-session-model" },
-  defaults: { model: "old-default-model", contextTokens: 8192 },
-} satisfies TuiSessionDescription;
-const currentDescription = {
-  session: {
-    key: metadataSessionKey,
-    sessionId: "current-session",
-    model: "current-session-model",
-  },
-  defaults: { model: "current-default-model", contextTokens: 32768 },
-} satisfies TuiSessionDescription;
-const oldListing: TuiSessionList = {
-  ts: 1,
-  path: "old-store",
-  count: 0,
-  sessions: [],
-  defaults: oldDescription.defaults,
-};
-const currentListing: TuiSessionList = {
-  ts: 2,
-  path: "current-store",
-  count: 0,
-  sessions: [],
-  defaults: currentDescription.defaults,
-};
+function metadataDescription(prefix: string, contextTokens: number): TuiSessionDescription {
+  return {
+    session: {
+      key: metadataSessionKey,
+      sessionId: `${prefix}-session`,
+      model: `${prefix}-session-model`,
+    },
+    defaults: { model: `${prefix}-default-model`, contextTokens },
+  };
+}
+const oldDescription = metadataDescription("old", 8192);
+const currentDescription = metadataDescription("current", 32768);
+const oldListing = makeTuiSessionList({ defaults: oldDescription.defaults });
+const currentListing = makeTuiSessionList({ defaults: currentDescription.defaults });
 
 function metadataHello(connId: string): HelloOk {
   return {
-    type: "hello-ok",
+    ...hello(
+      ["chat.history", "sessions.describe", "sessions.list"],
+      ["operator.read", "operator.write"],
+      [],
+    ),
     protocol: 4,
     server: { version: "2026.9.4", connId },
-    features: {
-      methods: ["chat.history", "sessions.describe", "sessions.list"],
-      events: [],
-      capabilities: [],
-    },
-    snapshot: { presence: [], health: {}, stateVersion: { presence: 0, health: 0 }, uptimeMs: 0 },
-    auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
-    policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
   };
 }
 
@@ -872,24 +767,17 @@ describe("GatewayChatClient streaming", () => {
       const setActivityStatus = (activity: string) => {
         state.activityStatus = activity;
       };
+      const view = { state, chatLog, btw, tui, setActivityStatus };
       let loadHistory: () => Promise<TuiHistoryLoadResult> = async () => ({ loaded: false });
       const handlers = createEventHandlers({
-        state,
-        chatLog,
-        btw,
-        tui,
-        setActivityStatus,
+        ...view,
         updateFooter: vi.fn(),
         loadHistory: () => loadHistory(),
         streamingWatchdogMs: 0,
       });
       const actions = createTestSessionActions({
         client,
-        state,
-        chatLog,
-        btw,
-        tui,
-        setActivityStatus,
+        ...view,
         invalidateRunOwnership: handlers.dispose,
       });
       loadHistory = actions.loadHistory;

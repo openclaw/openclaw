@@ -5,10 +5,10 @@ Follow [writing tests](../../../../docs/help/testing/writing-tests.md), [test-au
 ## Helpers (`ui/src/test-helpers/`)
 
 - **`mountSolid(() => view, options)`** (`mount-solid.ts`) returns scoped queries, `container`, and an idempotent `unmount()`. Roots are disposed after each test and before the shared-worker reset. Helper-created containers are removed; caller-supplied ones remain.
-- **`createSolidApplicationContextProvider(context)`** (`solid-application-context.tsx`) as the mount's `wrapper` shares the Lit harness's Gateway snapshot and event fixtures. `setContext(next)` retires and remounts consumers.
+- **`createSolidApplicationContextProvider(context)`** (`solid-application-context.tsx`) as the mount's `wrapper` provides Gateway snapshot and event fixtures. `setContext(next)` retires and remounts consumers.
 - **`flush` and `waitForSolid`** (`solid-settle.ts`): `flush()` applies pending synchronous signal writes; `waitForSolid(() => expect(...))` awaits an observable async outcome. `flush()` doesn't settle promises or browser layout.
 - **`renderSolidRef(() => ref, { targetElement, ...options })`** (`render-solid-ref.ts`) tests ref factories; it forwards container, wrapper, query, and hydration options that Testing Library beta.3 drops.
-- Retained Lit children still need their own `updateComplete` boundary (`components/option-card.test.ts` shows the mixed-renderer pattern).
+- Imperatively mounted native custom elements expose `updateComplete` for committed synchronous output; await the actual async or layout outcome separately.
 
 ## Discovery and runners
 
@@ -22,11 +22,11 @@ Follow [writing tests](../../../../docs/help/testing/writing-tests.md), [test-au
 
 - E2E selects host tags and classes, which is why both stay stable.
 - Wait on the readiness contract, never on timers: `window.openclawControlUi?.snapshot()` facts (`routeReady`, `gatewayPhase`, `rosterReady`, …). The hook loads lazily on first read, so a one-shot read must first `waitForFunction(() => window.openclawControlUi !== undefined)`.
-- Overlay and focus changes need WebKit runs as well as Chromium.
+- Overlay and focus changes need WebKit proof as well as Chromium; use PR CI under the assigned local compute budget. Chat, shell/routes, overlays/focus, and widely imported shared owners require `ci:full` before the run used to land.
 
 ## Visual parity
 
-`pnpm ui:parity` captures the scene gallery (924 shots across profiles) on two builds and diffs them. Run it on your merge base and your head for the routes and states you touched. Same-SHA captures are deterministic except an explicit, documented list of known-nondeterministic shots (Apps image clipping). One-level color noise is reported separately. Inspect the gallery before claiming parity, and embed sanitized before/after screenshots in the PR for visual changes.
+Visual changes require inspected, sanitized before/after screenshots in chat and the PR. Capture synthetic touched states with one build per side and targeted Playwright screenshots; follow the assigned compute budget rather than running local E2E batteries. The parity gallery remains available for an explicitly assigned parity campaign. Same-SHA determinism and its named exceptions belong to that tool, not a blanket image tolerance.
 
 ## Quantitative gates
 
@@ -37,3 +37,5 @@ The chat gates (see [state and ownership](state-and-ownership.md#chat-render-lif
 Follow the canonical [proof policy](../../openclaw-testing/SKILL.md#proof-policy)
 for local, PR CI, and exceptional remote proof; use the owning UI/Gateway lane
 for the changed contract.
+
+Keep local proof narrow: `pnpm tsgo:ui` and directly changed test files with `--maxWorkers=1`, subject to the assigned compute budget. Build locally only for boot/startup changes or the bounded screenshot capture above. Broad UI suites run in PR CI. Attribute inherited failures by the exact failing test names against scheduled `main`, never by shard name alone.

@@ -1,8 +1,10 @@
+import { REPETITIVE_OUTPUT_ERROR_CODE } from "@openclaw/llm-core/types";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
 type AssistantTurnLike = {
   role?: unknown;
   stopReason?: unknown;
+  errorCode?: unknown;
   content?: unknown;
 };
 
@@ -85,6 +87,10 @@ export function resolveFailedAssistantReplay(
     message.role !== "assistant" ||
     (message.stopReason !== "error" && message.stopReason !== "aborted")
   ) {
+    return "keep";
+  }
+  // The stream owner already removed the bad block and retained safe history.
+  if (message.errorCode === REPETITIVE_OUTPUT_ERROR_CODE) {
     return "keep";
   }
   const content = Array.isArray(message.content) ? message.content : [];

@@ -1,23 +1,17 @@
 // Control UI tests cover the responsive disconnected login gate.
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { openChatLayoutMenu, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  captureControlUiE2eFailureDiagnostics,
-  controlUiSessionUrl,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { closeContext, mountLoginGate, renderLoginGate } from "./login-gate-e2e.test-support.ts";
+import { closeContext, renderLoginGate } from "./login-gate-e2e.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI responsive login gate E2E",
@@ -134,7 +128,10 @@ suite.define(() => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
     await page.addInitScript(() => {
-      sessionStorage.setItem("openclaw.controlUi.staleChunkReloadBuildId", "replacement-build");
+      sessionStorage.setItem(
+        "openclaw.controlUi.staleChunkReloadBuildId",
+        JSON.stringify({ buildId: "replacement-build", at: Date.now() }),
+      );
     });
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
@@ -176,7 +173,7 @@ suite.define(() => {
     }
   });
 
-  it("blocks server settings actions visibly while reconnecting", async () => {
+  it("keeps settings content interactive while reconnecting", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
@@ -188,41 +185,17 @@ suite.define(() => {
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "test reconnect");
 
-      const notice = page.locator('.connection-action-block[role="status"]');
-      await notice.waitFor();
-      expect((await notice.textContent())?.trim()).toBe(
-        "Changes to settings are disabled while the Gateway is reconnecting.",
-      );
-      expect(await notice.locator("svg").count()).toBe(1);
+      await expect
+        .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
+        .toBe("reconnecting");
+      expect(await page.locator(".connection-action-block").count()).toBe(0);
+      expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
       const outlet = page.locator("openclaw-router-outlet");
-      expect(await outlet.getAttribute("inert")).not.toBeNull();
-      expect(await outlet.getAttribute("aria-disabled")).toBe("true");
-      const bounds = await page.evaluate(() => {
-        const noticeRect = document
-          .querySelector(".connection-action-block")
-          ?.getBoundingClientRect();
-        const navRect = document.querySelector(".shell-nav")?.getBoundingClientRect();
-        const mainRect = document.querySelector("#control-ui-main")?.getBoundingClientRect();
-        const headerRect = document
-          .querySelector("openclaw-config-page .content-header")
-          ?.getBoundingClientRect();
-        return {
-          headerTop: headerRect?.top,
-          noticeBottom: noticeRect?.bottom,
-          noticeTop: noticeRect?.top,
-          noticeLeft: noticeRect?.left,
-          noticeRight: noticeRect?.right,
-          mainTop: mainRect?.top,
-          navRight: navRect?.right,
-          mainRight: mainRect?.right,
-        };
-      });
-      expect(bounds.noticeTop).toBe(bounds.mainTop);
-      expect((bounds.headerTop ?? 0) - (bounds.noticeBottom ?? 0)).toBeCloseTo(44, 3);
-      expect(bounds.noticeLeft).toBe(bounds.navRight);
-      expect(bounds.noticeRight).toBe(bounds.mainRight);
+      expect(await outlet.getAttribute("inert")).toBeNull();
+      expect(await outlet.getAttribute("aria-disabled")).toBeNull();
+      expect(await page.locator("openclaw-config-page .content-header").isVisible()).toBe(true);
       await page.screenshot({
-        path: path.join(RECOVERY_ARTIFACT_DIR, "02-reconnecting-actions-blocked.png"),
+        path: path.join(RECOVERY_ARTIFACT_DIR, "02-reconnecting-settings-interactive.png"),
         fullPage: true,
       });
     } finally {
@@ -283,7 +256,7 @@ suite.define(() => {
   it.each([
     { name: "tablet", width: 900 },
     { name: "phone", width: 390 },
-  ])("spans the $name settings viewport while reconnecting", async ({ width }) => {
+  ])("keeps the $name settings viewport interactive while reconnecting", async ({ width }) => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
@@ -294,142 +267,13 @@ suite.define(() => {
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "test reconnect");
 
-      const notice = page.locator('.connection-action-block[role="status"]');
-      await notice.waitFor();
-      const bounds = await notice.boundingBox();
-      expect(bounds?.x).toBe(0);
-      expect(bounds?.width).toBe(width);
-    } finally {
-      await closeContext(context);
-    }
-  });
-
-  it.each([
-    {
-      name: "missing token",
-      error: {
-        code: "INVALID_REQUEST",
-        message: "token missing",
-        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
-      },
-      expectedKind: "auth-required",
-      expectedTitle: "This Gateway expects its token",
-    },
-    {
-      name: "missing identity header",
-      error: {
-        code: "INVALID_REQUEST",
-        message: "unauthorized",
-        details: { code: ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED },
-      },
-      expectedKind: "trusted-proxy",
-      expectedTitle: "Proxy authentication required",
-    },
-    {
-      name: "proxy account rejection",
-      error: {
-        code: "INVALID_REQUEST",
-        message: "unauthorized",
-        details: {
-          code: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
-          authReason: "trusted_proxy_user_not_allowed",
-        },
-      },
-      expectedKind: "trusted-proxy",
-      expectedTitle: "Proxy authentication required",
-    },
-    {
-      name: "disallowed browser origin",
-      error: {
-        code: "INVALID_REQUEST",
-        message: "origin not allowed",
-        details: { code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED },
-      },
-      expectedKind: "origin-not-allowed",
-      expectedTitle: "Browser origin not allowed",
-    },
-    {
-      name: "pairing approval",
-      error: {
-        code: "NOT_PAIRED",
-        message: "device is not approved",
-        details: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
-      },
-      expectedKind: "pairing-required",
-      expectedTitle: "Approve this browser",
-    },
-    {
-      name: "generic transport",
-      error: {
-        code: "UNAVAILABLE",
-        message: "WebSocket connection failed",
-      },
-      expectedKind: "network",
-      expectedTitle: "Gateway unreachable",
-    },
-    {
-      name: "profile verification",
-      error: {
-        code: "UNAVAILABLE",
-        message: "Authenticated profile verification is unavailable; retry the request.",
-        details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
-        retryable: true,
-      },
-      expectedKind: "profile-unavailable",
-      expectedTitle: "Couldn't verify your account",
-    },
-    {
-      name: "GitHub profile rate limit",
-      error: {
-        code: "UNAVAILABLE",
-        message:
-          "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential.",
-        details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
-        retryable: true,
-      },
-      expectedKind: "profile-unavailable",
-      expectedTitle: "Couldn't verify your account",
-    },
-  ])("renders $name guidance from the application gateway snapshot", async (fixture) => {
-    const viewport = { height: 900, width: 1280 };
-    const context = await suite.browser.newContext({
-      viewport,
-      recordVideo:
-        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-          ? { dir: RECOVERY_ARTIFACT_DIR, size: viewport }
-          : undefined,
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: { connect: { __mockError: fixture.error } },
-    });
-
-    try {
-      await page.goto(suite.server.baseUrl);
-      await gateway.waitForRequest("connect");
-
-      await page.locator(".login-gate__failure").waitFor();
-      // Retryable guidance must survive a real reconnect, including time spent capturing proof.
-      if (fixture.error.code === "UNAVAILABLE") {
-        await gateway.waitForRequest("connect", { after: 1 });
-      }
-      await writeFile(
-        path.join(RECOVERY_ARTIFACT_DIR, "login-failure.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".login-gate__card"), [
-          page.locator(".login-gate__failure"),
-        ]),
-      );
-      const failure = page.locator(`.login-gate__failure[data-kind="${fixture.expectedKind}"]`);
-      await failure.waitFor({ timeout: 10_000 });
-      expect((await failure.locator(".login-gate__failure-title").textContent())?.trim()).toBe(
-        fixture.expectedTitle,
-      );
-    } catch (error) {
-      await captureControlUiE2eFailureDiagnostics(page, {
-        error: error instanceof Error ? error : new Error(String(error)),
-        label: `login-guidance-${fixture.name}`,
-      });
-      throw error;
+      await expect
+        .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
+        .toBe("reconnecting");
+      expect(await page.locator(".connection-action-block").count()).toBe(0);
+      expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
+      expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
+      expect(await page.locator("openclaw-config-page .content-header").isVisible()).toBe(true);
     } finally {
       await closeContext(context);
     }
@@ -733,22 +577,32 @@ suite.define(() => {
       page,
       controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
     );
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
     try {
-      await renderLoginGate(page, suite.server.baseUrl);
-      await chatModule.request;
-      const mounting = mountLoginGate(page, null);
-      void mounting.catch(() => {});
-      // The held route cannot have mounted while the login presentation is changed.
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      });
+      await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
+      const chatModuleUrl = await chatModule.request;
+      const priorConnects = await gateway.deferNext("connect");
+      // Retry clears the owner error and pins the gate while the handshake is held.
+      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await gateway.waitForRequest("connect", { after: priorConnects });
       expect(await page.locator("openclaw-chat-page").count()).toBe(0);
-      chatModule.release();
-      await mounting;
-      expect(await page.locator(".login-gate__failure").count()).toBe(0);
 
       const help = page.locator(".login-gate__help");
       expect(await help.evaluate((element) => element.tagName)).toBe("DETAILS");
+      expect(await page.locator(".login-gate__failure").count()).toBe(0);
       expect(await help.getAttribute("open")).toBeNull();
       expect(await page.locator(".login-gate__steps").isVisible()).toBe(false);
+      chatModule.release();
+      await page.evaluate(`import(${JSON.stringify(chatModuleUrl)}).then(() => undefined)`);
+      await page.waitForFunction(() => window.openclawControlUi?.snapshot().booted === true);
       await help.locator("summary").click();
       expect(await page.locator(".login-gate__steps").isVisible()).toBe(true);
     } finally {

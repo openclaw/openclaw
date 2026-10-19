@@ -35,7 +35,7 @@ export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocum
       entry.authProfileType ? { when: { type: entry.authProfileType } } : {},
       { secretShape: entry.secretShape, optIn: true as const },
       entry.secretShape === `sibling_ref` && entry.refPathPattern
-        ? { notes: `Compatibility exception: sibling ref field remains canonical.` }
+        ? { notes: `Compatibility exception: sibling ref field remains primary.` }
         : {},
     );
     entriesByKey.set(

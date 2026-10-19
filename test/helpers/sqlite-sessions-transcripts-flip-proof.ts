@@ -13,16 +13,14 @@ import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatCliCommand } from "../../src/cli/command-format.js";
-import {
-  readSessionArchiveContentSync,
-  stripSessionArchiveCompressionSuffix,
-} from "../../src/config/sessions/archive-compression.js";
+import { readSessionArchiveContentSync } from "../../src/config/sessions/archive-compression.js";
 import { formatSqliteSessionFileMarker } from "../../src/config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   type TranscriptEvent,
 } from "../../src/config/sessions/session-accessor.js";
 import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite-import.test-support.js";
+import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../../src/config/sessions/transcript-file-names.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import { isGatewayProtocolResponseError } from "../../src/gateway/client.js";
 import {
@@ -1502,7 +1500,7 @@ async function readRecoverySession(
         .prepare(
           "SELECT seq, event_json AS eventJson FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
         )
-        .all(sessionId) as Array<{ seq: number; eventJson: string }>,
+        .all(sessionId) as Array<{ seq: number; eventJson: string | null }>,
   );
   const messages = events.flatMap(({ seq, eventJson }) => {
     const event = parseJsonObject(eventJson);
@@ -2093,7 +2091,7 @@ async function inventoryFile(filePath: string, relativeRoot: string) {
 function parseArchiveArtifactName(
   fileName: string,
 ): { archiveReason: "bak" | "deleted" | "reset"; archiveSessionId: string } | undefined {
-  const normalized = stripSessionArchiveCompressionSuffix(fileName);
+  const normalized = path.basename(fileName, SESSION_ARCHIVE_ZSTD_SUFFIX);
   for (const archiveReason of ["deleted", "reset", "bak"] as const) {
     const marker = `.jsonl.${archiveReason}.`;
     const index = normalized.lastIndexOf(marker);
@@ -2403,7 +2401,11 @@ function findArchiveArtifact(
   );
 }
 
-function parseJsonObject(text: string): Record<string, unknown> | undefined {
+// Large events are stored compressed (`event_zstd`) with a NULL `event_json`.
+function parseJsonObject(text: string | null | undefined): Record<string, unknown> | undefined {
+  if (typeof text !== "string") {
+    return undefined;
+  }
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end < start) {

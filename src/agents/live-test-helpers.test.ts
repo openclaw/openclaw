@@ -1,16 +1,41 @@
 // Covers shared live-test gates and credential precedence rules.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, readRuntimeConfig } from "../config/runtime-snapshot.js";
 import { completeSimple } from "../llm/stream.js";
 import {
   completeSimpleWithTimeout,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   resolveLiveCredentialPrecedence,
+  useLiveTestRuntimeConfig,
 } from "./live-test-helpers.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 vi.mock("../llm/stream.js", () => ({ completeSimple: vi.fn() }));
+
+describe("live fixture runtime config", () => {
+  afterEach(clearRuntimeConfigSnapshot);
+
+  it.each(["success", "failure"])("clears its published config after %s", (outcome) => {
+    clearRuntimeConfigSnapshot();
+    expect(() => readRuntimeConfig()).toThrow("Runtime config is not prepared");
+    const config = { agents: { entries: { live: { workspace: "/synthetic/live" } } } };
+    const runFixture = () => {
+      using _ = useLiveTestRuntimeConfig(config);
+      expect(readRuntimeConfig()).toEqual(config);
+      if (outcome === "failure") {
+        throw new Error("synthetic live failure");
+      }
+    };
+    if (outcome === "failure") {
+      expect(runFixture).toThrow("synthetic live failure");
+    } else {
+      runFixture();
+    }
+    expect(() => readRuntimeConfig()).toThrow("Runtime config is not prepared");
+  });
+});
 
 describe("completeSimpleWithTimeout", () => {
   const model = makeProviderModelFixture({

@@ -1,27 +1,12 @@
-import { createMemo, untrack } from "solid-js";
+import { createMemo } from "solid-js";
 import { SettingsDefaultDescription } from "../../../components/solid/settings-ui.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { projectSource } from "../../../lib/reactive/projection.ts";
 import type { AgentMemoryState } from "./memory-panel-state.ts";
 import { renderDreamingToggleConfirmation as DreamingToggleConfirmation } from "./toggle-confirmation.tsx";
 import { renderDreaming as Dreaming } from "./view.tsx";
 
 export function AgentMemoryView(props: { state: AgentMemoryState }) {
-  const state = untrack(() => props.state);
-  const projection = projectSource(state, {
-    read: (owner) => owner,
-    subscribe: (owner, notify) => owner.subscribe(notify),
-    equality: "revision",
-  });
-  const model = createMemo(() => projection.read().view);
-  // The owner mutates this view-only state synchronously. Reads subscribe to its
-  // revision while writes keep the same owner object and request boundary.
-  const viewState = new Proxy(state.view.dreaming.viewState, {
-    get(target, key, receiver) {
-      projection.revision();
-      return Reflect.get(target, key, receiver);
-    },
-  });
+  const model = createMemo(() => props.state.view());
   return (
     <>
       <section class="content-header content-header--page agent-memory-panel__header">
@@ -47,7 +32,10 @@ export function AgentMemoryView(props: { state: AgentMemoryState }) {
               )}
             </span>
             <button
-              class={`dreams__phase-toggle ${model().header.dreamingOn ? "dreams__phase-toggle--on" : ""}`}
+              class={[
+                "dreams__phase-toggle",
+                { "dreams__phase-toggle--on": model().header.dreamingOn },
+              ]}
               disabled={
                 !model().header.canUpdateConfig ||
                 model().header.loading ||
@@ -63,7 +51,7 @@ export function AgentMemoryView(props: { state: AgentMemoryState }) {
           </div>
         </div>
       </section>
-      <Dreaming {...model().dreaming} viewState={viewState} />
+      <Dreaming {...model().dreaming} />
       <DreamingToggleConfirmation {...model().toggle} />
     </>
   );

@@ -13,15 +13,9 @@ import {
   readUserProfileAliasRevision,
   readUserProfileVersion,
 } from "./user-profile-events.js";
-import {
-  readUserProfileSnapshotSync,
-  readUserProfileEmailBindings,
-} from "./user-profile-identity.read.js";
-import {
-  prepareUserProfileCatalog,
-  readUserProfileAliases,
-  readUserProfileIdentity,
-} from "./user-profile-list.js";
+import { readUserProfileEmailBindings } from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-list-item.test-support.js";
+import { prepareUserProfileCatalog, readUserProfileAliases } from "./user-profile-list.js";
 import {
   linkEmail,
   setAvatar,
@@ -296,8 +290,9 @@ describe("profile alias reader lifecycle", () => {
     expect(readUserProfileAliasRevision()).toBe(aliasRevision + 2);
 
     expect(setDisplayName(a.id, "Durable A", options)).toMatchObject({ id: c.id });
-    expect(readUserProfileIdentity(a.id, options)?.profileId).toBe(c.id);
-    expect(readUserProfileSnapshotSync(options).profiles).toEqual(
+    const { profiles } = readUserProfileSnapshotSync(options);
+    expect(profiles.find(({ id }) => id === a.id)?.mergedInto).toBe(c.id);
+    expect(profiles).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: a.id, mergedInto: c.id }),
         expect.objectContaining({ id: b.id, mergedInto: c.id }),

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import * as databaseProcessRole from "../infra/database-engine/admission-scope.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
@@ -47,6 +48,8 @@ beforeEach(() => {
       run: async () => undefined,
       failure: () => undefined,
       isPrepared: () => false,
+      getPendingNativeOpen: () => undefined,
+      getPendingPreparation: () => undefined,
       captureClaim: () => {
         throw new Error("Unused native claim");
       },
@@ -106,7 +109,9 @@ it("keeps a shared creating owner out of idle eviction until its last borrower r
 });
 
 it("expires each executor independently and refreshes only the borrowed one", async () => {
-  await use("first");
+  const first = await use("first");
+  const terminal = vi.fn();
+  first.onTerminal(terminal);
   await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
   await use("second");
   await use("first");
@@ -114,8 +119,18 @@ it("expires each executor independently and refreshes only the borrowed one", as
   expect(closedAgents()).toEqual([]);
   await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
   expect(closedAgents()).toEqual(["first", "second"]);
+  expect(terminal).not.toHaveBeenCalled();
   await use("first");
   expect(opened).toHaveLength(3);
+});
+
+it("retires a CLI one-shot's warm executor after the CLI window", async () => {
+  vi.spyOn(databaseProcessRole, "getDatabaseProcessRole").mockReturnValue("cli-oneshot");
+  await use("one-shot");
+  await vi.advanceTimersByTimeAsync(30_000 - 1);
+  expect(closedAgents()).toEqual([]);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(closedAgents()).toEqual(["one-shot"]);
 });
 
 it("closes all warm executors on restart drain", async () => {

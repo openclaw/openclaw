@@ -110,4 +110,25 @@ function buildRemovedExportRecord(seed: (typeof REMOVED_EXPORT_SEEDS)[number]) {
   } satisfies PluginCompatRecord;
 }
 
-export const PLUGIN_SDK_REMOVED_EXPORT_RECORDS = REMOVED_EXPORT_SEEDS.map(buildRemovedExportRecord);
+export const PLUGIN_SDK_REMOVED_EXPORT_RECORDS = [
+  ...REMOVED_EXPORT_SEEDS.map(buildRemovedExportRecord),
+  {
+    code: "plugin-sdk-reply-silence-parsers",
+    status: "removed",
+    owner: "agent-runtime",
+    introduced: "2026-10-13",
+    removeAfter: "2026-10-12",
+    replacement:
+      "Delivery plugins forward prepared text without parsing it. Harness producers use prepareAgentRunTerminalReply from openclaw/plugin-sdk/agent-harness-runtime once and publish its terminalReply. Import SILENT_REPLY_TOKEN from openclaw/plugin-sdk/reply-runtime instead of reply-chunking.",
+    docsPath: "/plugins/sdk-migration/removed-surfaces#reply-silence-parsing",
+    surfaces: [
+      "openclaw/plugin-sdk/reply-chunking.isSilentReplyText",
+      "openclaw/plugin-sdk/reply-chunking.isSilentReplyPayloadText",
+      "openclaw/plugin-sdk/reply-chunking.SILENT_REPLY_TOKEN",
+    ],
+    diagnostics: ["plugin SDK shipped-surface guard and migration guide"],
+    tests: ["src/plugin-sdk/reply-runtime.contract.test.ts", "src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "Reply silence is classified once by the terminal producer. Delivery-side parsers were removed without a compatibility shim so visible text is never reclassified as silence. The redundant reply-chunking.SILENT_REPLY_TOKEN export was removed; the constant remains available from reply-runtime.",
+  },
+] as const satisfies readonly PluginCompatRecord[];

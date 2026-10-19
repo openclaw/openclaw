@@ -31,14 +31,7 @@ export function appendPluginInstanceCleanupFailures(
   result: PluginInstanceDisposalResult,
 ): void {
   for (const error of result.errors) {
-    if (
-      failures.some(
-        (failure) =>
-          failure.pluginId === pluginId &&
-          failure.error === error &&
-          (failure.hookId === "instance" || result.hostCleanupErrors?.includes(error)),
-      )
-    ) {
+    if (failures.some((failure) => failure.pluginId === pluginId && failure.error === error)) {
       continue;
     }
     failures.push({ pluginId, hookId: "instance", error });

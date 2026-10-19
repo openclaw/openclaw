@@ -21,15 +21,13 @@ import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transc
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { Message } from "../../llm/types.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { getSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
-import { isTalkRealtimeVoiceEntry } from "./session-manager-codec.js";
+import { isOutOfTurnHistoryEntry } from "./session-manager-codec.js";
 import {
   prepareCurrentTurnReplaySelection,
   resolveCurrentTurnEntryId,
@@ -48,6 +46,7 @@ import { readCommittedSessionManagerReload } from "./session-manager-reload.js";
 import { SessionManagerSuffixPersistence } from "./session-manager-suffix-persistence.js";
 import type {
   AppendPersistenceOptions,
+  ModelChangeEntry,
   SessionEntry,
   SessionMessageEntry,
 } from "./session-manager-types.js";
@@ -98,14 +97,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         if (!admission && persistCompaction) {
           throw new Error("Compaction boundary validation failed");
         }
-        if (
-          !admission ||
-          (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) &&
-            !("actor" in admission) &&
-            "db" in admission.database &&
-            !(canonical.type === "compaction" && persistCompaction))
-        ) {
-          // Incognito retains its host-owned store until actor activation; detached views do not write.
+        if (!admission) {
           if (canonical.type === "message") {
             const result = this.appendMessageWithTranscriptAnchorSync(canonical.message, options);
             canonical.id = result.entryId;
@@ -334,6 +326,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     entry: T,
     committed: PersistWorkerRecordResult,
     admittedUserId?: string,
+    initialModel?: ModelChangeEntry,
   ): Promise<{
     entry: T;
     anchor?: TranscriptEntryAnchor;
@@ -348,7 +341,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       if (
         committed.result?.adoptedMessageId &&
         !committed.result.appended &&
-        this.resolveCurrentTurnEntryId(isTalkRealtimeVoiceEntry) !==
+        this.resolveCurrentTurnEntryId(isOutOfTurnHistoryEntry) !==
           committed.result.adoptedMessageId
       ) {
         throw new Error(
@@ -357,14 +350,14 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       }
       // A native SDK append can publish a later view before the worker receipt arrives.
       return {
-        entry: freezeJsonSnapshot({
+        entry: {
           ...entry,
           id: committed.result?.adoptedMessageId ?? entry.id,
           parentId:
             committed.result?.effectiveParentId !== undefined
               ? committed.result.effectiveParentId
               : entry.parentId,
-        }),
+        },
         anchor: committed.result?.anchor,
         lifecycleRevision: committed.result?.lifecycleRevision,
         appended: committed.result?.appended ?? true,
@@ -386,12 +379,20 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         : undefined);
     this.transcriptVersion = committed.committedVersion;
     this.transcriptMutationAt = committed.committedVersion.updatedAt;
-    return this.adoptPersistedEntry(entry, committed.result, admittedUserId, (append) => {
+    const adoptReload = (append?: {
+      expectedMutationAt: number | null;
+      expectedEntryId: string;
+      admittedUserId: string;
+    }) => {
       if (!reload) {
         throw new Error("Committed session append did not supply its transcript reload");
       }
       this.adoptPreparedTranscriptReload(reload, append);
-    });
+    };
+    if (initialModel && !needsReload) {
+      this.adoptPersistedEntry(initialModel, undefined, admittedUserId, adoptReload);
+    }
+    return this.adoptPersistedEntry(entry, committed.result, admittedUserId, adoptReload);
   }
 
   protected adoptPersistedEntry<T extends SessionEntry>(
@@ -408,9 +409,9 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       reload();
       // Context-excluded users have no payload in byId. The exact SQLite replay
       // anchors their identity; physical ancestry still closes older turns.
-      // Final Talk speech records history without consuming the consult's keyed input.
+      // Talk speech and direct child-result mirrors do not consume the open keyed input.
       if (
-        this.resolveCurrentTurnEntryId(isTalkRealtimeVoiceEntry) !==
+        this.resolveCurrentTurnEntryId(isOutOfTurnHistoryEntry) !==
         persistenceResult.adoptedMessageId
       ) {
         throw new Error(
@@ -501,7 +502,6 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       }
     }
     this.pendingDeliberateAppend = false;
-    freezeJsonSnapshot(canonicalEntry);
     if (canonicalEntry.type === "message") {
       // Publish with the adopted view, before later native writes or worker replies can run.
       this.#lastMessageAppend = persistenceResult?.anchor
@@ -524,7 +524,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   resolveCurrentTurnEntryId(
     isInterruptedTail?: (entry: SessionEntry) => boolean,
     options?: {
-      /** @deprecated Await openAsync and traverse the complete view without this option. */
+      /** @deprecated Await openAsync and traverse the complete view without this option. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
       includeOmittedCustomMessages?: boolean;
     },
   ): string | null {
@@ -577,7 +577,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     );
   }
 
-  /** @deprecated Await appendMessageAsync. This method will be removed in a later stable release after the deprecation period. */
+  /** @deprecated Await appendMessageAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendMessage(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
@@ -624,7 +624,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     };
   }
 
-  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. This method will be removed in a later stable release after the deprecation period. */
+  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendMessageWithTranscriptAnchor(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,

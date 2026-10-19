@@ -29,135 +29,82 @@ import {
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
+function syntheticRequest(
+  method: string,
+  params: Record<string, unknown>,
+  scope: OperatorScope | "dynamic",
+  scopes: OperatorScope[],
+  syntheticScopes: OperatorScope[],
+  displayName: string | null,
+) {
+  const handler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {
+    expect(client?.connect.scopes).toEqual([scope]);
+    respond(true, { ok: true });
+  });
+  const context = createContext([[method, scope, "scope-proof", handler]]);
+  const request = withOperatorToolGatewayAuthority(
+    {
+      authenticatedUserProfile: {
+        profileId: ensureProfileForEmail("scope-owner@example.test").id,
+        displayName,
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      scopes,
+    },
+    () =>
+      dispatchGatewayMethodInProcess(method, params, {
+        forceSyntheticClient: true,
+        syntheticScopes,
+        resolveGatewayContext: () => context,
+      }),
+  );
+  return { handler, request };
+}
+
 describe("synthetic operator scope attenuation", () => {
   it.each([
-    { method: "sessions.create", params: { incognito: true }, scope: "dynamic", missing: "admin" },
-    {
-      method: "sessions.create",
-      params: { execNode: "remote" },
-      scope: "dynamic",
-      missing: "admin",
-    },
-    {
-      method: "sessions.patch",
-      params: { permissionMode: "full" },
-      scope: "dynamic",
-      missing: "admin",
-    },
-    {
-      method: "sessions.patchMany",
-      params: { patch: { sandboxMode: "off" } },
-      scope: "dynamic",
-      missing: "admin",
-    },
-    {
-      method: "sessions.delete",
-      params: { key: "agent:main:own" },
-      scope: "dynamic",
-      missing: "admin",
-    },
-    { method: "sessions.create", params: {}, scope: "operator.admin", missing: "admin" },
-    { method: "sessions.create", params: {}, scope: "operator.approvals", missing: "approvals" },
-  ] as const)(
-    "keeps $method $params behind its $scope requirement",
-    async ({ method, params, scope, missing }) => {
-      const handler = vi.fn(({ respond }: GatewayRequestHandlerOptions) => respond(true, {}));
-      const context = createContext();
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          { name: method, scope, owner: { kind: "core", area: "scope-proof" }, handler },
-        ]);
-      await expect(
-        withOperatorToolGatewayAuthority(
-          {
-            authenticatedUserProfile: {
-              profileId: ensureProfileForEmail("scope-owner@example.test").id,
-              displayName: null,
-              hasAvatar: false,
-              updatedAt: 1,
-            },
-            scopes: ["operator.sessions.write"],
-          },
-          () =>
-            dispatchGatewayMethodInProcess(method, params, {
-              forceSyntheticClient: true,
-              syntheticScopes: ["operator.write"],
-              resolveGatewayContext: () => context,
-            }),
-        ),
-      ).rejects.toThrow(`missing scope: operator.${missing}`);
-      expect(handler).not.toHaveBeenCalled();
-    },
-  );
+    ["sessions.create", { incognito: true }, "dynamic", "admin"],
+    ["sessions.create", { execNode: "remote" }, "dynamic", "admin"],
+    ["sessions.patch", { permissionMode: "full" }, "dynamic", "admin"],
+    ["sessions.patchMany", { patch: { sandboxMode: "off" } }, "dynamic", "admin"],
+    ["sessions.delete", { key: "agent:main:own" }, "dynamic", "admin"],
+    ["sessions.create", {}, "operator.admin", "admin"],
+    ["sessions.create", {}, "operator.approvals", "approvals"],
+  ] as const)("keeps %s %j behind its %s requirement", async (method, params, scope, missing) => {
+    const { handler, request } = syntheticRequest(
+      method,
+      params,
+      scope,
+      ["operator.sessions.write"],
+      ["operator.write"],
+      null,
+    );
+    await expect(request).rejects.toThrow(`missing scope: operator.${missing}`);
+    expect(handler).not.toHaveBeenCalled();
+  });
 
   it.each([
-    {
-      method: "sessions.list",
-      requiredScope: "operator.read",
-      allowedScope: "operator.write",
-      allowed: true,
-    },
-    {
-      method: "talk.session.list",
-      requiredScope: "operator.talk",
-      allowedScope: "operator.write",
-      allowed: true,
-    },
-    {
-      method: "talk.config",
-      requiredScope: "operator.talk.secrets",
-      allowedScope: "operator.write",
-      allowed: false,
-    },
-    {
-      method: "tools.invoke",
-      requiredScope: "operator.write",
-      allowedScope: "operator.read",
-      allowed: false,
-    },
+    ["sessions.list", "operator.read", "operator.write", true],
+    ["talk.session.list", "operator.talk", "operator.write", true],
+    ["talk.config", "operator.talk.secrets", "operator.write", false],
+    ["tools.invoke", "operator.write", "operator.read", false],
   ] as const)(
-    "projects $allowedScope for $method without granting unrelated permissions",
-    async ({ method, requiredScope, allowedScope, allowed }) => {
-      const handler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {
-        expect(client?.connect.scopes).toEqual([requiredScope]);
-        respond(true, { ok: true });
-      });
-      const context = createContext();
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: method,
-            scope: requiredScope,
-            owner: { kind: "core", area: "scope-proof" },
-            handler,
-          },
-        ]);
-      const dispatch = withOperatorToolGatewayAuthority(
-        {
-          authenticatedUserProfile: {
-            profileId: ensureProfileForEmail("scope-owner@example.test").id,
-            displayName: "Scope owner",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
-          scopes: [allowedScope],
-        },
-        () =>
-          dispatchGatewayMethodInProcess(
-            method,
-            {},
-            {
-              forceSyntheticClient: true,
-              syntheticScopes: [requiredScope, "operator.admin"],
-              resolveGatewayContext: () => context,
-            },
-          ),
+    "projects the %s %s requirement within %s without granting unrelated permissions",
+    async (method, requiredScope, allowedScope, allowed) => {
+      const { handler, request } = syntheticRequest(
+        method,
+        {},
+        requiredScope,
+        [allowedScope],
+        [requiredScope, "operator.admin"],
+        "Scope owner",
       );
       if (allowed) {
-        await expect(dispatch).resolves.toEqual({ ok: true });
+        await expect(request).resolves.toEqual({ ok: true });
         expect(handler).toHaveBeenCalledOnce();
       } else {
-        await expect(dispatch).rejects.toThrow(`missing scope: ${requiredScope}`);
+        await expect(request).rejects.toThrow(`missing scope: ${requiredScope}`);
         expect(handler).not.toHaveBeenCalled();
       }
     },
@@ -296,6 +243,10 @@ describe("registered plugin SDK scope attenuation", () => {
 
 describe("native tool scope provenance", () => {
   afterEach(() => resetTestPluginRegistry());
+  const write: OperatorScope[] = ["operator.write"];
+  const readScopes: OperatorScope[] = ["operator.read"];
+  const sessionWrite: OperatorScope[] = ["operator.sessions.write"];
+  const admin: OperatorScope[] = ["operator.admin"];
 
   it.each<{
     name: string;
@@ -311,31 +262,19 @@ describe("native tool scope provenance", () => {
     admin?: boolean;
     denied?: boolean;
   }>([
-    { name: "staff write minimum", source: ["operator.write"], broad: true },
-    { name: "staff read minimum", source: ["operator.read"], read: true, broad: true },
-    { name: "admin minimum", source: ["operator.admin"], broad: true, admin: true },
-    {
-      name: "original Guest ceiling",
-      source: ["operator.sessions.write"],
-      scoped: ["operator.admin"],
-    },
-    {
-      name: "current caller ceiling",
-      source: ["operator.admin"],
-      scoped: ["operator.sessions.write"],
-    },
-    {
-      name: "explicit session ceiling",
-      source: ["operator.admin"],
-      explicit: ["operator.sessions.write"],
-    },
-    { name: "explicit empty ceiling", source: ["operator.admin"], explicit: [], denied: true },
-    { name: "scoped System write", source: ["operator.write"], system: true, broad: true },
-    { name: "scoped System session write", source: ["operator.sessions.write"], system: true },
+    { name: "staff write minimum", source: write, broad: true },
+    { name: "staff read minimum", source: readScopes, read: true, broad: true },
+    { name: "admin minimum", source: admin, broad: true, admin: true },
+    { name: "original Guest ceiling", source: sessionWrite, scoped: admin },
+    { name: "current caller ceiling", source: admin, scoped: sessionWrite },
+    { name: "explicit session ceiling", source: admin, explicit: sessionWrite },
+    { name: "explicit empty ceiling", source: admin, explicit: [], denied: true },
+    { name: "scoped System write", source: write, system: true, broad: true },
+    { name: "scoped System session write", source: sessionWrite, system: true },
     {
       name: "explicit System ceiling",
-      source: ["operator.sessions.write"],
-      explicit: ["operator.write"],
+      source: sessionWrite,
+      explicit: write,
       system: true,
       denied: true,
     },
@@ -343,15 +282,15 @@ describe("native tool scope provenance", () => {
     { name: "unbound trusted System route", system: true, unbound: true },
     {
       name: "nested explicit System ceiling",
-      source: ["operator.admin"],
-      explicit: ["operator.sessions.write"],
+      source: admin,
+      explicit: sessionWrite,
       system: true,
       nested: true,
     },
     {
       name: "nested System continuation ceiling",
-      source: ["operator.admin"],
-      explicit: ["operator.sessions.write"],
+      source: admin,
+      explicit: sessionWrite,
       system: true,
       nested: true,
       continuation: true,

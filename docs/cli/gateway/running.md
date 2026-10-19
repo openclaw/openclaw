@@ -19,6 +19,7 @@ openclaw gateway run   # equivalent, explicit form
 
 <AccordionGroup>
   <Accordion title="Startup behavior">
+    - Unexpected startup failures print a redacted `[openclaw] Reason:` without requiring debug mode, including in managed service logs. Use `--debug` or `OPENCLAW_DEBUG=1` to include stack traces.
     - Agent requests wait for the current startup model runtime publication, including when a config refresh replaces the initial publication while startup is still preparing authentication.
     - Deferred agent database preparation retries an overlapping config or secrets refresh before admitting sessions. Database opening and migration run once; repeated supersession or a genuine database failure retains the startup refusal.
     - Refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs; it bypasses the guard without writing or repairing config.

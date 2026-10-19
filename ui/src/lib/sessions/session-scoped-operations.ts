@@ -1,3 +1,4 @@
+import type { SessionsRecoverResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SessionsBranchesListResult,
@@ -8,7 +9,6 @@ import type {
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
 } from "../../api/types.ts";
-import { requestSessionRecovery } from "./recover.ts";
 import type {
   SessionCompactResult,
   SessionCapability,
@@ -31,32 +31,40 @@ function buildTranscriptMutationParams(sessionKey: string, agentId?: string | nu
   return { sessionKey: key, ...owner };
 }
 
+type SubscriptionRuntime = typeof import("./session-message-subscriptions.runtime.ts");
+let subscriptionRuntime: SubscriptionRuntime | undefined;
+let subscriptionRuntimeLoading: Promise<SubscriptionRuntime> | undefined;
+
+export function preloadSessionMessageSubscriptions(): Promise<SubscriptionRuntime> {
+  return (subscriptionRuntimeLoading ??= import("./session-message-subscriptions.runtime.ts").then(
+    (runtime) => (subscriptionRuntime = runtime),
+    (error: unknown) => {
+      subscriptionRuntimeLoading = undefined;
+      throw error;
+    },
+  ));
+}
+
 export function createSessionScopedOperations(host: SessionScopedOperationsHost) {
   const ownedSubscriptions = new Set<SessionMessageSubscription>();
-  type SubscriptionRuntime = typeof import("./session-message-subscriptions.runtime.ts");
-  let subscriptionRuntime: SubscriptionRuntime | undefined;
-  let subscriptionRuntimeLoading: Promise<SubscriptionRuntime> | undefined;
   let disposed = false;
-  const loadSubscriptionRuntime = () =>
-    (subscriptionRuntimeLoading ??= import("./session-message-subscriptions.runtime.ts").then(
-      (runtime) => (subscriptionRuntime = runtime),
-      (error: unknown) => {
-        subscriptionRuntimeLoading = undefined;
-        throw error;
-      },
-    ));
 
-  const recover = async (params: { key: string; agentId?: string }) => {
+  const recover: SessionCapability["recover"] = async (params) => {
     const scope = host.connection.capture();
     if (!scope) {
       return null;
     }
     try {
-      const result = await requestSessionRecovery(scope.client, params);
+      const result = await scope.client.request<SessionsRecoverResult>("sessions.recover", params);
+      if (!result?.key?.trim() || !result?.sessionId?.trim()) {
+        throw new Error("sessions.recover returned no session identity");
+      }
       if (!host.connection.isCurrent(scope)) {
         return null;
       }
-      host.notifyCreated(result.key);
+      if (!areUiSessionKeysEquivalent(result.key, params.key)) {
+        host.notifyCreated(result.key);
+      }
       await host.reconcileMutation(params.agentId);
       return host.connection.isCurrent(scope) ? result : null;
     } catch (error) {
@@ -119,7 +127,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     });
 
   const unsubscribeMessages = async (subscription: SessionMessageSubscription): Promise<void> => {
-    const runtime = subscriptionRuntime ?? (await loadSubscriptionRuntime());
+    const runtime = subscriptionRuntime ?? (await preloadSessionMessageSubscriptions());
     await runtime.releaseGatewaySessionMessageSubscription(subscription);
     ownedSubscriptions.delete(subscription);
   };
@@ -135,7 +143,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     const normalizedKey = key.trim();
     const agentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : null;
     const { mode, includeApprovals } = options;
-    const runtime = subscriptionRuntime ?? (await loadSubscriptionRuntime());
+    const runtime = subscriptionRuntime ?? (await preloadSessionMessageSubscriptions());
     if (disposed || !host.connection.isCurrent(scope)) {
       throw new Error("Session message subscription completed on a replaced Gateway connection");
     }

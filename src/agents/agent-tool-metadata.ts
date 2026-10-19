@@ -10,7 +10,11 @@ import {
 import { copyChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { copyCodeModeControlToolIdentity } from "./code-mode-control-tools.js";
 import { copyCronScheduledToolProjection } from "./exec-tool-target-pinning.js";
-import { copyInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
+import {
+  attachInternalToolExecutionPreparer,
+  copyInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "./runtime/internal-hooks.js";
 import { resolveCoreToolExecutionLocation } from "./tool-catalog.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
@@ -29,10 +33,10 @@ export type AgentToolExecutionLocation =
       timeout?: WorkerToolSurface["tools"][number]["timeout"];
     };
 
-type ToolActionState = {
+type ToolActionState = Readonly<{
   descriptor?: AgentToolActionDescriptor;
   executionLocation?: AgentToolExecutionLocation;
-};
+}>;
 
 // Rebuilt tools retain prepared classification without adding weak-table edges.
 class ToolActionMetadata extends PluginHostObject {
@@ -40,7 +44,7 @@ class ToolActionMetadata extends PluginHostObject {
 
   constructor(tool: AnyAgentTool, state: ToolActionState) {
     super(tool);
-    this.#state = { ...state };
+    this.#state = state;
   }
 
   static get(tool: AnyAgentTool): ToolActionState | undefined {
@@ -49,7 +53,7 @@ class ToolActionMetadata extends PluginHostObject {
 
   static set(tool: AnyAgentTool, state: ToolActionState): void {
     if (#state in tool) {
-      Object.assign(tool.#state, state);
+      tool.#state = { ...tool.#state, ...state };
     } else {
       void new ToolActionMetadata(tool, state);
     }
@@ -102,6 +106,7 @@ export function copyBeforeToolCallWrapperMetadata(
   // SAFETY: both metadata owners attach to the same runtime tool object shape.
   copyChannelAgentToolMeta(source as never, target as never);
   copyToolTerminalPresentation(source, target);
+  copyCodeModeControlToolIdentity(source, target);
   const state = ToolActionMetadata.get(source);
   if (state) {
     ToolActionMetadata.set(target, state);
@@ -133,8 +138,29 @@ export function copyAgentToolMetadata<T extends AnyAgentTool>(
   }
   copyBeforeToolCallWrapperMetadata(source, target);
   copyBeforeToolCallMetadata(source, target, wrapExecution);
-  copyCodeModeControlToolIdentity(source, target);
   copyCronScheduledToolProjection(source, target);
   copyInternalToolExecutionPreparer(source, target);
   return target;
+}
+
+export function wrapAgentToolExecutionContext<T extends AnyAgentTool>(
+  tool: T,
+  execute: T["execute"],
+  run: <R>(operation: () => Promise<R>) => Promise<R>,
+  rewrap: ToolExecutionWrapper,
+): T {
+  const wrapped = copyAgentToolMetadata(tool, { ...tool, execute }, rewrap);
+  const sourcePreparer = getInternalToolExecutionPreparer(tool);
+  if (sourcePreparer) {
+    attachInternalToolExecutionPreparer(wrapped, async (params) => {
+      const prepared = await run(() => sourcePreparer(params));
+      return prepared.kind === "ready"
+        ? {
+            ...prepared,
+            execute: (start) => run(() => prepared.execute(start)),
+          }
+        : prepared;
+    });
+  }
+  return wrapped;
 }

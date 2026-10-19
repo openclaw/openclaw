@@ -25,6 +25,11 @@
   min-width: 0;
 }
 
+.agent-chat__composer-notices > .agent-chat__cancellation-notice {
+  max-width: 100%;
+  white-space: normal;
+}
+
 .agent-chat__composer-notices:not(
   :has(
     > :not(openclaw-chat-child-attention, .chat-composer-lit-content),
@@ -105,7 +110,8 @@
   overscroll-behavior: auto;
 }
 
-:root[data-theme-mode="light"] .session-progress-card--composer {
+:root[data-theme-mode="light"]
+  .session-progress-card--composer:not(.session-progress-card--details) {
   border-color: var(--chat-composer-light-outline);
 }
 
@@ -446,6 +452,52 @@
   text-overflow: ellipsis;
 }
 
+.agent-chat__composer-combobox[data-prediction] {
+  display: grid;
+}
+
+.agent-chat__composer-combobox[data-prediction] > textarea,
+.agent-chat__composer-prediction {
+  grid-area: 1 / 1;
+}
+
+.agent-chat__composer-prediction {
+  max-height: calc(
+    var(--chat-composer-editor-line) * 3 + var(--chat-composer-editor-inset-block) * 2
+  );
+  overflow: hidden;
+  padding-block: var(--chat-composer-editor-inset-block);
+  color: var(--muted);
+  font-size: var(--chat-composer-editor-size);
+  line-height: var(--chat-composer-editor-line);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+.agent-chat__composer-prediction-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block: 4px;
+}
+
+.agent-chat__composer-prediction-actions button {
+  border: 0;
+  padding: 2px 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.agent-chat__composer-prediction-actions button:hover {
+  color: var(--text-strong);
+}
+
+.agent-chat__composer-prediction-actions kbd {
+  margin-inline-end: 4px;
+}
+
 .agent-chat__composer-input-row {
   display: flex;
   align-items: flex-end;
@@ -644,7 +696,7 @@
 }
 
 .agent-chat__input-btn:disabled,
-.agent-chat__attach-menu > button:disabled {
+.agent-chat__attach-menu .agent-chat__input-btn--attach:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -656,7 +708,7 @@
   flex: 0 0 auto;
 }
 
-.agent-chat__attach-menu[open] > button {
+.agent-chat__attach-menu[open] .agent-chat__input-btn--attach {
   color: var(--text);
   background: var(--bg-hover);
 }
@@ -963,7 +1015,6 @@
      it must not collapse the normal bottom breathing room. */
   .agent-chat__composer-shell {
     grid-template-columns: minmax(0, 1fr);
-    gap: 0;
   }
 }
 
@@ -996,17 +1047,6 @@
     max-height: 56px;
     overflow-y: auto;
   }
-}
-
-.agent-chat__input [data-chat-pointer-restored-focus]:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
-.agent-chat__input
-  wa-dropdown[data-chat-pointer-opened-picker]
-  wa-dropdown-item:is(:focus, :focus-visible) {
-  outline: none;
 }
 
 .chat-thread-inner {
@@ -1065,8 +1105,6 @@
    stretching the model control long before the row is under pressure. */
 @container chat-composer (max-width: 480px) {
   .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {
-    flex: 1 1 0;
-    min-width: 0;
     order: 3;
   }
   .agent-chat__composer-footer {
@@ -1105,11 +1143,20 @@
 /* Density follows the composer, including narrow split panes in wider windows.
    Plus and Send retain their targets while model and effort remain separate. */
 @container chat-composer (max-width: 560px) {
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-context {
+    margin-inline-start: auto;
+  }
+
+  .agent-chat__input--mobile-toolbar
+    .agent-chat__composer-context:not(:has(> .context-usage))
+    + .agent-chat__composer-controls {
+    margin-inline-start: auto;
+  }
+
   .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {
-    flex: 1 1 0;
+    flex: 0 1 auto;
     gap: var(--chat-composer-chip-gap);
     min-width: 0;
-    margin-inline-start: auto;
     overflow: visible;
   }
   .agent-chat__input--mobile-toolbar {
@@ -1173,7 +1220,6 @@
     transform: rotate(-45deg);
   }
 
-  .agent-chat__input--mobile-toolbar .context-ring,
   .agent-chat__input.agent-chat__input--mobile-toolbar .chat-controls__permission-trigger,
   .agent-chat__input--mobile-toolbar .chat-send-btn--voice {
     width: var(--chat-composer-control-size);
@@ -1182,7 +1228,15 @@
     border-radius: var(--radius-full);
   }
 
-  /* Mobile icon controls own a real 32px target; Plus uses its explicit 36px
+  /* The small dial keeps a 24px-wide target so both pickers and actions remain
+     separate even when a desktop side panel narrows the composer. */
+  .agent-chat__input.agent-chat__input--mobile-toolbar .context-ring {
+    width: 24px;
+    min-width: 24px;
+    height: var(--chat-mobile-row-target-size);
+  }
+
+  /* Mobile action controls own a real 32px target; Plus uses its explicit 36px
      role token. Adjacent controls never compete for one tap. */
   .agent-chat__input--mobile-toolbar
     :is(
@@ -1239,39 +1293,6 @@
     color: var(--muted);
     opacity: var(--chat-mobile-row-mic-opacity);
     stroke-width: var(--chat-mobile-row-mic-stroke);
-  }
-}
-
-/* Context and Working share a stable row without borrowing the picker targets. */
-@container chat-composer (max-width: 480px) {
-  .agent-chat__input--mobile-toolbar .agent-chat__composer-footer {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-rows: auto minmax(44px, auto);
-    column-gap: 8px;
-  }
-
-  .agent-chat__input--mobile-toolbar .agent-chat__composer-lead {
-    grid-column: 1;
-    grid-row: 2;
-  }
-
-  .agent-chat__input--mobile-toolbar .agent-chat__composer-context {
-    grid-column: 1 / -1;
-    grid-row: 1;
-    min-height: var(--chat-composer-control-size);
-    justify-content: flex-end;
-  }
-
-  .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {
-    grid-column: 2;
-    grid-row: 2;
-    margin-inline-start: 0;
-  }
-
-  .agent-chat__input--mobile-toolbar .agent-chat__composer-actions {
-    grid-column: 3;
-    grid-row: 2;
   }
 }
 

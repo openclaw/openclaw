@@ -25,11 +25,14 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
       extraParams: {
         ...ctx.extraParams,
         fastMode: () => {
+          const raw = ctx.extraParams?.fastMode ?? ctx.extraParams?.fast_mode;
+          const requested = normalizeFastMode(typeof raw === "function" ? raw() : raw);
+          if (requested === undefined) {
+            return undefined;
+          }
           if (!serviceTiers.includes("priority")) {
             return false;
           }
-          const raw = ctx.extraParams?.fastMode ?? ctx.extraParams?.fast_mode;
-          const requested = normalizeFastMode(typeof raw === "function" ? raw() : raw);
           return requested === "ultrafast" ? true : requested;
         },
       },

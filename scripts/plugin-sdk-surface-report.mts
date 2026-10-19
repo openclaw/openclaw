@@ -6,14 +6,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import {
   SignatureKind,
   SymbolFlags,
   type Checker,
   type Project,
   type Symbol,
-} from "typescript/unstable/async";
+} from "typescript/async";
 import { listPluginCompatRecords } from "../src/plugins/compat/registry.js";
 import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { formatNativeTypeScriptDiagnostics } from "./lib/native-typescript-diagnostics.mts";
@@ -138,7 +138,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 5,
   "plugin-entry": 3,
   // Shipped synchronous capture remains available while plugins migrate to async capture.
-  "proxy-capture": 9,
+  "proxy-capture": 10,
   routing: 1,
   // +4: shipped default/session-agent resolvers remain available through
   // compatibility barrels while callers migrate to explicit/sole selection.
@@ -147,13 +147,15 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +1: shipped channel setup state-migration declaration during its migration window.
   "channel-entry-contract": 1,
   "approval-gateway-runtime": 1,
-  "approval-handler-runtime": 1,
+  // Complete the approved synchronous approval-preparation deprecations.
+  "approval-handler-runtime": 3,
+  "approval-handler-adapter-runtime": 1,
   "approval-reply-runtime": 0,
   // Released synchronous approval routing remains until a later release after stable deprecation.
   "approval-client-runtime": 1,
-  "approval-delivery-runtime": 1,
-  "approval-native-runtime": 9,
-  "approval-runtime": 6,
+  "approval-delivery-runtime": 2,
+  "approval-native-runtime": 11,
+  "approval-runtime": 8,
   "config-contracts": 0,
   // +1: getRuntimeConfig keeps its shipped cold-load contract while callers prepare
   // with captureRuntimeConfigAsyncReader and consume readRuntimeConfig.
@@ -173,7 +175,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // with readOnly:true and allowKeychainPrompt:false; saveAuthProfileStore ->
   // provider-auth.updateAuthProfileStoreWithLock. resolveAuthStorePathForDisplay
   // stays compatible; its resolveAuthStorePathForDisplayAsync replacement is core-internal.
-  "agent-runtime": 14,
+  // +1: released snapshot publication remains during its approved async replacement.
+  "agent-runtime": 15,
   "memory-host-core": 2,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
@@ -204,7 +207,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +2: approved released upstream-link writes retained during worker migration.
   "session-catalog": 2,
   // +2: released synchronous transcript event/stat reads during the worker cutover.
-  "session-store-runtime": 9,
+  "session-store-runtime": 10,
   // Released synchronous sandbox lookup remains while plugins adopt async or prepared reads.
   sandbox: 1,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
@@ -214,7 +217,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "provider-auth": 22,
   "models-provider-runtime": 1,
   // Released synchronous command discovery remains while plugins adopt worker-backed preparation.
-  "command-auth-native": 3,
+  "command-auth-native": 4,
   "native-command-registry": 1,
   "skill-commands-runtime": 2,
   // +1: createSessionHeaderLink from shipped 2026.10.1 until plugin-sdk-session-header-link expires.
@@ -228,7 +231,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the shared state-owner boundary for plugin CLIs.
       // +1: owner-approved service-bound remote Control UI ingress.
       // +2: shared database-engine host and worker adapters.
-      155,
+      // +1: maintainer-requested context-engine-transcript-runtime watermark subpath (2026-10-08).
+      156,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -266,8 +270,27 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved PreparedAgentRunStart contract.
       // +2: readRuntimeConfig and captureRuntimeConfigAsyncReader on runtime-config-snapshot.
       // +10: shared database-engine contracts and operations after the SQLite export cutover.
+      // +1: approved async auth-snapshot publication with retained sync compatibility.
       // +1: approved lexical database-engine admission scope for workboard boot/migrations.
-      3757,
+      // +1: async auth-provider preparation for Codex and voice model-session patches.
+      // +1: isHostNoticePayload for agent-to-agent reply filtering.
+      // +1: approved jsonPathValue on the experimental database-engine worker entrypoint.
+      // +11: approved experimental engine-owned search capabilities on existing entrypoints.
+      // +14: versioned Decision data contracts, lossless codecs, validation, and typed errors.
+      // +4: Decision execution/context types; completes Peter Steinberger's
+      // approved +18 exports / +6 callables scope (2026-09-26, #157148 and #157225).
+      // +1: approved boot-selected family lookup on the database-engine runtime.
+      // +1: shared auth-patch application replaces manual plugin config merging.
+      // +6: packaged Settings placement, snapshot, components, context, view, and
+      // DoctorMemoryStatusPayload for the plugin-owned Memory overview.
+      // +2: MemorySearchResponse and AgentsWorkspaceGetResult type-only contracts
+      // for the plugin-owned indexed Memory search presentation.
+      // +5: maintainer-requested context-engine transcript watermark reader, its types, and fence error.
+      // +3: ControlUiChannelSettingsSnapshot, ControlUiChannelSettingsContext, and
+      // ControlUiChannelSettingsView for plugin-owned channel Settings presentations.
+      // +1: the shared message-tool source-reply finality resolver.
+      // +1: awaited web_search policy preparation for harnesses; the sync resolver stays.
+      3810,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -298,8 +321,19 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: the same transcript read replacement pairs.
       // +2: the same prepared runtime reader and asynchronous config preparation functions.
       // +5: shared database-engine host and worker operations.
+      // +1: approved async auth-snapshot publication with retained sync compatibility.
       // +1: the same lexical database-engine admission scope.
-      2192,
+      // +1: the same prepareAuthProfileProvider operation on model-session-runtime.
+      // +1: the same host-notice classifier on reply-payload.
+      // +1: the same approved database-engine JSON path helper.
+      // +1: the same engine-owned search admission helper.
+      // +6: four lossless Decision codecs and two bounded V2 validators.
+      // +1: the same boot-selected family lookup.
+      // +1: the same shared auth-patch application.
+      // +1: maintainer-requested context-engine transcript watermark reader.
+      // +1: the shared message-tool source-reply finality resolver, so harnesses apply a run's default.
+      // +1: the same awaited web_search policy preparation.
+      2208,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -317,7 +351,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: createSessionHeaderLink from shipped 2026.10.1 until plugin-sdk-session-header-link expires.
       // +2: retained synchronous transcript event/stat reads until a later release after stable deprecation.
       // +4: the runtime config getter and three auth/store compatibility pairs named above.
-      208,
+      // +10: approved missing deprecations for retained synchronous transcript lookup,
+      // proxy initialization, approval preparation, and command authorization.
+      // +1: released snapshot publication remains during its approved async replacement.
+      219,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

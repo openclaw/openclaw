@@ -12,7 +12,7 @@ Worked `models.providers` configurations. For what each field means, see [Custom
 ## Provider examples
 
 <AccordionGroup>
-  <Accordion title="Cerebras (GLM 4.7 / GPT OSS)">
+  <Accordion title="Cerebras (GPT OSS)">
     The official external `cerebras` provider plugin can configure this via `openclaw onboard --auth-choice cerebras-api-key`. Use explicit provider config only when overriding defaults.
 
     ```json5
@@ -21,12 +21,10 @@ Worked `models.providers` configurations. For what each field means, see [Custom
       agents: {
         defaults: {
           model: {
-            primary: "cerebras/zai-glm-4.7",
-            fallbacks: ["cerebras/gpt-oss-120b"],
+            primary: "cerebras/gpt-oss-120b",
           },
           models: {
-            "cerebras/zai-glm-4.7": { alias: "GLM 4.7 (Cerebras)" },
-            "cerebras/gpt-oss-120b": { alias: "GPT OSS 120B (Cerebras)" },
+            "cerebras/gpt-oss-120b": { alias: "Cerebras GPT OSS 120B" },
           },
         },
       },
@@ -38,7 +36,6 @@ Worked `models.providers` configurations. For what each field means, see [Custom
             apiKey: "${CEREBRAS_API_KEY}",
             api: "openai-completions",
             models: [
-              { id: "zai-glm-4.7", name: "GLM 4.7 (Cerebras)" },
               { id: "gpt-oss-120b", name: "GPT OSS 120B (Cerebras)" },
             ],
           },
@@ -47,7 +44,7 @@ Worked `models.providers` configurations. For what each field means, see [Custom
     }
     ```
 
-    Use `cerebras/zai-glm-4.7` for Cerebras; `zai/glm-4.7` for Z.AI direct.
+    Use `cerebras/gpt-oss-120b` for Cerebras. For Z.AI models, use the separate `zai` provider.
 
   </Accordion>
   <Accordion title="Kimi Coding">

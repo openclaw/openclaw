@@ -14,14 +14,16 @@ import { applySessionMessagePayload } from "../../ui/src/pages/chat/session-mess
 import { handleAgentEvent } from "../../ui/src/pages/chat/tool-stream.ts";
 import { createSubscribedSessionHarness } from "../agents/embedded-agent-subscribe.e2e-harness.js";
 import { emitAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
+import { resolveTerminalAssistantTranscriptRunId } from "../sessions/transcript-events.js";
 import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import {
   createAgentEventTestHarness,
   widgetResult,
 } from "./server-chat.agent-events.test-harness.js";
 import { subscribeAgentEvents } from "./server-chat.agent-events.test-helpers.js";
+import { projectSessionMessagePayload } from "./session-transcript-message.js";
 
-function renderedItems(state: TestState) {
+function renderedItems(state: TestState, showActivity = true) {
   return buildChatItems({
     paneId: "commentary-history",
     sessionKey: state.sessionKey,
@@ -31,12 +33,13 @@ function renderedItems(state: TestState) {
     streamSegments: state.chatStreamSegments,
     stream: state.chatStream,
     streamStartedAt: state.chatStreamStartedAt,
-    showToolCalls: true,
+    showToolCalls: showActivity,
+    persistCommentary: showActivity,
   });
 }
 
-function renderedText(state: TestState) {
-  return renderedItems(state)
+function renderedText(state: TestState, showActivity = true) {
+  return renderedItems(state, showActivity)
     .flatMap((item) =>
       item.kind === "group" && item.role !== "tool"
         ? item.messages.flatMap(({ message }) => extractText(message) || [])
@@ -291,7 +294,11 @@ it.each([
     };
     const saved = {
       role: "assistant",
-      content: [{ type: "text", text: "Saved A." }],
+      stopReason: "toolUse",
+      content: [
+        { type: "text", text: "Saved A." },
+        { type: "toolCall", id: "exec-a", name: "exec", arguments: { command: "pwd" } },
+      ],
       timestamp: Date.now() + (steerFirst ? 2 : 1),
       __openclaw: { id: "saved-a", seq: steerFirst ? 3 : 2, runId, idempotencyKey: "item-a" },
     };
@@ -330,10 +337,31 @@ it.each([
         message: { ...saved, idempotencyKey: "item-a" },
       });
       expect(gateway.chatRunState.resolveBuffer(runId).text).toBe("");
-      applySessionMessagePayload(state, { message: saved, runId }, true, {
+      // Tool-use persistence keeps producer ownership inside the message; the
+      // outer run ID is reserved for terminal assistant rows by the writer.
+      const publication = projectSessionMessagePayload({
+        sessionKey: "main",
+        message: saved,
+        messageId: saved["__openclaw"].id,
+        messageSeq: saved["__openclaw"].seq,
+        runId: resolveTerminalAssistantTranscriptRunId(saved, runId),
+        sessionSnapshot: { hasActiveRun: true, activeRunIds: [runId] },
+        projectCurrentUserProfile: (message) => message,
+      });
+      expect(publication.payload).not.toHaveProperty("runId");
+      expect(publication.payload).toMatchObject({ message: { __openclaw: { runId } } });
+      applySessionMessagePayload(state, publication.payload, true, {
         kind: "live",
         activeRunId: runId,
       });
+      expect(state.chatRunId).toBe(runId);
+      expect(renderedText(state, false)).toBe(
+        [
+          "Original prompt",
+          ...(includeSteer && steerFirst ? ["Steer prompt"] : []),
+          "Saved A.",
+        ].join("\n"),
+      );
       if (includeSteer && !steerFirst) {
         applySteer();
       }

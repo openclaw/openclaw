@@ -60,6 +60,110 @@ function fixtureCard(id: string, overrides: Partial<WorkboardCard> = {}): Workbo
 }
 
 describe("Workboard context and session-scoped reads", () => {
+  test("normalizes structural session casing without hydrating colliding opaque identities", async () => {
+    const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
+      createStores: createKernelStores,
+    });
+    const cases = [
+      {
+        kind: "direct",
+        stored: " Agent:Main:Matrix:Channel:!Room:example.org ",
+        key: "agent:main:matrix:channel:!Room:example.org",
+        other: "agent:main:matrix:channel:!room:example.org",
+      },
+      {
+        kind: "execution",
+        stored: "Agent:Main:Matrix:Channel:!Room:example.org:THREAD:$Event",
+        key: "agent:main:matrix:channel:!Room:example.org:thread:$Event",
+        other: "agent:main:matrix:channel:!Room:example.org:thread:$event",
+      },
+      {
+        kind: "attempt",
+        stored: "Agent:Main:Signal:Group: OpaqueGroup :THREAD:REPLY",
+        key: "agent:main:signal:group:OpaqueGroup:thread:reply",
+        other: "agent:main:signal:group:opaquegroup:thread:reply",
+      },
+      {
+        kind: "event",
+        stored: "Agent:Main:Agent:Worker:catalog:SourceID",
+        key: "agent:main:agent:worker:catalog:SourceID",
+        other: "agent:main:agent:worker:catalog:sourceid",
+      },
+      {
+        kind: "unicode-direct",
+        stored: "Agent:Main:ChÄt",
+        key: "agent:main:chät",
+        other: "agent:main:chât",
+      },
+      {
+        kind: "unicode-event",
+        stored: "Agent:Main:catalog:Ä",
+        key: "agent:main:catalog:Ä",
+        other: "agent:main:catalog:ä",
+      },
+      {
+        kind: "kelvin-event",
+        stored: "Agent:Main:Key",
+        key: "agent:main:key",
+        other: "agent:main:other",
+      },
+    ];
+    for (const scenario of cases) {
+      for (const [suffix, sessionKey] of [
+        ["selected", scenario.stored],
+        ["collision", scenario.other],
+      ] as const) {
+        const id = `${scenario.kind}-${suffix}`;
+        const link = scenario.kind.endsWith("direct")
+          ? { sessionKey }
+          : scenario.kind === "execution"
+            ? {
+                sessionKey: "another-session",
+                execution: {
+                  id,
+                  kind: "agent-session" as const,
+                  mode: "autonomous" as const,
+                  status: "done" as const,
+                  sessionKey,
+                  startedAt: 1,
+                  updatedAt: 2,
+                },
+              }
+            : scenario.kind === "attempt"
+              ? {
+                  metadata: {
+                    attempts: [{ id, status: "succeeded" as const, startedAt: 1, sessionKey }],
+                  },
+                }
+              : { events: [{ id, kind: "created" as const, at: 1, sessionKey }] };
+        await stores.cards.register(id, { version: 1, card: fixtureCard(id, link) });
+      }
+    }
+    using raw = new DatabaseSync(dbPath);
+    raw
+      .prepare("UPDATE workboard_cards SET automation_json = '{' WHERE id LIKE '%-collision'")
+      .run();
+    const hydratedIds: unknown[] = [];
+    const restore = observeReads((_sql, rows) => {
+      hydratedIds.push(...rows.filter((row) => "notes" in row).map((row) => row.id));
+    });
+    try {
+      for (const scenario of cases) {
+        expect(
+          (await store.listCards(undefined, scenario.key)).cards.map((card) => card.id),
+        ).toEqual([`${scenario.kind}-selected`]);
+      }
+      expect(new Set(hydratedIds)).toEqual(
+        new Set(cases.map((scenario) => `${scenario.kind}-selected`)),
+      );
+      expect((await store.listCards("other", cases[0]!.key)).cards).toEqual([]);
+      expect((await store.listCards(undefined, "missing-session")).cards).toEqual([]);
+      await expect(store.listCards(undefined)).rejects.toThrow(SyntaxError);
+    } finally {
+      restore();
+    }
+  });
+
   // Intercepts native SQLite statements and edits the underlying file mid-read.
   test("hydrates only the completed parents and recent assignee work included in context", async () => {
     const { store, stores, dbPath } = createWorkboardSqliteTestHarness({

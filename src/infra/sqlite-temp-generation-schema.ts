@@ -21,7 +21,7 @@ export function prepareSqliteTempTrackingSchema(
   database: DatabaseSync,
   schema: SqliteTempTrackingSchema,
 ): { sql: string; unexpected: boolean } {
-  const { sql, objects } = prepareTranscriptIndexSchema(schema);
+  const { createSql, objects } = prepareTranscriptIndexSchema(schema);
   const definitions = new Map(objects.map((object) => [object.name.toLowerCase(), object]));
   const names = objects.map((object) => object.name);
   const tableNames = objects
@@ -48,11 +48,16 @@ export function prepareSqliteTempTrackingSchema(
       normalizeSchemaSql(row.sql) !== normalizeSchemaSql(declared.sql)
     );
   });
-  return { sql, unexpected };
+  const existingTriggers = new Set(
+    existing.flatMap((row) =>
+      row.type === "trigger" && typeof row.name === "string" ? [row.name.toLowerCase()] : [],
+    ),
+  );
+  return { sql: createSql(existingTriggers), unexpected };
 }
 
 function prepareTranscriptIndexSchema(schema: SqliteTempTrackingSchema): {
-  sql: string;
+  createSql: (existingTriggers: ReadonlySet<string>) => string;
   objects: SqliteTempObject[];
 } {
   const status = quoteSqliteIdentifier(schema.statusTable);
@@ -97,21 +102,23 @@ function prepareTranscriptIndexSchema(schema: SqliteTempTrackingSchema): {
     }),
   );
   // Update before the conflict-free insert preserves an outer INSERT OR REPLACE policy.
-  const sql = `
+  const createSql = (existingTriggers: ReadonlySet<string>) => `
     CREATE TEMP TABLE IF NOT EXISTS ${statusTable};
-    INSERT OR IGNORE INTO temp.${status} VALUES (1, -1, -1, 0, NULL, 0);
-    UPDATE temp.${status} SET sibling_write_revision = -1;
+    INSERT INTO temp.${status} VALUES (1, -1, -1, 0, NULL, 0)
+      ON CONFLICT(id) DO UPDATE SET sibling_write_revision = -1;
     CREATE TEMP TABLE IF NOT EXISTS ${pendingTable};
     CREATE INDEX IF NOT EXISTS temp.${pendingIndex};
     ${triggers
-      .map(
-        ({ name, definition }) =>
-          `DROP TRIGGER IF EXISTS temp.${quoteSqliteIdentifier(name)};CREATE TEMP ${definition};`,
-      )
+      .map(({ name, definition }) => {
+        const drop = existingTriggers.has(name.toLowerCase())
+          ? `DROP TRIGGER IF EXISTS temp.${quoteSqliteIdentifier(name)};`
+          : "";
+        return `${drop}CREATE TEMP ${definition};`;
+      })
       .join("\n")}
   `;
   return {
-    sql,
+    createSql,
     objects: [
       {
         name: schema.statusTable,

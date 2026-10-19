@@ -180,7 +180,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.delete", { match: { key: targets[0]!.key } });
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
-        .locator("wa-dropdown.sidebar-agent-menu")
+        .locator(".sidebar-agent-menu")
         .getByRole("menuitem", { name: "Research", exact: true })
         .click();
       await rowFor(research[0]!.key).waitFor({ state: "visible" });
@@ -274,7 +274,40 @@ suite.define(() => {
       await filter("All");
       await rowFor(research[0]!.key).waitFor({ state: "visible" });
       await filter("Archived");
-      await rowFor(research[0]!.key).waitFor({ state: "visible" });
+      try {
+        await rowFor(research[0]!.key).waitFor({ state: "visible" });
+      } catch (error) {
+        try {
+          const [state, keys, rowCount, rowVisible, rendered, requests] = await Promise.all([
+            sidebarState(),
+            pageKeys(),
+            rowFor(research[0]!.key).count(),
+            rowFor(research[0]!.key).isVisible(),
+            page.evaluate(() => ({
+              storedStatusFilter: localStorage.getItem("openclaw:sidebar:sessions:status-filter"),
+              renderedRowCount: document.querySelectorAll(
+                "openclaw-app-sidebar .sidebar-recent-session",
+              ).length,
+            })),
+            gateway.getRequests("sessions.list", { agentId: "research" }),
+          ]);
+          console.error(
+            "[sidebar-bulk-delete-scope] archived recovery failed",
+            JSON.stringify({
+              state,
+              storedStatusFilter: rendered.storedStatusFilter,
+              renderedRowCount: rendered.renderedRowCount,
+              firstResearchRowListed: keys.includes(research[0]!.key),
+              firstResearchRowCount: rowCount,
+              rowVisible,
+              recentResearchLists: requests.slice(-6).map(({ params }) => params),
+            }),
+          );
+        } catch {
+          console.error("[sidebar-bulk-delete-scope] archived recovery snapshot unavailable");
+        }
+        throw error;
+      }
       if (!(await pageKeys()).includes(lastResearch.key)) {
         await loadMore.click();
       }

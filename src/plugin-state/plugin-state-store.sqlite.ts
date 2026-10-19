@@ -1,8 +1,10 @@
 // Plugin state SQLite helpers persist plugin state in the OpenClaw state database.
-import type { DatabaseSync } from "node:sqlite";
+
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { ExpressionBuilder } from "kysely";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -245,7 +247,7 @@ export function pluginStateLookup(params: {
       opened = true;
       recordPluginStateReadDependency({
         ...dependency,
-        identity: readTrackedStateDatabaseIdentity(store.db)?.key,
+        identity: readTrackedStateDatabaseIdentity(sqlPublicationAnchor(store.db))?.key,
       });
       return lookupPluginStateEntry(store, params);
     },
@@ -275,7 +277,7 @@ export function pluginStateLookupMany(params: {
       opened = true;
       recordPluginStateReadDependency({
         ...dependency,
-        identity: readTrackedStateDatabaseIdentity(store.db)?.key,
+        identity: readTrackedStateDatabaseIdentity(sqlPublicationAnchor(store.db))?.key,
       });
       return lookupPluginStateEntries(store, params);
     },
@@ -367,7 +369,7 @@ export function pluginStateDeleteEntriesIfUnchanged(params: {
   pluginId: string;
   namespace: string;
   entries: readonly PluginDoctorRawStateEntry[];
-  assertOwnedInTransaction: (database: DatabaseSync) => void;
+  assertOwnedInTransaction: (database: EngineConnection) => void;
   env?: NodeJS.ProcessEnv;
 }): { deleted: number; changed: number } {
   if (params.entries.length > MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES) {

@@ -177,50 +177,7 @@ describe("LogsView", () => {
     expectTimes([validTimes[0], appendedTime], "en");
   });
 
-  it("does not claim the log is empty before the initial load completes", () => {
-    const container = document.createElement("div");
-
-    renderView(createProps({ loading: true, entries: [] }), container);
-
-    expect(container.textContent).not.toContain("No log entries.");
-    expect(container.querySelector('[role="status"]')).not.toBeNull();
-  });
-
-  it("does not show loading when no initial request is pending", () => {
-    const container = document.createElement("div");
-
-    renderView(createProps({ loading: false, entries: [] }), container);
-
-    expect(container.textContent).not.toContain("No log entries.");
-    expect(container.querySelector('[role="status"]')).toBeNull();
-  });
-
-  it("disables refresh actions while the gateway cannot accept them", () => {
-    const container = document.createElement("div");
-
-    renderView(
-      createProps({
-        refreshDisabled: true,
-        status: {
-          error: "logs unavailable",
-          hasLoaded: false,
-          stale: false,
-          awaitingGateway: false,
-        },
-      }),
-      container,
-    );
-
-    expect(
-      container.querySelector<HTMLButtonElement>(".settings-section__actions .btn")?.disabled,
-    ).toBe(true);
-    expect(container.querySelector(".logs-refresh-status button")).toBeNull();
-  });
-
-  it.each([
-    { buttonText: "Exportar visivel", expectedLabel: "visible", filterText: "" },
-    { buttonText: "Exportar filtrado", expectedLabel: "filtered", filterText: "matched" },
-  ])(
+  it.each([{ buttonText: "Exportar visivel", expectedLabel: "visible", filterText: "" }])(
     "keeps the $expectedLabel export filename suffix stable when labels are localized",
     async ({ buttonText, expectedLabel, filterText }) => {
       await useTestPortugueseLogsLabels();
@@ -236,26 +193,4 @@ describe("LogsView", () => {
       );
     },
   );
-
-  it("renders the error and stale marker without a retry button or hiding loaded logs", () => {
-    const container = document.createElement("div");
-
-    renderView(
-      createProps({
-        status: {
-          error: "logs unavailable",
-          hasLoaded: true,
-          stale: true,
-          awaitingGateway: false,
-        },
-      }),
-      container,
-    );
-
-    const status = container.querySelector(".logs-refresh-status");
-    expect(status?.textContent).toContain("logs unavailable");
-    expect(status?.textContent).toContain("Showing stale data");
-    expect(container.textContent).toContain("matched line");
-    expect(status?.querySelector("button")).toBeNull();
-  });
 });

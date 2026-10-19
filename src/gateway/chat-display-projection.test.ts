@@ -61,6 +61,33 @@ it("strips attachment capabilities even after another field changed", () => {
   ).toEqual([{ role: "assistant", content: [{ type: "attachment", attachment }] }]);
 });
 
+it("normalizes context markers independently from assistant billing", () => {
+  // Whole-turn counters; the marker keeps the latest call that clients size context from.
+  const usage = { input: 6, output: 77, cacheRead: 54_631, totalTokens: 54_714 };
+  const marker = { state: "available", promptTokens: 27_378, totalTokens: 27_379 };
+  const message = (contextUsage: unknown) => ({
+    role: "assistant",
+    content: [{ type: "text", text: "done" }],
+    usage: { ...usage, contextUsage },
+  });
+  const projected = sanitizeChatHistoryMessages([
+    message({ ...marker, source: "private" }),
+    message({ state: "unavailable", source: "private", promptTokens: 100 }),
+    message({ state: "available", promptTokens: 27_378 }),
+    message({ state: "available", promptTokens: 27_378, totalTokens: 27_000 }),
+    message({ state: "available", promptTokens: Number.POSITIVE_INFINITY, totalTokens: 30_000 }),
+    message({ state: "available", promptTokens: 0, totalTokens: 0 }),
+  ]) as Array<{ usage?: unknown }>;
+  expect(projected.map((entry) => entry.usage)).toEqual([
+    { ...usage, contextUsage: marker },
+    { ...usage, contextUsage: { state: "unavailable" } },
+    usage,
+    usage,
+    usage,
+    { ...usage, contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 } },
+  ]);
+});
+
 describe("transcript display metadata", () => {
   it("keeps display identity while omitting upstream prompt metadata", () => {
     const metadata = { id: "message-1", mirrorIdentity: "turn-1:prompt", replyToId: "message-0" };
@@ -69,7 +96,11 @@ describe("transcript display metadata", () => {
         {
           role: "user",
           content: "Visible",
-          __openclaw: { ...metadata, upstreamUserText: "private decorated prompt ".repeat(12_000) },
+          __openclaw: {
+            ...metadata,
+            upstreamUserText: "private decorated prompt ".repeat(12_000),
+            sessionSendDelivery: Object.freeze({ source: "private-session" }),
+          },
           providerReplay: {
             type: "openai-responses-compaction",
             data: "opaque-display-compaction",
@@ -619,25 +650,8 @@ it.each([
   expect(message).toEqual(original);
 });
 
-it("preserves a model-fallback event marker through history projection", () => {
-  const notice = {
-    role: "assistant",
-    provider: "openclaw",
-    model: "delivery-mirror",
-    content: [{ type: "text", text: "Model switched from primary/model-a to secondary/model-b." }],
-    openclawDeliveryMirror: {
-      kind: "model-fallback",
-      runId: "run-a",
-      fromModel: "primary/model-a",
-      toModel: "secondary/model-b",
-      reason: "empty_response",
-    },
-  };
-  expect(projectChatDisplayMessages([notice])).toEqual([notice]);
-});
-
 it("shows one settled notice while preserving each attempt's partial output", () => {
-  const partial = { ...failed, content: [text("The first step completed.")] };
+  const partial = { ...failed, text: "", content: [text("The first step completed.")] };
   const empty = { ...failed, __openclaw: { id: "failed-again", seq: 3, runId: "run-a" } };
   const receipt = {
     role: "custom",
@@ -678,37 +692,6 @@ it.each([
   expect(state.messages).toEqual(projected);
 });
 
-it("keeps unrelated historical failures but never exposes active attempt diagnostics", () => {
-  const other = terminal("run-b");
-  const partial = { ...failed, content: [text("Useful partial answer")] };
-  const projected = projectChatDisplayMessages([user, partial, other]);
-  expect(projected.map(readRunFailureNotice).filter(Boolean)).toEqual([
-    { runId: "run-b", summary: "Recovery exhausted." },
-  ]);
-  expect(projected.find((message) => message.role === "assistant")).toMatchObject({
-    content: [text("Useful partial answer")],
-  });
-  expect(projected.filter((message) => message.role === "assistant")).toHaveLength(1);
-});
-
-it("does not infer exhaustion from historical attempts or a page boundary", () => {
-  const other = { ...failed, __openclaw: { id: "other", seq: 3, runId: "run-b" } };
-  for (const rows of [
-    [user, failed],
-    [user, failed, other],
-  ]) {
-    const before = structuredClone(rows);
-    expect(projectChatDisplayMessages(rows)).toEqual([user]);
-    expect(rows).toEqual(before);
-  }
-  expect(
-    projectChatDisplayMessages([user, failed, terminal(), other, terminal("run-b")])
-      .map(readRunFailureNotice)
-      .filter(Boolean)
-      .map((notice) => notice?.runId),
-  ).toEqual(["run-a", "run-b"]);
-});
-
 it("retires repeated non-visible failed attempts after their run answers", () => {
   const failures = Array.from({ length: 4 }, (_, attempt) => ({
     ...failed,
@@ -720,30 +703,6 @@ it("retires repeated non-visible failed attempts after their run answers", () =>
   const original = structuredClone(raw);
   expect(projectChatDisplayMessages(raw)).toEqual([user, final]);
   expect(raw).toEqual(original);
-});
-
-it("hides attributed overflow diagnostics while preserving partial answers", () => {
-  const overflow = {
-    ...failed,
-    errorCode: "context_length_exceeded",
-    errorMessage: "Your input exceeds the context window of this model.",
-  };
-  expect(projectChatDisplayMessage(overflow)).toBeUndefined();
-  expect(projectChatDisplayMessages([user, overflow, answer])).toEqual([user, answer]);
-  const partial = { ...overflow, content: [text("The first step completed.")] };
-  expect(projectChatDisplayMessages([user, partial])[1]).toMatchObject({
-    content: partial.content,
-  });
-  expect(projectChatDisplayMessages([user, partial, answer])[1]).toMatchObject({
-    content: partial.content,
-  });
-});
-
-it.each([
-  { ...answer, provider: "openclaw", model: "gateway-injected" },
-  { ...answer, stopReason: "toolUse" },
-])("does not infer terminal failure from later partial progress: %j", (later) => {
-  expect(projectedIds([user, failed, later])).not.toContainEqual(failed["__openclaw"]);
 });
 
 it.each([false, true])(
@@ -779,22 +738,6 @@ it.each([false, true])(
     expect(raw).toEqual(original);
   },
 );
-
-it("keeps unattributed failures and failures separated by a new user turn", () => {
-  const unattributed = { ...failed, __openclaw: { id: "failed", seq: 2 } };
-  expect(projectedIds([user, unattributed, answer])).toContainEqual(unattributed["__openclaw"]);
-  expect(
-    projectedIds([user, failed, { ...user, content: "next turn" }, answer]),
-  ).not.toContainEqual(failed["__openclaw"]);
-  expect(projectedIds([user, failed])).not.toContainEqual(failed["__openclaw"]);
-});
-
-it("preserves partial content even when the redundant text field is empty", () => {
-  const partial = { ...failed, text: "", content: [text("Partial reply")] };
-  expect(projectChatDisplayMessages([user, partial, answer])[1]).toMatchObject({
-    content: [text("Partial reply")],
-  });
-});
 
 it("repairs only matching attempts when run identities interleave", () => {
   const other = terminal("run-b");

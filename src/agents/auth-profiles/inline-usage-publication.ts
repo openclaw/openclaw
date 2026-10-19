@@ -121,7 +121,7 @@ export async function publishInlineAuthFailure(
     const store = markRuntimePersistedProfiles(
       loadPersistedAuthProfileStoreFromRows(rows, databasePath) ?? createEmptyAuthProfileStore(),
     );
-    recordRuntimeAuthProfilePersistedStore(databasePath, store, owner.env);
+    recordRuntimeAuthProfilePersistedStore(databasePath, store);
     observeCanonicalAuthProfileCredentials(databasePath, store.profiles);
     return {
       store,

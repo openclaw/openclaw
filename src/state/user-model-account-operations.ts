@@ -83,12 +83,37 @@ function mutate<Key extends Mutation>(
   options: AccountOptions,
 ) {
   const context = options.context ?? captureOpenClawStateWorkerContext(options);
-  const captured = structuredClone(input);
   assertCurrent();
   return runOpenClawStateWorkerOperation(
     context,
-    (scope) => scope.execute({ type, input: captured }),
-    mutationAdmission(context, captured.profileId, assertCurrent, captured.authorityProfileIds),
+    (scope) => scope.execute({ type, input }),
+    mutationAdmission(context, input.profileId, assertCurrent, input.authorityProfileIds),
+  );
+}
+
+/** Capture explicitly enrolls older credentials through the same admitted personal writer. */
+export function enrollPersonalAuthProfileAuthorizationAsync(
+  params: { profileId: string; assertCurrent: () => void },
+  options: AccountOptions = {},
+) {
+  const locator = parseUserModelAuthProfileId(params.profileId);
+  if (!locator) {
+    throw new Error("Personal authorization enrollment requires an exact account ID");
+  }
+  const context = options.context ?? captureOpenClawStateWorkerContext(options);
+  params.assertCurrent();
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({
+        type: "userProfiles.modelAccount.enrollAuthorization",
+        input: { profileId: locator.ownerProfileId, authProfileId: params.profileId },
+      }),
+    {
+      existingOnly: true,
+      assertCurrent: params.assertCurrent,
+      ...mutationAdmission(context, locator.ownerProfileId, params.assertCurrent, [], true),
+    },
   );
 }
 
@@ -159,10 +184,9 @@ async function read<
   Key extends "userProfiles.modelAccount.list" | "userProfiles.modelAccount.selected",
 >(type: Key, input: OpenClawStateWorkerOperations[Key]["input"], options: AccountOptions) {
   const context = options.context ?? captureOpenClawStateWorkerContext(options);
-  const captured = structuredClone(input);
   const result = await runOpenClawStateWorkerOperation(
     context,
-    (scope) => scope.execute({ type, input: captured }),
+    (scope) => scope.execute({ type, input }),
     { existingOnly: true },
   );
   context.admission.assertCurrent();

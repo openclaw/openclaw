@@ -4,7 +4,7 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
@@ -55,7 +55,7 @@ export function loadTranscriptSuffixEventsBoundedFromDatabase(
   limits: { maxBytes: number; maxEvents: number; retainedCustomDataIds?: readonly string[] },
 ): TranscriptEvent[] {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     database.db,
     () => {
       assertSessionTranscriptHot(database.db, resolved.sessionId);
@@ -84,7 +84,7 @@ export function loadTranscriptSuffixEventsBoundedFromDatabase(
           .select([
             "seq",
             /* kysely-allow-raw: reject oversized suffixes before acquiring their JSON payloads. */
-            sql<number>`${transcriptRetainedDataBytesSql(limits.retainedCustomDataIds ?? [])} + 1`.as(
+            sql<number>`${transcriptRetainedDataBytesSql(database.db, limits.retainedCustomDataIds ?? [])} + 1`.as(
               "serialized_bytes",
             ),
           ])
@@ -116,6 +116,7 @@ export function loadTranscriptSuffixEventsBoundedFromDatabase(
           .selectFrom("transcript_events")
           .select([
             projectTranscriptRetainedDataSql(
+              database.db,
               transcriptEventJsonSql(database.db),
               limits.retainedCustomDataIds ?? [],
             ).as("event_json"),

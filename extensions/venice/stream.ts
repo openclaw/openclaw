@@ -5,16 +5,16 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function isVeniceDeepSeekV4ModelId(modelId: unknown): boolean {
+function isVeniceDeepSeekV4ModelId(modelId: string): boolean {
   return modelId === "deepseek-v4-flash" || modelId === "deepseek-v4-pro";
 }
 
-function isVeniceGeminiModelId(modelId: unknown): boolean {
-  return typeof modelId === "string" && modelId.trim().toLowerCase().startsWith("gemini-");
+function isVeniceGeminiModelId(modelId: string): boolean {
+  return modelId.trim().toLowerCase().startsWith("gemini-");
 }
 
-function isVeniceGemini3ModelId(modelId: unknown): boolean {
-  return typeof modelId === "string" && /^gemini-3(?:[.-]|$)/.test(modelId.trim().toLowerCase());
+function isVeniceGemini3ModelId(modelId: string): boolean {
+  return /^gemini-3(?:[.-]|$)/.test(modelId.trim().toLowerCase());
 }
 
 function stringifyHistoricalValue(value: unknown): string {
@@ -59,7 +59,7 @@ function applyVeniceGeminiToolHistoryCompatibility(
   > = [];
   let hasHistoricalSignature = false;
   const requiresUnsignedCallFallback = isVeniceGemini3ModelId(model.id);
-  for (const message of context.messages ?? []) {
+  for (const message of context.messages) {
     if (
       message.role !== "assistant" ||
       message.stopReason === "error" ||
@@ -73,15 +73,10 @@ function applyVeniceGeminiToolHistoryCompatibility(
       message.model === model.id;
     const batch: Array<{ id: string; name: string; thoughtSignature?: string }> = [];
     for (const block of message.content) {
-      if (block.type !== "toolCall" || typeof block.id !== "string") {
+      if (block.type !== "toolCall") {
         continue;
       }
-      const thoughtSignature =
-        isExactRoute &&
-        typeof block.thoughtSignature === "string" &&
-        block.thoughtSignature.length > 0
-          ? block.thoughtSignature
-          : undefined;
+      const thoughtSignature = isExactRoute ? block.thoughtSignature || undefined : undefined;
       hasHistoricalSignature ||= thoughtSignature !== undefined;
       batch.push({
         id: block.id,

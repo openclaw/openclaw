@@ -68,7 +68,7 @@ describe("engine store opening", () => {
         inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: true }),
         openSqlite: () => anchor.exec(schema.sqlite),
       }),
-    ).toThrow(/database.engine to postgres/);
+    ).toThrow(/database\.families\.fixture\.engine to postgres/);
     expect(
       anchor.prepare("SELECT name FROM sqlite_schema WHERE name = 'fixture_rows'").all(),
     ).toEqual([]);

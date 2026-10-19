@@ -63,14 +63,11 @@ const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
 const MISTRAL_STREAM_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 /** Cap the SDK's response reader while preserving bodyless error responses. */
-export function createBoundedMistralFetcher(
-  maxBytes: number = MISTRAL_STREAM_BODY_MAX_BYTES,
-  upstreamFetch: Fetcher = fetch,
-): Fetcher {
+export function createBoundedMistralFetcher(upstreamFetch: Fetcher): Fetcher {
   return async (input, init) => {
     const response = init == null ? await upstreamFetch(input) : await upstreamFetch(input, init);
     return boundResponseBody(response, {
-      maxBytes,
+      maxBytes: MISTRAL_STREAM_BODY_MAX_BYTES,
       onOverflow: ({ size, maxBytes: cap }) =>
         new Error(`mistral: stream body exceeds ${cap} bytes (got ${size})`),
     });
@@ -102,7 +99,6 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       const apiKey = requireApiKey(model.provider, options?.apiKey);
 
       const boundedFetcher = createBoundedMistralFetcher(
-        MISTRAL_STREAM_BODY_MAX_BYTES,
         getAiTransportHost().buildModelFetch(model) ?? fetch,
       );
       let mistralResponse: Response | undefined;
@@ -606,41 +602,21 @@ async function consumeChatStream(
 }
 
 function toFunctionTools(tools: Tool[]): Array<FunctionTool & { type: "function" }> {
-  const converted = tools.flatMap((tool) => {
-    try {
-      const name = tool.name;
-      const description = tool.description;
-      const value = {
-        type: "function",
-        function: {
-          name,
-          description,
-          parameters: stripSymbolKeys(tool.parameters) as Record<string, unknown>,
-          strict: false,
-        },
-      } satisfies FunctionTool & { type: "function" };
-      return { name, description, value };
-    } catch {
-      return [];
-    }
+  const converted = tools.map((tool) => {
+    const name = tool.name;
+    const description = tool.description;
+    const value = {
+      type: "function",
+      function: {
+        name,
+        description,
+        parameters: structuredClone(tool.parameters),
+        strict: false,
+      },
+    } satisfies FunctionTool & { type: "function" };
+    return { name, description, value };
   });
   return sortPromptCacheToolsByName(converted).map(({ value }) => value);
-}
-
-function stripSymbolKeys(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => stripSymbolKeys(item));
-  }
-
-  if (value && typeof value === "object") {
-    const result: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) {
-      result[key] = stripSymbolKeys(entry);
-    }
-    return result;
-  }
-
-  return value;
 }
 
 function toChatMessages(
@@ -790,5 +766,3 @@ function mapToolChoice(
     function: { name: toolName },
   };
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

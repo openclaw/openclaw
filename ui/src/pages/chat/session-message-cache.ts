@@ -5,7 +5,9 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
@@ -22,19 +24,6 @@ export const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
 const cachedMessageWeights = new WeakMap<object, number>();
 const appendedEventClaims = new WeakMap<ChatMessageCache, WeakSet<object>>();
 
-export type ChatTranscriptMetadata = Pick<
-  GatewaySessionRow,
-  | "key"
-  | "kind"
-  | "classification"
-  | "participants"
-  | "expandedParticipants"
-  | "owner"
-  | "lastRunId"
-  | "status"
-  | "runtimeMs"
->;
-
 const transcriptMetadata = new WeakMap<GatewaySessionRow, ChatTranscriptMetadata>();
 
 export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTranscriptMetadata {
@@ -45,6 +34,9 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   const {
     key,
     kind,
+    label,
+    displayName,
+    derivedTitle,
     classification,
     participants,
     expandedParticipants,
@@ -56,6 +48,9 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   const metadata = {
     key,
     kind,
+    label,
+    displayName,
+    derivedTitle,
     classification,
     participants,
     expandedParticipants,
@@ -73,6 +68,7 @@ export type ChatSessionSnapshot = {
   transcriptMetadata?: ChatTranscriptMetadata;
   progressCard?: ProgressCard | null;
   deltaCursor?: string;
+  historyState?: ChatHistoryState;
   displayedLeafEntryId?: string | null;
   messages: unknown[];
   pagination: ChatHistoryPagination;
@@ -130,6 +126,15 @@ type CachedChatSessionSnapshot = {
 
 export type ChatMessageCache = Map<string, CachedChatSessionSnapshot>;
 
+/** Disk snapshots omit pairing secrets; discard only their connection-owned memory copies. */
+export function retireCachedPairingQr(cache: ChatMessageCache | undefined): void {
+  for (const [key, cached] of cache ?? []) {
+    if (cached.snapshot.messages.some((message) => readPairingQrContent(message).length > 0)) {
+      cache?.delete(key);
+    }
+  }
+}
+
 export type ChatCacheObserver = {
   delete: (sessionKey: string, reason?: SessionSnapshotInvalidationReason) => void | Promise<void>;
   write: (sessionKey: string, snapshot: ChatSessionSnapshot) => void;
@@ -156,6 +161,19 @@ export function readChatHistoryCursor(state: ChatHistoryCursorHost): string | un
   }
   delete state.chatHistoryCursor;
   return undefined;
+}
+
+export function readChatHistoryState(
+  state: ChatHistoryCursorHost & { chatMessagesBySession?: ChatMessageCache },
+  cursor: string | undefined,
+): ChatHistoryState | undefined {
+  if (cursor === undefined || !state.currentSessionId || !state.chatMessagesBySession) {
+    return undefined;
+  }
+  const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+    sessionKey: state.sessionKey,
+  });
+  return snapshot?.sessionId === state.currentSessionId ? snapshot.historyState : undefined;
 }
 
 export function setChatHistoryCursor(
@@ -307,6 +325,7 @@ export function cacheChatSessionSnapshot(
   if (
     existing?.snapshot.messages === snapshot.messages &&
     existing.snapshot.deltaCursor === snapshot.deltaCursor &&
+    existing.snapshot.historyState === snapshot.historyState &&
     existing.snapshot.sessionId === snapshot.sessionId &&
     existing.snapshot.displayedLeafEntryId === snapshot.displayedLeafEntryId &&
     existing.snapshot.transcriptMetadata === snapshot.transcriptMetadata &&

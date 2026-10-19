@@ -2,10 +2,10 @@ import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { probePathSuffixAliasesSync, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { resolveStateDir } from "../config/paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 
 type OpenClawAgentSqlitePathOptions = {
   agentId: string;

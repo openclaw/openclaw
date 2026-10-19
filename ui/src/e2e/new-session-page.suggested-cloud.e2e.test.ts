@@ -18,7 +18,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
-      const picker = page.locator("wa-popover.new-session-page__where-popover");
+      const picker = page.locator(".oc-popover.new-session-page__where-popover");
       await picker.getByRole("searchbox").waitFor();
       expect(await picker.getByRole("button", { name: "Cloud", exact: true }).count()).toBe(0);
       await captureUiProof({ artifactDir }, page, "suggested-cloud-before.png", {
@@ -46,7 +46,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
-      const picker = page.locator("wa-popover.new-session-page__where-popover");
+      const picker = page.locator(".oc-popover.new-session-page__where-popover");
       const cloud = picker.getByRole("button", { name: "Cloud", exact: true });
       await cloud.waitFor();
       expect(await cloud.locator('[data-provider-icon="aws"]').count()).toBe(1);

@@ -9,7 +9,7 @@ import {
 } from "../../agents/bash-process-registry.js";
 import { renderExecExitLabel } from "../../agents/bash-tools.exec-output.js";
 import { createExecTool } from "../../agents/bash-tools.js";
-import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { isCommandFlagEnabled } from "../../config/commands.flags.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -293,8 +293,7 @@ export async function handleBashChatCommand(params: {
         state: "running",
         sessionId,
       };
-      const snippet = formatSessionSnippet(sessionId);
-      logVerbose(`Started bash session ${snippet}: ${commandText}`);
+      logVerbose(`Started bash session ${formatSessionSnippet(sessionId)}`);
       return {
         text: `⚙️ bash started (session ${sessionId}). Still running; use !poll / !stop (or /bash poll / /bash stop).`,
       };

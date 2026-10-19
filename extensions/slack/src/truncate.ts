@@ -1,3 +1,4 @@
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export function truncateSlackText(
@@ -9,13 +10,10 @@ export function truncateSlackText(
   if (text.length <= max) {
     return text;
   }
-  // Slice on a code-point boundary so a surrogate pair (emoji / astral char)
-  // straddling the limit is dropped whole, instead of leaving a lone surrogate
-  // half that serializes to an invalid `\uD83D` in the Slack payload.
   if (max <= 1) {
     return sliceUtf16Safe(text, 0, max);
   }
-  return `${sliceUtf16Safe(text, 0, max - 1)}…`;
+  return truncateWithMarker(text, max, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 export function countSlackTextUtf8Bytes(value: string): number {

@@ -1,5 +1,4 @@
 import type { DatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
-import type { PreparedCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
 
 export type TrajectoryRuntimeRetentionInput = { sessionId: string; maxGlobalRuntimeBytes?: number };
 
@@ -37,5 +36,4 @@ export type TrajectoryRetentionWorkerInput = {
   expectedIdentity: DatabaseFileIdentity;
   input: TrajectoryRuntimeRetentionInput;
   now: number;
-  schemaContract?: PreparedCanonicalSessionValidationSchema;
 };

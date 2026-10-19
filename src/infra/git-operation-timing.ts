@@ -83,19 +83,14 @@ export function startGitOperationTiming(
         if (kind !== "worktree-removal") {
           return;
         }
-        try {
-          const now = performance.now();
-          if (removalStage !== undefined) {
-            removalDurations ??= {};
-            removalDurations[removalStage] =
-              (removalDurations[removalStage] ?? 0) + now - removalStageStartedAt;
-          }
-          removalStage = next;
-          removalStageStartedAt = now;
-        } catch {
-          removalStage = undefined;
-          removalDurations = undefined;
+        const now = performance.now();
+        if (removalStage !== undefined) {
+          removalDurations ??= {};
+          removalDurations[removalStage] =
+            (removalDurations[removalStage] ?? 0) + now - removalStageStartedAt;
         }
+        removalStage = next;
+        removalStageStartedAt = now;
       },
       finish(outcome: "returned" | "threw") {
         try {

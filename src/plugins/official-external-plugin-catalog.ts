@@ -541,6 +541,8 @@ export function isExternallyDistributedPlugin(plugin: {
   const entry = getOfficialExternalPluginCatalogEntryForPackage(plugin.packageName);
   return (
     plugin.packageBuild?.bundledDist === false ||
-    (entry !== undefined && resolveOfficialExternalPluginId(entry) === plugin.pluginId)
+    (entry !== undefined &&
+      resolveOfficialExternalPluginId(entry) === plugin.pluginId &&
+      getOfficialExternalPluginCatalogManifest(entry)?.build?.bundledDist !== true)
   );
 }

@@ -4,11 +4,18 @@ import { queryObjects } from "node:v8";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import {
   createAnthropicMessagesTransportStreamFn,
+  createOpenAICompletionsTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamSimpleOpenAICodexResponses } from "../../../packages/ai/src/providers/openai-chatgpt-responses.js";
+import {
+  modelRequestBodyState,
+  prepareModelRequestBody,
+  serializeModelRequestBody,
+} from "../../../packages/ai/src/transports/model-request-body.js";
 import * as guardedFetch from "../../infra/net/fetch-guard.js";
 import * as undiciRuntime from "../../infra/net/undici-runtime.js";
 import "../ai-transport-runtime-host.js";
@@ -83,6 +90,7 @@ async function fork(requestModel = model) {
   return runEmbeddedSessionFork({
     ...identity,
     model: requestModel,
+    apiKey: "synthetic-key",
     question: "Review only",
     assertCurrent: () => {},
   });
@@ -116,6 +124,140 @@ function responsesBody(): string {
 }
 
 describe("prepared session fork provider boundary", () => {
+  it.each(["unencoded", "encoded", "continuation"] as const)(
+    "releases the %s prepared payload while the parent options remain live",
+    async (boundary) => {
+      const references: WeakRef<object>[] = [];
+      const liveOptions: NonNullable<Parameters<StreamFn>[2]>[] = [];
+      const replayPayloads: Record<string, unknown>[] = [];
+      const replay = transport(replayPayloads, []);
+      const parent = wrapStreamFnWithSessionFork(async (requestModel, requestContext, options) => {
+        if (liveOptions.length > 0) {
+          return replay(requestModel, requestContext, options);
+        }
+        liveOptions.push(options!);
+        modelRequestBodyState(options!).encode = async (payload) => {
+          const encoded = serializeModelRequestBody(payload);
+          references.push(new WeakRef(encoded.body.buffer));
+          return encoded;
+        };
+        const encode = boundary === "unencoded" ? undefined : prepareModelRequestBody(options);
+        const payload = {
+          model: model.id,
+          input: [{ role: "user", content: "Prepared parent prefix" }],
+          stream: true,
+        };
+        references.push(new WeakRef(payload));
+        await options?.onPayload?.(payload, requestModel);
+        await encode?.(
+          boundary === "continuation"
+            ? { ...payload, input: [], previous_response_id: "resp_parent" }
+            : payload,
+        );
+        return createAssistantMessageEventStream();
+      }, identity);
+
+      await parent(model, context, {});
+      const control = new WeakRef({ unowned: true });
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(control.deref()).toBeUndefined();
+      expect(references.filter((reference) => reference.deref())).toHaveLength(0);
+      expect(liveOptions[0]?.onPayload).toBeTypeOf("function");
+      await expect(fork()).resolves.toBe("Answer");
+      expect(JSON.stringify(replayPayloads[0]?.input)).toContain("Prepared parent prefix");
+    },
+  );
+
+  it("keeps a captured prefix across suffix retries and replaces it after full-history recovery", async () => {
+    const liveOptions: NonNullable<Parameters<StreamFn>[2]>[] = [];
+    const replayPayloads: Record<string, unknown>[] = [];
+    const replay = transport(replayPayloads, []);
+    const parent = wrapStreamFnWithSessionFork(async (requestModel, requestContext, options) => {
+      if (liveOptions.length > 0) {
+        return replay(requestModel, requestContext, options);
+      }
+      liveOptions.push(options!);
+      return createAssistantMessageEventStream();
+    }, identity);
+    await parent(model, context, {});
+    const options = liveOptions[0]!;
+    const encode = prepareModelRequestBody(options);
+    await options.onPayload?.(
+      { input: [{ role: "user", content: "Original full prefix" }], stream: true },
+      model,
+    );
+    const suffix = { input: [], previous_response_id: "resp_parent", stream: true };
+    await encode(suffix);
+    await encode({ ...suffix, service_tier: "default" });
+    await expect(fork()).resolves.toBe("Answer");
+    expect(JSON.stringify(replayPayloads.at(-1)?.input)).toContain("Original full prefix");
+
+    const rebuilt = {
+      input: [{ role: "user", content: "Recovered full history" }],
+      stream: true,
+    };
+    await options.onPayload?.(rebuilt, model);
+    await encode(rebuilt);
+    await expect(fork()).resolves.toBe("Answer");
+    const recovered = JSON.stringify(replayPayloads.at(-1)?.input);
+    expect(recovered).toContain("Recovered full history");
+    expect(recovered).not.toContain("Original full prefix");
+  });
+
+  it("keeps review and verification available while the next parent request is being prepared", async () => {
+    const payloads: Record<string, unknown>[] = [];
+    const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
+    await (await parent(model, context, {})).result();
+    const review = fork();
+    const preparing = createDeferredCore();
+    const releasePreparation = createDeferredCore();
+    const nextParent = parent(
+      model,
+      { ...context, messages: [{ role: "user", content: "Next parent request", timestamp: 3 }] },
+      {
+        onPayload: async (payload) => {
+          preparing.resolve();
+          await releasePreparation.promise;
+          return payload;
+        },
+      },
+    );
+    try {
+      await preparing.promise;
+      await expect(review).resolves.toBe("Answer");
+      await expect(fork()).resolves.toBe("Answer");
+      expect(JSON.stringify(payloads.at(-1)?.input)).toContain("Parent question");
+      expect(JSON.stringify(payloads.at(-1)?.input)).not.toContain("Next parent request");
+    } finally {
+      releasePreparation.resolve();
+      await (await nextParent).result();
+    }
+    await expect(fork()).resolves.toBe("Answer");
+    expect(JSON.stringify(payloads.at(-1)?.input)).toContain("Next parent request");
+  });
+
+  it("does not restore a reset parent when pending request preparation finishes", async () => {
+    const payloads: Record<string, unknown>[] = [];
+    const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
+    await (await parent(model, context, {})).result();
+    const preparing = createDeferredCore();
+    const releasePreparation = createDeferredCore();
+    const nextParent = parent(model, context, {
+      onPayload: async (payload) => {
+        preparing.resolve();
+        await releasePreparation.promise;
+        return payload;
+      },
+    });
+    await preparing.promise;
+    cleanupSessionResources(identity.sessionId);
+    releasePreparation.resolve();
+    await (await nextParent).result();
+    await expect(fork()).rejects.toThrow("requires a parent turn");
+    expect(payloads).toHaveLength(2);
+  });
+
   it("keeps fork snapshots without retaining completed parent contexts or payload hooks", async () => {
     const callers = new AsyncLocalStorage<object>();
     const references: WeakRef<object>[] = [];
@@ -152,7 +294,7 @@ describe("prepared session fork provider boundary", () => {
 
   function guardedTransport(
     beforeDns?: () => void,
-    api: "openai-responses" | "anthropic-messages" = "openai-responses",
+    api: "openai-responses" | "anthropic-messages" | "openai-completions" = "openai-responses",
   ) {
     const physicalFetch = vi.fn<typeof fetch>(async () => {
       if (api === "anthropic-messages") {
@@ -185,6 +327,20 @@ describe("prepared session fork provider boundary", () => {
           { headers: { "content-type": "text/event-stream" } },
         );
       }
+      if (api === "openai-completions") {
+        return new Response(
+          `data: ${JSON.stringify({
+            id: "completion-fork",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: model.id,
+            choices: [
+              { index: 0, delta: { role: "assistant", content: "Answer" }, finish_reason: "stop" },
+            ],
+          })}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }
       return new Response(responsesBody(), {
         headers: { "content-type": "text/event-stream" },
       });
@@ -205,11 +361,302 @@ describe("prepared session fork provider boundary", () => {
       parent: wrapStreamFnWithSessionFork(
         api === "anthropic-messages"
           ? createAnthropicMessagesTransportStreamFn()
-          : createOpenAIResponsesTransportStreamFn(),
+          : api === "openai-completions"
+            ? createOpenAICompletionsTransportStreamFn()
+            : createOpenAIResponsesTransportStreamFn(),
         identity,
       ),
     };
   }
+
+  it.each(["bigint", "cycle"])(
+    "replays wire history without traversing transport-irrelevant %s tool metadata",
+    async (kind) => {
+      const { parent, physicalFetch } = guardedTransport();
+      const completed = await (
+        await parent(model, context, { apiKey: "synthetic-key", transport: "sse" })
+      ).result();
+      const cyclic: { self?: unknown } = {};
+      cyclic.self = cyclic;
+      const parentContext: Context = {
+        ...context,
+        messages: [
+          ...context.messages,
+          {
+            ...completed,
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "completed", name: "lookup", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "completed",
+            toolName: "lookup",
+            content: [{ type: "text", text: "Tool answer" }],
+            isError: false,
+            timestamp: 2,
+            details: kind === "bigint" ? { value: 1n } : cyclic,
+          },
+        ],
+      };
+      const onPayload = vi.fn();
+      const forkSent = createDeferredCore();
+      const releaseFork = createDeferredCore();
+      physicalFetch.mockImplementationOnce(async () => {
+        forkSent.resolve();
+        await releaseFork.promise;
+        return new Response(responsesBody(), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      });
+      const runningFork = expect(fork()).resolves.toBe("Answer");
+      try {
+        await forkSent.promise;
+        const assistant = await (
+          await parent(model, parentContext, {
+            apiKey: "synthetic-key",
+            transport: "sse",
+            onPayload,
+          })
+        ).result();
+        expect(assistant.stopReason).toBe("stop");
+        expect(onPayload).toHaveBeenCalledOnce();
+        expect(physicalFetch).toHaveBeenCalledTimes(3);
+        await expect(fork()).resolves.toBe("Answer");
+      } finally {
+        releaseFork.resolve();
+        await runningFork;
+      }
+    },
+  );
+
+  it.each(["openai-responses", "anthropic-messages"] as const)(
+    "replays frozen %s history and keeps later publications isolated",
+    async (api) => {
+      const { parent, physicalFetch } = guardedTransport(undefined, api);
+      const requestModel = {
+        ...model,
+        api,
+        provider: api === "anthropic-messages" ? "anthropic" : "openai",
+        baseUrl: api === "anthropic-messages" ? "https://api.anthropic.com" : model.baseUrl,
+      };
+      const parentContext: Context = {
+        systemPrompt: "Frozen instructions 🦞",
+        messages: [
+          { role: "user", content: [{ type: "text", text: "Frozen question" }], timestamp: 1 },
+        ],
+      };
+      const message = parentContext.messages[0]!;
+      if (Array.isArray(message.content)) {
+        message.content.forEach((block) => Object.freeze(block));
+      }
+      Object.freeze(message.content);
+      Object.freeze(message);
+      Object.freeze(parentContext.messages);
+      Object.freeze(parentContext);
+      const assistant = await (
+        await parent(requestModel, parentContext, { apiKey: "synthetic-key", transport: "sse" })
+      ).result();
+      const publication = {
+        ...assistant,
+        content: [{ type: "text" as const, text: "Published answer" }],
+      };
+      recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, publication);
+      publication.content[0]!.text = "Changed after publication";
+
+      for (let index = 0; index < 2; index++) {
+        await expect(fork(requestModel)).resolves.toBe("Answer");
+        const [url, init] = physicalFetch.mock.calls[index + 1]!;
+        const body = await new Request(url, init).text();
+        expect(body).toContain("Frozen question");
+        expect(body).toContain("Published answer");
+        expect(body).not.toContain("Changed after publication");
+      }
+      expect(parentContext.messages).toHaveLength(1);
+      expect(parentContext.messages[0]!.content).toEqual([
+        { type: "text", text: "Frozen question" },
+      ]);
+    },
+  );
+
+  it("preserves opaque publication details across isolated forks", async () => {
+    const values: { byte: number; blob: string | undefined }[] = [];
+    const replay = transport([], []);
+    const parent = wrapStreamFnWithSessionFork(async (requestModel, requestContext, options) => {
+      const details = requestContext.messages.find(
+        (message) => message.role === "toolResult",
+      )?.details;
+      if (isRecord(details) && details.bytes instanceof Uint8Array) {
+        values.push({
+          byte: details.bytes[0]!,
+          blob: details.blob instanceof Blob ? await details.blob.text() : undefined,
+        });
+        new Uint8Array(details.bytes.buffer).fill(99);
+      }
+      return replay(requestModel, requestContext, options);
+    }, identity);
+    await (await parent(model, context, {})).result();
+    const bytes = new Uint8Array([7]);
+    recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+      role: "toolResult",
+      toolCallId: "lookup",
+      toolName: "lookup",
+      content: [{ type: "text", text: "Result" }],
+      details: { bytes, blob: new Blob(["Opaque result"]) },
+      isError: false,
+      timestamp: 3,
+    });
+    bytes[0] = 42;
+    await expect(fork()).resolves.toBe("Answer");
+    await expect(fork()).resolves.toBe("Answer");
+    expect(values).toEqual([
+      { byte: 7, blob: "Opaque result" },
+      { byte: 7, blob: "Opaque result" },
+    ]);
+  });
+
+  it.each([
+    ["openai-responses", false],
+    ["openai-responses", true],
+    ["anthropic-messages", false],
+    ["anthropic-messages", true],
+  ] as const)("represents an in-flight %s tool call as pending (async=%s)", async (api, async) => {
+    const { parent, physicalFetch } = guardedTransport(undefined, api);
+    const requestModel = {
+      ...model,
+      api,
+      provider: api === "anthropic-messages" ? "anthropic" : "openai",
+      baseUrl: api === "anthropic-messages" ? "https://api.anthropic.com" : model.baseUrl,
+    };
+    const assistant = await (
+      await parent(requestModel, context, { apiKey: "synthetic-key", transport: "sse" })
+    ).result();
+    recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+      ...assistant,
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "toolCall",
+          id: "pending_call",
+          name: "exec",
+          arguments: { command: "echo 3; sleep 10" },
+          ...(async ? { async: true } : {}),
+        },
+      ],
+    });
+    const runFork = () =>
+      runEmbeddedSessionFork({
+        ...identity,
+        model: requestModel,
+        apiKey: "synthetic-key",
+        question: "Review only",
+        assertCurrent: () => {},
+      });
+    await expect(runFork()).resolves.toBe("Answer");
+    const pendingCall = physicalFetch.mock.calls[1]!;
+    const pendingBody = await new Request(pendingCall[0], pendingCall[1]).text();
+    expect(pendingBody).toContain("pending_call");
+    expect(pendingBody).toContain("still running");
+    expect(pendingBody).toContain("result is not available yet");
+    expect(pendingBody).not.toContain("aborted");
+    expect(pendingBody).not.toContain('"is_error":true');
+
+    recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+      role: "toolResult",
+      toolCallId: "pending_call",
+      toolName: "exec",
+      content: [{ type: "text", text: "3" }],
+      isError: false,
+      timestamp: 3,
+    });
+    await expect(runFork()).resolves.toBe("Answer");
+    const completedCall = physicalFetch.mock.calls[2]!;
+    const completedBody = await new Request(completedCall[0], completedCall[1]).text();
+    expect(completedBody).not.toContain("still running");
+    expect(completedBody).not.toContain("aborted");
+    expect(completedBody).toContain(
+      api === "anthropic-messages" ? '"content":"3"' : '"output":"3"',
+    );
+  });
+
+  it.each([
+    ["openai-responses", "github-copilot", "earlier:call", "earlier_call"],
+    ["openai-responses", "custom", "earlier:call", "earlier:call"],
+    ["anthropic-messages", "anthropic", "earlier:call", "earlier_call"],
+    ["openai-completions", "openai", "earlier:call|fc_item", "earlier_call"],
+  ] as const)(
+    "keeps late %s/%s tool results paired with the captured prefix",
+    async (api, provider, sourceId, wireId) => {
+      const { parent, physicalFetch } = guardedTransport(undefined, api);
+      const requestModel = {
+        ...model,
+        api,
+        provider,
+      };
+      const replayContext: Context = {
+        ...context,
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
+      };
+      const completed = await (
+        await parent(requestModel, replayContext, { apiKey: "synthetic-key" })
+      ).result();
+      await (
+        await parent(
+          requestModel,
+          {
+            ...replayContext,
+            messages: [
+              ...replayContext.messages,
+              {
+                ...completed,
+                ...(api !== "openai-responses"
+                  ? { provider: "prior-provider", model: "prior-model" }
+                  : {}),
+                content: [
+                  { type: "text", text: "Starting lookup" },
+                  {
+                    type: "toolCall",
+                    id: sourceId,
+                    name: "lookup",
+                    arguments: {},
+                    async: true,
+                  },
+                ],
+              },
+            ],
+          },
+          { apiKey: "synthetic-key" },
+        )
+      ).result();
+      recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+        role: "toolResult",
+        toolCallId: sourceId,
+        toolName: "lookup",
+        content: [{ type: "text", text: "LATE_RESULT_1119" }],
+        isError: false,
+        timestamp: 3,
+      });
+      await expect(fork(requestModel)).resolves.toBe("Answer");
+      const call = physicalFetch.mock.calls.at(-1)!;
+      const body = await new Request(call[0], call[1]).text();
+      expect(body).toContain("LATE_RESULT_1119");
+      const replay = JSON.parse(body);
+      const results =
+        api === "openai-responses"
+          ? replay.input
+          : api === "anthropic-messages"
+            ? replay.messages.flatMap((message: { content: unknown }) => message.content)
+            : replay.messages;
+      expect(results).toContainEqual(
+        expect.objectContaining(
+          api === "openai-responses"
+            ? { type: "function_call_output", call_id: wireId, output: "LATE_RESULT_1119" }
+            : api === "anthropic-messages"
+              ? { type: "tool_result", tool_use_id: wireId, content: "LATE_RESULT_1119" }
+              : { role: "tool", tool_call_id: wireId, content: "LATE_RESULT_1119" },
+        ),
+      );
+    },
+  );
 
   it("blocks the physical send when access is withdrawn during guarded DNS preparation", async () => {
     let revoked = false;
@@ -410,6 +857,48 @@ describe("prepared session fork provider boundary", () => {
     expect(replay.messages).toHaveLength(original.messages.length + 1);
   });
 
+  it("retains the full parent prefix when HTTP continuation sends only a suffix", async () => {
+    const { parent, physicalFetch } = guardedTransport();
+    const requestModel: Model = { ...model, compat: { supportsResponsesContinuation: true } };
+    const options = {
+      apiKey: "synthetic-key",
+      sessionId: identity.sessionId,
+      transport: "sse" as const,
+      onPayload: (payload: unknown) => {
+        if (!isRecord(payload)) {
+          throw new Error("Expected request");
+        }
+        return { ...payload, store: true };
+      },
+    };
+    const completed = await (await parent(requestModel, context, options)).result();
+    await (
+      await parent(
+        requestModel,
+        {
+          ...context,
+          messages: [
+            ...context.messages,
+            completed,
+            { role: "user", content: "Continue parent", timestamp: 3 },
+          ],
+        },
+        options,
+      )
+    ).result();
+    const second = physicalFetch.mock.calls[1]!;
+    const continuation = await new Request(second[0], second[1]).json();
+    expect(continuation.previous_response_id).toBe("resp_fork");
+    expect(JSON.stringify(continuation.input)).not.toContain("Parent question");
+    await expect(fork(requestModel)).resolves.toBe("Answer");
+    const last = physicalFetch.mock.calls.at(-1)!;
+    const replay = await new Request(last[0], last[1]).json();
+    expect(replay.previous_response_id).toBeUndefined();
+    expect(JSON.stringify(replay.input)).toContain("Parent question");
+    expect(JSON.stringify(replay.input)).toContain("Continue parent");
+    expect(JSON.stringify(replay.input)).toContain("Review only");
+  });
+
   it("rejects Bedrock forks before dispatch with an actionable unsupported API error", async () => {
     await expect(
       runEmbeddedSessionFork({
@@ -449,21 +938,71 @@ describe("prepared session fork provider boundary", () => {
     await expect(fork()).rejects.toThrow("requires a parent turn");
   });
 
-  it("does not re-enter the parent's one-shot prepared payload hook", async () => {
-    const payloads: Record<string, unknown>[] = [];
+  it("isolates replayed wire data without re-entering the parent's one-shot payload hook", async () => {
+    const { parent, physicalFetch } = guardedTransport();
+    const unicode = "🦞 café e\u0301 \u0000 \ud800";
+    let encodings = 0;
+    const metadata = {
+      acknowledged: "review",
+      unicode,
+      toJSON() {
+        return { acknowledged: this.acknowledged, unicode, encoding: ++encodings };
+      },
+    };
+    const codeModeOptions = {
+      openclawCodeModeToolSurface: true,
+      openclawCodeModeAllowedHostedToolTypes: new Set(["web_search"]),
+    };
+    const tools = ["exec", "wait"].map((name) => ({
+      name,
+      description: name,
+      parameters: Type.Object({}),
+    }));
+    const parentText = "Unicode parent 🦞 café e\u0301";
     const onPayload = vi.fn((payload: unknown) => {
       if (onPayload.mock.calls.length > 1) {
         throw new Error("Provider review continuation cannot rebuild or retry its request");
       }
-      if (!isRecord(payload)) {
+      if (!isRecord(payload) || !Array.isArray(payload.tools)) {
         throw new Error("Expected request");
       }
-      return { ...payload, client_metadata: { acknowledged: "review" } };
+      return {
+        ...payload,
+        client_metadata: metadata,
+        tools: [...payload.tools, { type: "web_search" }],
+      };
     });
-    const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
-    await (await parent(model, context, { onPayload })).result();
+    await (
+      await parent(
+        model,
+        { ...context, tools, messages: [{ role: "user", content: parentText, timestamp: 1 }] },
+        { ...codeModeOptions, apiKey: "synthetic-key", onPayload },
+      )
+    ).result();
+    expect(encodings).toBe(1);
+    metadata.acknowledged = "changed after parent send";
+    await expect(fork()).resolves.toBe("Answer");
     await expect(fork()).resolves.toBe("Answer");
     expect(onPayload).toHaveBeenCalledTimes(1);
-    expect(payloads[1]?.client_metadata).toEqual({ acknowledged: "review" });
+    const bodies = await Promise.all(
+      physicalFetch.mock.calls.map(([url, init]) => new Request(url, init).json()),
+    );
+    expect(bodies).toHaveLength(3);
+    for (const body of bodies) {
+      expect(body).toMatchObject({
+        client_metadata: { acknowledged: "review", unicode, encoding: 1 },
+        input: expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: [{ type: "input_text", text: parentText }],
+          }),
+        ]),
+      });
+    }
+    expect(bodies[2]).toEqual(bodies[1]);
+    for (const body of bodies.slice(1)) {
+      expect(body.tools).toEqual(bodies[0].tools);
+      expect(body.tool_choice).toBe("none");
+    }
   });
 });

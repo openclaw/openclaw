@@ -13,11 +13,9 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runVectorKnnQuery } from "./manager-search-knn.js";
+import { runVectorKnnQuery, vectorToBlob } from "./manager-search-knn.test-support.js";
 import { createEmbeddingScorer } from "./manager-search-scorer.js";
 import { searchChunksByEmbedding, searchVector } from "./manager-search-vector.js";
-import { runMemorySearchWithDeadline } from "./search-deadline.js";
-import { vectorToBlob } from "./vector-blob.js";
 
 function referenceCosine(a: number[], b: number[]): number {
   let dot = 0;
@@ -40,7 +38,6 @@ type VectorSearchOptions = Omit<Parameters<typeof searchVector>[0], "runFallback
 function searchVectorFixture(db: DatabaseSync, options: Partial<VectorSearchOptions> = {}) {
   const { sourceFilterChunks = { sql: "", params: [] }, ...overrides } = options;
   const request: Omit<Parameters<typeof searchVector>[0], "runFallback"> = {
-    vectorTable: "memory_index_chunks_vec",
     providerModel: "target-model",
     queryVec: [1, 0],
     limit: 5,
@@ -95,11 +92,7 @@ describe("searchVector sqlite-vec KNN", () => {
       `);
       const caller = new AbortController();
       const abortReason = new Error("caller stopped memory search");
-      const pending = runMemorySearchWithDeadline({
-        timeoutMs: 5_000,
-        parentSignal: caller.signal,
-        run: async (signal) => await searchVectorFixture(db, { signal }),
-      });
+      const pending = searchVectorFixture(db, { signal: caller.signal });
       setImmediate(() => caller.abort(abortReason));
 
       await expect(pending).rejects.toBe(abortReason);

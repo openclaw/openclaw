@@ -50,7 +50,7 @@ export type ModelContextTokenProjection = {
 };
 
 const normalizePositiveContextTokens = (value: number | undefined) =>
-  typeof value === "number" && value > 0 ? value : undefined;
+  value !== undefined && value > 0 ? value : undefined;
 
 const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
 
@@ -78,11 +78,11 @@ function resolveProviderModelRef(params: {
 
 /** Preserve shipped self-prefixed context refs after exact configured-row selection. */
 function resolveConfiguredProviderModel(
-  cfg: OpenClawConfig | null | undefined,
+  cfg: OpenClawConfig | undefined,
   provider: string,
   model: string,
 ): ConfigModelEntry | undefined {
-  const providerConfig = resolveMergedModelProviderConfig(cfg ?? undefined, provider);
+  const providerConfig = resolveMergedModelProviderConfig(cfg, provider);
   const bareModel = stripSelfProviderModelPrefix(provider, model);
   const findModel = createConfiguredProviderModelResolver(providerConfig, provider, (id) =>
     normalizeConfiguredProviderCatalogModelId(provider, id),
@@ -91,7 +91,7 @@ function resolveConfiguredProviderModel(
 }
 
 function resolveConfiguredRuntimeModel(
-  cfg: OpenClawConfig | null | undefined,
+  cfg: OpenClawConfig | undefined,
   provider: string,
   modelProvider: string | undefined,
   model: string,
@@ -194,21 +194,20 @@ function resolveConfiguredContextTokenLimitsForModel(
   configuredModel: ConfigModelEntry | undefined,
   normalize: (value: number | undefined) => number | null | undefined,
 ) {
-  const { provider, model } = params;
+  const { model } = params;
+  const provider = normalizeProviderId(params.provider);
   const extraParamSources = resolveModelExtraParamSources({
     config: params.cfg,
-    provider: normalizeProviderId(provider),
+    provider,
     modelId: model,
   });
   const effectiveContext1M =
     extraParamSources.modelParams && Object.hasOwn(extraParamSources.modelParams, "context1m")
       ? extraParamSources.modelParams.context1m
       : extraParamSources.defaultParams?.context1m;
-  const fixedContextWindow = resolveAnthropicFixedContextWindow(
-    normalizeProviderId(provider),
-    model,
-    { claudeCli1M: effectiveContext1M === true },
-  );
+  const fixedContextWindow = resolveAnthropicFixedContextWindow(provider, model, {
+    claudeCli1M: effectiveContext1M === true,
+  });
   const configuredContextTokens = normalize(configuredModel?.contextTokens) ?? undefined;
   const configuredContextWindow = normalize(configuredModel?.contextWindow) ?? undefined;
   // Fixed provider contracts deliberately ignore materialized catalog windows.
@@ -265,7 +264,7 @@ export function resolveModelContextTokenProjectionFromCache(
     if (configuredTokens !== undefined) {
       return { contextTokens: configuredTokens, authoredContextTokens };
     }
-    const providerKey = providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model);
+    const providerKey = providerContextTokenCacheKey(ref.provider, ref.model);
     const providerResult =
       params.allowCacheLookup === false ? undefined : lookupContextTokens(providerKey);
     const providerWindow =

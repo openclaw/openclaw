@@ -3,6 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { expectSuccessorWorkspaceRead } from "../workspace-readiness.test-support.js";
@@ -10,6 +11,7 @@ import { handleChatSend } from "./chat-send-handler.js";
 
 it("reads an existing chat workspace without inheriting its previous preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await loadOrCreateProcessDeviceIdentityAsync();
     const sessionKey = "agent:main:resumed-workspace";
     const runId = "chat-workspace-successor";
     setRuntimeConfigSnapshot({ agents: { defaults: { workspace: state.workspaceDir } } });

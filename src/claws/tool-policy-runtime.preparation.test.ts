@@ -72,3 +72,30 @@ it("defers late-registered consent reads until awaited config preparation", asyn
   expect(resolve()).toEqual({ frozen: true });
   expect(worker.mainRead).not.toHaveBeenCalled();
 });
+
+it("keeps legacy installed-Claw tool authority fail-closed without an update command", async () => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", "/claw-consent-legacy");
+  const tools = { profile: "full" as const, allow: ["read"] };
+  const config = { agents: { entries: { worker: { tools } } } };
+  const { resolveClawToolPolicyConsent } = await import("./tool-policy-runtime.js");
+  worker.read.mockResolvedValueOnce([
+    {
+      agentId: "worker",
+      schemaVersion: "openclaw.clawInstallRecord.v1",
+      agentConfigDigest: "old-grant",
+    },
+  ]);
+
+  await setAppliedRuntimeConfigSnapshot(config, config);
+
+  expect(() =>
+    resolveClawToolPolicyConsent({
+      agentId: "worker",
+      agentTools: tools,
+      hasAgentAllowlist: true,
+      ownsProfile: true,
+      profile: "full",
+    }),
+  ).toThrow("Add the Claw again to create an ordinary agent");
+  expect(worker.mainRead).not.toHaveBeenCalled();
+});

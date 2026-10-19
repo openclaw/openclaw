@@ -1,42 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createComposerContainer,
+  createComposerQuestionPrompt as questionPrompt,
+  createComposerControlsFixture,
   createComposerProps as props,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
-
-function questionPrompt(id: string, question: string): QuestionPrompt {
-  return {
-    id,
-    questions: [
-      {
-        questionId: "choice",
-        header: "Choice",
-        question,
-        options: [{ label: "Yes" }, { label: "No" }],
-        isOther: false,
-      },
-    ],
-    sessionKey: "queue-test",
-    createdAtMs: 1_000,
-    expiresAtMs: Date.now() + 60_000,
-    status: "pending",
-    answeredElsewhere: false,
-    localResolutionConfirmed: false,
-    locallyExpired: false,
-    submitting: false,
-    error: null,
-    drafts: new Map(),
-    revision: 1,
-  };
-}
 
 afterEach(() => resetComposerFixture());
 
@@ -60,13 +34,12 @@ describe("composer question takeover", () => {
         sessionKey: "queue-test",
         draft: "Keep this draft",
         gatewayQuestionPrompts: [],
-        composerControls: html`<button type="button">Model</button>`,
-        onRequestUpdate: vi.fn(),
+        composerControls: createComposerControlsFixture(),
       });
       composerProps.onDraftChange = (next) => {
         composerProps.draft = next;
       };
-      const draw = () => render(renderChatComposer(composerProps), container);
+      const draw = () => renderComposerInto(container, composerProps);
 
       draw();
       const progress = container.querySelector<HTMLDetailsElement>(

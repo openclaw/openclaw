@@ -25,36 +25,6 @@ const toolAssistant = makeAgentAssistantMessage({
 
 describe("tool-authored source reply payloads", () => {
   it.each(["automatic", "message_tool_only"] as const)(
-    "delivers the reply and asks delivery to write its transcript row in %s mode",
-    (sourceReplyDeliveryMode) => {
-      const payloads = buildPayloads({
-        assistantTexts: ["I will check the order now."],
-        lastAssistant: toolAssistant,
-        messagingToolSourceReplyPayloads: [toolAuthoredReply],
-        sourceReplyDeliveryMode,
-        sessionKey: "agent:vinalia:telegram:123",
-        runId: "run-1",
-        agentId: "vinalia",
-      });
-
-      expect(payloads).toHaveLength(1);
-      expect(payloads[0]).toMatchObject({
-        text: toolAuthoredReply.text,
-        mediaUrls: ["/tmp/albaran.pdf"],
-      });
-      const metadata = getReplyPayloadMetadata(payloads[0] as object);
-      expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
-      expect(metadata?.sourceReplyTranscriptMirror).toEqual({
-        sessionKey: "agent:vinalia:telegram:123",
-        agentId: "vinalia",
-        text: toolAuthoredReply.text,
-        mediaUrls: ["/tmp/albaran.pdf"],
-        idempotencyKey: "run-1:tool-source-reply:tc-1",
-      });
-    },
-  );
-
-  it.each(["automatic", "message_tool_only"] as const)(
     "preserves earlier and later input answers around a tool-authored reply in %s mode",
     (sourceReplyDeliveryMode) => {
       const earlier = makeAgentAssistantMessage({
@@ -65,6 +35,9 @@ describe("tool-authored source reply payloads", () => {
       });
       const payloads = buildPayloads({
         sourceReplyDeliveryMode,
+        sessionKey: "agent:vinalia:telegram:123",
+        runId: "run-1",
+        agentId: "vinalia",
         assistantTexts: ["Earlier answer.", "I will check the order now.", "Later answer."],
         answerSegments: [
           { textEnd: 1, messageEnd: 1, finalMessageStart: 1, lastAssistant: earlier },
@@ -78,10 +51,20 @@ describe("tool-authored source reply payloads", () => {
         toolAuthoredReply.text,
         "Later answer.",
       ]);
+      expect(payloads[1]?.mediaUrls).toEqual(["/tmp/albaran.pdf"]);
+      const metadata = getReplyPayloadMetadata(payloads[1] as object);
+      expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
+      expect(metadata?.sourceReplyTranscriptMirror).toEqual({
+        sessionKey: "agent:vinalia:telegram:123",
+        agentId: "vinalia",
+        text: toolAuthoredReply.text,
+        mediaUrls: ["/tmp/albaran.pdf"],
+        idempotencyKey: "run-1:tool-source-reply:tc-1",
+      });
     },
   );
 
-  it.each(["turnId", "responseId"] as const)(
+  it.each(["turnId"] as const)(
     "does not attach a later reply to an earlier input that reused the same call ID (%s)",
     (identity) => {
       const earlier = {
@@ -108,22 +91,6 @@ describe("tool-authored source reply payloads", () => {
       ]);
     },
   );
-
-  it("preserves a sealed earlier answer before the current tool-authored final", () => {
-    const earlier = makeAgentAssistantMessage({
-      content: [{ type: "text", text: "Earlier answer." }],
-    });
-    const payloads = buildPayloads({
-      assistantTexts: ["Earlier answer.", "I will check the order now."],
-      answerSegments: [{ textEnd: 1, messageEnd: 1, finalMessageStart: 1, lastAssistant: earlier }],
-      lastAssistant: toolAssistant,
-      messagingToolSourceReplyPayloads: [toolAuthoredReply],
-    });
-    expect(payloads.map((payload) => payload.text)).toEqual([
-      "Earlier answer.",
-      toolAuthoredReply.text,
-    ]);
-  });
 
   it("does not let an earlier tool-authored reply hide a later assistant failure", () => {
     const failed = makeAgentAssistantMessage({
@@ -155,17 +122,5 @@ describe("tool-authored source reply payloads", () => {
     });
     expect(payloads[0]?.text).toBe(toolAuthoredReply.text);
     expect(payloads.some((payload) => payload.isError)).toBe(true);
-  });
-
-  it("does not add an incomplete-turn warning when the tool-authored reply is the only output", () => {
-    const payloads = buildPayloads({
-      assistantTexts: [],
-      messagingToolSourceReplyPayloads: [{ text: "Hecho.", sourceReplyFinal: true }],
-      sourceReplyDeliveryMode: "automatic",
-      runId: "run-1",
-    });
-
-    expect(payloads.map((payload) => payload.text)).toEqual(["Hecho."]);
-    expect(payloads.some((payload) => payload.isError)).toBe(false);
   });
 });

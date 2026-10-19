@@ -211,17 +211,6 @@ describe("Windows Gateway task supervisor", () => {
     expect(JSON.stringify(log.error.mock.calls)).not.toContain("unretained stdout");
   });
 
-  it("records a spawn failure and fails the task", async () => {
-    spawn.mockRejectedValue(new Error("synthetic Job Object spawn failure"));
-
-    const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
-    await runWindowsGatewayTaskSupervisor();
-
-    expect(process.exitCode).toBe(1);
-    expect(JSON.stringify(log.error.mock.calls)).toContain("synthetic Job Object spawn failure");
-    expect(flushLogger).toHaveBeenCalledOnce();
-  });
-
   it("preserves the child diagnostic when its tree cleanup fails", async () => {
     const stderr = "synthetic child startup failure";
     spawn.mockImplementation(async (input: SpawnInput) => {

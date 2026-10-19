@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { withinTest } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -25,7 +25,8 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -462,7 +463,7 @@ describe("session hook context wiring", () => {
     hookRunnerMocks.runSessionStart.mockImplementation(async () => {
       try {
         // The plugin runtime's runWithWorkAdmission API requests this broad writer barrier.
-        const admission = await beginSessionWorkAdmission({
+        const admission = await beginSessionEffect({
           scope: storePath,
           identities: ["agent:main:dashboard:hook-target"],
           assertAllowed: () => {},
@@ -480,6 +481,40 @@ describe("session hook context wiring", () => {
     });
     await withinTest(Promise.all([initialized, completed.promise]), signal);
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledOnce();
+  });
+
+  it("runs an unawaited session_start hook outside the reply turn that emitted it", async () => {
+    // The hook outlives the turn; resuming that retired admission would reject its own turn.
+    const sessionKey = "agent:main:hook-after-turn";
+    const storePath = await createStorePath("openclaw-session-hook-after-turn");
+    await writeStore(storePath, {});
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const turnSettled = createDeferred();
+    const hookAdmission = createDeferred<unknown>();
+    hookRunnerMocks.runSessionStart.mockImplementation(async (event) => {
+      await turnSettled.promise;
+      try {
+        hookAdmission.resolve(
+          await withSessionTurn(
+            { storePath, sessionKey, sessionId: event.sessionId },
+            async (operation) => operation?.key,
+          ),
+        );
+      } catch (error) {
+        hookAdmission.resolve(error);
+      }
+    });
+
+    await withSessionTurn({ storePath, sessionKey }, () =>
+      initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      }),
+    );
+    turnSettled.resolve();
+
+    await expect(hookAdmission.promise).resolves.toBe(sessionKey);
   });
 
   it("starts the first reply lifecycle for a session created by admission without resetting it", async () => {
@@ -631,13 +666,14 @@ describe("session hook context wiring", () => {
       await admission.run(() =>
         parent.run(() =>
           initSessionState({
-            ctx: { Body: "/new", SessionKey: sessionKey },
+            ctx: { Body: "/reset", SessionKey: sessionKey },
             cfg: { session: { store: storePath } } as OpenClawConfig,
             commandAuthorized: true,
           }),
         ),
       );
       expect(releases).toHaveLength(3);
+      expect(hookRunnerMocks.runSessionEnd.mock.calls[0]?.[0]).toMatchObject({ reason: "reset" });
       admission.release();
       await withinTest(parent.drain(), signal);
       expect(getActiveGatewayRootWorkCount()).toBe(3);
@@ -702,52 +738,8 @@ describe("session hook context wiring", () => {
     }
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunnerMocks.runSessionEnd.mock.calls[0]?.[0]).toMatchObject({ reason: "new" });
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-  });
-
-  it("marks explicit /reset rollovers with reason reset", async () => {
-    const sessionKey = "agent:main:telegram:direct:456";
-    const { storePath } = await createStoredSession({
-      prefix: "openclaw-session-hook-explicit-reset",
-      sessionKey,
-      sessionId: "reset-session",
-      text: "reset me",
-    });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    await initSessionState({
-      ctx: { Body: "/reset", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-    expectFields(event, { reason: "reset" });
-  });
-
-  it("maps custom reset trigger aliases to the new-session reason", async () => {
-    const sessionKey = "agent:main:telegram:direct:alias";
-    const { storePath } = await createStoredSession({
-      prefix: "openclaw-session-hook-reset-alias",
-      sessionKey,
-      sessionId: "alias-session",
-      text: "alias me",
-    });
-    const cfg = {
-      session: {
-        store: storePath,
-        resetTriggers: ["/fresh"],
-      },
-    } as OpenClawConfig;
-
-    await initSessionState({
-      ctx: { Body: "/fresh", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-    expectFields(event, { reason: "new" });
   });
 
   it("marks daily stale rollovers and exposes the archived transcript path", async () => {

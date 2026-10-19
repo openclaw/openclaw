@@ -3,11 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as boundaryPath from "../infra/boundary-path.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
-  resolveDatabasePath,
   resolveOpenClawAgentDatabaseStoredPath,
   resolveOpenClawRegisteredAgentDatabasePath,
-  resolveOpenClawStateSqliteDir,
-  resolveOpenClawStateSqlitePath,
 } from "./openclaw-state-db.paths.js";
 
 vi.hoisted(() => {
@@ -29,50 +26,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-describe("Windows shared-state database paths", () => {
-  it.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
-    "uses one database identity for explicit and environment paths under %s",
-    (stateDir) => {
-      const plain = path.join(stateDir, "state", "openclaw.sqlite");
-      for (const root of [stateDir, path.toNamespacedPath(stateDir)]) {
-        expect(resolveOpenClawStateSqliteDir({ OPENCLAW_STATE_DIR: root })).toBe(
-          path.dirname(plain),
-        );
-        expect(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root })).toBe(plain);
-        expect(resolveDatabasePath({ env: { OPENCLAW_STATE_DIR: root } })).toBe(plain);
-      }
-      for (const pathname of [plain, path.toNamespacedPath(plain)]) {
-        expect(resolveDatabasePath({ path: pathname })).toBe(plain);
-      }
-    },
-  );
-});
-
 describe("Windows agent database inventory paths", () => {
-  it.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
-    "uses one relative registration across namespace spellings under %s",
-    (stateDir) => {
-      const relative = String.raw`agents\main\agent\openclaw-agent.sqlite`;
-      const registry = path.join(stateDir, "state", "openclaw.sqlite");
-      const agent = path.join(stateDir, relative);
-      for (const registryPath of [registry, path.toNamespacedPath(registry)]) {
-        for (const agentPath of [agent, path.toNamespacedPath(agent)]) {
-          expect(resolveOpenClawAgentDatabaseStoredPath(registryPath, agentPath)).toBe(relative);
-        }
-      }
-    },
-  );
-
-  it.each([
-    [String.raw`C:\OpenClaw`, String.raw`C:\External\openclaw-agent.sqlite`],
-    [String.raw`C:\OpenClaw`, String.raw`D:\External\openclaw-agent.sqlite`],
-    [String.raw`\\Server\Share\OpenClaw`, String.raw`\\Server\Other\openclaw-agent.sqlite`],
-  ])("preserves an external native locator outside %s", (stateDir, external) => {
-    const registry = path.join(stateDir, "state", "openclaw.sqlite");
-    const namespaced = path.toNamespacedPath(external);
-    expect(resolveOpenClawAgentDatabaseStoredPath(registry, namespaced)).toBe(namespaced);
-  });
-
   it.each([
     {
       stateDir: String.raw`\\kost\share\OpenClaw`,
@@ -88,16 +42,6 @@ describe("Windows agent database inventory paths", () => {
       stateDir: String.raw`C:\OpenClaw`,
       canonicalRoot: String.raw`C:\OpenClaw`,
       agentPath: String.raw`\\.\C:\..\UNC\server\share\agent.sqlite`,
-    },
-    {
-      stateDir: String.raw`C:\Alias`,
-      canonicalRoot: String.raw`\\kost\share\OpenClaw`,
-      agentPath: String.raw`\\Kost\share\OpenClaw\agents\main\agent.sqlite`,
-    },
-    {
-      stateDir: String.raw`C:\Alias`,
-      canonicalRoot: String.raw`\\server\share\OpenClaw`,
-      agentPath: String.raw`\\?\UNC\server\share\..\..\server\share\OpenClaw\agent.sqlite`,
     },
   ])(
     "retains raw locator identity for $agentPath under $stateDir",
@@ -116,11 +60,6 @@ describe("Windows agent database inventory paths", () => {
   );
 
   it.each([
-    { canonicalRoot: String.raw`D:\Canonical`, relative: String.raw`agents\main\agent.sqlite` },
-    {
-      canonicalRoot: String.raw`\\server\share\Canonical`,
-      relative: String.raw`agents\main\agent.sqlite`,
-    },
     { canonicalRoot: String.raw`D:\Canonical`, relative: String.raw`linked\..\agent.sqlite` },
   ])(
     "relativizes an admitted $relative under canonical root $canonicalRoot",
@@ -136,16 +75,6 @@ describe("Windows agent database inventory paths", () => {
       }
     },
   );
-
-  it("preserves a raw in-root suffix instead of collapsing link traversal", () => {
-    const stateDir = String.raw`C:\OpenClaw`;
-    const registry = path.join(stateDir, "state", "openclaw.sqlite");
-    const suffix = String.raw`linked\..\openclaw-agent.sqlite`;
-    expect(resolveOpenClawAgentDatabaseStoredPath(registry, `${stateDir}\\${suffix}`)).toBe(suffix);
-    expect(resolveOpenClawAgentDatabaseStoredPath(registry, `\\\\?\\${stateDir}\\${suffix}`)).toBe(
-      suffix,
-    );
-  });
 
   it("preserves a device namespace without a plain drive/share spelling", () => {
     const registry = String.raw`C:\OpenClaw\state\openclaw.sqlite`;

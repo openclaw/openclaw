@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import type { SqliteSourceFence } from "../infra/sqlite-source-fence-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -16,10 +18,10 @@ import {
   type OpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 
-const reservations = new WeakMap<DatabaseSync, () => void>();
+const reservations = new WeakMap<EngineConnection, () => void>();
 
 /** The command's durable predicates have been checked while every source is reserved. */
-export function assertGitHubPublicationWorkerSourceCurrent(db: DatabaseSync): void {
+export function assertGitHubPublicationWorkerSourceCurrent(db: EngineConnection): void {
   const assertCurrent = reservations.get(db);
   if (!assertCurrent) {
     throw new Error("GitHub publication requires its reserved source authority.");
@@ -31,7 +33,7 @@ export function assertGitHubPublicationWorkerSourceCurrent(db: DatabaseSync): vo
 export function createGitHubPublicationSourceWorker() {
   let source: DatabaseSync | undefined;
   let current: GitHubPublicationSourceRead | undefined;
-  let destination: DatabaseSync | undefined;
+  let destination: EngineConnection | undefined;
   let validated = false;
   const close = () => {
     if (destination) {
@@ -55,7 +57,7 @@ export function createGitHubPublicationSourceWorker() {
     return { source: input.memory ?? source!, destination };
   };
   return {
-    prepare(input: GitHubPublicationSourceRead, db: DatabaseSync) {
+    prepare(input: GitHubPublicationSourceRead, db: EngineConnection) {
       close();
       if (input.source) {
         const { physical } = input.source;
@@ -78,7 +80,10 @@ export function createGitHubPublicationSourceWorker() {
         throw new Error("GitHub publication source was not prepared.");
       }
       let reservedSource: DatabaseSync | undefined;
-      const destinationBinding = { database: handles.destination, identity: input.destination };
+      const destinationBinding = {
+        database: sqlPublicationAnchor(handles.destination),
+        identity: input.destination,
+      };
       const sourceBinding = { database: source, identity: input.source };
       reservations.set(handles.destination, () => {
         if (!validated || !reservedSource?.isTransaction || !handles.destination.isTransaction) {

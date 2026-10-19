@@ -1,4 +1,5 @@
 import type { SessionEntry } from "../config/sessions/types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { createSessionObserverCompanionSnapshotReader } from "./session-observer-companion.js";
@@ -23,6 +24,7 @@ export function createSessionObserverWork(params: {
   deps: SessionObserverDeps;
   readSession: NonNullable<SessionObserverDeps["readSession"]>;
   companionReader: ReturnType<typeof createSessionObserverCompanionSnapshotReader>;
+  states: ReadonlyMap<string, SessionObserverState>;
   handleEventSteps: (
     event: SessionObserverEvent,
     settledError?: boolean,
@@ -44,6 +46,15 @@ export function createSessionObserverWork(params: {
   const reportError = params.reportError;
   const background = (run: () => Promise<unknown>) => {
     void runInDetachedAsyncContext(() => acceptedWork.track(run)).catch(reportError);
+  };
+  const getRunReader = (event: SessionObserverEvent) => {
+    const sessionKey = event.sessionKey?.trim();
+    const agentId = event.agentId?.trim();
+    const state =
+      sessionKey && agentId
+        ? params.states.get(resolveSessionSubscriptionKey(sessionKey, agentId))
+        : undefined;
+    return state?.runId === event.runId && state.agentId === agentId ? state.reader : undefined;
   };
   const enqueue = <T>(
     scopeKey: string,
@@ -77,6 +88,11 @@ export function createSessionObserverWork(params: {
     return result;
   };
   function handleEvent(event: SessionObserverEvent, settledError = false) {
+    warnPluginSdkDeprecation({
+      family: "session-observer",
+      method: "sessionObserver.handleEvent",
+      replacement: "await sessionObserver.handleEventAsync",
+    });
     if (disposal) {
       return;
     }
@@ -87,9 +103,10 @@ export function createSessionObserverWork(params: {
       return;
     }
     const reader =
-      event.sessionKey && event.agentId
+      getRunReader(event) ??
+      (event.sessionKey && event.agentId
         ? captureSessionObserverRead(params.deps, event.sessionKey, event.agentId)
-        : undefined;
+        : undefined);
     const steps = params.handleEventSteps(event, settledError, reader);
     nativeEvent = true;
     try {
@@ -117,6 +134,7 @@ export function createSessionObserverWork(params: {
     const agentId = event.agentId ?? "";
     const reader =
       captured ??
+      getRunReader(event) ??
       (sessionKey && agentId
         ? captureSessionObserverRead(params.deps, sessionKey, agentId)
         : undefined);
@@ -182,6 +200,11 @@ export function createSessionObserverWork(params: {
     handleEventAsync,
     disposeAsync,
     dispose: () => {
+      warnPluginSdkDeprecation({
+        family: "session-observer",
+        method: "sessionObserver.dispose",
+        replacement: "await sessionObserver.disposeAsync",
+      });
       if (disposed) {
         return;
       }

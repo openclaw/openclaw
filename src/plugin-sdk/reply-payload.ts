@@ -1,4 +1,3 @@
-// Reply payload helpers normalize plugin reply targets, text, media, and approval metadata.
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   getReplyPayloadMetadata,
@@ -86,6 +85,7 @@ export {
   FAST_MODE_AUTO_PROGRESS_KIND,
   getReplyPayloadTtsSupplement,
   isFastModeAutoProgressPayload,
+  isHostNoticePayload,
   isReplyPayloadNonTerminalToolErrorWarning,
   isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,

@@ -94,16 +94,20 @@ export type ProjectChipOptions = {
   projectId: string;
   freshWorkspace?: boolean;
   onNewWorkspace?: () => void;
-  gatewayLabel: string;
+  deviceFolder?: boolean;
+  onDeviceFolder?: () => void;
+  deviceFolderDisabledReason?: string;
+  /** Present when the selected device folder can be chosen from a node listing. */
+  deviceBrowseLabel?: string;
+  onBrowseDevice?: () => void;
+  browserLabel: string;
   submitting: boolean;
   pendingPlacement: boolean;
   popoverOpen: boolean;
-  popoverHiding: boolean;
   browserOpen: boolean;
   browser: PlaceBrowserState;
   registerProjectPath: string | null;
   registeringProject: boolean;
-  onGuardTransition: (event: MouseEvent) => void;
   onPopoverShow: () => void;
   onPopoverHide: () => void;
   onPopoverAfterHide: () => void;

@@ -156,6 +156,11 @@ with `code: "commander.invalidArgument"` so Commander names the rejected option.
 AI CLI backend such as `claude-cli` or `my-cli`.
 
 - The backend `id` becomes the provider prefix in model refs like `my-cli/gpt-5`.
+- Set `modelProvider` to the canonical model provider id to bind that provider's
+  models to this CLI runtime. There is no inferred default. A missing or blank
+  value emits a warning during runtime or setup-only registration naming the
+  plugin, backend, and missing field; direct CLI references remain available,
+  but no provider-to-runtime binding is created.
 - The backend `config` is the authoritative command adapter: argv, environment,
   parser, session, image, and reliability behavior live in plugin code.
 - Users select the backend through model refs or model-scoped `agentRuntime.id`;

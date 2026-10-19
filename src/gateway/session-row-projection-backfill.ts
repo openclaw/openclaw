@@ -2,7 +2,26 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { yieldSessionListBackgroundWork } from "./session-projection-work.js";
 import { identity, type EntryRow, type Row } from "./session-row-projection-record.js";
-import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
+import {
+  backfillSessionRowTranscriptFields,
+  presentSessionRowTranscriptFields,
+} from "./session-row-transcript-backfill.js";
+
+function transcriptParams(row: Row, entry: EntryRow["entry"]) {
+  return {
+    ...row.storeTarget,
+    agentId: row.agentId,
+    storeAgentId: row.storeTarget.agentId,
+    sessionKey: row.key,
+    sessionId: entry.sessionId,
+    sessionEntry: entry,
+    model: row.materialized && {
+      selectedProvider: row.materialized.source.selectedModel.provider,
+      selectedModel: row.materialized.source.selectedModel.model,
+      config: row.materialized.source.cfg,
+    },
+  };
+}
 
 /** Optional transcript work never participates in row readiness or a foreground response. */
 export function createSessionRowProjectionBackfill(params: {
@@ -11,7 +30,7 @@ export function createSessionRowProjectionBackfill(params: {
   current: (row: Row) => boolean;
   publish: (
     row: Row,
-    fields: Awaited<ReturnType<typeof backfillSessionRowTranscriptFields>>,
+    fields: NonNullable<Awaited<ReturnType<typeof backfillSessionRowTranscriptFields>>>,
   ) => void;
 }) {
   const inOwnerContext = AsyncLocalStorage.snapshot();
@@ -57,30 +76,30 @@ export function createSessionRowProjectionBackfill(params: {
         continue;
       }
       try {
-        const fields = await backfillSessionRowTranscriptFields({
-          ...row.storeTarget,
-          agentId: row.agentId,
-          storeAgentId: row.storeTarget.agentId,
-          sessionKey: row.key,
-          sessionId: entry.sessionId,
-          sessionEntry: entry,
-          model: row.materialized && {
-            selectedProvider: row.materialized.source.selectedModel.provider,
-            selectedModel: row.materialized.source.selectedModel.model,
-            config: row.materialized.source.cfg,
-          },
-        });
-        await params.ready();
+        const fields = await backfillSessionRowTranscriptFields(transcriptParams(row, entry));
         const live = params.read(id);
-        if (
-          !disposed &&
-          live?.generation === row.generation &&
-          revisions.get(id) === captured &&
-          params.current(live)
-        ) {
-          params.publish(live, fields);
-        } else if (live?.generation === row.generation && revisions.get(id) === captured) {
-          revisions.delete(id);
+        // A replacement/private-session revocation must not publish another session's text.
+        if (!disposed && live?.entry && params.current(row)) {
+          const facts = live.retainedDatabaseFacts;
+          // Superseded reads must not restore previews cleared by broad invalidation.
+          if (revisions.get(id) !== captured) {
+            continue;
+          }
+          if (fields && facts?.transcriptAssistantMessage === "unknown") {
+            facts.transcriptAssistantMessage = fields.lastAssistantMessage ?? null;
+          }
+          params.publish(
+            live,
+            facts?.transcriptPreview !== undefined &&
+              facts.transcriptAssistantMessage !== "unknown" &&
+              facts.transcriptTerminalModel !== undefined
+              ? presentSessionRowTranscriptFields(transcriptParams(live, live.entry), {
+                  lastMessagePreview: facts.transcriptPreview,
+                  lastAssistantMessage: facts.transcriptAssistantMessage,
+                  terminalModel: facts.transcriptTerminalModel,
+                })
+              : (fields ?? {}),
+          );
         }
       } catch {
         // A later owner publication retries optional fields; do not spin on a cold/error row.
@@ -111,11 +130,23 @@ export function createSessionRowProjectionBackfill(params: {
     prepare(row: EntryRow, facts: Row["retainedDatabaseFacts"]) {
       const id = identity(row);
       const next = revision(row, facts);
-      if (facts?.transcriptPreview !== undefined && !row.entry.fallbackNotice) {
-        revisions.set(id, next);
-        queued.delete(id);
-        params.publish(row, { lastMessagePreview: facts.transcriptPreview ?? undefined });
-        return;
+      if (facts?.transcriptPreview !== undefined && facts.transcriptTerminalModel !== undefined) {
+        params.publish(
+          row,
+          presentSessionRowTranscriptFields(transcriptParams(row, row.entry), {
+            lastMessagePreview: facts.transcriptPreview,
+            lastAssistantMessage:
+              facts.transcriptAssistantMessage === "unknown"
+                ? (row.lastAssistantMessage ?? null)
+                : facts.transcriptAssistantMessage,
+            terminalModel: facts.transcriptTerminalModel,
+          }),
+        );
+        if (facts.transcriptAssistantMessage !== "unknown") {
+          revisions.set(id, next);
+          queued.delete(id);
+          return;
+        }
       }
       if (!isDeepStrictEqual(revisions.get(id), next)) {
         revisions.set(id, next);

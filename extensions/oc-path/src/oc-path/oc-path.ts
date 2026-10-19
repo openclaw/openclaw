@@ -19,12 +19,13 @@ const OC_SCHEME = "oc://";
 
 // Hard caps bound resource use under pathological / hostile input.
 const MAX_PATH_LENGTH = 4096;
-const MAX_SUB_SEGMENTS_PER_SLOT = 64;
+export const MAX_SUB_SEGMENTS_PER_SLOT = 64;
 export const MAX_TRAVERSAL_DEPTH = 256;
 
 const BOM = "﻿";
 
 const RESERVED_CHARS_RE = /[?&%]/;
+const SPECIAL_SEGMENT_RE = /^(?:\$first|\$last|\*\*?|#\d+|\+.*)$/;
 
 /** Render with `\xNN` escapes so error output is readable for invisible chars. */
 function printable(s: string): string {
@@ -167,7 +168,7 @@ export function parseOcPath(input: string): OcPath {
     }
   }
   const fileSeg = expectDefined(rawSegments.at(0), "path split always returns a file segment");
-  const file = isQuotedSeg(fileSeg) ? unquoteSeg(fileSeg) : fileSeg;
+  const file = unquoteSeg(fileSeg);
   validateFileSlot(file, input);
 
   const segments = normalizeDeepJsonPathSegments(rawSegments, file, input);
@@ -250,6 +251,7 @@ export function formatOcPath(path: OcPath): string {
   const formatSubSegment = (sub: string): string => {
     if (
       isQuotedSeg(sub) ||
+      SPECIAL_SEGMENT_RE.test(sub) ||
       (sub.startsWith("[") && sub.endsWith("]")) ||
       (sub.startsWith("{") && sub.endsWith("}"))
     ) {
@@ -284,7 +286,7 @@ export function formatOcPath(path: OcPath): string {
   // File slot uses lighter quoting than section/item/field: dots are
   // normal in filenames (`AGENTS.md`); only quote when the file
   // contains chars that would parse as structure (primarily `/`).
-  const fileNeedsQuote = /[/[\]{}?&%"\s]/.test(path.file);
+  const fileNeedsQuote = /[/[\]{}?&%"\\\s]/.test(path.file);
   const formattedFile = fileNeedsQuote ? quoteSeg(path.file) : path.file;
   let out = OC_SCHEME + formattedFile;
   if (path.section !== undefined) {
@@ -527,8 +529,8 @@ function extractSession(queryPart: string, input: string): string | undefined {
   return undefined;
 }
 
-// Walk `s` respecting `[...]`/`{...}`/`"..."` regions. Quoted regions
-// are byte-literal. `onChar` returns "stop" to short-circuit;
+// Walk `s` respecting `[...]`/`{...}`/`"..."` regions and quoted escapes.
+// `onChar` returns "stop" to short-circuit;
 // `onUnbalanced` (must throw) fires on bracket/brace/quote imbalance.
 type ScanCallback = (c: string, i: number, atTop: boolean) => "stop" | void;
 function scanBracketAware(s: string, onChar: ScanCallback, onUnbalanced: () => never): void {
@@ -537,35 +539,29 @@ function scanBracketAware(s: string, onChar: ScanCallback, onUnbalanced: () => n
   let inQuote = false;
   for (let i = 0; i < s.length; i++) {
     const c = s.charAt(i);
-    if (inQuote) {
-      if (c === '"') {
-        inQuote = false;
-      }
-      if (onChar(c, i, false) === "stop") {
-        return;
-      }
+    if (inQuote && c === "\\") {
+      i++;
       continue;
     }
+    const quoted = inQuote || c === '"';
     if (c === '"') {
-      inQuote = true;
-      if (onChar(c, i, false) === "stop") {
-        return;
+      inQuote = !inQuote;
+    }
+    if (!quoted) {
+      if (c === "[") {
+        depthBracket++;
+      } else if (c === "]") {
+        depthBracket--;
+      } else if (c === "{") {
+        depthBrace++;
+      } else if (c === "}") {
+        depthBrace--;
       }
-      continue;
+      if (depthBracket < 0 || depthBrace < 0) {
+        onUnbalanced();
+      }
     }
-    if (c === "[") {
-      depthBracket++;
-    } else if (c === "]") {
-      depthBracket--;
-    } else if (c === "{") {
-      depthBrace++;
-    } else if (c === "}") {
-      depthBrace--;
-    }
-    if (depthBracket < 0 || depthBrace < 0) {
-      onUnbalanced();
-    }
-    if (onChar(c, i, depthBracket === 0 && depthBrace === 0) === "stop") {
+    if (onChar(c, i, !quoted && depthBracket === 0 && depthBrace === 0) === "stop") {
       return;
     }
   }
@@ -599,56 +595,43 @@ export function splitRespectingBrackets(
   originalInput?: string,
 ): string[] {
   const out: string[] = [];
-  let buf = "";
+  let start = 0;
   const ctx = originalInput ?? s;
   const onUnbalanced = (): never => {
     fail(`Unbalanced bracket/brace in oc:// path: ${ctx}`, ctx, "OC_PATH_UNBALANCED");
   };
   scanBracketAware(
     s,
-    (c, _i, atTop) => {
+    (c, i, atTop) => {
       if (atTop && c === delim) {
-        out.push(buf);
-        buf = "";
-        return;
+        out.push(s.slice(start, i));
+        start = i + 1;
       }
-      buf += c;
     },
     onUnbalanced,
   );
-  out.push(buf);
+  out.push(s.slice(start));
   return out;
 }
 
-/** Flatten concrete path slots while preserving quoted keys as one segment. */
+/** Flatten path slots without losing the distinction between quoted keys and selectors. */
 export function splitOcPathSlots(...slots: readonly (string | undefined)[]): string[] {
-  return slots.flatMap((slot) =>
-    slot === undefined ? [] : splitRespectingBrackets(slot, ".").map(unquoteSeg),
-  );
+  return slots.flatMap((slot) => (slot === undefined ? [] : splitRespectingBrackets(slot, ".")));
 }
 
 function isQuotedSeg(seg: string): boolean {
   return seg.length >= 2 && seg.startsWith('"') && seg.endsWith('"');
 }
 
-/** Strip surrounding quotes. Content is byte-literal. */
+/** Decode a literal segment after selector dispatch has inspected its raw spelling. */
 export function unquoteSeg(seg: string): string {
-  return isQuotedSeg(seg) ? seg.slice(1, -1) : seg;
+  return isQuotedSeg(seg) ? seg.slice(1, -1).replace(/\\(["\\])/g, "$1") : seg;
 }
 
-// Refuses values with `"` or `\` — no escape mechanism.
 export function quoteSeg(value: string): string {
-  if (value.length === 0) {
-    return '""';
-  }
-  if (value.includes('"') || value.includes("\\")) {
-    fail(
-      `Cannot quote value containing '"' or '\\\\': ${printable(value)}`,
-      value,
-      "OC_PATH_UNQUOTABLE",
-    );
-  }
-  return /[/.[\]{}?&%\s]/.test(value) ? `"${value}"` : value;
+  return value.length === 0 || SPECIAL_SEGMENT_RE.test(value) || /[/.[\]{}?&%"\\\s]/.test(value)
+    ? JSON.stringify(value)
+    : value;
 }
 
 function validateSubSegment(sub: string, input: string): void {
@@ -666,12 +649,10 @@ function validateSubSegment(sub: string, input: string): void {
       "OC_PATH_CONTROL_CHAR",
     );
   }
-  // Quoted content is byte-literal but can't contain `"` or `\`.
   if (isQuotedSeg(sub)) {
-    const inner = new Set(sub.slice(1, -1));
-    if (inner.has('"') || inner.has("\\")) {
+    if (!/^(?:[^"\\]|\\["\\])*$/.test(sub.slice(1, -1))) {
       fail(
-        `Quoted segment cannot contain '"' or '\\\\': ${printable(sub)}`,
+        `Quoted segment must escape '"' and '\\\\' with a backslash: ${printable(sub)}`,
         input,
         "OC_PATH_UNQUOTABLE",
       );

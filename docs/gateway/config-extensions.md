@@ -65,7 +65,7 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   `openclaw doctor --fix` normalize into the current `transport` field.
 - `mcp.servers.<name>.enabled`: set `false` to keep a saved server definition
   while excluding it from embedded OpenClaw MCP discovery and tool projection.
-- `mcp.servers.<name>.requestTimeoutMs`: per-server MCP request timeout in milliseconds (default 60 seconds). When it is not set, tool listing at session start uses 10 seconds.
+- `mcp.servers.<name>.requestTimeoutMs`: per-server MCP request timeout in milliseconds (default 60 seconds). When it is not set, tool listing at session start uses 10 seconds. The built-in HTTP client keeps header and body inactivity timeouts at least this long, preserving longer transport defaults without imposing a deadline on the entire SSE stream.
 - `mcp.servers.<name>.connectionTimeoutMs`: per-server connection timeout in milliseconds.
 - `mcp.servers.<name>.supportsParallelToolCalls`: optional concurrency hint for
   adapters that can choose whether to issue parallel MCP tool calls.
@@ -105,7 +105,7 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   lifetime and retires its runtimes at run end; retained transcripts alone do
   not keep them alive.
 - `mcp.sessionIdleTtlMs`: optional idle eviction in milliseconds. Unset or `0`
-  keeps the session lifetime above. Positive finite values opt into eviction;
+  keeps the session lifetime above unless capacity eviction is needed. Positive finite values opt into TTL eviction;
   fractions round down. For example, `mcp: { sessionIdleTtlMs: 3600000 }` evicts
   after one hour without use. While enabled, a sweep runs once per minute and
   preserves active leases and pending acquisitions. This override does not
@@ -114,8 +114,21 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   intended value from your config backup; the deleted value cannot be inferred.
 - Each Gateway admits at most 256 OpenClaw-managed MCP runtimes with server connections across sessions
   and requester partitions, including creation and cleanup in progress. At the
-  limit, existing runtimes stay alive and new admissions fail with a log message
-  directing you to stop or reset unused sessions. A runtime can own multiple
+  limit, the least-recently-used idle runtime is retired and its servers stop;
+  that session reconnects on its next turn. Active runs, leases, app views, and
+  pending acquisitions are preserved. An active turn protects its session runtime;
+  idle requester partitions in that session remain eligible for eviction. If every runtime is in use, the turn
+  continues with a bounded warning once per capacity episode.
+  Waiting for idle cleanup is bounded; unfinished cleanup retains its slot and continues
+  under the lifecycle owner. Usable static or requester connections remain available. Previously advertised
+  tool schemas stay stable; unavailable bindings return an error without contacting MCP.
+  Sign-in tools from a refused connection keep their schemas but cannot start authorization;
+  retry on the next turn.
+  Tool catalogs for up to 256 evicted runtime partitions and advertised requester catalogs
+  for up to 256 evicted sessions are retained in least-recently-used order, in addition
+  to catalogs with live ownership. Session retirement or config reload
+  clears retained catalogs; older evicted sessions rediscover their tools on reconnect.
+  A runtime can own multiple
   configured server connections. Sessions without available MCP servers and
   sign-in-only catalogs do not consume this limit. Native client runtimes manage their own bounds.
 - MCP config changes retire only changed or removed server connections. Unchanged

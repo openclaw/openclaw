@@ -194,6 +194,8 @@ describe("createGatewayRequestContext", () => {
         });
       }
       const peers = [...clients];
+      const profiles = await userProfileCatalog.prepareUserProfileCatalog();
+      onTestFinished(profiles.release);
       const broadcaster = createGatewayBroadcaster({
         clients,
         preparePresenceProjection: (presence) => () => presence,
@@ -220,7 +222,6 @@ describe("createGatewayRequestContext", () => {
         toolEventRecipients: chatRunState.toolEventRecipients,
         sessionEventSubscribers: subscribers,
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        chatAbortControllers: new Map(),
         restartRecoveryCandidates: new Map(),
         refreshConnectedUserProfiles: () => context.refreshConnectedUserProfile?.(),
       });
@@ -238,7 +239,7 @@ describe("createGatewayRequestContext", () => {
         expect(frames.some((frame) => frame.event === "sessions.changed")).toBe(true);
         const authenticated = peers.map((peer) => peer.authenticatedUserProfile);
         const resolve = vi
-          .spyOn(userProfileCatalog, "readUserProfileIdentity")
+          .spyOn(userProfileCatalog, "readResidentUserProfileIdentity")
           .mockImplementationOnce(() => {
             throw new Error("fixture storage unavailable");
           });

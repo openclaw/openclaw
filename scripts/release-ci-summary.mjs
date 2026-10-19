@@ -25,12 +25,14 @@ import {
   composeReleaseAttemptJobs,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
+  isReleaseGhServerError,
   isSplitChangelogEvidenceDelta,
   classifyReleaseChangelogEvidenceComparison,
   SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
   MAX_RELEASE_ARTIFACT_BYTES,
   normalizeReleaseCoveragePolicy,
   normalizeReleaseTelegramWaiver,
+  readReleaseJobListing,
   releaseCompositeJobsSha256,
   releaseChildSpec,
   terminalPolicyPass,
@@ -197,7 +199,7 @@ export function runReleaseCiGh(args, params = {}) {
   }
 }
 
-async function ghAsync(args) {
+async function ghAsync(args, { smallerPageFallback = false } = {}) {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await execGhReadAsync(args, {
@@ -206,6 +208,9 @@ async function ghAsync(args) {
         timeout: GH_COMMAND_TIMEOUT_MS,
       });
     } catch (error) {
+      if (smallerPageFallback && isReleaseGhServerError(error)) {
+        throw error;
+      }
       await sleep(evidenceReadRetryDelay(args, error, attempt));
     }
   }
@@ -223,8 +228,8 @@ function githubRestJson(pathSuffix, repository = DEFAULT_REPO) {
   return jsonGh(githubRestArgs(pathSuffix, repository));
 }
 
-async function githubRestJsonAsync(pathSuffix, repository = DEFAULT_REPO) {
-  return JSON.parse(await ghAsync(githubRestArgs(pathSuffix, repository)));
+async function githubRestJsonAsync(pathSuffix, repository = DEFAULT_REPO, options = {}) {
+  return JSON.parse(await ghAsync(githubRestArgs(pathSuffix, repository), options));
 }
 
 function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
@@ -804,38 +809,47 @@ function findExactChildRun(child, repository = DEFAULT_REPO) {
   return selectExactChildRunFromPages(runPages, child.displayTitle, child.headBranch);
 }
 
-async function findRunJobsAll(path, repository = DEFAULT_REPO, requireComplete = false) {
-  const jobs = [];
-  let total;
-  for (let page = 1; page <= 10; page += 1) {
-    const query = new URLSearchParams({
-      page: String(page),
-      per_page: "100",
-    });
-    const response = await githubRestJsonAsync(`${path}${query.toString()}`, repository);
-    const pageJobs = response.jobs ?? [];
+// The listing keeps the 1,000-job inventory ceiling of ten 100-job pages, whatever page size
+// readReleaseJobListing selects.
+const MAX_RUN_JOBS = 1000;
+
+function findRunJobsAll(path, repository = DEFAULT_REPO, requireComplete = false) {
+  return readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
+    const jobs = [];
+    let total;
+    for (let page = 1; jobs.length < MAX_RUN_JOBS; page += 1) {
+      const query = new URLSearchParams({
+        page: String(page),
+        per_page: String(perPage),
+      });
+      const response = await githubRestJsonAsync(`${path}${query.toString()}`, repository, {
+        smallerPageFallback,
+      });
+      const pageJobs = response.jobs ?? [];
+      if (
+        requireComplete &&
+        (!Array.isArray(response.jobs) ||
+          !Number.isSafeInteger(response.total_count) ||
+          response.total_count < 0 ||
+          (total !== undefined && total !== response.total_count))
+      ) {
+        throw new Error("publication original jobs enumeration is invalid");
+      }
+      total = response.total_count;
+      jobs.push(...pageJobs);
+      if (pageJobs.length < perPage) {
+        break;
+      }
+    }
+    jobs.splice(MAX_RUN_JOBS);
     if (
       requireComplete &&
-      (!Array.isArray(response.jobs) ||
-        !Number.isSafeInteger(response.total_count) ||
-        response.total_count < 0 ||
-        (total !== undefined && total !== response.total_count))
+      (jobs.length !== total || new Set(jobs.map((job) => job.id)).size !== total)
     ) {
-      throw new Error("publication original jobs enumeration is invalid");
+      throw new Error("publication original jobs enumeration is incomplete or duplicated");
     }
-    total = response.total_count;
-    jobs.push(...pageJobs);
-    if (pageJobs.length < 100) {
-      break;
-    }
-  }
-  if (
-    requireComplete &&
-    (jobs.length !== total || new Set(jobs.map((job) => job.id)).size !== total)
-  ) {
-    throw new Error("publication original jobs enumeration is incomplete or duplicated");
-  }
-  return jobs;
+    return jobs;
+  });
 }
 
 function parentJobLogArgs(jobId, repository = DEFAULT_REPO, allowEscapeSequences = true) {

@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { readClawSecondaryReferenceTables } from "../claws/provenance-secondary-references.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import type { AgentDeletionJournalAuthority } from "./agent-deletion-journal.types.js";
@@ -15,7 +15,7 @@ import type { DB } from "./openclaw-state-db.generated.js";
 
 /** Deletion authority requires its admitted journal; unavailable rows must never grant cleanup. */
 export function readAgentDeletionJournalAuthorityInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentId: string,
 ): AgentDeletionJournalAuthority | undefined {
   const row = executeSqliteQueryTakeFirstSync(

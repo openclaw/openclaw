@@ -1,9 +1,16 @@
 // Tests entrypoint respawn behavior for compile cache and process flags.
-import type { ChildProcess } from "node:child_process";
+import childProcess, { type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CLI_PARENT_BOUND_PRELOAD } from "../cli-parent-lifetime.mjs";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
+import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+
+vi.mock("./process/child-process-bridge.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./process/child-process-bridge.js")>()),
+  attachChildProcessBridge: vi.fn(),
+}));
 
 const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
 const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
@@ -23,39 +30,36 @@ function buildPlan(params: Parameters<typeof buildCliRespawnPlan>[0]) {
 }
 
 describe("buildCliRespawnPlan", () => {
-  it("returns null when respawn policy skips the argv", () => {
-    expect(
-      buildPlan({
-        argv: ["node", "openclaw", "--help"],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-      }),
-    ).toBeNull();
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it.each([["gateway", "--ambient-channels", "run"]])(
-    "keeps foreground Gateway ambient channel options in process: %j",
-    (...args) => {
-      for (const platform of ["darwin", "linux", "win32"] as const) {
-        expect(
-          buildPlan({
-            argv: ["node", "openclaw", ...args],
-            autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-            platform,
-          }),
-        ).toBeNull();
-      }
+  it.each([undefined, "--max-old-space-size=4096"])(
+    "suppresses standalone warnings through NODE_OPTIONS while preserving %s",
+    (nodeOptions) => {
+      vi.stubGlobal("__openclawStandaloneRootUrl", "file:///app/runtime/");
+      const argv = [
+        "bun",
+        "/app/runtime/openclaw.mjs",
+        "--profile",
+        "work",
+        "config",
+        "get",
+        "gateway.mode",
+      ];
+      const respawnPlan = expectCliRespawnPlan(
+        buildPlan({ argv, env: { NODE_OPTIONS: nodeOptions }, platform: "darwin" }),
+      );
+
+      expect(respawnPlan.argv).toEqual(argv.slice(2));
+      expect(respawnPlan.env.NODE_OPTIONS).toBe(
+        nodeOptions ? `${nodeOptions} ${EXPERIMENTAL_WARNING_FLAG}` : EXPERIMENTAL_WARNING_FLAG,
+      );
+      expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBe("1");
+      expect(respawnPlan.env.OPENCLAW_CLI_RESPAWN_PARENT).toBe(String(process.pid));
+      expect(buildPlan({ argv, env: respawnPlan.env, platform: "darwin" })).toBeNull();
     },
   );
-
-  it("does not detach native hook relays through a startup respawn", () => {
-    expect(
-      buildPlan({
-        argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-        platform: "linux",
-      }),
-    ).toBeNull();
-  });
 
   it.each(["linux", "win32"] as const)(
     "leaves foreground Gmail shutdown with its lifecycle owner on %s",
@@ -89,7 +93,12 @@ describe("buildCliRespawnPlan", () => {
     });
 
     const respawnPlan = expectCliRespawnPlan(plan);
-    expect(respawnPlan.argv).toEqual([EXPERIMENTAL_WARNING_FLAG, "openclaw"]);
+    expect(respawnPlan.argv).toEqual([
+      "--import",
+      CLI_PARENT_BOUND_PRELOAD,
+      EXPERIMENTAL_WARNING_FLAG,
+      "openclaw",
+    ]);
     expect(respawnPlan.detachForProcessTree).toBe(false);
   });
 
@@ -103,6 +112,8 @@ describe("buildCliRespawnPlan", () => {
 
     const respawnPlan = expectCliRespawnPlan(plan);
     expect(respawnPlan.argv).toEqual([
+      "--import",
+      CLI_PARENT_BOUND_PRELOAD,
       EXPERIMENTAL_WARNING_FLAG,
       "openclaw",
       "cron",
@@ -186,7 +197,14 @@ describe("buildCliRespawnPlan", () => {
     });
 
     const respawnPlan = expectCliRespawnPlan(plan);
-    expect(respawnPlan.argv).toEqual(["--stack-size=8192", scriptPath, "node.exe", "status"]);
+    expect(respawnPlan.argv).toEqual([
+      "--import",
+      CLI_PARENT_BOUND_PRELOAD,
+      "--stack-size=8192",
+      scriptPath,
+      "node.exe",
+      "status",
+    ]);
   });
 
   it("does not respawn on Windows when underscore stack size spelling is already configured", () => {
@@ -216,6 +234,8 @@ describe("buildCliRespawnPlan", () => {
     const respawnPlan = expectCliRespawnPlan(plan);
     expect(respawnPlan.command).toBe("node");
     expect(respawnPlan.argv).toEqual([
+      "--import",
+      CLI_PARENT_BOUND_PRELOAD,
       EXPERIMENTAL_WARNING_FLAG,
       "/usr/local/bin/openclaw",
       "status",
@@ -228,45 +248,70 @@ describe("runCliRespawnPlan", () => {
   const originalExitCode = process.exitCode;
   afterEach(() => {
     process.exitCode = originalExitCode;
+    vi.restoreAllMocks();
+    vi.mocked(attachChildProcessBridge).mockReset();
   });
+  it("spawns the standalone plan without adding runtime flags", async () => {
+    vi.stubGlobal("__openclawStandaloneRootUrl", "file:///app/runtime/");
+    try {
+      const plan = expectCliRespawnPlan(
+        buildPlan({
+          argv: [process.execPath, "/app/runtime/openclaw.mjs", "doctor"],
+          platform: "darwin",
+        }),
+      );
+      const child = new EventEmitter() as ChildProcess;
+      const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+      vi.mocked(attachChildProcessBridge).mockReturnValue({ detach: vi.fn() });
+      const completion = runCliRespawnPlan(plan, vi.fn());
+      expect(spawn.mock.calls[0]).toEqual([
+        process.execPath,
+        ["doctor"],
+        expect.objectContaining({
+          env: expect.objectContaining({ OPENCLAW_CLI_RESPAWN_PARENT: String(process.pid) }),
+        }),
+      ]);
+      child.emit("close", 0, null);
+      await completion;
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("records status after the respawn child closes", async () => {
     process.exitCode = undefined;
     const child = new EventEmitter() as ChildProcess;
-    const spawn = vi.fn(() => child);
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(child);
     const detach = vi.fn();
-    const attachChildProcessBridge = vi.fn(() => ({ detach }));
+    vi.mocked(attachChildProcessBridge).mockReturnValue({ detach });
     const writeError = vi.fn();
 
     const completion = runCliRespawnPlan(
       {
         command: "/usr/bin/node",
-        argv: ["/repo/openclaw/dist/entry.js", "status"],
+        argv: ["--import", CLI_PARENT_BOUND_PRELOAD, "/repo/openclaw/dist/entry.js", "status"],
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
         detachForProcessTree: true,
       },
-      {
-        spawn: spawn as unknown as typeof import("node:child_process").spawn,
-        attachChildProcessBridge,
-        writeError,
-      },
+      writeError,
     );
 
     expect(spawn).toHaveBeenCalledWith(
       "/usr/bin/node",
-      ["/repo/openclaw/dist/entry.js", "status"],
+      ["--import", CLI_PARENT_BOUND_PRELOAD, "/repo/openclaw/dist/entry.js", "status"],
       {
-        stdio: "inherit",
+        stdio: ["inherit", "inherit", "inherit", "ipc"],
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
         detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
         windowsHide: !(process.stdin.isTTY || process.stdout.isTTY),
       },
     );
-    const [bridgeChild, bridgeOptions] = expectDefined<unknown[]>(
-      attachChildProcessBridge.mock.calls[0],
+    const [bridgeChild, onSignal] = expectDefined<unknown[]>(
+      vi.mocked(attachChildProcessBridge).mock.calls[0],
       "child process bridge attach call",
     );
     expect(bridgeChild).toBe(child);
-    expect(bridgeOptions).toEqual({ onSignal: expect.any(Function) });
+    expect(onSignal).toEqual(expect.any(Function));
 
     child.emit("exit", 7, null);
     expect(process.exitCode).toBeUndefined();

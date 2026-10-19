@@ -1,5 +1,6 @@
 /** Stable feature names advertised in Gateway hello responses. */
 export const GATEWAY_SERVER_CAPS = {
+  AGENT_SESSION_ID_CREATE: "agent-session-id-create-v1",
   BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
   CONTROL_UI_BROWSER_FOCUS: "control-ui-browser-focus",
@@ -22,6 +23,7 @@ export const GATEWAY_SERVER_CAPS = {
   NODE_WORKER_BUNDLE_STATUS: "node-worker-bundle-status-v1",
   NODE_WORKER_CAPTURED_EXEC_POLICY: "node-worker-captured-exec-policy",
   NODE_WORKER_WORKSPACE_QUIESCENCE: "node-worker-workspace-quiescence-v1",
+  NODE_WORKER_DEVICE_FOLDERS: "node-worker-device-folders-v1",
   NODE_WORKER_ENVIRONMENT_SESSION: "node-worker-environment-session-v1",
   NODE_WORKER_HOST_DIAGNOSTICS: "node-worker-host-diagnostics-v1",
   NODE_WORKER_IDLE_RETENTION: "node-worker-idle-retention-v1",
@@ -43,4 +45,5 @@ export const GATEWAY_SERVER_CAPS = {
   SYSTEM_AGENT_WIZARD_CANCEL: "openclaw-chat-wizard-cancel",
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
   TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
+  TALK_SESSION_CLOSE_DISPOSITION: "talk-session-close-disposition",
 } as const;

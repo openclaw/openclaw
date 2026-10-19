@@ -19,7 +19,29 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
 import { awaitAgentHarnessAgentEndHook } from "./lifecycle-hook-helpers.js";
-import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
+import { resolveAgentHarnessBeforePromptBuildResult as buildBase } from "./prompt-compaction-hook-helpers.js";
+
+function buildPrompt(overrides: Partial<Parameters<typeof buildBase>[0]> = {}) {
+  return buildBase({
+    prompt: "hello",
+    developerInstructions: "base",
+    messages: [],
+    ctx: {},
+    ...overrides,
+  });
+}
+
+type Hook = Parameters<typeof createMockPluginRegistry>[0][number];
+function promptHook(handler: Hook["handler"], options: Partial<Omit<Hook, "handler">> = {}): Hook {
+  return { hookName: "before_prompt_build", handler, ...options };
+}
+function installHooks(...hooks: Hook[]) {
+  initializeGlobalHookRunner(createMockPluginRegistry(hooks));
+}
+
+function toolAuthority(activeToolNames = () => ["memory_search"]) {
+  return { fingerprint: "synthetic", activeToolNames, assertActive: () => undefined };
+}
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-harness-injection-");
 
@@ -54,10 +76,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
             }),
           ).toMatchObject({ enqueued: true });
           const build = () =>
-            resolveAgentHarnessBeforePromptBuildResult({
-              prompt: "hello",
-              developerInstructions: "base",
-              messages: [],
+            buildPrompt({
               ctx: { config, sessionKey, agentId: "main", runId: "harness-injection-run" },
             });
           const first = await build();
@@ -79,15 +98,8 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
   it("preserves the admitted request through projected prompts", async () => {
     const handler = vi.fn(async (_event: unknown) => undefined);
     const history = [{ role: "user", content: "Earlier request" }];
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler,
-        },
-      ]),
-    );
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
+    installHooks(promptHook(handler));
+    const result = await buildPrompt({
       prompt: "Current message: hello",
       currentInboundContext: {
         text: "Prior conversation: remember my preference",
@@ -96,13 +108,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       currentUserMessage: "hello",
       currentUserMessageId: "message-1",
       messages: async () => history,
-      developerInstructions: "base",
-      ctx: {},
-      toolAuthority: {
-        fingerprint: "synthetic",
-        activeToolNames: () => ["memory_search"],
-        assertActive: () => undefined,
-      },
+      toolAuthority: toolAuthority(),
     });
     expect(result.prompt).toBe(
       "Prior conversation: remember my preference\nCurrent message: hello",
@@ -131,23 +137,11 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     "normalizes admitted message content for prompt hooks: $expected",
     async ({ content, expected }) => {
       const handler = vi.fn(async (_event: unknown) => undefined);
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([
-          { hookName: "before_prompt_build", handler },
-          { hookName: "before_prompt_build", requiresToolAuthority: true, handler },
-        ]),
-      );
-      await resolveAgentHarnessBeforePromptBuildResult({
+      installHooks(promptHook(handler), promptHook(handler, { requiresToolAuthority: true }));
+      await buildPrompt({
         prompt: "Projected transport prompt",
         currentUserMessage: { content, idempotencyKey: "original:user" },
-        developerInstructions: "base",
-        messages: [],
-        ctx: {},
-        toolAuthority: {
-          fingerprint: "synthetic",
-          activeToolNames: () => ["memory_search"],
-          assertActive: () => undefined,
-        },
+        toolAuthority: toolAuthority(),
       });
       expect(handler).toHaveBeenCalledTimes(2);
       for (const [event] of handler.mock.calls) {
@@ -168,35 +162,25 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       },
     ];
     const retained: (typeof messages)[] = [];
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          requiresToolAuthority: true,
-          handler: (event) => {
-            expect(event).not.toHaveProperty("currentUserMessage");
-            expect(event).not.toHaveProperty("currentUserMessageId");
-            const snapshot = (event as { messages: typeof messages }).messages;
-            expect(snapshot[0]!["__openclaw"]).toEqual({ mirrorIdentity: "synthetic" });
-            expect(snapshot[0]!.content[0]!.arguments.nested.value).toBe("original");
-            retained.push(snapshot);
-            snapshot[0]!.content[0]!.arguments.nested.value = "immediate mutation";
-            return { prependContext: "contribution" };
-          },
+    installHooks(
+      promptHook(
+        (event) => {
+          expect(event).not.toHaveProperty("currentUserMessage");
+          expect(event).not.toHaveProperty("currentUserMessageId");
+          const snapshot = (event as { messages: typeof messages }).messages;
+          expect(snapshot[0]!["__openclaw"]).toEqual({ mirrorIdentity: "synthetic" });
+          expect(snapshot[0]!.content[0]!.arguments.nested.value).toBe("original");
+          retained.push(snapshot);
+          snapshot[0]!.content[0]!.arguments.nested.value = "immediate mutation";
+          return { prependContext: "contribution" };
         },
-      ]),
+        { requiresToolAuthority: true },
+      ),
     );
     const build = () =>
-      resolveAgentHarnessBeforePromptBuildResult({
-        prompt: "hello",
-        developerInstructions: "base",
+      buildPrompt({
         messages,
-        ctx: {},
-        toolAuthority: {
-          fingerprint: "synthetic-authority",
-          activeToolNames: () => ["read"],
-          assertActive: () => undefined,
-        },
+        toolAuthority: toolAuthority(() => ["read"]),
       });
     expect((await build()).prompt).toBe("contribution\n\nhello");
     expect(messages[0]!.content[0]!.arguments.nested.value).toBe("original");
@@ -215,39 +199,19 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       calls.push(next);
       return { prependContext: next };
     };
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "agent_turn_prepare",
-          handler: (event) => mutate(event, "original", "prepare"),
-        },
-        {
-          hookName: "before_prompt_build",
-          priority: 10,
-          handler: (event) => mutate(event, "original", "first"),
-        },
-        {
-          hookName: "before_prompt_build",
-          priority: 0,
-          handler: (event) => mutate(event, "first", "second"),
-        },
-        {
-          hookName: "before_prompt_build",
-          requiresToolAuthority: true,
-          handler: (event) => mutate(event, "original", "authorized"),
-        },
-      ]),
+    installHooks(
+      promptHook((event) => mutate(event, "original", "prepare"), {
+        hookName: "agent_turn_prepare",
+      }),
+      promptHook((event) => mutate(event, "original", "first"), { priority: 10 }),
+      promptHook((event) => mutate(event, "first", "second"), { priority: 0 }),
+      promptHook((event) => mutate(event, "original", "authorized"), {
+        requiresToolAuthority: true,
+      }),
     );
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: "hello",
-      developerInstructions: "base",
+    const result = await buildPrompt({
       messages,
-      ctx: {},
-      toolAuthority: {
-        fingerprint: "synthetic",
-        activeToolNames: () => [],
-        assertActive: () => undefined,
-      },
+      toolAuthority: toolAuthority(() => []),
     });
     expect(calls).toEqual(["prepare", "first", "second", "authorized"]);
     expect(result.prompt).toBe("prepare\n\nfirst\n\nsecond\n\nauthorized\n\nhello");
@@ -255,161 +219,110 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
   });
   it("classifies restrictive globs before building system instructions", async () => {
     const toolsAllow = ["read*"];
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: () => ({
-            appendSystemContext: "after replacement",
-            prependSystemContext: "before replacement",
-            systemPrompt: "hook replacement",
-            toolsAllow,
-          }),
-        },
-      ]),
+    installHooks(
+      promptHook(() => ({
+        appendSystemContext: "after replacement",
+        prependSystemContext: "before replacement",
+        systemPrompt: "hook replacement",
+        toolsAllow,
+      })),
     );
     const build = vi.fn(() => "policy-filtered base");
 
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
+    const result = await buildPrompt({
       prompt: "answer directly",
       developerInstructions: { build },
-      messages: [],
-      ctx: {},
     });
 
     expect(build).toHaveBeenCalledWith({ toolsAllow, hasToolRestrictions: true });
     expect(result).toMatchObject({
       toolsAllow,
+      threadDeveloperInstructions: "hook replacement",
+      turnDeveloperInstructions:
+        "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
       developerInstructions:
         "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\nhook replacement\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
     });
     expect(result.developerInstructions).not.toContain("policy-filtered base");
   });
 
-  it("runs heartbeat_prompt_contribution on a heartbeat turn and prepends its contribution", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "heartbeat_prompt_contribution",
-          handler: () => ({ prependContext: "Run the base-heartbeat skill." }),
-        },
-      ]),
-    );
-
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: "Read HEARTBEAT.md.",
-      developerInstructions: "base instructions",
-      messages: async () => {
-        throw new Error("History is unavailable");
-      },
-      ctx: { trigger: "heartbeat", agentId: "agent-1", sessionKey: "session-1" },
-    });
-
-    expect(result.prompt).toBe("Run the base-heartbeat skill.\n\nRead HEARTBEAT.md.");
-    // The heartbeat contribution affects only the prompt, not developer instructions.
-    expect(result.developerInstructions).toBe("base instructions");
-  });
-
-  it("runs heartbeat contributions before other prompt-build hooks", async () => {
-    const calls: string[] = [];
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "heartbeat_prompt_contribution",
-          handler: () => {
-            calls.push("heartbeat");
-            return { prependContext: "heartbeat context" };
-          },
-        },
-        {
-          hookName: "before_prompt_build",
-          handler: () => {
+  it.each([
+    ["only", "read", "beat", "beat\n\nread"],
+    ["ordered", "hello", "beat", "beat\n\nprompt\n\nhello"],
+    ["user", "hello", "should not appear", "hello"],
+  ] as const)(
+    "dispatches heartbeat contributions for %s turns",
+    async (mode, prompt, contribution, expected) => {
+      const calls: string[] = [];
+      const handler = vi.fn(() => {
+        calls.push("heartbeat");
+        return { prependContext: contribution };
+      });
+      const hooks = [promptHook(handler, { hookName: "heartbeat_prompt_contribution" })];
+      if (mode === "ordered") {
+        hooks.push(
+          promptHook(() => {
             calls.push("before_prompt_build");
-            return { prependContext: "prompt context" };
-          },
-        },
-      ]),
-    );
-
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: "hello",
-      developerInstructions: "base instructions",
-      messages: [],
-      ctx: { trigger: "heartbeat", agentId: "agent-1", sessionKey: "session-1" },
-    });
-
-    expect(calls).toEqual(["heartbeat", "before_prompt_build"]);
-    expect(result.prompt).toBe("heartbeat context\n\nprompt context\n\nhello");
-  });
+            return { prependContext: "prompt" };
+          }),
+        );
+      }
+      installHooks(...hooks);
+      const result = await buildPrompt({
+        prompt,
+        messages: mode === "only" ? () => Promise.reject(new Error("History unavailable")) : [],
+        ctx: { trigger: mode === "user" ? "user" : "heartbeat" },
+      });
+      expect(handler).toHaveBeenCalledTimes(mode === "user" ? 0 : 1);
+      const orderedCalls = ["heartbeat", ...(mode === "ordered" ? ["before_prompt_build"] : [])];
+      expect(calls).toEqual(mode === "user" ? [] : orderedCalls);
+      expect(result).toMatchObject({ prompt: expected, developerInstructions: "base" });
+    },
+  );
 
   it("preserves authenticated channel identity in prompt-build hook context", async () => {
-    const handler = vi.fn(() => undefined);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_prompt_build", handler }]),
-    );
-
-    await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: "hello",
-      developerInstructions: "base instructions",
-      messages: [],
-      ctx: {
-        trigger: "user",
-        accountId: "account-a",
-        channel: "telegram",
-        channelId: "chat-a",
-        senderId: "sender-a",
-        chatId: "chat-a",
-        channelContext: {
-          sender: { id: "sender-a" },
-          chat: { id: "chat-a" },
-        },
+    const ctx = {
+      trigger: "user",
+      accountId: "account-a",
+      channel: "telegram",
+      channelId: "chat-a",
+      senderId: "sender-a",
+      chatId: "chat-a",
+      channelContext: {
+        sender: { id: "sender-a" },
+        chat: { id: "chat-a" },
       },
-    });
+    } satisfies Parameters<typeof buildBase>[0]["ctx"];
+    const expected = structuredClone(ctx);
+    const handler = vi.fn(() => undefined);
+    installHooks(promptHook(handler));
 
-    expect(handler).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        accountId: "account-a",
-        channel: "telegram",
-        channelId: "chat-a",
-        senderId: "sender-a",
-        chatId: "chat-a",
-        channelContext: {
-          sender: { id: "sender-a" },
-          chat: { id: "chat-a" },
-        },
-      }),
-    );
+    await buildPrompt({ ctx });
+
+    expect(handler).toHaveBeenCalledWith(expect.anything(), expect.objectContaining(expected));
   });
 
   it("runs authorized enrichment after restrictive hooks finalize the tool surface", async () => {
     const calls: string[] = [];
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: () => {
-            calls.push("restrict");
-            return { prependContext: "regular context", toolsAllow: ["message"] };
-          },
+    installHooks(
+      promptHook(() => {
+        calls.push("restrict");
+        return { prependContext: "regular context", toolsAllow: ["message"] };
+      }),
+      promptHook(
+        (_event, ctx) => {
+          calls.push("enrich");
+          expect((ctx as PluginHookAgentContext).toolAuthority?.allows("memory_search")).toBe(
+            false,
+          );
+          return { prependContext: "authorized context" };
         },
-        {
-          hookName: "before_prompt_build",
-          requiresToolAuthority: true,
-          handler: (_event, ctx) => {
-            calls.push("enrich");
-            expect((ctx as PluginHookAgentContext).toolAuthority?.allows("memory_search")).toBe(
-              false,
-            );
-            return { prependContext: "authorized context" };
-          },
-        },
-      ]),
+        { requiresToolAuthority: true },
+      ),
     );
     let activeToolNames: string[] = [];
 
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: "hello",
+    const result = await buildPrompt({
       developerInstructions: {
         build: ({ toolsAllow }) => {
           calls.push("build");
@@ -417,33 +330,10 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
           return "base instructions";
         },
       },
-      messages: [],
-      ctx: {},
-      toolAuthority: {
-        fingerprint: "turn-authority",
-        activeToolNames: () => activeToolNames,
-        assertActive: () => undefined,
-      },
+      toolAuthority: toolAuthority(() => activeToolNames),
     });
 
     expect(calls).toEqual(["restrict", "build", "enrich"]);
     expect(result.prompt).toBe("regular context\n\nauthorized context\n\nhello");
-  });
-
-  it("skips heartbeat_prompt_contribution off a heartbeat turn", async () => {
-    const handler = vi.fn(() => ({ prependContext: "should not appear" }));
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "heartbeat_prompt_contribution", handler }]),
-    );
-
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: "hello",
-      developerInstructions: "base instructions",
-      messages: [],
-      ctx: { trigger: "user", agentId: "agent-1", sessionKey: "session-1" },
-    });
-
-    expect(handler).not.toHaveBeenCalled();
-    expect(result.prompt).toBe("hello");
   });
 });

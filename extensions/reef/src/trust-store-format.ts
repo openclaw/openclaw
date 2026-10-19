@@ -140,8 +140,6 @@ export function mergeReefRejectionNotice(
   };
 }
 
-export type { ReefOutboundDeliveryPreparation } from "./types.js";
-
 export type ReefDeliverySettlement = {
   readonly delivery: ReefOutboundDelivery;
   readonly recovery: ReefRejectionRecovery;

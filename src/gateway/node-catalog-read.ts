@@ -3,7 +3,7 @@ import type { DevicePairingNodeSnapshot } from "../infra/device-pairing-read.typ
 import { readDevicePairingNodeSnapshot } from "../infra/device-pairing-store-readonly.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
-import { createKnownNodeCatalog, listKnownNodes } from "./node-catalog.js";
+import { createKnownNodeCatalog } from "./node-catalog.js";
 import {
   collectNodeCatalogRuntimeState,
   readNodeCatalogRevision,
@@ -52,7 +52,7 @@ export async function readKnownNodeCatalog(
   if (!result) {
     const nodePairing = projectNodePairing(pairing.paired);
     const catalog = createKnownNodeCatalog({
-      pairedDevices: pairing.paired,
+      pairedDevices: pairing.paired.filter((device) => pairing.bindings.has(device.deviceId)),
       pairedNodes: nodePairing.paired,
       // Environment discovery never exposes pending-only node metadata.
       pendingNodes: view === "nodes" ? nodePairing.pending : undefined,
@@ -64,7 +64,7 @@ export async function readKnownNodeCatalog(
       ),
     });
     result = Object.freeze({
-      nodes: freezeJsonSnapshot(structuredClone(listKnownNodes(catalog))),
+      nodes: freezeJsonSnapshot(structuredClone(catalog)),
       connectedNodes: Object.freeze(prepared.connectedNodes),
     });
     prepared.views.set(view, result);

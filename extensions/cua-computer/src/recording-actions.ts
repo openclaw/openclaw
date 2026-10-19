@@ -47,6 +47,9 @@ function structured(result: CuaToolResult, tool: string): unknown {
   if (result.isError) {
     throw driverError(result, tool);
   }
+  if (result.structuredContent) {
+    return result.structuredContent;
+  }
   if (!result.structuredJson) {
     throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned no structuredContent`);
   }

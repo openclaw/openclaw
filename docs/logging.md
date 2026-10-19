@@ -175,6 +175,12 @@ Console logs are **TTY-aware** and formatted for readability:
 
 Console formatting is controlled by `logging.consoleStyle`.
 
+Gateway startup notices for `OPENCLAW_RAW_STREAM` and `OPENCLAW_RAW_STREAM_PATH`
+identify configured flags without printing their values. Successful LSP startup,
+native web-search activation, and web-search provider auto-detection stay quiet.
+Video generation retains the first skipped-candidate warning and all returned
+attempts without repeating every skip at debug level.
+
 SQLite worker diagnostics use stderr. After the final backend closes normally,
 the worker flushes queued file logs and gives pending console output up to five
 seconds to drain before acknowledging close. Source-loaded backends and compiled
@@ -341,6 +347,22 @@ the Gateway. Earlier tool actions may already have completed, so check their
 results before repeating them.
 
 ### Targeted model transport diagnostics
+
+OpenAI Responses transport failures retain structured status, code, type, and
+error/cause names. When the active request signal was aborted, `abortReason`
+identifies OpenClaw-owned causes with fixed labels: `idle_timeout`, `no_progress`,
+`first_event_timeout`, `request_deadline`, `session_watchdog`, `restart`,
+`superseded`, or `caller_abort`. Unclassified caller cancellation uses
+`caller_abort`. Provider error messages and arbitrary abort-reason text are never
+logged because they can contain prompt or tool content. Headers and request or
+response bodies are also omitted.
+
+Prompt-cache history warnings identify the first changed message and bounded
+field paths, such as `content[0].thinkingSignature` or `content[0].arguments`.
+They report no message content, argument values, or signature bytes. Unknown
+extension keys appear as `other`; blocks beyond the retained diagnostic prefix
+appear as `content[remaining]`. A history warning identifies changed model
+context; it does not alone prove why a provider's cache-read tokens dropped.
 
 When debugging provider calls, use targeted environment flags instead of raising
 all logs to `debug`:
@@ -640,15 +662,15 @@ even when content capture is off. Missing logs do not prove an absence of stalls
 
 When process diagnostics are enabled, the `sessions/lifecycle` logger emits
 `session lifecycle queue waiting` once when a queue acquisition is still pending
-after one second. It identifies the `mutation` or `lifecycle` queue and samples
-its current holder at that instant. The holder can have changed since the
-waiter entered the queue. A delayed timer that runs after acquisition emits no
+after one second. It identifies the controller mutation queue or lifecycle
+admission/settlement wait and samples an observed current holder at that instant.
+The holder can have changed since the waiter entered the queue. A delayed timer that runs after acquisition emits no
 holder sample.
 
 `operationId` and `holderOperationId` identify diagnostic operation instances
 within `diagnosticEpoch`, PID and thread. Operations use the fixed boundary
 labels `lifecycle`, `mutation` and `compaction`. Mutations also include the bounded
-`mutationKind` (for example, `create`, `archive`, `delete`, or `worktree-cleanup`);
+`mutationKind` (for example, `create`, `delete`, or `worktree-cleanup`);
 queue samples include `holderMutationKind`. Existing request traces appear in `operationTraceId`/`operationSpanId`
 and separate `holderTraceId`/`holderSpanId` fields when present. Missing trace
 fields remain unknown; no new trace or audit execution identity is created.
@@ -663,24 +685,34 @@ session. `holderSessionScopeHash` identifies that same scope for the current hol
 No session titles, transcript content, repository names, or raw identities are logged.
 
 `slow session lifecycle operation` records operations taking at least one
-second through their actual queued work's settlement. It separates
+second through their actual owner release. It separates
 `mutationQueueWaitMs`, `lifecycleQueueWaitMs`, `completionDelayMs` and
 `phaseDurationsMs.prepare`, `.run` and `.finalize`. The holder's current
 `holderPhase` can also identify activation, admission or release work. A
-`lifecycle` operation describes its queue attempt after the existing active-
-mutation idle wait; that prior idle wait is not measured here. Calls with no
-normalized identities have no queue and emit no queue-operation summary. A
+`lifecycle` operation includes admission, validation, the store-writer barrier
+and the acquired effect lifetime. Mutation timing includes the wait for captured
+turns, claims and effects before its body runs. A holder can remain unknown while
+a mutation waits for a turn or claim; an effect sample names only an effect whose
+settlement that mutation is actually awaiting. `completionDelayMs` measures
+synchronous owner-release cleanup after the callback settles. A
 caller can cancel before all of its queued work unwinds; `signalAborted`
 reports the signal without claiming that the holder has released.
 
 The tracker preserves outer ownership across reentrant work and retires a
-holder only when its actual queue callback exits. Its state weakly follows
-existing queue objects; it does not create another execution queue. Per
-runtime isolate, it retains at most 128 holder descriptors and 32 one-shot
-wait timers, and emits at most 60 records per minute. The queue timing owner
-explicitly distinguishes reentry, so unobserved outer holders stay unknown at
-capacity or after enablement. `omittedObservations` on a later record reports
-suppressed observations; missing records never prove no wait.
+holder only when its actual callback exits and the owner releases custody. Its
+metadata follows existing controller mutations and effects; it does not create
+another execution queue. Per runtime isolate, it retains at most 128 holder descriptors and 32 one-shot
+wait timers, and emits at most 60 records per minute. The mutation owner
+explicitly distinguishes reentry, so unobserved outer mutation holders stay
+unknown at capacity or after enablement. `omittedObservations` on a later record
+reports suppressed observations; missing records never prove no wait.
+
+Controller transition records use `session controller phase` on the `diagnostic`
+logger at `info` level, with the same process diagnostics gate. Session, source
+and priority-source identities are salted digests, and reasons are fixed labels.
+These records have a separate 60-record-per-minute budget so transition traffic
+cannot suppress the slow warnings above. Their `omittedObservations` count applies
+to phase records independently.
 
 Elapsed intervals can include asynchronous waits and nested work, so phase
 and queue totals need not form a disjoint partition. `isMainThread=true` identifies
@@ -725,6 +757,9 @@ structured file log. Records are limited to 60 per minute.
 the absolute checkout path; linked checkouts have different IDs. `checkoutClass`
 is `managed` when the caller supplies managed-index ownership, otherwise
 `unspecified`. Paths, refs, command arguments, and output contents are not logged.
+For `checkout.diff`, `scope` distinguishes `all`, `uncommitted`, and `commit`;
+`summaryOnly` distinguishes summary polling from full patch requests. These
+fields describe the admitted request without inspecting the checkout again.
 
 `workerQueueWaitMs` measures admission wait (null if never dispatched).
 `firstHostRequestMs` includes that wait plus worker startup and work before the
@@ -814,8 +849,17 @@ Measured phases log both their start and elapsed
 duration; `total` is elapsed time from process startup (or the current in-process
 restart). These are wall times, including asynchronous waits, not CPU measurements.
 Nested durations overlap their parent phases; do not add them to the parent total.
+Plugin service starts taking at least 250 ms always log one compact
+`sidecars.plugin-services.<plugin>.<service>` span with elapsed time and a
+`success` or `failure` outcome, even without opt-in tracing. Plugin and service IDs
+use encoded diagnostic segments; the record contains no service payload or error text.
 Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the complete breakdown and per-plugin
-import and registration timings.
+import and registration timings. `cli.main.gateway-run-select-environment-imports`
+separates the environment selector's module imports from its work;
+`cli.environment.*` breaks down trusted dotenv loading, config reads, validation,
+and recovery inside that work. These steps also appear in `process.bootstrap`.
+For external plugins, `modulePreparationMs` measures awaited source acquisition
+inside `loadMs`; it is not additional time to add to that total.
 
 Desktop permission narrowing and session identity checks remain on their required
 admission paths. Transcript projection repair, orphan settlement, channel
@@ -911,6 +955,16 @@ and scheduling delays; they do not establish lock contention. The separate
 errors. These elapsed durations do not measure SQL CPU time or establish a
 causal link to a nearby request.
 
+Hold warnings label the callback as `callbackKind: "application-transaction"`:
+OpenClaw's transaction body, not a SQLite busy handler or SQL function.
+`phases.databaseAdmissionWaitMs` measures synchronous metadata exchanges with the
+host, separately from authority waits in `hostAdmissionWaitMs`. Metadata waits
+during COMMIT belong to this field and are excluded from the hold's `commitMs`.
+The legacy
+`sqlMs` field excludes both waits and commit time, but includes JavaScript between
+SQL statements. The default 1,000 ms logging threshold does not establish a
+one-second timeout.
+
 Older builds report `session.reclamation.commit-settlement` for a parent-side
 synchronous SQLite check after authorizing a reclamation or cold-storage commit.
 The parent now atomically accepts the commit after checking live authority and
@@ -956,6 +1010,20 @@ The timing fields separate the elapsed interval into:
 These fields are available when the queued callback started and finished;
 `elapsedMs` records the total duration. The warning's console line carries the
 same fields as `key=value` pairs; `openclaw logs --json` shows the original `raw` record.
+
+`slow agent database reservation` covers direct, Worker, and ordered-read
+reservations when `queueWaitMs + writerExecutionMs` reaches 1000 ms, even when
+execution itself is fast. Completion delay alone does not trigger this warning.
+When a writer was holding the lane at enqueue, `blockingOperation` and optional
+`blockingCaller` identify that holder; `blockingWorkerOperations` lists its bounded
+Worker operation labels. This is the holder observed at enqueue, not a breakdown
+of every writer ahead in the queue. Reentrant borrowing does not emit a second
+reservation warning. No reservation warning is emitted below the threshold.
+
+Prometheus already exposes `openclaw_worker_queue_wait_seconds` with
+`kind="sqlite_writer"` and bounded `request_class` labels. It measures Worker
+request enqueue-to-dispatch time; an outer reservation wait before that enqueue
+is visible in the reservation warning, not in this Worker histogram.
 
 Use `operation` to locate the owning code path. It does not identify a specific
 SQL statement, measure CPU time or lock contention, or establish that a nearby
@@ -1100,6 +1168,26 @@ capturing raw prompt or response content:
 These fields are available to diagnostic snapshots, model-call plugin hooks, and
 OTEL model-call spans/metrics when diagnostics export is enabled.
 
+Local llama.cpp and native Ollama requests show “Waiting for the local model to
+respond” after one second without a response event. Control UI, TUI, and channels
+with progress drafts show this transient status, including later model calls in
+the same turn. It clears on the first stream event, cancellation, failure, or
+completion. Fast requests do not flash a waiting status, and no server polling
+or user configuration is required.
+
+If you cancel while this local-model wait is visible, the terminal acknowledgment
+adds “Cancellation requested; the local model may still be finishing.” Control UI
+and TUI show the caveat for five seconds; channels append it to their existing stop
+reply. The run ends immediately. This is not evidence that the backend is still
+busy or has released its slot, and fast cancels or cancels after output begins do
+not add the caveat.
+
+“Waiting for a free model slot” is reserved for request-correlated backend
+evidence. The pinned llama.cpp server and Ollama do not expose that evidence for
+queued requests: occupied slots, model residency, and silence alone cannot
+distinguish queueing from loading or prompt processing. They use the generic
+response-wait wording.
+
 Completed llama.cpp and Ollama calls also report `providerProcessingMs` and
 `providerWaitEstimateMs` in model-call diagnostics, provider request timeline
 events, and Gateway stability snapshots and bundles. `openclaw gateway stability`
@@ -1119,6 +1207,7 @@ session's previous request), `responseId`, `sessionId`, and `promptTokens` when
 reported by the provider. The previous/current wire summaries include the
 requested `serviceTier` so tier switches can be distinguished from cache loss
 on an unchanged route.
+Drops classified as `unattributed` use `debug`; attributed drops remain warnings.
 `providerPrefix` compares final encoded request segments against the last request
 with usable cache-read usage: system instructions, tools, history messages, and
 other request parameters. It names the first differing segment or `prefix-match`
@@ -1137,9 +1226,9 @@ baselines. No prompt content or digest values appear in these warnings.
 OpenAI service-tier rejection and downgrade records include the requested model,
 account route, run/session IDs, original requested tier, and final wire-request
 tier. Terminal responses also include the served tier, response ID/model, total
-input tokens (including cached input), and cached tokens when reported. Each
-downgraded request is logged even when the account-catalog observation is
-unchanged. Join its response ID to a prompt-cache warning to inspect the same
+input tokens (including cached input), and cached tokens when reported. Changed
+account-catalog observations log at `info`; repeated observations use `debug`.
+Join the response ID to a prompt-cache diagnostic to inspect the same
 completion; a downgrade alone does not prove a cache miss. These are raw file-log
 fields and follow the usual redaction rules at egress.
 
@@ -1165,11 +1254,22 @@ Log messages should contain IDs, sizes, and outcomes, never message text, prompt
 tool arguments, or tool results. Config snapshots, audit output, and
 credential-bearing URLs and command-line options retain their credential masking.
 
+Gateway agent ingress returns replies through results and session transcripts
+without echoing them to service logs. Nested-agent replies are not printed to
+logs. Interactive `openclaw agent` commands still print replies to stdout.
+Stalled and stuck session diagnostics retain session IDs, ages, tool names, cron
+metadata, and recovery outcomes without copying assistant replies from transcripts.
+
 `logging.redactPatterns` replaces the default regex string list for logs and
 diagnostics. Built-in structural protections for form bodies, structured
 authorization headers, and bare AWS secret access keys always apply, including
 when this list is customized. Redaction is best-effort; review diagnostic
 exports before sharing them.
+
+If the list contains malformed or rejected patterns, OpenClaw skips those entries,
+keeps valid patterns, and adds the default protections. It warns once per process
+without printing the rejected values. Correct `logging.redactPatterns` in your
+config; directory inspection and Doctor can still report the config error.
 
 Tool arguments and results are not secret-masked. This includes model context,
 session transcripts, tool events and summaries in the Control UI, session-history

@@ -3,10 +3,29 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
+import * as databaseRegistry from "../../state/openclaw-agent-db-registry.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { dedupeSessionStoreTargetsBySqliteTarget } from "./targets.js";
 
 describe("session store target dedupe", () => {
+  it("reads one ownership snapshot for multiple shared targets", async () => {
+    await withTempHome(async (home) => {
+      const targets = Array.from({ length: 3 }, (_, index) => ({
+        agentId: "main",
+        storePath: path.join(home, `shared-${index}.sqlite`),
+      }));
+      const readRegistry = vi.spyOn(databaseRegistry, "listOpenClawRegisteredAgentDatabases");
+      try {
+        expect(
+          dedupeSessionStoreTargetsBySqliteTarget(targets, { defaultAgentId: "main" }),
+        ).toEqual(targets);
+        expect(readRegistry).toHaveBeenCalledTimes(1);
+      } finally {
+        readRegistry.mockRestore();
+      }
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "leaves a sole canonical target's inspection to its consumer",
     async () => {

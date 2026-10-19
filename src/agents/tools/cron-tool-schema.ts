@@ -37,7 +37,7 @@ const CRON_ACTIONS = [
 
 const CRON_SELF_ACTIONS = ["status", "list", "get", "remove", "runs", "next_check"] as const;
 
-const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream"] as const;
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream", "event"] as const;
 // When cron.triggers.enabled is explicitly false, the scheduler rejects
 // stream schedules, script payloads, and condition triggers, so the
 // model-facing schema must not advertise them.
@@ -89,6 +89,18 @@ function createCronScheduleSchema(params: {
           ],
           { description: "Schedule kind" },
         ),
+        ...(params.triggersEnabled
+          ? {
+              source: Type.Optional(
+                Type.String({ description: "Installed event-source plugin ID (kind=event)" }),
+              ),
+              options: Type.Optional(
+                Type.Record(Type.String(), Type.Unknown(), {
+                  description: "Event source options from its plugin catalog (kind=event)",
+                }),
+              ),
+            }
+          : {}),
         at: Type.Optional(Type.String({ description: "ISO-8601 time (kind=at)" })),
         everyMs: optionalPositiveIntegerSchema({
           description: "Interval ms (kind=every)",
@@ -101,13 +113,13 @@ function createCronScheduleSchema(params: {
         expr: Type.Optional(
           Type.String({
             description:
-              'Cron wall-time expr; never UTC-convert. Missing tz=Gateway local. Example "0 18 * * *", "Asia/Shanghai".',
+              'Cron wall-time expr; never UTC-convert. Missing tz preserves the existing cron timezone on update; otherwise Gateway local. Example "0 18 * * *", "Asia/Shanghai".',
           }),
         ),
         tz: Type.Optional(
           Type.String({
             description:
-              'IANA timezone for wall-clock fields; missing=Gateway host local timezone. Example "Asia/Shanghai".',
+              'IANA timezone for wall-clock fields. Omit on update to preserve the existing cron timezone; otherwise defaults to Gateway host local timezone. Example "Asia/Shanghai".',
           }),
         ),
         staggerMs: optionalNonNegativeIntegerSchema({

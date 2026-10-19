@@ -63,7 +63,6 @@ suite.define(() => {
       async ({ page }) => {
         await page.clock.setFixedTime(new Date(updatedAt));
         const gateway = await installMockGateway(page, {
-          communityInviteDismissed: true,
           methodResponses: responses,
         });
         await page.goto(`${suite.server.baseUrl}usage`);

@@ -1,11 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { readAcpSessionCommand } from "../acp/runtime/session-meta-read.worker.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 
 export function readSessionRowsSharedFacts(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: "sessionRows.sharedFacts" }>,
 ) {
   const readSharedFacts = () => {
@@ -38,6 +38,6 @@ export function readSessionRowsSharedFacts(
     };
   };
   return command.entries.some((entry) => entry.repositoryWorkspace)
-    ? runSqliteDeferredTransactionSync(db, readSharedFacts)
+    ? runSqliteReadSnapshotSync(db, readSharedFacts)
     : readSharedFacts();
 }

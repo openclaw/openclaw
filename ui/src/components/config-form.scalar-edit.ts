@@ -1,4 +1,5 @@
 // Scalar edit sessions keep their initial primitive branch while focused rerenders apply patches.
+type ScalarControl = HTMLInputElement | HTMLTextAreaElement;
 type ScalarValueBranch = "string" | "number" | "boolean";
 
 export type ScalarEditHint = {
@@ -7,14 +8,11 @@ export type ScalarEditHint = {
 
 type ScalarInputState = {
   edit?: ScalarEditHint;
-  controlIdentity: unknown;
-  sourceIdentity: unknown;
   pathKey: string;
   presentationIdentity: string;
-  renderedValue: string;
 };
 
-const scalarInputState = new WeakMap<HTMLInputElement, ScalarInputState>();
+const scalarInputState = new WeakMap<ScalarControl, ScalarInputState>();
 
 export function scalarValueBranch(value: unknown): ScalarValueBranch | undefined {
   const type = typeof value;
@@ -22,7 +20,7 @@ export function scalarValueBranch(value: unknown): ScalarValueBranch | undefined
 }
 
 export function beginScalarEdit(
-  target: HTMLInputElement,
+  target: ScalarControl,
   initialBranch: ScalarValueBranch | undefined,
 ): ScalarEditHint {
   const state = scalarInputState.get(target);
@@ -34,46 +32,24 @@ export function beginScalarEdit(
 }
 
 export function scalarEditHintForInput(
-  target: HTMLInputElement,
+  target: ScalarControl,
   initialBranch: ScalarValueBranch | undefined,
 ): ScalarEditHint {
   return scalarInputState.get(target)?.edit ?? { branch: initialBranch };
 }
 
-export function finishScalarEdit(target: HTMLInputElement): void {
+export function finishScalarEdit(target: ScalarControl): void {
   const state = scalarInputState.get(target);
   if (state) {
     state.edit = undefined;
   }
 }
 
-export function setControlValidity(
-  target: HTMLInputElement | HTMLTextAreaElement,
-  message: string,
-  errorContainer = ".settings-row",
-): boolean {
-  target.setCustomValidity(message);
-  target.setAttribute("aria-invalid", String(Boolean(message)));
-  const error = target.closest(errorContainer)?.querySelector<HTMLElement>(".cfg-field__error");
-  if (error) {
-    error.hidden = !message;
-    error.textContent = message;
-  }
-  return !message;
-}
-
-export function syncScalarInputIdentity(
-  element: Element | undefined,
-  controlIdentity: unknown,
-  sourceIdentity: unknown,
+export function syncScalarEditIdentity(
+  element: ScalarControl,
   pathKey: string,
   presentationIdentity: string,
-  renderedValue: string,
-  revalidate: (target: HTMLInputElement) => void,
 ): void {
-  if (!(element instanceof HTMLInputElement)) {
-    return;
-  }
   const previous = scalarInputState.get(element);
   const edit =
     element.ownerDocument.activeElement === element &&
@@ -81,34 +57,9 @@ export function syncScalarInputIdentity(
     previous.presentationIdentity === presentationIdentity
       ? previous.edit
       : undefined;
-  if (previous) {
-    if (
-      !Object.is(previous.sourceIdentity, sourceIdentity) ||
-      previous.pathKey !== pathKey ||
-      previous.presentationIdentity !== presentationIdentity ||
-      previous.renderedValue !== renderedValue
-    ) {
-      // A focused input whose DOM value drifted from the last render holds an
-      // in-flight edit the model has not committed yet (mid-keystroke or
-      // mid-automation fill). Resetting it here silently eats that input when
-      // a background config refresh lands; blurred fields keep the
-      // authoritative-reset contract.
-      if (element.matches(":focus") && element.value !== previous.renderedValue) {
-        revalidate(element);
-      } else {
-        element.value = renderedValue;
-        setControlValidity(element, "");
-      }
-    } else if (!Object.is(previous.controlIdentity, controlIdentity)) {
-      revalidate(element);
-    }
-  }
   scalarInputState.set(element, {
     edit,
-    controlIdentity,
-    sourceIdentity,
     pathKey,
     presentationIdentity,
-    renderedValue,
   });
 }

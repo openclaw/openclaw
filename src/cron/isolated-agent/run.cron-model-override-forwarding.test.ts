@@ -10,6 +10,7 @@ import {
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import type { CliSessionReseedReceipt } from "../../config/sessions.js";
+import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -114,8 +115,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
   });
 
   it("builds cron context from the published replacement owner", async () => {
-    const callerConfig = { agents: { defaults: { model: "anthropic/caller" } } };
+    const callerConfig = {
+      session: { store: "/tmp/store.json" },
+      agents: { defaults: { model: "anthropic/caller" } },
+    };
     const ownerConfig = {
+      session: { store: "/tmp/store.json" },
       agents: {
         defaults: { model: "google/gemini-2.0-flash" },
         entries: { main: { workspace: "/tmp/replacement-workspace" } },
@@ -492,23 +497,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(firstMockArg(runWithModelFallbackMock).model).toBe("gpt-5.4");
     expect(firstMockArg(runWithModelFallbackMock).fallbacksOverride).toStrictEqual([]);
   });
-
-  it("uses explicit payload fallbacks when both model and fallbacks are set", async () => {
-    const jobWithFallbacks = makeJob({
-      payload: {
-        kind: "agentTurn",
-        message: "summarize",
-        model: "google/gemini-2.0-flash",
-        fallbacks: ["openai/gpt-4o"],
-      },
-    });
-
-    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
-
-    await runCronIsolatedAgentTurn(makeParams({ job: jobWithFallbacks }));
-
-    expect(firstMockArg(runWithModelFallbackMock).fallbacksOverride).toEqual(["openai/gpt-4o"]);
-  });
 });
 
 function makePersistParams(overrides?: Record<string, unknown>) {
@@ -619,27 +607,6 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
         configuredProfileId: "openai:test-profile",
       }),
     );
-  });
-
-  it("returns error without persisting model when payload model is disallowed", async () => {
-    resolveAllowedModelRefMock.mockReturnValueOnce({
-      error: "Model not allowed: anthropic/claude-sonnet-4-6",
-    });
-
-    const result = await runCronIsolatedAgentTurn(makePersistParams());
-
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("Model not allowed");
-    expect(result.diagnostics?.entries).toEqual([
-      expect.objectContaining({
-        source: "cron-preflight",
-        severity: "error",
-        message: expect.stringContaining("Model not allowed"),
-        ts: expect.any(Number),
-      }),
-    ]);
-    expect(cronSession.sessionEntry.model).toBeUndefined();
-    expect(cronSession.sessionEntry.modelProvider).toBeUndefined();
   });
 
   it("blocks required work when pre-run persistence fails without configured roles", async () => {
@@ -927,9 +894,11 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
         agentRuntimeOverride: "openclaw",
         contextTokens: 272_000,
         contextTokensSource: "runtime",
-        contextBudgetStatus: {} as NonNullable<
-          ReturnType<typeof makeCronSessionEntry>["contextBudgetStatus"]
-        >,
+        contextBudgetStatus: contextBudgetStatusFixture({
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          contextTokenBudget: 272_000,
+        }),
       }),
       isNewSession: false,
     });

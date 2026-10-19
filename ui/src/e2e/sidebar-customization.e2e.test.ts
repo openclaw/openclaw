@@ -84,8 +84,6 @@ async function setThemeMode(page: Page, mode: "dark" | "light") {
     const root = document.documentElement;
     root.dataset.themeMode = nextMode;
     root.dataset.themeResolved = nextMode;
-    root.classList.toggle("wa-light", nextMode === "light");
-    root.classList.toggle("wa-dark", nextMode === "dark");
     root.style.colorScheme = nextMode;
   }, mode);
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
@@ -406,7 +404,7 @@ suite.define(() => {
       const openSettingsFromIdentity = async () => {
         await identityCard.click();
         await sidebar
-          .locator("wa-dropdown.sidebar-identity-menu")
+          .locator(".sidebar-identity-menu")
           .getByRole("menuitem", { exact: true, name: "Settings" })
           .click();
       };
@@ -631,7 +629,42 @@ suite.define(() => {
         .filter({ has: page.getByRole("link", { name: "Usage", exact: true }) });
       await usage.getByRole("button", { name: "Pin", exact: true }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
+      // A pinned page keeps a filled pin at rest, and hovering the pin keeps the
+      // whole entry, pin included, inside the row highlight.
+      const usagePin = usage.getByRole("button", { name: "Unpin", exact: true });
+      await page.mouse.move(900, 600);
+      await expect
+        .poll(() =>
+          usagePin.evaluate((pin) => ({
+            opacity: getComputedStyle(pin).opacity,
+            filled: getComputedStyle(pin.querySelector("svg")!).fill !== "none",
+          })),
+        )
+        .toEqual({ opacity: "1", filled: true });
+      await usagePin.hover();
+      await expect
+        .poll(() => usage.evaluate((entry) => getComputedStyle(entry).backgroundColor))
+        .not.toBe("rgba(0, 0, 0, 0)");
       await captureUiProof(page, "02-personal-pin.png");
+      // Rail pins match the view buttons: same icon size, and the same fill for
+      // hover and for the current page.
+      const railUsage = pinnedItems.first();
+      const iconWidth = (locator: typeof railUsage) =>
+        locator
+          .locator("svg")
+          .first()
+          .evaluate((svg) => svg.getBoundingClientRect().width);
+      const background = (locator: typeof railUsage) =>
+        locator.evaluate((element) => getComputedStyle(element).backgroundColor);
+      expect(await iconWidth(railUsage)).toBe(await iconWidth(pagesButton));
+      const pressedBackground = await background(pagesButton);
+      await railUsage.hover();
+      await expect.poll(() => background(railUsage)).toBe(pressedBackground);
+      await railUsage.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
+      await page.mouse.move(900, 600);
+      await expect.poll(() => background(railUsage)).toBe(pressedBackground);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await page.reload();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
       // The transient selected view resets, but saved personal pins do not.
@@ -891,7 +924,7 @@ suite.define(() => {
         await gateway.emitGatewayEvent("update.available", {
           schedule: {
             autoEnabled: false,
-            channel: "dev",
+            channel: "beta",
             install: { kind: "git", git: { status: "behind", commitsBehind: 246 } },
             target: {
               kind: "git",
@@ -901,7 +934,7 @@ suite.define(() => {
             },
           },
           updateAvailable: {
-            channel: "dev",
+            channel: "beta",
             commitsBehind: 246,
             currentSha: "1111111111111111111111111111111111111111",
             currentVersion: "2026.8.1",

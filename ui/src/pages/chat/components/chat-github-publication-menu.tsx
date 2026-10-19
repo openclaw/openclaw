@@ -1,11 +1,9 @@
-import { createEffect, createMemo, createUniqueId } from "solid-js";
+import { createMemo, createUniqueId } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { Menu } from "../../../components/solid/menu.tsx";
+import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import {
-  PRESENTATION_CHANGED_EVENT,
-  type PresentationValue,
-} from "../../../lit/presentation-binding.ts";
+import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 
 export function GitHubPublicationMenu(props: {
   choices: readonly { source: "shared" | "personal"; login: string; label: string }[];
@@ -16,31 +14,12 @@ export function GitHubPublicationMenu(props: {
   onSelect: (source: "shared" | "personal") => void;
 }) {
   const id = createUniqueId();
-  let menu: MenuHandle | undefined;
-  const isPresented = (value: PresentationValue) =>
-    typeof value === "boolean" ? value : value.isPresented();
-  createEffect(
-    () => props.presented,
-    (value) => {
-      const sync = () => {
-        if (!isPresented(value)) {
-          menu?.close();
-        }
-      };
-      sync();
-      if (typeof value !== "boolean") {
-        value.owner.addEventListener(PRESENTATION_CHANGED_EVENT, sync);
-        return () => value.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, sync);
-      }
-      return undefined;
-    },
-  );
+  const presentation = createMemo(() => projectPresentation(props.presented));
   const items = createMemo(() =>
     props.choices.map((choice) => ({
       id: choice.source,
       label: `@${choice.login}${props.duplicateLogin ? ` · ${choice.label}` : ""}`,
       class: "session-menu__item",
-      attributes: { value: choice.source },
       type: "radio" as const,
       checked: props.selected === choice.source,
       disabled: props.busy,
@@ -68,11 +47,9 @@ export function GitHubPublicationMenu(props: {
       triggerClass="btn btn--ghost btn--icon chat-icon-btn"
       trigger={<Icon name="chevronDown" />}
       items={items()}
-      ref={(handle) => {
-        menu = handle;
-      }}
+      open={presentation().read() ? undefined : false}
       onBeforeShow={(event) => {
-        if (!isPresented(props.presented)) {
+        if (!presentation().read()) {
           event.preventDefault();
         }
       }}

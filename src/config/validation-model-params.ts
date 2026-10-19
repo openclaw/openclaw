@@ -13,8 +13,8 @@ import {
 export function validateProviderModelParams(params: {
   config: OpenClawConfig;
   registry: PluginManifestRegistry;
+  schemaValidations: PreparedPluginSchemaValidations;
   deferredPluginIds: ReadonlySet<string>;
-  schemaValidations?: PreparedPluginSchemaValidations;
 }): ConfigValidationIssue[] {
   const scopes = [
     { path: "agents.defaults", models: params.config.agents?.defaults?.models },

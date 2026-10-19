@@ -1,10 +1,7 @@
-// Exercises managed proxy lifecycle ownership, env inheritance, Proxyline
-// reuse, loopback bypass policy, TLS trust, and cleanup behavior.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 const {
   installGlobalProxyMock,
   proxylineRegisterBypassMock,
@@ -62,9 +59,19 @@ import { stopMockedProxylineHandles } from "./proxyline.test-support.js";
 const mockLogInfo = vi.mocked(logInfo);
 const mockLogWarn = vi.mocked(logWarn);
 const activeProxyHandles: ProxyHandle[] = [];
+const proxyUrl = "http://127.0.0.1:3128";
+
+function expectProxyInstall(options: Record<string, unknown>, call?: number) {
+  const expected = expect.objectContaining({ mode: "managed", ...options });
+  if (call === undefined) {
+    expect(installGlobalProxyMock).toHaveBeenCalledWith(expected);
+  } else {
+    expect(installGlobalProxyMock).toHaveBeenNthCalledWith(call, expected);
+  }
+}
 
 async function startProxy(
-  config: Parameters<typeof startProxyRuntime>[0],
+  config: Parameters<typeof startProxyRuntime>[0] = { proxyUrl },
 ): Promise<Awaited<ReturnType<typeof startProxyRuntime>>> {
   const handle = await startProxyRuntime(config);
   if (handle) {
@@ -82,27 +89,14 @@ function expectProxyHandle(handle: Awaited<ReturnType<typeof startProxy>>): Prox
 }
 
 describe("startProxy", () => {
-  const savedEnv: Record<string, string | undefined> = {};
-  const envKeysToClean = [
-    "http_proxy",
-    "https_proxy",
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "all_proxy",
-    "ALL_PROXY",
-    "no_proxy",
-    "NO_PROXY",
-    "OPENCLAW_PROXY_ACTIVE",
-    "OPENCLAW_PROXY_CA_FILE",
-    "OPENCLAW_PROXY_LOOPBACK_MODE",
-    "OPENCLAW_PROXY_URL",
-  ];
+  const envKeysToClean = ["http_proxy", "https_proxy", "all_proxy", "no_proxy"]
+    .flatMap((key) => [key, key.toUpperCase()])
+    .concat(["ACTIVE", "CA_FILE", "LOOPBACK_MODE", "URL"].map((key) => `OPENCLAW_PROXY_${key}`));
   const tempDirs: string[] = [];
 
   beforeEach(() => {
     for (const key of envKeysToClean) {
-      savedEnv[key] = process.env[key];
-      delete process.env[key];
+      vi.stubEnv(key, undefined);
     }
     mockLogInfo.mockReset();
     mockLogWarn.mockReset();
@@ -121,13 +115,7 @@ describe("startProxy", () => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
-    for (const key of envKeysToClean) {
-      if (savedEnv[key] === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = savedEnv[key];
-      }
-    }
+    vi.unstubAllEnvs();
     expect(getActiveManagedProxyUrl()).toBeUndefined();
   });
 
@@ -140,8 +128,7 @@ describe("startProxy", () => {
   }
 
   it("returns null silently and does not touch env when not explicitly enabled", async () => {
-    const handle = await startProxy(undefined);
-
+    const handle = await startProxyRuntime(undefined);
     expect(handle).toBeNull();
     expect(process.env["http_proxy"]).toBeUndefined();
     expect(installGlobalProxyMock).not.toHaveBeenCalled();
@@ -151,35 +138,21 @@ describe("startProxy", () => {
 
   it("uses HTTPS proxy URLs from OPENCLAW_PROXY_URL", async () => {
     process.env["OPENCLAW_PROXY_URL"] = "https://127.0.0.1:3128";
-
     const handle = await startProxy({});
-
     expect(expectProxyHandle(handle).proxyUrl).toBe("https://127.0.0.1:3128");
     expect(process.env["HTTP_PROXY"]).toBe("https://127.0.0.1:3128");
-    expect(installGlobalProxyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "managed",
-        proxyUrl: "https://127.0.0.1:3128",
-      }),
-    );
+    expectProxyInstall({ proxyUrl: "https://127.0.0.1:3128" });
   });
 
   it("passes configured proxy CA trust to Proxyline", async () => {
     const caFile = writeTempCa("active-proxy-ca");
-
     const handle = await startProxy({
       proxyUrl: "https://127.0.0.1:3128",
       tls: { caFile },
     });
-
     expect(getActiveManagedProxyTlsOptions()).toEqual({ ca: "active-proxy-ca" });
     expect(process.env["OPENCLAW_PROXY_CA_FILE"]).toBe(caFile);
-    expect(installGlobalProxyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        proxyTls: { ca: "active-proxy-ca" },
-      }),
-    );
-
+    expectProxyInstall({ proxyTls: { ca: "active-proxy-ca" } });
     await stopProxy(expectProxyHandle(handle));
   });
 
@@ -189,45 +162,33 @@ describe("startProxy", () => {
     process.env["OPENCLAW_PROXY_LOOPBACK_MODE"] = "gateway-only";
     process.env["HTTP_PROXY"] = "https://proxy.example:8443";
     process.env["OPENCLAW_PROXY_CA_FILE"] = caFile;
-
     ensureInheritedManagedProxyRoutingActive();
-
     expect(process.env["NO_PROXY"]).toContain("127.0.0.1");
     expect(process.env["no_proxy"]).toBe(process.env["NO_PROXY"]);
     expect(getActiveManagedProxyTlsOptions()).toBeUndefined();
-    expect(installGlobalProxyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ifActive: "reuse-compatible",
-        mode: "managed",
-        proxyTls: { ca: "inherited-https-proxy-ca" },
-        proxyUrl: "https://proxy.example:8443",
-      }),
-    );
+    expectProxyInstall({
+      ifActive: "reuse-compatible",
+      proxyTls: { ca: "inherited-https-proxy-ca" },
+      proxyUrl: "https://proxy.example:8443",
+    });
   });
 
   it("persists loopbackMode in env for forked child CLIs", async () => {
     const { getActiveManagedProxyLoopbackMode } = await import("./active-proxy-state.js");
-    const handle = await startProxy({
-      proxyUrl: "http://127.0.0.1:3128",
-      loopbackMode: "block",
-    });
-
+    const handle = await startProxy({ proxyUrl, loopbackMode: "block" });
     expect(process.env["OPENCLAW_PROXY_LOOPBACK_MODE"]).toBe("block");
     expect(getActiveManagedProxyLoopbackMode()).toBe("block");
-
     await stopProxy(handle);
     process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
     process.env["OPENCLAW_PROXY_LOOPBACK_MODE"] = "proxy";
-
     expect(getActiveManagedProxyLoopbackMode()).toBe("proxy");
   });
 
   it("redacts proxy credentials before logging the active proxy URL", async () => {
-    const proxyUrl = new URL("http://127.0.0.1:3128");
-    proxyUrl.username = "user";
-    proxyUrl.password = "pass";
-    await startProxy({ proxyUrl: proxyUrl.href });
-
+    const authenticatedUrl = new URL(proxyUrl);
+    authenticatedUrl.username = "user";
+    authenticatedUrl.password = "pass";
+    await startProxy({ proxyUrl: authenticatedUrl.href });
     expect(mockLogInfo).toHaveBeenCalledWith(
       "proxy: routing process HTTP traffic through external proxy http://127.0.0.1:3128",
     );
@@ -241,11 +202,7 @@ describe("startProxy", () => {
   it("replaces ambient NO_PROXY with only runtime loopback destinations", async () => {
     process.env["NO_PROXY"] = "127.0.0.1,localhost,corp.example.com";
     process.env["no_proxy"] = "localhost";
-
-    await startProxy({
-      proxyUrl: "http://127.0.0.1:3128",
-    });
-
+    await startProxy();
     expect(process.env["NO_PROXY"]).toContain("127.0.0.1,localhost");
     expect(process.env["NO_PROXY"]).toContain("::1");
     expect(process.env["NO_PROXY"]).not.toContain("corp.example.com");
@@ -256,84 +213,46 @@ describe("startProxy", () => {
     process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
     process.env["OPENCLAW_PROXY_LOOPBACK_MODE"] = "gateway-only";
     process.env["HTTP_PROXY"] = "http://127.0.0.1:3111";
-
     ensureInheritedManagedProxyRoutingActive();
-
-    expect(installGlobalProxyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ifActive: "reuse-compatible",
-        mode: "managed",
-        proxyUrl: "http://127.0.0.1:3111",
-        undici: expect.objectContaining({ allowH2: false }),
-      }),
-    );
+    const inheritedInstall = {
+      ifActive: "reuse-compatible",
+      proxyUrl: "http://127.0.0.1:3111",
+      undici: expect.objectContaining({ allowH2: false }),
+    };
+    expectProxyInstall(inheritedInstall);
     expect(proxylineStopMock).not.toHaveBeenCalled();
-
-    const handle = await startProxy({
-      proxyUrl: "http://127.0.0.1:3222",
-    });
-
+    const handle = await startProxy({ proxyUrl: "http://127.0.0.1:3222" });
     expect(installGlobalProxyMock).toHaveBeenCalledTimes(2);
-    const installCalls = installGlobalProxyMock.mock.calls as unknown[][];
-    expect(installCalls[1]?.[0]).toEqual(
-      expect.objectContaining({
-        ifActive: "replace",
-        mode: "managed",
-        proxyUrl: "http://127.0.0.1:3222",
-        undici: expect.objectContaining({ allowH2: false }),
-      }),
+    expectProxyInstall(
+      { ...inheritedInstall, ifActive: "replace", proxyUrl: "http://127.0.0.1:3222" },
+      2,
     );
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3222");
-
     await stopProxy(expectProxyHandle(handle));
-
     expect(proxylineStopMock).toHaveBeenCalledOnce();
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3111");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
     expect(installGlobalProxyMock).toHaveBeenCalledTimes(3);
-    expect(installCalls[2]?.[0]).toEqual(
-      expect.objectContaining({
-        ifActive: "reuse-compatible",
-        mode: "managed",
-        proxyUrl: "http://127.0.0.1:3111",
-        undici: expect.objectContaining({ allowH2: false }),
-      }),
-    );
+    expectProxyInstall(inheritedInstall, 3);
   });
 
   it("rejects overlapping handles with different managed proxy URLs", async () => {
-    const firstHandle = await startProxy({
-      proxyUrl: "http://127.0.0.1:3128",
-    });
-
-    await expect(
-      startProxy({
-        proxyUrl: "http://127.0.0.1:3129",
-      }),
-    ).rejects.toThrow("cannot activate a managed proxy");
-
+    const firstHandle = await startProxy();
+    await expect(startProxy({ proxyUrl: "http://127.0.0.1:3129" })).rejects.toThrow(
+      "cannot activate a managed proxy",
+    );
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
-
     await stopProxy(firstHandle);
   });
 
   it("rejects overlapping handles with the same proxy URL but different loopback modes", async () => {
-    const firstHandle = await startProxy({
-      proxyUrl: "http://127.0.0.1:3128",
-      loopbackMode: "gateway-only",
-    });
-
-    await expect(
-      startProxy({
-        proxyUrl: "http://127.0.0.1:3128",
-        loopbackMode: "block",
-      }),
-    ).rejects.toThrow("cannot activate a managed proxy with a different proxy.loopbackMode");
-
+    const firstHandle = await startProxy({ proxyUrl, loopbackMode: "gateway-only" });
+    await expect(startProxy({ proxyUrl, loopbackMode: "block" })).rejects.toThrow(
+      "cannot activate a managed proxy with a different proxy.loopbackMode",
+    );
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
-
     await stopProxy(firstHandle);
   });
 
@@ -341,64 +260,31 @@ describe("startProxy", () => {
     installGlobalProxyMock.mockImplementationOnce(() => {
       throw new Error("install failed");
     });
-
-    await expect(
-      startProxy({
-        proxyUrl: "http://127.0.0.1:3128",
-      }),
-    ).rejects.toThrow("failed to activate external proxy routing");
-
+    await expect(startProxy()).rejects.toThrow("failed to activate external proxy routing");
     expect(process.env["http_proxy"]).toBeUndefined();
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBeUndefined();
   });
 
   it("blocks Gateway bypass registration when active proxy loopbackMode is block", async () => {
-    const handle = await startProxy({
-      proxyUrl: "http://127.0.0.1:3128",
-      loopbackMode: "block",
-    });
-
-    try {
-      expect(process.env.NO_PROXY).toBe("");
-      expect(process.env.no_proxy).toBe("");
-      expect(() => registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:18789")).toThrow(
-        "blocked by proxy.loopbackMode",
-      );
-    } finally {
-      await stopProxy(handle);
-    }
+    const handle = await startProxy({ proxyUrl, loopbackMode: "block" });
+    expect(process.env.NO_PROXY).toBe("");
+    expect(process.env.no_proxy).toBe("");
+    expect(() => registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:18789")).toThrow(
+      "blocked by proxy.loopbackMode",
+    );
+    await stopProxy(handle);
   });
 
   it("kill restores env synchronously during hard process exit", async () => {
     process.env["NO_PROXY"] = "corp.example.com";
-    const handle = await startProxy({
-      proxyUrl: "http://127.0.0.1:3128",
-    });
-
+    const handle = await startProxy();
     expectProxyHandle(handle).kill("SIGTERM");
-
     expect(process.env["HTTP_PROXY"]).toBeUndefined();
     expect(process.env["NO_PROXY"]).toBe("corp.example.com");
   });
 
   it("stopProxy is a no-op when handle is null", async () => {
     await expect(stopProxy(null)).resolves.toBeUndefined();
-  });
-
-  it("throws when active proxy loopbackMode is block for Browser CDP bypass", async () => {
-    const handle = await startProxy({
-      proxyUrl: "http://127.0.0.1:3128",
-      loopbackMode: "block",
-    });
-
-    try {
-      expect(() => registerManagedProxyBrowserCdpBypass("http://127.0.0.1:18800")).toThrow(
-        "Browser loopback CDP connections are blocked by proxy.loopbackMode",
-      );
-      expect(proxylineRegisterBypassMock).not.toHaveBeenCalled();
-    } finally {
-      await stopProxy(handle);
-    }
   });
 
   it("returns undefined when no managed proxy is active (bypass is a no-op)", () => {

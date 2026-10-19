@@ -1,3 +1,4 @@
+import type { SessionAdmissionTransition } from "../../../config/sessions/session-admission-transition.types.js";
 import {
   runWithoutOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
@@ -65,12 +66,21 @@ export async function createEmbeddedRunSessionPromptState(input: {
   const initialTarget = initialWriter ? { ...activeSessionTarget } : undefined;
   let sessionTargetAdopted = false;
   let committedCompactionSuccessor: AcceptedCompactionSuccessor | undefined;
+  const committedCompactionTransitions: SessionAdmissionTransition[] = [];
   // Only retries after this run mutates its transcript may wait for deferred projection work.
   // Fresh attempts retain the projection owner's bounded, retryable failure contract.
   let settleOwnedTranscriptProjection = false;
   let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
   let basePromptOverride: string | undefined;
   let continuation: EmbeddedRunAttemptParams["continuation"];
+  const releaseContinuation = () => {
+    if (continuation) {
+      // Harness parameter copies may retain the envelope after its run-owned payload expires.
+      continuation.messages = [];
+      continuation.prompt = "";
+      continuation = undefined;
+    }
+  };
   let compactionContinuationInstruction: string | undefined;
   const activePrompt: ActivePrompt = {
     get override() {
@@ -109,6 +119,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
   const recordCommittedCompactionSuccessor = (accepted: AcceptedCompactionSuccessor) => {
     // Commit-edge bookkeeping only: observers may cancel before the patch promise
     // returns, so neither notification callbacks nor another await belongs here.
+    if (accepted.admissionTransition && committedCompactionSuccessor !== accepted) {
+      committedCompactionTransitions.push(accepted.admissionTransition);
+    }
     committedCompactionSuccessor = accepted;
     capturePreparedCompactionTarget(accepted);
   };
@@ -179,7 +192,13 @@ export async function createEmbeddedRunSessionPromptState(input: {
   };
 
   return {
-    [Symbol.asyncDispose]: async () => await initialOwner?.close(),
+    [Symbol.asyncDispose]: async () => {
+      try {
+        await initialOwner?.close();
+      } finally {
+        releaseContinuation();
+      }
+    },
     get sessionId() {
       return activeSessionId;
     },
@@ -198,6 +217,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
     },
     get sessionTargetAdopted() {
       return sessionTargetAdopted;
+    },
+    get committedCompactionTransitions() {
+      return Object.freeze([...committedCompactionTransitions]);
     },
     get committedCompactionSuccessor() {
       return committedCompactionSuccessor;
@@ -219,7 +241,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
               run,
             )
           : runWithoutOwnedSessionTranscriptWrites(run);
-      return initialOwner ? initialOwner.run(withContext) : withContext();
+      return initialOwner && !initialWriter?.committedFence
+        ? initialOwner.run(withContext)
+        : withContext();
     },
     recordOutputLimitNotice: async (toolCallId: string | undefined) => {
       const note: CustomMessage = {
@@ -300,9 +324,11 @@ export async function createEmbeddedRunSessionPromptState(input: {
         return;
       }
       if (options?.messages) {
+        const messages = [...(continuation?.messages ?? []), ...options.messages];
+        releaseContinuation();
         continuation = {
           prompt: params.prompt,
-          messages: [...(continuation?.messages ?? []), ...options.messages],
+          messages,
         };
       }
       const prompt = options?.includeToolFailureInstruction

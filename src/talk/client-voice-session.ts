@@ -307,6 +307,7 @@ function appendVoiceTranscript(
     entryId: string;
     role: "user" | "assistant";
     text: string;
+    providerOwned?: boolean;
     timestamp?: number;
     config?: OpenClawConfig;
   },
@@ -367,6 +368,7 @@ function appendVoiceTranscript(
                   text: normalized.text,
                   timestamp,
                   provider: record.provider ?? "realtime",
+                  providerOwned: normalized.providerOwned,
                 }),
                 now: timestamp,
               };

@@ -1,19 +1,11 @@
+import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  untrack,
-} from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { toSanitizedMarkdownHtml } from "../components/markdown.ts";
-import { renderSessionProgressCard } from "../components/session-progress-card.ts";
+import { SessionProgressCard } from "../components/session-progress-card-solid.tsx";
 import { AgentAvatar } from "../components/solid/agent-avatar.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { SanitizedHtml } from "../components/solid/sanitized-html.tsx";
@@ -26,11 +18,15 @@ import { projectProgressCard } from "../lib/reactive/domain-keyed.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
+import { createSessionEventRefreshCoordinator } from "../lib/sessions/event-refresh-coordinator.ts";
 import { readSessionChangedEvent } from "../lib/sessions/reconcile.ts";
 import { uiSessionEventMatches, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
-import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import type {
+  ChatHistoryResponse,
+  ChatHistoryResult,
+} from "../pages/chat/chat-history-snapshot.ts";
+import { ChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
 import "../styles/chat/progress-card.css";
 import "../styles/sidebar-markdown.css";
 import "../styles/plugin-session-summary.css";
@@ -51,69 +47,84 @@ type SummaryScope = {
   session: BoardGetParams;
 };
 
-function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope }) {
-  const scope = untrack(() => props.scope);
+function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
   const [history, setHistory] = createSignal<ChatHistoryResult | null>(null);
   const [error, setError] = createSignal(false);
   let alive = true;
-  let pending = false;
-  let dirty = false;
+  let snapshot: ChatHistoryResult | null = null;
   const current = () =>
-    untrack(
-      () =>
-        alive &&
-        !scope.signal.aborted &&
-        props.presented &&
-        props.gateway === scope.gateway &&
-        scope.gateway.snapshot.phase === "connected" &&
-        scope.gateway.snapshot.client === scope.client &&
-        scope.gateway.connectionRevision === scope.revision &&
-        props.session?.sessionKey === scope.session.sessionKey &&
-        props.session?.agentId === scope.session.agentId,
-    );
+    alive &&
+    !scope.signal.aborted &&
+    props.presented &&
+    props.gateway === scope.gateway &&
+    scope.gateway.snapshot.phase === "connected" &&
+    scope.gateway.snapshot.client === scope.client &&
+    scope.gateway.connectionRevision === scope.revision &&
+    props.session?.sessionKey === scope.session.sessionKey &&
+    props.session?.agentId === scope.session.agentId;
   onCleanup(() => {
     alive = false;
   });
   const store = sessionProgressCardsForGateway(scope.gateway);
-  const progress = projectProgressCard({
+  const progress = projectProgressCard(() => ({
     store,
     target: scope.session,
     options: { admitAutomaticRead: current },
-  });
+  }));
   const refresh = async () => {
     if (!current()) {
       return;
     }
-    if (pending) {
-      dirty = true;
-      return;
-    }
-    pending = true;
-    dirty = false;
     setError(false);
-    try {
-      const result = await scope.client.request<ChatHistoryResult>("chat.history", {
+    const request = (cursor?: string) =>
+      scope.client.request<ChatHistoryResponse>("chat.history", {
         ...scope.session,
+        cursor,
         toolResultMaxChars: 2_000,
         limit: 20,
         maxChars: 12000,
       });
-      if (current()) {
-        setHistory(result);
+    try {
+      let result = await request(snapshot?.deltaCursor);
+      if (!current()) {
+        return;
       }
+      if ("kind" in result && result.kind === "reset") {
+        snapshot = null;
+        result = await request();
+        if (!current()) {
+          return;
+        }
+      }
+      if ("kind" in result) {
+        if (result.kind === "reset") {
+          throw new Error("History tail returned a reset");
+        }
+        let projection = createSessionProjection({}, snapshot?.messages ?? []);
+        for (const envelope of result.messages) {
+          if (!isRecord(envelope)) {
+            continue;
+          }
+          projection = reduceSessionProjection(projection, {
+            type: "messagePersisted",
+            message: envelope.message,
+            envelope,
+          });
+        }
+        snapshot = { ...result, messages: projection.messages.slice(-20) };
+      } else {
+        snapshot = { ...result, messages: result.messages?.slice(-20) };
+      }
+      setHistory(snapshot);
+      onSettled(hydrateIdentities);
     } catch {
       if (current()) {
         setError(true);
       }
-    } finally {
-      if (current()) {
-        pending = false;
-        if (dirty) {
-          void refresh();
-        }
-      }
     }
   };
+  const refreshes = createSessionEventRefreshCoordinator({ active: true, refresh });
+  onCleanup(() => refreshes.dispose());
   onCleanup(
     scope.gateway.subscribeEvents((event) => {
       if (event.event !== "sessions.changed" && event.event !== "session.message") {
@@ -133,12 +144,12 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
           changed.agentId,
         )
       ) {
-        void refresh();
+        refreshes.schedule();
       }
     }),
   );
   onSettled(() => {
-    void refresh();
+    refreshes.scheduleRetry(0);
   });
   const messages = createMemo(() =>
     (history()?.messages ?? []).slice(-20).flatMap((message) => {
@@ -181,28 +192,32 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
       return [{ text, label, sender, agentId, agent, time, role: message.role }];
     }),
   );
+  const hydrateIdentities = () => {
+    if (current()) {
+      void props.agentIdentity?.ensure(
+        messages().flatMap((message) =>
+          !message.sender && message.agentId ? [message.agentId] : [],
+        ),
+      );
+    }
+  };
   const identity = createMemo(() => props.agentIdentity);
   const identities = createMemo(() => {
     const source = identity();
     return source
       ? projectSource(source, {
           read: (owner) => owner,
-          subscribe: (owner, notify) => owner.subscribe(notify),
+          subscribe: (owner, notify) => {
+            onSettled(hydrateIdentities);
+            return owner.subscribe(() => {
+              notify();
+              onSettled(hydrateIdentities);
+            });
+          },
           equality: "revision",
         })
       : null;
   });
-  createEffect(
-    () => ({
-      owner: identities()?.read(),
-      ids: messages().flatMap((message) =>
-        !message.sender && message.agentId ? [message.agentId] : [],
-      ),
-    }),
-    ({ owner, ids }) => {
-      void owner?.ensure(ids);
-    },
-  );
   return (
     <div class="plugin-session-summary">
       <Show when={progress.read().error || progress.read().card !== null}>
@@ -212,18 +227,13 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
           ) : progress.read().card === undefined ? (
             <p>{t("sessionProgressCard.widgetLoading")}</p>
           ) : (
-            <LitContent
-              render={() =>
-                renderSessionProgressCard(
-                  progress.read().card,
-                  "board",
-                  undefined,
-                  history()?.sessionInfo?.status,
-                  history()?.sessionInfo?.startedAt,
-                  history()?.sessionInfo?.endedAt,
-                  history()?.sessionInfo?.hasActiveRun === true,
-                )
-              }
+            <SessionProgressCard
+              card={progress.read().card}
+              placement="board"
+              sessionStatus={history()?.sessionInfo?.status}
+              startedAt={history()?.sessionInfo?.startedAt}
+              endedAt={history()?.sessionInfo?.endedAt}
+              hasActiveRun={history()?.sessionInfo?.hasActiveRun === true}
             />
           )}
         </section>
@@ -248,7 +258,7 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
                 <header class="plugin-session-summary__message-header">
                   <span class="plugin-session-summary__avatar">
                     {message().sender ? (
-                      <LitContent render={() => renderChatAuthorAvatar(message().sender)} />
+                      <ChatAuthorAvatar sender={message().sender} />
                     ) : message().agentId ? (
                       <AgentAvatar
                         option={{
@@ -290,7 +300,7 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
         <button
           class="btn"
           onClick={() => {
-            void refresh();
+            refreshes.scheduleRetry(0);
             void store.load(scope.session).catch(() => undefined);
           }}
         >
@@ -365,7 +375,7 @@ function PluginSessionSummaryContent(props: PluginSessionSummaryProps) {
         keyed
         fallback={<p role="status">{t("pluginUi.sessionHistoryUnavailable")}</p>}
       >
-        {(current) => <SessionHistory {...props} scope={current} />}
+        {(current) => SessionHistory(props, current)}
       </Show>
     </Show>
   );

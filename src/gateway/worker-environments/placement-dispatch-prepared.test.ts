@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import vm from "node:vm";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -12,7 +13,12 @@ import {
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createGitHubReadIdentity } from "../../agents/github-read-identity.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../infra/diagnostic-events.js";
 import {
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
@@ -28,6 +34,7 @@ import {
 } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
+import { sessionLog } from "../session-log.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
@@ -35,18 +42,18 @@ import { createHarness } from "./placement-dispatch-test-harness.js";
 import type { WorkerPlacementExecutionMode } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
+import { prepareRepositoryGitHubIdentity } from "./repository-github-identity.js";
 import * as support from "./service.test-support.js";
 import {
   readSessionRepositoryArtifacts,
   stageSessionRepositoryCheckpoint,
 } from "./session-repository-checkpoints.js";
-import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
 // mock-isolation: Workspace startup supplies a synthetic identity without credential discovery.
-vi.mock("./worker-github-binding.js", () => ({ prepareGitHubPublicationFact: vi.fn() }));
+vi.mock("./repository-github-identity.js", () => ({ prepareRepositoryGitHubIdentity: vi.fn() }));
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
@@ -385,11 +392,58 @@ describe("prepared worker dispatch", () => {
   it.each([true, false])(
     "runs first-binding lifecycle after session sync and before activation (reserve=%s)",
     async (reserve) => {
-      const { harness, request } = await preparedHarness({ reserve, recipe: lifecycleRecipe });
+      const { harness, request, ready } = await preparedHarness({
+        reserve,
+        recipe: lifecycleRecipe,
+      });
+      const previousDiagnostics = areDiagnosticsEnabledForProcess();
+      setDiagnosticsEnabledForProcess(true);
+      onTestFinished(() => {
+        setDiagnosticsEnabledForProcess(previousDiagnostics);
+        vi.restoreAllMocks();
+      });
+      vi.spyOn(sessionLog, "isEnabled").mockReturnValue(true);
+      const warn = vi.spyOn(sessionLog, "warn").mockImplementation(() => {
+        throw new Error("diagnostic sink unavailable");
+      });
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const attach = vi.mocked(harness.environments.attachSession);
+      const ordinaryAttach = attach.getMockImplementation()!;
+      attach.mockImplementation(async (params) => {
+        const credential = await ordinaryAttach(params);
+        now += 1_200;
+        return credential;
+      });
+      if (!reserve) {
+        const provision = vi.mocked(harness.environments.createWithRequest);
+        const environment = harness.environments.get(ready.environmentId)!;
+        provision.mockImplementation(async () => {
+          now += 600;
+          return environment;
+        });
+      }
 
       const active = await harness.service.dispatch(request);
 
       expect(active.state).toBe("active");
+      expect(warn).toHaveBeenCalledExactlyOnceWith("slow placement dispatch", {
+        operation: "sessions.dispatch",
+        elapsedMs: reserve ? 1_200 : 1_800,
+        phaseDurationsMs: {
+          admission: 0,
+          workspacePreparation: 0,
+          reserveClaim: 0,
+          ...(!reserve ? { provision: 600 } : {}),
+          attach: 1_200,
+          tunnel: 0,
+          bind: 0,
+          repositoryStartup: 0,
+          lifecycleCommands: 0,
+          activation: 0,
+          cleanup: 0,
+        },
+      });
       expect(
         harness.log.filter((phase) =>
           [
@@ -413,6 +467,38 @@ describe("prepared worker dispatch", () => {
       expect(tunnel.launchTurn).not.toHaveBeenCalled();
     },
   );
+
+  it("carries prepared repository authority into the provider lifecycle launch", async () => {
+    const { harness, request } = await preparedHarness({ recipe: lifecycleRecipe });
+    let repositoryCurrent = true;
+    const bind = vi.mocked(harness.environments.bindPreparedWorkspace);
+    const ordinaryBind = bind.getMockImplementation()!;
+    bind.mockImplementation(async (input) => ({
+      ...(await ordinaryBind(input)),
+      assertCurrent: () => {
+        input.assertCurrent();
+        if (!repositoryCurrent) {
+          throw new Error("Repository identity revoked");
+        }
+      },
+    }));
+    const runSetup = vi.fn<NonNullable<typeof harness.environments.runProjectLifecycleCommand>>(
+      async (_environmentId, _ownerEpoch, command) => {
+        expect(command.workspaceDir).toBe("/worker/workspace");
+        expect(command.homeDir).toBe("/worker/home");
+        command.assertCurrent();
+        await Promise.resolve();
+        repositoryCurrent = false;
+        command.assertCurrent();
+        throw new Error("Repository command must not launch");
+      },
+    );
+    harness.environments.runProjectLifecycleCommand = runSetup;
+    await expect(harness.service.dispatch(request)).rejects.toThrow("Repository identity revoked");
+    expect(runSetup).toHaveBeenCalledOnce();
+    expect(harness.log).not.toContain("lifecycle:post-create");
+    expect(harness.log).not.toContain("activation");
+  });
 
   it("fails dispatch before activation when a declared post-binding command fails", async () => {
     const { harness, placements, ready, request } = await preparedHarness({
@@ -670,7 +756,14 @@ describe("prepared worker dispatch", () => {
       onTestFinished(() => {
         vi.unstubAllEnvs();
       });
-      vi.mocked(prepareGitHubPublicationFact).mockResolvedValue(undefined);
+      vi.mocked(prepareRepositoryGitHubIdentity).mockResolvedValue(
+        createGitHubReadIdentity({
+          token: undefined,
+          selection: { source: "anonymous" },
+          assertSelected: () => {},
+          readToken: async () => undefined,
+        }),
+      );
       const stagingRoot = path.join(support.testState.root, "checkpoint-source");
       await fs.mkdir(stagingRoot);
       await fs.writeFile(path.join(stagingRoot, "tracked.txt"), "pinned source\n");

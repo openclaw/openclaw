@@ -31,7 +31,10 @@ import { persistCliSessionBindingResult } from "../cli-session-store.js";
 import { claimAgentSessionWriter } from "../embedded-agent-runner/run/session-bootstrap.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../sessions/session-manager.js";
 import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
-import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import {
+  prepareCliHistoryBoundary,
+  prepareCliHistoryCompactionBoundary,
+} from "./history-boundary.js";
 import { buildCliSessionHistoryPrompt, loadCliSessionPromptContext } from "./session-history.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -297,6 +300,43 @@ describe("CLI transcript account boundary", () => {
     expect(projectPublicSessionEntry(entry)).not.toHaveProperty("cliHistoryBoundary");
   });
 
+  it.each([false, true])(
+    "keeps compacted history only when the complete source is account-owned (foreign tail: %s)",
+    async (foreignTail) => {
+      const f = await fixture();
+      await f.seed();
+      const retained = await f.run("epoch-a", async () =>
+        f.manager().appendMessage({
+          role: "user",
+          content: "Retained recent turn",
+          timestamp: 2,
+        }),
+      );
+      const manager = f.manager();
+      if (foreignTail) {
+        manager.appendMessage({ role: "user", content: "Unowned tail", timestamp: 3 });
+      }
+      if (!retained) {
+        throw new Error("Missing retained turn");
+      }
+      const commit = await prepareCliHistoryCompactionBoundary(f.target, () => {});
+      await manager.appendThinkingLevelChange("off");
+      await manager.appendCustomEntryAsync("model-snapshot", { provider: "summary-fixture" });
+      await manager.appendCompactionAsync("Compacted account summary", retained, 1000);
+      await commit?.();
+      await f.run("epoch-a", async (allowed, params) => {
+        const prompt = await history(allowed, params);
+        if (foreignTail) {
+          expect(prompt).toBeUndefined();
+        } else {
+          expect(prompt?.match(/Compacted account summary/g)).toHaveLength(1);
+          expect(prompt?.match(/Retained recent turn/g)).toHaveLength(1);
+          expect(prompt).not.toContain("A private canary");
+        }
+      });
+    },
+  );
+
   it("distinguishes OAuth account identity from rotating or identity-less tokens", async () => {
     const f = await fixture();
     const credential = {
@@ -521,6 +561,34 @@ describe("CLI transcript account boundary", () => {
       });
     });
     expect(JSON.stringify(f.manager().getEntries())).toContain("recovered CLI answer");
+  });
+
+  it("rejects CLI assistant persistence after its terminal writer claim is revoked", async () => {
+    const f = await fixture();
+    await f.withRun("terminal-cli-writer", async (params) => {
+      const claim = await claimAgentSessionWriter(params);
+      if (!claim) {
+        throw new Error("Missing terminal CLI writer claim");
+      }
+      const before = f.manager().getEntries();
+
+      await expect(claim.revoke()).resolves.toBe(true);
+      const result = await persistCliAssistantTranscript({
+        runParams: {
+          ...params,
+          expectedLifecycleRevision: claim.expectedLifecycleRevision,
+          expectedWriterRunId: claim.expectedWriterRunId,
+          persistAssistantTranscript: true,
+        },
+        text: "late terminal CLI answer",
+        modelId: "test-model",
+        stopReason: "stop",
+      });
+
+      expect(result).toMatchObject({ owned: true });
+      expect(result.terminalAnchor).toBeUndefined();
+      expect(f.manager().getEntries()).toEqual(before);
+    });
   });
 
   it("rechecks a revived foreign writer after metadata planning yields", async () => {

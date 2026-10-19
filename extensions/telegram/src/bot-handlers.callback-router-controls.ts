@@ -82,12 +82,11 @@ type LegacyApprovalCallback = NonNullable<ReturnType<typeof parseExecApprovalCom
 
 export function createTelegramCallbackApprovalRuntime(params: {
   accountId: RegisterTelegramHandlerParams["accountId"];
-  telegramDeps: RegisterTelegramHandlerParams["telegramDeps"];
   runtimeCfg: OpenClawConfig;
   senderId: string;
   actions: TelegramCallbackMessageActions;
 }) {
-  const { accountId, telegramDeps, runtimeCfg, senderId, actions } = params;
+  const { accountId, runtimeCfg, senderId, actions } = params;
   const { clearCallbackButtons, editCallbackMessage, replyToCallbackChat } = actions;
 
   const resolveAuthorizedApprovalKinds = (): ChannelApprovalKind[] => {
@@ -146,12 +145,10 @@ export function createTelegramCallbackApprovalRuntime(params: {
     receipt: Parameters<typeof buildTelegramLegacyApprovalTerminalText>[0],
   ) => await terminalizeApprovalMessage(buildTelegramLegacyApprovalTerminalText(receipt));
 
-  const resolveApproval = telegramDeps.resolveApproval ?? resolveApprovalOverGateway;
-
   const resolveCanonicalApproval = async (
     approvalCallback: TelegramApprovalCallback,
   ): Promise<ApprovalResolveResult> =>
-    (await resolveApproval({
+    await resolveApprovalOverGateway({
       cfg: runtimeCfg,
       approvalId: approvalCallback.approvalId,
       approvalKind: approvalCallback.approvalKind,
@@ -159,7 +156,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
       channel: "telegram",
       accountId,
       senderId,
-    })) as ApprovalResolveResult;
+    });
 
   const terminalizeCanonicalApproval = async (
     approvalCallback: TelegramApprovalCallback,
@@ -233,7 +230,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
       };
       try {
         // Legacy callbacks lack an owner. Probe only adapters this sender may use.
-        await resolveApproval({
+        await resolveApprovalOverGateway({
           cfg: runtimeCfg,
           approvalId: approvalCallback.approvalId,
           decision: approvalCallback.decision,

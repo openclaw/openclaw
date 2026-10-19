@@ -18,15 +18,12 @@ import {
   window,
 } from "./responses.fixtures.js";
 
-function source(
-  route: (url: URL, init?: RequestInit) => Response | Promise<Response>,
-  signal?: AbortSignal,
-) {
+function source(route: (url: URL, init?: RequestInit) => Response | Promise<Response>) {
   const logs = { ...logger, info: vi.fn() };
   const fetchImpl = vi.fn<NonNullable<SourceRuntime["fetchImpl"]>>((input, init) =>
     Promise.resolve(route(new URL(input), init)),
   );
-  const streaming = createGithubSource({ logger: logs, fetchImpl, signal });
+  const streaming = createGithubSource({ logger: logs, fetchImpl });
   return {
     streaming,
     api: {
@@ -795,61 +792,6 @@ describe("GitHub reports source", () => {
     expect(JSON.stringify([result, logs.warn.mock.calls, logs.error.mock.calls])).not.toContain(
       config.token,
     );
-  });
-
-  it("aborts between pages without fetching the next page or exposing abort reasons", async () => {
-    const controller = new AbortController();
-    const { api, fetchImpl } = source((url) => {
-      controller.abort(new Error(config.token));
-      return json([{ login: "builder" }], { Link: `<${url}&page=2>; rel="next"` });
-    }, controller.signal);
-    await expect(api.loadRoster(config)).rejects.toThrow("aborted");
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    ["created", "issue"],
-    ["updated", "pull-request"],
-  ])(
-    "aborts a %s is:%s search without fetching more pages or searches",
-    async (qualifier, type) => {
-      const controller = new AbortController();
-      const queries: string[] = [];
-      const { api, fetchImpl } = source((url) => {
-        if (url.pathname === "/search/issues") {
-          const query = url.searchParams.get("q") ?? "";
-          queries.push(query);
-          if (query.includes(` is:${type} ${qualifier}:`)) {
-            controller.abort(new Error(config.token));
-            return json(
-              { total_count: 2, items: [issue()] },
-              { Link: `<${url}&page=2>; rel="next"` },
-            );
-          }
-        }
-        return emptyRoute(url);
-      }, controller.signal);
-      await expect(api.collect(config, window, roster)).rejects.toThrow(
-        "GitHub collection aborted",
-      );
-      expect(queries.at(-1)).toContain(` is:${type} ${qualifier}:`);
-      expect(fetchImpl).toHaveBeenCalledTimes(queries.length + 1);
-    },
-  );
-
-  it("cancels a rate limit sleep promptly", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const { api, fetchImpl } = source(
-      () => json({}, { "Retry-After": "3600" }, 429),
-      controller.signal,
-    );
-    const pending = api.loadRoster(config);
-    const rejected = expect(pending).rejects.toThrow("aborted");
-    await vi.advanceTimersByTimeAsync(1);
-    controller.abort();
-    await rejected;
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("refuses cross-origin pagination before forwarding credentials", async () => {

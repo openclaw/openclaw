@@ -18,8 +18,13 @@ import type { SessionEntryCohortReader } from "../../config/sessions/session-ent
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { isRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
-import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import {
+  type ReplyOperation,
+  runAfterReplyOperationClear,
+} from "../../sessions/session-controller.js";
+import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   type DeliveryContext,
@@ -34,7 +39,6 @@ import {
 } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type {
   ReplyAgentTurnContext,
@@ -60,7 +64,6 @@ import {
   isReplyOperationSuperseded,
   resolveReplyOperationAbortReason,
 } from "./reply-operation-abort.js";
-import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
@@ -82,7 +85,12 @@ export function scheduleFollowupDrainAfterReplyOperationClear(params: {
                 ? { ...queued, admissionSessionId }
                 : queued,
             );
-    scheduleFollowupDrain(params.queueKey, runFollowupAfterClear);
+    // Same-key sessions in other physical stores may retain their own dedupe mailbox.
+    scheduleFollowupDrain(
+      params.queueKey,
+      runFollowupAfterClear,
+      getSessionControllerEntryForOperation(params.operation),
+    );
   });
 }
 
@@ -226,9 +234,11 @@ export async function resolveTerminalReplyDelivery(params: {
     minimumAssistantMessageIndex,
     (error) => logVerbose(`reply delivery observation failed; retaining custody: ${String(error)}`),
   );
-  if (sourceDelivery === "delivered" || params.sourceReplyDeliveryState !== undefined) {
+  if (sourceDelivery === "delivered") {
     return sourceDelivery;
   }
+  // Runtime facts can miss host-owned block/direct sends. Their terminal
+  // receipts still confirm delivery or retain custody before recovery.
   let pending =
     sourceDelivery === "pending" ||
     blockReplyPipeline?.hasRetryBlockedTerminalDelivery?.(minimumAssistantMessageIndex) === true;
@@ -338,6 +348,7 @@ export async function handleReplyAgentRunError(
     resolveVisibleReplyDelivery: () => Promise<boolean>;
     isHeartbeat: boolean;
     replyExpectation: ReplyExpectation;
+    userTurnAccepted?: boolean;
     isRestartRecoveryArmed: () => Promise<boolean>;
     replyOperation: ReplyOperation;
     resolvedVerboseLevel: VerboseLevel;
@@ -357,13 +368,13 @@ export async function handleReplyAgentRunError(
   } = context;
 
   if (isReplyOperationSuperseded(replyOperation)) {
-    return { text: SILENT_REPLY_TOKEN };
+    return {};
   }
   if (
     replyOperation.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_by_user"
   ) {
-    return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+    return returnWithQueuedFollowupDrain({});
   }
   if (
     replyOperation.result?.kind === "aborted" &&
@@ -374,7 +385,7 @@ export async function handleReplyAgentRunError(
       isReplyOperationSuperseded(replyOperation) ||
       resolveReplyOperationAbortReason(replyOperation) === "user"
     ) {
-      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+      return returnWithQueuedFollowupDrain({});
     }
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({
@@ -382,11 +393,8 @@ export async function handleReplyAgentRunError(
       }),
     );
   }
-  if (error instanceof GatewayDrainingError || error instanceof CommandLaneClearedError) {
-    replyOperation.fail(
-      error instanceof GatewayDrainingError ? "gateway_draining" : "command_lane_cleared",
-      error,
-    );
+  if (error instanceof GatewayDrainingError) {
+    replyOperation.fail("gateway_draining", error);
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({
         text: buildRestartLifecycleReplyText(),
@@ -411,7 +419,11 @@ export async function handleReplyAgentRunError(
     return returnWithQueuedFollowupDrain(knownFailurePayload);
   }
   const visibleReplyDelivered = await resolveVisibleReplyDelivery();
-  if (!isHeartbeat && visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
+  if (
+    !isHeartbeat &&
+    (visibleReplyDelivered || context.userTurnAccepted) &&
+    !replyOperation.abortSignal.aborted
+  ) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({ replyExpectation, visibleReplyDelivered }),
@@ -461,7 +473,9 @@ export async function cleanupReplyAgentRun(context: {
   if (shouldDrainQueuedFollowupsAfterClear) {
     if (isHeartbeat) {
       // Heartbeat-scoped options and dispatch must never run queued user turns after a restart.
-      runAfterReplyOperationClear(replyOperation, () => kickFollowupDrainIfIdle(queueKey));
+      runAfterReplyOperationClear(replyOperation, () => {
+        kickFollowupDrainIfIdle(queueKey, getSessionControllerEntryForOperation(replyOperation));
+      });
     } else {
       scheduleFollowupDrainAfterReplyOperationClear({
         operation: replyOperation,

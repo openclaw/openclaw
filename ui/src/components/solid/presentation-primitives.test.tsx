@@ -1,10 +1,6 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  completePanelRefresh,
-  type PanelRefreshStatus as RefreshStatus,
-} from "../panel-refresh-status-state.ts";
 import { AgentStartupState, LazyViewError, PanelErrorState } from "./lazy-view-error.tsx";
 import { LoadingState } from "./loading-state.tsx";
 import { PanelEmptyStateContent } from "./panel-empty-state.tsx";
@@ -13,7 +9,6 @@ import {
   PanelLoadingSkeletonContent,
   type PanelLoadingSkeletonVariant,
 } from "./panel-loading-skeleton.tsx";
-import { PanelRefreshStatus } from "./panel-refresh-status.tsx";
 
 afterEach(cleanup);
 
@@ -55,7 +50,6 @@ describe("Solid presentation primitives", () => {
     ["file-list", ".rows .row", 5],
     ["files", ".rows .row", 5],
     ["review", ".summary .pill", 2],
-    ["terminal", ".terminal .line", 4],
   ] satisfies Array<[PanelLoadingSkeletonVariant, string, number]>)(
     "renders the %s loading structure",
     (variant, selector, count) => {
@@ -98,28 +92,6 @@ describe("Solid presentation primitives", () => {
     expect(view.container.querySelector(".agent-startup-state")?.textContent).not.toBe("");
   });
 
-  it("hides expected gateway interruptions, then presents hard and stale-only failures", () => {
-    const [status, setStatus] = createSignal<RefreshStatus>({
-      ...completePanelRefresh(),
-      stale: true,
-      awaitingGateway: true,
-    });
-    const view = render(() => <PanelRefreshStatus status={status()} />);
-    expect(view.container.textContent).toBe("");
-    setStatus({ ...completePanelRefresh(), error: "Synthetic read failure", stale: true });
-    flush();
-    expect(view.getByRole("alert").textContent).toContain("Synthetic read failure");
-    expect(view.getByRole("alert").textContent).toContain("Showing stale data");
-    expect(view.queryByRole("button")).toBeNull();
-    setStatus({ ...completePanelRefresh(), stale: true });
-    flush();
-    expect(view.queryByRole("alert")).toBeNull();
-    expect(view.getByRole("status").textContent).toContain("Showing stale data");
-    setStatus(completePanelRefresh());
-    flush();
-    expect(view.container.textContent).toBe("");
-  });
-
   it("retains prior content with a recoverable error and forwards retry and close actions", () => {
     const retry = vi.fn();
     const close = vi.fn();
@@ -153,8 +125,16 @@ describe("Solid presentation primitives", () => {
 
   it("supports non-alert panel errors with no details or actions", () => {
     const view = render(() => (
-      <PanelErrorState title="Panel unavailable" subtitle="Reconnect to continue." role="status" />
+      <PanelErrorState
+        class="session-route-not-found"
+        title="Panel unavailable"
+        subtitle="Reconnect to continue."
+        role="status"
+      />
     ));
+    expect(view.getByRole("status").getAttribute("class")).toBe(
+      "lazy-view-error session-route-not-found",
+    );
     expect(view.getByRole("status").textContent).toContain("Reconnect to continue.");
     expect(view.container.querySelector("details")).toBeNull();
     expect(view.queryByRole("button")).toBeNull();

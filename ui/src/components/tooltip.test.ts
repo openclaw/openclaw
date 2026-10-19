@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installTestLinkReader } from "../test-helpers/link-reader.ts";
-import { renderKbd } from "./kbd.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { linkReaderHovercardBootstrap } from "./link-reader-hovercard-registration.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
+import { Kbd } from "./solid/kbd.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import {
   createTooltip,
@@ -19,6 +21,7 @@ import {
   settleTooltip,
   type TooltipElement,
 } from "./tooltip.test-support.ts";
+import { focusWithoutTooltip } from "./tooltip.ts";
 
 // Keep renderer-specific readiness and content lookup at the fixture boundary.
 function commitTooltip(tooltip: TooltipElement) {
@@ -70,6 +73,22 @@ describe("openclaw-tooltip", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([true, false])(
+    "preserves focus options without opening a tooltip (wrapped=%s)",
+    async (wrapped) => {
+      const { tooltip, trigger } = createTooltip("Navigation action");
+      document.body.append(wrapped ? tooltip : trigger);
+      if (wrapped) {
+        await commitTooltip(tooltip);
+      }
+      const focus = vi.spyOn(trigger, "focus");
+      focusWithoutTooltip(trigger, { preventScroll: true });
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+      expect(document.activeElement).toBe(trigger);
+      await expectOpenCount(0);
+    },
+  );
+
   it.each([
     [undefined, "right-start"],
     [true, "bottom-start"],
@@ -92,18 +111,22 @@ describe("openclaw-tooltip", () => {
     },
   );
 
-  it("renders shortcut templates without changing plain descriptions or dismissal", async () => {
-    const { tooltip, trigger } = createTooltip("Search (⌘K)");
-    tooltip.contentTemplate = html`Search (${renderKbd(["⌘", "K"], { inline: true })})`;
+  it("renders slotted shortcuts without duplicating descriptions", async () => {
+    const { tooltip, trigger, card } = createRichTooltip("");
+    const view = mountSolid(
+      () => ["Search (", createComponent(Kbd, { keys: ["⌘", "K"], inline: true }), ")"],
+      { container: card },
+    );
     document.body.append(tooltip);
     await commitTooltip(tooltip);
 
     hoverTrigger(trigger);
     vi.advanceTimersByTime(150);
     await settleTooltip(tooltip);
-    const content = tooltipContent(tooltip);
-    expect(content?.querySelector("kbd svg")).not.toBeNull();
-    expect(content?.textContent?.replace(/\s+/gu, "")).toBe("Search(⌘K)");
+    expect(projectedTooltipContent(tooltip)).toEqual([card]);
+    expect(card.querySelector("kbd svg")).not.toBeNull();
+    expect(card.textContent?.replace(/\s+/gu, "")).toBe("Search(⌘K)");
+    expect(tooltipContent(tooltip)?.textContent).toBe("");
     const descriptionId = trigger.getAttribute("aria-describedby") ?? "";
     expect(document.getElementById(descriptionId)?.textContent).toBe("Search (⌘K)");
 
@@ -111,15 +134,18 @@ describe("openclaw-tooltip", () => {
     vi.advanceTimersByTime(150);
     await expectOpenCount(1);
     dispatchMousePointer(trigger, "pointerleave");
+    vi.advanceTimersByTime(100);
     await expectOpenCount(0);
     focusTrigger(trigger);
     await expectOpenCount(1);
     dispatchMousePointer(trigger, "pointerdown");
     await expectOpenCount(0);
 
-    tooltip.contentTemplate = undefined;
+    view.unmount();
+    card.remove();
     tooltip.content = "Search unavailable";
     await commitTooltip(tooltip);
+    const content = tooltipContent(tooltip);
     expect(content?.querySelector("kbd")).toBeNull();
     expect(content?.textContent).toBe("Search unavailable");
     expect(document.getElementById(descriptionId)?.textContent).toBe("Search unavailable");
@@ -164,6 +190,36 @@ describe("openclaw-tooltip", () => {
     await expectOpenCount(1);
   });
 
+  it("retires listeners when an external anchor is replaced or the tooltip disconnects", async () => {
+    const { tooltip, trigger } = createTooltip("Anchor details");
+    const next = document.createElement("button");
+    tooltip.anchor = trigger;
+    document.body.append(trigger, next, tooltip);
+    await commitTooltip(tooltip);
+    focusTrigger(trigger);
+    await expectOpenCount(1);
+
+    tooltip.anchor = next;
+    await settleTooltip(tooltip);
+    await expectOpenCount(0);
+    focusTrigger(trigger);
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(150);
+    await expectOpenCount(0);
+    focusTrigger(next);
+    await expectOpenCount(1);
+
+    tooltip.remove();
+    focusTrigger(next);
+    hoverTrigger(next);
+    vi.advanceTimersByTime(150);
+    document.body.append(tooltip);
+    await settleTooltip(tooltip);
+    await expectOpenCount(0);
+    focusTrigger(next);
+    await expectOpenCount(1);
+  });
+
   it("suppresses repeated trigger text before opening and after content updates", async () => {
     const provider = createProvider();
     const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "Claude Opus 4.7 Anthropic");
@@ -200,21 +256,41 @@ describe("openclaw-tooltip", () => {
     await expectOpenCount(1);
   });
 
-  it("keeps a repeated-label tooltip when a nested label clips", async () => {
-    const provider = createProvider();
-    const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "");
-    const label = document.createElement("span");
-    label.textContent = "Claude Opus 4.7 Anthropic";
-    Object.defineProperty(label, "scrollWidth", { value: 160, configurable: true });
-    Object.defineProperty(label, "clientWidth", { value: 80, configurable: true });
-    trigger.append(label);
-    provider.append(tooltip);
-    document.body.append(provider);
-    await commitTooltip(tooltip);
+  it.each(["width", "height", "marker", "hidden descendant", "faded descendant"] as const)(
+    "keeps a repeated-label tooltip for nested overflow: %s",
+    async (overflow) => {
+      const provider = createProvider();
+      const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "");
+      const label = document.createElement("span");
+      label.textContent = "Claude Opus 4.7 Anthropic";
+      let target = label;
+      if (overflow === "hidden descendant" || overflow === "faded descendant") {
+        const wrapper = document.createElement("span");
+        wrapper.hidden = overflow === "hidden descendant";
+        wrapper.style.opacity = overflow === "faded descendant" ? "0" : "1";
+        target = document.createElement("span");
+        target.textContent = "Decorative text";
+        wrapper.append(target);
+        label.append(wrapper);
+      }
+      if (overflow === "width") {
+        Object.defineProperty(target, "scrollWidth", { value: 160, configurable: true });
+        Object.defineProperty(target, "clientWidth", { value: 80, configurable: true });
+      } else if (overflow === "height") {
+        Object.defineProperty(target, "scrollHeight", { value: 80, configurable: true });
+        Object.defineProperty(target, "clientHeight", { value: 40, configurable: true });
+      } else {
+        target.setAttribute("data-tooltip-overflow", "");
+      }
+      trigger.append(label);
+      provider.append(tooltip);
+      document.body.append(provider);
+      await commitTooltip(tooltip);
 
-    focusTrigger(trigger);
-    await expectOpenCount(1);
-  });
+      focusTrigger(trigger);
+      await expectOpenCount(1);
+    },
+  );
 
   it("does not reopen from pointer-origin focus after activation settles", async () => {
     const provider = createProvider();
@@ -415,18 +491,23 @@ describe("openclaw-tooltip", () => {
   it.each([true])(
     "returns Escape focus from rich content to its trigger (wrapped=%s)",
     async (wrapped) => {
-      const { tooltip, trigger, card } = createRichTooltip("Focusable card");
+      const { tooltip, trigger: directTrigger, card } = createRichTooltip("Focusable card");
+      const trigger = wrapped ? document.createElement("button") : directTrigger;
       if (wrapped) {
         const wrapper = document.createElement("span");
-        trigger.replaceWith(wrapper);
+        trigger.textContent = directTrigger.textContent;
         wrapper.append(trigger);
+        directTrigger.replaceWith(wrapper);
       }
+      tooltip.descriptionTarget = () => trigger;
       const action = document.createElement("button");
       action.textContent = "Card action";
       card.append(action);
       document.body.append(tooltip);
-      await commitTooltip(tooltip);
+      await settleTooltip(tooltip);
       trigger.focus();
+      expect(document.activeElement).toBe(trigger);
+      await expectOpenCount(1);
       action.focus();
       await expectOpenCount(1);
       action.dispatchEvent(
@@ -602,7 +683,7 @@ describe("title tooltips", () => {
     vi.advanceTimersByTime(150);
     await expectOpenCount(1);
 
-    const hovercard = new PortaledHovercardController(() => hovercard.reset());
+    const hovercard = createPortaledHovercardOwner(() => hovercard.reset());
     hovercard.markTrigger(trigger);
     await Promise.resolve();
     await commitTooltip(tooltip);
@@ -688,19 +769,24 @@ describe("title tooltips", () => {
     provider.append(link);
     parent.append(provider, control);
     document.body.append(parent);
-    dispatchMousePointer(link, "pointerover");
-    await vi.advanceTimersByTimeAsync(200);
-    await expectOpenCount(0);
-    expect(parent.title).toBe("");
-    expect(link.hasAttribute("aria-expanded")).toBe(false);
-    dispatchMousePointer(control, "pointerover");
-    await vi.advanceTimersByTimeAsync(200);
-    await expectOpenCount(1);
-    expect(document.querySelector<TooltipElement>("openclaw-tooltip")?.content).toBe(
-      "Shared context hint",
-    );
-    dispatchMousePointer(parent, "pointerleave");
-    expect(parent.title).toBe("Shared context hint");
+    try {
+      dispatchMousePointer(link, "pointerover");
+      await vi.advanceTimersByTimeAsync(200);
+      await expectOpenCount(0);
+      expect(parent.title).toBe("");
+      expect(link.hasAttribute("aria-expanded")).toBe(false);
+      dispatchMousePointer(control, "pointerover");
+      await vi.advanceTimersByTimeAsync(200);
+      await expectOpenCount(1);
+      expect(document.querySelector<TooltipElement>("openclaw-tooltip")?.content).toBe(
+        "Shared context hint",
+      );
+      dispatchMousePointer(parent, "pointerleave");
+      expect(parent.title).toBe("Shared context hint");
+    } finally {
+      parent.remove();
+      await linkReaderHovercardBootstrap.define();
+    }
   });
 
   it("yields a nested title when its link becomes preview eligible and restores ordinary hints on reentry", async () => {
@@ -783,6 +869,79 @@ describe("title tooltips", () => {
     await expectOpenCount(1);
   });
 
+  it("keeps an inherited hint on its focused control until focus moves to a sibling", async () => {
+    const wrapper = document.createElement("div");
+    wrapper.title = "Shared action details";
+    const first = document.createElement("button");
+    const second = document.createElement("button");
+    first.textContent = "First action";
+    second.textContent = "Second action";
+    first.setAttribute("aria-describedby", "first-description");
+    second.setAttribute("aria-describedby", "second-description");
+    wrapper.append(first, second);
+    document.body.append(wrapper);
+
+    second.focus();
+    const tooltip = document.querySelector<TooltipElement>("openclaw-tooltip")!;
+    await settleTooltip(tooltip);
+    const ids = (second.getAttribute("aria-describedby") ?? "").split(/\s+/u);
+    expect(ids).toHaveLength(2);
+    const descriptionId = ids.find((id) => id !== "second-description")!;
+    expect(document.getElementById(descriptionId)?.textContent).toBe("Shared action details");
+    expect(first.getAttribute("aria-describedby")).toBe("first-description");
+    expect(wrapper.hasAttribute("aria-describedby")).toBe(false);
+    const surface = currentTooltipSurface(tooltip);
+    expect(tooltipIsOpen(tooltip)).toBe(true);
+
+    for (const target of [first, wrapper]) {
+      dispatchMousePointer(target, "pointerover");
+      await settleTooltip(tooltip);
+      expect(second.getAttribute("aria-describedby")).toBe(`second-description ${descriptionId}`);
+      expect(first.getAttribute("aria-describedby")).toBe("first-description");
+    }
+
+    first.focus();
+    await settleTooltip(tooltip);
+    expect(document.activeElement).toBe(first);
+    expect(first.getAttribute("aria-describedby")).toBe(`first-description ${descriptionId}`);
+    expect(second.getAttribute("aria-describedby")).toBe("second-description");
+    expect(document.querySelector("openclaw-tooltip")).toBe(tooltip);
+    expect(currentTooltipSurface(tooltip)).toBe(surface);
+    expect(tooltipIsOpen(tooltip)).toBe(true);
+  });
+
+  it("describes a titled label's associated control and follows its next pointer discovery", async () => {
+    const label = document.createElement("label");
+    label.title = "Account details";
+    label.textContent = "Account";
+    const first = document.createElement("input");
+    const second = document.createElement("input");
+    first.id = "first-account";
+    second.id = "second-account";
+    first.setAttribute("aria-describedby", "first-description");
+    second.setAttribute("aria-describedby", "second-description");
+    label.htmlFor = first.id;
+    document.body.append(label, first, second);
+
+    dispatchMousePointer(label, "pointerover");
+    const tooltip = document.querySelector<TooltipElement>("openclaw-tooltip")!;
+    await settleTooltip(tooltip);
+    const ids = (first.getAttribute("aria-describedby") ?? "").split(/\s+/u);
+    expect(ids).toHaveLength(2);
+    const descriptionId = ids.find((id) => id !== "first-description")!;
+    expect(document.getElementById(descriptionId)?.textContent).toBe("Account details");
+    expect(label.hasAttribute("aria-describedby")).toBe(false);
+    expect(second.getAttribute("aria-describedby")).toBe("second-description");
+
+    label.htmlFor = second.id;
+    dispatchMousePointer(label, "pointerover");
+    await settleTooltip(tooltip);
+    expect(first.getAttribute("aria-describedby")).toBe("first-description");
+    expect(second.getAttribute("aria-describedby")).toBe(`second-description ${descriptionId}`);
+    expect(label.hasAttribute("aria-describedby")).toBe(false);
+    expect(document.querySelector("openclaw-tooltip")).toBe(tooltip);
+  });
+
   it("uses the nearest inherited title through shadow DOM and preserves iframe names", async () => {
     const parent = document.createElement("div");
     parent.title = "Inherited hint";
@@ -796,6 +955,9 @@ describe("title tooltips", () => {
     await commitTooltip(tooltip);
     expect(tooltip.content).toBe("Inherited hint");
     await settleTooltip(tooltip);
+    const descriptionId = trigger.getAttribute("aria-describedby") ?? "";
+    expect(shadow.getElementById(descriptionId)?.textContent).toBe("Inherited hint");
+    expect(parent.hasAttribute("aria-describedby")).toBe(false);
     expect(tooltipIsOpen(tooltip)).toBe(true);
 
     const iframe = document.createElement("iframe");

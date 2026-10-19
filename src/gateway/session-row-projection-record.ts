@@ -23,8 +23,10 @@ import type { readSessionRowFacts } from "./server-methods/session-placement-rea
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
+import { sessionTitleRequests } from "./session-title-state.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 export type ProjectionOptions = {
@@ -38,12 +40,9 @@ export type ProjectionOptions = {
 };
 
 export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
-  /** A committed append's bounded preview; null means the newest message exceeded the bound. */
-  transcriptPreview?: string | null;
   acpMeta: SessionAcpMeta | null;
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
-  runtimeOwnershipRetryPending?: true;
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
 };
 
@@ -52,12 +51,7 @@ export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
   Partial<
     Pick<
       PreparedSessionRowDatabaseFacts,
-      | "acpMeta"
-      | "runtimeOwnership"
-      | "runtimeOwnershipDependencies"
-      | "runtimeOwnershipRetryPending"
-      | "repositoryWorkspace"
-      | "transcriptPreview"
+      "acpMeta" | "runtimeOwnership" | "runtimeOwnershipDependencies" | "repositoryWorkspace"
     >
   >;
 
@@ -76,9 +70,8 @@ export function isPreparedSessionRowDatabaseFacts(
 /** Opaque legacy/external ownership must be prepared again whenever its row becomes dirty. */
 export function canRetainSessionRowRuntimeOwnership(facts: PreparedSessionRowDatabaseFacts) {
   return (
-    !facts.runtimeOwnershipRetryPending &&
-    (facts.runtimeOwnershipDependencies.length > 0 ||
-      resolveSessionPinnedHarnessId(facts.entry) === undefined)
+    facts.runtimeOwnershipDependencies.length > 0 ||
+    resolveSessionPinnedHarnessId(facts.entry) === undefined
   );
 }
 
@@ -97,6 +90,8 @@ export type Row = {
   agentId: string;
   storeTarget: SessionStoreTarget;
   storedEntry?: SessionEntry;
+  /** Committed archive metadata awaits the lineage registry before entry acquisition. */
+  entryAcquisitionPending?: true;
   /** Accepted under retained database custody; presentation consumes the whole snapshot. */
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
   /** Presentation retains committed facets until their owner publishes or the row is demoted. */
@@ -118,6 +113,7 @@ export type Row = {
   profileRevision?: number;
   subagentRevision?: number;
   lastMessagePreview?: string;
+  lastAssistantMessage?: GatewaySessionRow["lastAssistantMessage"];
   fallbackModel?: ReturnType<
     typeof rowProjection.readSessionRowInputs
   >["presentation"]["activeModel"];
@@ -187,10 +183,11 @@ type RowTarget = Pick<Row, "agentId" | "key" | "storeTarget">;
 export const identity = (row: RowTarget) =>
   `${row.agentId}\0${row.storeTarget.storePath}\0${row.key}`;
 export const physical = (storePath: string, key: string) => `physical:${storePath}\0${key}`;
-const logical = (agentId: string, key: string) => `logical:${agentId}\0${key}`;
+export const logicalSessionRowIdentity = (agentId: string, key: string) =>
+  `logical:${agentId}\0${key}`;
 export function dependents(row: Row, byParent: ReadonlyMap<string, Set<string>>) {
   return new Set([
-    ...(byParent.get(logical(row.agentId, row.key)) ?? []),
+    ...(byParent.get(logicalSessionRowIdentity(row.agentId, row.key)) ?? []),
     ...(byParent.get(physical(row.storeTarget.storePath, row.key)) ?? []),
   ]);
 }
@@ -353,6 +350,7 @@ export function renewGeneration(row: Row): Row {
     ...row,
     entry: undefined,
     storedEntry: undefined,
+    entryAcquisitionPending: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
     preparedAcpMeta: undefined,
@@ -363,6 +361,7 @@ export function renewGeneration(row: Row): Row {
     sharingEntry: undefined,
     materialized: undefined,
     lastMessagePreview: undefined,
+    lastAssistantMessage: undefined,
     fallbackModel: undefined,
     generation: Symbol("row"),
   };
@@ -384,7 +383,7 @@ export function ready(row: Row | undefined): row is MaterializedRow {
 
 export function publishTranscriptFields(
   row: MaterializedRow,
-  fields: Pick<Row, "lastMessagePreview" | "fallbackModel">,
+  fields: Pick<Row, "lastMessagePreview" | "lastAssistantMessage" | "fallbackModel">,
   cfg: Inputs["cfg"],
   context: SessionListRowContext,
 ): boolean {
@@ -403,13 +402,20 @@ export function publishTranscriptFields(
   });
   if (
     row.lastMessagePreview === fields.lastMessagePreview &&
+    isDeepStrictEqual(row.lastAssistantMessage, fields.lastAssistantMessage) &&
     isDeepStrictEqual(row.fallbackModel, fallbackModel)
   ) {
     return false;
   }
-  Object.assign(row, { lastMessagePreview: fields.lastMessagePreview, fallbackModel });
+  Object.assign(row, {
+    lastMessagePreview: fields.lastMessagePreview,
+    lastAssistantMessage: fields.lastAssistantMessage,
+    fallbackModel,
+  });
   row.materialized.source.lastMessagePreview = fields.lastMessagePreview;
   row.materialized.row.lastMessagePreview = fields.lastMessagePreview;
+  row.materialized.source.lastAssistantMessage = fields.lastAssistantMessage;
+  row.materialized.row.lastAssistantMessage = fields.lastAssistantMessage;
   return true;
 }
 
@@ -475,12 +481,20 @@ export function present(
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;
+  // Naming belongs to the in-flight owner, not persisted or materialized row state.
+  row.titlePending =
+    sessionTitleRequests.get({
+      storePath: record.storeTarget.storePath,
+      sessionKey: record.key,
+      sessionId: record.entry.sessionId,
+    }) !== undefined;
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
     row.derivedTitle = undefined;
   }
   if (!options.includeLastMessage) {
     row.lastMessagePreview = undefined;
+    row.lastAssistantMessage = undefined;
   }
   return row;
 }
@@ -494,51 +508,6 @@ export function snapshot(
   return row
     ? { row: present(row, context, options), lifecycleRunId: row.entry.lifecycleRunId }
     : { row: null };
-}
-
-function updateIndex(
-  map: Map<string, Set<string>>,
-  key: string | undefined,
-  id: string,
-  deleting: boolean,
-) {
-  if (!key) {
-    return;
-  }
-  const values = map.get(key);
-  if (deleting) {
-    values?.delete(id);
-    if (values?.size === 0) {
-      map.delete(key);
-    }
-  } else if (values) {
-    values.add(id);
-  } else {
-    map.set(key, new Set([id]));
-  }
-}
-
-export function index(
-  row: Row,
-  indexes: {
-    byStore: Map<string, Set<string>>;
-    byAgent: Map<string, Set<string>>;
-    byKey: Map<string, Set<string>>;
-    byParent: Map<string, Set<string>>;
-  },
-  deleting = false,
-) {
-  const { byStore, byAgent, byKey, byParent } = indexes;
-  const id = identity(row);
-  updateIndex(byStore, row.storeTarget.storePath, id, deleting);
-  updateIndex(byAgent, row.agentId, id, deleting);
-  updateIndex(byKey, `key:${row.key}`, id, deleting);
-  updateIndex(byKey, row.entry && `id:${row.entry.sessionId}`, id, deleting);
-  updateIndex(byKey, logical(row.agentId, row.key), id, deleting);
-  updateIndex(byKey, physical(row.storeTarget.storePath, row.key), id, deleting);
-  for (const parent of row.parents) {
-    updateIndex(byParent, parent, id, deleting);
-  }
 }
 
 export function isPrivateSourceCurrent(source: NonNullable<Row["privateSource"]>): boolean {
@@ -583,9 +552,13 @@ function selectSessionRowParent(
     cfg,
     agentId: fallbackAgentId,
     sessionKey: key,
-    read: (agentId, sessionKey) => referenced?.(logical(agentId, sessionKey))?.storedEntry,
+    read: (agentId, sessionKey) =>
+      referenced?.(logicalSessionRowIdentity(agentId, sessionKey))?.storedEntry,
   });
-  return { key: selected.key, reference: logical(selected.agentId, selected.key) };
+  return {
+    key: selected.key,
+    reference: logicalSessionRowIdentity(selected.agentId, selected.key),
+  };
 }
 
 /** Drop reader-only graphs while retaining cold metadata and index identity. */
@@ -600,6 +573,7 @@ export function dematerialize(row: Row): Row {
     databaseFactsRevision: row.databaseFactsRevision + 1,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
+    lastAssistantMessage: undefined,
     fallbackModel: undefined,
   };
 }
@@ -663,13 +637,18 @@ export function acquireSessionRowEntry(params: {
     return undefined;
   }
   const lineage = readSessionRowLineage(row, storedEntry, cfg, context, params.referenced);
+  const entryChanged = !isDeepStrictEqual(lineage.entry, row.entry);
+  // Selection and profile indexes retain entry identity until its metadata changes.
+  if (!entryChanged && row.entry) {
+    lineage.entry = row.entry;
+  }
   const { entry, parents } = lineage;
   // Equal timestamps still need the full metadata comparison.
   const changed =
     !isDeepStrictEqual(row.parents, parents) ||
     !Object.is(storedEntry.updatedAt, row.storedEntry?.updatedAt) ||
     !isDeepStrictEqual(storedEntry, row.storedEntry) ||
-    !isDeepStrictEqual(entry, row.entry);
+    entryChanged;
   // Archive custody can retain new stored metadata before its lineage is acquired.
   const includeChildren =
     changesSessionRowDependents(row.storedEntry, storedEntry) ||
@@ -688,6 +667,7 @@ export function acquireSessionRowEntry(params: {
   let next: Row = {
     ...row,
     storedEntry,
+    entryAcquisitionPending: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts,
     databaseFactsRevision: row.databaseFactsRevision + (retainedDatabaseFacts ? 0 : 1),
@@ -702,6 +682,7 @@ export function acquireSessionRowEntry(params: {
     ...(generation !== row.generation
       ? {
           lastMessagePreview: undefined,
+          lastAssistantMessage: undefined,
           fallbackModel: undefined,
           materialized: undefined,
           preparedAcpMeta: undefined,

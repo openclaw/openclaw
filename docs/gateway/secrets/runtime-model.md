@@ -74,6 +74,10 @@ SecretRefs are validated only on effectively active surfaces:
 - **Enabled surfaces**: retryable failures for mapped, isolatable owners enter cold or stale degradation. Strict failures, failures that must stop startup, Gateway-required failures, and unmapped failures block startup/reload.
 - **Inactive surfaces**: unresolved refs do not block startup/reload; they emit a non-fatal `SECRETS_REF_IGNORED_INACTIVE_SURFACE` diagnostic.
 
+Channel hot restarts also skip credential preparation for disabled idle accounts.
+An account that was running before it was disabled still receives cleanup using
+its admitted runtime credentials.
+
 <Accordion title="Examples of inactive surfaces">
 - Disabled channel/account entries.
 - Top-level channel credentials that no enabled account inherits.

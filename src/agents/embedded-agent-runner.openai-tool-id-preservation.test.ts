@@ -1,7 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  createSanitizeSessionHistoryHelpersMock,
+  createSanitizeSessionHistoryImagesMock,
   createSanitizeSessionHistoryProviderHookRuntimeMock,
   createSanitizeSessionHistoryProviderRuntimeMock,
   loadSanitizeSessionHistoryWithCleanMocks,
@@ -13,7 +13,12 @@ import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 
-vi.mock("./embedded-agent-helpers.js", async () => await createSanitizeSessionHistoryHelpersMock());
+vi.mock("./embedded-agent-helpers/images.js", async () => ({
+  ...(await vi.importActual<typeof import("./embedded-agent-helpers/images.js")>(
+    "./embedded-agent-helpers/images.js",
+  )),
+  ...createSanitizeSessionHistoryImagesMock(),
+}));
 
 vi.mock(
   "../plugins/provider-runtime.js",
@@ -99,8 +104,8 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
     );
     const firstId = callId(result[0]);
     const secondId = callId(result[3]);
-    expect(firstId).toMatch(/^call_[A-Za-z0-9_-]+$/);
-    expect(secondId).toMatch(/^call_[A-Za-z0-9_-]+$/);
+    expect(firstId).toMatch(/^call_[A-Za-z0-9_-]{1,59}\|fc_tmp_first$/);
+    expect(secondId).toMatch(/^call_[A-Za-z0-9_-]{1,59}\|fc_tmp_second$/);
     expect(secondId).not.toBe(firstId);
     expect(result[1]).toMatchObject({
       role: "toolResult",

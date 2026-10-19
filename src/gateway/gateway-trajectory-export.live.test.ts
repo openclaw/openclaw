@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { isLiveTestEnabled, useLiveTestRuntimeConfig } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
@@ -101,7 +101,7 @@ async function writeLiveGatewayConfig(params: {
   port: number;
   token: string;
   workspace: string;
-}): Promise<void> {
+}): Promise<OpenClawConfig> {
   const cfg: OpenClawConfig = {
     gateway: {
       mode: "local",
@@ -122,6 +122,7 @@ async function writeLiveGatewayConfig(params: {
     },
   };
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`);
+  return cfg;
 }
 
 async function connectGatewayClient(params: {
@@ -502,7 +503,15 @@ describeLive("gateway live trajectory export", () => {
 
       await fs.mkdir(stateDir, { recursive: true });
       await fs.mkdir(trajectoryDir, { recursive: true });
-      await writeLiveGatewayConfig({ configPath, modelKey, port, token, workspace: workspaceDir });
+      const config = await writeLiveGatewayConfig({
+        configPath,
+        modelKey,
+        port,
+        token,
+        workspace: workspaceDir,
+      });
+      const runtimeConfig = useLiveTestRuntimeConfig(config);
+      cleanup.push(async () => runtimeConfig[Symbol.dispose]());
       logLiveStep("config-written", { configPath, modelKey, port, workspaceDir });
 
       const server = await startGatewayServer(port, {

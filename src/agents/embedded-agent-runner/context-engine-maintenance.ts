@@ -13,10 +13,7 @@ import {
 } from "../../process/command-queue.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  createSessionMaintenanceOwner,
-  waitForSessionMaintenance,
-} from "../session-maintenance/coordinator.js";
+import { createSessionMaintenanceOwner } from "../session-maintenance/coordinator.js";
 import { executeContextEngineMaintenance } from "./context-engine-maintenance-execution.js";
 import {
   disposeDeferredMaintenanceContextEngine,
@@ -42,7 +39,6 @@ type DeferredTurnMaintenanceRunState = {
   activeEngine: ContextEngine;
   pendingParams?: DeferredTurnMaintenanceScheduleParams;
   engines: DeferredTurnMaintenanceScheduleParams[];
-  disposedEngines: WeakRef<ContextEngine>[];
   disposals: Set<Promise<void>>;
   closing: boolean;
 };
@@ -107,10 +103,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   };
 }
 
-export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: string): Promise<void> {
-  await waitForSessionMaintenance(sessionKey);
-}
-
 function scheduleDeferredTurnMaintenance(
   params: DeferredTurnMaintenanceScheduleParams,
 ): Promise<void> | undefined {
@@ -125,20 +117,6 @@ function scheduleDeferredTurnMaintenance(
     if (activeRun.closing) {
       params.onDeferredMaintenanceFailure?.(
         new Error("Deferred maintenance is finishing cleanup; try again on the next turn"),
-      );
-      return undefined;
-    }
-    activeRun.disposedEngines = activeRun.disposedEngines.filter(
-      (ref) => ref.deref() !== undefined,
-    );
-    if (
-      activeRun.disposedEngines.some((ref) => {
-        const engine = ref.deref();
-        return engine !== undefined && hasSameContextEngineInstance(engine, params.contextEngine);
-      })
-    ) {
-      params.onDeferredMaintenanceFailure?.(
-        new Error("Context engine was disposed before deferred maintenance could be scheduled"),
       );
       return undefined;
     }
@@ -168,7 +146,6 @@ function scheduleDeferredTurnMaintenance(
     promise: maintenance.track(completion.promise),
     activeEngine: params.contextEngine,
     engines: [params],
-    disposedEngines: [],
     disposals: new Set(),
     closing: false,
   };
@@ -267,8 +244,6 @@ async function disposeRetainedEngine(
   }
   const [entry] = state.engines.splice(index, 1);
   if (entry?.disposeContextEngineAfterMaintenance) {
-    state.disposedEngines = state.disposedEngines.filter((ref) => ref.deref() !== undefined);
-    state.disposedEngines.push(new WeakRef(entry.contextEngine));
     await disposeDeferredMaintenanceContextEngine(entry, state.maintenance);
   }
 }

@@ -77,6 +77,10 @@ it("keeps managed workspace custody through awaited sandbox skill synchronizatio
           workspaceDir,
           workspaceCwd: workspaceDir,
           assertCurrent,
+          retain: () => {
+            assertCurrent();
+            return () => {};
+          },
           provision: async <T>(run: () => Promise<T>) => {
             assertCurrent();
             const result = await run();
@@ -84,6 +88,7 @@ it("keeps managed workspace custody through awaited sandbox skill synchronizatio
             return result;
           },
           checkpoint: async () => {},
+          terminate: async (run) => await run(),
           [Symbol.dispose]: releaseProjection,
         };
       });

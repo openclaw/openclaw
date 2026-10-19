@@ -24,6 +24,7 @@ import {
 } from "../../scripts/publish-model-catalog.mts";
 import { MODELS_JSON_STATE } from "../../src/agents/models-config-state.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { prepareRemoteModelCatalogStartupSnapshot } from "../../src/model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../src/model-catalog/remote-overlay.test-support.js";
 import { resolveModelCostConfig } from "../../src/utils/usage-format.js";
 
@@ -77,7 +78,7 @@ function modelsDevCatalog(
   );
 }
 
-function publishedPricingParams(bundle: RemoteModelCatalogBundle, provider: string) {
+async function publishedPricingParams(bundle: RemoteModelCatalogBundle, provider: string) {
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-pricing-"));
   tempDirs.push(agentDir);
   vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
@@ -99,6 +100,7 @@ function publishedPricingParams(bundle: RemoteModelCatalogBundle, provider: stri
     models: { catalogRefresh: { url: "https://catalog.openclaw.ai/models/v1/catalog.json" } },
     plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
   };
+  await prepareRemoteModelCatalogStartupSnapshot();
   return { config, agentDir, provider };
 }
 
@@ -249,7 +251,7 @@ describe("publish model catalog", () => {
     expect(bundle.pricing).not.toHaveProperty("absent");
     expect(bundle.pricing).not.toHaveProperty("foreign/hidden");
     expect(bundle.providers).not.toHaveProperty("foreign");
-    const params = publishedPricingParams(bundle, "deepinfra");
+    const params = await publishedPricingParams(bundle, "deepinfra");
     for (const model of ["free", "standalone-free"]) {
       expect(bundle.pricing?.[`deepinfra/${model}`]).toEqual({ input: 0, output: 0 });
       expect(resolveModelCostConfig({ ...params, model })).toEqual({
@@ -1244,7 +1246,7 @@ describe("publish model catalog", () => {
         );
         expect(
           resolveModelCostConfig({
-            ...publishedPricingParams(bundle, provider),
+            ...(await publishedPricingParams(bundle, provider)),
             model: "priced-fixture",
           }),
         ).toBeUndefined();

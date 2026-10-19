@@ -3,52 +3,45 @@ import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
 } from "../state/openclaw-state-db-readonly.js";
+import { PluginCacheFactInvalidatedError } from "./plugin-cache.js";
 import type {
   PluginMetadataStateKey,
   PluginMetadataStateRow,
   PluginMetadataStateSelector,
-} from "./installed-plugin-index-row.js";
-import { PluginCacheFactInvalidatedError } from "./plugin-cache.js";
+} from "./plugin-metadata-state.kernel.js";
 
-/** Read raw metadata from retained snapshot bytes or the shared inspection worker. */
-export async function readPluginMetadataStateRow(
-  selector: PluginMetadataStateSelector,
+async function readPluginMetadataState(
+  selection:
+    | { selector: PluginMetadataStateSelector }
+    | { stateKeys: readonly PluginMetadataStateKey[] },
   options: { path?: string; env?: NodeJS.ProcessEnv },
-  artifactPreservingReadOnly = false,
-): Promise<{ value_json: string } | undefined> {
-  const rows = await readPluginMetadataStateRows(
-    [selector === "installed-index" ? "plugins.installedIndex" : "plugins.bundledDiscovery"],
-    options,
-    artifactPreservingReadOnly,
-  );
-  return rows[0] ? { value_json: rows[0].value_json } : undefined;
-}
-
-/** Policy and inventory preparation share one worker request and SQLite snapshot. */
-export async function readPluginMetadataStateRows(
-  stateKeys: readonly PluginMetadataStateKey[],
-  options: { path?: string; env?: NodeJS.ProcessEnv },
-  artifactPreservingReadOnly = false,
+  artifactPreservingReadOnly: boolean,
 ): Promise<PluginMetadataStateRow[]> {
-  const read = async () => {
-    const result = await executeExistingOpenClawStateRead(
-      options,
-      {
-        type: "plugins.metadata.read",
-        input: { stateKeys: [...stateKeys] },
-      },
-      { snapshotPreparation: "awaited" },
-    );
+  try {
+    const stateKeys: PluginMetadataStateKey[] =
+      "stateKeys" in selection
+        ? [...selection.stateKeys]
+        : [
+            selection.selector === "installed-index"
+              ? "plugins.installedIndex"
+              : "plugins.bundledDiscovery",
+          ];
+    const read = () =>
+      executeExistingOpenClawStateRead(
+        options,
+        {
+          type: "plugins.metadata.read",
+          input: { stateKeys },
+        },
+        { snapshotPreparation: "awaited" },
+      );
+    const result = await (artifactPreservingReadOnly
+      ? withArtifactPreservingStateReads(read)
+      : read());
     if (result === undefined) {
       return [];
     }
-    if (result.ok && result.type === "plugins.metadata.read") {
-      return result.rows;
-    }
-    throw new Error("Unexpected plugin metadata read reply");
-  };
-  try {
-    return await (artifactPreservingReadOnly ? withArtifactPreservingStateReads(read) : read());
+    return result.rows;
   } catch (error) {
     if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
       throw new PluginCacheFactInvalidatedError(
@@ -58,4 +51,23 @@ export async function readPluginMetadataStateRows(
     }
     throw error;
   }
+}
+
+/** Read raw metadata through the shared reader, including retained snapshot scopes. */
+export async function readPluginMetadataStateRow(
+  selector: PluginMetadataStateSelector,
+  options: { path?: string; env?: NodeJS.ProcessEnv },
+  artifactPreservingReadOnly = false,
+): Promise<{ value_json: string } | undefined> {
+  const [row] = await readPluginMetadataState({ selector }, options, artifactPreservingReadOnly);
+  return row ? { value_json: row.value_json } : undefined;
+}
+
+/** Policy and inventory preparation share one worker request and SQLite snapshot. */
+export function readPluginMetadataStateRows(
+  stateKeys: readonly PluginMetadataStateKey[],
+  options: { path?: string; env?: NodeJS.ProcessEnv },
+  artifactPreservingReadOnly = false,
+): Promise<PluginMetadataStateRow[]> {
+  return readPluginMetadataState({ stateKeys }, options, artifactPreservingReadOnly);
 }

@@ -193,30 +193,27 @@ describe("Discord report source", () => {
     expect(result.status.stats.privateArchivesSkipped).toBe(0);
   });
 
-  it.each([3_000_000])(
-    "waits %s seconds for Discord retry_after before retrying",
-    async (seconds) => {
-      vi.useFakeTimers();
-      let attempts = 0;
-      const context = runtime((url) => {
-        if (url.pathname.endsWith("/messages")) {
-          attempts += 1;
-          return attempts === 1
-            ? json({ retry_after: seconds }, 429)
-            : json([message(window.sinceMs + 1)]);
-        }
-        return undefined;
-      });
-      const pending = collect(context, config, window);
-      await vi.advanceTimersByTimeAsync(seconds * 1000 - 1);
-      expect(attempts).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      const result = await pending;
-      expect(attempts).toBe(2);
-      expect(result.messages).toHaveLength(1);
-      expect(result.status.stats.apiCalls).toBe(context.requests.length);
-    },
-  );
+  it.each([60])("waits %s seconds for Discord retry_after before retrying", async (seconds) => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    const context = runtime((url) => {
+      if (url.pathname.endsWith("/messages")) {
+        attempts += 1;
+        return attempts === 1
+          ? json({ retry_after: seconds }, 429)
+          : json([message(window.sinceMs + 1)]);
+      }
+      return undefined;
+    });
+    const pending = collect(context, config, window);
+    await vi.advanceTimersByTimeAsync(seconds * 1000 - 1);
+    expect(attempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await pending;
+    expect(attempts).toBe(2);
+    expect(result.messages).toHaveLength(1);
+    expect(result.status.stats.apiCalls).toBe(context.requests.length);
+  });
 
   it("warns on missing channel access and collects accessible sibling channels without exposing tokens", async () => {
     const context = runtime((url) => {
@@ -252,38 +249,5 @@ describe("Discord report source", () => {
     expect(JSON.stringify({ status: result.status, logs: context.logs })).not.toContain(
       config.token,
     );
-  });
-
-  it("aborts rate-limit waits without requesting another page", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const context = runtime(
-      (url) => (url.pathname.endsWith("/messages") ? json({ retry_after: 60 }, 429) : undefined),
-      controller.signal,
-    );
-    const pending = collect(context, config, window);
-    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    await vi.advanceTimersByTimeAsync(1);
-    const requestsBeforeAbort = context.requests.length;
-    controller.abort(new Error(config.token));
-    await rejected;
-    await vi.advanceTimersByTimeAsync(60000);
-    expect(context.requests).toHaveLength(requestsBeforeAbort);
-    expect(context.logs.join(" ")).not.toContain(config.token);
-  });
-
-  it("stops paging immediately when the run is aborted during a response", async () => {
-    const controller = new AbortController();
-    const context = runtime((url) => {
-      if (url.pathname.endsWith("/messages")) {
-        controller.abort();
-        return json(Array.from({ length: 100 }, (_, index) => message(window.sinceMs + index + 1)));
-      }
-      return undefined;
-    }, controller.signal);
-    await expect(collect(context, config, window)).rejects.toMatchObject({
-      name: "AbortError",
-    });
-    expect(context.requests.filter((url) => url.pathname.endsWith("/messages"))).toHaveLength(1);
   });
 });

@@ -24,7 +24,8 @@ export function parseExportCommandOutputPath(
   }
   const aliasPattern = aliases.map(escapeRegExp).join("|");
   const args = normalized.replace(new RegExp(`^/(${aliasPattern})\\s*`), "").trim();
-  const outputPath = args.split(/\s+/).find((part) => !part.startsWith("-"));
+  // The command registry serializes a single path argument, which may contain spaces.
+  const outputPath = args.replace(/^(?:-\S*(?:\s+|$))+/u, "").trim() || undefined;
   if (outputPath && outputPath.length > MAX_EXPORT_COMMAND_OUTPUT_PATH_CHARS) {
     return {
       error: `❌ Output path is too long. Keep it at ${MAX_EXPORT_COMMAND_OUTPUT_PATH_CHARS} characters or less.`,

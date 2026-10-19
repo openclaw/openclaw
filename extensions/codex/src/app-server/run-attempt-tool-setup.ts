@@ -2,7 +2,6 @@ import {
   embeddedAgentLog,
   isHostScopedAgentToolActive,
   materializeRequesterScopedMcpToolsForHarnessRun,
-  resolveAgentDir,
   supportsModelTools,
   type EmbeddedRunAttemptParams,
   type ExecApprovalDecision,
@@ -351,7 +350,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       sessionId: params.sessionId,
       runId: params.runId,
       agentId: policyAgentId,
-      agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
+      agentDir,
       agentAccountId: params.agentAccountId,
       messageProvider: params.messageProvider ?? params.messageChannel,
       messageChannel: params.messageChannel,
@@ -381,6 +380,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       cwd: effectiveCwd ?? effectiveWorkspace,
       sandboxToolPolicy: sandbox?.tools,
       conversationToolPolicy: params.conversationToolPolicy,
+      requesterOrigin: params.requesterOrigin,
+      operatorProfileId: params.operatorProfileId,
+      conversationId: params.conversationId,
       inputProvenance: params.inputProvenance,
       trustedInternalHandoff: params.trustedInternalHandoff,
       scheduledToolPolicy: params.scheduledToolPolicy,
@@ -507,6 +509,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       replyToMode: params.replyToMode,
       hasRepliedRef: params.hasRepliedRef,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      messageToolFinalByDefault: params.messageToolFinalByDefault,
       onToolOutcome: onCodexToolOutcome,
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
       trigger: params.trigger,
@@ -554,6 +557,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ? "direct"
         : resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
             connectionClass: connection.appServer.connectionClass,
+            nativeToolSurfaceEnabled,
           }),
       directToolNames: resolveCodexDynamicToolDirectNames(
         params,

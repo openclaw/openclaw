@@ -63,9 +63,19 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 
 ## Rejected Experiments
 
+- **UI blobless sparse checkout (2026-10-16):** Excluding native mobile/macOS
+  app trees removed 48.31 MiB of logical tracked content, but did not qualify as
+  a runner-cost improvement. In
+  [run 38866595993](https://github.com/openclaw/openclaw/actions/runs/38866595993),
+  the Blacksmith UI E2E checkout took 56s and the hosted browser checkout 58s;
+  same-run full UI checkouts took 22–38s. These are small, unpaired samples,
+  not a measured billing delta. Keep the full source checkout. Reconsider only
+  with lower complete checkout time and billed cost, including filtered fetch,
+  lazy materialization, and trusted-harness export; fewer logical bytes alone
+  do not establish savings.
 - **Declaration-fixture owner selection (2026-10-02):**
-  `test/scripts/tsdown-declaration-fixture.ts` copies 26 real runtime owners by
-  path, so product PRs that edit one do not select the four declaration suites
+  `test/scripts/tsdown-declaration-fixture.ts` derives real source copies from its runtime
+  entrypoint closures, so product PRs that edit one do not select the four declaration suites
   built on it. [PR #162614](https://github.com/openclaw/openclaw/pull/162614)
   broke `write-unified-entry-dts` that way; hourly scheduled CI
   ([run 36979748808](https://github.com/openclaw/openclaw/actions/runs/36979748808))
@@ -142,6 +152,13 @@ For a suspicious queued run, inspect its jobs. A run-level `queued` status does
 not reveal whether the job is waiting on dependencies or has no eligible
 runner. Compare `created_at`, `started_at`, `labels`, and `runner_name`. Recheck
 stale queued runs live before canceling them; cancel only runs proven obsolete.
+
+Testbox `warmup` confirms lease creation, not runner readiness. An initial
+`queued` snapshot without `providerMetadata.runURL` does not establish a capacity
+shortage. Use that URL to inspect the exact workflow once associated. An assigned
+`check` runner performing setup is hydration; a confirmed admission or capacity
+queue follows the existing stop-owned-allocation policy. Do not infer association
+from the newest workflow run or wait on a confirmed capacity queue.
 
 `scripts/ci-run-timings.mjs` start delay can include workflow dependency wait
 plus runner queue time. It is trend evidence, not runner-pressure proof alone.
@@ -277,8 +294,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   include short-publisher turnover in burst estimates. Preflight and downstream Node jobs are
   restore-only consumers on eligible self-hosted runners. Exact misses and
   hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
-- Trusted canonical hybrid first attempts route `ci-gate` to the Blacksmith
-  4-class after hosted assignment added 416 seconds to main's critical chain.
+- Ordinary canonical same-repository hybrid first attempts keep `preflight`,
+  `pr-failure-report`, and `ci-gate` on hosted Ubuntu. October 15's 26-PR sample
+  found 148 minutes of Blacksmith preflight queueing, with a 12.9-minute p75.
+  Fork first attempts, RunsOn, and admitted qualification/release dispatches
+  retain their existing routes. Count these mandatory hosted controls before
+  optional offload; keep the 45-row ceiling and all job/worker limits.
   Core lint uses the 16-class on canonical automatic first attempts with an
   unset, `blacksmith`, or `hybrid` backend, including fork PRs. Admitted
   qualifications retain their existing routes. The first packed lint row took
@@ -288,11 +309,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   jobs or registrations and keeps the deadline and complete stripe inventory. The gate has no checkout or dependency setup; retries, ordinary
   manual dispatches, noncanonical contexts, and the GitHub override stay hosted.
   Core lint additionally retains hosted routing for frozen targets. Normal hybrid
-  main/same-repository PRs add three assignments; fork PRs can add six because
+  main/same-repository PRs add two lint assignments; fork PRs can add six because
   their logical GitHub check profile emits five lint rows. These fit the fresh
   71-row union and reserved 84-row non-Node allowance described above.
-  Automatic canonical hybrid and RunsOn first-attempt `preflight` uses the
-  existing 4-class, matching default Blacksmith preflight. The former 16-class
+  Automatic canonical RunsOn and fork hybrid first-attempt `preflight` uses
+  the existing 4-class, matching default Blacksmith preflight. The former 16-class
   placement addressed hosted queue stalls. October 13 observations found 610
   4-class runs with no OOMs and 113s p95 duration; full and changed manifest plans
   also fit two CPUs and 4 GiB without swap with unchanged outputs. Keep the
@@ -302,9 +323,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   `security-fast` stays hosted
   outside eligible hybrid first attempts and when the bounded hosted plan is admitted. Security hooks use pinned installed packages
   and local hook definitions, without remote Git initialization. The `github`
-  outage override remains intact. Budget three control-job registrations per eligible
-  hybrid first attempt when optional hosted admission is closed, two when admitted,
-  and one per normal Blacksmith run. All occur in the reserved non-Node inventory.
+  outage override remains intact. Ordinary same-repository hybrid controls add
+  at most one Blacksmith security registration when optional hosted admission is
+  closed, none when admitted; fork hybrid first attempts retain up to three,
+  and normal Blacksmith runs retain their existing control registrations. All occur in the reserved non-Node inventory.
   Selected baseline ratchets and Node rows start independently after preflight.
   Keep the standalone ratchet owner and exact merge-parent/base checks; the final
   gate still requires every selected ratchet to pass. Same-repository
@@ -313,7 +335,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Preserve the existing hosted fallbacks and deadline.
   The existing `check-plan` prerequisite uses the 16-class for shared compiler
   snapshot memory on canonical automatic first attempts with an unset,
-  `blacksmith`, or `hybrid` backend, including fork PRs. Fork core type stripes
+  `blacksmith`, or `hybrid` backend, including fork PRs. Same-repository hybrid
+  PR first attempts instead use hosted planning with the existing serial
+  compiler discovery mode; reserve that mandatory row before optional offloads.
+  Never move the complete compiler snapshot onto the smaller hosted runner.
+  Fork core type stripes
   with an unset or `blacksmith` backend also use the 16-class on those attempts;
   hybrid health admission retains its existing placement rules. These routes
   add paid assignments, not jobs. Preserve logical GitHub stripe coverage,
@@ -340,9 +366,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   leaves thirteen inside the unchanged 84-row allowance and 5,110 bound.
 
 - Automatic canonical hybrid first attempts count every selected hosted row in
-  preflight. `HYBRID_HOSTED_BASE_ROW_LIMIT = 40` admits at most five optional
-  rows within `HYBRID_HOSTED_ROW_LIMIT = 45`: security, three Control UI unit
-  rows, and only browser-extension E2E. Above 40 base rows, retain their
+  preflight. `HYBRID_HOSTED_BASE_ROW_LIMIT = 40` admits at most two optional
+  rows within `HYBRID_HOSTED_ROW_LIMIT = 45`: security and browser-extension
+  E2E. Control UI unit rows retain the 8-class on eligible first attempts.
+  Above 40 base rows, retain the optional rows' existing
   Blacksmith routes; an eligible base above 45 warns with counts and retains
   the complete base manifest. The budget limits optional admission, not coverage.
   Record base/total rows and compare the actual workflow expansion in guards.
@@ -525,8 +552,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   it does not promote serial jobs or change worker limits. Preserve the separate
   300s ordered two-slot queue bound and runtime preparation charge.
   Gateway-exclusive serial bins and native numbered tooling bins use a 300s test
-  budget. Native tooling rows containing the partitioned changed-Node planner proof
-  retain a 150s test budget through initial and measured packing. The partition keeps
+  budget; hourly hybrid main validation packs its tooling rows within 420s plus
+  60s setup to keep headroom under its 77-row cap. Native tooling rows containing
+  the partitioned changed-Node planner proof retain a 150s test budget through
+  initial and measured packing. The partition keeps
   two workers and serial outer admission. Ordinary self-hosted bins share promoted capacity across logical
   classes; the existing group exchange fills stranded slots without raising caps.
   Parallel admission also bounds the ordered two-slot queue at 300 test seconds;
@@ -593,14 +622,33 @@ These are intentionally guarded by the `ci-workflow-guards`,
   elapsed-time, actual memory and cleanup proof; requested labels are not capacity.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
-- Precisely selected serial CLI and Gateway client jobs use the 16-class when
-  every group belongs to either family, has one or two explicit files, and keeps
-  its two-worker fallback, without build, dist, memory, or large-runner anchors.
-  Gateway client groups must pair `agentic-gateway-core-2` with
-  `vitest.gateway-client.config.ts`; other Gateway owners retain planned capacity.
+- Precisely selected serial CLI, Gateway client/server, and embedded-agent jobs
+  use the 16-class when every group has one qualified config, one or two explicit
+  files, and a two-worker pin or fallback. An explicit wider pin disqualifies the
+  group. Keep build, dist, memory, large-runner anchors, and unqualified configs
+  at planned capacity; resource-gated tooling tests are not qualified by this rule.
   Apply capacity after packing; preserve inventories, runtime selection, timing
   identities, and process boundaries. Full families retain their planned capacity.
   RunsOn inherits the hybrid choice for these retained Blacksmith jobs.
+  The exact singleton `gateway-core` selection of
+  `src/gateway/mcp-app-extension-runtime.test.ts` and `agents-core` selection of
+  `src/agents/cli-runner.helpers.test.ts` also qualify under these guards.
+  Their five-file serial replay at `137e7b2abc87` passed 56 tests on each of Bun
+  and Node, using four CPUs and 15.42 GiB RAM. Whole-machine peaks were 5.00 and
+  5.22 GiB, with zero OOM kills and at most 268 KiB swap use. Other files in those
+  configs and unbounded or parallel infra selections retain planned capacity.
+  Native billed savings remain unverified.
+  The isolated LLM-boundary cache-stability file also qualifies when it is the
+  group's only file, under the same serial, worker, and preparation guards.
+  Its complete current-source replay passed all 19 tests with four CPUs,
+  12 GiB RAM, no swap, 4.23 GiB peak, and zero OOMs. Other isolated files,
+  including siblings in the same job, retain their planned capacity.
+  The singleton `src/gateway/board-store.test.ts` selection also qualifies as the
+  job's only group, with an explicit two-worker pin, two-worker fallback, and
+  unchanged 28-GiB worker-admission threshold. Its five-test replay passed through
+  the CI shard executor in 40.78 seconds on four CPUs and 15.42 GiB RAM. Maximum
+  process RSS was 3.17 GiB, not an aggregate VM peak. Keep all other database-worker
+  selections and mixed jobs at planned capacity; native billed savings are unverified.
 - Source-only serial Blacksmith tooling bins use the 16-class after packing,
   retaining logical classes, names, file inventories, and two-worker pins.
   Keep the 32-class for compiler/artifact capacity files, explicit runner or

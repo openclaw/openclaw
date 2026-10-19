@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -16,10 +16,10 @@ import {
 } from "./github-repository-publication.kernel.js";
 
 const table = "github_repository_publication_requests";
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
 
 function selectRepositoryGitHubPublications(
-  db: DatabaseSync,
+  db: EngineConnection,
   filter: RepositoryGitHubPublicationFilter,
 ) {
   let selection = query(db).selectFrom(table).selectAll();
@@ -49,7 +49,7 @@ function selectRepositoryGitHubPublications(
 }
 
 export function listRepositoryGitHubPublicationsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filter: RepositoryGitHubPublicationFilter,
 ): RepositoryGitHubPublicationRow[] {
   if (!tableExists(db, table)) {
@@ -61,7 +61,7 @@ export function listRepositoryGitHubPublicationsInDatabase(
 }
 
 export function readPendingRepositoryGitHubPublicationInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: RepositoryGitHubPublicationPendingQuery,
 ): RepositoryGitHubPublicationStatusRow | undefined {
   if (!tableExists(db, table)) {

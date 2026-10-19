@@ -189,6 +189,7 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/code-mode-quickjs/assets/encoding.so",
       "dist/extensions/code-mode-quickjs/assets/quickjs.wasm",
       "dist/extensions/crabbox/assets/openclaw-worker-wallpaper.png",
+      "dist/extensions/logbook/src/logbook-schema.postgres.sql",
       "dist/extensions/onepassword/onepassword-op-path.js",
       "dist/extensions/onepassword/onepassword-secret-id.js",
       "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
@@ -203,6 +204,28 @@ describe("runtime postbuild static assets", () => {
     expect(payload.sources).not.toContain("extensions/discord/assets/embedded-app-sdk.mjs");
     expect(payload.packageOutputs).toContain("dist/extensions/discord/assets/embedded-app-sdk.mjs");
     expect(payload.sources).toContain("extensions/crabbox/assets/openclaw-worker-wallpaper.png");
+  });
+
+  it("ships the PostgreSQL schema read by the packaged Logbook port descriptor", async () => {
+    const rootDir = createTempDir("openclaw-logbook-port-assets-");
+    const pluginPath = "extensions/logbook";
+    const schemaPath = `${pluginPath}/src/logbook-schema.postgres.sql`;
+    for (const relativePath of [`${pluginPath}/package.json`, schemaPath]) {
+      const destination = path.join(rootDir, relativePath);
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.copyFile(path.join(MODULE_ROOT, relativePath), destination);
+    }
+    await fs.mkdir(path.join(rootDir, "dist-runtime/extensions"), { recursive: true });
+
+    copyStaticExtensionAssets({ rootDir });
+    copyStaticExtensionAssetsToRuntimeOverlay({ rootDir });
+
+    const schema = await fs.readFile(path.join(MODULE_ROOT, schemaPath), "utf8");
+    for (const outputRoot of ["dist", "dist-runtime"]) {
+      await expect(fs.readFile(path.join(rootDir, outputRoot, schemaPath), "utf8")).resolves.toBe(
+        schema,
+      );
+    }
   });
 
   it("copies each package asset once with multiple Git index stages", async () => {
@@ -1957,12 +1980,17 @@ describe("previous release update compatibility", () => {
   it.each([
     { latest: "2026.9.3", beta: "2026.9.4-beta.1", missing: "2026.9.4-beta.1" },
     { latest: "2026.9.4", beta: "2026.9.4", missing: "2026.9.4" },
+    { latest: "2026.9.3", beta: "2026.9.3", extendedStable: "2026.9.33", missing: "2026.9.33" },
   ])(
     "prints a complete refresh command when $missing leaves the window",
-    ({ latest, beta, missing }) => {
+    ({ latest, beta, extendedStable, missing }) => {
       const output = writeWindowInventory(createTempDir("update-compat-tag-refresh-"));
       const newIntegrity = `sha512-${Buffer.alloc(64, 1).toString("base64")}`;
-      const tags = { latest, beta };
+      const tags = {
+        latest,
+        beta,
+        ...(extendedStable ? { "extended-stable": extendedStable } : {}),
+      };
       const expectedCalls = [
         ["view", "openclaw", "dist-tags", "--json"],
         ["view", `openclaw@${missing}`, "openclaw.schemaVersions", "--json"],
@@ -2016,6 +2044,10 @@ describe("previous release update compatibility", () => {
   it.each([
     { tags: { beta: "2026.9.3" }, invalid: "latest" },
     { tags: { latest: "2026.9.3", beta: "not-a-release" }, invalid: "beta" },
+    {
+      tags: { latest: "2026.9.3", beta: "2026.9.3", "extended-stable": "not-a-release" },
+      invalid: "extended-stable",
+    },
   ])("refuses an absent or invalid $invalid dist-tag", ({ tags, invalid }) => {
     const output = writeWindowInventory(createTempDir("update-compat-invalid-tags-"));
     const npmArgs = ["view", "openclaw", "dist-tags", "--json"];
@@ -2184,6 +2216,10 @@ describe("previous release update compatibility", () => {
     ["config-doctor", "missing"],
     ["native-hook-relay", "present"],
     ["native-hook-relay", "missing"],
+    ["state/openclaw-state-read-inspect", "present"],
+    ["state/openclaw-state-read-inspect", "missing"],
+    ["infra/sqlite-readonly-inspect", "present"],
+    ["infra/sqlite-readonly-inspect", "missing"],
     ["control-ui", "present"],
     ["control-ui", "missing"],
     ["control-ui.build-123-fixture", "present"],
@@ -2197,7 +2233,10 @@ describe("previous release update compatibility", () => {
       const root = createTempDir("update-compat-isolated-graph-");
       candidate(root);
       const current = path.join(root, "dist/current.mjs");
-      write(root, `dist/${directory}/inspect.mjs`, fsSync.readFileSync(current, "utf8"));
+      const isolatedPath = directory.includes("/")
+        ? `dist/${directory}-abcdefgh.mjs`
+        : `dist/${directory}/inspect.mjs`;
+      write(root, isolatedPath, fsSync.readFileSync(current, "utf8"));
       const options = { distDir: path.join(root, "dist"), sourceDir: root, inventory };
       if (runtime === "missing") {
         fsSync.unlinkSync(current);

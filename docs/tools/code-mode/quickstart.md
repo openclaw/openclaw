@@ -226,8 +226,9 @@ unchanged; no partially saved value is advertised.
 
 ## Recover from tool errors
 
-Nested tool failures are ordinary JavaScript errors. Guest code can catch them
-and inspect diagnostic fields: `code` identifies `input_contract`,
+Thrown tool errors are catchable. Returned values may instead report failure.
+Follow the tool's result contract, and inspect possible effects before retrying.
+Guest code can inspect diagnostic fields on thrown errors: `code` identifies `input_contract`,
 `output_contract`, `invalid_contract`, `invalid_input`, or `tool_error`;
 `location` contains the original guest call-site frames when available.
 `effectStatus` remains `"unknown"`: classification is not a dispatch-owner
@@ -286,8 +287,8 @@ openclaw gateway
 ```
 
 With code mode active, the logged model-facing tool names should be `exec` and
-`wait`. For the full redacted provider payload, add
-`OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` for a short debugging session.
+`wait`. `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` also reports request shape
+and the complete tool-name list; it never logs prompt, message, or tool content.
 
 ## Use Swarm for agent fan-out
 

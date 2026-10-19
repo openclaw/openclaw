@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
 import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
@@ -14,7 +14,8 @@ import { Icon } from "./solid/icon.tsx";
 import {
   renderSessionLeadingState,
   sessionRunVisibility,
-  renderTeamSessionSlots,
+  TeamSessionSlots,
+  type TeamSessionSlotsProps,
   SessionRowBadges,
 } from "./solid/session-presentation.tsx";
 import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
@@ -22,13 +23,12 @@ import "./elapsed-time.tsx";
 import "./tooltip.ts";
 /** Compose independently owned session state and context indicators. */
 export function renderSidebarSessionIndicators(
-  host: SessionListHost,
+  host: () => SessionListHost,
   readSession: () => SidebarRecentSession,
   readDisplay?: () => CatalogBackingSessionDisplay | undefined,
   readIcon?: () => JSX.Element,
-  headerSummary?: Parameters<typeof renderTeamSessionSlots>,
 ) {
-  const team = createMemo(() => host.sidebarAgentsMode === "roster");
+  const team = createMemo(() => host().sidebarAgentsMode === "roster");
   const ownAttention = createMemo(() => readSession().ownAttention ?? readSession().attention);
   const hasApproval = createMemo(() => {
     const attention = ownAttention();
@@ -36,24 +36,22 @@ export function renderSidebarSessionIndicators(
       ? attention.requests.some((request) => request.kind === "approval")
       : !team() && attention.kind === "approval";
   });
-  const childrenExpanded = createMemo(() => host.isSessionChildrenExpanded(readSession()));
+  const childrenExpanded = createMemo(() => host().isSessionChildrenExpanded(readSession()));
   const initialPullRequest = createMemo(
     () => readSession().pullRequest ?? readDisplay?.()?.pullRequest,
   );
   const pullRequest = createMemo(() => {
     const readSessionValue = readSession();
     const initialPullRequestValue = initialPullRequest();
-    return readSessionValue.worktreeId
-      ? host.sessionPullRequests.summary(
-          readSessionValue.key,
-          readSessionValue.worktreeId,
-          initialPullRequestValue,
-        )
-      : initialPullRequestValue;
+    return host().sessionPullRequests.summary(
+      readSessionValue.key,
+      readSessionValue.worktreeId ?? "",
+      initialPullRequestValue,
+    );
   });
   const ownerAttribution = createMemo(() => {
     const readSessionValue = readSession();
-    return host.sessionsStatusFilter === "archived"
+    return host().sessionsStatusFilter === "archived"
       ? "archived"
       : readSessionValue.owner?.assignedAt !== undefined
         ? "owned"
@@ -61,8 +59,8 @@ export function renderSidebarSessionIndicators(
   });
   const ownerActor = createMemo(() => {
     const readSessionValue = readSession();
-    return host.sessionOwnershipVisibility.avatars
-      ? host.sessionsStatusFilter === "archived"
+    return host().sessionOwnershipVisibility.avatars
+      ? host().sessionsStatusFilter === "archived"
         ? readSessionValue.archivedBy
         : readSessionValue.owner?.actor
       : undefined;
@@ -71,7 +69,7 @@ export function renderSidebarSessionIndicators(
     const ownerActorValue = ownerActor();
     const readSessionValue = readSession();
     return ownerActorValue?.identity?.type === "profile"
-      ? projectPresencePayload(host.sessionData.presencePayload).users.some(
+      ? projectPresencePayload(host().sessionData.presencePayload).users.some(
           (user) =>
             presenceMatchesProfile(user, ownerActorValue.identity) &&
             user.watchedSessions.includes(readSessionValue.key),
@@ -82,13 +80,13 @@ export function renderSidebarSessionIndicators(
   // only for live presence; pinned and archive-attribution rows have no matching header.
   const ownerRepeatedBySection = createMemo(
     () =>
-      host.sessionsGrouping === "person" &&
+      host().sessionsGrouping === "person" &&
       !readSession().pinned &&
       ownerAttribution() !== "archived",
   );
   // A self filter already identifies solo ownership. Keep shared rows and
   // archive attribution visible; the participant count includes unshown faces.
-  const selfUser = createMemo(() => host.sessionDataContext?.gateway.snapshot.selfUser);
+  const selfUser = createMemo(() => host().sessionDataContext?.gateway.snapshot.selfUser);
   const selfProfileId = createMemo(() => selfUser()?.identity?.id ?? selfUser()?.id);
   const ownerRepeatedByFilter = createMemo(() => {
     const actor = ownerActor();
@@ -96,7 +94,7 @@ export function renderSidebarSessionIndicators(
       ownerAttribution() !== "archived" &&
       actor?.identity?.type === "profile" &&
       actor.identity.id === selfProfileId() &&
-      (host.sessionInvolvingMeFilterActive || host.sessionOwnerFilterId === actor.id) &&
+      (host().sessionInvolvingMeFilterActive || host().sessionOwnerFilterId === actor.id) &&
       (readSession().participantCount ?? readSession().participants?.length ?? 0) === 0
     );
   });
@@ -111,7 +109,7 @@ export function renderSidebarSessionIndicators(
       ? undefined
       : ownerActorValue;
   });
-  const gateway = createMemo(() => host.sessionDataContext?.gateway);
+  const gateway = createMemo(() => host().sessionDataContext?.gateway);
   const channelAvatarAuth = createMemo(() =>
     resolveControlUiAvatarAuth({
       hello: gateway()?.snapshot.hello,
@@ -119,36 +117,44 @@ export function renderSidebarSessionIndicators(
       password: gateway()?.connection.password,
     }),
   );
-  const teamSummary = createMemo<Parameters<typeof renderTeamSessionSlots>>(
-    () =>
-      headerSummary ?? [
-        [readSession()],
-        !childrenExpanded(),
-        readSession().childSessionKeys.length,
-        0,
-        sessionRunVisibility,
-      ],
-  );
-  const leadingState = createMemo(() =>
-    renderSessionLeadingState(
-      readSession(),
-      leadingOwner(),
-      ownerAttribution(),
-      ownerViewing(),
-      channelAvatarAuth(),
-      team(),
-      readIcon?.(),
-      sessionRunVisibility,
-    ),
-  );
-  const running = createMemo(() => leadingState().running),
-    leadingIndicator = createMemo(() => leadingState().leadingIndicator),
-    renderedIdentities = createMemo(() => leadingState().renderedIdentities);
+  const teamSummary = createMemo<TeamSessionSlotsProps>(() => ({
+    rows: [readSession()],
+    includeChildren: !childrenExpanded(),
+    childCount: readSession().childSessionKeys.length,
+    runVisibility: sessionRunVisibility,
+  }));
+  const leadingState = renderSessionLeadingState({
+    get session() {
+      return readSession();
+    },
+    get ownerActor() {
+      return leadingOwner();
+    },
+    get attribution() {
+      return ownerAttribution();
+    },
+    get ownerViewing() {
+      return ownerViewing();
+    },
+    get avatarAuth() {
+      return channelAvatarAuth();
+    },
+    get trailingState() {
+      return team();
+    },
+    get icon() {
+      return readIcon?.();
+    },
+    runVisibility: sessionRunVisibility,
+  });
+  const running = createMemo(() => leadingState.running),
+    leadingIndicator = () => leadingState.leadingIndicator,
+    renderedIdentities = createMemo(() => leadingState.renderedIdentities);
   const stateDescription = createMemo(() => describeSessionState(readSession()));
   const snoozed = createMemo(
     () =>
       !readSession().isChild &&
-      (host.sessionsStatusFilter === "snoozed" || host.sessionsStatusFilter === "all") &&
+      (host().sessionsStatusFilter === "snoozed" || host().sessionsStatusFilter === "all") &&
       isSessionSnoozed(readSession(), Date.now()),
   );
   const hasTrail = createMemo(
@@ -251,14 +257,10 @@ export function renderSidebarSessionIndicators(
       <>
         {" "}
         <span class="sidebar-recent-session__details-endcap">
-          {headerSummary &&
-          (leadingIndicator() !== undefined || readSession().visibility === "draft")
-            ? persistentIndicator
-            : undefined}
           <openclaw-viewer-facepile
-            prop:presencePayload={host.sessionData.presencePayload}
-            prop:selfUser={host.sessionDataContext?.gateway.snapshot.selfUser}
-            prop:selfInstanceId={host.sessionData.presenceInstanceId}
+            prop:presencePayload={host().sessionData.presencePayload}
+            prop:selfUser={host().sessionDataContext?.gateway.snapshot.selfUser}
+            prop:selfInstanceId={host().sessionData.presenceInstanceId}
             prop:sessionKey={readSession().key}
             prop:excludeIdentities={renderedIdentities() ?? EMPTY_VIEWER_IDENTITIES}
             prop:maxVisible={3}
@@ -301,11 +303,14 @@ export function renderSidebarSessionIndicators(
               outboxAttentionCount={readSession().outboxAttentionCount}
               hasComposerDraft={readSession().hasComposerDraft === true}
               pullRequest={pullRequest()}
+              pullRequestCount={host().sessionPullRequests.count(readSession().key)}
               hasApproval={hasApproval()}
             />
           }
           {team() ? trail() : undefined}{" "}
-          {team() ? renderTeamSessionSlots(...teamSummary()) : undefined}
+          <Show when={team()}>
+            <TeamSessionSlots {...teamSummary()} />
+          </Show>
           {!team() && stateDescription() ? (
             <span class="sr-only" id={stateId()} aria-hidden="true">
               {stateDescription()}

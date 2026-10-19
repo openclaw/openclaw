@@ -2,6 +2,7 @@
 // updates do not carry the originating chat/thread. Persist the authoritative route
 // returned by sendPoll so a later vote can enter the normal inbound turn pipeline.
 import type { Chat } from "grammy/types";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { parseStrictInteger, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -105,8 +106,7 @@ function normalizePollRegistryEntry(raw: unknown): TelegramPollRegistryEntry | n
     !threadSpec ||
     messageId === undefined ||
     typeof raw.question !== "string" ||
-    !Array.isArray(raw.options) ||
-    !raw.options.every((option) => typeof option === "string")
+    !isStringArray(raw.options)
   ) {
     return null;
   }

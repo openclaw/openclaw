@@ -46,6 +46,7 @@ import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.NativeControlUiCredential
 import ai.openclaw.app.gateway.NetworkMonitor
 import ai.openclaw.app.gateway.NodeEventSendOutcome
+import ai.openclaw.app.gateway.TalkSessionCloseDisposition
 import ai.openclaw.app.gateway.buildNativeControlUiConnectAuth
 import ai.openclaw.app.gateway.decideGatewayTlsTrust
 import ai.openclaw.app.gateway.formatGatewayAuthority
@@ -3512,7 +3513,11 @@ class NodeRuntime internal constructor(
 
   internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice): Unit = talkMode.acknowledgeFailure(notice)
 
-  fun setTalkModeEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
+  fun setTalkModeEnabled(value: Boolean): Unit =
+    setVoiceCaptureMode(
+      if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off,
+      disposition = if (value) TalkSessionCloseDisposition.Detach else TalkSessionCloseDisposition.Abort,
+    )
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
@@ -3964,6 +3969,7 @@ class NodeRuntime internal constructor(
   private fun setVoiceCaptureMode(
     mode: VoiceCaptureMode,
     persistManualMic: Boolean = true,
+    disposition: TalkSessionCloseDisposition = TalkSessionCloseDisposition.Detach,
   ) {
     var startAfterSuppression: VoiceCaptureMode? = null
     var ownershipEpoch = 0L
@@ -3983,7 +3989,7 @@ class NodeRuntime internal constructor(
         when (captureMode) {
           VoiceCaptureMode.Off -> {
             talkMode.ttsOnAllResponses = false
-            talkMode.stopAllCapture()
+            talkMode.stopAllCapture(disposition = disposition)
             stopVoicePlayback()
             micCapture.setMicEnabled(false)
             if (persistManualMic) {
@@ -5327,8 +5333,17 @@ class NodeRuntime internal constructor(
       applyVoiceWakeWords(payloadJson)
     }
     if (operatorConnected && (event == "config.changed" || event == "chat.metadata.changed")) {
-      refreshModelCatalog()
-      refreshProviderModels()
+      val change = if (event == "chat.metadata.changed") parseJsonParamsObject(payloadJson) else null
+      val changedAgentId = change.nonBlankString("agentId")
+      val affectsSelectedAgent = changedAgentId == null || selectedChatAgentId == null || changedAgentId.equals(selectedChatAgentId, ignoreCase = true)
+      // Usage publications do not change catalogs; retain auth and selection invalidation.
+      if (
+        change.boolean("modelSelectionChanged") ||
+        (affectsSelectedAgent && (change?.get("modelCatalogChanged") != JsonPrimitive(false) || change.boolean("authChanged")))
+      ) {
+        refreshModelCatalog()
+        refreshProviderModels()
+      }
     }
     if (event == "config.changed" || event == GatewayEvent.UsersPrefsChanged.rawValue) {
       // Config changes invalidate the snapshot; profile changes are targeted by

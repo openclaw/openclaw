@@ -2,6 +2,7 @@ import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type JsonObject,
@@ -22,7 +23,6 @@ function createTerminalReleaseHarness() {
     order.push(method);
     return {};
   });
-  const resolveCompletion = vi.fn();
   const sourceReplies: NonNullable<CodexDynamicToolRuntimeResponse["toolAuthoredSourceReply"]>[] =
     [];
   const state = {
@@ -32,7 +32,7 @@ function createTerminalReleaseHarness() {
     currentTurnHadNonTerminalDynamicToolResult: false,
     pendingTerminalDynamicToolRelease: undefined,
     terminalDynamicToolReleaseCheckScheduled: false,
-    resolveCompletion,
+    resolveCompletion: vi.fn(),
   };
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   const activeTurnItemIds = new Set<string>();
@@ -81,7 +81,7 @@ function createTerminalReleaseHarness() {
       }),
     completeTurn: () => {
       state.completed = true;
-      resolveCompletion();
+      state.resolveCompletion();
     },
   };
   const controller = createCodexAttemptLifecycleController(
@@ -96,8 +96,9 @@ function createTerminalReleaseHarness() {
   let responseIndex = 0;
   const notify = async (notification: CodexServerNotification) => {
     const scope = { threadId: "thread-1", turnId: "turn-1" };
-    notifications.noteNotificationReceived(notification, scope, 0);
-    await notifications.enqueueNotification(notification, scope);
+    const prepared = prepareCodexServerNotification(notification, scope);
+    notifications.noteNotificationReceived(prepared, scope, 0);
+    await notifications.enqueueNotification(prepared);
   };
   const completeTurn = () => {
     for (const handler of notificationHandlers) {
@@ -118,7 +119,7 @@ function createTerminalReleaseHarness() {
     controller,
     receive: (notification: CodexServerNotification) =>
       notifications.noteNotificationReceived(
-        notification,
+        prepareCodexServerNotification(notification),
         { threadId: "thread-1", turnId: "turn-1" },
         0,
       ),
@@ -171,7 +172,7 @@ function createTerminalReleaseHarness() {
       exitCode?: number,
     ) =>
       notifications.enqueueNotification(
-        {
+        prepareCodexServerNotification({
           method,
           params: {
             threadId: "thread-1",
@@ -183,13 +184,12 @@ function createTerminalReleaseHarness() {
               ...(exitCode !== undefined ? { exitCode } : {}),
             },
           },
-        },
-        { threadId: "thread-1", turnId: "turn-1" },
+        }),
       ),
     order,
     pendingOpenClawDynamicToolCompletionIds,
     request,
-    resolveCompletion,
+    resolveCompletion: state.resolveCompletion,
     state,
   };
 }
@@ -269,6 +269,7 @@ describe("Codex terminal dynamic-tool release", () => {
               params: { timeoutMs: 60_000 },
               options: {},
               attemptStartedAt: Date.now(),
+              attemptStartedAtMonotonicMs: performance.now(),
               runAbortController: new AbortController(),
               fastModeAutoProgressState: {},
             },
@@ -287,12 +288,12 @@ describe("Codex terminal dynamic-tool release", () => {
       route.armTurn();
       await route.bindTurn("turn-1");
       controller.recordDynamicToolResult(terminalYieldResult(true));
-      await yieldImmediate();
+      await runtime.completion;
       expect(runtime.state.completed).toBe(true);
       expect(interrupt).toHaveBeenCalledOnce();
       const nativeCleanup = interrupt.mock.results[0]?.value;
       const settled = vi.fn();
-      void nativeCleanup?.then(settled, settled);
+      void runtime.state.abortCleanup.then(settled, settled);
 
       route.release();
       await yieldImmediate();
@@ -306,8 +307,16 @@ describe("Codex terminal dynamic-tool release", () => {
           turn: { id: "peer-turn", status: "completed", items: [] },
         },
       });
+      physical.send({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "previous-turn", status: "interrupted", items: [] },
+        },
+      });
       await yieldImmediate();
       expect(settled).not.toHaveBeenCalled();
+      expect(runtime.state.nativeCancellationConfirmed).toBe(false);
       physical.send({
         method: "turn/completed",
         params: {
@@ -316,6 +325,9 @@ describe("Codex terminal dynamic-tool release", () => {
         },
       });
       await expect(nativeCleanup).resolves.toBe(true);
+      await runtime.state.abortCleanup;
+      expect(settled).toHaveBeenCalledOnce();
+      expect(runtime.state.nativeCancellationConfirmed).toBe(true);
       expect(physical.stdinDestroyed).toBe(false);
       expect(peerRoute.signal.aborted).toBe(false);
     } finally {

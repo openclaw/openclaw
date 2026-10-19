@@ -107,14 +107,6 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
           ? `Teams reaction ${emoji} added by ${senderName} on message ${targetMessageId}`
           : `Teams reaction ${emoji} removed by ${senderName} from message ${targetMessageId}`;
 
-      log.info(`reaction ${direction}`, {
-        sender: senderId,
-        reactionType,
-        emoji,
-        targetMessageId,
-        conversationId,
-      });
-
       core.system.enqueueSystemEvent(label, {
         sessionKey,
         contextKey: `msteams:reaction:${conversationId}:${targetMessageId}:${senderId}:${reactionType}:${direction}`,

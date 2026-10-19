@@ -114,7 +114,7 @@ async function waitForConfigRestartSettle(
 function withoutQaConfigApplyVolatileFields(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
-  const comparable = structuredClone(config);
+  const comparable = { ...config };
   // config.apply updates root metadata on write; metadata alone needs no restart.
   delete comparable.meta;
   return comparable;

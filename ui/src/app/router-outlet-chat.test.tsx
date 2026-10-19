@@ -5,14 +5,17 @@ import {
   type RouteMatch,
   type Router,
 } from "@openclaw/uirouter";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { JSX } from "@solidjs/web";
+import { Show } from "solid-js";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
+import type { SolidRouteProps } from "../app-route-types.ts";
+import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
 import {
   SESSION_COMPOSER_FOCUS_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
   sessionNavigationTarget,
 } from "../lib/sessions/route-navigation.ts";
-import { solidContent } from "../lit/solid-content.tsx";
 import type { ChatRouteData } from "../pages/chat/route-loader.ts";
 import { pages as chatPages } from "../pages/chat/route.ts";
 import {
@@ -29,11 +32,7 @@ type RouteId = "chat" | "dashboard" | "home" | "settings" | "new-session";
 type TestContext = Record<string, never>;
 type OwnerMatch = Pick<RouteMatch<string, unknown, ChatRouteData>, "data" | "location">;
 type TestModule = {
-  render: (
-    data: ChatRouteData | undefined,
-    loaderPending?: boolean,
-    presented?: boolean,
-  ) => unknown;
+  renderSolid: (props: SolidRouteProps<ChatRouteData>) => JSX.Element;
   retainOnNavigate?: boolean;
   renderOwnerKey?: (match: OwnerMatch, settled: OwnerMatch | undefined) => string | undefined;
 };
@@ -61,8 +60,11 @@ function ownedRenderer(teardown: () => Promise<void>) {
     <>
       <mcp-app-view
         ref={(element) => {
-          Reflect.set(element, "restartAfterTeardown", vi.fn());
-          Reflect.set(element, "teardown", teardown);
+          const target = Object.assign(element, {
+            restartAfterTeardown: vi.fn(),
+            teardown,
+          });
+          onTestFinished(registerMcpAppUnmountTarget(target));
         }}
       />
       <div data-testid="route-value" data-presented={String(props.presented)}>
@@ -71,21 +73,25 @@ function ownedRenderer(teardown: () => Promise<void>) {
       <textarea data-testid="route-draft" />
     </>
   );
-  return (data: ChatRouteData | undefined, _loaderPending = false, presented = true) => {
-    const value = data?.kind === "session" ? data.face : "chooser";
-    return data ? solidContent(OwnedRoute, { value, presented }) : undefined;
-  };
+  return (props: SolidRouteProps<ChatRouteData>) => (
+    <Show when={props.data}>
+      <OwnedRoute
+        value={props.data?.kind === "session" ? props.data.face : "chooser"}
+        presented={props.presented}
+      />
+    </Show>
+  );
 }
 
 async function routeModule(
   face: "chat" | "dashboard",
-  render: TestModule["render"],
+  renderSolid: TestModule["renderSolid"],
 ): Promise<TestModule> {
   const declared = await chatPages[face === "chat" ? 0 : 1].component();
   return {
     renderOwnerKey: declared.renderOwnerKey,
     retainOnNavigate: declared.retainOnNavigate,
-    render,
+    renderSolid,
   };
 }
 
@@ -102,9 +108,11 @@ describe("openclaw-router-outlet chat ownership", () => {
       const firstLoad = createDeferredCore<ChatRouteData>();
       const retryLoad = createDeferredCore<ChatRouteData>();
       const Launcher = () => <textarea data-testid="launcher" />;
-      const module = await routeModule("chat", (data) =>
-        data ? <div data-testid="chat-ready">Chat</div> : undefined,
-      );
+      const module = await routeModule("chat", (props) => (
+        <Show when={props.data}>
+          <div data-testid="chat-ready">Chat</div>
+        </Show>
+      ));
       const loader = vi.fn(() => retryLoad.promise);
       if (failure !== "unmatched location") {
         loader.mockImplementationOnce(() => firstLoad.promise);
@@ -114,7 +122,7 @@ describe("openclaw-router-outlet chat ownership", () => {
           definePage({
             id: "new-session",
             path: "/new",
-            component: () => ({ render: () => solidContent(Launcher, {}) }),
+            component: () => ({ renderSolid: () => <Launcher /> }),
           }),
           definePage({ id: "chat", path: "/chat", component: () => module, loader }),
         ],
@@ -174,7 +182,7 @@ describe("openclaw-router-outlet chat ownership", () => {
             id,
             path: `/${id}`,
             component: () => ({
-              render: () => <div data-testid="ordinary-route">{id}</div>,
+              renderSolid: () => <div data-testid="ordinary-route">{id}</div>,
             }),
           }),
         ),
@@ -238,7 +246,7 @@ describe("openclaw-router-outlet chat ownership", () => {
         definePage({
           id: "home",
           path: "/home",
-          component: () => ({ render: () => <div>Home</div> }),
+          component: () => ({ renderSolid: () => <div>Home</div> }),
         }),
         definePage({
           id: "dashboard",
@@ -295,7 +303,7 @@ describe("openclaw-router-outlet chat ownership", () => {
         definePage({
           id: "home",
           path: "/home",
-          component: () => ({ render: () => <div>Home</div> }),
+          component: () => ({ renderSolid: () => <div>Home</div> }),
         }),
       ],
     });
@@ -431,7 +439,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     await dashboardNavigation;
     await settleOutlet(outlet);
     expect(outlet.querySelector('[data-testid="route-value"][data-presented="true"]')).toBeNull();
-    homeModule.resolve({ render: () => <div data-testid="ordinary-route">Home</div> });
+    homeModule.resolve({ renderSolid: () => <div data-testid="ordinary-route">Home</div> });
     await homeNavigation;
     await settleOutlet(outlet);
     expect(outlet.querySelector('[data-testid="ordinary-route"]')?.textContent).toBe("Home");
@@ -455,7 +463,7 @@ describe("openclaw-router-outlet chat ownership", () => {
         definePage({
           id: "dashboard",
           path: "/dashboard",
-          component: () => ({ ...module, render: () => <p>Session not found</p> }),
+          component: () => ({ ...module, renderSolid: () => <p>Session not found</p> }),
           loader: (): ChatRouteData => ({
             kind: "missing-session",
             face: "dashboard",

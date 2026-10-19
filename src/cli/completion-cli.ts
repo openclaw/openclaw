@@ -9,7 +9,7 @@ import { generateBashCompletion } from "./completion-bash.js";
 import {
   collectShellCompletionCommandTree,
   commandNameVariants,
-  completionFlags,
+  completionOptions,
   visibleCompletionCommands,
   type ShellCompletionCommandTree,
 } from "./completion-command-tree.js";
@@ -210,10 +210,9 @@ fi
 }
 
 function generateZshArgs(cmd: Command): string {
-  return cmd.options
-    .map((opt) => {
-      const flags = completionFlags(opt);
-      const name = opt.long ?? opt.short ?? opt.flags;
+  return completionOptions(cmd)
+    .map(({ option: opt, flags }) => {
+      const name = flags.find((flag) => flag === opt.long) ?? flags[0] ?? opt.flags;
       const alternate = flags.find((flag) => flag !== name);
       // `_arguments` hides `!` specs but still skips their values when locating subcommands.
       const visibility = opt.hidden ? "!" : "";
@@ -259,7 +258,7 @@ function generateZshCommandGroup(
   local -a commands
   local -a options
   
-  _arguments -C \\
+  _arguments -s -C \\
     ${generateZshArgs(command)} \\
     ${generateZshSubcmdList(command)} \\
     "*::arg:->args"
@@ -284,7 +283,7 @@ function generateZshSubcommands(program: Command, prefix: string): string {
           ? `\n${generateZshCommandGroup(cmd, funcName)}\n`
           : `
 ${funcName}() {
-  _arguments -C \\
+  _arguments -s -C \\
     ${generateZshArgs(cmd)}
 }
 `;
@@ -386,6 +385,10 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     $previousElement = if ($previousElementIndex -ge 1) { $commandElements[$previousElementIndex].Extent.Text } else { '' }
     $choiceFlag = $previousElement
     $choicePrefix = $wordToComplete
+    # PowerShell retains quotes in wordToComplete, even for an unfinished literal.
+    if ($wordToComplete -ne '' -and $commandElements[-1] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+        $choicePrefix = $commandElements[-1].Value
+    }
     $choiceCompletionPrefix = ''
     if ($wordToComplete -match '^(--[^=]+)=(.*)$') {
         $choiceFlag = $Matches[1]
@@ -473,12 +476,14 @@ function generateFishCompletion(tree: ShellCompletionCommandTree): string {
           );
         }
       }
-      for (const opt of cmd.options.filter((option) => !option.hidden)) {
+      for (const { option: opt, flags } of completionOptions(cmd).filter(
+        ({ option }) => !option.hidden,
+      )) {
         segments.push(
           buildFishOptionCompletionLine({
             rootCmd,
             condition,
-            flags: completionFlags(opt),
+            flags,
             description: opt.description,
             requiresValue: opt.required,
             choices: opt.argChoices,

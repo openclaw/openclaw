@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type {
   WorkerOperationHandlers,
   WorkerWriteOperationContext,
@@ -23,13 +22,14 @@ import {
   snapshotFromExecApprovalsRow,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 
 function applyAuthorizationBatch(
-  db: DatabaseSync,
+  db: EngineConnection,
   initial: ExecApprovalsSnapshot,
   items: readonly ExecAuthorizationCommitInput[],
 ) {
@@ -37,7 +37,7 @@ function applyAuthorizationBatch(
   const outcomes = items.map((item): ExecAuthorizationCommitOutcome => {
     let next: ReturnType<typeof applyExecAuthorizationCommit>;
     try {
-      next = applyExecAuthorizationCommit(structuredClone(current.file), item);
+      next = applyExecAuthorizationCommit(current.file, item);
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     }

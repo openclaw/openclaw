@@ -3,9 +3,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
-import type { UsageOverviewOptions, UsageOverviewSession } from "../shared/usage-types.js";
-import { getAgentDeletionDatabaseCleanup } from "../state/agent-deletion-cleanup.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isAbortError } from "./abort-signal.js";
 import { observeAgentRunActivity } from "./agent-run-activity.js";
 import { formatErrorMessage } from "./errors.js";
@@ -25,6 +26,7 @@ import type {
   CostUsageSummary,
   SessionCostSummary,
   UsageCacheStatus,
+  UsageCostTranscriptFile,
   UsageDailyBucket,
 } from "./session-cost-usage.types.js";
 
@@ -39,6 +41,7 @@ type UsageCostRefreshState = {
   agentId: string;
   config?: OpenClawConfig;
   databasePath: string;
+  statePath: string;
   queueKey: string;
   env?: NodeJS.ProcessEnv;
   sessionActor?: SessionActorStorageBinding;
@@ -46,12 +49,12 @@ type UsageCostRefreshState = {
   pendingSessionFiles: Map<string, { firstAt: number; lastAt: number } | null>;
   pendingRebuildRows: Map<string, SessionCostUsageRollupRow>;
   storePath: string;
-  joinOnRead: boolean;
-  flushRequested: boolean;
+  dirtySessionFiles: Set<string>;
+  readingSessionFiles: Map<string, Deferred>;
+  runningSessionFiles: Set<string> | "all";
   agentBusy: boolean;
   idleAt: number;
   resume?: () => void;
-  completion?: Promise<void>;
 };
 
 type UsageCostRefreshRequest = Pick<UsageCostRefreshState, "agentId" | "config" | "storePath"> & {
@@ -71,19 +74,60 @@ function isUsageCostRefreshQueued(databasePath: string): boolean {
   return usageCostRefreshes.get(getAsyncWorkSignal())?.has(databasePath) === true;
 }
 
-async function flushPendingUsageCostRefresh(prepared: PreparedUsageCostWorker): Promise<void> {
+async function flushPendingUsageCostRefresh(
+  prepared: PreparedUsageCostWorker,
+  sessionFiles?: string[],
+  maxPublicationWaitMs = Infinity,
+): Promise<void> {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   const key = prepared.location.databasePath;
   const pending: Promise<void>[] = [];
   for (const refreshes of usageCostRefreshes.values()) {
     const state = refreshes.get(key);
-    // Startup and repair backfills keep serving their last completed projection.
-    if (state?.joinOnRead && state.completion) {
-      state.flushRequested = true;
-      state.resume?.();
-      pending.push(state.completion);
+    if (!state) {
+      continue;
     }
+    // Aggregate reads flush dirty publications; keyed reads need only their sessions.
+    for (const file of sessionFiles ?? state.dirtySessionFiles) {
+      if (
+        !state.fullRefreshRequested &&
+        state.runningSessionFiles !== "all" &&
+        !state.runningSessionFiles.has(file) &&
+        !state.pendingSessionFiles.has(file)
+      ) {
+        continue;
+      }
+      let completion = state.readingSessionFiles.get(file);
+      if (!completion) {
+        completion = createDeferredCore();
+        state.readingSessionFiles.set(file, completion);
+      }
+      if (state.runningSessionFiles === "all" || !state.runningSessionFiles.has(file)) {
+        state.pendingSessionFiles.set(file, null);
+      }
+      pending.push(completion.promise);
+    }
+    state.resume?.();
   }
-  await Promise.all(pending);
+  if (pending.length === 0) {
+    return;
+  }
+  // Reports can serve the last committed projection after their wait budget;
+  // exact reads keep awaiting their selected sessions. Publication owns the refresh.
+  const waiting = new AbortController();
+  const stopWaiting = () => waiting.abort();
+  signal?.addEventListener("abort", stopWaiting, { once: true });
+  try {
+    await Promise.race([
+      Promise.all(pending),
+      waitForUsageCostRefresh(waiting.signal, maxPublicationWaitMs),
+    ]);
+    signal?.throwIfAborted();
+  } finally {
+    signal?.removeEventListener("abort", stopWaiting);
+    stopWaiting();
+  }
 }
 
 export async function loadCostUsageSummary(params: {
@@ -177,59 +221,37 @@ async function loadAggregateCostUsageSummary(
 }
 
 type SessionCostReadParams = {
-  sessions: Array<{ sessionId?: string; sessionFile: string }>;
+  sessions: Array<{
+    sessionId?: string;
+    sessionFile: string;
+    transcriptFile?: UsageCostTranscriptFile;
+  }>;
   config?: OpenClawConfig;
   agentId: string;
   startMs?: number;
   endMs?: number;
-  projection?: "overview";
   includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
   requestRefresh?: boolean;
+  maxPublicationWaitMs?: number;
+  reportBudgetBytes?: number;
+  committedOnly?: boolean;
 };
 
-export async function loadSessionCostSummariesFromCache(
-  params: SessionCostReadParams,
-): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
+export async function loadSessionCostSummariesFromCache(params: SessionCostReadParams): Promise<{
+  summaries: Array<SessionCostSummary | null>;
+  cacheStatus: UsageCacheStatus;
+  remainingReportBytes?: number;
+}> {
   const result = await loadSessionCostResultFromCache(params);
-  if (result.kind !== "sessions") {
-    throw new Error("Usage worker returned an invalid session summary");
-  }
-  return { summaries: result.summaries, cacheStatus: result.cacheStatus };
+  return {
+    summaries: result.summaries,
+    cacheStatus: result.cacheStatus,
+    remainingReportBytes: result.remainingReportBytes,
+  };
 }
 
-export async function loadSessionCostOverviewFromCache(
-  params: Omit<SessionCostReadParams, "sessions" | "projection"> & {
-    sessions: UsageOverviewSession[];
-    options: UsageOverviewOptions;
-    projection?: "overview";
-  },
-) {
-  const result = await loadSessionCostResultFromCache({
-    ...params,
-    sessions: params.sessions.flatMap((session) => session.instances),
-    projection: params.projection,
-    overview: {
-      sessions: params.sessions,
-      options: params.options,
-      compact: params.projection === "overview",
-    },
-  });
-  if (result.kind !== "overview") {
-    throw new Error("Usage worker returned an invalid overview");
-  }
-  return { ...result.result, cacheStatus: result.cacheStatus };
-}
-
-function loadSessionCostResultFromCache(
-  params: SessionCostReadParams & {
-    overview?: {
-      sessions: UsageOverviewSession[];
-      options: UsageOverviewOptions;
-      compact?: boolean;
-    };
-  },
-) {
+function loadSessionCostResultFromCache(params: SessionCostReadParams) {
   const prepared = prepareUsageCostWorker({
     ...params,
     sessionFiles: params.sessions.map((session) => session.sessionFile),
@@ -238,33 +260,33 @@ function loadSessionCostResultFromCache(
 }
 
 async function loadCapturedSessionCostSummariesFromCache(
-  params: SessionCostReadParams & {
-    overview?: {
-      sessions: UsageOverviewSession[];
-      options: UsageOverviewOptions;
-      compact?: boolean;
-    };
-  },
+  params: SessionCostReadParams,
   prepared: PreparedUsageCostWorker,
-): Promise<Extract<UsageCostWorkerResult, { kind: "sessions" | "overview" }>> {
+): Promise<Extract<UsageCostWorkerResult, { kind: "sessions" }>> {
   const { databasePath, storePath } = prepared.location;
-  await flushPendingUsageCostRefresh(prepared);
+  if (!params.committedOnly) {
+    await flushPendingUsageCostRefresh(
+      prepared,
+      params.sessions.map((session) => session.sessionFile),
+      params.maxPublicationWaitMs,
+    );
+  }
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
     prepared.config,
     prepared.agentDir,
   );
   const result = await runUsageCostWorker(prepared, {
     kind: "sessions",
-    projection: params.projection,
-    overview: params.overview,
     pricingFingerprint,
     sessions: params.sessions,
     startMs: params.startMs,
     endMs: params.endMs,
     includeUntimestamped: params.includeUntimestamped,
+    reportBudgetBytes: params.reportBudgetBytes,
+    committedOnly: params.committedOnly,
     dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
   });
-  if (result.kind !== "sessions" && result.kind !== "overview") {
+  if (result.kind !== "sessions") {
     throw new Error("Usage worker returned an invalid session summary");
   }
   const { cacheStatus, staleSessionFiles } = result;
@@ -289,9 +311,7 @@ async function loadCapturedSessionCostSummariesFromCache(
         : await isSessionCostUsageRefreshRunning(params.agentId, databasePath)))
   ) {
     cacheStatus.status = "refreshing";
-    for (const summary of result.kind === "sessions"
-      ? result.summaries
-      : result.result.sessions.map((session) => session.usage)) {
+    for (const summary of result.summaries) {
       if (summary?.staleSince !== undefined) {
         summary.refreshing = true;
       }
@@ -312,16 +332,6 @@ export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): v
       path: params.databasePath,
       env: params.env,
     });
-  // Purge publications must not start rebuildable cache work in the retiring database.
-  if (
-    getAgentDeletionDatabaseCleanup({
-      agentId: params.agentId,
-      path: databasePath,
-      env: params.env,
-    })?.ownsDatabase
-  ) {
-    return;
-  }
   const queueKey = databasePath;
   const refreshes = usageCostRefreshes.get(scopeSignal) ?? new Map<string, UsageCostRefreshState>();
   const existing = refreshes.get(queueKey);
@@ -336,14 +346,16 @@ export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): v
     config: params.config,
     databasePath,
     queueKey,
+    statePath: resolveOpenClawStateSqlitePath(params.env ?? process.env),
     env: params.env,
     sessionActor: params.sessionActor,
     fullRefreshRequested: false,
     pendingSessionFiles: new Map(),
     pendingRebuildRows: new Map(),
     storePath: params.storePath,
-    joinOnRead: params.coalesce === true && params.sessionFiles !== undefined,
-    flushRequested: false,
+    dirtySessionFiles: new Set(),
+    readingSessionFiles: new Map(),
+    runningSessionFiles: new Set(),
     agentBusy: false,
     idleAt: Date.now(),
   };
@@ -351,7 +363,7 @@ export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): v
   usageCostRefreshes.set(scopeSignal, refreshes);
   // Register the initial timer and every retry now, not after a timer fires.
   refreshes.set(queueKey, state);
-  state.completion = trackAsyncWork(() => runQueuedUsageCostRefresh(state, refreshes, scopeSignal));
+  void trackAsyncWork(() => runQueuedUsageCostRefresh(state, refreshes, scopeSignal));
 }
 
 function mergeUsageCostRefreshRequest(
@@ -369,9 +381,11 @@ function mergeUsageCostRefreshRequest(
     state.fullRefreshRequested = true;
     return;
   }
-  state.joinOnRead ||= params.coalesce === true;
   const now = Date.now();
   for (const sessionFile of params.sessionFiles) {
+    if (params.coalesce) {
+      state.dirtySessionFiles.add(sessionFile);
+    }
     const pending = state.pendingSessionFiles.get(sessionFile);
     state.pendingSessionFiles.set(
       sessionFile,
@@ -383,16 +397,21 @@ function mergeUsageCostRefreshRequest(
 }
 
 function usageCostRefreshDelay(state: UsageCostRefreshState, now: number, file?: string): number {
-  if (state.flushRequested || state.fullRefreshRequested) {
+  if (
+    (file === undefined && (state.readingSessionFiles.size > 0 || state.fullRefreshRequested)) ||
+    (file !== undefined && state.readingSessionFiles.has(file))
+  ) {
     return 0;
   }
-  if (state.joinOnRead && state.agentBusy) {
-    return Infinity;
-  }
   const delays =
-    file === undefined ? state.pendingSessionFiles.values() : [state.pendingSessionFiles.get(file)];
+    file === undefined
+      ? state.pendingSessionFiles.entries()
+      : [[file, state.pendingSessionFiles.get(file)] as const];
   let delay = Infinity;
-  for (const pending of delays) {
+  for (const [pendingFile, pending] of delays) {
+    if (state.agentBusy && state.dirtySessionFiles.has(pendingFile)) {
+      continue;
+    }
     if (!pending) {
       return 0;
     }
@@ -464,15 +483,32 @@ async function runQueuedUsageCostRefresh(
       }
       let partialBatch = false;
       try {
+        // Publications queued before deletion leave discovery before acquiring storage.
+        if (
+          (await readAgentDeletionJournalStatusInWorker(
+            state.agentId,
+            { path: state.statePath, env: state.env },
+            signal,
+          )) !== "absent"
+        ) {
+          return;
+        }
         if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
-          const fullRefreshRequested = state.fullRefreshRequested;
+          const priorityFiles = [...state.readingSessionFiles.keys()];
+          const fullRefreshRequested = state.fullRefreshRequested && priorityFiles.length === 0;
           partialBatch = !fullRefreshRequested;
           const sessionFiles: string[] = [];
           if (fullRefreshRequested) {
-            // Full discovery supersedes queued locators, including deleted instances.
-            state.pendingSessionFiles.clear();
-          } else {
+            // Keep dirty publications explicit: discovery may leave them beyond its batch.
             for (const file of state.pendingSessionFiles.keys()) {
+              if (!state.dirtySessionFiles.has(file)) {
+                state.pendingSessionFiles.delete(file);
+              }
+            }
+          } else {
+            for (const file of priorityFiles.length
+              ? priorityFiles
+              : state.pendingSessionFiles.keys()) {
               if (usageCostRefreshDelay(state, Date.now(), file) > 0) {
                 continue;
               }
@@ -483,13 +519,12 @@ async function runQueuedUsageCostRefresh(
               }
             }
           }
-          const rebuildRows = fullRefreshRequested
-            ? [...state.pendingRebuildRows.values()]
-            : sessionFiles.flatMap((file) => {
-                const row = state.pendingRebuildRows.get(file);
-                return row ? [row] : [];
-              });
-          state.fullRefreshRequested = false;
+          // Caller selectors can differ from canonical keys; the worker matches repair facts.
+          const rebuildRows = [...state.pendingRebuildRows.values()];
+          if (fullRefreshRequested) {
+            state.fullRefreshRequested = false;
+          }
+          state.runningSessionFiles = fullRefreshRequested ? "all" : new Set(sessionFiles);
           const remainingRollupIds = new Set<string>();
           const result = await refreshCostUsageCacheForAgent({
             config: state.config,
@@ -501,10 +536,10 @@ async function runQueuedUsageCostRefresh(
             onRemaining: (files) => {
               for (const { sessionFile, rollupId } of files) {
                 remainingRollupIds.add(rollupId);
-                state.pendingSessionFiles.set(
-                  state.pendingRebuildRows.has(rollupId) ? rollupId : sessionFile,
-                  null,
-                );
+                state.pendingSessionFiles.set(sessionFile, null);
+                if (state.pendingRebuildRows.has(rollupId)) {
+                  state.pendingSessionFiles.set(rollupId, null);
+                }
               }
             },
             rebuildRows,
@@ -529,15 +564,27 @@ async function runQueuedUsageCostRefresh(
             continue;
           }
           for (const row of rebuildRows) {
-            if (!remainingRollupIds.has(row.key) && state.pendingRebuildRows.get(row.key) === row) {
+            if (
+              (fullRefreshRequested || sessionFiles.includes(row.key)) &&
+              !remainingRollupIds.has(row.key) &&
+              state.pendingRebuildRows.get(row.key) === row
+            ) {
               state.pendingRebuildRows.delete(row.key);
             }
           }
+          for (const file of sessionFiles) {
+            // A publication during the scan needs another pass before this read is exact.
+            if (!state.pendingSessionFiles.has(file)) {
+              state.dirtySessionFiles.delete(file);
+              state.readingSessionFiles.get(file)?.resolve();
+              state.readingSessionFiles.delete(file);
+            }
+          }
+          state.runningSessionFiles = new Set();
           busyRetryDelayMs = USAGE_COST_REFRESH_RETRY_MIN_MS;
         }
       } catch (error) {
         if (signal?.aborted && !(error instanceof AggregateError) && isAbortError(error)) {
-          logger.debug("background refresh cancelled during shutdown");
           return;
         }
         logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });
@@ -548,10 +595,18 @@ async function runQueuedUsageCostRefresh(
         // persistent failures wait for the next publication instead of spinning.
         recoveredPartialFailure = true;
         state.fullRefreshRequested = true;
+        for (const file of state.readingSessionFiles.keys()) {
+          state.pendingSessionFiles.set(file, null);
+        }
       }
     } while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0);
   } finally {
     offActivity();
+    for (const completion of state.readingSessionFiles.values()) {
+      completion.reject(
+        new Error("Usage refresh ended before the requested session was refreshed"),
+      );
+    }
     // Remove synchronously with completion; a late request must enqueue a new owner.
     refreshes.delete(state.queueKey);
     if (refreshes.size === 0) {

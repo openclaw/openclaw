@@ -193,6 +193,15 @@ fn install_at(
     #[cfg_attr(target_os = "windows", allow(unused_variables))] runtime_only: bool,
     spawn: Option<&SpawnCommand<'_>>,
 ) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    if let Some((runtime, entry)) = crate::bundled_runtime::seed_package(app)? {
+        return crate::runtime_action::install_launcher(
+            &prefix,
+            &runtime,
+            &entry,
+            crate::runtime_action::Purpose::Gateway,
+        );
+    }
     #[cfg(not(target_os = "windows"))]
     let mut command = {
         let script = app

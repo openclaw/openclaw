@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -9,12 +9,15 @@ import {
   realpathSync,
   readFileSync,
   lstatSync,
+  rmSync,
+  writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { afterEach, expect, it, vi } from "vitest";
+import { collectPackageDistImportErrors } from "../../scripts/lib/package-dist-imports.mjs";
 import { withUpdateCommandExecutor } from "../../src/cli/update-cli/update-command-executor.js";
 import {
   resolvePackageActivationHelper,
@@ -80,6 +83,19 @@ vi.mock("../../src/infra/runtime-worker-url.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const require = createRequire(import.meta.url);
+const packageDir = (name: string) => path.dirname(require.resolve(`${name}/package.json`));
+function commandOutput(result: ReturnType<typeof spawnSync>, status = 0) {
+  expect({ error: result.error, status: result.status }, String(result.stderr)).toEqual({
+    error: undefined,
+    status,
+  });
+  return String(result.stdout);
+}
+const commandFacts = (result: ReturnType<typeof spawnSync>) => JSON.parse(commandOutput(result));
+const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+const freebsd = process.platform === "freebsd";
+const windows = process.platform === "win32";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -149,37 +165,42 @@ it.each(
   const commands: string[] = [];
   let preparedPackage: Awaited<ReturnType<typeof preparePackageActivationJournal>> | undefined;
   let prepareNext: (() => Promise<NonNullable<typeof preparedPackage>>) | undefined;
+  const childOptions = {
+    encoding: "utf8",
+    timeout: 30_000,
+    cwd: directory,
+    env: childEnv,
+  } as const;
   const runCommand = (command: string, action: string) =>
     spawnSync("/bin/sh", ["-c", command.replace(/ status$/u, ` ${action}`)], {
-      encoding: "utf8",
-      timeout: 30_000,
+      ...childOptions,
       killSignal: "SIGKILL",
-      cwd: directory,
-      env: childEnv,
     });
+  const assertPhases = (command: string, operationId: string, phases: string[][]) => {
+    for (const [action, phase] of phases) {
+      expect(commandFacts(runCommand(command, action!))).toMatchObject({ operationId, phase });
+    }
+  };
   // Use the production graph unchanged, not the invocation compiler's extra plugins.
   const { bundles } = await build({ ...config, config: false, outDir, logLevel: "silent" });
   try {
     const modules = bundles.flatMap(({ chunks }) =>
       chunks.flatMap((chunk) => (chunk.type === "chunk" ? chunk.moduleIds : [])),
     );
-    if (kind === "managed") {
-      expect(modules).toContain(
-        path.resolve("src/infra/update-managed-service-handoff-native-loader.ts"),
-      );
-      expect(modules).not.toContain(path.resolve("src/shared/freebsd-process-identity-native.ts"));
-    } else {
-      expect(modules).toContain(
-        path.resolve("src/infra/package-update-activation-native-loader.ts"),
-      );
-      expect(modules).not.toContain(path.resolve("src/shared/freebsd-process-identity-native.ts"));
-      // Lease observation and error-code metadata must not capture execution controllers.
-      for (const module of [
-        "src/infra/update-managed-service-handoff.ts",
-        "src/flows/doctor-health-contributions.ts",
-      ]) {
-        expect(modules.includes(path.resolve(module)), module).toBe(false);
-      }
+    const loader =
+      kind === "managed" ? "update-managed-service-handoff" : "package-update-activation";
+    expect(modules).toContain(path.resolve(`src/infra/${loader}-native-loader.ts`));
+    // Lease observation and error metadata must not capture execution controllers.
+    for (const module of [
+      "src/shared/freebsd-process-identity-native.ts",
+      ...(kind === "package"
+        ? [
+            "src/infra/update-managed-service-handoff.ts",
+            "src/flows/doctor-health-contributions.ts",
+          ]
+        : []),
+    ]) {
+      expect(modules, module).not.toContain(path.resolve(module));
     }
     const runtimeWorker = await vi.importActual<
       typeof import("../../src/infra/runtime-worker-url.js")
@@ -189,45 +210,89 @@ it.each(
         ? pathToFileURL(path.join(outDir, runtimeEntry))
         : runtimeWorker.resolveRuntimeWorkerUrl(entry),
     );
+    const helperName = "windows-security-helper.exe";
+    const publishedHelper = readFileSync(
+      path.join(packageDir("@openclaw/fs-safe"), "dist", helperName),
+    );
+    expect(readFileSync(path.join(outDir, helperName))).toEqual(publishedHelper);
+    const packageFiles = globSync("**/*", { cwd: outDir })
+      .filter((name) => lstatSync(path.join(outDir, name)).isFile())
+      .map((name) => `dist/${name.replaceAll(path.sep, "/")}`);
+    const readPackageText = (name: string) =>
+      readFileSync(path.join(outDir, name.slice("dist/".length)), "utf8");
+    expect(
+      collectPackageDistImportErrors({ files: packageFiles, readText: readPackageText }),
+    ).toEqual([]);
+    // Reproduce the original archive defect without compiling an unchanged baseline.
+    expect(
+      collectPackageDistImportErrors({
+        files: packageFiles.filter((name) => name !== `dist/${helperName}`),
+        readText: readPackageText,
+      }),
+    ).toContain(`dist/${runtimeEntry} imports missing dist/${helperName}`);
     let entry: string;
     if (kind === "managed") {
+      // The repository runner compiles a separate graph from this production build.
+      const invocationAssets = await vi.importActual<
+        typeof import("../../src/infra/update-managed-service-handoff-runtime-assets.js")
+      >("../../src/infra/update-managed-service-handoff-runtime-assets.js");
+      const invocationEntry = runtimeWorker.resolveRuntimeWorkerUrl(
+        invocationAssets.managedHandoffRuntimeEntrypoint,
+      );
+      expect(readFileSync(new URL(`./${helperName}`, invocationEntry))).toEqual(publishedHelper);
+      const manifest = JSON.parse(
+        readFileSync(new URL("../manifest.json", invocationEntry), "utf8"),
+      );
+      const helperHash = sha256(publishedHelper);
+      expect(manifest.outputs[helperName]).toBe(helperHash);
+      if (manifest.cacheSignature) {
+        for (const file of [`dist/${helperName}`, "package.json"]) {
+          const source = realpathSync(path.join(packageDir("@openclaw/fs-safe"), file));
+          expect(manifest.inputs[source]).toBe(sha256(readFileSync(source)));
+        }
+      }
+      if (windows) {
+        rmSync(path.join(outDir, helperName));
+        try {
+          expect(() => stageManagedHandoffRuntime(directory)).toThrow(/ENOENT/);
+          expect(readdirSync(path.join(directory, "runtime"))).toEqual([
+            MANAGED_HANDOFF_RUNTIME_ENTRY,
+          ]);
+        } finally {
+          rmSync(path.join(directory, "runtime"), { recursive: true, force: true });
+          writeFileSync(path.join(outDir, helperName), publishedHelper);
+        }
+      }
       const staged = stageManagedHandoffRuntime(directory);
       entry = path.join(directory, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
-      const nativeAssets =
-        process.platform === "freebsd"
-          ? [
-              ...publishedProcSafeRuntimeFiles(
-                path.dirname(
-                  createRequire(import.meta.url).resolve("@openclaw/proc-safe/package.json"),
-                ),
-              ).map((file) =>
-                path.join(directory, "runtime", "node_modules", "@openclaw", "proc-safe", file),
-              ),
-              ...["package.json", "proc-safe-native.node"].map((file) =>
-                path.join(
-                  directory,
-                  "runtime",
-                  "node_modules",
-                  "@openclaw",
-                  `proc-safe-freebsd-${process.arch}`,
-                  file,
-                ),
-              ),
-            ]
-          : [];
-      expect(staged.toSorted()).toEqual([entry, ...nativeAssets].toSorted());
-      if (process.platform === "freebsd") {
-        const privateModules = path.join(directory, "runtime", "node_modules");
+      const privateModules = path.join(directory, "runtime", "node_modules");
+      const procSafeRoot = path.join(privateModules, "@openclaw", "proc-safe");
+      const addonRoot = path.join(privateModules, "@openclaw", `proc-safe-freebsd-${process.arch}`);
+      const nativeAssets = freebsd
+        ? [
+            ...publishedProcSafeRuntimeFiles(packageDir("@openclaw/proc-safe")).map((file) =>
+              path.join(procSafeRoot, file),
+            ),
+            ...["package.json", "proc-safe-native.node"].map((file) => path.join(addonRoot, file)),
+          ]
+        : [];
+      const windowsAssets = windows ? [path.join(path.dirname(entry), helperName)] : [];
+      expect(staged.toSorted()).toEqual([entry, ...nativeAssets, ...windowsAssets].toSorted());
+      for (const helper of windowsAssets) {
+        expect(readFileSync(helper)).toEqual(publishedHelper);
+      }
+      if (freebsd) {
         const stagedPackageFiles = globSync("**/*", { cwd: privateModules })
           .map((file) => path.join(privateModules, file))
           .filter((file) => lstatSync(file).isFile());
         expect(stagedPackageFiles.toSorted()).toEqual(nativeAssets.toSorted());
       }
       expect(readdirSync(directory)).toEqual(["runtime"]);
-      expect(readdirSync(path.dirname(entry))).toEqual(
-        process.platform === "freebsd"
-          ? [MANAGED_HANDOFF_RUNTIME_ENTRY, "node_modules"]
-          : [MANAGED_HANDOFF_RUNTIME_ENTRY],
+      expect(readdirSync(path.dirname(entry)).toSorted()).toEqual(
+        [
+          MANAGED_HANDOFF_RUNTIME_ENTRY,
+          ...(freebsd ? ["node_modules"] : windows ? [helperName] : []),
+        ].toSorted(),
       );
     } else {
       const base = path.join(realpathSync(directory), "literal-$HOME-`id`-'quoted'");
@@ -236,20 +301,20 @@ it.each(
         const fixture = await createPackageSwapFixture(base);
         // npm nests proc-safe and its FreeBSD addon inside the installed package.
         const nativeModules = path.join(fixture.packageRoot, "node_modules");
-        if (process.platform === "freebsd" && !existsSync(nativeModules)) {
-          const procSafe = realpathSync(
-            path.dirname(
-              createRequire(import.meta.url).resolve("@openclaw/proc-safe/package.json"),
-            ),
-          );
+        if (freebsd && !existsSync(nativeModules)) {
+          const procSafe = realpathSync(packageDir("@openclaw/proc-safe"));
           const platformName = `@openclaw/proc-safe-freebsd-${process.arch}`;
           const addon = path.dirname(
             createRequire(path.join(procSafe, "package.json")).resolve(
               `${platformName}/package.json`,
             ),
           );
-          cpSync(procSafe, path.join(nativeModules, "@openclaw", "proc-safe"), { recursive: true });
-          cpSync(realpathSync(addon), path.join(nativeModules, platformName), { recursive: true });
+          cpSync(procSafe, path.join(nativeModules, "@openclaw", "proc-safe"), {
+            recursive: true,
+          });
+          cpSync(realpathSync(addon), path.join(nativeModules, platformName), {
+            recursive: true,
+          });
         }
         return withUpdateCommandExecutor(randomUUID(), async (executor) =>
           preparePackageActivationJournal({
@@ -257,10 +322,9 @@ it.each(
               fence: await executor.enter(fixture.packageRoot),
               runtime: packageActivationRuntimeForTest(),
               onPrepared: (command) => {
-                const observed = runCommand(command, "status");
-                expect(observed.error).toBeUndefined();
-                expect(observed.status, observed.stderr).toBe(0);
-                expect(JSON.parse(observed.stdout)).toMatchObject({ phase: "preparing" });
+                expect(commandFacts(runCommand(command, "status"))).toMatchObject({
+                  phase: "preparing",
+                });
                 commands.push(command);
               },
             },
@@ -280,6 +344,10 @@ it.each(
       );
     }
 
+    // Recovery must survive loss of the old package and all its neighboring assets.
+    // The POSIX activation helper intentionally has no Windows executable in custody.
+    const builtRuntime = readFileSync(path.join(outDir, runtimeEntry));
+    rmSync(outDir, { recursive: true });
     const result = spawnSync(
       resolveTestNodeExecPath(),
       [
@@ -287,11 +355,11 @@ it.each(
         "--eval",
         `
           import assert from "node:assert/strict";
-          import { isBuiltin, registerHooks } from "node:module";
+          import { isBuiltin, registerHooks, syncBuiltinESMExports } from "node:module";
+          import childProcess from "node:child_process";
           import path from "node:path";
-          import { fileURLToPath } from "node:url";
+          import { fileURLToPath, pathToFileURL } from "node:url";
           import { DatabaseSync } from "node:sqlite";
-          import { pathToFileURL } from "node:url";
           const kind = process.argv[2];
           const entryPath = process.argv[1];
           const entry = pathToFileURL(entryPath).href;
@@ -306,6 +374,15 @@ it.each(
               "Dependency escaped private runtime: " + specifier);
             return resolved;
           } });
+          const helperCalls = [];
+          for (const method of ["spawn", "spawnSync"]) {
+            const original = childProcess[method];
+            childProcess[method] = function(file, ...args) {
+              if (String(file).endsWith("windows-security-helper.exe")) helperCalls.push(String(file));
+              return Reflect.apply(original, this, [file, ...args]);
+            };
+          }
+          syncBuiltinESMExports();
           const runtime = await import(entry);
           if (kind === "managed") for (const name of [
             "assertOpenClawStateWriteAllowed",
@@ -317,6 +394,23 @@ it.each(
             assert.equal(typeof runtime[name], "function", name);
           }
           if (kind === "managed") {
+          if (process.platform === "win32") {
+            const store = await runtime.prepareManagedHandoffLeaseStore({
+              databasePath: process.argv[5], serviceManagerEnv: {},
+            });
+            assert.deepEqual(store.read(process.cwd()), { kind: "absent" });
+            const acquired = store.acquire(process.cwd(), "fixture-owner", { kind: "update" });
+            assert.equal(acquired.kind, "acquired");
+            try {
+              assert.equal(store.read(process.cwd()).kind, "current");
+            } finally {
+              assert.equal(store.release(acquired.lease), true);
+            }
+            assert.deepEqual(store.read(process.cwd()), { kind: "absent" });
+            assert(helperCalls.length > 0, "Windows handoff did not execute the packaged ACL helper");
+            assert(helperCalls.every(file => file === path.join(path.dirname(entryPath), "windows-security-helper.exe")));
+            console.log("staged Windows ACL helper executed");
+          }
           if (process.platform === "freebsd") {
             const options = { databasePath: path.join(process.cwd(), "identity.sqlite"), serviceManagerEnv: {} };
             const store = runtime.createManagedHandoffLeaseStore(options);
@@ -354,45 +448,31 @@ it.each(
         kind,
         preparedPackage?.anchor ?? "",
         preparedPackage?.journal.read().descriptor.operationId ?? "",
+        databasePath,
       ],
-      {
-        cwd: directory,
-        encoding: "utf8",
-        timeout: 30_000,
-        env: childEnv,
-      },
+      childOptions,
     );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toContain("staged production runtime loaded");
+    const output = commandOutput(result).trim();
+    expect(output).toContain("staged production runtime loaded");
     if (kind === "package") {
-      expect(JSON.parse(result.stdout.trim().split("\n")[0]!)).toMatchObject({
-        phase: "prepared",
-      });
+      expect(JSON.parse(output.split("\n")[0]!)).toMatchObject({ phase: "prepared" });
       if (!preparedPackage || !prepareNext || commands.length !== 1) {
         throw new Error("First package recovery command was not published exactly once.");
       }
       const commandA = commands[0]!;
       const first = preparedPackage.journal.read();
-      const originalJournal = lstatSync(
-        resolvePackageActivationJournalPath(preparedPackage.anchor),
-      );
-      for (const [action, phase] of [
+      const firstJournal = resolvePackageActivationJournalPath(preparedPackage.anchor);
+      const originalJournal = lstatSync(firstJournal);
+      assertPhases(commandA, first.descriptor.operationId, [
         ["repair", "aborted"],
         ["retire", "complete"],
-      ]) {
-        const recovered = runCommand(commandA, action!);
-        expect(recovered.error).toBeUndefined();
-        expect(recovered.status, recovered.stderr).toBe(0);
-        expect(JSON.parse(recovered.stdout)).toMatchObject({
-          operationId: first.descriptor.operationId,
-          phase,
-        });
-      }
-      const completedJournal = readFileSync(
-        resolvePackageActivationJournalPath(preparedPackage.anchor),
-      );
+      ]);
+      const completedJournal = readFileSync(firstJournal);
+      mkdirSync(outDir);
+      // A new preparation reads its own build; its detached commands still run without it.
+      writeFileSync(path.join(outDir, runtimeEntry), builtRuntime);
       const second = await prepareNext();
+      rmSync(outDir, { recursive: true });
       const recordB = second.journal.read();
       const journalPath = resolvePackageActivationJournalPath(second.anchor);
       const archivedJournal = path.join(
@@ -416,24 +496,15 @@ it.each(
       expect(commands).toHaveLength(2);
       for (const action of ["status", "repair", "retire"]) {
         const stale = runCommand(commandA, action);
-        expect(stale.error).toBeUndefined();
-        expect(stale.status).toBe(1);
+        commandOutput(stale, 1);
         expect(stale.stderr).toContain("different operation");
         expect(snapshot()).toEqual(before);
       }
-      for (const [action, phase] of [
+      assertPhases(commands[1]!, recordB.descriptor.operationId, [
         ["status", "prepared"],
         ["repair", "aborted"],
         ["retire", "complete"],
-      ]) {
-        const current = runCommand(commands[1]!, action!);
-        expect(current.error).toBeUndefined();
-        expect(current.status, current.stderr).toBe(0);
-        expect(JSON.parse(current.stdout)).toMatchObject({
-          operationId: recordB.descriptor.operationId,
-          phase,
-        });
-      }
+      ]);
     }
   } finally {
     for (const bundle of bundles) {

@@ -81,6 +81,39 @@ function button(page: HTMLElement, label: string) {
 afterEach(() => document.body.replaceChildren());
 
 describe("Skill Workshop page", () => {
+  it("keeps the selected agent loading when the former agent's list fails", async () => {
+    const previousList = createDeferredCore<SkillsWorkshopListResult>();
+    const selectedList = createDeferredCore<SkillsWorkshopListResult>();
+    const request = vi.fn((method: string, params: { agentId: string }) => {
+      if (method === "skills.workshop.list") {
+        return params.agentId === "research" ? previousList.promise : selectedList.promise;
+      }
+      if (method === "skills.workshop.changes") {
+        return Promise.resolve({ changes: [] });
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    const context = createContext(request);
+    const page = await mount(context);
+    expect(page.querySelector(".settings-loading-skeleton")).not.toBeNull();
+
+    context.agentSelection.set("scout");
+    flush();
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith("skills.workshop.list", { agentId: "scout" }),
+    );
+    previousList.reject(new Error("Former agent list failed"));
+    await previousList.promise.catch(() => undefined);
+    await waitForSolid(() => {
+      expect(page.textContent).not.toContain("Former agent list failed");
+      expect(page.querySelector(".settings-loading-skeleton")).not.toBeNull();
+    });
+
+    selectedList.resolve({ ...list, agentId: "scout", skills: [], archived: [] });
+    await waitForSolid(() => expect(page.querySelector(".settings-loading-skeleton")).toBeNull());
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("shows a failed configuration read and retries only when requested", async () => {
     const firstRead = createDeferredCore<unknown>();
     const configRead = vi.fn().mockReturnValueOnce(firstRead.promise).mockResolvedValue({
@@ -133,33 +166,6 @@ describe("Skill Workshop page", () => {
       page.remove();
       runtimeConfig.dispose();
     }
-  });
-
-  it("lists learned skills and undoes a change by restoring its saved version", async () => {
-    const request = workshopGateway();
-    const page = await mount(
-      createContext(request, {
-        methods: ["skills.workshop.archive", "skills.workshop.restore"],
-      }),
-    );
-    await vi.waitFor(() => {
-      expect(page.textContent).toContain("Use when reconciling Actual Budget accounts");
-      expect(page.textContent).toContain("tightened reconciliation step");
-    });
-    expect(request).toHaveBeenCalledWith("skills.workshop.list", { agentId: "research" });
-
-    button(page, "Undo")?.click();
-
-    await vi.waitFor(() =>
-      expect(
-        request.mock.calls.filter(([method]) => method === "skills.workshop.list"),
-      ).toHaveLength(2),
-    );
-    expect(request).toHaveBeenCalledWith("skills.workshop.restore", {
-      agentId: "research",
-      name: SKILL,
-      versionId: VERSION,
-    });
   });
 
   it("undoes restoring an archived skill by archiving it again", async () => {

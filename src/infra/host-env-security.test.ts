@@ -124,6 +124,21 @@ async function runGitCommandExitCode(
 }
 
 describe("sanitizeHostExecEnv", () => {
+  it("preserves Gateway identity for child commands that need their custom service", () => {
+    const serviceEnv = {
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.custom",
+      OPENCLAW_SYSTEMD_UNIT: "custom-gateway.service",
+      OPENCLAW_WINDOWS_TASK_NAME: "Custom Gateway",
+      OPENCLAW_GATEWAY_SERVICE_PID: "12345",
+    };
+    expect(sanitizeHostExecEnv({ baseEnv: serviceEnv })).toEqual({
+      ...serviceEnv,
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+    });
+  });
+
   it("removes dangerous inherited keys while preserving PATH", () => {
     const env = sanitizeHostExecEnv({
       baseEnv: envRecord(`PATH=/usr/bin:/bin | BASH_ENV=/tmp/pwn.sh | BROWSER=/tmp/pwn-browser

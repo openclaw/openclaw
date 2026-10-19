@@ -7,12 +7,12 @@ import { isMobileNavLayout } from "../../app/mobile-nav-layout.ts";
 import { resolveSidebarSessionParentKey } from "../../components/app-sidebar-session-parent.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
-import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import {
   SessionMenu,
   type SessionMenuAction,
   type SessionMenuWork,
-} from "../../components/session-menu.ts";
+} from "../../components/session-menu-solid.tsx";
+import { sessionPlacementAction } from "../../components/session-placement-action.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
@@ -58,6 +58,7 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
     return {
       session: {
         label: normalizeOptionalString(row.label) ?? row.key,
+        placementAction: sessionPlacementAction(row),
         target: { key: row.key, agentId: row.agentId },
         sessionId: normalizeOptionalString(row.sessionId) ?? null,
         isChild:
@@ -68,10 +69,6 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
               new Set([buildAgentMainSessionKey({ agentId: row.agentId ?? "main", mainKey })]),
             ),
           ),
-        hasChildren: hasSessionArchiveDescendants(
-          row,
-          context.sessions.state.result?.sessions ?? [],
-        ),
         pinned: context.navigation.snapshot.sidebarEntries.includes(
           serializeSidebarEntry({ type: "session", key: row.key }),
         ),
@@ -92,6 +89,8 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
       copyMarkdownAllowed: canCopySessionMarkdown(gateway),
       actionDisabledReasons: sessionMenuReasons({
         snapshot: gateway,
+        placementRow: row,
+        requiredProfile: context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
         session: { ...row, pinnable },
         cloudWorkerStopAction,
       }),

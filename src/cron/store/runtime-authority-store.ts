@@ -1,6 +1,5 @@
 /** Downgrade-stable persistence for runtime-private cron authority. */
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import type { Selectable } from "kysely";
 import {
@@ -8,7 +7,9 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
+import { ensureStatePostgresFragment } from "../../state/openclaw-state-db-engine.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
@@ -37,7 +38,7 @@ type CronRuntimeAuthorityLoadResult = {
   repairJobIds: string[];
 };
 
-function getCronAuthorityKysely(db: DatabaseSync) {
+function getCronAuthorityKysely(db: EngineConnection) {
   return getNodeSqliteKysely<CronAuthorityDatabase>(db);
 }
 
@@ -71,7 +72,7 @@ function cronRuntimeAuthorityInputFingerprint(job: CronStoredJob): string {
 }
 
 function loadCronRuntimeAuthorityRows(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   jobIds: Iterable<string>,
 ): CronRuntimeAuthorityRow[] {
@@ -109,7 +110,7 @@ function applyCronRuntimeAuthorityRow(
 
 /** Applies stored authority only when its authorization inputs still match exactly. */
 export function loadCronRuntimeAuthorities(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   storeKey: string;
   jobs: CronStoredJob[];
 }): CronRuntimeAuthorityLoadResult {
@@ -127,7 +128,7 @@ export function loadCronRuntimeAuthorities(params: {
   return { repairJobIds };
 }
 
-function writeRecoveryRow(db: DatabaseSync, storeKey: string, jobId: string): void {
+function writeRecoveryRow(db: EngineConnection, storeKey: string, jobId: string): void {
   executeSqliteQuerySync(
     db,
     getCronAuthorityKysely(db)
@@ -151,7 +152,7 @@ function writeRecoveryRow(db: DatabaseSync, storeKey: string, jobId: string): vo
 
 /** Revalidates downgrade-detected drift before retiring stale authority durably. */
 export function repairCronRuntimeAuthorityRows(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   storeKey: string;
   jobs: CronStoredJob[];
   jobIds: readonly string[];
@@ -180,7 +181,7 @@ export function repairCronRuntimeAuthorityRows(params: {
 
 /** Reconciles child rows inside the same transaction as their owning cron rows. */
 export function replaceCronRuntimeAuthorityRows(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   storeKey: string;
   jobs: readonly CronStoredJob[];
   preserveExistingForJobIds?: ReadonlySet<string>;
@@ -192,7 +193,11 @@ export function replaceCronRuntimeAuthorityRows(params: {
   if (!hasPersistedAuthority && !tableExists(params.db, CRON_RUNTIME_AUTHORITY_TABLE)) {
     return;
   }
-  ensureCronRuntimeAuthorityTable(params.db);
+  if (isPostgresSqlConnection(params.db)) {
+    ensureStatePostgresFragment(params.db, CRON_RUNTIME_AUTHORITY_TABLE);
+  } else {
+    ensureCronRuntimeAuthorityTable(params.db);
+  }
   const database = getCronAuthorityKysely(params.db);
   const existingRowsByJobId = params.preserveExistingForJobIds
     ? new Map(

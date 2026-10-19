@@ -217,6 +217,7 @@ describe("Deepgram Flux audio", () => {
           query: {
             ...(queryLanguage === undefined ? {} : { language_hint: queryLanguage }),
             eot_threshold: 0.7,
+            keyterm: ["OpenClaw", "Deepgram"],
             numerals: true,
             profanity_filter: true,
             smart_format: true,
@@ -239,6 +240,7 @@ describe("Deepgram Flux audio", () => {
       expect(requestUrl?.searchParams.get("sample_rate")).toBe("16000");
       expect(requestUrl?.searchParams.get("language_hint")).toBe(expectedHint);
       expect(requestUrl?.searchParams.get("eot_threshold")).toBe("0.7");
+      expect(requestUrl?.searchParams.getAll("keyterm")).toEqual(["OpenClaw", "Deepgram"]);
       expect(requestUrl?.searchParams.get("numerals")).toBe("true");
       expect(requestUrl?.searchParams.get("profanity_filter")).toBe("true");
       expect(requestUrl?.searchParams.has("smart_format")).toBe(false);
@@ -247,8 +249,27 @@ describe("Deepgram Flux audio", () => {
     },
   );
 
+  it("returns an empty transcript when the flushed stream has no turns", async () => {
+    mockDecodedPcm(Buffer.alloc(10, 1));
+    const server = await createFluxServer({ onCloseStream: (socket) => socket.close() });
+
+    await expect(transcribeAudio(fluxRequest(server.baseUrl))).resolves.toMatchObject({
+      text: "",
+    });
+  });
+
   it.each([
     { name: "non-object server JSON", payload: "[]", error: "malformed JSON response" },
+    {
+      name: "a turn without transcript text",
+      payload: JSON.stringify({ type: "TurnInfo", event: "EndOfTurn" }),
+      error: "missing transcript",
+    },
+    {
+      name: "a turn with a non-string transcript",
+      payload: JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", transcript: 42 }),
+      error: "missing transcript",
+    },
     {
       name: "retained transcript growth above the provider limit",
       payload: JSON.stringify({

@@ -1,6 +1,15 @@
 import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -29,12 +38,14 @@ import {
 } from "../../scripts/prepublish-plugin-registry-artifact.mjs";
 import { resolveExtendedStablePackage } from "../../src/infra/update-check.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeCombinedBuildFixture } from "./prepublish-plugin-registry-build.fixture.js";
 
 const SOURCE_SHA = "a".repeat(40);
 const VERSION = "2026.8.1-beta.1";
 const PACKAGE_NAME = "@openclaw/discord";
 const TARBALL = "openclaw-discord-2026.8.1-beta.1.tgz";
 const SCRIPT = path.resolve("scripts/prepublish-plugin-registry-artifact.mjs");
+const BUILD_AND_PACK = path.resolve("scripts/lib/plugin-npm-build-and-pack.mts");
 const tempDirs: string[] = [];
 const registryTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const packageTarballs = new Map<string, Buffer>();
@@ -140,7 +151,7 @@ function addCompanionPackage(paths: ReturnType<typeof fixture>) {
   paths.writeManifest();
 }
 
-function cliFixture(packageNames = [PACKAGE_NAME]) {
+function cliFixture(packageNames = [PACKAGE_NAME], combinedBuild = false) {
   const repoRoot = mkdtempSync(path.join(tmpdir(), "openclaw-prepublish-plugin-cli-"));
   tempDirs.push(repoRoot);
   const scriptsDir = path.join(repoRoot, "scripts", "lib");
@@ -178,6 +189,9 @@ execFileSync("tar", ["-czf", path.join(outputDir, tarball), "-C", staging, "pack
 console.log("package manifest stdout");
 `,
   );
+  if (combinedBuild) {
+    writeCombinedBuildFixture(repoRoot, packageNames, VERSION);
+  }
   execFileSync("git", ["init"], { cwd: repoRoot });
   execFileSync("git", ["add", "."], { cwd: repoRoot });
   execFileSync("git", fixtureCommitArgs, { cwd: repoRoot });
@@ -186,6 +200,12 @@ console.log("package manifest stdout");
     encoding: "utf8",
   }).trim();
   return { repoRoot, sourceSha };
+}
+
+function sourceMetadata(packageDir: string) {
+  return ["package.json", "openclaw.plugin.json"].map((file) =>
+    readFileSync(path.join(packageDir, file), "utf8"),
+  );
 }
 
 function preparedBundleFixture(repoRoot: string, sourceSha: string) {
@@ -216,6 +236,62 @@ function preparedBundleFixture(repoRoot: string, sourceSha: string) {
 }
 
 describe("prepublish plugin registry artifact", () => {
+  it("packages the built runtime and restores source metadata in one child", async () => {
+    const { repoRoot, sourceSha } = cliFixture([PACKAGE_NAME], true);
+    const packageDir = path.join(repoRoot, "extensions", "discord");
+    const original = sourceMetadata(packageDir);
+    const artifactDir = path.join(repoRoot, "artifact");
+    const result = createPrepublishPluginRegistryArtifact({
+      repoRoot,
+      outputDir: artifactDir,
+      sourceSha,
+      candidateVersion: VERSION,
+      requiredPackages: [PACKAGE_NAME],
+    });
+    const tarball = path.join(artifactDir, result.manifest.packages[0]!.tarball);
+    const packedPackage = JSON.parse(
+      execFileSync("tar", ["-xOf", tarball, "package/package.json"], { encoding: "utf8" }),
+    );
+    expect(packedPackage.openclaw.runtimeExtensions).toEqual(["./dist/index.js"]);
+    const runtime = execFileSync("tar", ["-xOf", tarball, "package/dist/index.js"]);
+    const loaded = await import(`data:text/javascript;base64,${runtime.toString("base64")}`);
+    expect(loaded.message).toBe("built before packing");
+    expect(sourceMetadata(packageDir)).toEqual(original);
+  });
+
+  it.each(["build", "pack"])(
+    "does not publish after a %s failure and restores source metadata",
+    (failure) => {
+      const { repoRoot } = cliFixture([PACKAGE_NAME], true);
+      const packageDir = path.join(repoRoot, "extensions", "discord");
+      const outputDir = path.join(repoRoot, "artifact");
+      mkdirSync(outputDir);
+      if (failure === "build") {
+        writeFileSync(
+          path.join(packageDir, "index.ts"),
+          'export { missing } from "./missing.ts";\n',
+        );
+      }
+      const original = sourceMetadata(packageDir);
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          BUILD_AND_PACK,
+          packageDir,
+          failure === "pack" ? path.join(outputDir, "missing") : outputDir,
+        ],
+        { cwd: repoRoot, encoding: "utf8" },
+      );
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stderr).toContain(failure === "build" ? "missing.ts" : "ENOENT");
+      expect(existsSync(path.join(packageDir, "dist/index.js"))).toBe(failure === "pack");
+      expect(readdirSync(outputDir)).toEqual([]);
+      expect(sourceMetadata(packageDir)).toEqual(original);
+    },
+  );
+
   it.each(["source", "conflicting dependency", "tarball bytes"])(
     "rejects prepared bundle %s drift before accepting its registry",
     (drift) => {

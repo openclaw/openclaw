@@ -6,6 +6,7 @@ import {
   isCodeModeEngagedForModel,
   resolveCodeModeConfig,
 } from "./code-mode.js";
+import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import { normalizeToolPolicyName, readToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
@@ -104,6 +105,7 @@ export function prepareAgentToolSurfacePresentation(
   return {
     codeMode: { ...plan.codeModeConfig, enabled: plan.codeModeControlsEnabled },
     toolSearch: { ...plan.toolSearchConfig, enabled: plan.toolSearchControlsEnabled },
+    toolSearchDirectoryLean: isLocalModelLeanEnabled(params),
     forceDirectMessageTool: params.forceDirectMessageTool,
   };
 }
@@ -141,7 +143,7 @@ export function applyAgentToolSurfaceCatalog({
       catalogParams.config?.tools?.toolSearch === undefined &&
       model?.api === "ollama" &&
       model.toolSearchMode === "tools"
-        ? ["message", "web_search", "web_fetch"]
+        ? ["message", "web_search", "web_fetch", "memory_search", "memory_get"]
         : ["message"],
   });
 }

@@ -113,11 +113,27 @@ a replacement value for them. Other fields retain their ordinary update behavior
 array changes nothing. Clients using this argument need a Gateway version that
 supports explicit appearance clearing; older Gateways do not implement this reset.
 
-Card lists share one prepared, claim-token-redacted snapshot per board scope and
-card revision. `workboard.cards.list` returns `revision`; repeat the same query
-with `{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
+`workboard.cards.list` returns up to 100 cards, with claim tokens redacted. When
+`nextCursor` is present, pass that `{ position, createdAt, id }` object as `after`
+with the same filters to request the next page. The final page omits `nextCursor`.
+The first page returns `revision`; repeat the same query with
+`{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
+`sinceRevision` does not apply to continuation pages. CLI lists follow all pages
+automatically; full-population reads remain available to explicit tool and
+internal export workflows.
 The revision includes the store epoch and, for scoped queries, the normalized
-`boardId`. Reconnects request a full snapshot. `plugin.workboard.changed` includes
+`boardId` and requested `sessionKey`. The optional `sessionKey` filter takes a
+nonempty canonical session key and selects cards linked directly, through their
+execution, or through a recorded attempt or event. It can be combined with
+`boardId`; omitting it pages across all cards in the selected board scope. Selection happens in the
+database before card notes, comments, events, and other details are loaded.
+Ordinary keys and Matrix/Signal structural segments compare without case;
+opaque peer IDs and catalog source identifiers retain their exact identity. The
+Control UI and server filter share `normalizeSessionKeyForComparison` from
+`@openclaw/normalization-core`, exposed to the plugin through
+`openclaw/plugin-sdk/session-key-runtime`. Candidate matching reads only session-link
+fields before loading matching cards. Reconnects request a fresh snapshot of the
+same scope. `plugin.workboard.changed` includes
 an event `revision` and a separate `cardsRevision`: session-fact notifications
 advance the event sequence without invalidating unchanged cards.
 
@@ -136,8 +152,10 @@ activity. Message previews are plain text: Markdown formatting and HTML are remo
 link labels are retained, and whitespace is collapsed before the 400-character limit.
 Tiles link up to four pull requests, ordered by open, draft, merged,
 then closed state, with a count for any additional pull requests. The agent filter
-narrows the displayed sessions without changing the
-saved board scope.
+narrows the loaded sessions without changing the saved board scope. **Load more
+sessions** extends the view in pages of 100; the board displays the loaded and
+total matching session counts. People filters apply to the complete authorized
+session population before paging.
 
 Dock conversations stay excluded even when automation is included.
 
@@ -191,9 +209,14 @@ background previews, and time-dependent subagent state remain current; profile,
 configuration, topology, and access changes refresh authorization. Age-window and
 unavailable-PR retry deadlines still refresh the snapshot. Tool callers obtain
 their own caller-scoped roster; sharing never expands session visibility.
-`workboard.sessionsBoard.read` returns a `revision`; repeat the same query with
+`workboard.sessionsBoard.read` returns up to 100 sessions, a `total` matching count,
+and a `revision`. Pass the string `nextCursor` as `after` with the same board and
+view to continue; the final page omits `nextCursor`. Repeat a first-page query with
 `{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
-Reconnects and view changes request a full snapshot. The Workboard change event's
+Continuation pages ignore `sinceRevision`. Pages reflect current session state;
+if a cursor's session is no longer present, the request returns an explicit
+refresh error. Refresh reconciles sessions reordered between page requests.
+Reconnects and view changes request a fresh first page. The Workboard change event's
 `sessionsRevision` advances for board edits, operator pins, and session fact
 invalidations independently of `cardsRevision`.
 
@@ -257,6 +280,8 @@ The Gateway methods are `workboard.sessionsBoard.read` (`operator.read`) and
 `workboard.sessionsBoard.update` and `.move` (`operator.write`). All require
 `boardId`. Update takes a `patch` object with the spec fields, including the
 dock's `agentSessionKey`; move additionally requires `sessionKey` and `columnId`.
+Move returns the first page of the updated board, with the same 100-session limit,
+`total`, and optional `nextCursor` as read.
 Create with `workboard.boards.upsert` and `kind: "sessions"`, or with
 `workboard_board_create`. Changing an existing board's kind is rejected.
 
@@ -292,6 +317,10 @@ This metadata lets an operator see how a card moved through the board without
 opening the linked session. It is local operating context, not a replacement for session
 transcripts or GitHub issue history.
 
+New and edited comments are limited to 2000 characters. Unchanged stored comment
+bodies, including older oversized comments, retain their exact text during dispatch
+and other card updates. The existing per-card metadata budget still applies.
+
 The plugin and Control UI use one Workboard card contract. Control UI refreshes
 therefore preserve workspace provenance and authority, claim state, diagnostic
 actions, and notification sequence numbers instead of projecting a smaller
@@ -307,13 +336,21 @@ edited, or written, then resumes after the local interaction finishes. A
 reconnect always performs a reload from the store. There is no routine full-card
 poll, and **Refresh** remains available as manual recovery.
 
-The Gateway shares one immutable `workboard.cards.list` payload per normalized
-board filter at each store revision, including concurrent reads. Card and board
-writes invalidate it before the next read; the existing change service also
-invalidates it when it observes a commit from another SQLite connection.
-Each response still includes all board summaries, so a change to another board
-invalidates the payload too. Claim tokens remain redacted, and the RPC response
-shape is unchanged.
+The sidebar catalog reads names and summaries from `workboard.boards.list`.
+The session-header chip reads only cards linked to its session through the
+`workboard.cards.list` session filter; neither downloads unrelated card history.
+These narrower reads preserve the existing rendering.
+
+The Gateway shares the first `workboard.cards.list` page per board filter at each
+store revision, including concurrent reads. Session-filtered and continuation
+reads do not retain a payload cache. Card and board writes invalidate cached
+pages before the next read. Each response includes all board summaries, so a
+change to another board invalidates the page too.
+
+The Control UI and dashboard widgets show when more cards are available and
+offer **Load more cards**. Card search, filters, and widget counts apply to loaded
+cards. Load all cards before reordering them. Refresh reconciles cards reordered
+between page requests.
 
 When more than one board exists, the toolbar includes a **Board** filter backed
 by persisted board metadata rather than only the currently visible cards. Empty
@@ -411,6 +448,11 @@ do not need it: each worker run is granted `workboard_heartbeat`,
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                      |
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
 
+Creating linked cards, linking existing cards, and decomposition save one card at a
+time. If a later step fails, completed steps remain visible; Workboard reports the
+original error without rolling them back. Inspect the board before retrying, and
+repair missing links or remove unwanted partial cards as needed.
+
 Proof statuses are worker-reported outcomes, not independent verification. A `passed`
 entry means the worker reports that its command or check succeeded. Consumers that need
 an independent quality gate should inspect the attached command, URL, or artifact and
@@ -421,6 +463,15 @@ already has the same terminal status is reused unchanged. Completion proof witho
 `proofId` remains append-only, so a later retry cannot rewrite older history merely because
 its command or note is identical.
 
+Completion validates its proof, artifacts, and notification before saving the card.
+A validation failure leaves the card unchanged. Completion notifications preserve
+the full execution run ID, including IDs longer than 120 characters. Run IDs are limited
+to 512 characters across execution admission, launch metadata, worker logs, and
+notification subscriptions. Use a shorter ID if admission rejects it; IDs are never
+truncated. Metadata trimming preserves the completion's new notification and proof,
+discarding older history as needed. If those records cannot fit, completion fails
+without saving the card.
+
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an
 agent tool or Gateway RPC call redacts `metadata.claim.token` to `[redacted]`
@@ -430,9 +481,16 @@ seeing a usable token. Recovery goes through
 `workboard_promote`/`workboard_reassign`/`workboard_reclaim`, which do not
 require the token.
 
-Promotion rejects completed (`done`) cards, including when `force` is set, and
-preserves their completion timestamp. It remains available for recovering
-blocked work; `force` only bypasses dependency or schedule holds.
+Promotion only moves `todo` cards to `ready`; every other status returns an
+error without changing the card, including when `force` is set. To recover
+blocked work, use `workboard_unblock` first to move it to `todo`.
+`force` only bypasses dependency or schedule holds.
+
+Once a managed worker blocks its attempt, late lifecycle observations from that
+attempt cannot settle it again. Unblocking and promoting the card leaves it
+`ready` for a fresh dispatch and preserves the blocked attempt's failure. Ignored
+observations are logged with the card and attempt IDs. Explicitly linking a
+different session still allows that session's lifecycle to synchronize.
 
 ## Dispatch
 
@@ -604,10 +662,18 @@ Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
 not depend on an open browser tab. Subagent completion hooks persist terminal
 outcomes immediately. Agent attempt hooks consult the linked session state:
 finishing a model attempt does not move a card into `review` or `blocked` while
-its run is still active. A bounded session sweep runs once per minute to reconcile
-terminal, active, idle, missing, and stale session state. Each store mutation emits
+its run is still active. A recovery sweep runs once per minute and reads only the
+sessions linked to active cards, sharing each read across cards with the same link.
+Settled cards stop polling unless they retain pending lifecycle state. Provisional
+Workboard links share one configured-agent roster per sweep and check exact candidates; ambiguous
+or incomplete results leave the card unchanged. Legacy unqualified links use a bounded
+search tagged `workboard-lifecycle`. Each store mutation emits
 the normal `plugin.workboard.changed` invalidation, so an open Workboard tab reloads
 the stored card instead of writing its own lifecycle projection.
+
+Archiving a linked session does not hide its terminal outcome from this sweep.
+After a restart or missed completion hook, Workboard still reconciles active cards linked
+to archived sessions into `review` or `blocked`.
 
 Incognito sessions remain absent from session discovery. Explicitly linked
 Incognito cards use authorized exact-session metadata reads, without derived

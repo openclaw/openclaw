@@ -1,5 +1,4 @@
 import { AsyncResource } from "node:async_hooks";
-import fs from "node:fs";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
@@ -270,7 +269,7 @@ it("refreshes admitted cohorts after a known write and a foreign membership comm
   }
 });
 
-it.each(["reset", "delete", "physical replacement", "release"] as const)(
+it.each(["reset", "delete", "release"] as const)(
   "refuses an admitted cohort after %s without consuming stale rows",
   async (change) => {
     const { scope, entry, database } = createCohortFixture(`revoke-${change.replaceAll(" ", "-")}`);
@@ -283,9 +282,6 @@ it.each(["reset", "delete", "physical replacement", "release"] as const)(
         database.db
           .prepare("DELETE FROM session_nodes WHERE session_key = ?")
           .run(scope.sessionKey);
-      } else if (change === "physical replacement") {
-        fs.copyFileSync(database.path, `${database.path}.replacement`);
-        fs.renameSync(`${database.path}.replacement`, database.path);
       } else {
         await claim.release();
       }

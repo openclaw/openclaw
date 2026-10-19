@@ -18,6 +18,7 @@ import {
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db-lifecycle.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
@@ -162,6 +163,7 @@ describe("voice consult registration authority", () => {
       context.getRuntimeConfig = () => config;
       context.getCommittedRuntimeConfig = () => config;
       const client = { connId: `${origin}-${wait}-delegation-source` };
+      const sessionTarget = await prepareTalkSessionTarget(config, scope.sessionKey);
       const created =
         origin === "relay"
           ? createTalkRealtimeRelaySession({
@@ -173,7 +175,7 @@ describe("voice consult registration authority", () => {
               instructions: "brief",
               tools: [],
               controlSource: "transcript",
-              sessionTarget: await prepareTalkSessionTarget(config, scope.sessionKey),
+              sessionTarget,
             })
           : undefined;
       const relay = created ? relaySessions.get(created.relaySessionId)! : undefined;
@@ -181,6 +183,19 @@ describe("voice consult registration authority", () => {
       const waiting = createDeferred();
       const resume = createDeferred();
       let pending: Promise<unknown> | undefined;
+      const registration = registerChatAbortController({
+        target: captureSessionTarget({
+          storeScope: sessionTarget.storePath,
+          sessionKey: sessionTarget.canonicalKey,
+          agentId: sessionTarget.agentId,
+          incarnation: "original-consult-session",
+        }),
+        runId: "queued-consult",
+        sessionId: "original-consult-session",
+        sessionKey: scope.sessionKey,
+        ownerConnId: client.connId,
+        timeoutMs: 60_000,
+      });
       try {
         setTestEnvValue("OPENCLAW_STATE_DIR", successor);
         await voiceSessions.createOrResumeClientVoiceSession({
@@ -264,6 +279,7 @@ describe("voice consult registration authority", () => {
         if (relay) {
           await closeRelaySession(relay, "completed");
         }
+        registration.cleanup();
         await cleanupSessionStateForTest({ stateDir: successor, rootPath: successor });
       }
     },
@@ -275,6 +291,7 @@ describe("voice consult registration authority", () => {
       const context = createGatewayRequestContext(makeContextParams());
       context.getRuntimeConfig = () => ({});
       const client = { connId: "replacement-registration" };
+      const sessionTarget = await prepareTalkSessionTarget({}, scope.sessionKey);
       const created = createTalkRealtimeRelaySession({
         context,
         connId: client.connId,
@@ -284,15 +301,21 @@ describe("voice consult registration authority", () => {
         instructions: "brief",
         tools: [],
         controlSource: "transcript",
-        sessionTarget: await prepareTalkSessionTarget({}, scope.sessionKey),
+        sessionTarget,
       });
       const relay = relaySessions.get(created.relaySessionId)!;
       const runId = "queued-consult";
       const registration = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
+        target: captureSessionTarget({
+          storeScope: sessionTarget.storePath,
+          sessionKey: sessionTarget.canonicalKey,
+          agentId: sessionTarget.agentId,
+          incarnation: "original-consult-session",
+        }),
         runId,
         sessionId: "original-consult-session",
         sessionKey: scope.sessionKey,
+        ownerConnId: client.connId,
         timeoutMs: 60_000,
       });
       const held = createDeferred();
@@ -689,9 +712,6 @@ describe("voice consult registration authority", () => {
           requester: composeSessionSourceAssertion(
             [authorized.authorization!.assertCurrent],
             (assertSource) => {
-              if (kind === "foreign") {
-                expect(inWorkerGrant).toBe(false);
-              }
               assertSource();
               workerAuthorityObserved ||= inWorkerGrant;
               nativeAuthorityObserved ||=
@@ -703,8 +723,8 @@ describe("voice consult registration authority", () => {
           ),
         });
         expect(schemaSql).toEqual([]);
-        expect(workerAuthorityObserved).toBe(kind === "incognito");
-        expect(nativeAuthorityObserved).toBe(kind === "foreign");
+        expect(workerAuthorityObserved).toBe(true);
+        expect(nativeAuthorityObserved).toBe(false);
         expect(
           clientVoiceSessionTesting.readRecord(target.agentId, "cold-native-voice"),
         ).toMatchObject({

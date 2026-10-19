@@ -88,6 +88,7 @@ export function buildCliAgentSystemPrompt(params: {
     typeof buildConfiguredAgentSystemPrompt
   >[0]["preparedModelRuntime"];
   preparedGitCoauthorPrompt?: string;
+  preparedSessionEntry?: Parameters<typeof buildSystemPromptParams>[0]["preparedSessionEntry"];
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requireExplicitMessageTarget?: boolean;
@@ -122,6 +123,7 @@ export function buildCliAgentSystemPrompt(params: {
     workspaceDir: runtimeCwd,
     cwd: runtimeCwd,
     preparedGitCoauthorPrompt: params.preparedGitCoauthorPrompt,
+    preparedSessionEntry: params.preparedSessionEntry,
     requesterProfileId: params.requesterProfileId,
     runtime: {
       sessionKey: params.sessionKey,

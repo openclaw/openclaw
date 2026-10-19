@@ -9,12 +9,38 @@
     <title>OpenClaw Control</title>
     <meta name="color-scheme" content="dark light" />
     <!-- These mirror the claw theme's --bg tokens for first paint; runtime theme application keeps them synchronized. -->
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#faf9f7" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1015" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <meta
+      id="openclaw-theme-color-light"
+      name="theme-color"
+      media="(prefers-color-scheme: light)"
+      content="#faf9f7"
+    />
+    <meta
+      id="openclaw-theme-color-dark"
+      name="theme-color"
+      media="(prefers-color-scheme: dark)"
+      content="#0e1015"
+    />
+    <link id="openclaw-favicon-svg" rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link
+      id="openclaw-favicon-png"
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="/favicon-32.png"
+    />
+    <link
+      id="openclaw-apple-touch-icon"
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="/apple-touch-icon.png"
+    />
+    <link
+      id="openclaw-manifest"
+      rel="manifest"
+      href="/manifest.webmanifest"
+      crossorigin="use-credentials"
+    />
     <script data-cfasync="false">
       // Configure Zod before module evaluation so its JIT probe cannot violate strict CSP.
       globalThis.__zod_globalConfig ??= {};
@@ -448,11 +474,11 @@
         var wait = document.getElementById("openclaw-mount-wait");
         var rawDelay = Number(fallback.getAttribute("data-openclaw-mount-timeout-ms"));
         var delay = Number.isFinite(rawDelay) && rawDelay > 0 ? rawDelay : 12000;
-        var maxRecoveryAttempts = 6;
+        var maxRecoveryNavigations = 3;
         var timer;
         var recoveryTimer;
         var recoveryAttempt = 0;
-        var recoveryNavigation = false;
+        var recoveryNavigation = 0;
         var bootSettled = false;
         var documentLoaded = document.readyState === "complete";
         var recoveryController;
@@ -470,9 +496,16 @@
 
         try {
           var initialUrl = new URL(window.location.href);
-          recoveryNavigation = initialUrl.searchParams.has("openclaw_mount_recovery");
-          if (recoveryNavigation) {
+          var recoveryMarker = initialUrl.searchParams.get("openclaw_mount_recovery");
+          // Runtime reloads pass a timestamp cache buster; count it as the first recovery navigation.
+          if (recoveryMarker !== null) {
+            var count = Number(recoveryMarker);
+            recoveryNavigation =
+              Number.isInteger(count) && count >= 1 && count <= maxRecoveryNavigations ? count : 1;
+          }
+          if (recoveryNavigation || initialUrl.searchParams.has("openclaw_http_auth")) {
             initialUrl.searchParams.delete("openclaw_mount_recovery");
+            initialUrl.searchParams.delete("openclaw_http_auth");
             window.history.replaceState(null, "", initialUrl.href);
           }
         } catch (e) {}
@@ -494,59 +527,31 @@
 
         function scheduleRecovery() {
           window.clearTimeout(recoveryTimer);
-          if (bootSettled || recoveryAttempt >= maxRecoveryAttempts) return;
-          var retryDelay = Math.min(delay, 1000 * Math.pow(2, recoveryAttempt));
+          if (bootSettled) return;
+          var retryDelay = Math.min(15000, 1000 * Math.pow(2, Math.min(recoveryAttempt - 1, 4)));
           recoveryTimer = window.setTimeout(retryCurrentDocument, retryDelay);
         }
 
         function finishRecoveryAttempt() {
           recoveryController = undefined;
           if (bootSettled) return;
-          if (recoveryAttempt >= maxRecoveryAttempts) {
-            setSummary(
-              "The gateway is still unavailable. Try again, then check the troubleshooting guide if the problem persists.",
-            );
-            return;
-          }
           setSummary(
             "The gateway is not reachable yet. OpenClaw will keep retrying while it restarts.",
           );
           scheduleRecovery();
         }
 
-        function unregisterServiceWorkers() {
-          if (!navigator.serviceWorker?.getRegistrations) return;
-          // Recovery must not depend on a possibly broken worker. Navigations bypass it,
-          // so a reload can self-heal after the registrations are removed.
-          void navigator.serviceWorker
-            .getRegistrations()
-            .then(function (registrations) {
-              return Promise.all(
-                registrations.map(function (registration) {
-                  return registration.unregister();
-                }),
-              );
-            })
-            .catch(function () {});
-        }
-
         function retryCurrentDocument() {
-          if (
-            bootSettled ||
-            recoveryController ||
-            recoveryAttempt >= maxRecoveryAttempts ||
-            typeof window.fetch !== "function"
-          )
-            return;
+          if (bootSettled || recoveryController || typeof window.fetch !== "function") return;
           var documentUrl = new URL(window.location.href);
-          if (recoveryNavigation) {
+          if (recoveryNavigation >= maxRecoveryNavigations) {
             setSummary(
               "A fresh page still could not start the Control UI. Try again, then check the troubleshooting guide if the problem persists.",
             );
             return;
           }
           recoveryAttempt += 1;
-          documentUrl.searchParams.set("openclaw_mount_recovery", String(Date.now()));
+          documentUrl.searchParams.set("openclaw_mount_recovery", String(recoveryNavigation + 1));
           var controller = new AbortController();
           recoveryController = controller;
           var requestTimer = window.setTimeout(function () {
@@ -565,7 +570,7 @@
             })
             .catch(function () {
               if (recoveryController !== controller) return;
-              unregisterServiceWorkers();
+              // Network failure says nothing about worker health. Keep offline recovery.
               finishRecoveryAttempt();
             })
             .finally(function () {
@@ -609,7 +614,7 @@
           "DOMContentLoaded",
           function () {
             documentLoaded = true;
-            if (!fallback.hidden) showFallback();
+            if (!bootSettled) armFallbackTimer();
           },
           { once: true },
         );
@@ -647,7 +652,6 @@
         if (retry) {
           retry.addEventListener("click", function () {
             cancelRecovery();
-            unregisterServiceWorkers();
             window.location.reload();
           });
         }

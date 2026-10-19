@@ -2,18 +2,17 @@
 
 ## Startup bundle
 
-The startup-JS budget (`scripts/check-control-ui-performance.mts`, baseline in `config/control-ui-startup-budget-baseline.json`) is enforced with a small growth tolerance. Budget changes need owner approval; fix the graph instead:
+The startup budget is **342,000 B gzip and one startup CSS request** (post-Lit startup measured 340,081 B on 2026-10-16, with about 2 KB of headroom). `scripts/check-control-ui-performance.mts` and `config/control-ui-startup-budget-baseline.json` own measurement and enforcement. Budget changes need owner approval; preserve the lazy graph:
 
 - Keep code out of the startup graph until a startup surface actually needs it. Defer behind the route or interaction that uses it: automation readiness loads on the first read of its hook, and System busyness renders only when opened.
-- The Solid runtime belongs in startup only once a startup surface renders with Solid, which happens when the Solid shell lands. Pulling it in earlier is a regression.
-- Icons and shared primitives are on the startup path. A primitive port must not grow startup bytes, so measure it.
+- The Solid shell now owns startup rendering. Its imports must not eagerly register lazy page custom elements or load route-only libraries, even if every importer uses Solid. An eager Zod import previously added about 36 KB gzip.
+- Icons and shared primitives are on the startup path. A primitive change must not grow startup bytes, so measure it.
 - Measure with `pnpm ui:build` plus the strict performance check, and compare against the merge base on the **same machine**. The same commit can differ by several hundred bytes between environments.
-- The Solid shell (root, shell, outlet) measured about 18 KB gzip smaller than the Lit shell it replaces.
 
 ## Rendering
 
-- Fine-grained updates replace `requestUpdate`. A component re-runs nothing; only the computations that read a changed signal do. Don't recreate that broadness with large memos over whole snapshots: derive narrowly.
-- Lists: `<For each keyed>` by semantic key. Never key by index or streaming text.
+- Fine-grained updates keep invalidation local. A component re-runs nothing; only the computations that read a changed signal do. Don't recreate that broadness with large memos over whole snapshots: derive narrowly.
+- Lists: select identity, semantic keys, or anonymous positions deliberately; see [keying](idioms.md#key-lists-by-the-lifetime-you-intend). Never key entities by index or streaming text.
 - Large transcripts stay on the existing virtualizer owners; no `@tanstack/solid-virtual`.
 - Streaming markdown goes through the framework-neutral `MarkdownDomReconciler`, driven from a ref factory; Solid never renders inside the markdown island.
 - xterm, noVNC, and iframes own their DOM: Solid hosts the island and never renders inside it.

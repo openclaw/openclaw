@@ -1,3 +1,4 @@
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   sessionChanges,
@@ -96,10 +97,8 @@ export function emitPreparedSessionSharingChange(
   if (record.kind === "metadata") {
     const seal = () => sealSessionEntryPublicationSource(record.prepared.source);
     if (
-      !stageSqliteTransactionState(database.db, {
-        stage() {},
+      !stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
         commit: seal,
-        rollback() {},
       })
     ) {
       seal();

@@ -1,6 +1,5 @@
-import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For } from "solid-js";
+import { createMemo } from "solid-js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
@@ -11,127 +10,137 @@ import type { PresenceViewer } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
 import {
-  closeMenuAfterOwnDropdownHide,
   COMMAND_VALUE_PREFIX,
-  consumeSidebarMenuSelection,
-  moveSidebarMenuFocus,
   renderSidebarHelpMenu,
+  selectSidebarHelpLink,
 } from "./app-sidebar-agent-menu.tsx";
-import { renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
+import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
 import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
-import { renderMenuTrigger } from "./solid/menu-trigger.tsx";
+import { createMenuControls, type MenuEntry, type MenuItem } from "./solid/menu.tsx";
 import "./viewer-facepile.ts";
-import { syncDropdownItemRadio, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
+import "./theme-mode-toggle.ts";
 
 type SidebarIdentityMenuParams = {
   position: { x: number; bottom: number; width: number };
+  anchor?: HTMLElement;
+  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   canPairDevice: boolean;
   basePath: string;
   gatewayVersion: string | null;
-  updateAttentionDismissed: boolean;
+  updateAvailable: boolean;
   profileViewer?: PresenceViewer;
   canRetryConnection: boolean;
   themeMode: ThemeMode;
   triggerWidth: number;
-  onTabAway: () => void;
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
   onRetryConnect?: () => void;
 };
 
-function renderIdentityGateways(
-  snapshot: () => NativeGatewaysSnapshot | null,
-  onClose: SidebarIdentityMenuParams["onClose"],
-): JSX.Element {
-  const capability = nativeGatewaysCapability();
-  if (!capability) {
-    return undefined;
-  }
-  const current = createMemo(() =>
-    snapshot()?.gateways.find((gateway) => gateway.id === snapshot()?.currentId),
-  );
+function renderGatewayHealth(health: NativeGatewaysSnapshot["gateways"][number]["health"]) {
   return (
-    <>
-      <div class="sidebar-customize-menu__title">{t("nav.gateway.sectionLabel")}</div>
-      <For each={snapshot()?.gateways} keyed={(gateway) => gateway.id}>
-        {(gateway, index) => {
-          const selected = () => gateway().id === snapshot()?.currentId;
-          const healthLabel = () =>
-            ({
-              ok: t("nav.gateway.connected"),
-              error: t("nav.gateway.unreachable"),
-              unknown: t("nav.gateway.unknown"),
-            })[gateway().health];
-          const openWindow = (event: MouseEvent) => {
-            if (capability.openWindow && (event.metaKey || event.ctrlKey)) {
-              event.preventDefault();
-              event.stopPropagation();
-              capability.openWindow(gateway().id);
-              onClose(false);
-            }
-          };
-          return (
-            <wa-dropdown-item
-              class="sidebar-customize-menu__item"
-              value={`gateway:${encodeURIComponent(gateway().id)}`}
-              role="menuitemradio"
-              aria-checked={selected() ? "true" : "false"}
-              ref={(element) => {
-                syncDropdownItemRadio(element, selected());
-                // Intercept modifiers before Web Awesome's ancestor click listener selects the item.
-                element.addEventListener("click", openWindow);
-                element.addEventListener("contextmenu", openWindow);
-              }}
-            >
-              <span
-                slot="icon"
-                class="sidebar-gateway-health"
-                data-health={gateway().health}
-                role="img"
-                aria-label={healthLabel()}
-              />
-              <span class="sidebar-customize-menu__text">{gateway().name}</span>
-              <span slot="details" class="sidebar-gateway-details">
-                {gateway().isPrimary ? (
-                  <span class="sidebar-gateway-primary">{t("nav.gateway.primaryTag")}</span>
-                ) : undefined}
-                {capability.openWindow && !selected() && index() < 9 ? (
-                  <Kbd
-                    {...{
-                      class: "session-menu__shortcut",
-                      ariaHidden: true,
-                    }}
-                    keys={["⌘", String(index() + 1)]}
-                  />
-                ) : undefined}
-                {selected() ? (
-                  <span class="sidebar-gateway-check" aria-hidden="true">
-                    {<Icon name="check" />}
-                  </span>
-                ) : undefined}
-              </span>
-            </wa-dropdown-item>
-          );
-        }}
-      </For>
-      {current()?.canPromote
-        ? renderSidebarMenuAction(
-            "command:gateway-set-primary",
-            t("nav.gateway.setPrimary"),
-            "star",
-          )
-        : undefined}
-      {renderSidebarMenuAction("command:gateway-settings", t("nav.gateway.openSettings"), "server")}
-      <div class="sidebar-customize-menu__separator" role="separator" />
-    </>
+    <span
+      class="sidebar-gateway-health"
+      data-health={health}
+      role="img"
+      aria-label={
+        {
+          ok: t("nav.gateway.connected"),
+          error: t("nav.gateway.unreachable"),
+          unknown: t("nav.gateway.unknown"),
+        }[health]
+      }
+    />
   );
 }
 
+function renderIdentityGateways(
+  snapshot: NativeGatewaysSnapshot | null,
+  onClose: SidebarIdentityMenuParams["onClose"],
+): MenuEntry[] {
+  const capability = nativeGatewaysCapability();
+  if (!capability) {
+    return [];
+  }
+  const current = snapshot?.gateways.find((gateway) => gateway.id === snapshot.currentId);
+  const gateways: MenuEntry[] = [
+    ...(snapshot?.gateways ?? []).map((gateway, index): MenuItem => {
+      const selected = gateway.id === snapshot?.currentId;
+      const openWindow = (event: MouseEvent) => {
+        if (capability.openWindow && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          event.stopPropagation();
+          capability.openWindow(gateway.id);
+          onClose(false);
+        }
+      };
+      return {
+        id: `gateway:${encodeURIComponent(gateway.id)}`,
+        label: gateway.name,
+        type: "radio",
+        checked: selected,
+        class: "sidebar-customize-menu__item",
+        attributes: { onClick: openWindow, onContextMenu: openWindow },
+        icon: renderGatewayHealth(gateway.health),
+        content: <span class="sidebar-customize-menu__text">{gateway.name}</span>,
+        details: (
+          <span class="sidebar-gateway-details">
+            {gateway.isPrimary ? (
+              <span class="sidebar-gateway-primary">{t("nav.gateway.primaryTag")}</span>
+            ) : undefined}
+            {capability.openWindow && !selected && index < 9 ? (
+              <Kbd class="session-menu__shortcut" ariaHidden keys={["⌘", String(index + 1)]} />
+            ) : undefined}
+            {selected ? (
+              <span class="sidebar-gateway-check" aria-hidden="true">
+                <Icon name="check" />
+              </span>
+            ) : undefined}
+          </span>
+        ),
+      };
+    }),
+    ...(current?.canPromote
+      ? [
+          renderSidebarMenuAction(
+            "command:gateway-set-primary",
+            t("nav.gateway.setPrimary"),
+            "star",
+          ),
+        ]
+      : []),
+    renderSidebarMenuAction("command:gateway-settings", t("nav.gateway.openSettings"), "server"),
+  ];
+  return [
+    {
+      kind: "content",
+      id: "gateway-title",
+      content: <div class="sidebar-customize-menu__title">{t("nav.gateway.sectionLabel")}</div>,
+    },
+    {
+      id: "command:gateways",
+      label: current?.name ?? t("nav.gateway.sectionLabel"),
+      class: "sidebar-customize-menu__item",
+      icon: current ? renderGatewayHealth(current.health) : undefined,
+      details: current?.isPrimary ? (
+        <span class="sidebar-gateway-primary">{t("nav.gateway.primaryTag")}</span>
+      ) : undefined,
+      children: gateways,
+    },
+    {
+      kind: "content",
+      id: "gateway-separator",
+      content: <div class="sidebar-customize-menu__separator" role="separator" />,
+    },
+  ];
+}
+
 export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JSX.Element {
+  const controls = createMenuControls();
   const position = params.position;
   const profileName = () =>
     params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
@@ -145,17 +154,163 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
     params.profileViewer?.email && params.profileViewer.email !== profileName()
       ? params.profileViewer.email
       : null;
+  const items = (): MenuEntry[] => {
+    const help = renderSidebarHelpMenu();
+    return [
+      {
+        id: "command:profile",
+        label: profileName(),
+        class: "sidebar-customize-menu__item sidebar-identity-menu__header",
+        icon: (
+          <span class="sidebar-identity-menu__avatar" aria-hidden="true">
+            <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+          </span>
+        ),
+        content: (
+          <span class="sidebar-identity-menu__identity">
+            <span class="sidebar-identity-menu__name" title={profileName()}>
+              {profileName()}
+            </span>
+            {profileEmail() ? (
+              <span class="sidebar-identity-menu__email" title={profileEmail() ?? undefined}>
+                {profileEmail()}
+              </span>
+            ) : undefined}
+          </span>
+        ),
+      },
+      {
+        kind: "content",
+        id: "profile-separator",
+        content: <div class="sidebar-customize-menu__separator" role="separator" />,
+      },
+      ...renderIdentityGateways(params.nativeGatewaySnapshot, params.onClose),
+      renderSidebarMenuAction("command:settings", t("nav.settings"), "settings", {
+        details: (
+          <KeyboardShortcut
+            class="session-menu__shortcut"
+            ariaHidden
+            combo={KEYBOARD_SHORTCUT_COMBOS.appearanceSettings}
+          />
+        ),
+      }),
+      {
+        ...renderSidebarMenuAction("command:updates", titleForRoute("updates"), "download", {
+          details: params.updateAvailable ? (
+            <span
+              class="agent-select__badge sidebar-identity-menu__update-badge"
+              aria-hidden="true"
+            >
+              {t("updates.sidebar.availableBadge")}
+            </span>
+          ) : undefined,
+        }),
+        label: params.updateAvailable
+          ? `${titleForRoute("updates")}. ${t("updates.sidebar.availableTitle")}`
+          : titleForRoute("updates"),
+      },
+      renderSidebarMenuAction("command:usage", titleForRoute("usage"), "coins"),
+      {
+        kind: "content",
+        id: "usage-separator",
+        content: <div class="sidebar-customize-menu__separator" role="separator" />,
+      },
+      renderSidebarMenuAction("command:pair-mobile", t("devices.pairing.button"), "smartphone", {
+        className: "sidebar-pair-mobile",
+        disabled: !params.canPairDevice,
+        title: params.canPairDevice ? undefined : t("devices.pairing.adminRequired"),
+      }),
+      ...(!document.documentElement.classList.contains("openclaw-native-macos")
+        ? [renderSidebarMenuAction("command:apps", t("agentChip.getApps"), "layoutGrid")]
+        : []),
+      renderSidebarMenuAction("command:debug-overlay", t("debug.overlay.title"), "activity", {
+        details: (
+          <KeyboardShortcut
+            class="session-menu__shortcut"
+            ariaHidden
+            combo={KEYBOARD_SHORTCUT_COMBOS.debugOverlay}
+          />
+        ),
+      }),
+      {
+        kind: "content",
+        id: "help-separator",
+        content: <div class="sidebar-customize-menu__separator" role="separator" />,
+      },
+      ...(help ? [help] : []),
+      ...(params.canRetryConnection
+        ? [
+            {
+              kind: "content" as const,
+              id: "retry-separator",
+              content: <div class="sidebar-customize-menu__separator" role="separator" />,
+            },
+            {
+              id: "command:retry-connect",
+              label: t("connection.retryNow"),
+              class: "sidebar-customize-menu__item sidebar-identity-menu__retry",
+              content: <span class="sidebar-customize-menu__text">{t("connection.retryNow")}</span>,
+            },
+          ]
+        : []),
+      {
+        kind: "content",
+        id: "footer-separator",
+        content: <div class="sidebar-customize-menu__separator" role="separator" />,
+      },
+      {
+        kind: "group",
+        id: "footer",
+        class: "sidebar-identity-menu__footer",
+        items: [
+          {
+            id: "command:about",
+            label: t("aboutPage.artifactDetails"),
+            render: (menuAttributes) => (
+              <SidebarBuildChip
+                variant="identity"
+                basePath={params.basePath}
+                gatewayVersion={params.gatewayVersion}
+                menuAttributes={menuAttributes}
+                copyButtonRef={controls.ref()}
+              />
+            ),
+          },
+          {
+            id: "command:theme",
+            label: t("common.colorMode"),
+            closeOnSelect: false,
+            render: (menuAttributes) => (
+              <span class="sidebar-mode-switch">
+                <openclaw-theme-mode-toggle
+                  prop:mode={params.themeMode}
+                  prop:menuItem={true}
+                  prop:menuAttributes={menuAttributes}
+                />
+              </span>
+            ),
+          },
+        ],
+      },
+    ];
+  };
   return (
-    <wa-dropdown
+    <SidebarDropdown
+      controls={controls}
       class="sidebar-customize-menu sidebar-identity-menu"
-      style={{ "--sidebar-identity-menu-min-width": `${params.triggerWidth}px` }}
-      prop:open={true}
-      placement="top-start"
-      prop:distance={0}
-      aria-label={t("profilePage.identity.menuLabel")}
-      onWa-select={(event: WaSelectEvent) => {
-        const value = consumeSidebarMenuSelection(event, params.onClose);
-        if (!value) {
+      position={position}
+      anchor={params.anchor}
+      tabFocusTarget={params.tabFocusTarget}
+      label={t("profilePage.identity.menuLabel")}
+      panelStyle={{ "--sidebar-identity-menu-min-width": `${params.triggerWidth}px` }}
+      items={items()}
+      onClose={params.onClose}
+      onSelect={(value) => {
+        if (value === "command:theme") {
+          return;
+        }
+        params.onClose(false);
+        if (selectSidebarHelpLink(value)) {
           return;
         }
         const capability = nativeGatewaysCapability();
@@ -179,11 +334,17 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
           case `${COMMAND_VALUE_PREFIX}gateway-settings`:
             capability?.openSettings();
             break;
+          case `${COMMAND_VALUE_PREFIX}about`:
+            params.onNavigate("about");
+            break;
           case `${COMMAND_VALUE_PREFIX}profile`:
             params.onNavigate("profile", { hash: "#settings-profile-identity" });
             break;
           case `${COMMAND_VALUE_PREFIX}settings`:
             params.onNavigate("appearance");
+            break;
+          case `${COMMAND_VALUE_PREFIX}updates`:
+            params.onNavigate("updates");
             break;
           case `${COMMAND_VALUE_PREFIX}usage`:
             params.onNavigate("usage");
@@ -202,115 +363,6 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
             break;
         }
       }}
-      onKeyDown={(event: KeyboardEvent) => {
-        if (!moveSidebarMenuFocus(event)) {
-          trackDropdownKeyboardDismissal(event, params.onTabAway);
-        }
-      }}
-      onWa-after-hide={(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
-    >
-      {renderMenuTrigger(
-        {
-          get x() {
-            return position.x;
-          },
-          get y() {
-            return position.bottom;
-          },
-        },
-        t("profilePage.identity.menuLabel"),
-        "bottom",
-      )}
-      <wa-dropdown-item
-        class="sidebar-customize-menu__item sidebar-identity-menu__header"
-        value="command:profile"
-      >
-        <span slot="icon" class="sidebar-identity-menu__avatar" aria-hidden="true">
-          <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
-        </span>
-        <span class="sidebar-identity-menu__identity">
-          <span class="sidebar-identity-menu__name" title={profileName()}>
-            {profileName()}
-          </span>
-          {profileEmail() ? (
-            <span class="sidebar-identity-menu__email" title={profileEmail() ?? undefined}>
-              {profileEmail()}
-            </span>
-          ) : undefined}
-        </span>
-      </wa-dropdown-item>
-      <div class="sidebar-customize-menu__separator" role="separator" />
-      {renderIdentityGateways(() => params.nativeGatewaySnapshot, params.onClose)}
-      {renderSidebarMenuAction("command:settings", t("nav.settings"), "settings", {
-        get details() {
-          return (
-            <KeyboardShortcut
-              {...{
-                slot: "details",
-                class: "session-menu__shortcut",
-                ariaHidden: true,
-              }}
-              combo={KEYBOARD_SHORTCUT_COMBOS.appearanceSettings}
-            />
-          );
-        },
-      })}
-      {renderSidebarMenuAction("command:usage", titleForRoute("usage"), "coins")}
-      <div class="sidebar-customize-menu__separator" role="separator" />
-      {renderSidebarMenuAction("command:pair-mobile", t("devices.pairing.button"), "smartphone", {
-        className: "sidebar-pair-mobile",
-        get disabled() {
-          return !params.canPairDevice;
-        },
-        get title() {
-          return params.canPairDevice ? undefined : t("devices.pairing.adminRequired");
-        },
-      })}
-      {renderSidebarMenuAction("command:apps", t("agentChip.getApps"), "layoutGrid")}
-      {renderSidebarMenuAction("command:debug-overlay", t("debug.overlay.title"), "activity", {
-        get details() {
-          return (
-            <KeyboardShortcut
-              {...{
-                slot: "details",
-                class: "session-menu__shortcut",
-                ariaHidden: true,
-              }}
-              combo={KEYBOARD_SHORTCUT_COMBOS.debugOverlay}
-            />
-          );
-        },
-      })}
-
-      <div class="sidebar-customize-menu__separator" role="separator" />
-      {renderSidebarHelpMenu()}
-      {params.canRetryConnection ? (
-        <>
-          <div class="sidebar-customize-menu__separator" role="separator" />
-          <wa-dropdown-item
-            class="sidebar-customize-menu__item sidebar-identity-menu__retry"
-            value="command:retry-connect"
-          >
-            <span class="sidebar-customize-menu__text">{t("connection.retryNow")}</span>
-          </wa-dropdown-item>
-        </>
-      ) : undefined}
-      <div class="sidebar-customize-menu__separator" role="separator" />
-      <div class="sidebar-identity-menu__footer">
-        <SidebarBuildChip
-          variant={"identity"}
-          basePath={params.basePath}
-          gatewayVersion={params.gatewayVersion}
-          updateAttentionDismissed={params.updateAttentionDismissed}
-          onNavigate={(routeId: "about") => {
-            params.onClose();
-            params.onNavigate(routeId);
-          }}
-        />
-        <span class="sidebar-mode-switch">
-          <openclaw-theme-mode-toggle prop:mode={params.themeMode} prop:menuItem={true} />
-        </span>
-      </div>
-    </wa-dropdown>
+    />
   );
 }

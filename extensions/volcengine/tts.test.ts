@@ -81,18 +81,18 @@ describe("Volcengine speech provider", () => {
     vi.unstubAllEnvs();
   });
 
-  it("reports configured for legacy appId and token in providerConfig", () => {
+  it("reports configured for legacy appId and token in providerConfig", async () => {
     expect(
-      provider.isConfigured({
+      await provider.isConfiguredAsync?.({
         providerConfig: { appId: "test-app-id", token: "test-token" },
         timeoutMs: 30000,
       }),
     ).toBe(true);
   });
 
-  it("falls back to env vars for credentials", () => {
+  it("falls back to env vars for credentials", async () => {
     vi.stubEnv("BYTEPLUS_SEED_SPEECH_API_KEY", "env-api-key");
-    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
+    expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
   });
 
   it("rejects blank Seed and legacy credentials before requests", async () => {
@@ -101,7 +101,7 @@ describe("Volcengine speech provider", () => {
     }
     const providerConfig = { apiKey: "   ", appId: "   ", token: "   " };
 
-    expect(provider.isConfigured({ providerConfig, timeoutMs: 30_000 })).toBe(false);
+    expect(await provider.isConfiguredAsync?.({ providerConfig, timeoutMs: 30_000 })).toBe(false);
     await expect(
       provider.synthesize({
         text: "hello",
@@ -309,7 +309,7 @@ describe("volcengineTTS", () => {
     { key: "speedratio", value: "1.25", expected: 1.25 },
     { key: "speed_ratio", value: "3", expected: 3 },
   ])(
-    "merges the $key=$value directive without mutating prior overrides",
+    "returns the $key=$value patch without mutating prior overrides",
     ({ key, value, expected }) => {
       const provider = buildVolcengineSpeechProvider();
       const currentOverrides = Object.freeze({ voice: "retained", speedRatio: 0.75 });
@@ -321,7 +321,7 @@ describe("volcengineTTS", () => {
       });
       expect(result).toEqual({
         handled: true,
-        overrides: { voice: "retained", speedRatio: expected },
+        overrides: { speedRatio: expected },
       });
       expect(result?.overrides).not.toBe(currentOverrides);
       expect(currentOverrides).toEqual({ voice: "retained", speedRatio: 0.75 });

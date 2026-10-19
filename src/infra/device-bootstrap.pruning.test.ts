@@ -12,6 +12,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   consumeDeviceBootstrapTokenWithSetupCompletion,
@@ -38,12 +39,15 @@ describe("device setup completion pruning", () => {
     const baseDir = await createTempDir();
     const env = { ...process.env, OPENCLAW_STATE_DIR: baseDir };
     const database = openOpenClawStateDatabase({ env });
-    const statements = trackSqliteStatementExecutions(database.db, ["expiry", "prune"], (sql) =>
-      /^select "retain_until_ms" from "device_pair_setup_completions"/iu.test(sql)
-        ? "expiry"
-        : /^delete from "device_pair_setup_completions"/iu.test(sql)
-          ? "prune"
-          : null,
+    const statements = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["expiry", "prune"],
+      (sql) =>
+        /^select "retain_until_ms" from "device_pair_setup_completions"/iu.test(sql)
+          ? "expiry"
+          : /^delete from "device_pair_setup_completions"/iu.test(sql)
+            ? "prune"
+            : null,
     );
     const execute = vi.spyOn(database.db, "exec");
     // Observe command SQL locally; the worker cases below exercise the live host port.

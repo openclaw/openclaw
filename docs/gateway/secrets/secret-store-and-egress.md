@@ -129,6 +129,8 @@ Destination binding does not make an allowed host trustworthy. A bound service t
 
 The CA is generated once per Gateway start under the state directory with a ten-year certificate validity window. Its key is still process-owned, not retained for ten years. The proxy reuses up to 128 hostname certificates across commands while keeping each command's TLS connections and secret bindings separate. This cache belongs to the process CA and is cleared at shutdown. One-day leaf certificates renew on demand within their final hour without replacing the CA or interrupting established TLS connections. This keeps already-running subprocesses trusting the same issuer across renewal. Its directory is mode `0700`, its private keys are mode `0600`, it is removed during Gateway shutdown, and OpenClaw never installs it in a system trust store. Requests are rejected when a sentinel cannot be authenticated or resolved; the proxy never forwards or silently strips an unresolved sentinel. Request bodies are scanned as a stream with a bounded carry window, so substitution also works when a sentinel crosses chunk boundaries or appears in a large upload.
 
+Service installation excludes the proxy's process-owned environment, including its temporary CA trust, while preserving operator-provided CA files. If an older installation captured those values, run `openclaw doctor --fix` to repair the managed service definition, or `openclaw gateway install --force` to reinstall it. Operator-owned service overrides remain under your control.
+
 `openclaw status` and `openclaw doctor` report certificate preparation failures and warn when the process CA is within seven days of expiry. Failed preparation refuses the new CONNECT request with an actionable error; the next request can retry after OpenSSL, filesystem access, or clock problems are corrected. An expired or not-yet-valid CA requires checking the system clock and restarting the Gateway, not disabling TLS verification. Gateway RPC can remain reachable while protected egress is degraded. For a read-only, machine-readable check, run `openclaw doctor --lint --only core/doctor/gateway-health --json`; the default JSON checks do not check the running Gateway.
 
 Generated certificates include the key identifiers required by strict TLS clients, including Python 3.13 and later, with either OpenSSL or macOS LibreSSL. After updating, restart the Gateway to generate its new process CA and start a new command to load the new trust bundle.
@@ -175,6 +177,24 @@ read-worker snapshot. Unrelated secrets and agent-readable `env` entries are not
 loaded or registered. A missing or non-secret selection fails before launching
 the job; changes to the store apply to the next job's snapshot.
 
+Cloud worker profiles select these jobs with `settings.setupSecrets`, a bounded
+map of POSIX environment names to store SecretRefs. Only protected entries with
+exact destination bindings qualify. A committed devcontainer `secrets` property
+requests names from this approved map; it cannot select another store entry or
+grant destinations. Missing mappings are reported together before repository
+commands run. See [cloud environment files](/gateway/cloud-workers/environment-file).
+
+Profile setup, preparation, and post-create/start use Crabbox native `egress run`
+on the worker's owned coordinator Linux lease. Crabbox 0.77.0 or newer permits
+public destinations for ordinary HTTPS package downloads, while the Gateway
+substitutes each sentinel only at that secret's bound host. This job does not
+require `secrets.egressProxy.enabled`. Unsupported leases, unavailable helpers or
+proxy service, and old CLIs fail with repair guidance before repository code.
+No-secret jobs retain their existing transport.
+Protected setup exports only HTTPS proxy settings and unsets inherited
+`HTTP_PROXY` and `http_proxy` values. Plain HTTP downloads go directly from the
+lease and never receive substituted secrets.
+
 The job receives remote sentinel environment values and public CA bundle
 contents. Its authenticated upstream proxy environment belongs only on the
 credential-owning host, never in the remote environment or a snapshot. The host
@@ -183,6 +203,14 @@ same worker-owned grant lifecycle: cancellation revokes access synchronously
 before process termination, and completion or failure revokes the grant, stops
 the proxy, and removes temporary CA files. See the
 [SDK runtime contract](/plugins/sdk-runtime#setup-secret-egress).
+
+Setup secrets no longer disable snapshots. Compatibility records use sorted
+environment names and store references with a protected-egress identity, never
+values or sentinel bytes. Capture removes runner-owned CA files and Crabbox
+command staging. No runner-generated credential config is retained; repository
+configuration stays owned by the repository. Legacy `setupEnv` requires Doctor
+repair against existing bound store entries; values are never forwarded or
+rewritten by that migration.
 
 ## Model credentials for Crabbox commands
 

@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
@@ -132,7 +133,10 @@ export async function publishHeartbeatSessionReply(params: {
     }
     const priorMessage = prior && readTranscriptEventMessage(prior.event);
     const priorId = prior && readTranscriptEventId(prior.event);
-    const answer = parseReplyDirectives(resolveRawAssistantAnswerText(priorMessage));
+    const rawAnswer = resolveRawAssistantAnswerText(priorMessage);
+    const answer = parseReplyDirectives(
+      owned && !mirror ? prepareAgentRunTerminalReply({ rawText: rawAnswer }).text : rawAnswer,
+    );
     const originalMedia = mirror?.mediaUrls ?? metadata?.assistantTranscriptMediaUrls ?? mediaUrls;
     const storedMedia = asOptionalRecord(priorMessage?.openclawDelivery)?.mediaUrls;
     const displayMedia = readAssistantDisplayContent(priorMessage).filter((block) =>
@@ -140,9 +144,7 @@ export async function publishHeartbeatSessionReply(params: {
     );
     // Managed mirrors retain source identities separately from their display URLs.
     const receiptMedia =
-      displayMedia.length > 0 &&
-      Array.isArray(storedMedia) &&
-      storedMedia.every((source): source is string => typeof source === "string")
+      displayMedia.length > 0 && isStringArray(storedMedia)
         ? storedMedia
         : (answer.mediaUrls ?? []);
     // Runtime payloads carry original references even after delivery URLs change.

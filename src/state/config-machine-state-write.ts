@@ -1,15 +1,15 @@
-// Machine-state mutations own serialization and the shared write transaction.
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+// Machine-state mutations own serialization and the shared write transaction.
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   normalizeConfigMachineStateKey,
   publishConfigMachineStateRow,
   type ConfigMachineStateDatabase,
-} from "./config-machine-state.js";
+} from "./config-machine-state-row.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -25,7 +25,7 @@ function serializeStateValue(value: unknown): string {
 }
 
 function publishMachineStateWrite<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   stateKey: string,
   valueJson: string | undefined,
   write: () => T,
@@ -42,7 +42,7 @@ function publishMachineStateWrite<T>(
 }
 
 function upsertConfigMachineState(
-  database: DatabaseSync,
+  database: EngineConnection,
   stateKey: string,
   valueJson: string,
   now: number,
@@ -78,7 +78,7 @@ export function writeConfigMachineState(
 
 /** Write an owner-held value on its existing admitted transaction connection. */
 export function writeConfigMachineStateInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   key: string,
   value: unknown,
 ): number {
@@ -120,19 +120,19 @@ export function updateConfigMachineState<T>(
 
 /** Update an already-normalized key on the caller's admitted transaction connection. */
 export function updateConfigMachineStateInDatabase<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   stateKey: string,
   update: (current: T | undefined) => T,
   now: number,
 ): T;
 export function updateConfigMachineStateInDatabase<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   stateKey: string,
   update: (current: T | undefined) => T | undefined,
   now: number,
 ): T | undefined;
 export function updateConfigMachineStateInDatabase<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   stateKey: string,
   update: (current: T | undefined) => T | undefined,
   now: number,

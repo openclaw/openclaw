@@ -10,7 +10,6 @@ import {
   readRegularFileSync,
   root,
 } from "openclaw/plugin-sdk/file-access-runtime";
-// The published 2026.9.7 host loads canonical state without these newer repair capabilities.
 import * as migrationSdk from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
@@ -61,7 +60,7 @@ async function listSources(params: MigrationInput): Promise<AuthSource[]> {
   }
   const sources = new Map<string, AuthSource>();
   for (const entry of await fs.readdir(params.oauthDir, { withFileTypes: true })) {
-    const name = migrationSdk.resolveLegacyMigrationSourcePath?.(entry.name) ?? entry.name;
+    const name = migrationSdk.resolveLegacyMigrationSourcePath(entry.name);
     if (!entry.isFile() || !isWhatsAppBaileysAuthFileName(name)) {
       continue;
     }
@@ -122,7 +121,7 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
       (entry) => entry.channelId === "whatsapp",
     )?.assertCurrent;
     const { backupLegacyStateSource } = migrationSdk;
-    if (!assertCurrent || !backupLegacyStateSource) {
+    if (!assertCurrent) {
       return warn(
         "WhatsApp credential import requires offline Doctor repair. Update OpenClaw core and run openclaw doctor --fix; original files remain unchanged.",
       );

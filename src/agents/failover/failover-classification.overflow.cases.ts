@@ -45,6 +45,13 @@ export const overflowCases = [
       },
     ],
     [
+      "billing-context-dashscope-range",
+      {
+        message:
+          "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
+      },
+    ],
+    [
       "billing-context-kimi-status",
       {
         message:
@@ -139,6 +146,22 @@ export const overflowCases = [
       "patterns-context-ds4",
       {
         message: "400 Prompt has 256468 tokens, but the configured context size is 256000 tokens",
+      },
+    ],
+    [
+      "patterns-context-tgi-total",
+      {
+        status: 422,
+        message:
+          "422 Input validation error: `inputs` tokens + `max_new_tokens` must be <= 32768. Given: 28897 `inputs` tokens and 3872 `max_new_tokens`",
+      },
+    ],
+    [
+      "patterns-context-tgi-input",
+      {
+        status: 422,
+        message:
+          "422 Input validation error: `inputs` must have less than 32768 tokens. Given: 40000",
       },
     ],
   ]),

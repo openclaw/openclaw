@@ -1,12 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
+import { getPostgresPhysicalFacts } from "../../../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
-import { parseSqliteTableDefinition } from "../../../infra/sqlite-schema-contract-assembly.js";
-import {
-  getAdmittedSqliteSchemaFacts,
-  type SqliteSchemaFacts,
-} from "../../../infra/sqlite-schema-facts.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
+import { getAdmittedSqliteSchemaFacts } from "../../../infra/sqlite-schema-facts.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-contract.js";
-import { ensureColumn } from "../../../state/openclaw-state-db-schema-helpers.js";
+import { ensureColumn, readTableColumns } from "../../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 
@@ -14,21 +11,13 @@ type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs
 // Eight bound columns per row keep each statement within 1,024 parameters.
 const MAX_SUBAGENT_UPSERT_ROWS = 128;
 
-const parentStoreSchemas = new WeakMap<SqliteSchemaFacts, boolean>();
-
-export function hasParentStoreColumns(db: DatabaseSync): boolean {
-  const schema = getAdmittedSqliteSchemaFacts(db);
+export function hasParentStoreColumns(db: EngineConnection): boolean {
+  const schema = getPostgresPhysicalFacts(db) ?? getAdmittedSqliteSchemaFacts(db);
   if (!schema) {
     throw new Error("Subagent rows require admitted schema facts");
   }
-  let present = parentStoreSchemas.get(schema);
-  if (present === undefined) {
-    const table = schema.tableSql.get("subagent_runs");
-    const columns = table ? parseSqliteTableDefinition(table, "subagent_runs").columns : undefined;
-    present = Boolean(columns?.has("requester_store_path") && columns.has("controller_store_path"));
-    parentStoreSchemas.set(schema, present);
-  }
-  return present;
+  const columns = readTableColumns(db, "subagent_runs");
+  return columns.has("requester_store_path") && columns.has("controller_store_path");
 }
 
 /** Applies selected row changes inside the caller's transaction. */

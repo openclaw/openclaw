@@ -17,7 +17,6 @@ import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive, readPidFile } from "../test-utils/process-tree.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { applyLinkUnderstanding } from "./apply.js";
-import { runLinkUnderstanding } from "./runner.js";
 
 const mocks = vi.hoisted(() => ({
   bodyCancel: vi.fn(),
@@ -66,22 +65,6 @@ vi.mock("../process/exec.js", async () => {
   };
 });
 
-async function within<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
 async function withServer(handler: RequestListener, run: (base: string) => Promise<void>) {
   const sockets = new Set<Socket>();
   const server = createServer(handler);
@@ -124,7 +107,7 @@ afterAll(async () => {
   await receipts?.close();
 });
 
-it("cancels a non-OK response body before releasing its guarded transport", async () => {
+it("cancels a non-OK response body before releasing its guarded transport", async ({ signal }) => {
   const requestSocketClosed = deferred();
   await withServer(
     (request, response) => {
@@ -137,7 +120,9 @@ it("cancels a non-OK response body before releasing its guarded transport", asyn
       response.write("error");
     },
     async (base) => {
-      const resultPromise = runLinkUnderstanding({
+      const context: MsgContext = { Body: `see ${base}/error` };
+      const before = { ...context };
+      const resultPromise = applyLinkUnderstanding({
         cfg: {
           tools: {
             links: {
@@ -146,12 +131,13 @@ it("cancels a non-OK response body before releasing its guarded transport", asyn
             },
           },
         },
-        ctx: { Body: `see ${base}/error` },
+        ctx: context,
       });
 
-      const result = await within(resultPromise, 1000, "link understanding did not finish");
-      expect(result).toEqual([]);
-      await within(requestSocketClosed.promise, 1000, "loopback socket stayed open");
+      await withinTest(resultPromise, signal);
+      expect(context).toEqual(before);
+      expect(context.LinkUnderstanding).toBeUndefined();
+      await withinTest(requestSocketClosed.promise, signal);
 
       expect(mocks.bodyCancel).toHaveBeenCalledOnce();
       expect(mocks.releaseAfterCancel).toHaveBeenCalledWith(true);

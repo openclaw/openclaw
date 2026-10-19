@@ -2,7 +2,7 @@ import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { hostEventsStateMigration } from "./src/migration/doctor-host-events.js";
 import { memorySidecarStateMigration } from "./src/migration/doctor-memory-sidecar.js";
 
@@ -41,7 +41,7 @@ it("inventories host-event originals, claims, and archives without moving or imp
   await expect(fs.access(params.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
-it("inventories sidecar imports and retry paths while preserving empty legacy files", async () => {
+it("reports sidecar discovery errors and inventories retry paths without changing legacy files", async () => {
   const params = fixture();
   const legacyPath = path.join(params.root, "external-memory", "main.sqlite");
   const input = {
@@ -51,6 +51,13 @@ it("inventories sidecar imports and retry paths while preserving empty legacy fi
   const collect = memorySidecarStateMigration.collectBackupResources;
   if (!collect) {
     throw new Error("Missing sidecar recovery inventory");
+  }
+  const failure = Object.assign(new Error("fixture discovery denied"), { code: "EACCES" });
+  const readdir = vi.spyOn(fs, "readdir").mockRejectedValueOnce(failure);
+  try {
+    await expect(collect(input)).rejects.toBe(failure);
+  } finally {
+    readdir.mockRestore();
   }
   await expect(collect(input)).resolves.toEqual([]);
   await fs.mkdir(path.dirname(legacyPath), { recursive: true });

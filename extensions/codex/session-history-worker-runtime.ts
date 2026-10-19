@@ -43,8 +43,6 @@ const historyReads = new WorkerTaskPool<CodexHistoryWorkerInput, CodexHistoryWor
       })
     : sourceWorkerUrl,
   workerClass: "reader",
-  // Published plugin supports older hosts that only understand numeric sizing.
-  maxWorkers: 1,
 });
 
 export async function projectCodexSettledHistoryInWorker(

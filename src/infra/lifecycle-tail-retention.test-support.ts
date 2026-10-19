@@ -81,9 +81,35 @@ if (mode === "native-source") {
     await owner.clear();
     await scheduler.stop();
   }
+} else if (mode === "worker-pool") {
+  const { WorkerTaskPool } = await import("./worker-task-pool.js");
+  function abandonPool() {
+    const caller = new LifecycleTailCaller("worker pool options");
+    const pool = new WorkerTaskPool<never, void>({
+      workerUrl: new URL("file:///unused-worker.js"),
+      maxWorkers: 1,
+      validateResult() {
+        assert.equal(caller.prompt.byteLength, 1024 * 1024);
+      },
+    });
+    references.push(
+      { label: "abandoned worker pool", reference: new WeakRef(pool) },
+      { label: "worker pool options context", reference: new WeakRef(caller) },
+      { label: "worker pool options prompt", reference: new WeakRef(caller.prompt) },
+    );
+  }
+  // An unused pool has no worker resources and needs no explicit close to be collected.
+  abandonPool();
+  await assertCollected();
 } else {
   throw new Error(`Unknown lifecycle retention resource: ${mode}`);
 }
 process.stdout.write(
-  JSON.stringify({ resource: mode, collected: references.length, reused: true }),
+  JSON.stringify({
+    resource: mode,
+    collected: references.length,
+    ...(mode === "worker-pool"
+      ? { runtime: process.versions.bun ? "bun" : "node" }
+      : { reused: true }),
+  }),
 );

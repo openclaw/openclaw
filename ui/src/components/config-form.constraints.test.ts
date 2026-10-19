@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
 import {
   arrayInputConstraints,
   canApplyArrayCandidate,
@@ -455,27 +456,8 @@ describe("config form schema constraints", () => {
     ).toBe(NO_SAFE_DEFAULT);
   });
 
-  it("clones mutable schema defaults and repeated derived defaults", () => {
-    const expectIndependentCandidates = (
-      schema: JsonSchema,
-      source: { nested: { enabled: boolean } },
-    ) => {
-      const first = defaultValue(schema) as typeof source;
-      const second = defaultValue(schema) as typeof source;
-
-      expect(first).not.toBe(source);
-      expect(second).not.toBe(first);
-      first.nested.enabled = false;
-      expect(second.nested.enabled).toBe(true);
-      expect(source.nested.enabled).toBe(true);
-    };
-    const explicitDefault = { nested: { enabled: true } };
-    expectIndependentCandidates({ type: "object", default: explicitDefault }, explicitDefault);
-    const constant = { nested: { enabled: true } };
-    expectIndependentCandidates({ type: "object", const: constant }, constant);
-    const enumerated = { nested: { enabled: true } };
-    expectIndependentCandidates({ type: "object", enum: [enumerated] }, enumerated);
-
+  it("edits repeated defaults without changing another row or the schema", () => {
+    const tags = ["primary"];
     const repeated = defaultValue({
       type: "array",
       minItems: 2,
@@ -483,15 +465,16 @@ describe("config form schema constraints", () => {
         type: "object",
         required: ["tags"],
         properties: {
-          tags: { type: "array", default: ["primary"] },
+          tags: { type: "array", default: tags },
         },
       },
-    }) as Array<{ tags: string[] }>;
-
-    expect(repeated).toHaveLength(2);
-    expect(repeated[0]).not.toBe(repeated[1]);
-    expect(repeated[0]?.tags).not.toBe(repeated[1]?.tags);
-    repeated[0]?.tags.push("changed");
-    expect(repeated[1]?.tags).toEqual(["primary"]);
+    });
+    const edited = copyWithPathPatch(repeated, [0, "tags", 0], "changed");
+    expect(edited).toEqual({
+      ok: true,
+      value: [{ tags: ["changed"] }, { tags: ["primary"] }],
+    });
+    expect(repeated).toEqual([{ tags: ["primary"] }, { tags: ["primary"] }]);
+    expect(tags).toEqual(["primary"]);
   });
 });

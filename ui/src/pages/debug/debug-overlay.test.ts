@@ -13,7 +13,11 @@ import {
   useDebugTestEnvironment,
 } from "./debug.test-support.ts";
 
-type TestDebugContent = HTMLElement & { readonly updateComplete: Promise<boolean> };
+type TestDebugContent = HTMLElement & {
+  readonly updateComplete: Promise<boolean>;
+  context: ApplicationContext;
+  minimized: boolean;
+};
 
 type TestDebugOverlay = HTMLElement & {
   readonly updateComplete: Promise<boolean>;
@@ -34,6 +38,15 @@ async function updateOverlayVitals(overlay: TestDebugOverlay): Promise<void> {
   for (const tile of overlay.querySelectorAll<TestSparkline>("openclaw-sparkline")) {
     await tile.updateComplete;
   }
+}
+
+async function openOverlay(overlay: TestDebugOverlay): Promise<void> {
+  overlay.toggle();
+  await waitForSolid(() =>
+    expect(overlay.querySelector("openclaw-debug-overlay-content")).not.toBeNull(),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  await updateOverlayVitals(overlay);
 }
 
 useDebugTestEnvironment();
@@ -66,7 +79,7 @@ describe("DebugOverlay", () => {
     const requestCount = (method: string) =>
       request.mock.calls.filter(([called]) => called === method).length;
     try {
-      overlay.toggle();
+      await openOverlay(overlay);
       await vi.advanceTimersByTimeAsync(30_000);
       await updateOverlayVitals(overlay);
       expect(requestCount("sessions.list")).toBe(1);
@@ -136,7 +149,7 @@ describe("DebugOverlay", () => {
       }
     };
     try {
-      overlay.toggle();
+      await openOverlay(overlay);
       await vi.advanceTimersByTimeAsync(30_000);
       expect(request).not.toHaveBeenCalled();
 
@@ -169,7 +182,7 @@ describe("DebugOverlay", () => {
     }
   });
 
-  it("graphs bounded status samples without clamping CPU and resets history on reopen", async () => {
+  it("graphs status samples without clamping CPU and resets history on reopen", async () => {
     vi.useFakeTimers();
     let sampleCount = 0;
     let uptimeMs = 60_000;
@@ -229,9 +242,12 @@ describe("DebugOverlay", () => {
     document.body.append(overlay);
 
     try {
-      overlay.toggle();
-      await vi.advanceTimersByTimeAsync(0);
-      await overlay.updateComplete;
+      await openOverlay(overlay);
+      await waitForSolid(() =>
+        expect(normalizedText(overlay.querySelector(".gateway-vital--cpu"))).toContain(
+          "1.10 cores",
+        ),
+      );
 
       const vitalUpdated = () => updateOverlayVitals(overlay);
       await vitalUpdated();
@@ -285,14 +301,11 @@ describe("DebugOverlay", () => {
       // Healthy event loop: no tile carries the degraded tint.
       expect(overlay.querySelector(".gateway-vital[data-degraded]")).toBeNull();
 
-      await vi.advanceTimersByTimeAsync(900_000);
-      await vitalUpdated();
-
       const points = overlay
         .querySelector(".gateway-vital--cpu polyline")
         ?.getAttribute("points")
         ?.split(" ");
-      expect(points).toHaveLength(90);
+      expect(points).toHaveLength(2);
 
       uptimeMs = 0;
       overlay.toggle();
@@ -343,6 +356,50 @@ describe("DebugOverlay", () => {
       expect(request.mock.calls.some(([method]) => method === "status")).toBe(false);
     } finally {
       overlay.remove();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains the latest 90 status samples in the minimized content", async () => {
+    vi.useFakeTimers();
+    let sampleCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "system.info") {
+        return { eventLoop: { cpuCoreRatio: ++sampleCount } };
+      }
+      throw new Error(`Unexpected diagnostics method: ${method}`);
+    });
+    const content = document.createElement("openclaw-debug-overlay-content") as TestDebugContent;
+    content.context = createDebugApplicationContext(request);
+    content.minimized = true;
+    document.body.append(content);
+
+    try {
+      await content.updateComplete;
+      vi.advanceTimersByTime(0);
+      await waitForSolid(() => {
+        expect(content.querySelector<TestSparkline>(".gateway-vital--cpu")?.samples).toHaveLength(
+          1,
+        );
+      });
+      for (let value = 2; value <= 91; value += 1) {
+        vi.advanceTimersByTime(10_000);
+        await waitForSolid(() => {
+          expect(
+            content.querySelector<TestSparkline>(".gateway-vital--cpu")?.samples.at(-1)?.value,
+          ).toBe(value);
+        });
+      }
+      await waitForSolid(() => {
+        const cpu = content.querySelector<TestSparkline>(".gateway-vital--cpu");
+        expect(sampleCount).toBe(91);
+        expect(cpu?.samples).toHaveLength(90);
+        expect(cpu?.samples[0]?.value).toBe(2);
+        expect(cpu?.samples.at(-1)?.value).toBe(91);
+        expect(cpu?.querySelector("polyline")?.getAttribute("points")?.split(" ")).toHaveLength(90);
+      });
+    } finally {
+      content.remove();
       vi.useRealTimers();
     }
   });
@@ -398,6 +455,14 @@ describe("DebugOverlay", () => {
     document.body.append(overlay);
     try {
       overlay.toggle();
+      // The bridge commit precedes the lazy content and its first sample.
+      await overlay.updateComplete;
+      await vi.dynamicImportSettled();
+      await waitForSolid(() => {
+        expect(overlay.querySelector<TestSparkline>(".gateway-vital--disk")?.samples).toHaveLength(
+          1,
+        );
+      });
       await vi.advanceTimersByTimeAsync(10_000);
       await updateOverlayVitals(overlay);
       expect(overlay.querySelector<TestSparkline>(".gateway-vital--disk")?.samples).toHaveLength(2);

@@ -73,7 +73,6 @@ function resolveLifecycleOptions(cmdOpts: DaemonLifecycleOptions, command?: Comm
   };
 }
 
-/** Attach Gateway service status/install/lifecycle subcommands to a parent command. */
 export function addGatewayServiceCommands(parent: Command, opts?: { statusDescription?: string }) {
   parent
     .command("status")
@@ -88,6 +87,11 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--no-probe", "Skip RPC check")
     .option("--require-rpc", "Exit non-zero when the RPC check fails", false)
     .option("--deep", "Scan system-level services", false)
+    .option(
+      "--runtime-intent-only",
+      "Output local service runtime intent as JSON without shared-state or RPC reads",
+      false,
+    )
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
       const { runDaemonStatus } = await import("./status.runtime.js");
@@ -103,6 +107,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
         probe: Boolean(cmdOpts.probe),
         requireRpc: Boolean(cmdOpts.requireRpc),
         deep: Boolean(cmdOpts.deep),
+        ...(cmdOpts.runtimeIntentOnly ? { runtimeIntentOnly: true } : {}),
         json: resolveJsonOption(cmdOpts, command),
       });
     });

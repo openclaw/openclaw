@@ -1,4 +1,5 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
@@ -83,6 +84,26 @@ describe("transcribeDeepgramAudio", () => {
     expect(seenInit.body).toBeInstanceOf(Uint8Array);
   });
 
+  it.each([{ keyterm: ["OpenClaw", "Deepgram"] }, { keyterm: [] }])(
+    "sends array query values as repeated parameters: $keyterm",
+    async ({ keyterm }) => {
+      const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
+        results: { channels: [{ alternatives: [{ transcript: "hello" }] }] },
+      });
+      await transcribeDeepgramAudio({
+        ...audioRequest,
+        query: { keyterm },
+        fetchFn,
+      });
+
+      expect(
+        new URL(expectDefined(getRequest().url, "Deepgram request URL")).searchParams.getAll(
+          "keyterm",
+        ),
+      ).toEqual(keyterm);
+    },
+  );
+
   it.each([
     {
       name: "each channel in provider order",
@@ -93,6 +114,11 @@ describe("transcribeDeepgramAudio", () => {
       name: "speech after a silent first channel",
       transcripts: ["", "Only second track."],
       expected: "Only second track.",
+    },
+    {
+      name: "an empty transcript when every channel is silent",
+      transcripts: ["", "   "],
+      expected: "",
     },
     {
       name: "repeated text from distinct channels",
@@ -117,13 +143,16 @@ describe("transcribeDeepgramAudio", () => {
   });
 
   it.each([
-    { name: "omitted", channels: [{ alternatives: [{}] }] },
-    {
-      name: "silent across all channels",
-      channels: [{ alternatives: [{ transcript: "" }] }, { alternatives: [{ transcript: "   " }] }],
-    },
-  ])("throws when transcripts are $name", async ({ channels }) => {
-    const { fetchFn } = createRequestCaptureJsonFetch({ results: { channels } });
+    { name: "the only channel", transcripts: [undefined] },
+    { name: "the first channel before silence", transcripts: [undefined, ""] },
+    { name: "a later channel after silence", transcripts: [" \t", undefined] },
+    { name: "a later channel after speech", transcripts: ["hello", undefined] },
+  ])("rejects a missing transcript in $name", async ({ transcripts }) => {
+    const { fetchFn } = createRequestCaptureJsonFetch({
+      results: {
+        channels: transcripts.map((transcript) => ({ alternatives: [{ transcript }] })),
+      },
+    });
 
     await expect(
       transcribeDeepgramAudio({
@@ -141,6 +170,10 @@ describe("transcribeDeepgramAudio", () => {
     {
       name: "non-string transcript values in a later channel",
       channels: ["First track.", 123].map((transcript) => ({ alternatives: [{ transcript }] })),
+    },
+    {
+      name: "a non-string transcript before a silent channel",
+      channels: [null, ""].map((transcript) => ({ alternatives: [{ transcript }] })),
     },
   ])("rejects $name with a stable provider error", async ({ channels }) => {
     const { fetchFn } = createRequestCaptureJsonFetch({ results: { channels } });

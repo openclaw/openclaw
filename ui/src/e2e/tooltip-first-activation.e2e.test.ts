@@ -41,7 +41,7 @@ suite.define(() => {
       );
       const palette = await holdModuleResponse(
         page,
-        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
       );
       try {
         const sessionKey = "agent:main:dashboard:tooltip-cold";

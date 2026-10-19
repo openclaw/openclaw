@@ -35,7 +35,6 @@ export type GatewayReloadPlan = {
     waitForDrain?: boolean;
     drainSignal?: AbortSignal;
     expectedSourceDigests?: Readonly<Record<string, string>>;
-    expectedInstallHashes?: Readonly<Record<string, string>>;
   };
   restartChannels: Set<ChannelKind>;
   restartServices?: Set<string>;
@@ -174,6 +173,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.controlUi.allowExternalEmbedUrls",
       "gateway.controlUi.automaticallyFetchFavicons",
       "gateway.controlUi.experimental.customPlugins",
+      "gateway.controlUi.experimental.claws",
       "gateway.controlUi.experimental.chatBubbles",
       "gateway.controlUi.allowedOrigins",
       "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
@@ -307,7 +307,7 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
     actions: ["reloadPlugins"],
     replaceChannelPlugins: true,
   },
-  { prefixes: ["gateway", "discovery"], kind: "restart" },
+  { prefixes: ["gateway", "discovery", "database"], kind: "restart" },
 ];
 
 let cachedCatalog:

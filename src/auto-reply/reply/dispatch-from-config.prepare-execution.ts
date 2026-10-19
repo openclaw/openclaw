@@ -1,5 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { shouldSuppressLocalExecApprovalPromptAsync } from "../../channels/plugins/exec-approval-local.js";
 import { formatPlanChecklistLines } from "../../channels/streaming.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -161,7 +162,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   }) => {
     if (
       params.replyOptions?.progressRequiresReply === true &&
-      state.replyOperationRunState.replyCompletion?.expectation !== "required"
+      !isRequiredReplyExpectation(state.replyOperationRunState.replyCompletion?.expectation)
     ) {
       return false;
     }
@@ -307,6 +308,10 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         ? noteCommentaryProgress(payload)
         : undefined,
   });
+  const forwardModelWait = wrapProgressCallback(params.replyOptions?.onItemEvent, {
+    forwardWhenSourceDeliverySuppressed: true,
+    waitForDirectBlockReplyDelivery: true,
+  });
   // CLI runners classify preambles as item events only when this handler exists.
   // Keep it for channel-owned capture even when delivery policy hides the event.
   const onItemEvent =
@@ -325,7 +330,9 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
           ) {
             await noteCommentaryProgress(payload);
           }
-          return await forwardItemEvent?.(payload);
+          return payload.kind === "model-wait"
+            ? await forwardModelWait?.(payload)
+            : await forwardItemEvent?.(payload);
         }
       : undefined;
   const replyResolver: InternalGetReplyFromConfig =

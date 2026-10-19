@@ -120,7 +120,7 @@ export function createSqliteWorkerWriteAdmission(
       admission: createSqliteWorkerOperationAdmission((request, grant) => {
         if (
           !(
-            (phase === "waiting" && request.stage === "transaction") ||
+            ((phase === "waiting" || phase === "transaction") && request.stage === "transaction") ||
             (phase === "transaction" && request.stage === "commit")
           )
         ) {
@@ -130,7 +130,9 @@ export function createSqliteWorkerWriteAdmission(
         if (!grant()) {
           throw new Error("SQLite worker write authority expired");
         }
-        phase = phase === "waiting" ? "transaction" : "commit";
+        // A rolled-back attempt can reacquire its initial grant. A successful
+        // commit grant remains terminal for this command's admission owner.
+        phase = request.stage === "transaction" ? "transaction" : "commit";
       }, attachment),
     };
   };
@@ -237,7 +239,7 @@ export function openSharedStateSqliteWorkerStore<Operations extends SqliteWorker
       { ...options, input: undefined },
       stateContext,
       assertCurrent,
-      lifecycle,
+      { ...lifecycle, sharedState: true },
     ),
   ).then((store) => {
     if (store) {

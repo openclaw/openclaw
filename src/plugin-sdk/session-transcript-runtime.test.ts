@@ -386,12 +386,15 @@ describe("native transcript catalog SDK", () => {
       } finally {
         sql.restore();
       }
+      // The shared display projection removes the standalone trailing control line.
       expect(first.items.map((item) => [item.type, item.text])).toEqual([
         ["agentMessage", "Answer"],
         ["agentMessage", "Second answer part"],
       ]);
       const second = await read(1, first.nextCursor);
-      expect(second.items).toMatchObject([{ type: "agentMessage", text: "First answer part" }]);
+      expect(second.items.map((item) => [item.type, item.text])).toEqual([
+        ["agentMessage", "First answer part"],
+      ]);
       const third = await read(2, second.nextCursor);
       expect(third.items.map((item) => [item.type, item.text])).toEqual([
         ["userMessage", "Visible question"],
@@ -528,7 +531,7 @@ describe("native transcript catalog SDK", () => {
   });
 
   it("exports portable senders and creators, linking only verified numeric GitHub identities on opt-in", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const github = syncGitHubIdentity({
         identity: { accountId: 12345, login: "portable-user", name: "Portable User" },
         authenticationAlias: { kind: "github-login", login: "portable-user" },

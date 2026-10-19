@@ -1,5 +1,7 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
+import { render } from "@solidjs/web";
 import { createComponent, onSettled } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -9,7 +11,8 @@ import { createApplicationRouter } from "../app-routes.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { ApplicationProvider } from "../lib/reactive/context.ts";
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import {
   admitStoredChatComposerQueueItem,
   persistChatComposerState,
@@ -26,6 +29,8 @@ import {
 } from "../test-helpers/application-context.ts";
 import { settleLitElements } from "../test-helpers/lit-settle.ts";
 import "../components/app-sidebar.tsx";
+// A preceding shard file can register the palette before the pairing shell mounts.
+import "../components/command-palette.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -35,12 +40,34 @@ import {
   refreshShellView,
 } from "./app-host-solid.test-support.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
-import { LazyRenderer } from "./lazy-renderer.ts";
+import { createLazyRenderer } from "./lazy-renderer.ts";
 import { ShellLayoutBoundary } from "./shell-layout-traits-solid.tsx";
 
 type PairingSidebar = AppSidebarElement;
 
 type PairingAuth = { role: string; scopes?: string[] };
+const operator = (...scopes: string[]): PairingAuth => ({ role: "operator", scopes });
+const admin = operator("operator.admin");
+const pairingOnly = operator("operator.pairing");
+
+function outboxes(sessionKey: string, total: number, draft: boolean) {
+  return {
+    total,
+    sessions: total
+      ? [{ agentId: "main", sessionKey, hasComposerDraft: draft, outboxAttentionCount: total }]
+      : [],
+    attentionCountForSession: () => total,
+    hasSessionDraft: () => draft,
+  };
+}
+
+function deferredRenderer<Renderer>(shell: object, property: string) {
+  const loading = createDeferred<Renderer>();
+  const retrying = createDeferred<Renderer>();
+  const load = vi.fn(() => retrying.promise).mockImplementationOnce(() => loading.promise);
+  Object.defineProperty(shell, property, { value: createLazyRenderer(load) });
+  return { loading, retrying, load };
+}
 
 setupSidebarTest();
 
@@ -57,13 +84,8 @@ function createPairingShell(params: {
   } as unknown as GatewayBrowserClient);
   gateway.publish({
     phase: params.connected === false ? "stopped" : "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: params.auth ? ({ auth: params.auth } as ApplicationGatewaySnapshot["hello"]) : null,
-    assistantAgentId: "main",
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
   });
   const snapshot = gateway.gateway.snapshot;
   const sessions = createSessionsHarness("main", params.sessionKeys ?? []);
@@ -96,17 +118,19 @@ function createPairingShell(params: {
     recordedUpdateAttempt: null,
     controlUiRefreshRequired: false,
   };
+  const router = createApplicationRouter();
   const context = {
     ...createContext(gateway.gateway, sessions.sessions),
+    router,
     basePath: "",
     navigation: createNavigationPreferencesFixture(),
     overlays: {
       snapshot: overlaySnapshot,
       openDevicePairSetup,
+      closeDevicePairSetup: vi.fn(() => {
+        overlaySnapshot.devicePairSetupOpen = false;
+      }),
       subscribe: () => () => undefined,
-    },
-    runtimeConfig: {
-      state: { configSnapshot: null, configForm: null, configSchema: null, configUiHints: {} },
     },
     settingsAgentSelection: {
       state: { selectedId: "main", scopeId: "main" },
@@ -117,7 +141,6 @@ function createPairingShell(params: {
     },
   } as unknown as ApplicationContext;
   const shell = createShellOwner();
-  const router = createApplicationRouter();
   shell.runtime = {
     context,
     router,
@@ -127,6 +150,7 @@ function createPairingShell(params: {
     pendingGatewayConnection: null,
     confirmPendingGatewayConnection: () => undefined,
     cancelPendingGatewayConnection: () => undefined,
+    setShell: () => undefined,
     start: async () => undefined,
     stop: () => router.stop(),
   };
@@ -135,6 +159,12 @@ function createPairingShell(params: {
     location: { pathname: "/chat", search: "", hash: "" },
   };
   const container = shell.element;
+  // Production's application root provides context to independently mounted shell leaves.
+  const disposeProvider = render(
+    () => createComponent(ApplicationProvider, { value: context, host: container }),
+    document.createDocumentFragment(),
+  );
+  onTestFinished(disposeProvider);
   onTestFinished(() => router.stop());
   let mounted = false;
   const refresh = async () => {
@@ -150,27 +180,21 @@ function createPairingShell(params: {
 
   const renderSidebar = async () => {
     await refresh();
-    const sidebar = container.querySelector<PairingSidebar>("openclaw-app-sidebar");
-    if (!sidebar) {
-      throw new Error("Expected the application shell to render its navigation sidebar");
-    }
-    return sidebar;
+    return expectDefined(
+      container.querySelector<PairingSidebar>("openclaw-app-sidebar"),
+      "shell sidebar",
+    );
   };
 
-  // The pairing modal is a lazy chunk; re-render until the loaded renderer
-  // replaces the eager loading shell with the full dialog.
   const renderPairingDialog = async () => {
     await renderSidebar();
     await vi.dynamicImportSettled();
     return await waitForFast(async () => {
       await refresh();
-      const dialog = container.querySelector<HTMLElement>(
-        '.device-pair-setup:not([aria-busy="true"])',
+      return expectDefined(
+        container.querySelector<HTMLElement>('.device-pair-setup:not([aria-busy="true"])'),
+        "loaded pairing dialog",
       );
-      if (!dialog) {
-        throw new Error("Expected the application shell to render its mobile pairing dialog");
-      }
-      return dialog;
     });
   };
 
@@ -187,12 +211,7 @@ function createPairingShell(params: {
   };
 }
 
-afterEach(async () => {
-  await vi.dynamicImportSettled();
-  vi.useRealTimers();
-  document.body.replaceChildren();
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
+afterEach(() => {
   Reflect.deleteProperty(document, "execCommand");
 });
 
@@ -252,27 +271,13 @@ describe("application shell pairing access", () => {
     "retains navigation chrome for unrelated shell updates (outbox runtime: %s)",
     async (withOutboxes) => {
       vi.useFakeTimers();
-      // This render-isolation case observes an ordinary conversation in the All list,
-      // not the compact Home control, which no longer has a row endcap.
       const sessionKey = "agent:main:queued";
       const { shell, context, renderSidebar, container, overlaySnapshot, refresh } =
         createPairingShell({
-          auth: { role: "operator", scopes: ["operator.admin"] },
+          auth: admin,
           sessionKeys: [sessionKey],
         });
-      let storedOutboxes = {
-        total: 1,
-        sessions: [
-          {
-            agentId: "main",
-            sessionKey,
-            hasComposerDraft: true,
-            outboxAttentionCount: 1,
-          },
-        ],
-        attentionCountForSession: () => 1,
-        hasSessionDraft: () => true,
-      };
+      let storedOutboxes = outboxes(sessionKey, 1, true);
       if (withOutboxes) {
         shell.outboxStoreRuntime = {
           read: () => storedOutboxes,
@@ -334,19 +339,7 @@ describe("application shell pairing access", () => {
       );
       expect(sidebar.storedOutboxes?.hasSessionDraft(sessionKey) ?? false).toBe(withOutboxes);
       if (withOutboxes) {
-        storedOutboxes = {
-          total: 2,
-          sessions: [
-            {
-              agentId: "main",
-              sessionKey,
-              hasComposerDraft: false,
-              outboxAttentionCount: 2,
-            },
-          ],
-          attentionCountForSession: () => 2,
-          hasSessionDraft: () => false,
-        };
+        storedOutboxes = outboxes(sessionKey, 2, false);
         await refresh();
         await settleLitElements([sidebar, topbar]);
         await waitForSolid(() =>
@@ -360,9 +353,7 @@ describe("application shell pairing access", () => {
   );
 
   it("keeps resident navigation actions bound to current context and permission", async () => {
-    const { shell, renderSidebar, openDevicePairSetup } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    });
+    const { shell, renderSidebar, openDevicePairSetup } = createPairingShell({ auth: admin });
     const sidebar = await renderSidebar();
     const {
       onPairMobile,
@@ -371,9 +362,7 @@ describe("application shell pairing access", () => {
       onUpdateSidebarEntries,
       watchUpdateProgress,
     } = sidebar;
-    const replacement = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    });
+    const replacement = createPairingShell({ auth: admin });
     replacement.snapshot.hello = {
       ...replacement.snapshot.hello,
       features: { methods: ["sessions.create"], events: [] },
@@ -407,7 +396,7 @@ describe("application shell pairing access", () => {
     expect(stopOverlays).toHaveBeenCalledOnce();
     replacement.snapshot.hello = {
       ...replacement.snapshot.hello,
-      auth: { role: "operator", scopes: ["operator.read"] },
+      auth: operator("operator.read"),
     } as ApplicationGatewaySnapshot["hello"];
     onOpenNewSession?.("main");
     expect(openNewSession).toHaveBeenCalledOnce();
@@ -418,12 +407,7 @@ describe("application shell pairing access", () => {
     let publish: (() => void) | undefined;
     const shell = createShellOwner();
     shell.outboxStoreRuntime = {
-      read: () => ({
-        total: 0,
-        sessions: [],
-        attentionCountForSession: () => 0,
-        hasSessionDraft: () => false,
-      }),
+      read: () => outboxes("", 0, false),
       subscribe: (listener) => {
         publish = listener;
         return () => {
@@ -451,133 +435,125 @@ describe("application shell pairing access", () => {
   });
 
   it.each([
-    { name: "legacy authenticated", auth: { role: "operator" }, canPair: true },
-    { name: "legacy unadvertised", auth: null, canPair: true },
-    { name: "read-only", auth: { role: "operator", scopes: ["operator.read"] }, canPair: false },
-    { name: "write-only", auth: { role: "operator", scopes: ["operator.write"] }, canPair: false },
-    {
-      name: "pairing-only",
-      auth: { role: "operator", scopes: ["operator.pairing"] },
-      canPair: false,
+    ["legacy authenticated", { role: "operator" }, true],
+    ["legacy unadvertised", null, true],
+    ["read-only", operator("operator.read"), false],
+    ["write-only", operator("operator.write"), false],
+    ["pairing-only", pairingOnly, false],
+    ["explicitly ungranted", operator(), false],
+    ["disconnected", pairingOnly, false, false],
+    ["admin becoming pairing-only", admin, true, true, pairingOnly],
+  ] satisfies [string, PairingAuth | null, boolean, boolean?, PairingAuth?][])(
+    "gates the sidebar pairing entry for a %s operator",
+    async (_name, auth, canPair, connected?: boolean, nextAuth?: PairingAuth) => {
+      const { snapshot, openDevicePairSetup, renderSidebar } = createPairingShell({
+        auth,
+        connected,
+      });
+      expect((await renderSidebar()).canPairDevice).toBe(canPair);
+      if (nextAuth) {
+        snapshot.hello = { auth: nextAuth } as ApplicationGatewaySnapshot["hello"];
+        const sidebar = await renderSidebar();
+        expect(sidebar.canPairDevice).toBe(false);
+        sidebar.onPairMobile?.();
+        expect(openDevicePairSetup).toHaveBeenCalledOnce();
+      }
     },
-    { name: "explicitly ungranted", auth: { role: "operator", scopes: [] }, canPair: false },
-    {
-      name: "disconnected",
-      auth: { role: "operator", scopes: ["operator.pairing"] },
-      connected: false,
-      canPair: false,
-    },
-    {
-      name: "admin becoming pairing-only",
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      nextAuth: { role: "operator", scopes: ["operator.pairing"] },
-      canPair: true,
-    },
-  ])("gates the sidebar pairing entry for a $name operator", async (scenario) => {
-    const { snapshot, openDevicePairSetup, renderSidebar } = createPairingShell(scenario);
-    expect((await renderSidebar()).canPairDevice).toBe(scenario.canPair);
-    if (scenario.nextAuth) {
-      snapshot.hello = { auth: scenario.nextAuth } as ApplicationGatewaySnapshot["hello"];
-      const sidebar = await renderSidebar();
-      expect(sidebar.canPairDevice).toBe(false);
-      sidebar.onPairMobile?.();
-      expect(openDevicePairSetup).toHaveBeenCalledOnce();
-    }
-  });
+  );
 
-  it.each([false, true])("keeps the lazy pairing dialog visible (failed: %s)", async (failed) => {
-    const { shell, renderSidebar, container } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      setupCode: "pair-mobile-secret",
+  it.each([
+    ["pairing", false],
+    ["pairing", true],
+    ["settings", false],
+    ["settings", true],
+  ] as const)("keeps lazy %s visible (failed: %s)", async (surface, failed) => {
+    const settings = surface === "settings";
+    const { shell, container, refresh, renderSidebar } = createPairingShell({
+      auth: settings ? { role: "operator" } : admin,
+      setupCode: settings ? undefined : "pair-mobile-secret",
     });
-    const loadRenderer = vi.fn();
-    if (failed) {
+    const property = settings ? "settingsSidebar" : "devicePairSetup";
+    type Renderer = NonNullable<ReturnType<(typeof shell)[typeof property]["renderer"]>>;
+    const { loading, retrying, load } = deferredRenderer<Renderer>(shell, property);
+    if (settings) {
+      shell.routeState = {
+        routeId: "profile",
+        location: { pathname: "/settings/profile", search: "", hash: "" },
+      };
+      await refresh();
+    } else {
       await renderSidebar();
-    } else {
-      shell.devicePairSetup.load = loadRenderer;
     }
-    shell.devicePairSetup.renderer = null;
-    shell.devicePairSetup.failed = failed;
-    await renderSidebar();
-    const dialog = container.querySelector<HTMLElement>(".device-pair-setup");
+    const message = settings
+      ? "Settings navigation could not load."
+      : "Could not load the pairing dialog";
     if (failed) {
-      expect(dialog?.textContent).toContain("Could not load the pairing dialog");
+      loading.reject(new Error(`${surface} chunk unavailable`));
+      await waitForSolid(() => expect(container.textContent).toContain(message));
+    }
+    const target = container.querySelector<HTMLElement>(
+      settings ? ".settings-sidebar" : ".device-pair-setup",
+    );
+    if (failed) {
+      expect(target?.textContent).toContain(message);
+      if (settings) {
+        expect(target?.getAttribute("aria-busy")).toBeNull();
+      }
       const actions = [
-        ...container.querySelectorAll<HTMLButtonElement>(".device-pair-setup__footer button"),
+        ...(target?.querySelectorAll<HTMLButtonElement>(
+          settings ? "button" : ".device-pair-setup__footer button",
+        ) ?? []),
       ];
-      expect(actions.map((button) => button.textContent?.trim())).toEqual(["Retry", "Close"]);
-      actions[0]?.click();
-      expect(shell.devicePairSetup.failed).toBe(false);
+      if (!settings) {
+        expect(actions.map((button) => button.textContent?.trim())).toEqual(["Retry", "Close"]);
+      }
+      actions.find((button) => button.textContent?.trim() === "Retry")?.click();
+      await waitForSolid(() => expect(target?.getAttribute("aria-busy")).toBe("true"));
     } else {
-      expect(dialog?.getAttribute("aria-busy")).toBe("true");
-      expect(dialog?.textContent).toContain("Loading…");
-      expect(loadRenderer).toHaveBeenCalledOnce();
-    }
-  });
-
-  it.each([false, true])("keeps lazy settings navigation visible (failed: %s)", async (failed) => {
-    const { shell, container, refresh } = createPairingShell({ auth: { role: "operator" } });
-    const loading = createDeferred<NonNullable<typeof shell.settingsSidebar.renderer>>();
-    const importRenderer = vi.fn(() => loading.promise);
-    const settingsSidebar = new LazyRenderer(shell, importRenderer);
-    settingsSidebar.failed = failed;
-    Object.defineProperty(shell, "settingsSidebar", { value: settingsSidebar });
-    shell.routeState = {
-      routeId: "profile",
-      location: { pathname: "/settings/profile", search: "", hash: "" },
-    };
-    await refresh();
-    const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
-    if (failed) {
-      expect(sidebar?.getAttribute("aria-busy")).toBeNull();
-      expect(sidebar?.textContent).toContain("Settings navigation could not load.");
-      const retry = [...(sidebar?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
-        (button) => button.textContent?.trim() === "Retry",
-      );
-      retry?.click();
-    } else {
-      expect(sidebar?.getAttribute("aria-busy")).toBe("true");
-      const skeleton = sidebar?.querySelector<HTMLElement>(
-        '.settings-sidebar__loading[role="status"][aria-busy="true"]',
-      );
-      expect(skeleton?.getAttribute("aria-label")).toBe("Loading…");
-      const expectedItems = visibleSettingsNavigationGroups(true).reduce(
-        (count, group) => count + group.routes.length,
-        0,
-      );
-      expect(skeleton?.querySelectorAll(".settings-sidebar__loading-item")).toHaveLength(
-        expectedItems,
-      );
-      expect(
-        skeleton?.querySelectorAll(
+      expect(target?.getAttribute("aria-busy")).toBe("true");
+      if (settings) {
+        const skeleton = target?.querySelector<HTMLElement>(
+          '.settings-sidebar__loading[role="status"][aria-busy="true"]',
+        );
+        expect(skeleton?.getAttribute("aria-label")).toBe("Loading…");
+        const expectedItems = visibleSettingsNavigationGroups(true).reduce(
+          (count, group) => count + group.routes.length,
+          0,
+        );
+        for (const selector of [
+          ".settings-sidebar__loading-item",
           ".settings-sidebar__loading-item .settings-sidebar__loading-icon",
-        ),
-      ).toHaveLength(expectedItems);
+        ]) {
+          expect(skeleton?.querySelectorAll(selector)).toHaveLength(expectedItems);
+        }
+      } else {
+        expect(target?.textContent).toContain("Loading…");
+        expect(load).toHaveBeenCalledOnce();
+      }
     }
-    expect(importRenderer).toHaveBeenCalledOnce();
+    if (settings) {
+      expect(load).toHaveBeenCalledTimes(failed ? 2 : 1);
+      (failed ? retrying : loading).resolve(() => document.createTextNode("Settings ready"));
+      await waitForSolid(() => expect(container.textContent).toContain("Settings ready"));
+      expect(container.querySelector(".settings-sidebar__loading")).toBeNull();
+    }
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {
-    vi.stubGlobal(
-      "IntersectionObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
     const writeText = vi.fn().mockRejectedValue(new DOMException("Clipboard access denied"));
     const execCommand = vi.fn(() => false);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
     const schedule = vi.spyOn(window, "setTimeout");
     const { container, renderPairingDialog } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: admin,
       setupCode: "pair-mobile-secret",
     });
     document.body.append(container);
     const pairing = await renderPairingDialog();
-    const button = pairing.querySelector<HTMLButtonElement>(".device-pair-setup__actions button");
+    const button = pairing.querySelector<HTMLButtonElement>(
+      ".device-pair-setup__actions button:has([data-copy-label])",
+    );
 
     button?.click();
     expect(writeText).toHaveBeenCalledWith("pair-mobile-secret");
@@ -600,7 +576,7 @@ describe("application shell pairing access", () => {
   it("expires a node setup link from the pairing clock", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(4_000);
     const { container, renderSidebar, refresh } = createPairingShell({
-      auth: { role: "operator", scopes: ["operator.admin"] },
+      auth: admin,
       setupCode: "pair-node-secret",
       access: "node",
       expiresAtMs: 5_000,
@@ -623,14 +599,6 @@ describe("application shell pairing access", () => {
   });
 
   it("publishes layout traits from an already-loaded native route on shell mount", async () => {
-    vi.stubGlobal(
-      "IntersectionObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
     const { shell, context, container, refresh } = createPairingShell({ auth: null });
     const router = shell.runtime!.router;
     const definition = router.getRoute("activity")!;

@@ -60,6 +60,7 @@ it("deduplicates byte-different live-event and history projections of one transc
   const historyProjection = {
     role: "assistant",
     content: [{ type: "text", text: "One stored reply" }],
+    openclawResponsesInputReplay: { items: ["server replay state"] },
     __openclaw: {
       id: "assistant-message-42",
       idempotencyKey: "run-42",

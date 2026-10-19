@@ -26,7 +26,7 @@ export async function cleanupPendingWorkspaceResultOrphans(
   admit: WorkerPlacementRecoveryAdmission,
   pass: PendingWorkspaceResultOrphanCleanup,
 ): Promise<boolean> {
-  if (getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0) {
+  if (deps.isShuttingDown?.() || getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0) {
     return false;
   }
   const { placements } = deps;
@@ -35,11 +35,14 @@ export async function cleanupPendingWorkspaceResultOrphans(
   // once per pass; a failed resolution stays uncached and is retried on the next sweep.
   const workspaceSessions = new Map<string, string[]>();
   for (const placement of pass.placements) {
+    if (deps.isShuttingDown?.()) {
+      return false;
+    }
     let root = rootsBySession.get(placement.sessionId);
     if (root === undefined) {
       try {
         const workspace = await deps.resolveWorkspace(placement);
-        root = workspace.kind === "repository" ? null : workspace.path;
+        root = workspace.kind === "local" ? workspace.path : null;
         rootsBySession.set(placement.sessionId, root);
       } catch {
         // Cleanup refs are independently retryable on the next sweep or after the next restart.
@@ -61,7 +64,11 @@ export async function cleanupPendingWorkspaceResultOrphans(
     if (completedRoots.has(root)) {
       continue;
     }
-    if (remaining === 0 || getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0) {
+    if (
+      deps.isShuttingDown?.() ||
+      remaining === 0 ||
+      getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0
+    ) {
       return false;
     }
     const idleAdmission = tryBeginGatewayRootWorkAdmission("idle-task");
@@ -72,7 +79,10 @@ export async function cleanupPendingWorkspaceResultOrphans(
       let deferred = false;
       const admitted = await idleAdmission.run(() =>
         admit(sessionIds, async () => {
-          if (getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0) {
+          if (
+            deps.isShuttingDown?.() ||
+            getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0
+          ) {
             deferred = true;
             return;
           }

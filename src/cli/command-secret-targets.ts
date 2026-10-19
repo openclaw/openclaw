@@ -15,6 +15,7 @@ import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-on
 import { getConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { GATEWAY_AUTH_SURFACE_PATHS as STATIC_GATEWAY_AUTH_TARGET_IDS } from "../gateway/secret-input-paths.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import type {
   PluginWebFetchProviderEntry,
@@ -69,12 +70,6 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
 const STATIC_MEMORY_EMBEDDING_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
   ...STATIC_MEMORY_TARGET_IDS,
-] as const;
-const STATIC_GATEWAY_AUTH_TARGET_IDS = [
-  "gateway.auth.token",
-  "gateway.auth.password",
-  "gateway.remote.token",
-  "gateway.remote.password",
 ] as const;
 const STATIC_STATUS_TARGET_IDS = [
   ...STATIC_GATEWAY_AUTH_TARGET_IDS,
@@ -487,9 +482,21 @@ export function getModelsCommandSecretTargetIds(): Set<string> {
   return new Set(STATIC_MODEL_TARGET_IDS);
 }
 
-/** Credential targets required by memory embedding flows. */
-export function getMemoryEmbeddingCommandSecretTargetIds(): Set<string> {
-  return new Set(STATIC_MEMORY_EMBEDDING_TARGET_IDS);
+function getSelectedMemoryProviderSecretTargetIds(config: OpenClawConfig): string[] {
+  return discoverConfigSecretTargetsByIds(config)
+    .filter(
+      ({ pathSegments }) =>
+        pathSegments[0] === "plugins" && pathSegments[2] === config.plugins?.slots?.memory,
+    )
+    .map(({ entry }) => entry.id);
+}
+
+/** Credential targets required by memory embeddings and the selected memory plugin. */
+export function getMemoryEmbeddingCommandSecretTargetIds(config?: OpenClawConfig): Set<string> {
+  return new Set([
+    ...STATIC_MEMORY_EMBEDDING_TARGET_IDS,
+    ...(config?.plugins?.slots?.memory ? getSelectedMemoryProviderSecretTargetIds(config) : []),
+  ]);
 }
 
 /** Credential targets required by text-to-speech flows. */

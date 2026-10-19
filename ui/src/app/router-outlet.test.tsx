@@ -1,7 +1,10 @@
 import { createRouter, definePage, type RouteMatch, type Router } from "@openclaw/uirouter";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { JSX } from "@solidjs/web";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
-import { solidContent } from "../lit/solid-content.tsx";
+import type { SolidRouteProps } from "../app-route-types.ts";
+import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import {
   disposeRouterOutlets,
@@ -15,7 +18,7 @@ type TestContext = { label: string };
 type TestData = { label: string };
 type TestOwnerMatch = Pick<RouteMatch<string, unknown, TestData>, "data" | "location">;
 type TestModule = {
-  render: (data: TestData | undefined) => unknown;
+  renderSolid: (props: SolidRouteProps<TestData>) => JSX.Element;
   retainOnNavigate?: boolean;
   renderOwnerKey?: (
     match: TestOwnerMatch,
@@ -41,6 +44,55 @@ async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
 }
 
 describe("openclaw-router-outlet", () => {
+  it("publishes native and Solid route hosts and retires their references with the route", async () => {
+    const Bridge = defineSolidBridge<{ label: string }>(
+      "openclaw-route-ref-test",
+      (props) => <span>{props.label}</span>,
+      { properties: { label: { default: "native" } } },
+    );
+    const native = new Bridge.Element();
+    const context = { label: "page" };
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => ({
+            renderSolid: () => (
+              <>
+                {native}
+                <Bridge label="Solid" />
+              </>
+            ),
+          }),
+        }),
+        definePage({
+          id: "next",
+          path: "/next",
+          component: () => ({ renderSolid: () => <p>Next</p> }),
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, context);
+    try {
+      await router.navigate("page", context);
+      await settleOutlet(outlet);
+      const hosts = outlet.renderedElements?.("openclaw-route-ref-test");
+      expect(hosts).toHaveLength(2);
+      expect(hosts).toContain(native);
+      expect(hosts?.map((host) => host.textContent)).toEqual(["native", "Solid"]);
+      expect(outlet.renderedElement?.("openclaw-route-ref-test")).toBe(native);
+
+      await router.navigate("next", context);
+      await settleOutlet(outlet);
+      expect(outlet.renderedElements?.("openclaw-route-ref-test")).toEqual([]);
+      expect(outlet.renderedElement?.("openclaw-route-ref-test")).toBeUndefined();
+    } finally {
+      outlet.dispose();
+      router.stop();
+    }
+  });
+
   it("settles the active route when a parked descendant's update fails", async () => {
     const parked = document.createElement("test-parked-surface");
     const ParkedRoute = () => <section>{parked}</section>;
@@ -53,14 +105,14 @@ describe("openclaw-router-outlet", () => {
           component: () => ({
             retainOnNavigate: true,
             renderOwnerKey: () => "retained-page",
-            render: () => solidContent(ParkedRoute, {}),
+            renderSolid: () => <ParkedRoute />,
           }),
           loader: () => ({ label: "page" }),
         }),
         definePage({
           id: "next",
           path: "/next",
-          component: () => ({ render: () => <p>Current destination</p> }),
+          component: () => ({ renderSolid: () => <p>Current destination</p> }),
         }),
       ],
     });
@@ -95,19 +147,22 @@ describe("openclaw-router-outlet", () => {
       <>
         <mcp-app-view
           ref={(element) => {
-            Reflect.set(element, "restartAfterTeardown", vi.fn());
-            Reflect.set(element, "teardown", teardownView);
+            const target = Object.assign(element, {
+              restartAfterTeardown: vi.fn(),
+              teardown: teardownView,
+            });
+            onTestFinished(registerMcpAppUnmountTarget(target));
           }}
         />
         <div data-testid="owned-route">{props.label}</div>
       </>
     );
-    const renderOwnedRoute = vi.fn((data: TestData | undefined) =>
-      data ? solidContent(OwnedRoute, { label: data.label }) : undefined,
+    const renderOwnedRoute = (props: SolidRouteProps<TestData>) => (
+      <OwnedRoute label={props.data?.label ?? ""} />
     );
     const ownedModule: TestModule = {
       renderOwnerKey: () => "shared-owner",
-      render: renderOwnedRoute,
+      renderSolid: renderOwnedRoute,
     };
     const context = { label: "page" };
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
@@ -133,7 +188,6 @@ describe("openclaw-router-outlet", () => {
 
     const navigation = router.navigate("next", context);
     await settleOutlet(outlet);
-    expect(renderOwnedRoute).toHaveBeenCalledWith(undefined, true);
     expect(outlet.querySelector("mcp-app-view")).toBe(appView);
     expect(outlet.querySelector('[data-testid="owned-route"]')?.textContent).toBe("page");
     expect(teardownView).not.toHaveBeenCalled();
@@ -150,7 +204,6 @@ describe("openclaw-router-outlet", () => {
   });
 
   it("replaces the loading skeleton with the resolved route", async () => {
-    vi.useFakeTimers();
     const routeModule = createDeferredCore<TestModule>();
     const context = { label: "loaded" };
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
@@ -167,10 +220,6 @@ describe("openclaw-router-outlet", () => {
     const navigation = router.navigate("page", context);
 
     await settleOutlet(outlet);
-    expect(outlet.querySelector('[role="status"]')).toBeNull();
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    await settleOutlet(outlet);
 
     const loadingState = outlet.querySelector('[role="status"]');
     expect(loadingState?.getAttribute("aria-label")).toBe("Loading…");
@@ -182,7 +231,7 @@ describe("openclaw-router-outlet", () => {
     expect(outlet.textContent).not.toContain("Loading panel");
 
     routeModule.resolve({
-      render: (data) => <div data-testid="route-page">{data?.label}</div>,
+      renderSolid: (props) => <div data-testid="route-page">{props.data?.label}</div>,
     });
     await navigation;
     await settleOutlet(outlet);
@@ -201,8 +250,11 @@ describe("openclaw-router-outlet", () => {
       <>
         <mcp-app-view
           ref={(element) => {
-            Reflect.set(element, "restartAfterTeardown", vi.fn());
-            Reflect.set(element, "teardown", teardownView);
+            const target = Object.assign(element, {
+              restartAfterTeardown: vi.fn(),
+              teardown: teardownView,
+            });
+            onTestFinished(registerMcpAppUnmountTarget(target));
           }}
         />
         <div data-testid="route-page">page</div>
@@ -215,7 +267,7 @@ describe("openclaw-router-outlet", () => {
           id: "page",
           path: "/page",
           component: () => ({
-            render: () => solidContent(RetiringRoute, {}),
+            renderSolid: () => <RetiringRoute />,
           }),
           loader: () => ({ label: "page" }),
         }),
@@ -223,7 +275,7 @@ describe("openclaw-router-outlet", () => {
           id: "next",
           path: "/next",
           component: () => ({
-            render: () => <div data-testid="route-next">next</div>,
+            renderSolid: () => <div data-testid="route-next">next</div>,
           }),
           loader: () => ({ label: "next" }),
         }),
@@ -272,8 +324,8 @@ describe("openclaw-router-outlet", () => {
           id: "page",
           path: "/page",
           component: () => ({
-            render: (data: TestData | undefined) => (
-              <div data-testid="route-page">{data?.label ?? "pending"}</div>
+            renderSolid: (props: SolidRouteProps<TestData>) => (
+              <div data-testid="route-page">{props.data?.label ?? "pending"}</div>
             ),
           }),
           loader: (context) => {
@@ -310,9 +362,11 @@ describe("openclaw-router-outlet", () => {
   it("keeps asset recovery retryable after the reachability wait expires", async () => {
     vi.useFakeTimers();
     let loadCount = 0;
+    let finishProbe: ((response: Response) => void) | undefined;
     const fetchMock = vi.fn<typeof fetch>(
       async (_input, init) =>
-        await new Promise<Response>((_resolve, reject) => {
+        await new Promise<Response>((resolve, reject) => {
+          finishProbe = resolve;
           const signal = init?.signal;
           if (!signal) {
             return;
@@ -373,6 +427,12 @@ describe("openclaw-router-outlet", () => {
     expect(button?.disabled).toBe(false);
     expect(outlet.querySelector('[role="alert"]')).not.toBeNull();
     expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
+    // Manual timeout leaves automatic recovery alive. Settle its shared probe
+    // before fake timers are removed so it cannot leak into the next document.
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    finishProbe?.(new Response(null, { status: 200 }));
+    await vi.advanceTimersByTimeAsync(0);
     outlet.dispose();
     router.stop();
   });
@@ -397,7 +457,7 @@ describe("openclaw-router-outlet", () => {
             }
             // Vite remembers a failed CSS dependency as seen, so a repeated
             // component import can succeed without the required stylesheet.
-            return { render: () => <div data-testid="unstyled-page">Agents</div> };
+            return { renderSolid: () => <div data-testid="unstyled-page">Agents</div> };
           },
           loader: (context) => ({ label: context.label }),
         }),

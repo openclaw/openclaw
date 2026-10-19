@@ -33,9 +33,9 @@ vi.mock("./session-binding.js", () => ({
 vi.mock("./user-prompt-message.js", () => ({
   buildCodexUserPromptMessage: () => ({ role: "user", content: "reviewed continuation" }),
 }));
+// mock-isolation: Provider-review recovery does not read accounts or mutate auth-profile state.
 vi.mock("./usage-limit-error.js", () => ({
-  CodexUsageLimitPromptError: class extends Error {},
-  formatCodexTurnStartUsageLimitError: async () => undefined,
+  resolveCodexTurnStartError: async () => undefined,
   markCodexAuthProfileBlockedFromRateLimits: vi.fn(),
 }));
 

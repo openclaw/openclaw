@@ -435,12 +435,8 @@ describe("brave web search provider", () => {
     );
     expect(requestLog?.[1]).toEqual({
       mode: "web",
-      query: "unique brave diagnostics query",
-      params: {
-        count: "1",
-        q: "unique brave diagnostics query",
-      },
-      url: "https://api.search.brave.com/res/v1/web/search?q=unique+brave+diagnostics+query&count=1",
+      count: 1,
+      endpoint: "https://api.search.brave.com/res/v1/web/search",
     });
     const responseLog = loggerInfoMock.mock.calls.find(
       ([message]) => message === "brave http response",
@@ -455,6 +451,9 @@ describe("brave web search provider", () => {
     expect(responsePayload?.durationMs).toBeGreaterThanOrEqual(0);
     expect(JSON.stringify(loggerInfoMock.mock.calls)).not.toContain("brave-test-key");
     expect(JSON.stringify(loggerInfoMock.mock.calls)).not.toContain("X-Subscription-Token");
+    expect(JSON.stringify(loggerInfoMock.mock.calls)).not.toContain(
+      "unique brave diagnostics query",
+    );
   });
 });
 

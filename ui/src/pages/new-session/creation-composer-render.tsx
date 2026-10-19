@@ -1,8 +1,9 @@
 import { createMemo, Show } from "solid-js";
+import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import { getChatComposerState } from "../chat/components/chat-composer-state.ts";
 import { ChatComposer, resetChatComposerState } from "../chat/components/chat-composer.tsx";
@@ -38,6 +39,7 @@ function prepareCreationComposer(
     stream: null,
     queue: composer.inputs,
     draft: composer.message,
+    draftSource: composer.composerDraft,
     getDraft: () => composer.message,
     mentions: composer.mentions,
     getMentions: () => composer.mentions,
@@ -68,60 +70,48 @@ function prepareCreationComposer(
     },
     onQueueRemove: (id) => composer.remove(id),
     onOpenImage,
-    onRequestUpdate: composer.notify,
   };
 }
 
 export function CreationComposer(props: {
   composer: CreationComposerOwner | undefined;
   onOpenImage: (item: ImageLightboxItem) => void;
-  renderRevision?: object;
 }) {
+  const owner = createMemo(() => {
+    const composer = props.composer;
+    return composer ? projectOwner(composer, (current) => current) : undefined;
+  });
   const visible = createMemo(() => {
-    void props.renderRevision;
-    return props.composer?.canDisplay() ? props.composer : undefined;
+    const composer = owner()?.read();
+    return composer?.canDisplay() ? composer : undefined;
   });
   return (
-    <Show when={visible()}>
-      {(composer) => (
-        <CreationComposerContent
-          composer={composer()}
-          onOpenImage={props.onOpenImage}
-          renderRevision={props.renderRevision}
-        />
-      )}
+    <Show when={visible()} keyed>
+      {(composer) => {
+        const footerControl = createFooterControlRef();
+        const prepared = createMemo(() => {
+          owner()?.read();
+          return prepareCreationComposer(composer, props.onOpenImage);
+        });
+        const error = createMemo(() => {
+          owner()?.read();
+          return composer.error;
+        });
+        return (
+          <section
+            ref={footerControl}
+            class="creation-composer"
+            aria-label={t("newSession.followUps")}
+          >
+            <Show when={error()}>
+              <div class="callout danger" role="alert">
+                {error()}
+              </div>
+            </Show>
+            <ChatComposer {...prepared()} />
+          </section>
+        );
+      }}
     </Show>
   );
-}
-
-function CreationComposerContent(props: {
-  composer: CreationComposerOwner;
-  onOpenImage: (item: ImageLightboxItem) => void;
-  renderRevision?: object;
-}) {
-  const prepared = createMemo(() => {
-    void props.renderRevision;
-    return prepareCreationComposer(props.composer, props.onOpenImage);
-  });
-  const error = createMemo(() => {
-    void props.renderRevision;
-    return props.composer.error;
-  });
-  return (
-    <section class="creation-composer" aria-label={t("newSession.followUps")}>
-      <Show when={error()}>
-        <div class="callout danger" role="alert">
-          {props.composer.error}
-        </div>
-      </Show>
-      <ChatComposer {...prepared()} renderRevision={props.renderRevision} />
-    </section>
-  );
-}
-
-export function renderCreationComposer(
-  composer: CreationComposerOwner | undefined,
-  onOpenImage: (item: ImageLightboxItem) => void,
-) {
-  return solidContent(CreationComposer, { composer, onOpenImage, renderRevision: {} });
 }

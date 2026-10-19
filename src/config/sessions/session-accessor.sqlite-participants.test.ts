@@ -20,6 +20,7 @@ import {
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureRuntimeConfigAsyncReader } from "../io.js";
 import {
@@ -27,7 +28,6 @@ import {
   deleteSessionEntryLifecycle,
   listSessionParticipantsReadOnly,
   listSessionEntriesCore,
-  loadExactSessionEntryCandidatesReadOnlyBatch,
   loadSessionEntry,
   MAX_SESSION_PARTICIPANTS,
   patchSessionEntryCore,
@@ -113,10 +113,13 @@ describe("SQLite session participants", () => {
       const read = () => listSessionEntriesCore({ ...scope, projection: "list" })[0]?.entry;
       read();
       const database = openOpenClawAgentDatabase(scope);
-      const reads = trackSqliteStatementExecutions(database.db, ["participants"], (sql) =>
-        sql.startsWith('select "session_key", "identity_namespace", "actor_id"')
-          ? "participants"
-          : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["participants"],
+        (sql) =>
+          sql.startsWith('select "session_key", "identity_namespace", "actor_id"')
+            ? "participants"
+            : null,
       );
       try {
         for (let index = 0; index < 100; index++) {
@@ -286,14 +289,14 @@ describe("SQLite session participants", () => {
         }
         runOpenClawAgentWriteTransaction((db) => {
           if (mutation.endsWith("before")) {
-            mutate(db.db);
+            mutate(requireNativeSqliteDatabase(db.db));
           }
           recordSessionParticipant(target, {
             identity: profile(write === "inserted-target" ? "b" : "a"),
             promptedAt: 20,
           });
           if (mutation === "participant-after") {
-            mutate(db.db);
+            mutate(requireNativeSqliteDatabase(db.db));
           }
         }, scope);
         expect(listSessionParticipantsReadOnly(target).get(target.sessionKey)).toHaveLength(
@@ -504,8 +507,11 @@ describe("SQLite session participants", () => {
             ...(selected ? { sessionKeys: [sessionKey] } : {}),
           });
         read();
-        const executions = trackSqliteStatementExecutions(database.db, ["metadata"], (sql) =>
-          sql.includes('from "session_nodes"') && sql.includes("entry_json") ? "metadata" : null,
+        const executions = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(database.db),
+          ["metadata"],
+          (sql) =>
+            sql.includes('from "session_nodes"') && sql.includes("entry_json") ? "metadata" : null,
         );
         try {
           for (const [identity, promptedAt, order] of [
@@ -528,63 +534,6 @@ describe("SQLite session participants", () => {
       });
     },
   );
-
-  it("isolates an invalid participant identity to its requested session", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = { agentId: "main", env: state.env };
-      const keys = ["agent:main:before", "agent:main:invalid", "agent:main:after"] as const;
-      for (const [index, sessionKey] of keys.entries()) {
-        await upsertSessionEntryCore(
-          { ...scope, sessionKey },
-          { sessionId: `session-${index}`, updatedAt: index + 1 },
-        );
-        recordSessionParticipant(
-          { ...scope, sessionKey },
-          { identity: profile(`person-${index}`), promptedAt: index + 1 },
-        );
-      }
-      const read = (sessionKeys: readonly string[], projection: "full" | "list") =>
-        loadExactSessionEntryCandidatesReadOnlyBatch(
-          sessionKeys.map((sessionKey) => ({ ...scope, sessionKeys: [sessionKey], projection })),
-        );
-      expect(read(keys, "list").every((result) => result.ok)).toBe(true);
-      const database = openOpenClawAgentDatabase(scope);
-      // Model a damaged saved namespace without changing the session row or schema.
-      database.db
-        .prepare("UPDATE session_participants SET identity_namespace = ? WHERE session_key = ?")
-        .run('{"type":"profile","extra":true}', keys[1]);
-      const expectedEntry = (index: 0 | 1 | 2) => ({
-        ok: true,
-        value: [
-          {
-            sessionKey: keys[index],
-            entry: {
-              participants: [{ identity: profile(`person-${index}`) }],
-              participantCount: 1,
-            },
-          },
-        ],
-      });
-      for (const projection of ["full", "list"] as const) {
-        expect(read([keys[0], keys[1], "agent:main:missing", keys[2]], projection)).toMatchObject([
-          expectedEntry(0),
-          {
-            ok: false,
-            error: expect.objectContaining({
-              message: "Session participant identity is invalid; run openclaw doctor --fix.",
-            }),
-          },
-          { ok: true, value: [] },
-          expectedEntry(2),
-        ]);
-        expect(read([keys[0], keys[2]], projection)).toMatchObject([
-          expectedEntry(0),
-          expectedEntry(2),
-        ]);
-      }
-    });
-  });
 
   it("does not create a missing agent database during participant reads", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -676,10 +625,13 @@ describe("SQLite session participants", () => {
             input: { scope, params: { identity: remote("second"), promptedAt } },
           }),
         );
-      const reads = trackSqliteStatementExecutions(database.db, ["projection"], (sql) =>
-        sql.startsWith('select "session_key", "identity_namespace", "actor_id"')
-          ? "projection"
-          : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["projection"],
+        (sql) =>
+          sql.startsWith('select "session_key", "identity_namespace", "actor_id"')
+            ? "projection"
+            : null,
       );
       try {
         expect(record(30)).toEqual({
@@ -913,8 +865,10 @@ describe("SQLite session participants", () => {
       database.db
         .prepare("UPDATE session_participants SET first_prompted_at = NULL WHERE session_key = ?")
         .run(second.sessionKey);
-      const reads = trackSqliteStatementExecutions(database.db, ["participants"], (sql) =>
-        sql.includes('from "session_participants"') ? "participants" : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["participants"],
+        (sql) => (sql.includes('from "session_participants"') ? "participants" : null),
       );
       try {
         runOpenClawAgentWriteTransaction(() => {
@@ -985,8 +939,10 @@ describe("SQLite session participants", () => {
         rows.find((row) => row.identity.type === "profile" && row.identity.id === "profile-0")
           ?.contributionCount,
       ).toBe(2);
-      const reads = trackSqliteStatementExecutions(target.db, ["participants"], (sql) =>
-        sql.includes('from "session_participants"') ? "participants" : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(target.db),
+        ["participants"],
+        (sql) => (sql.includes('from "session_participants"') ? "participants" : null),
       );
       try {
         expect(

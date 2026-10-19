@@ -5,6 +5,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { waitForActiveCronTaskRuns } from "../cron/service/active-run-cancellation.js";
 import { createCronServiceState } from "../cron/service/state.js";
 import { executeJobCoreWithTimeout } from "../cron/service/timer-job-runner.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
 import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
@@ -35,9 +36,12 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
   const cfg = { cron: { enabled: false }, agents: { entries: { main: {} } } };
   const scheduler = createTestGatewayScheduler();
   const { cron } = buildGatewayCronService({
+    storePath: await resolveCronJobsStorePathFromConfigAsync(cfg, {
+      ...process.env,
+      OPENCLAW_STATE_DIR: stateDir,
+    }),
     scheduler,
     cfg,
-    storePath: path.join(stateDir, "cron", "jobs.json"),
     deps: {} as CliDeps,
     broadcast: () => {},
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },

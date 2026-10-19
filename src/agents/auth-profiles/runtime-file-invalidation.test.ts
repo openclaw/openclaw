@@ -1,10 +1,10 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { runtimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   registerRuntimeAuthProfileExternalRefresh,
-  runtimeAuthProfileRowsCache,
   setRuntimeAuthProfileStoreSnapshotAtDatabasePath,
 } from "./runtime-snapshots.js";
 import type { AuthProfileStore } from "./types.js";
@@ -15,7 +15,6 @@ const observation = vi.hoisted(() => ({
       directory: string;
       identityChanged: boolean;
       sourcesChanged: boolean;
-      contentsChanged: boolean;
       createdPaths: readonly string[];
     }) => void | Promise<void>
   >(),
@@ -33,7 +32,6 @@ vi.mock("./file-state.js", () => ({
       directory: string;
       identityChanged: boolean;
       sourcesChanged: boolean;
-      contentsChanged: boolean;
       createdPaths: readonly string[];
     }) => void | Promise<void>,
   ) => {
@@ -64,42 +62,9 @@ function observeSharedReplacement(): void {
       directory: path.dirname(sharedDatabase),
       identityChanged: true,
       sourcesChanged: false,
-      contentsChanged: true,
       createdPaths: [],
     });
   }
-}
-
-function observeSharedRowChange(): Promise<void[]> {
-  runtimeAuthProfileRowsCache.recordSource(
-    sharedDatabase,
-    "fixture",
-    { version: 1, profiles: {} },
-    async () => ({
-      store: {
-        status: "readable",
-        raw: {
-          version: 1,
-          profiles: { example: { type: "api_key", provider: "example", key: "foreign" } },
-        },
-      },
-      state: { status: "missing", reason: "row" },
-      cacheable: false,
-    }),
-  );
-  return Promise.all(
-    [...observation.listeners].map((listener) =>
-      Promise.resolve(
-        listener({
-          directory: path.dirname(sharedDatabase),
-          identityChanged: false,
-          sourcesChanged: false,
-          contentsChanged: true,
-          createdPaths: [],
-        }),
-      ),
-    ),
-  );
 }
 
 beforeEach(() => clearRuntimeAuthProfileStoreSnapshots());
@@ -158,76 +123,13 @@ it.each([
   },
 );
 
-it.each(["declined", "failed"] as const)(
-  "preserves newer inherited snapshots when shared refresh is %s",
-  async (outcome) => {
-    const started = Promise.withResolvers<void>();
-    const refreshed = Promise.withResolvers<boolean>();
-    registerRuntimeAuthProfileExternalRefresh(() => {
-      started.resolve();
-      return refreshed.promise;
-    });
-    publishAgent("before");
-    setRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-      { version: 1, profiles: {} },
-      sharedDatabase,
-      undefined,
-      { databasePath: sharedDatabase, sharedDatabasePath: sharedDatabase, location: "legacy-main" },
-    );
-    const observing = observeSharedRowChange();
-    await started.promise;
-    publishAgent("replacement");
-    if (outcome === "declined") {
-      refreshed.resolve(false);
-    } else {
-      refreshed.reject(new Error("Previous shared refresh failed"));
-    }
-    await refreshed.promise.catch(() => undefined);
-    await observing;
-
-    expect(getRuntimeAuthProfileStoreSnapshotAtDatabasePath(sharedDatabase)).toBeUndefined();
-    expect(
-      getRuntimeAuthProfileStoreSnapshotAtDatabasePath(agentDatabase)?.profiles.example,
-    ).toMatchObject({ key: "replacement" });
-  },
-);
-
-it("invalidates changed shared credentials despite an unrelated snapshot publication", async () => {
-  const started = Promise.withResolvers<void>();
-  const refreshed = Promise.withResolvers<boolean>();
-  registerRuntimeAuthProfileExternalRefresh(() => {
-    started.resolve();
-    return refreshed.promise;
-  });
-  publishAgent("before");
-  const observing = observeSharedRowChange();
-  await started.promise;
-  const unrelated = "/tmp/auth-file-invalidation/unrelated/openclaw-agent.sqlite";
-  setRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-    { version: 1, profiles: {} },
-    unrelated,
-    path.dirname(unrelated),
-    { databasePath: unrelated, sharedDatabasePath: unrelated, location: "legacy-main" },
-  );
-  refreshed.resolve(false);
-  await refreshed.promise;
-  await observing;
-
-  expect(getRuntimeAuthProfileStoreSnapshotAtDatabasePath(agentDatabase)).toBeUndefined();
-  expect(getRuntimeAuthProfileStoreSnapshotAtDatabasePath(unrelated)).toBeDefined();
-});
-
 it.each([false, true])(
-  "checks first-file contents only with known source provenance: %s",
+  "retains first-file snapshots only with known source provenance: %s",
   async (knownSource) => {
     registerRuntimeAuthProfileExternalRefresh(async () => true);
     publishAgent("inherited");
     if (knownSource) {
-      runtimeAuthProfileRowsCache.recordSource(sharedDatabase, "absent", null, async () => ({
-        store: { status: "missing", reason: "table" },
-        state: { status: "missing", reason: "table" },
-        cacheable: false,
-      }));
+      runtimeAuthProfileRowsCache.recordSource(sharedDatabase, "absent", null);
     }
     await Promise.all(
       [...observation.listeners].map((listener) =>
@@ -236,7 +138,6 @@ it.each([false, true])(
             directory: path.dirname(sharedDatabase),
             identityChanged: false,
             sourcesChanged: false,
-            contentsChanged: true,
             createdPaths: [sharedDatabase],
           }),
         ),

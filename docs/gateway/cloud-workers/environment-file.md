@@ -2,79 +2,75 @@
 summary: "Declare cloud project setup and lifecycle commands with a host-mode devcontainer file"
 title: "Cloud environment file"
 read_when: "You want repository-defined setup or startup commands for cloud sessions."
+doc-schema-version: 1
 ---
 
-Commit a `.devcontainer/devcontainer.json` file to prepare a cloud repository once and reuse its installed dependencies in later sessions. OpenClaw supports a host-mode subset of the [Dev Container specification](https://containers.dev/implementors/json_reference/): commands run directly on the cloud machine as the worker user, with the prepared workspace as their working directory.
+Commit `.devcontainer/devcontainer.json` to customize repository preparation and startup. OpenClaw supports a host-mode subset of the Dev Container specification: commands run directly on the cloud machine as the worker user, in the prepared workspace. It does not start a container.
 
 ## Recipe precedence
 
-OpenClaw resolves one recipe from the admitted Git commit, in this order:
+OpenClaw selects one recipe from the admitted Git commit, in this order:
 
 1. `.devcontainer/devcontainer.json`.
 2. `.devcontainer.json` at the repository root.
-3. The committed executable `.openclaw/worktree-setup.sh`.
-4. Built-in JavaScript dependency detection.
+3. An executable `.openclaw/worktree-setup.sh`.
+4. Built-in JavaScript lockfile detection.
 
-Both devcontainer paths accept JSONC, including comments and trailing commas. A devcontainer file takes precedence even when it declares no lifecycle commands; OpenClaw does not also run the fallback script or detected installer. An invalid declared recipe reports a dispatch error rather than falling back silently.
-
-Repository commands use the same administrator-authorized setup gate as the existing worktree setup script. Explicitly skipping setup keeps a separate preparation identity. This recipe resolution applies to cloud project preparation; local managed worktrees on the Gateway host retain their existing setup behavior.
+Devcontainer files accept JSONC comments and trailing commas. A declared file wins even if it contains no commands; an invalid file reports an error instead of falling back. Uncommitted recipes do not enter shared snapshots. Repository commands require administrator-authorized setup; explicitly skipping setup uses a separate snapshot identity. Local managed worktrees retain their existing setup behavior.
 
 ## Lifecycle and snapshots
 
-| Property               | When OpenClaw runs it                                                                  | Included in the snapshot?   |
-| ---------------------- | -------------------------------------------------------------------------------------- | --------------------------- |
-| `onCreateCommand`      | First preparation of a checkout, before `updateContentCommand`                         | Yes, its filesystem results |
-| `updateContentCommand` | Initial preparation and an in-place refresh to a new commit                            | Yes, its filesystem results |
-| `postCreateCommand`    | Once per worker, after enrollment and session workspace binding, before the first turn | No                          |
-| `postStartCommand`     | After `postCreateCommand` when the worker is bound for a machine start                 | No                          |
+| Property               | When it runs                                                | Captured?          |
+| ---------------------- | ----------------------------------------------------------- | ------------------ |
+| `onCreateCommand`      | Initial checkout preparation, before `updateContentCommand` | Filesystem results |
+| `updateContentCommand` | Initial preparation and in-place refresh to a new commit    | Filesystem results |
+| `postCreateCommand`    | First session binding on each worker, after enrollment      | No                 |
+| `postStartCommand`     | At binding, after `postCreateCommand` when present          | No                 |
 
-On an in-place commit refresh, only `updateContentCommand` reruns; `onCreateCommand` does not. A verified checkout at the same commit skips preparation commands. The fallback script and detected installer run again when their checkout refreshes.
+A verified checkout at the same commit skips preparation commands. On a commit refresh, only `updateContentCommand` reruns; the fallback script and detected installer rerun for their own refreshes. Post-binding commands run before the first turn on both cold machines and snapshot forks. Waking an idle-reclaimed session provisions another worker and runs them again. There is no hook for arbitrary external reboots.
 
-Both cold provisioning and snapshot forks run the post-binding commands. Here, **start** means every machine start OpenClaw performs. Idle reclaim destroys the environment; waking the session provisions another worker and runs `postCreateCommand`, then `postStartCommand` again. OpenClaw does not install a hook for arbitrary external machine reboots. Put process startup in `postStartCommand`, because snapshots retain filesystem state rather than running processes.
+Each command accepts a shell string, an executable-and-arguments array, or an object whose named commands run in parallel. All commands in a phase must succeed. Make declared commands idempotent because an interrupted first binding can retry them.
 
-Each lifecycle command supports these forms:
-
-- A string runs through the shell.
-- An array names the executable and its arguments, without a shell.
-- An object runs its named commands in parallel. Every command must succeed before the phase completes.
-
-`containerEnv` and `remoteEnv` provide literal, non-secret string values for lifecycle commands. `remoteEnv` overrides matching `containerEnv` keys; a `null` value removes the variable for lifecycle commands. These values extend the minimal setup environment; they do not propagate to session processes. Environment-variable substitution and setup secrets are outside this subset. Declared commands should be idempotent: an interrupted first binding can retry before activation records completion.
+`containerEnv` and `remoteEnv` supply literal, non-secret strings to lifecycle commands. `remoteEnv` overrides matching `containerEnv` keys; a `null` remote value removes the variable. These values extend the minimal setup environment and do not propagate to session processes. Variable substitution is unsupported.
 
 ## Minimal example
 
 ```jsonc
 {
-  "name": "Project tools",
   "updateContentCommand": ["npm", "ci"],
   "postCreateCommand": "npm run build",
   "postStartCommand": "npm run dev > /tmp/project-dev.log 2>&1 &",
-  "remoteEnv": {
-    "NODE_ENV": "development",
-  },
+  "remoteEnv": { "NODE_ENV": "development" },
 }
 ```
 
-The dependency installation can be captured and reused. The build and development server run after the session workspace is bound, so they see session content and never enter the shared snapshot.
+Dependency installation is reusable in the snapshot. The build and server start after binding, so they see session content. Put process startup in `postStartCommand`: snapshots preserve filesystem state, not running processes.
 
 ## Ignored properties
 
-Container-specific or unsupported properties never fail preparation. OpenClaw records one concise ignored-properties note, such as `devcontainer image ignored on cloud machines`. This includes `image`, `build`, `dockerComposeFile`, `runArgs`, `mounts`, `remoteUser`, `features`, `hostRequirements`, `secrets`, and `customizations`. OpenClaw does not start a container or install Dev Container Features from this file.
+Unsupported properties are ignored with a recorded note. These include `image`, `build`, `dockerComposeFile`, `runArgs`, `mounts`, `remoteUser`, `features`, `hostRequirements`, and `customizations`. OpenClaw does not install Dev Container Features. See the [supported fields above](/gateway/cloud-workers/environment-file#lifecycle-and-snapshots) and setup-secret requests below rather than assuming the full [Dev Container specification](https://containers.dev/implementors/json_reference/) applies.
 
 ## Built-in detection
 
-With neither a devcontainer file nor an executable fallback script, OpenClaw chooses the first matching JavaScript lockfile:
+Without a devcontainer file, an executable `.openclaw/worktree-setup.sh` runs before capture. With neither, OpenClaw uses the first matching lockfile:
 
-| Lockfile                  | Preparation                                                                                                                                                                                            |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `pnpm-lock.yaml`          | Enable Corepack shims in a user-writable directory, without `sudo`, then `pnpm install --frozen-lockfile`                                                                                              |
-| `yarn.lock`               | Enable Corepack shims in a user-writable directory, then `yarn install --immutable` for Berry, detected from `packageManager` or `.yarnrc.yml`; otherwise `yarn install --frozen-lockfile` for Classic |
-| `package-lock.json`       | `npm ci`                                                                                                                                                                                               |
-| `bun.lock` or `bun.lockb` | `bun install --frozen-lockfile` when Bun is on `PATH`; otherwise skip with a note                                                                                                                      |
+| Lockfile                  | Preparation                                                                                                       |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `pnpm-lock.yaml`          | Enable user-writable Corepack shims, then `pnpm install --frozen-lockfile`                                        |
+| `yarn.lock`               | Enable user-writable Corepack shims, then `yarn install --immutable` for Berry or `--frozen-lockfile` for Classic |
+| `package-lock.json`       | `npm ci`                                                                                                          |
+| `bun.lock` or `bun.lockb` | `bun install --frozen-lockfile`, or skip with a note when Bun is absent                                           |
 
-No recognized lockfile means no dependency setup. Detection does not install Node or Bun.
+Yarn's `packageManager` major selects Berry (2+) or Classic; without it, `.yarnrc.yml` selects Berry. No recognized lockfile means no dependency setup. Detection itself does not install Node or Bun; Linux [toolchain bootstrap](/gateway/cloud-workers/setup-and-bundle-installation#automatic-linux-node-toolchains) supplies Node separately.
 
-A failed detected install records a reason and a bounded output tail, skips snapshot capture for that run, and lets the session start cold. A failed declared devcontainer command or fallback script keeps the existing visible dispatch failure.
+Detected pnpm and Yarn installs suppress Corepack's download prompt and do not auto-pin `packageManager` in `package.json`.
 
-Preparation diagnostics exposed by `crabbox.images.list` include the recipe source (`devcontainer`, `script`, `detected`, or `none`), the ignored-properties note, phase durations, and failure output limited to 16 KiB. Recipe identity uses the devcontainer file blob, the fallback script blob, or the built-in recipe version and detected lockfile blob hashes. Changing the resolved recipe therefore changes its preparation identity.
+A failed detected install records a reason and bounded output, skips capture for that run, and lets the session start cold. A failed declared command or fallback script stops dispatch. Changing the recipe changes snapshot compatibility; see [Warm images](/gateway/cloud-workers/warm-images).
 
-See [Warm images](/gateway/cloud-workers/warm-images) for capture and reuse, and [Worker setup and bundle installation](/gateway/cloud-workers/setup-and-bundle-installation) for machine prerequisites and the OpenClaw runtime.
+## Setup secrets
+
+A devcontainer `secrets` map can request up to 16 POSIX environment names, with optional `description` and `documentationUrl` metadata. For example, `"secrets": { "NPM_TOKEN": { "description": "Private registry access" } }` requests `NPM_TOKEN` from the selected profile's operator-approved `settings.setupSecrets` map. The repository cannot choose store entries, values, or destinations; an unmapped name fails before commands run.
+
+[Configure setup secrets](/gateway/config-cloud-workers#setup-secrets) on the Gateway. Profile setup, repository preparation, and post-create/start commands receive opaque placeholders. Protected egress substitutes credentials only for each secret's bound HTTPS hosts. Approved secret and proxy settings override literal recipe environment values.
+
+This requires a coordinator-owned Linux lease, a known machine class for protected repository preparation, and Crabbox's native egress helper. Unavailable support fails visibly with no plaintext fallback. Access ends when the lifecycle command finishes, so detached servers cannot retain it. Secrets do not disable snapshots.

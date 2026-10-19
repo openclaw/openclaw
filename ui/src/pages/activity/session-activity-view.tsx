@@ -2,11 +2,10 @@ import { dynamic } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
-import "../../components/agent-row-chip.tsx";
+import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import "../../components/ip-location.ts";
+import "../../components/ip-location.tsx";
 import "../../components/viewer-facepile.ts";
 import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -20,6 +19,8 @@ import {
   presenceViewerLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
+import { projectAgents, projectAgentIdentity } from "../../lib/reactive/domain-capabilities.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
@@ -50,7 +51,6 @@ import {
 } from "./session-activity.ts";
 
 export type SessionActivityViewProps = {
-  context: ApplicationContext;
   expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
   presenceViewers: readonly PresenceViewer[];
@@ -88,20 +88,20 @@ function dayLabel(timestamp: number | null, now = Date.now()): string {
 }
 
 function SessionLinkView(props: {
-  context: ApplicationContext;
   row: GatewaySessionRow;
   onSummaryRetry?: (row: GatewaySessionRow) => void;
   presentationRevision?: number;
 }) {
+  const context = useApplication();
   const agentId = createMemo(
     () =>
       parseAgentSessionKey(props.row.key)?.agentId ??
       props.row.agentId ??
-      resolveSessionNavigationAgentId(props.context),
+      resolveSessionNavigationAgentId(context),
   );
   const sessionHost = createMemo(() => ({
-    agentsList: props.context.agents.state.agentsList,
-    hello: props.context.gateway.snapshot.hello,
+    agentsList: context.agents.state.agentsList,
+    hello: context.gateway.snapshot.hello,
   }));
   const face = createMemo(() => resolveSessionPreferredFace(props.row));
   const addressable = createMemo(() =>
@@ -113,17 +113,27 @@ function SessionLinkView(props: {
           face: face(),
           sessionKey: props.row.key,
           fallbackAgentId:
-            props.row.key === "global" ? agentId() : resolveSessionNavigationAgentId(props.context),
-          basePath: props.context.basePath,
+            props.row.key === "global" ? agentId() : resolveSessionNavigationAgentId(context),
+          basePath: context.basePath,
           row: props.row,
           mainKey: resolveUiConfiguredMainKey(sessionHost()),
         })
       : null,
   );
   const SessionLink = dynamic(() => (target() ? "a" : "div"));
+  const agents = projectAgents(context.agents);
+  const agentIdentity = projectAgentIdentity({
+    identities: context.agentIdentity,
+    get agentId() {
+      return props.row.agentId;
+    },
+  });
+  const owner = createMemo(() =>
+    sessionActivityOwner(props.row, agents.read().agentsList, agentIdentity.read()),
+  );
   const ownerName = createMemo(() => {
     getLocale();
-    return presenceViewerLabel(sessionActivityOwner(props.row));
+    return presenceViewerLabel(owner());
   });
   const activityAt = () => sessionActivityTimestamp(props.row);
   const relativeTime = createMemo(() => {
@@ -160,7 +170,7 @@ function SessionLinkView(props: {
           const destination = target();
           if (destination && shouldHandleNavigationClick(event)) {
             event.preventDefault();
-            props.context.navigate(face(), destination.options);
+            context.navigate(face(), destination.options);
           }
         }}
       >
@@ -170,7 +180,7 @@ function SessionLinkView(props: {
           ) : undefined}
           <openclaw-viewer-avatar
             prop:identity={props.row.owner?.actor.identity ?? props.row.createdActor?.identity}
-            prop:user={sessionActivityOwner(props.row)}
+            prop:user={owner()}
             prop:markAsViewer={false}
             variant="footer"
           />
@@ -198,7 +208,7 @@ function SessionLinkView(props: {
             ) : undefined}
             {showAgent() ? (
               <span class="activity-feed__session-scope">
-                <openclaw-agent-row-chip prop:agentId={agentId()} />
+                <AgentRowChip agentId={agentId()} />
               </span>
             ) : undefined}
             {scope() ? <span class="activity-feed__session-scope">{scope()}</span> : undefined}
@@ -211,12 +221,12 @@ function SessionLinkView(props: {
       </SessionLink>
       <SessionActivitySummary row={props.row} onRetry={props.onSummaryRetry} />
       <ActivitySessionGit
-        context={props.context}
+        context={context}
         sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}
         agentId={agentId()}
       />
       <ActivitySessionMedia
-        context={props.context}
+        context={context}
         sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}
         agentId={agentId()}
         revision={props.row.updatedAt ?? 0}
@@ -226,7 +236,7 @@ function SessionLinkView(props: {
         {(runId) => (
           <a
             class="activity-feed__inspect-run"
-            href={activityRunInspectorHref(runId(), props.context.basePath)}
+            href={activityRunInspectorHref(runId(), context.basePath)}
           >
             {t("activityFeed.inspectRun")}
           </a>
@@ -255,7 +265,6 @@ function DaySessions(props: {
       <For each={regular()} keyed={(row) => row.key}>
         {(row) => (
           <SessionLinkView
-            context={props.view.context}
             row={row()}
             onSummaryRetry={props.view.onSummaryRetry}
             presentationRevision={props.view.presentationRevision}
@@ -283,7 +292,6 @@ function DaySessions(props: {
             <For each={automation()} keyed={(row) => row.key}>
               {(row) => (
                 <SessionLinkView
-                  context={props.view.context}
                   row={row()}
                   onSummaryRetry={props.view.onSummaryRetry}
                   presentationRevision={props.view.presentationRevision}
@@ -298,7 +306,6 @@ function DaySessions(props: {
 }
 
 function IdentityHeader(props: {
-  context: ApplicationContext;
   identity: PresenceViewer;
   rows: readonly GatewaySessionRow[];
   presentationRevision?: number;
@@ -353,11 +360,7 @@ function IdentityHeader(props: {
           <div class="activity-feed__viewing-list">
             <For each={viewing()} keyed={(row) => row.key}>
               {(row) => (
-                <SessionLinkView
-                  context={props.context}
-                  row={row()}
-                  presentationRevision={props.presentationRevision}
-                />
+                <SessionLinkView row={row()} presentationRevision={props.presentationRevision} />
               )}
             </For>
           </div>
@@ -535,7 +538,6 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
             <For each={identity() ? [identity()!] : []} keyed={(person) => person.id}>
               {(person) => (
                 <IdentityHeader
-                  context={props.context}
                   identity={person()}
                   rows={projection().sessions}
                   presentationRevision={props.presentationRevision}

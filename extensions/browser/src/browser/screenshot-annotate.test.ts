@@ -103,7 +103,7 @@ describe("planAnnotations - element mode", () => {
 });
 
 describe("planAnnotations - maxLabels", () => {
-  it("uses ANNOTATION_MAX_LABELS_DEFAULT when not specified", () => {
+  it("caps drawn annotations at 150", () => {
     const inputs = Array.from({ length: 200 }, (_, i) => ({
       ref: `e${i + 1}`,
       role: "button",

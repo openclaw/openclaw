@@ -47,6 +47,12 @@ Crabbox.”
   worker counts to compensate.
 - Testbox sizing: `--blacksmith-workflow`, never direct `--class`/`--type`;
   profile changes require fresh leases.
+- Blacksmith runner labels request a tier, not guaranteed CPU or RAM.
+  Blacksmith can allocate smaller machines depending on service availability.
+  For resource-sensitive tests or benchmarks, measure available CPUs,
+  affinity/quotas, and usable RAM on the allocated machine. Size workers and
+  workloads from those measurements. Record the requested tier and observed
+  resources separately. Do not qualify hardware or performance from labels alone.
 - Size, duration, hydration failure, capacity never authorize provider overrides;
   explicit user selection or required backend semantics do.
 
@@ -66,6 +72,32 @@ test -n "$CRABBOX"
 - Use consumer's trusted wrapper/install instructions.
 - Repairs: verify upstream; use clean task-owned checkout; preserve installed
   binary + unrelated source. Never trust sibling checkout merely by name.
+
+## Lease lifetime
+
+- TTL counts from creation, including hydration; idle timeout counts inactivity.
+  Earlier deadline wins. Defaults: 30m each, 4h maximum. Owner/org overrides can
+  allow up to 24h; use effective policy and sanitized clamp notices, not requested
+  durations. Policy tightening also applies to live leases.
+- `--keep` and `stop: never` do not prevent expiry. Request explicit bounded TTL
+  and idle for retained direct leases. Plain heartbeat, setup, sync, SSH, and
+  desktop use do not extend total TTL; `run` requests bounded auto-extension only
+  while a command executes, within policy, budget, and provider capability.
+- Before long source-dependent work, inspect remaining total lifetime. If allowed,
+  request one bounded `extend <id> --ttl <desired-total> --json`; extension does
+  not reset idle. Denied/budget/unsupported/nonadvancing/inactive outcomes require
+  a visible skip or failure, never provider switching or infinite lease chains.
+  Creation-fixed providers such as Daytona need enough TTL at allocation.
+- Direct guest-refresh failure can leave a longer provider deadline with the old
+  on-box deadline. Keep the same local state and retry the same fixed total TTL
+  only to reconcile; do not treat the failed extension as protection.
+- Honor trusted `directLeases: deny` and `directLeaseAllow`. A denied provider
+  requires the configured coordinator route; never bypass with direct credentials.
+  Testbox retains its native job and idle limits;
+  `--ttl` does not extend a delegated workflow.
+- `list` shows live coordinator leases; `list --retained` adds kept terminal
+  resources whose cleanup is unconfirmed. Use exact-ID inspect/stop for recovery.
+  Retain claims and recovery state until a blocking stop confirms completion.
 
 ## Trusted Testbox
 
@@ -130,7 +162,7 @@ env -u CRABBOX_AWS_INSTANCE_PROFILE \
   --provider aws --network public --tailscale=false \
   --tailscale-exit-node= \
   --tailscale-exit-node-allow-lan-access=false \
-  --keep --timing-json
+  --ttl 4h --idle-timeout 90m --keep --timing-json
 
 "$CRABBOX" inspect --provider aws --id <cbx_id> --json | \
   jq -e '.network == "public" and .tailscale == null' >/dev/null

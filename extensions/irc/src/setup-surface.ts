@@ -75,6 +75,13 @@ function normalizeGroupEntry(raw: string): string | null {
   return `#${normalized.replace(/^#+/, "")}`;
 }
 
+function parseAutoJoinChannels(value: string): string[] {
+  return splitSetupEntries(value)
+    .map(normalizeGroupEntry)
+    .filter((entry): entry is string => Boolean(entry && entry !== "*"))
+    .filter(isChannelTarget);
+}
+
 const promptIrcAllowFrom = createPromptParsedAllowFromForAccount<CoreConfig>({
   defaultAccountId: resolveDefaultIrcAccountId,
   noteTitle: t("wizard.irc.allowlistTitle"),
@@ -306,17 +313,9 @@ export const ircSetupWizard: ChannelSetupWizard = {
       currentValue: ({ cfg, accountId }) =>
         resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.channels?.join(", "),
       shouldPrompt: ({ credentialValues }) => credentialValues[USE_ENV_FLAG] !== "1",
-      normalizeValue: ({ value }) =>
-        splitSetupEntries(value)
-          .map((entry) => normalizeGroupEntry(entry))
-          .filter((entry): entry is string => Boolean(entry && entry !== "*"))
-          .filter((entry) => isChannelTarget(entry))
-          .join(", "),
+      normalizeValue: ({ value }) => parseAutoJoinChannels(value).join(", "),
       applySet: async ({ cfg, accountId, value }) => {
-        const channels = splitSetupEntries(value)
-          .map((entry) => normalizeGroupEntry(entry))
-          .filter((entry): entry is string => Boolean(entry && entry !== "*"))
-          .filter((entry) => isChannelTarget(entry));
+        const channels = parseAutoJoinChannels(value);
         return updateIrcAccountConfig(cfg as CoreConfig, accountId, {
           enabled: true,
           channels: channels.length > 0 ? channels : undefined,

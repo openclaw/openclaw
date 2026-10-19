@@ -1,8 +1,6 @@
-import * as pluginStateRuntime from "openclaw/plugin-sdk/plugin-state-runtime";
+import { PluginStateOperationInvalidatedError } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  bodyHash as hashMessageBody,
   composeInbound,
-  composeOutbound,
   confirmDelivery,
   createMonotonicUlidFactory,
   effectiveGuardPolicyVersion,
@@ -11,23 +9,17 @@ import {
   parseHandleEpoch,
   PipelineError,
   type AuditStore,
-  type Envelope,
   type GuardAdapter,
   type ReplayStore,
   type ReviewGate,
 } from "../protocol/index.js";
 import type { ReefChannelConfig } from "./config-schema.js";
 import { autonomyBudget } from "./config-schema.js";
-import {
-  matchesReefPeerIdentity,
-  reefPeerIdentity,
-  type ReefPeerIdentity,
-} from "./friend-types.js";
+import { matchesReefPeerIdentity, type ReefPeerIdentity } from "./friend-types.js";
 import {
   prepareReefOutboundComposition,
   ReefOutboundRejectedError,
 } from "./outbound-state-client.js";
-import { reefMessageTextHash } from "./rejection-resend.js";
 import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
 import { ReefInboxEntryParkedError, ReefTransportClient } from "./transport.js";
 import { requirePeer } from "./trust-store-format.js";
@@ -37,7 +29,6 @@ import type {
   ReefDeliveryRejection,
   ReefIngressMessage,
   ReefKeys,
-  ReefOutboundDeliveryPreparation,
   ReefRejectionRecovery,
 } from "./types.js";
 
@@ -45,11 +36,10 @@ import type {
 export const prepareReefMessageId = createMonotonicUlidFactory();
 
 export function isPermanentReefOutboundRejection(error: unknown): boolean {
-  const InvalidatedError = pluginStateRuntime.PluginStateOperationInvalidatedError;
   if (
     error instanceof ReefOutboundRejectedError ||
     error instanceof ReefPeerTrustChangedError ||
-    (InvalidatedError && error instanceof InvalidatedError)
+    error instanceof PluginStateOperationInvalidatedError
   ) {
     return true;
   }
@@ -101,7 +91,6 @@ export class ReefMessageFlow {
       resendDisabled?: true;
       messageId?: string;
       onPlatformSendDispatch?: () => Promise<void>;
-      prepareDelivery?: (id: string) => Promise<ReefOutboundDeliveryPreparation | undefined>;
       recovery?: ReefRejectionRecovery;
     } = {},
   ): Promise<string> {
@@ -126,7 +115,6 @@ export class ReefMessageFlow {
       : undefined;
     const resendDisabled = context.resendDisabled;
     const onPlatformSendDispatch = context.onPlatformSendDispatch;
-    const prepareDelivery = context.prepareDelivery;
     const transport = this.options.transport;
     const composition = prepareReefOutboundComposition({
       trust: this.options.trust,
@@ -144,53 +132,9 @@ export class ReefMessageFlow {
       recovery: context.recovery,
       authoritySignal: signal,
     });
-    if (composition && prepareDelivery && !context.recovery) {
-      throw new Error("Reef worker send requires a source-bound recovery continuation");
-    }
     this.pendingOutbound.add(pendingKey);
     try {
-      let prepared: { envelope: Envelope; assertCurrent(): void };
-      if (composition) {
-        prepared = await composition.compose();
-      } else {
-        const preparation = await (prepareDelivery
-          ? prepareDelivery(id)
-          : this.options.trust.prepareOutboundDelivery(peer, id));
-        const friend = preparation?.trust;
-        signal?.throwIfAborted();
-        if (
-          !preparation ||
-          !friend ||
-          friend.safetyNumberChanged ||
-          (expectedRecipient !== undefined && !matchesReefPeerIdentity(friend, expectedRecipient))
-        ) {
-          throw new ReefOutboundRejectedError(
-            `Reef peer @${peer} is not approved with current keys`,
-          );
-        }
-        const result = await composeOutbound({
-          id,
-          from,
-          to: formatHandleEpoch(peer, friend.keyEpoch),
-          body,
-          senderSigningSecretKey,
-          recipientEncryptionPublicKey: friend.x25519PublicKey,
-          guard: this.options.guard,
-          audit: this.options.audit,
-          policyVersion,
-          reviewGate: reviewGateFor(this.options.reviews),
-        });
-        signal?.throwIfAborted();
-        await preparation.record(
-          {
-            bodyHash: hashMessageBody(body),
-            textHash: reefMessageTextHash(text),
-            recipient: reefPeerIdentity(friend),
-          },
-          resendDisabled ? { resendDisabled: true } : {},
-        );
-        prepared = { envelope: result.envelope, assertCurrent: () => preparation.assertCurrent() };
-      }
+      const prepared = await composition.compose();
       // Guard/review/encryption may reject safely. Mark ambiguity only at the
       // relay boundary, after the exact delivery binding has committed.
       await onPlatformSendDispatch?.();

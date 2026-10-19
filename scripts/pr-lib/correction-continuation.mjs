@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { readRegular, requireCheckout, requireOperationOwner } from "./baseline-refresh.mjs";
-import { incomingReview } from "./correction-review.mjs";
+import { incomingReview } from "./incoming-review.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
 const executable = process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git";
@@ -54,6 +54,44 @@ function same(left, right, message) {
   }
 }
 
+function publicationLineage(request) {
+  if (
+    present(join(request.archive, "correction-incoming-review.json")) ||
+    !present(join(request.archive, "prepare-baseline.json"))
+  ) {
+    return null;
+  }
+  const [anchor, binding] = execFileSync(
+    "/bin/bash",
+    [
+      "-c",
+      'set -eu; source "$1/prep-context.env"; printf "%s\\0" "${PREP_BASELINE_REFRESH_HEAD:-}" "${PREP_BASELINE_REFRESH_OID:-}"',
+      "continuation-baseline",
+      request.archive,
+    ],
+    { encoding: "utf8" },
+  ).split("\0");
+  if (![anchor, binding].every((value) => sha.test(value))) {
+    throw new Error("Missing retained continuation baseline identity.");
+  }
+  const lineage = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        join(scripts, "baseline-refresh.mjs"),
+        "publication-lineage",
+        String(request.pr),
+        request.head,
+        anchor,
+        binding,
+        request.archive,
+      ],
+      { encoding: "utf8" },
+    ),
+  );
+  return { ...lineage, archiveFiles: inventory(lineage.archive) };
+}
+
 function validateRequest(request) {
   const { pr, head, tree, incoming, review, receipt, receiptOid, archive } = request;
   if (
@@ -67,13 +105,19 @@ function validateRequest(request) {
     throw new Error("Invalid correction continuation identity.");
   }
   same(inventory(archive), request.archiveFiles, "Retained continuation evidence changed.");
+  same(
+    publicationLineage(request),
+    request.lineage ?? null,
+    "Retained publication lineage changed.",
+  );
   for (const name of freshNames) {
     if (digest(readRegular(`.local/${name}`)) !== request.fresh[name]) {
       throw new Error(`Incoming continuation authority changed: ${name}`);
     }
   }
   const { prMeta } = incomingReview(pr, incoming, review);
-  if (oid(readRegular(join(archive, receipt))) !== receiptOid) {
+  const publicationArchive = request.lineage?.archive ?? archive;
+  if (oid(readRegular(join(publicationArchive, receipt))) !== receiptOid) {
     throw new Error("Selected publication receipt changed.");
   }
   // Reuse the publication owner's complete receipt-chain and identical-tree checks.
@@ -99,7 +143,7 @@ printf '%s\\0' "$PR_HEAD" "$PR_HEAD_SHA_BEFORE" "$PREP_INCOMING_JSON_OID" "\${PR
 `,
       "correction-publication",
       scripts,
-      archive,
+      publicationArchive,
       String(pr),
       head,
       incoming,
@@ -112,13 +156,17 @@ printf '%s\\0' "$PR_HEAD" "$PR_HEAD_SHA_BEFORE" "$PREP_INCOMING_JSON_OID" "\${PR
   if (
     headRef !== prMeta.headRefName ||
     oldIncoming === incoming ||
+    (request.lineage &&
+      (oldIncoming !== request.lineage.incoming || oldReview !== request.lineage.review)) ||
     !sha.test(oldIncoming) ||
     !sha.test(oldReview) ||
-    oid(readRegular(join(archive, "correction-incoming-review.json"))) !== oldReview
+    oid(readRegular(join(publicationArchive, "correction-incoming-review.json"))) !== oldReview
   ) {
     throw new Error("Publication does not continue the retained incoming correction.");
   }
-  const previous = JSON.parse(readRegular(join(archive, "correction-incoming-review.json")));
+  const previous = JSON.parse(
+    readRegular(join(publicationArchive, "correction-incoming-review.json")),
+  );
   if (previous.pr?.number !== pr || previous.pr?.headSha !== oldIncoming) {
     throw new Error("Retained incoming review belongs to another correction.");
   }
@@ -176,6 +224,13 @@ function check(facts, pr, root, lockRef, lockOid) {
     throw new Error("Continuation operation identity changed.");
   }
   same(inventory(request.archive), request.archiveFiles, "Retained continuation evidence changed.");
+  if (request.lineage) {
+    same(
+      inventory(request.lineage.archive),
+      request.lineage.archiveFiles,
+      "Retained publication lineage changed.",
+    );
+  }
   for (const name of freshNames) {
     if (digest(readRegular(`.local/${name}`)) !== request.fresh[name]) {
       throw new Error(`Incoming continuation authority changed: ${name}`);
@@ -227,6 +282,7 @@ function run(command, pr, root, lockRef, lockOid, args) {
         freshNames.map((name) => [name, digest(readRegular(`.local/${name}`))]),
       ),
     };
+    request.lineage = publicationLineage(request);
     const journal = Buffer.from(
       `${JSON.stringify({
         version: 1,

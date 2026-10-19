@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { once } from "node:events";
+import { on, once } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import type { Profiler } from "node:inspector";
 import os from "node:os";
@@ -9,13 +9,53 @@ import { expect, it, onTestFinished } from "vitest";
 import {
   controlGatewayProfile,
   measureGatewayCpuUsage,
+  measureGatewayAllocations,
   readGatewayCpuUsage,
   readGatewayHeapProfile,
   readGatewayResources,
+  startGatewayDiagnostics,
 } from "../../scripts/lib/gateway-bench-profile.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 
 const nodeExecutable = requireNodeTool("node");
+const preloadUrl = new URL("../../scripts/lib/gateway-bench-profile-preload.ts", import.meta.url)
+  .href;
+const fixturePath = (name: string) =>
+  fileURLToPath(new URL(`./fixtures/${name}.mjs`, import.meta.url));
+const readJson = async <T>(file: string): Promise<T> => JSON.parse(await readFile(file, "utf8"));
+
+function spawnFixture(args: string[], directory?: string, ipc = true) {
+  const child = spawn(nodeExecutable, args, {
+    stdio: ipc ? ["ignore", "ignore", "pipe", "ipc"] : ["ignore", "ignore", "pipe"],
+  });
+  const closed = once(child, "close");
+  let stderr = "";
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  onTestFinished(async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill();
+    }
+    await closed;
+    if (directory) {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  return { child, closed, stderr: () => stderr };
+}
+
+async function sendMessage(child: ChildProcess, message: object) {
+  const received = once(child, "message");
+  child.send(message);
+  return (await received)[0];
+}
+
+const workerIdentities = (manifest: WorkerProfileManifest) =>
+  manifest.workers
+    .map(({ threadId, inspectorWorkerId }) => ({ threadId, inspectorWorkerId }))
+    .toSorted((left, right) => left.threadId - right.threadId);
 
 type WorkerProfileManifest = {
   workers: Array<{
@@ -36,23 +76,7 @@ type WorkerProfileManifest = {
 };
 
 it("measures fixed CPU work including a retired Worker without starting the inspector", async () => {
-  const child = spawn(
-    nodeExecutable,
-    [fileURLToPath(new URL("./fixtures/gateway-bench-cpu-usage.mjs", import.meta.url))],
-    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-  );
-  const closed = once(child, "close");
-  let stderr = "";
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk) => {
-    stderr += chunk;
-  });
-  onTestFinished(async () => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill();
-    }
-    await closed;
-  });
+  const { child, stderr } = spawnFixture([fixturePath("gateway-bench-cpu-usage")]);
   await waitMessage(child, "ready");
   const initialResources = await readGatewayResources(child, { initial: true });
   const resources = await readGatewayResources(child);
@@ -64,20 +88,20 @@ it("measures fixed CPU work including a retired Worker without starting the insp
     expect(value).toBeGreaterThanOrEqual(0);
   }
   const changeTimer = async (run: string) => {
-    const changed = once(child, "message");
-    child.send({ run });
-    expect((await changed)[0]).toEqual({ timerChanged: true });
+    expect(await sendMessage(child, { run })).toEqual({ timerChanged: true });
     return await readGatewayResources(child);
   };
   const held = await changeTimer("timer-start");
   const released = await changeTimer("timer-stop");
   expect(held.activeResources.Timeout).toBe((resources.activeResources.Timeout ?? 0) + 1);
   expect(released.activeResources.Timeout ?? 0).toBe(resources.activeResources.Timeout ?? 0);
+  const stopDiagnostics = await startGatewayDiagnostics(child);
+  await expect(startGatewayDiagnostics(child)).rejects.toThrow("already started");
+  const stopBurstDiagnostics = await startGatewayDiagnostics(child, "burst");
+  await expect(startGatewayDiagnostics(child, "burst")).rejects.toThrow("already started");
   const before = await readGatewayCpuUsage(child);
-  const mainCompleted = once(child, "message");
-  child.send({ run: "main" });
-  const [mainResult] = await mainCompleted;
-  expect(mainResult, stderr).toMatchObject({ completed: 1, checksum: expect.any(Number) });
+  const mainResult = await sendMessage(child, { run: "main" });
+  expect(mainResult, stderr()).toMatchObject({ completed: 1, checksum: expect.any(Number) });
   const afterMain = await readGatewayCpuUsage(child);
   const mainUsage = measureGatewayCpuUsage(before, afterMain);
 
@@ -88,11 +112,11 @@ it("measures fixed CPU work including a retired Worker without starting the insp
   expect(mainUsage.mainThread.totalMs).toBeLessThan(
     (before.mainThread.user + before.mainThread.system) / 1_000,
   );
+  const burstDiagnostics = await stopBurstDiagnostics();
+  await expect(stopBurstDiagnostics()).rejects.toThrow("have not started");
 
-  const workerCompleted = once(child, "message");
-  child.send({ run: "worker" });
-  const [workerResult] = await workerCompleted;
-  expect(workerResult, stderr).toMatchObject({
+  const workerResult = await sendMessage(child, { run: "worker" });
+  expect(workerResult, stderr()).toMatchObject({
     completed: 1,
     workerRetired: true,
     checksum: mainResult.checksum,
@@ -101,21 +125,22 @@ it("measures fixed CPU work including a retired Worker without starting the insp
   const workerUsage = measureGatewayCpuUsage(afterMain, afterWorker);
   expect(workerUsage.process.totalMs).toBeGreaterThan(workerUsage.mainThread.totalMs);
   expect(workerUsage.process.totalMs).toBeGreaterThanOrEqual(workerResult.workerCpuMicros / 1_000);
+  const diagnostics = await stopDiagnostics();
+  expect(burstDiagnostics.startedAtEpochMs).toBeGreaterThan(diagnostics.startedAtEpochMs);
+  expect(burstDiagnostics.endedAtEpochMs).toBeLessThan(diagnostics.endedAtEpochMs);
+  expect(diagnostics.eventLoopDelay.count).toBeGreaterThan(0);
+  expect(diagnostics.eventLoopDelay.maxMs).toBeGreaterThan(0);
+  expect(diagnostics.endedAtEpochMs).toBeGreaterThan(diagnostics.startedAtEpochMs);
+  await expect(stopDiagnostics()).rejects.toThrow("have not started");
+  const stopAgain = await startGatewayDiagnostics(child);
+  expect((await stopAgain()).collectionErrors).toBe(0);
 }, 30_000);
 
 it.each(["exit", "disconnect"])("rejects a CPU sample when the child %ss", async (action) => {
-  const child = spawn(
-    nodeExecutable,
-    ["-e", `process.on("message", () => process.${action}()); process.send({ ready: true });`],
-    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-  );
-  const closed = once(child, "close");
-  onTestFinished(async () => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill();
-    }
-    await closed;
-  });
+  const { child, closed } = spawnFixture([
+    "-e",
+    `process.on("message", () => process.${action}()); process.send({ ready: true });`,
+  ]);
   await waitMessage(child, "ready");
   await expect(readGatewayCpuUsage(child)).rejects.toThrow(/Gateway (exited|disconnected)/);
   await closed;
@@ -128,52 +153,28 @@ it.each([false, true])(
   "settles startup profiling across builtin initialization with unknown identity=%s",
   async (unknownIdentity) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-profile-startup-"));
-    const child = spawn(
-      nodeExecutable,
-      [
-        fileURLToPath(new URL("./fixtures/gateway-bench-profile-startup.mjs", import.meta.url)),
-        directory,
-        String(unknownIdentity),
-      ],
-      { stdio: ["ignore", "ignore", "pipe"] },
+    const { closed, stderr } = spawnFixture(
+      [fixturePath("gateway-bench-profile-startup"), directory, String(unknownIdentity)],
+      directory,
+      false,
     );
-    let stderr = "";
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    const closed = once(child, "close");
-    let cleanupPending: Promise<void> | undefined;
-    const cleanup = () =>
-      (cleanupPending ??= (async () => {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill();
-        }
-        await closed;
-        await rm(directory, { recursive: true, force: true });
-      })());
-    onTestFinished(cleanup);
-    try {
-      const [code, signal] = await closed;
-      expect({ code, signal }, stderr).toEqual({ code: 0, signal: null });
-      const { threadId, manifest, samplerStopProbe } = JSON.parse(
-        await readFile(path.join(directory, "result.json"), "utf8"),
+    const [code, signal] = await closed;
+    expect({ code, signal }, stderr()).toEqual({ code: 0, signal: null });
+    const { threadId, manifest, samplerStopProbe } = JSON.parse(
+      await readFile(path.join(directory, "result.json"), "utf8"),
+    );
+    expect(manifest.workers).toHaveLength(1);
+    if (unknownIdentity) {
+      expect(manifest.workers[0].completed).not.toBe(true);
+      expect(manifest.workers[0].threadId).toBeUndefined();
+      expect(manifest.workers[0].error).toBeTruthy();
+      expect(samplerStopProbe.error.message).toMatch(/not started/i);
+    } else {
+      expect(manifest.workers[0]).toMatchObject({ completed: true, threadId });
+      expect(manifest.workers[0].inspectorWorkerId).not.toBe(String(threadId));
+      expect(await readFile(manifest.workers[0].profilePath, "utf8")).toContain(
+        "allocateAtStartup",
       );
-      expect(manifest.workers).toHaveLength(1);
-      if (unknownIdentity) {
-        expect(manifest.workers[0].completed).not.toBe(true);
-        expect(manifest.workers[0].threadId).toBeUndefined();
-        expect(manifest.workers[0].error).toBeTruthy();
-        expect(samplerStopProbe.error.message).toMatch(/not started/i);
-      } else {
-        expect(manifest.workers[0]).toMatchObject({ completed: true, threadId });
-        expect(manifest.workers[0].inspectorWorkerId).not.toBe(String(threadId));
-        expect(await readFile(manifest.workers[0].profilePath, "utf8")).toContain(
-          "allocateAtStartup",
-        );
-      }
-    } finally {
-      await cleanup();
     }
   },
   30_000,
@@ -227,27 +228,12 @@ process.on('message', (message) => {
 `;
 
 async function waitMessage(child: ChildProcess, field: string) {
-  await new Promise<void>((resolve, reject) => {
-    const finish = (error?: Error) => {
-      child.off("message", onMessage);
-      child.off("exit", onExit);
-      child.off("error", finish);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const onMessage = (message: Record<string, unknown>) => {
-      if (message[field]) {
-        finish();
-      }
-    };
-    const onExit = () => finish(new Error(`Profile fixture exited before ${field}`));
-    child.on("message", onMessage);
-    child.once("exit", onExit);
-    child.once("error", finish);
-  });
+  for await (const [message] of on(child, "message", { close: ["exit"] })) {
+    if (message[field]) {
+      return;
+    }
+  }
+  throw new Error(`Profile fixture exited before ${field}`);
 }
 
 it.each([
@@ -258,118 +244,138 @@ it.each([
   async (kind, preexisting) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-profile-"));
     const profilePath = path.join(directory, kind);
-    const child = spawn(
-      nodeExecutable,
-      [
-        "-e",
-        workload,
-        new URL("../../scripts/lib/gateway-bench-profile-preload.ts", import.meta.url).href,
-      ],
-      { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-    );
-    try {
-      await waitMessage(child, "ready");
-      if (preexisting) {
-        const prepared = waitMessage(child, "prepared");
-        child.send({ prepare: true });
-        await prepared;
-      }
-      await controlGatewayProfile(child, kind, "start", profilePath, { includeWorkers: true });
-      const complete = once(child, "message");
-      child.send({ run: true });
-      const [completed] = await complete;
-      expect(completed.complete).toBe(true);
-      await controlGatewayProfile(child, kind, "stop", profilePath, { includeWorkers: true });
-      const manifest: WorkerProfileManifest = JSON.parse(
-        await readFile(`${profilePath}.workers.json`, "utf8"),
-      );
-      expect(manifest).toMatchObject({
-        kind,
-        sampleClock: "performance.now",
-        cpuCounters: "cumulative-microseconds",
+    const { child } = spawnFixture(["-e", workload, preloadUrl], directory);
+    await waitMessage(child, "ready");
+    if (preexisting) {
+      expect(await sendMessage(child, { prepare: true })).toMatchObject({ prepared: true });
+    }
+    await controlGatewayProfile(child, kind, "start", profilePath, { includeWorkers: true });
+    const completed = await sendMessage(child, { run: true });
+    expect(completed.complete).toBe(true);
+    await controlGatewayProfile(child, kind, "stop", profilePath, { includeWorkers: true });
+    const manifest = await readJson<WorkerProfileManifest>(`${profilePath}.workers.json`);
+    expect(manifest).toMatchObject({
+      kind,
+      sampleClock: "performance.now",
+      cpuCounters: "cumulative-microseconds",
+    });
+    expect(manifest.workers).toHaveLength(preexisting ? 2 : 1);
+    for (const key of ["threadId", "inspectorWorkerId", "profilePath"] as const) {
+      const values = manifest.workers.map((recording) => recording[key]);
+      expect(new Set<string | number>(values).size).toBe(manifest.workers.length);
+    }
+    const profiledThreadIds: number[] = [];
+    for (const recording of manifest.workers) {
+      expect(recording).toMatchObject({
+        completed: true,
+        inspectorWorkerId: expect.any(String),
+        threadId: expect.any(Number),
       });
-      expect(manifest.workers).toHaveLength(preexisting ? 2 : 1);
-      const threadIds = manifest.workers.map((recording) => recording.threadId);
-      const inspectorWorkerIds = manifest.workers.map((recording) => recording.inspectorWorkerId);
-      const profilePaths = manifest.workers.map((recording) => recording.profilePath);
-      for (const values of [threadIds, inspectorWorkerIds, profilePaths]) {
-        expect(new Set<string | number>(values).size).toBe(manifest.workers.length);
-      }
-      const profiledThreadIds: number[] = [];
-      for (const recording of manifest.workers) {
-        expect(recording).toMatchObject({
-          completed: true,
-          inspectorWorkerId: expect.any(String),
-          threadId: expect.any(Number),
-        });
-        expect(recording.error).toBeUndefined();
-        if (kind === "cpu") {
-          const profile: Profiler.Profile = JSON.parse(
-            await readFile(recording.profilePath, "utf8"),
-          );
-          if (profile.nodes.some((node) => node.callFrame.functionName === "allocateForProfile")) {
-            expect(profile.samples?.length ?? 0).toBeGreaterThan(0);
-            expect(profile.endTime).toBeGreaterThan(profile.startTime);
-            profiledThreadIds.push(recording.threadId);
-          }
-        } else {
-          const profile = readGatewayHeapProfile(recording.profilePath);
-          if (
-            profile.topAllocationSites.some((site) =>
-              site.stack.some((frame) => frame.startsWith("allocateForProfile (")),
-            )
-          ) {
-            expect(profile.sampledAllocatedBytes).toBeGreaterThan(0);
-            profiledThreadIds.push(recording.threadId);
-          }
+      expect(recording.error).toBeUndefined();
+      if (kind === "cpu") {
+        const profile = await readJson<Profiler.Profile>(recording.profilePath);
+        if (profile.nodes.some((node) => node.callFrame.functionName === "allocateForProfile")) {
+          expect(profile.samples?.length ?? 0).toBeGreaterThan(0);
+          expect(profile.endTime).toBeGreaterThan(profile.startTime);
+          profiledThreadIds.push(recording.threadId);
+        }
+      } else {
+        const profile = readGatewayHeapProfile(recording.profilePath);
+        if (
+          profile.topAllocationSites.some((site) =>
+            site.stack.some((frame) => frame.startsWith("allocateForProfile (")),
+          )
+        ) {
+          expect(profile.sampledAllocatedBytes).toBeGreaterThan(0);
+          profiledThreadIds.push(recording.threadId);
         }
       }
-      expect(profiledThreadIds).toEqual([completed.threadId]);
-      expect(
-        manifest.samples.some((sample) =>
-          sample.workers.some(
-            (worker) =>
-              worker.threadId === completed.threadId &&
-              worker.error === undefined &&
-              Number.isFinite(worker.cpu?.user) &&
-              Number.isFinite(worker.cpu?.system) &&
-              Number.isFinite(worker.heap?.total_heap_size) &&
-              Number.isFinite(worker.heap?.used_heap_size),
+    }
+    expect(profiledThreadIds).toEqual([completed.threadId]);
+    const samples = manifest.samples.flatMap((sample) => sample.workers);
+    expect(
+      samples.some(
+        ({ threadId, error, cpu, heap }) =>
+          threadId === completed.threadId &&
+          error === undefined &&
+          [cpu?.user, cpu?.system, heap?.total_heap_size, heap?.used_heap_size].every(
+            Number.isFinite,
           ),
-        ),
-      ).toBe(true);
-      expect(await readFile(profilePath, "utf8")).not.toBe("");
+      ),
+    ).toBe(true);
+    expect(await readFile(profilePath, "utf8")).not.toBe("");
 
-      const retiredPath = path.join(directory, `${kind}-retired`);
-      await controlGatewayProfile(child, kind, "start", retiredPath, { includeWorkers: true });
-      const retired = waitMessage(child, "retired");
-      child.send({ retire: true });
-      await retired;
-      await controlGatewayProfile(child, kind, "stop", retiredPath, { includeWorkers: true });
-      const incomplete: WorkerProfileManifest = JSON.parse(
-        await readFile(`${retiredPath}.workers.json`, "utf8"),
-      );
-      expect(
-        incomplete.workers
-          .map(({ threadId, inspectorWorkerId }) => ({ threadId, inspectorWorkerId }))
-          .toSorted((left, right) => left.threadId - right.threadId),
-      ).toEqual(
-        manifest.workers
-          .map(({ threadId, inspectorWorkerId }) => ({ threadId, inspectorWorkerId }))
-          .toSorted((left, right) => left.threadId - right.threadId),
-      );
-      for (const recording of incomplete.workers) {
-        expect(recording.completed).not.toBe(true);
-        expect(recording.error).toBeTruthy();
-      }
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        const exited = once(child, "exit");
-        child.kill();
-        await exited;
-      }
-      await rm(directory, { recursive: true, force: true });
+    const retiredPath = path.join(directory, `${kind}-retired`);
+    await controlGatewayProfile(child, kind, "start", retiredPath, { includeWorkers: true });
+    expect(await sendMessage(child, { retire: true })).toMatchObject({ retired: true });
+    await controlGatewayProfile(child, kind, "stop", retiredPath, { includeWorkers: true });
+    const incomplete = await readJson<WorkerProfileManifest>(`${retiredPath}.workers.json`);
+    expect(workerIdentities(incomplete)).toEqual(workerIdentities(manifest));
+    for (const recording of incomplete.workers) {
+      expect(recording.completed).not.toBe(true);
+      expect(recording.error).toBeTruthy();
     }
   },
   30_000,
 );
+
+it("measures discarded allocation churn and GC per completed operation, and cleans up failures", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-allocation-"));
+  const { child } = spawnFixture(
+    [
+      "--expose-gc",
+      "--input-type=module",
+      "-e",
+      `
+    await import(${JSON.stringify(preloadUrl)});
+    process.channel.ref();
+    function discardedAllocation() {
+      let checksum = 0;
+      for (let batch = 0; batch < 10; batch++) {
+        const rows = Array.from({ length: 20000 }, (_, i) => ({ i, values: [i, i + 1] }));
+        checksum += rows[rows.length - 1].values[1];
+      }
+      return checksum;
+    }
+    process.on('message', async message => {
+      if (!message.run) return;
+      for (let operation = 0; operation < 4; operation++) discardedAllocation();
+      globalThis.gc();
+      await new Promise(setImmediate);
+      await new Promise(setImmediate);
+      process.send({ completed: 4 });
+    });
+    process.send({ ready: true });
+  `,
+    ],
+    directory,
+  );
+  await waitMessage(child, "ready");
+  const measure = (name: string, count: number, run: () => Promise<void>) =>
+    measureGatewayAllocations(child, path.join(directory, name), count, run);
+  await expect(
+    measure("failed", 1, async () => {
+      throw new Error("workload failed");
+    }),
+  ).rejects.toThrow("workload failed");
+  const stopDiagnostics = await startGatewayDiagnostics(child);
+  const result = await measure("completed", 4, async () => {
+    expect(await sendMessage(child, { run: true })).toEqual({ completed: 4 });
+  });
+  expect(result).toMatchObject({
+    scope: "main-isolate",
+    includesCollectedObjects: true,
+    cpu: { pid: child.pid },
+  });
+  expect(result.estimatedAllocatedBytesPerOperation).toBeGreaterThan(1_000_000);
+  expect(result.gcMsPerOperation).toBeGreaterThan(0);
+  expect(result.gcCount).toBeGreaterThan(0);
+  const diagnostics = await stopDiagnostics();
+  expect(diagnostics.gc.durationMs?.total).toBeGreaterThan(0);
+  expect(diagnostics.collectionErrors).toBe(0);
+  expect(
+    result.topAllocationSites.some((site) =>
+      site.stack.some((frame) => frame.startsWith("discardedAllocation (")),
+    ),
+  ).toBe(true);
+});

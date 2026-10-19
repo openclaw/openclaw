@@ -151,6 +151,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   printInfo("Host desktop:", formatHostDesktopStatus(status.hostDesktop));
   spacer();
 
+  if (service.configAudit?.definitionDriftError) {
+    printWarning(
+      `Service definition inspection incomplete: ${sanitizeTerminalText(service.configAudit.definitionDriftError)}`,
+    );
+  }
   if (service.configAudit?.issues.length) {
     printWarning("Service config looks out of date or non-standard.");
     for (const issue of service.configAudit.issues) {

@@ -104,7 +104,9 @@ function extractApplicationId(req: IncomingMessage): string | undefined {
       if (match?.[1]) {
         return match[1];
       }
-    } catch {}
+    } catch {
+      // Invalid Origin metadata may still have a valid Referer fallback.
+    }
   }
   return undefined;
 }

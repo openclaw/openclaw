@@ -42,13 +42,14 @@ it("counts caller-visible conversations once through direct and delegated work b
     });
     setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const client = identifiedClient(ada);
+    const now = Date.now();
     const seed = (name: string, agentId = "main", fields: Partial<SessionEntry> = {}) => {
       const sessionKey = "agent:" + agentId + ":" + name;
       const scope = { agentId, sessionKey };
       const { owner, participants, ...entry } = fields;
       replaceSessionEntrySync(scope, {
         sessionId: name,
-        updatedAt: Date.now(),
+        updatedAt: now,
         visibility: "shared",
         createdActor: actor(ada),
         ...entry,
@@ -61,7 +62,7 @@ it("counts caller-visible conversations once through direct and delegated work b
         });
       }
       for (const participant of participants ?? []) {
-        recordSessionParticipant(scope, { identity: participant.identity, promptedAt: 100 });
+        recordSessionParticipant(scope, { identity: participant.identity, promptedAt: now });
       }
       return sessionKey;
     };
@@ -77,7 +78,7 @@ it("counts caller-visible conversations once through direct and delegated work b
     seed("reassigned-to-bob", "work", { owner: { actor: actor(bob) } });
     seed("own-draft", "main", { visibility: "draft" });
     const visibleChild = seed("dashboard:visible-child", "work", { spawnedBy: idle });
-    seed("archive", "main", { archivedAt: 100, status: "done" });
+    seed("archive", "main", { archivedAt: now, status: "done" });
     const privateKey = seed("private", "work", { createdActor: actor(bob), visibility: "draft" });
     seed("incognito", "main", { incognito: true });
     const child = seed("subagent:hidden", "main", { spawnedBy: idle });
@@ -122,6 +123,7 @@ it("counts caller-visible conversations once through direct and delegated work b
       ].toSorted((a, b) => a.profileId.localeCompare(b.profileId));
     try {
       await listSessions({ client, context, request });
+      const projection = getSessionRowProjection(context)!;
       const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
       for (const offset of [0, 3, 100]) {
         const result = await listSessions({ client, context, request: { ...request, offset } });
@@ -228,20 +230,32 @@ it("counts caller-visible conversations once through direct and delegated work b
         ownerSessionCounts: expected(8, 1),
       });
       clearAgentRunContext(runIds[0]);
-      childRun.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
-      subagentRuns.commitOwnership(childRun);
+      const completedChild = createSubagentRunRecord({
+        ...childRun,
+        execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } },
+      });
+      subagentRuns.set(completedChild.runId, completedChild);
+      subagentRuns.commitOwnership(completedChild);
       expect(await listSessions({ client, context, request })).toMatchObject({
         ownerSessionCounts: expected(8, 1),
       });
-      grandchildRun.execution = {
-        status: "terminal",
-        endedAt: Date.now(),
-        outcome: { status: "ok" },
-      };
-      subagentRuns.commitOwnership(grandchildRun);
+      const completedGrandchild = createSubagentRunRecord({
+        ...grandchildRun,
+        execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } },
+      });
+      subagentRuns.set(completedGrandchild.runId, completedGrandchild);
+      subagentRuns.commitOwnership(completedGrandchild);
+      const selections = vi.spyOn(projection, "selectEntries");
       expect(await listSessions({ client, context, request })).toMatchObject({
         ownerSessionCounts: expected(8, 0),
       });
+      // Retained terminal history is not a candidate for the live running-count facet.
+      expect(
+        selections.mock.calls.filter(
+          ([query]) => query?.sessionIdOrKey === idle || query?.sessionIdOrKey === child,
+        ),
+      ).toEqual([]);
+      selections.mockRestore();
       // A later child turn has a new execution ID but retains the original parent lineage.
       registerAgentRunContext(runIds[0], {
         sessionKey: grandchild,
@@ -257,7 +271,6 @@ it("counts caller-visible conversations once through direct and delegated work b
       });
 
       // A sharing/ownership change during readiness must affect the whole facet.
-      const projection = getSessionRowProjection(context)!;
       const ensure = projection.prepareSelection;
       vi.spyOn(projection, "prepareSelection").mockImplementationOnce(async () => {
         assignSessionOwner(

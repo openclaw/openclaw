@@ -1,34 +1,14 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core";
-import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
+import { setConfiguredMcpServer, unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
 import { canonicalizeConfiguredMcpServer } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
-import {
-  compileSqliteQueryBindings,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
 import { digestClawValue } from "./digest.js";
-import {
-  CLAW_MCP_REF_SCHEMA_VERSION,
-  refToRow,
-  rowToRef,
-  selectMcpRefs,
-  type McpDatabase,
-  type McpRefRow,
-  type PersistedClawMcpServerRef,
-} from "./mcp-records.js";
-import type { ClawReferencedCleanup } from "./package-remove.js";
-import { reconcileClawMcpServerRefsInWorker } from "./provenance-write.js";
+import { CLAW_MCP_REF_SCHEMA_VERSION, type PersistedClawMcpServerRef } from "./mcp-records.js";
+import type { ClawMutationStateOptions } from "./state-mutation-options.js";
 import type { ClawAddPlan, ClawMcpServer } from "./types.js";
 
-export { CLAW_MCP_REF_SCHEMA_VERSION, type PersistedClawMcpServerRef } from "./mcp-records.js";
+export type { PersistedClawMcpServerRef } from "./mcp-records.js";
 
 export class ClawMcpInstallError extends Error {
   constructor(
@@ -50,106 +30,22 @@ export function digestClawMcpServer(server: Record<string, unknown>): string {
   return digestClawValue(canonicalizeConfiguredMcpServer(server));
 }
 
-function persistPendingRef(
+/** Add a shared MCP requirement without creating a Claw ownership record. */
+export async function installClawMcpServersStateless(
   plan: ClawAddPlan,
-  name: string,
-  server: ClawMcpServer,
-  ownership: Pick<PersistedClawMcpServerRef, "relationship" | "origin" | "independentOwner">,
-  options: OpenClawStateDatabaseOptions & { nowMs?: number },
-): PersistedClawMcpServerRef {
-  const nowMs = options.nowMs ?? Date.now();
-  const configDigest = digestClawMcpServer(server);
-  const database = openOpenClawStateDatabase(options);
-  const { compiled, bind } = compileSqliteQueryBindings<{ agentId: string; name: string }>(
-    (parameter) =>
-      selectMcpRefs(database.db)
-        .where(
-          "agent_id",
-          "=",
-          parameter((value) => value.agentId),
-        )
-        .where(
-          "name",
-          "=",
-          parameter((value) => value.name),
-        ),
-  );
-  const existing =
-    database.db /* sqlite-allow-raw: preserve native point-read errors outside the write transaction. */
-      .prepare(compiled.sql)
-      // SAFETY: The canonical table and explicit projection provide this generated row shape.
-      .get(...bind({ agentId: plan.agent.finalId, name })) as McpRefRow | undefined;
-  if (existing) {
-    const ref = rowToRef(existing);
-    if (ref.configDigest !== configDigest || ref.status === "failed") {
-      throw new ClawMcpInstallError(
-        "mcp_provenance_conflict",
-        `MCP server ${JSON.stringify(name)} differs from its ownership record.`,
-        [ref],
-      );
-    }
-    return ref;
-  }
-  const ref: PersistedClawMcpServerRef = {
-    schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
-    agentId: plan.agent.finalId,
-    name,
-    configDigest,
-    ...ownership,
-    status: "pending",
-    createdAtMs: nowMs,
-    updatedAtMs: nowMs,
-  };
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<McpDatabase>(db).insertInto("claw_mcp_server_refs").values(refToRow(ref)),
-    );
-  }, options);
-  return ref;
-}
-
-function updateRef(
-  ref: PersistedClawMcpServerRef,
-  update: { status: PersistedClawMcpServerRef["status"]; error?: string },
-  options: OpenClawStateDatabaseOptions & { nowMs?: number },
-): PersistedClawMcpServerRef {
-  const { error: _error, ...retained } = ref;
-  const updated = { ...retained, ...update, updatedAtMs: options.nowMs ?? Date.now() };
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<McpDatabase>(db)
-        .updateTable("claw_mcp_server_refs")
-        .set({
-          status: update.status,
-          error: update.error ?? null,
-          updated_at_ms: updated.updatedAtMs,
-        })
-        .where("agent_id", "=", ref.agentId)
-        .where("name", "=", ref.name),
-    );
-  }, options);
-  return updated;
-}
-
-export async function installClawMcpServers(
-  plan: ClawAddPlan,
-  options: OpenClawStateDatabaseOptions & {
-    setMcpServer?: (params: {
-      name: string;
-      server: ClawMcpServer;
-      createOnly?: boolean;
-    }) => ReturnType<typeof setConfiguredMcpServer>;
-    listMcpServers?: typeof listConfiguredMcpServers;
+  options: ClawMutationStateOptions & {
+    assertForwardCurrent?: () => void;
     nowMs?: number;
   } = {},
 ): Promise<PersistedClawMcpServerRef[]> {
-  const setMcpServer = options.setMcpServer ?? setConfiguredMcpServer;
-  const listMcpServers = options.listMcpServers ?? listConfiguredMcpServers;
   const refs: PersistedClawMcpServerRef[] = [];
   for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
-    await withClawMcpLifecycleLease(action.id, options, async () => {
+    await withClawMcpLifecycleLease(action.id, options, async (assertOwned) => {
+      const assertCurrent = () => {
+        assertOwned();
+        options.assertCurrent?.();
+        options.assertForwardCurrent?.();
+      };
       const server = action.details ? mcpServerFromActionDetails(action.details) : undefined;
       if (!server) {
         throw new ClawMcpInstallError(
@@ -158,7 +54,8 @@ export async function installClawMcpServers(
           refs,
         );
       }
-      const listed = await listMcpServers();
+      const listed = await listConfiguredMcpServers();
+      assertCurrent();
       if (!listed.ok) {
         throw new ClawMcpInstallError("mcp_preflight_failed", listed.error, refs);
       }
@@ -171,250 +68,96 @@ export async function installClawMcpServers(
           refs,
         );
       }
-      const existingRefs = readClawMcpServerRefsByName(action.id, options);
-      const inheritsClawOrigin =
-        existingRefs.length > 0 &&
-        existingRefs.every(
-          (candidate) => candidate.origin === "claw-introduced" && !candidate.independentOwner,
-        );
-      const ownership = configured
-        ? {
-            relationship: "referenced" as const,
-            origin: inheritsClawOrigin ? ("claw-introduced" as const) : ("pre-existing" as const),
-            independentOwner: !inheritsClawOrigin,
+      const nowMs = options.nowMs ?? Date.now();
+      const ref: PersistedClawMcpServerRef = {
+        schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
+        agentId: plan.agent.finalId,
+        name: action.id,
+        configDigest,
+        relationship: configured ? "referenced" : "managed",
+        origin: configured ? "pre-existing" : "claw-introduced",
+        independentOwner: true,
+        status: "complete",
+        createdAtMs: nowMs,
+        updatedAtMs: nowMs,
+      };
+      if (!configured) {
+        try {
+          const result = await setConfiguredMcpServer({
+            name: action.id,
+            server,
+            createOnly: true,
+            skipLifecycleLease: true,
+            assertCurrent,
+          });
+          if (!result.ok) {
+            throw new ClawMcpInstallError("mcp_install_failed", result.error, refs);
           }
-        : {
-            relationship: "managed" as const,
-            origin: "claw-introduced" as const,
-            independentOwner: false,
-          };
-      let pending = persistPendingRef(plan, action.id, server, ownership, options);
-      refs.push(pending);
-      if (pending.status === "complete") {
-        if (configured) {
-          return;
+          refs.push(ref);
+          assertCurrent();
+        } catch (error) {
+          if (error instanceof ClawMcpInstallError) {
+            throw error;
+          }
+          throw new ClawMcpInstallError("mcp_install_uncertain", coerceErrorMessage(error), refs);
         }
-        const hasSiblingOwner = readClawMcpServerRefsByName(action.id, options).some(
-          (candidate) => candidate.agentId !== plan.agent.finalId,
-        );
-        if (
-          pending.relationship !== "managed" ||
-          pending.origin !== "claw-introduced" ||
-          pending.independentOwner ||
-          hasSiblingOwner
-        ) {
-          throw new ClawMcpInstallError(
-            "mcp_reconcile_conflict",
-            `MCP server ${JSON.stringify(action.id)} was removed while shared or independently owned and will not be recreated.`,
-            refs,
-          );
-        }
-        pending = updateRef(pending, { status: "pending" }, options);
-        refs[refs.length - 1] = pending;
       }
       if (configured) {
-        refs[refs.length - 1] = updateRef(pending, { status: "complete" }, options);
-        return;
-      }
-      let result: Awaited<ReturnType<typeof setConfiguredMcpServer>>;
-      try {
-        result = await setMcpServer({
-          name: action.id,
-          server,
-          createOnly: true,
-          recordIndependentOwner: false,
-        });
-      } catch (error) {
-        const message = coerceErrorMessage(error);
-        throw new ClawMcpInstallError("mcp_install_uncertain", message, refs);
-      }
-      if (!result.ok) {
-        refs[refs.length - 1] = updateRef(
-          pending,
-          { status: "failed", error: result.error },
-          options,
-        );
-        throw new ClawMcpInstallError("mcp_install_failed", result.error, refs);
-      }
-      try {
-        refs[refs.length - 1] = updateRef(pending, { status: "complete" }, options);
-      } catch (error) {
-        const message = coerceErrorMessage(error);
-        throw new ClawMcpInstallError(
-          "mcp_provenance_failed",
-          `MCP server was configured, but ownership could not be persisted: ${message}`,
-          refs,
-        );
+        refs.push(ref);
       }
     });
   }
   return refs;
 }
 
-function readMcpRefsByIdentity(
-  column: "agent_id" | "name",
-  value: string,
-  options: OpenClawStateDatabaseOptions,
-): PersistedClawMcpServerRef[] {
-  const { db } = openOpenClawStateDatabase(options);
-  if (options.readOnly && !tableExists(db, "claw_mcp_server_refs")) {
-    return [];
-  }
-  const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) =>
-    selectMcpRefs(db)
-      .where(
-        column,
-        "=",
-        parameter((identity) => identity),
-      )
-      .orderBy(column === "agent_id" ? "name" : "agent_id"),
-  );
-  const rows =
-    db /* sqlite-allow-raw: preserve native full-agent inventory errors without a write transaction. */
-      .prepare(compiled.sql)
-      // SAFETY: The canonical table and explicit projection provide this generated row shape.
-      .all(...bind(value)) as McpRefRow[];
-  return rows.map(rowToRef);
-}
-
-export function readClawMcpServerRefs(
-  agentId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): PersistedClawMcpServerRef[] {
-  return readMcpRefsByIdentity("agent_id", agentId, options);
-}
-
-export function readClawMcpServerRefsByName(
-  name: string,
-  options: OpenClawStateDatabaseOptions = {},
-): PersistedClawMcpServerRef[] {
-  return readMcpRefsByIdentity("name", name, options);
-}
-
-export function clawMcpRemovalSelector(ref: PersistedClawMcpServerRef): string {
-  return `mcp:${ref.name}`;
-}
-
-type ClawMcpServerRemovalDecision = {
-  ref: PersistedClawMcpServerRef;
-  action: "remove" | "release";
-  blocked: boolean;
-  affectedClawAgentIds: string[];
-  reason?: string;
-};
-
-export function planClawMcpServerRemoval(
-  ref: PersistedClawMcpServerRef,
-  options: OpenClawStateDatabaseOptions & { referencedCleanup?: ClawReferencedCleanup } = {},
-): ClawMcpServerRemovalDecision {
-  const otherRefs = readClawMcpServerRefsByName(ref.name, options).filter(
-    (candidate) => candidate.agentId !== ref.agentId,
-  );
-  const affectedClawAgentIds = otherRefs.map((candidate) => candidate.agentId).toSorted();
-  const cleanup = options.referencedCleanup ?? { mode: "retain" };
-  const explicitlySelected =
-    cleanup.mode === "remove-selected" &&
-    (cleanup.selected ?? []).includes(clawMcpRemovalSelector(ref));
-  const conflicts =
-    affectedClawAgentIds.length > 0 || ref.independentOwner || ref.origin === "pre-existing";
-  const release = (reason: string, blocked = false): ClawMcpServerRemovalDecision => ({
-    ref,
-    action: "release",
-    blocked,
-    affectedClawAgentIds,
-    reason,
-  });
-
-  if (ref.relationship === "managed") {
-    if (explicitlySelected) {
-      return release(
-        "--remove-referenced only accepts resources with a referenced relationship.",
-        true,
-      );
+/** Remove unchanged MCP entries introduced before a failed Add published its agent. */
+export async function rollbackStatelessClawMcpServers(
+  refs: PersistedClawMcpServerRef[],
+  options: ClawMutationStateOptions = {},
+): Promise<string[]> {
+  const errors: string[] = [];
+  for (const ref of refs.toReversed()) {
+    if (ref.origin !== "claw-introduced" || ref.status !== "complete") {
+      continue;
     }
-    if (affectedClawAgentIds.length > 0) {
-      return release("Another Claw still references this MCP server.");
+    try {
+      await withClawMcpLifecycleLease(ref.name, options, async (assertOwned) => {
+        const assertCurrent = () => {
+          assertOwned();
+          options.assertCurrent?.();
+        };
+        const listed = await listConfiguredMcpServers();
+        assertCurrent();
+        if (!listed.ok) {
+          throw new Error(listed.error);
+        }
+        const configured = listed.mcpServers[ref.name];
+        if (!configured) {
+          refs.splice(refs.indexOf(ref), 1);
+          return;
+        }
+        if (digestClawMcpServer(configured) !== ref.configDigest) {
+          return;
+        }
+        const removed = await unsetConfiguredMcpServer({
+          name: ref.name,
+          expectedServer: configured,
+          skipLifecycleLease: true,
+          assertCurrent,
+        });
+        assertCurrent();
+        if (!removed.ok) {
+          // A concurrent change is not ours to remove.
+          if (removed.error.includes("changed and was not removed")) {
+            return;
+          }
+          throw new Error(removed.error);
+        }
+        refs.splice(refs.indexOf(ref), 1);
+      });
+    } catch (error) {
+      errors.push(`MCP server ${ref.name} cleanup failed: ${coerceErrorMessage(error)}`);
     }
-    if (ref.independentOwner) {
-      return release("MCP server has a current non-Claw owner.");
-    }
-    return { ref, action: "remove", blocked: false, affectedClawAgentIds };
   }
-  if (!explicitlySelected && cleanup.mode !== "remove-if-unused") {
-    return release("Referenced resources are retained unless a cleanup mode selects them.");
-  }
-  if (!explicitlySelected && conflicts) {
-    return release(
-      affectedClawAgentIds.length > 0
-        ? "Another Claw still references this MCP server."
-        : "MCP server has a current non-Claw owner or pre-existing origin.",
-    );
-  }
-  if (explicitlySelected && conflicts && !cleanup.allowConflicts) {
-    return release(
-      "Selected MCP server has other Claw dependents, a non-Claw owner, or pre-existing origin; explicit conflict override is required.",
-      true,
-    );
-  }
-  return { ref, action: "remove", blocked: false, affectedClawAgentIds };
-}
-
-export function reconcileClawMcpServerRefs(
-  agentId: string,
-  configuredServers: Record<string, Record<string, unknown>>,
-  options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
-): Promise<PersistedClawMcpServerRef[]> {
-  return reconcileClawMcpServerRefsInWorker(
-    agentId,
-    Object.fromEntries(
-      Object.entries(configuredServers).map(([name, server]) => [
-        name,
-        digestClawMcpServer(server),
-      ]),
-    ),
-    options,
-  );
-}
-
-export function deleteClawMcpServerRef(
-  agentId: string,
-  name: string,
-  options: OpenClawStateDatabaseOptions = {},
-): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<McpDatabase>(db)
-        .deleteFrom("claw_mcp_server_refs")
-        .where("agent_id", "=", agentId)
-        .where("name", "=", name),
-    );
-  }, options);
-}
-
-export function upsertClawMcpServerRef(
-  ref: PersistedClawMcpServerRef,
-  options: OpenClawStateDatabaseOptions = {},
-): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<McpDatabase>(db)
-        .insertInto("claw_mcp_server_refs")
-        .values(refToRow(ref))
-        .onConflict((conflict) =>
-          conflict.columns(["agent_id", "name"]).doUpdateSet((eb) => ({
-            schema_version: eb.ref("excluded.schema_version"),
-            config_digest: eb.ref("excluded.config_digest"),
-            relationship: eb.ref("excluded.relationship"),
-            origin: eb.ref("excluded.origin"),
-            independent_owner: eb.ref("excluded.independent_owner"),
-            status: eb.ref("excluded.status"),
-            error: eb.ref("excluded.error"),
-            // Existing claims retain their original creation timestamp through updates and undo.
-            updated_at_ms: eb.ref("excluded.updated_at_ms"),
-          })),
-        ),
-    );
-  }, options);
+  return errors;
 }

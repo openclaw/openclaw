@@ -137,7 +137,17 @@ describe("google provider policy public artifact", () => {
     });
   });
 
-  it("honors catalog reasoning=false for non-Gemini 3 Google models", () => {
+  it.each(["gemini-4-argon", "google/gemini-4-argon"])(
+    "keeps the Gemini 4 thinking profile for %s despite stale catalog reasoning",
+    (modelId) => {
+      expect(
+        resolveThinkingProfile({ provider: "google", modelId, reasoning: false })
+          ?.preserveWhenCatalogReasoningFalse,
+      ).toBe(true);
+    },
+  );
+
+  it("honors catalog reasoning=false for non-thinking-level Google models", () => {
     expect(
       resolveThinkingProfile({
         provider: "google",

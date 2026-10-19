@@ -5,6 +5,7 @@ import { isGatewayProtocolResponseError } from "../../packages/gateway-client/sr
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
+import { captureStalledGatewayStartup } from "../infra/gateway-startup-owner.js";
 import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import type { PortListener } from "../infra/ports-types.js";
@@ -16,6 +17,7 @@ import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sleep } from "../utils.js";
@@ -117,7 +119,11 @@ async function resolveScheduledTaskGatewayOwnership(
     return null;
   }
   const ownerEnv = mergeGatewayServiceEnv(env, command);
-  const owner = await retryScheduledTaskLeaseRead(() => readGatewayOwnerLease({ env: ownerEnv }));
+  const publishedOwner = await retryScheduledTaskLeaseRead(() =>
+    readGatewayOwnerLease({ env: ownerEnv }),
+  );
+  const stalled = captureStalledGatewayStartup(ownerEnv);
+  const owner = stalled ? undefined : publishedOwner;
   const taskName = resolveTaskName(env);
   const isTaskSupervisor = (supervisor: NonNullable<typeof owner>["supervisor"]) =>
     supervisor?.kind === "schtasks" && supervisor.name?.toLowerCase() === taskName.toLowerCase();
@@ -132,6 +138,9 @@ async function resolveScheduledTaskGatewayOwnership(
       ? [owner.pid]
       : []
     : await resolveLegacyScheduledTaskOwnedGatewayPids(env, command, port, context?.probeHosts);
+  if (stalled) {
+    pids.splice(0, pids.length, stalled.pid);
+  }
   if (captureExisting && owner && pids.length > 0) {
     pids.push(
       ...(
@@ -189,6 +198,14 @@ async function resolveScheduledTaskGatewayOwnership(
       return exclusion;
     },
     assertOwnerCurrent(this: void, pid?: number) {
+      if (stalled && (pid === undefined || pid === stalled.pid)) {
+        if (isPidAlive(stalled.pid)) {
+          stalled.assertCurrent();
+        } else {
+          stalled.confirmStopped();
+        }
+        return;
+      }
       if (
         pid !== undefined &&
         starts.has(pid) &&
@@ -445,7 +462,6 @@ export async function terminateScheduledTaskNodeHost(
   }
   if (beforeMutation) {
     await beforeMutation();
-    assertCurrent?.();
   }
   await terminateGatewayProcessTree(pid, assertCurrent);
   return [pid];
@@ -630,6 +646,33 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
   return probe(pid) === "missing";
 }
 
+export async function stopStalledGatewayStartup(
+  stalled: NonNullable<ReturnType<typeof captureStalledGatewayStartup>>,
+  assertCurrent?: () => void,
+): Promise<void> {
+  const assertTarget = () => {
+    assertGatewayServiceUpdateCurrent();
+    assertCurrent?.();
+    stalled.assertCurrent();
+  };
+  if (isPidAlive(stalled.pid)) {
+    if (process.platform === "win32") {
+      await terminateGatewayProcessTree(stalled.pid, assertTarget);
+    } else {
+      assertTarget();
+      process.kill(stalled.pid, "SIGTERM");
+      if (!(await waitForProcessExit(stalled.pid, 300))) {
+        assertTarget();
+        process.kill(stalled.pid, "SIGKILL");
+      }
+      if (!(await waitForProcessExit(stalled.pid, WINDOWS_FORCED_PROCESS_EXIT_TIMEOUT_MS))) {
+        throw new Error(`Gateway startup pid ${stalled.pid} exit could not be confirmed`);
+      }
+    }
+  }
+  stalled.confirmStopped();
+}
+
 export async function terminateGatewayProcessTree(
   pid: number,
   assertCurrent?: () => void,
@@ -667,19 +710,4 @@ export async function terminateGatewayProcessTree(
   if (!(await waitForProcessExit(pid, WINDOWS_FORCED_PROCESS_EXIT_TIMEOUT_MS))) {
     throw new Error(`gateway process ${pid} exit could not be confirmed after taskkill`);
   }
-}
-
-export async function waitForGatewayPortRelease(
-  port: number,
-  probeHosts: readonly string[],
-): Promise<boolean> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
-    if (diagnostics?.status === "free") {
-      return true;
-    }
-    await sleep(250);
-  }
-  return false;
 }

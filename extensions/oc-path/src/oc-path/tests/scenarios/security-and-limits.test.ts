@@ -47,8 +47,9 @@ describe("file-slot containment", () => {
     expect(() => parseOcPath('oc://"C:/Windows/System32/foo"/section')).toThrow(
       /Absolute file slot/,
     );
-    // `\` inside quoted segments is rejected outright (no escape support).
-    expect(() => parseOcPath('oc://"C:\\\\Windows\\\\System32"/section')).toThrow(OcPathError);
+    expect(() => parseOcPath('oc://"C:\\\\Windows\\\\System32"/section')).toThrow(
+      /Absolute file slot/,
+    );
   });
 
   it("rejects leading-backslash UNC path", () => {
@@ -169,20 +170,24 @@ describe("numeric segments dispatch by node kind", () => {
 describe("setOcPath value coercion is locale-independent and exact-match", () => {
   it("number coercion accepts `1.5`, refuses `1,5`", () => {
     const ast = parseJsonc('{"x":1.0}').ast;
-    expect(setOcPath(ast, parseOcPath("oc://X/x"), "1.5").ok).toBe(true);
-    const r = setOcPath(ast, parseOcPath("oc://X/x"), "1,5");
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toBe("parse-error");
-    }
+    expect(JSON.parse(setOcPath(ast, parseOcPath("oc://X/x"), "1.5").raw)).toEqual({ x: 1.5 });
+    expect(() => setOcPath(ast, parseOcPath("oc://X/x"), "1,5")).toThrow(
+      expect.objectContaining({ reason: "parse-error" }),
+    );
   });
 
   it("boolean coercion accepts `true` / `false` only", () => {
     const ast = parseJsonc('{"x":true}').ast;
-    expect(setOcPath(ast, parseOcPath("oc://X/x"), "false").ok).toBe(true);
-    expect(setOcPath(ast, parseOcPath("oc://X/x"), "False").ok).toBe(false);
-    expect(setOcPath(ast, parseOcPath("oc://X/x"), "TRUE").ok).toBe(false);
-    expect(setOcPath(ast, parseOcPath("oc://X/x"), "yes").ok).toBe(false);
+    expect(JSON.parse(setOcPath(ast, parseOcPath("oc://X/x"), "false").raw)).toEqual({ x: false });
+    expect(() => setOcPath(ast, parseOcPath("oc://X/x"), "False")).toThrow(
+      expect.objectContaining({ reason: "parse-error" }),
+    );
+    expect(() => setOcPath(ast, parseOcPath("oc://X/x"), "TRUE")).toThrow(
+      expect.objectContaining({ reason: "parse-error" }),
+    );
+    expect(() => setOcPath(ast, parseOcPath("oc://X/x"), "yes")).toThrow(
+      expect.objectContaining({ reason: "parse-error" }),
+    );
   });
 });
 

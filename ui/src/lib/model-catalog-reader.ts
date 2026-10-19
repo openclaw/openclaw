@@ -66,15 +66,19 @@ export class ModelCatalogReader {
       scope,
     };
     this.binding = binding;
-    const unwatchCache = subscribeModelCatalogCache(client, () => {
-      if (!this.owns(binding)) {
-        return;
-      }
-      if (this.failed && peekModelCatalog(client, scope)) {
-        this.failed = false;
-      }
-      this.notify();
-    });
+    const unwatchCache = subscribeModelCatalogCache(
+      client,
+      () => {
+        if (!this.owns(binding)) {
+          return;
+        }
+        if (this.failed && peekModelCatalog(client, scope)) {
+          this.failed = false;
+        }
+        this.notify();
+      },
+      () => scope,
+    );
     const unwatchEvents = subscribeModelCatalogChanges(
       gateway,
       () => {

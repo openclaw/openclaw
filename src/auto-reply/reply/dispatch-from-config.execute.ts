@@ -5,6 +5,7 @@ import {
   isFastModeAutoProgressPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
+import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
@@ -14,10 +15,13 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { isFileLogLevelEnabled } from "../../logging/logger.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
+import { observeAgentRunStart } from "../agent-run-start.js";
+import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
   isCommandReplyForDelivery,
+  markReplyPayloadForSourceSuppressionDelivery,
   readAskUserQuestionId,
 } from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -36,6 +40,7 @@ import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
+import { readReplySourceInput, readReplySourcePreparationRetry } from "./reply-source-binding.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
   const {
@@ -72,10 +77,15 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     wrapProgressCallback,
   } = state;
   // Bind at invocation so every public resolver consumes the request generation without widening its Plugin SDK contract.
-  const replyResolver = bindPreparedReplyDispatchRuntime(
+  const preparedReplyResolver = bindPreparedReplyDispatchRuntime(
     params.configOverride ? undefined : state.preparedReplyDispatchRuntime,
     state.replyResolver,
   );
+  const runPreparation = readReplySourcePreparationRetry(readReplySourceInput(params.replyOptions));
+  // Retry before raw resolver work settles so this same turn and FIFO source retain custody.
+  const replyResolver: typeof preparedReplyResolver = runPreparation
+    ? (...args) => runPreparation(() => preparedReplyResolver(...args))
+    : preparedReplyResolver;
   let pendingContinuation = false;
   let pendingContinuationSettlement: PendingContinuationSettlement | undefined;
   let rawLlmResponse: string | undefined;
@@ -87,6 +97,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   let didDeliverVisiblePartialReply = false;
   let replyResolverError: string | undefined;
   const pendingToolProgress = new Set<Promise<void>>();
+  let explicitFollowupStartNotice: Promise<void> | undefined;
   const {
     onBlockReply,
     onPreparedBlockReply,
@@ -155,10 +166,30 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
             allowWhenToolSummariesHidden:
               params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
           };
+          const replyOptions = state.getReplyOptions();
           const result = await replyResolver(
             ctx,
             {
-              ...state.getReplyOptions(),
+              ...replyOptions,
+              ...observeAgentRunStart(replyOptions, () => {
+                if (
+                  !explicitFollowupStartNotice &&
+                  isExplicitFollowupCommandTurn(ctx) &&
+                  state.replyOperationRunState.admission?.status !== "accepted"
+                ) {
+                  // The synchronous start callback retains completion ownership; delivery
+                  // joins the existing progress lifecycle without waiting for the answer.
+                  explicitFollowupStartNotice = Promise.resolve(
+                    onBlockReply(
+                      markReplyPayloadForSourceSuppressionDelivery({
+                        text: "Your followup has started.",
+                        isStatusNotice: true,
+                      }),
+                    ),
+                  );
+                  trackDispatchLifecycleWork(explicitFollowupStartNotice, "delivery");
+                }
+              }),
               preparedTtsPreferences: state.preparedTtsPreferences,
               [REPLY_OPERATION_RUN_STATE]: state.replyOperationRunState,
               sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
@@ -190,6 +221,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 ? undefined
                 : wrapProgressCallback(params.replyOptions?.onPartialReply, {
                     onForward: async () => {
+                      await explicitFollowupStartNotice;
                       if (!state.deliverStandaloneCommentaryProgress) {
                         return;
                       }
@@ -199,8 +231,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       await waitForReplyDispatcherIdle(dispatcher, getDispatchAbortSignal());
                     },
                     onVisible: (payload) => {
-                      if (hasOutboundReplyContent(payload, { trimText: true })) {
-                        didDeliverVisiblePartialReply = true;
+                      didDeliverVisiblePartialReply ||= hasOutboundReplyContent(payload, {
+                        trimText: true,
+                      });
+                      if (didDeliverVisiblePartialReply) {
+                        state
+                          .getDispatchReplyOperation()
+                          ?.watchdog.progress("finalization", "reply:partial_delivered");
                       }
                     },
                   }),
@@ -457,8 +494,14 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 forwardToolProgress(() => state.onApprovalEventFromReplyOptions?.(payload)),
               onPatchSummary: (payload) =>
                 forwardToolProgress(() => state.onPatchSummaryFromReplyOptions?.(payload)),
-              onBlockReply,
-              onPreparedBlockReply,
+              onBlockReply: (payload, context) =>
+                explicitFollowupStartNotice
+                  ? explicitFollowupStartNotice.then(() => onBlockReply(payload, context))
+                  : onBlockReply(payload, context),
+              onPreparedBlockReply: (plan, context) =>
+                explicitFollowupStartNotice
+                  ? explicitFollowupStartNotice.then(() => onPreparedBlockReply(plan, context))
+                  : onPreparedBlockReply(plan, context),
             },
             state.preparedReplyDispatchRuntime && !params.configOverride ? undefined : replyConfig,
           );
@@ -482,6 +525,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     try {
       return await resolverWork;
     } finally {
+      await explicitFollowupStartNotice;
       await flushBlockTtsText();
     }
   }).catch(async (error: unknown) => {
@@ -508,8 +552,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       // Adoption retires ingress replay before the model starts. A progress ACK
       // cannot settle a later failure; use normal final delivery and its policy.
       return adopted &&
-        state.replyOperationRunState.replyCompletion?.expectation === "required" &&
-        state.replyOperationRunState.replyCompletion.outcome !== "blocked" &&
+        isRequiredReplyExpectation(state.replyOperationRunState.replyCompletion?.expectation) &&
+        state.replyOperationRunState.replyCompletion?.outcome !== "blocked" &&
         !state.suppressDelivery &&
         !state.getObservedReplyDelivery()
         ? { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }

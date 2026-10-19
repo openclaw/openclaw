@@ -31,7 +31,7 @@ import {
   hasChannelDmPolicyDependencyWarningCandidates,
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
-import { collectHeartbeatOwnerWarnings } from "./validation-core.js";
+import { collectHeartbeatOwnerWarnings, collectRedactPatternWarnings } from "./validation-core.js";
 import { validateProviderModelParams } from "./validation-model-params.js";
 import {
   formatChannelConfigIssueMessage,
@@ -43,6 +43,7 @@ import {
   collectSecretRefProviderSourceIssues,
 } from "./validation-plugin-registry.js";
 import {
+  preparePluginSchemaValidations,
   validatePreparedPluginSchemaValue,
   type PreparedPluginSchemaValidations,
 } from "./validation-prepared.js";
@@ -80,7 +81,6 @@ export function validatePreparedConfigWithPlugins(
   opts: ValidateConfigWithPluginsParams & {
     applyDefaults: boolean;
     installedPluginRecordIds?: ReadonlySet<string>;
-    schemaValidations?: PreparedPluginSchemaValidations;
   },
 ): ValidateConfigWithPluginsResult {
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
@@ -97,6 +97,10 @@ export function validatePreparedConfigWithPlugins(
     };
     return registryInfo;
   };
+
+  let schemaValidations: PreparedPluginSchemaValidations | undefined;
+  const ensureSchemaValidations = () =>
+    (schemaValidations ??= preparePluginSchemaValidations(ensureLoadedRegistryInfo().registry));
 
   const config = opts.applyDefaults
     ? materializeRuntimeConfig(parsedConfig, {
@@ -131,7 +135,7 @@ export function validatePreparedConfigWithPlugins(
   const deferredPluginIds = new Set(
     opts.deferredPluginMigrations?.map(({ pluginId }) => normalizePluginId(pluginId)),
   );
-  warnings.push(...collectHeartbeatOwnerWarnings(config));
+  warnings.push(...collectHeartbeatOwnerWarnings(config), ...collectRedactPatternWarnings(config));
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
 
   let compatPluginIds: ReadonlySet<string> | null = null;
@@ -374,7 +378,7 @@ export function validatePreparedConfigWithPlugins(
           config,
           registry,
           deferredPluginIds,
-          schemaValidations: opts.schemaValidations,
+          schemaValidations: ensureSchemaValidations(),
         }),
       );
     }
@@ -501,7 +505,7 @@ export function validatePreparedConfigWithPlugins(
           applyDefaults: true, // Always apply defaults for plugin schema validation;
           // writeConfigFile persists persistCandidate, not validated.config (#61841)
         },
-        opts.schemaValidations,
+        ensureSchemaValidations(),
       );
       if (!result.ok) {
         for (const error of result.errors) {
@@ -591,8 +595,8 @@ export function validatePreparedConfigWithPlugins(
       config,
       env: opts.env,
       applyDefaults: opts.applyDefaults,
-      schemaValidations: opts.schemaValidations,
       registry,
+      schemaValidations: ensureSchemaValidations(),
       deferredPluginIds,
       ensureCompatPluginIds,
       ensureOverriddenPluginIds,
@@ -614,6 +618,9 @@ export function validatePreparedConfigWithPlugins(
     );
   }
 
+  if (issues.length === 0) {
+    (schemaValidations ?? preparePluginSchemaValidations(registryInfo?.registry)).publish();
+  }
   return issues.length > 0
     ? { ok: false, issues, warnings }
     : { ok: true, config: mutatedConfig, warnings };

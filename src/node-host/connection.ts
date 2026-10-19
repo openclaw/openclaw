@@ -203,11 +203,6 @@ export function startNodeHostConnection({
         state.rejectedParams = undefined;
         try {
           await connectionClient.request(method, nextParams);
-          // Request settlement races reconnect teardown. Stale completions must
-          // not mutate or report against the retired connection.
-          if (!connectionIsCurrent()) {
-            return;
-          }
           if (isDeepStrictEqual(state.pendingParams, nextParams)) {
             state.pendingParams = undefined;
           }
@@ -217,9 +212,6 @@ export function startNodeHostConnection({
           state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
           state.retryPending = false;
         } catch (error) {
-          if (!connectionIsCurrent()) {
-            return;
-          }
           const failure = classifyNodeMethodFailure(error, method, gatewayProtocol);
           if (failure === "legacy-unsupported") {
             state.unsupported = true;
@@ -326,6 +318,10 @@ export function startNodeHostConnection({
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION)
                 ? { idleRetention: true }
                 : {}),
+              ...(prepared.deviceFoldersEnabled &&
+              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS)
+                ? { deviceFolders: true }
+                : {}),
               ...(prepared.preparedWorkspacesEnabled
                 ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
                 : {}),
@@ -411,6 +407,22 @@ export function startNodeHostConnection({
     onRunnerCapacityChanged: (capacity) => {
       workerCapacity = capacity;
       publishRunnerInventory();
+    },
+    onProcessesChanged: (binding) => {
+      if (!gatewayHelloReceived) {
+        return;
+      }
+      // Retained processes outlive invocation routes; the current connection owns publication.
+      const generation = gatewayConnectionGeneration;
+      void publicationClient
+        .request("node.event", buildNodeEventParams("worker.processes.changed", binding))
+        .catch((error: unknown) => {
+          if (generation === gatewayConnectionGeneration) {
+            writeStderrLine(
+              `worker process notification failed: ${redactSensitiveText(String(error))}`,
+            );
+          }
+        });
     },
     onWorkerHostingDisabled,
     onManifestChanged: (manifest) => {

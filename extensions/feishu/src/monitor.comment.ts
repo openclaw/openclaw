@@ -20,7 +20,6 @@ import {
   type ParsedCommentLinkedDocument,
 } from "./comment-shared.js";
 import { normalizeCommentFileType, type CommentFileType } from "./comment-target.js";
-import type { ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_COMMENT_VERIFY_TIMEOUT_MS = 3_000;
 const FEISHU_COMMENT_PAGE_SIZE = 100;
@@ -57,10 +56,7 @@ type ResolveDriveCommentEventParams = {
   cfg: ClawdbotConfig;
   accountId: string;
   event: FeishuDriveCommentNoticeEvent;
-  account?: ResolvedFeishuAccount;
   botOpenId?: string;
-  createClient?: (account: ResolvedFeishuAccount) => FeishuRequestClient;
-  verificationTimeoutMs?: number;
   logger?: (message: string) => void;
   abortSignal?: AbortSignal;
 };
@@ -952,17 +948,7 @@ function buildDriveCommentSurfacePrompt(
 }
 
 export async function resolveDriveCommentEventTurn(params: ResolveDriveCommentEventParams) {
-  const {
-    cfg,
-    accountId,
-    event,
-    account,
-    botOpenId,
-    createClient,
-    verificationTimeoutMs = FEISHU_COMMENT_VERIFY_TIMEOUT_MS,
-    logger,
-    abortSignal,
-  } = params;
+  const { cfg, accountId, event, botOpenId, logger, abortSignal } = params;
   const eventId = event.event_id?.trim();
   const commentId = event.comment_id?.trim();
   const replyId = event.reply_id?.trim();
@@ -1002,9 +988,9 @@ export async function resolveDriveCommentEventTurn(params: ResolveDriveCommentEv
     return null;
   }
 
-  const client = createClient
-    ? createClient(account ?? ({ accountId } as ResolvedFeishuAccount))
-    : createFeishuClient((await import("./accounts.js")).resolveFeishuAccount({ cfg, accountId }));
+  const client = createFeishuClient(
+    (await import("./accounts.js")).resolveFeishuAccount({ cfg, accountId }),
+  );
   const context = await fetchDriveCommentContext({
     client,
     fileToken,
@@ -1012,7 +998,7 @@ export async function resolveDriveCommentEventTurn(params: ResolveDriveCommentEv
     commentId,
     replyId,
     botOpenIds: [effectiveBotOpenId, event.notice_meta?.to_user_id?.open_id],
-    timeoutMs: verificationTimeoutMs,
+    timeoutMs: FEISHU_COMMENT_VERIFY_TIMEOUT_MS,
     logger,
     accountId,
     abortSignal,

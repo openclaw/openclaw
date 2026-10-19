@@ -40,11 +40,9 @@ import {
   listManagedNpmRootPackageNames,
   quarantineManagedNpmProjectRebuildArtifacts,
   resolveManagedNpmInstallPlan,
-  resolveManagedNpmRootDependencySpecForInstall,
   resolveManagedNpmRootPackageDir,
   resolveRequiredPlatformPackageNames,
   type ManagedNpmProjectQuarantine,
-  type ManagedNpmRootDependencySpecPreparation,
 } from "./install-managed-npm-state.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
 import { preflightPluginNpmInstallPolicy } from "./install-security-scan.js";
@@ -122,8 +120,7 @@ export async function installPluginFromManagedNpmRoot(
     "requirePluginManifest" | "allowSourceTypeScriptEntries"
   > & {
     packageName: string;
-    dependencySpec?: string;
-    prepareDependencySpec?: ManagedNpmRootDependencySpecPreparation;
+    prepareDependencySpec: (params: { npmRoot: string }) => Promise<string>;
     displaySpec: string;
     installPolicyRequest: PluginInstallPolicyRequest;
     npmResolution: NpmSpecResolution;
@@ -207,14 +204,11 @@ export async function installPluginFromManagedNpmRoot(
     | undefined;
   const runManagedNpmInstall = async (npmRoot: string): Promise<InstallPluginResult> => {
     const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
-    const prepared = await resolveManagedNpmRootDependencySpecForInstall({
-      npmRoot,
-      packageName: params.packageName,
-      dependencySpec: params.dependencySpec,
-      prepareDependencySpec: params.prepareDependencySpec,
-    });
-    if (!prepared.ok) {
-      return prepared;
+    let dependencySpec: string;
+    try {
+      dependencySpec = await params.prepareDependencySpec({ npmRoot });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
     logger.info?.(`Installing ${params.displaySpec} into ${npmRoot}…`);
     const repairOpenClawPeer = async (phase: "" | " after npm install") => {
@@ -278,7 +272,7 @@ export async function installPluginFromManagedNpmRoot(
       await upsertManagedNpmRootDependency({
         npmRoot,
         packageName: params.packageName,
-        dependencySpec: prepared.dependencySpec,
+        dependencySpec,
         managedOverrides,
         omitNpmAliasOverrides,
       });

@@ -25,19 +25,16 @@ export function ChatTaskStartMenu(props: {
         {
           id: "local",
           label: t("chat.taskSuggestions.startSession"),
-          attributes: { value: "local" },
           disabled: props.busy || !props.canAccept,
         },
         {
           id: "worktree",
           label: t("chat.taskSuggestions.startWorktree"),
-          attributes: { value: "worktree" },
           disabled: props.busy || !props.canAccept,
         },
         {
           id: "session",
           label: t("chat.taskSuggestions.startCurrentSession"),
-          attributes: { value: "session" },
           disabled: props.busy || !props.canAccept,
         },
       ]}

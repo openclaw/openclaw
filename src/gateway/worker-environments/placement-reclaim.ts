@@ -124,6 +124,43 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
         if (current.state === "reclaimed") {
           return current;
         }
+        if (workspace.kind === "device-folder") {
+          if (moveIntent || request.recoverToGateway) {
+            throw new Error(
+              "Device folders cannot move to the Gateway; reconnect the original device.",
+            );
+          }
+          const claimId = `reclaim-${randomUUID()}`;
+          const claim = await placements.claimReclaimWorkspaceResult(
+            {
+              sessionId: current.sessionId,
+              sessionKey: current.sessionKey,
+              agentId: current.agentId,
+              claimId,
+              runId: claimId,
+              owner: placementTurnOwner(current),
+            },
+            undefined,
+            reauthorize,
+          );
+          reauthorize?.();
+          await placements.acceptWorkspaceResult(claim);
+          await placements.closeWorkerTurnToolState(claim);
+          reauthorize?.();
+          // Destroy stops the worker and releases its private state, never the user-owned folder.
+          await environments.destroy(current.environmentId);
+          const completed = await completeWorkerWorkspaceTeardown({
+            placements,
+            turnClaim: claim,
+            environmentId: current.environmentId,
+            ownerEpoch: current.activeOwnerEpoch,
+          });
+          reportPlacementTransition(onTransition, completed);
+          await environments
+            .stopTunnel(current.environmentId, current.activeOwnerEpoch)
+            .catch(() => undefined);
+          return completed;
+        }
         const root = sessionWorkspaceRoot(workspace);
         const journalPlacement = { ...current };
         const reclaimClaimId = `reclaim-${randomUUID()}`;

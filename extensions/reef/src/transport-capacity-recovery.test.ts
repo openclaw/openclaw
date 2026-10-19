@@ -21,7 +21,6 @@ import {
   reefKeys,
   resetFlowStoresForTests,
   transport,
-  trust,
 } from "./flow.test-helpers.js";
 import {
   REEF_DELIVERED_MAX_ENTRIES,
@@ -31,6 +30,7 @@ import {
 } from "./state.js";
 import { ReefInboxConnection, type ReefTransportClient } from "./transport.js";
 import { createClient, parseRequestUrl } from "./transport.test-helpers.js";
+import { openReefTrustStore } from "./trust-store.js";
 import type { InboxEntry } from "./types.js";
 
 // New runtime and store handles over the same persisted database, as on restart.
@@ -80,6 +80,10 @@ async function fixture(peers = ["alice"], deliveredMaxEntries = REEF_DELIVERED_M
     }),
   );
   const stores = flowStores(deliveredMaxEntries);
+  const trusted = openReefTrustStore(stores.runtime, config());
+  for (const { peer, identity } of identities) {
+    await trusted.set(peer, peerTrust(identity));
+  }
   const raw = stores.runtime.state.openSyncKeyedStore<{ id: string }>({
     namespace: REEF_DELIVERED_NAMESPACE,
     maxEntries: deliveredMaxEntries,
@@ -98,9 +102,7 @@ async function fixture(peers = ["alice"], deliveredMaxEntries = REEF_DELIVERED_M
     const { replay, reviews, delivered } = await openStores(runtime, keys, { deliveredMaxEntries });
     const flow = new ReefMessageFlow({
       config: config(),
-      trust: trust(
-        Object.fromEntries(identities.map(({ peer, identity }) => [peer, peerTrust(identity)])),
-      ).store,
+      trust: openReefTrustStore(runtime, config()),
       keys,
       transport: relay as unknown as ReefTransportClient, // SAFETY: ack-recording mock satisfies the client contract
       guard: guard(allow),

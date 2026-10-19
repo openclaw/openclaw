@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { deriveDeliveryQueueRetentionColumns } from "./delivery-queue-retention-columns.js";
 import { promoteDeliveryQueueEntryPlatformSendInDatabase } from "./delivery-queue-sqlite-claim.kernel.js";
 import { commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase } from "./delivery-queue-sqlite-namespace.kernel.js";
@@ -63,7 +64,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
   });
 
   function insertCorruptRow(id: string, json: string) {
-    const { db } = openTestDatabase();
+    const db = requireNativeSqliteDatabase(openTestDatabase().db);
     db.prepare(
       `INSERT INTO delivery_queue_entries
          (queue_name, id, status, entry_kind, session_key, channel, target, account_id,
@@ -161,8 +162,13 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       seedDeliveryQueueEntry({ queueName: status, entry, status, stateDir });
     }
     const database = openTestDatabase();
-    const reads = trackSqliteStatementExecutions(database.db, ["owners"], (sql) =>
-      sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"') ? "owners" : null,
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["owners"],
+      (sql) =>
+        sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"')
+          ? "owners"
+          : null,
     );
     try {
       expect(getDeliveryQueueEntryOwnersInDatabase(database, ["pending", "failed"], id)).toEqual(
@@ -555,10 +561,13 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         completeDeliveryQueueEntryInDatabase(database, QUEUE, id);
 
         vi.setSystemTime(Date.now() + boundedCronRetention.maxAgeMs - 1);
-        const reads = trackSqliteStatementExecutions(database.db, ["owners"], (sql) =>
-          sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"')
-            ? "owners"
-            : null,
+        const reads = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(database.db),
+          ["owners"],
+          (sql) =>
+            sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"')
+              ? "owners"
+              : null,
         );
         try {
           expect(getDeliveryQueueEntryStatus(QUEUE, id, stateDir)).toBe("completed");

@@ -197,7 +197,7 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
       }
       // Empty startup snapshots carry the admitted absence into later session-only creation.
       for (const pathname of databasePaths) {
-        recordRuntimeAuthProfilePersistedStore(pathname, null, runtimeEnv);
+        recordRuntimeAuthProfilePersistedStore(pathname, null);
       }
       authStores = candidateDirs.map((agentDir) => ({
         agentDir,

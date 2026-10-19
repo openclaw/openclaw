@@ -2,7 +2,8 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { chunkItems } from "../../utils/chunk-items.js";
@@ -16,7 +17,11 @@ import { createTranscriptEntryAnchor } from "./session-accessor.sqlite-transcrip
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
-import { transcriptEventJsonSql, transcriptEventRunIdSql } from "./transcript-payload.js";
+import {
+  transcriptEventJsonSql,
+  transcriptEventRunIdSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
 import { selectVisibleTranscriptEvents } from "./transcript-visible-events.js";
 
 // Keep supplied-key probes below SQLite's conservative variable ceiling.
@@ -84,7 +89,7 @@ export function readTranscriptMirrorFacts(
     sourceRunId?: string;
   },
 ): TranscriptMirrorFacts {
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     database.db,
     () => {
       assertSessionTranscriptHot(database.db, resolved.sessionId);
@@ -151,7 +156,7 @@ export function readTranscriptMirrorFacts(
             events
               .where("event.session_id", "=", resolved.sessionId)
               .where("active.event_seq", "is not", null)
-              .where("event.message_role", "=", "assistant")
+              .where(transcriptPredicateSql(database.db, "message_role", "event"), "=", "assistant")
               .where("event.seq", ">=", (eb) =>
                 eb.fn.coalesce(
                   db
@@ -169,11 +174,14 @@ export function readTranscriptMirrorFacts(
                   ),
                 ),
               )
-              .where(transcriptEventRunIdSql("event"), "=", sourceRunId)
+              .where(transcriptEventRunIdSql(database.db, "event"), "=", sourceRunId)
               .select((eb) => eb.val(1).as("is_source")),
           );
         }
-        const rows = executeSqliteQuerySync(database.db, query.orderBy("event.seq", "asc")).rows;
+        const rows = executeSqliteQuerySync(
+          database.db,
+          query.orderBy(isPostgresSqlConnection(database.db) ? "seq" : "event.seq", "asc"),
+        ).rows;
         for (const row of rows) {
           // SAFETY: event_json reconstructs the stored TranscriptEvent via transcriptEventJsonSql.
           const event = JSON.parse(row.event_json) as TranscriptEvent;

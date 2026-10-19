@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as authStore from "../agents/auth-profiles/store-runtime.js";
+import * as cliAuthEpoch from "../agents/cli-auth-epoch.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintAwsSdkRuntimeOwner,
@@ -9,8 +11,13 @@ import {
   fingerprintResolvedAuthProfileCredential,
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
+import type { AgentHarnessAuthBindingFingerprintParams } from "../agents/harness/types.js";
+import * as modelAuth from "../agents/model-auth.js";
+import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
 import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
 import { resolvePersistentApplyInference as resolvePersistentApplyInferenceImpl } from "./setup-inference.js";
 import {
@@ -21,7 +28,6 @@ import {
 import {
   createSystemAgentVerifiedInferenceBinding as createSystemAgentVerifiedInferenceBindingImpl,
   resolveSystemAgentVerifiedInferenceRoute as resolveSystemAgentVerifiedInferenceRouteImpl,
-  type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 import {
   config,
@@ -29,9 +35,7 @@ import {
   profileStore,
   requireFingerprint,
   cliRuntimeArtifactAuth,
-  cliRuntimeArtifactDeps,
   codexRuntimeArtifactAuth,
-  pluginArtifactDeps,
   pluginRecord,
 } from "./verified-inference.test-support.js";
 
@@ -44,6 +48,13 @@ const harnessRuntimeArtifactState = vi.hoisted(() => ({
   fingerprint: "codex-runtime-v1",
   valid: true,
   ownsAuthBootstrap: true,
+  acceptUnknown: false,
+  authFingerprint:
+    vi.fn<
+      (
+        params: AgentHarnessAuthBindingFingerprintParams & { harnessId: string },
+      ) => Promise<string | undefined>
+    >(),
 }));
 
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
@@ -62,7 +73,7 @@ vi.mock("../agents/harness/runtime-plugin.js", async (importOriginal) => ({
 vi.mock("../agents/harness/registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/harness/registry.js")>()),
   getRegisteredAgentHarness: vi.fn((id: string) =>
-    id === "codex"
+    id === "codex" || harnessRuntimeArtifactState.acceptUnknown
       ? {
           harness: {
             ...(harnessRuntimeArtifactState.ownsAuthBootstrap
@@ -70,10 +81,12 @@ vi.mock("../agents/harness/registry.js", async (importOriginal) => ({
               : {}),
             runtimeArtifact: {
               validate: async (artifact: { id: string; fingerprint: string }) =>
-                harnessRuntimeArtifactState.valid &&
-                artifact.id === harnessRuntimeArtifactState.id &&
-                artifact.fingerprint === harnessRuntimeArtifactState.fingerprint,
+                harnessRuntimeArtifactState.acceptUnknown ||
+                (harnessRuntimeArtifactState.valid &&
+                  artifact.id === harnessRuntimeArtifactState.id &&
+                  artifact.fingerprint === harnessRuntimeArtifactState.fingerprint),
             },
+            authBinding: { fingerprint: harnessRuntimeArtifactState.authFingerprint },
           },
         }
       : undefined,
@@ -124,6 +137,8 @@ afterAll(() => {
   restoreCliBackendFixture?.();
 });
 
+afterEach(() => vi.restoreAllMocks());
+
 beforeEach(() => {
   pluginRegistryState.providerOwnerIds = ["provider-owner"];
   pluginRegistryState.records = [pluginRecord("provider-owner"), pluginRecord("codex")];
@@ -131,37 +146,42 @@ beforeEach(() => {
   harnessRuntimeArtifactState.fingerprint = "codex-runtime-v1";
   harnessRuntimeArtifactState.valid = true;
   harnessRuntimeArtifactState.ownsAuthBootstrap = true;
+  harnessRuntimeArtifactState.acceptUnknown = false;
+  mockAuth();
+  vi.spyOn(cliAuthEpoch, "resolveCliRuntimeArtifactFingerprint").mockResolvedValue(
+    "claude-cli-artifact-v1",
+  );
+  vi.spyOn(pluginArtifactIdentity, "fingerprintPluginRuntimeArtifact").mockImplementation(
+    (record) => `${record.pluginId}-runtime-v1`,
+  );
+  vi.spyOn(pluginArtifactIdentity, "loadPluginRuntimeArtifactIdentitySources").mockImplementation(
+    () => pluginRegistryState.records,
+  );
 });
 
-function authDeps(apiKey = "verified-key") {
+function mockAuth(apiKey = "verified-key") {
   const resolvedAuth = profileAuth("openai:verified", apiKey);
-  return {
-    loadAuthProfileStoreForRuntime: profileStore("openai:verified", { ...profile, key: apiKey }),
-    resolveApiKeyForProvider: vi.fn(async () => resolvedAuth),
-    resolveAgentHarnessAuthBindingFingerprint: vi.fn(
-      async (
-        params: Parameters<
-          NonNullable<SystemAgentVerifiedInferenceDeps["resolveAgentHarnessAuthBindingFingerprint"]>
-        >[0],
-      ) => {
-        const credential = params.authProfileStore.profiles[params.authProfileId];
-        return credential
-          ? fingerprintResolvedAuthProfileCredential({
-              profileId: params.authProfileId,
-              credential,
-              resolvedAuth: profileAuth(params.authProfileId, apiKey),
-            })
-          : undefined;
-      },
-    ),
-  };
+  vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(
+    profileStore("openai:verified", {
+      ...profile,
+      key: apiKey,
+    }),
+  );
+  vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockResolvedValue(resolvedAuth);
+  harnessRuntimeArtifactState.authFingerprint.mockImplementation(async (params) => {
+    const credential = params.authProfileStore.profiles[params.authProfileId];
+    return credential
+      ? fingerprintResolvedAuthProfileCredential({
+          profileId: params.authProfileId,
+          credential,
+          resolvedAuth: profileAuth(params.authProfileId, apiKey),
+        })
+      : undefined;
+  });
 }
 
-async function bindingFor(
-  baseConfig: OpenClawConfig,
-  deps: SystemAgentVerifiedInferenceDeps = { ...authDeps(), ...pluginArtifactDeps() },
-) {
-  const route = await requireRoute(baseConfig);
+async function bindingFor(baseConfig: OpenClawConfig, preparedRoute?: ConfiguredRoute) {
+  const route = preparedRoute ?? (await requireRoute(baseConfig));
   const authFingerprint = requireFingerprint(
     fingerprintAuthProfileCredential({ profileId: "openai:verified", credential: profile }),
   );
@@ -171,28 +191,24 @@ async function bindingFor(
         ? "openclaw"
         : (route.agentHarnessRuntimeOverride ?? "codex")
       : undefined;
-  return createBinding(
-    route,
-    {
-      authProfileId: "openai:verified",
-      authFingerprint,
-      modelId: route.model,
-      modelApi: route.provider === "anthropic" ? "anthropic-messages" : "openai-responses",
-      ...(agentHarnessId
-        ? {
-            agentHarnessId,
-            ...(agentHarnessId === "openclaw"
-              ? {}
-              : {
-                  runtimeOwnerKind: "plugin-harness" as const,
-                  runtimeOwnerId: agentHarnessId,
-                  ...codexRuntimeArtifactAuth,
-                }),
-          }
-        : {}),
-    },
-    deps,
-  );
+  return createBinding(route, {
+    authProfileId: "openai:verified",
+    authFingerprint,
+    modelId: route.model,
+    modelApi: route.provider === "anthropic" ? "anthropic-messages" : "openai-responses",
+    ...(agentHarnessId
+      ? {
+          agentHarnessId,
+          ...(agentHarnessId === "openclaw"
+            ? {}
+            : {
+                runtimeOwnerKind: "plugin-harness" as const,
+                runtimeOwnerId: agentHarnessId,
+                ...codexRuntimeArtifactAuth,
+              }),
+        }
+      : {}),
+  });
 }
 
 type ConfiguredRoute = NonNullable<
@@ -215,13 +231,11 @@ async function requireRoute(baseConfig: OpenClawConfig, runner?: ConfiguredRoute
 function createBinding(
   route: ConfiguredRoute,
   auth: Parameters<typeof createSystemAgentVerifiedInferenceBinding>[0]["auth"],
-  deps: SystemAgentVerifiedInferenceDeps = {},
 ) {
   return createSystemAgentVerifiedInferenceBinding({
     configuredRoute: route,
     executionRoute: route,
     auth,
-    deps,
   });
 }
 
@@ -280,7 +294,6 @@ async function opaqueHarnessBinding(
   const binding = await createBinding(
     configuredRoute,
     opaqueHarnessAuth(configuredRoute, options.backendId),
-    pluginArtifactDeps(),
   );
   return { binding };
 }
@@ -288,11 +301,9 @@ async function opaqueHarnessBinding(
 async function revalidate(
   binding: Awaited<ReturnType<typeof bindingFor>>,
   baseConfig: OpenClawConfig,
-  deps: SystemAgentVerifiedInferenceDeps = {},
 ) {
   return resolveSystemAgentVerifiedInferenceRoute(binding, {
     ...configSnapshot(baseConfig),
-    ...deps,
   });
 }
 
@@ -335,56 +346,49 @@ describe("verified OpenClaw inference binding", () => {
     const authFingerprint = requireFingerprint(
       fingerprintAuthProfileCredential({ profileId: "anthropic:oauth", credential }),
     );
-    const binding = await createBinding(
-      route,
-      {
-        authProfileId: "anthropic:oauth",
-        authFingerprint,
-        agentHarnessId: "openclaw",
-      },
-      {
-        ...pluginArtifactDeps(),
-        loadAuthProfileStoreForRuntime: profileStore("anthropic:oauth", credential),
-      },
+    vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(
+      profileStore("anthropic:oauth", credential),
     );
+    const binding = await createBinding(route, {
+      authProfileId: "anthropic:oauth",
+      authFingerprint,
+      agentHarnessId: "openclaw",
+    });
 
-    const current = await revalidate(binding, oauthConfig, {
-      loadAuthProfileStoreForRuntime: profileStore("anthropic:oauth", {
+    vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(
+      profileStore("anthropic:oauth", {
         ...credential,
         access: "access-b",
         refresh: "refresh-b",
       }),
-    });
+    );
+    const current = await revalidate(binding, oauthConfig);
 
     expect(current).toBeNull();
   });
 
   it("rejects a binding when no credential fingerprint can be observed", async () => {
     const route = await requireRoute(config());
+    vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(
+      profileStore("openai:verified", {
+        type: "api_key",
+        provider: "openai",
+        keyRef: { source: "file", provider: "vault", id: "/openai/key" },
+      }),
+    );
+    harnessRuntimeArtifactState.authFingerprint.mockRejectedValue(
+      new Error("active secret unavailable"),
+    );
 
     await expect(
-      createBinding(
-        route,
-        {
-          authProfileId: "openai:verified",
-          authFingerprint: "reported-owner",
-          agentHarnessId: "codex",
-          runtimeOwnerKind: "plugin-harness",
-          runtimeOwnerId: "codex",
-          ...codexRuntimeArtifactAuth,
-        },
-        {
-          ...pluginArtifactDeps(),
-          loadAuthProfileStoreForRuntime: profileStore("openai:verified", {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "file", provider: "vault", id: "/openai/key" },
-          }),
-          resolveAgentHarnessAuthBindingFingerprint: vi.fn(async () => {
-            throw new Error("active secret unavailable");
-          }),
-        },
-      ),
+      createBinding(route, {
+        authProfileId: "openai:verified",
+        authFingerprint: "reported-owner",
+        agentHarnessId: "codex",
+        runtimeOwnerKind: "plugin-harness",
+        runtimeOwnerId: "codex",
+        ...codexRuntimeArtifactAuth,
+      }),
     ).rejects.toThrow("active secret unavailable");
   });
 
@@ -393,19 +397,13 @@ describe("verified OpenClaw inference binding", () => {
     // plan. Revalidation must carry that exact tuple forward instead of
     // repeating catalog and provider discovery in the authority hot path.
     const { route, authFingerprint, resolveAuth } = await envAuthFixture();
-    const binding = await createBinding(
-      route,
-      {
-        authFingerprint,
-        agentHarnessId: "openclaw",
-        modelId: "gpt-5.6",
-        modelApi: "openai-responses",
-      },
-      {
-        ...pluginArtifactDeps(),
-        resolveApiKeyForProvider: resolveAuth as never,
-      },
-    );
+    vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockImplementation(resolveAuth);
+    const binding = await createBinding(route, {
+      authFingerprint,
+      agentHarnessId: "openclaw",
+      modelId: "gpt-5.6",
+      modelApi: "openai-responses",
+    });
 
     expect(binding.auth.authFingerprint).toBe(authFingerprint);
     expect(resolveAuth).toHaveBeenCalledWith(
@@ -415,16 +413,10 @@ describe("verified OpenClaw inference binding", () => {
 
   it("fails closed when a credential-backed run omits its model transport facts", async () => {
     const { route, authFingerprint, resolveAuth } = await envAuthFixture();
+    vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockImplementation(resolveAuth);
 
     await expect(
-      createBinding(
-        route,
-        { authFingerprint, agentHarnessId: "openclaw" },
-        {
-          ...pluginArtifactDeps(),
-          resolveApiKeyForProvider: resolveAuth as never,
-        },
-      ),
+      createBinding(route, { authFingerprint, agentHarnessId: "openclaw" }),
     ).rejects.toThrow("no longer the active route owner");
     expect(resolveAuth).not.toHaveBeenCalled();
   });
@@ -437,30 +429,23 @@ describe("verified OpenClaw inference binding", () => {
     } satisfies OpenClawConfig;
     const route = await requireRoute(cliConfig, "cli");
     const resolveOwner = vi.fn(async () => "opaque-cli-owner");
-    const deps = {
-      ...cliRuntimeArtifactDeps(),
-      resolveCliRuntimeOwnerFingerprint: resolveOwner,
-    };
-    const binding = await createBinding(
-      route,
-      {
-        runtimeOwnerFingerprint: "opaque-cli-owner",
-        runtimeOwnerKind: "cli-runtime",
-        runtimeOwnerId: "claude-cli",
-        ...cliRuntimeArtifactAuth,
-      },
-      { ...pluginArtifactDeps(), ...deps },
-    );
+    vi.spyOn(cliAuthEpoch, "resolveCliRuntimeOwnerFingerprint").mockImplementation(resolveOwner);
+    const binding = await createBinding(route, {
+      runtimeOwnerFingerprint: "opaque-cli-owner",
+      runtimeOwnerKind: "cli-runtime",
+      runtimeOwnerId: "claude-cli",
+      ...cliRuntimeArtifactAuth,
+    });
 
     expect(binding.auth).toMatchObject({
       authFingerprint: "opaque-cli-owner",
       proofKind: "runtime-owner",
     });
     expect(resolveOwner).toHaveBeenCalledWith(expect.objectContaining({ agentId: "ops" }));
-    await expect(revalidate(binding, cliConfig, deps)).resolves.toBe(binding.execution);
+    await expect(revalidate(binding, cliConfig)).resolves.toBe(binding.execution);
 
     resolveOwner.mockResolvedValue("replacement-owner");
-    await expect(revalidate(binding, cliConfig, deps)).resolves.toBeNull();
+    await expect(revalidate(binding, cliConfig)).resolves.toBeNull();
   });
 
   it("invalidates a strict CLI credential when its package artifact changes", async () => {
@@ -470,26 +455,17 @@ describe("verified OpenClaw inference binding", () => {
     const route = await requireRoute(cliConfig, "cli");
     const resolveAuth = vi.fn(async () => "strict-cli-credential");
     const resolveArtifact = vi.fn(async () => "claude-cli-artifact-v1");
-    const binding = await createBinding(
-      route,
-      {
-        authFingerprint: "strict-cli-credential",
-        ...cliRuntimeArtifactAuth,
-      },
-      {
-        ...pluginArtifactDeps(),
-        resolveCliAuthBindingFingerprint: resolveAuth,
-        resolveCliRuntimeArtifactFingerprint: resolveArtifact,
-      },
+    vi.spyOn(cliAuthEpoch, "resolveCliAuthBindingFingerprint").mockImplementation(resolveAuth);
+    vi.spyOn(cliAuthEpoch, "resolveCliRuntimeArtifactFingerprint").mockImplementation(
+      resolveArtifact,
     );
+    const binding = await createBinding(route, {
+      authFingerprint: "strict-cli-credential",
+      ...cliRuntimeArtifactAuth,
+    });
 
     resolveArtifact.mockResolvedValue("claude-cli-artifact-v2");
-    await expect(
-      revalidate(binding, cliConfig, {
-        resolveCliAuthBindingFingerprint: resolveAuth,
-        resolveCliRuntimeArtifactFingerprint: resolveArtifact,
-      }),
-    ).resolves.toBeNull();
+    await expect(revalidate(binding, cliConfig)).resolves.toBeNull();
   });
 
   it.each(["cli", "embedded"] as const)(
@@ -499,25 +475,18 @@ describe("verified OpenClaw inference binding", () => {
         runner === "cli" ? "claude-cli/claude-opus-5" : "openai/gpt-5.5@openai:verified",
       );
       baseConfig.agents = { ...baseConfig.agents, entries: { main: {} } };
-      const deps = {
-        ...authDeps(),
-        ...pluginArtifactDeps(),
-        ...cliRuntimeArtifactDeps(),
-        resolveCliRuntimeOwnerFingerprint: vi.fn(async () => "opaque-cli-owner"),
-      };
+      vi.spyOn(cliAuthEpoch, "resolveCliRuntimeOwnerFingerprint").mockResolvedValue(
+        "opaque-cli-owner",
+      );
       const binding =
         runner === "cli"
-          ? await createBinding(
-              await requireRoute(baseConfig, "cli"),
-              {
-                runtimeOwnerFingerprint: "opaque-cli-owner",
-                runtimeOwnerKind: "cli-runtime",
-                runtimeOwnerId: "claude-cli",
-                ...cliRuntimeArtifactAuth,
-              },
-              deps,
-            )
-          : await bindingFor(baseConfig, deps);
+          ? await createBinding(await requireRoute(baseConfig, "cli"), {
+              runtimeOwnerFingerprint: "opaque-cli-owner",
+              runtimeOwnerKind: "cli-runtime",
+              runtimeOwnerId: "claude-cli",
+              ...cliRuntimeArtifactAuth,
+            })
+          : await bindingFor(baseConfig);
       const materialized = {
         ...baseConfig,
         agents: {
@@ -532,15 +501,17 @@ describe("verified OpenClaw inference binding", () => {
         },
       } satisfies OpenClawConfig;
 
-      await expect(revalidate(binding, materialized, deps)).resolves.toBe(binding.execution);
+      await expect(revalidate(binding, materialized)).resolves.toBe(binding.execution);
 
       const moved = structuredClone(materialized);
       moved.agents.entries.main.agentDir = path.join(binding.execution.agentDir, "replacement");
-      await expect(revalidate(binding, moved, deps)).resolves.toBeNull();
+      await expect(revalidate(binding, moved)).resolves.toBeNull();
 
-      deps.resolveCliRuntimeArtifactFingerprint.mockResolvedValue("replacement-cli-artifact");
+      vi.mocked(cliAuthEpoch.resolveCliRuntimeArtifactFingerprint).mockResolvedValue(
+        "replacement-cli-artifact",
+      );
       harnessRuntimeArtifactState.fingerprint = "replacement-harness-artifact";
-      await expect(revalidate(binding, materialized, deps)).resolves.toBeNull();
+      await expect(revalidate(binding, materialized)).resolves.toBeNull();
     },
   );
 
@@ -562,33 +533,24 @@ describe("verified OpenClaw inference binding", () => {
       keyRef: { source: "file" as const, provider: "vault", id: "/claude/work" },
     };
     const ensureStore = profileStore(profileId, credential);
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig, undefined, {
-      loadAuthProfileStoreForRuntime: ensureStore,
-    });
+    vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(ensureStore);
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig);
     if (!route || route.runner !== "cli" || route.authProfileId !== profileId) {
       throw new Error("missing test CLI SecretRef route");
     }
     let activeKey = "materialized-a";
     const resolveAuth = vi.fn(async () => profileAuth(profileId, activeKey));
     const resolveBinding = vi.fn(
-      (params: { resolvedAuth?: { apiKey?: string } }) =>
+      async (params: { resolvedAuth?: { apiKey?: string } }) =>
         params.resolvedAuth?.apiKey && `strict:${params.resolvedAuth.apiKey}`,
     );
-    const binding = await createBinding(
-      route,
-      {
-        authProfileId: profileId,
-        authFingerprint: "strict:materialized-a",
-        ...cliRuntimeArtifactAuth,
-      },
-      {
-        ...pluginArtifactDeps(),
-        ...cliRuntimeArtifactDeps(),
-        loadAuthProfileStoreForRuntime: ensureStore,
-        resolveApiKeyForProvider: resolveAuth,
-        resolveCliAuthBindingFingerprint: resolveBinding as never,
-      },
-    );
+    vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockImplementation(resolveAuth);
+    vi.spyOn(cliAuthEpoch, "resolveCliAuthBindingFingerprint").mockImplementation(resolveBinding);
+    const binding = await createBinding(route, {
+      authProfileId: profileId,
+      authFingerprint: "strict:materialized-a",
+      ...cliRuntimeArtifactAuth,
+    });
 
     expect(resolveBinding).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -599,14 +561,7 @@ describe("verified OpenClaw inference binding", () => {
       expect.objectContaining({ profileId, lockedProfile: true, secretSentinels: false }),
     );
     activeKey = "materialized-b";
-    await expect(
-      revalidate(binding, cliConfig, {
-        ...cliRuntimeArtifactDeps(),
-        loadAuthProfileStoreForRuntime: ensureStore,
-        resolveApiKeyForProvider: resolveAuth,
-        resolveCliAuthBindingFingerprint: resolveBinding as never,
-      }),
-    ).resolves.toBeNull();
+    await expect(revalidate(binding, cliConfig)).resolves.toBeNull();
     expect(resolveBinding).toHaveBeenLastCalledWith(
       expect.objectContaining({
         resolvedAuth: expect.objectContaining({ apiKey: "materialized-b", profileId }),
@@ -623,7 +578,6 @@ describe("verified OpenClaw inference binding", () => {
     const authFingerprint = requireFingerprint(
       fingerprintAuthProfileCredential({ profileId: "openai:verified", credential: profile }),
     );
-    const deps = { ...authDeps(), ...pluginArtifactDeps() };
     const harnessAuth = {
       authProfileId: "openai:verified",
       authFingerprint,
@@ -633,15 +587,15 @@ describe("verified OpenClaw inference binding", () => {
     };
 
     await expect(
-      createBinding(route, { authProfileId: "openai:verified", authFingerprint }, deps),
+      createBinding(route, { authProfileId: "openai:verified", authFingerprint }),
     ).rejects.toThrow("did not report its exact runtime artifact");
 
-    await expect(createBinding(route, harnessAuth, deps)).rejects.toThrow(
+    await expect(createBinding(route, harnessAuth)).rejects.toThrow(
       "did not report its exact runtime artifact",
     );
 
     await expect(
-      createBinding(route, { ...harnessAuth, ...codexRuntimeArtifactAuth }, deps),
+      createBinding(route, { ...harnessAuth, ...codexRuntimeArtifactAuth }),
     ).resolves.toMatchObject({
       execution: { agentHarnessRuntimeOverride: "codex" },
       auth: { authFingerprint, runtimeArtifactFingerprint: "codex-runtime-v1" },
@@ -670,24 +624,16 @@ describe("verified OpenClaw inference binding", () => {
     );
 
     await expect(
-      createBinding(
-        configuredRoute,
-        { authProfileId: "openai:verified", authFingerprint },
-        authDeps(),
-      ),
+      createBinding(configuredRoute, { authProfileId: "openai:verified", authFingerprint }),
     ).rejects.toThrow("did not report its exact agent harness");
 
-    const binding = await createBinding(
-      configuredRoute,
-      {
-        authProfileId: "openai:verified",
-        authFingerprint,
-        agentHarnessId: "openclaw",
-        modelId: configuredRoute.model,
-        modelApi: "openai-responses",
-      },
-      { ...authDeps(), ...pluginArtifactDeps() },
-    );
+    const binding = await createBinding(configuredRoute, {
+      authProfileId: "openai:verified",
+      authFingerprint,
+      agentHarnessId: "openclaw",
+      modelId: configuredRoute.model,
+      modelApi: "openai-responses",
+    });
 
     expect(binding.execution).toMatchObject({ agentHarnessRuntimeOverride: "openclaw" });
     expect(binding.auth.agentHarnessId).toBe("openclaw");
@@ -699,11 +645,10 @@ describe("verified OpenClaw inference binding", () => {
       ...resolved,
       agentHarnessRuntimeOverride: "auto",
     } satisfies typeof resolved;
+    harnessRuntimeArtifactState.acceptUnknown = true;
 
     await expect(
-      createBinding(configuredRoute, opaqueHarnessAuth(configuredRoute, "unowned-harness"), {
-        validateAgentHarnessRuntimeArtifact: vi.fn(async () => true),
-      }),
+      createBinding(configuredRoute, opaqueHarnessAuth(configuredRoute, "unowned-harness")),
     ).rejects.toThrow("no trusted manifest owner");
   });
 
@@ -731,27 +676,22 @@ describe("verified OpenClaw inference binding", () => {
       }),
     );
     const resolveAuth = vi.fn(async () => resolvedAuth);
-    const deps = {
-      ...pluginArtifactDeps(),
-      loadAuthProfileStoreForRuntime: profileStore("openai:verified", profile),
-      resolveApiKeyForProvider: resolveAuth,
-    };
-    const binding = await createBinding(
-      route,
-      {
-        authProfileId: "openai:verified",
-        authFingerprint,
-        agentHarnessId: "codex",
-        modelId: route.model,
-        modelApi: "openai-responses",
-        runtimeOwnerKind: "plugin-harness",
-        runtimeOwnerId: "codex",
-        ...codexRuntimeArtifactAuth,
-      },
-      deps,
+    vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(
+      profileStore("openai:verified", profile),
     );
+    vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockImplementation(resolveAuth);
+    const binding = await createBinding(route, {
+      authProfileId: "openai:verified",
+      authFingerprint,
+      agentHarnessId: "codex",
+      modelId: route.model,
+      modelApi: "openai-responses",
+      runtimeOwnerKind: "plugin-harness",
+      runtimeOwnerId: "codex",
+      ...codexRuntimeArtifactAuth,
+    });
 
-    await expect(revalidate(binding, harnessConfig, deps)).resolves.toBe(binding.execution);
+    await expect(revalidate(binding, harnessConfig)).resolves.toBe(binding.execution);
     expect(resolveAuth).toHaveBeenLastCalledWith(
       expect.objectContaining({
         profileId: "openai:verified",
@@ -787,28 +727,23 @@ describe("verified OpenClaw inference binding", () => {
         resolvedAuth: profileAuth("openai:work", activeKey),
       }),
     );
-    const deps = {
-      ...pluginArtifactDeps(),
-      loadAuthProfileStoreForRuntime: profileStore("openai:work", credential),
-      resolveAgentHarnessAuthBindingFingerprint: resolveHarnessAuth,
-    };
-    const binding = await createBinding(
-      route,
-      {
-        authProfileId: "openai:work",
-        authFingerprint,
-        agentHarnessId: "codex",
-        runtimeOwnerKind: "plugin-harness",
-        runtimeOwnerId: "codex",
-        ...codexRuntimeArtifactAuth,
-      },
-      deps,
+    vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(
+      profileStore("openai:work", credential),
     );
+    harnessRuntimeArtifactState.authFingerprint.mockImplementation(resolveHarnessAuth);
+    const binding = await createBinding(route, {
+      authProfileId: "openai:work",
+      authFingerprint,
+      agentHarnessId: "codex",
+      runtimeOwnerKind: "plugin-harness",
+      runtimeOwnerId: "codex",
+      ...codexRuntimeArtifactAuth,
+    });
 
-    await expect(revalidate(binding, harnessConfig, deps)).resolves.toBe(binding.execution);
+    await expect(revalidate(binding, harnessConfig)).resolves.toBe(binding.execution);
 
     activeKey = "replacement-key";
-    await expect(revalidate(binding, harnessConfig, deps)).resolves.toBeNull();
+    await expect(revalidate(binding, harnessConfig)).resolves.toBeNull();
     expect(resolveHarnessAuth).toHaveBeenCalledWith(
       expect.objectContaining({ harnessId: "codex", authProfileId: "openai:work" }),
     );
@@ -865,7 +800,7 @@ describe("verified OpenClaw inference binding", () => {
       pluginRegistryState.providerOwnerIds = ownerIds;
       pluginRegistryState.records = records;
 
-      const route = await revalidate(binding, baseConfig, authDeps());
+      const route = await revalidate(binding, baseConfig);
 
       expect(route).toBeNull();
     },
@@ -876,7 +811,7 @@ describe("verified OpenClaw inference binding", () => {
     const binding = await bindingFor(baseConfig);
     pluginRegistryState.records = [];
 
-    const route = await revalidate(binding, baseConfig, authDeps());
+    const route = await revalidate(binding, baseConfig);
 
     expect(route).toBeNull();
   });
@@ -891,6 +826,7 @@ describe("verified OpenClaw inference binding", () => {
   ])(
     "invalidates a strict credential after an in-place $name change with stable registry identity",
     async ({ origin, sourcePath, installRecordHash }) => {
+      vi.mocked(pluginArtifactIdentity.fingerprintPluginRuntimeArtifact).mockRestore();
       const runtimePath = "dist/index.js";
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-openclaw-plugin-"));
       try {
@@ -928,19 +864,27 @@ describe("verified OpenClaw inference binding", () => {
           source: codexSource,
           packageJson: { path: codexPackageJsonPath, hash: "codex-package-v1" },
         });
-        const loadPluginRegistrySnapshot = vi.fn(() => ({ plugins: [record, codexRecord] }));
-        const deps = {
-          ...authDeps(),
-          loadPluginRegistrySnapshot,
-        };
+        pluginRegistryState.records = [record, codexRecord];
         const baseConfig = config();
-        const binding = await bindingFor(baseConfig, deps);
+        const configFixture = await createInferenceConfigFixture(baseConfig);
+        const snapshot = configFixture.snapshot;
+        const view = snapshot.runtimeConfig ?? snapshot.config;
+        const route = await resolveSystemAgentConfiguredRouteFromConfig(
+          view,
+          undefined,
+          {},
+          snapshot,
+        );
+        if (!route) {
+          throw new Error("missing physical-artifact test route");
+        }
+        const binding = await bindingFor(view, route);
+        vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(configFixture.read);
 
         await expect(
           resolvePersistentApplyInference({
             binding,
             runtime,
-            deps: { ...configSnapshot(baseConfig), ...deps },
           }),
         ).resolves.toBe(binding.execution);
 
@@ -950,7 +894,6 @@ describe("verified OpenClaw inference binding", () => {
           resolvePersistentApplyInference({
             binding,
             runtime,
-            deps: { ...configSnapshot(baseConfig), ...deps },
           }),
         ).resolves.toBeNull();
       } finally {
@@ -970,7 +913,7 @@ describe("verified OpenClaw inference binding", () => {
     const binding = await bindingFor(baseConfig);
     const changed = { ...config(), plugins } satisfies OpenClawConfig;
 
-    const route = await revalidate(binding, changed, authDeps());
+    const route = await revalidate(binding, changed);
 
     expect(route).toBe(remainsValid ? binding.execution : null);
   });

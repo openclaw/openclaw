@@ -36,6 +36,12 @@ const modelAccountLinksCurrent = vi.hoisted(() => vi.fn());
 
 vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  readResidentUserProfileIdentity: (reference: string) => {
+    const profileId = resolveProfileId(reference);
+    return profileId
+      ? { profileId, aliases: new Set([reference, profileId]), role: null }
+      : undefined;
+  },
   captureResidentUserProfileAccess: (profileId: string) => ({
     assertCurrent: () => ({ id: resolveProfileId(profileId), role: null, githubLogin: null }),
   }),
@@ -43,6 +49,16 @@ vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
 vi.mock("../../state/user-channel-identity-operations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-channel-identity-operations.js")>()),
   prepareUserProfileSelectionAuthority,
+  prepareUserProfileRolePolicyAuthority: async (reference: string) => {
+    const profileId = resolveProfileId(reference);
+    return {
+      profileId,
+      role: null,
+      githubLogin: null,
+      isCurrent: () =>
+        resolveProfileId(reference) === profileId && resolveProfileId(profileId) === profileId,
+    };
+  },
 }));
 vi.mock("../../state/user-profile-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-events.js")>()),

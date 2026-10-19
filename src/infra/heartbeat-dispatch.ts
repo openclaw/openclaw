@@ -31,7 +31,7 @@ import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
 import { writeCronJobScratch } from "../cron/scratch-store.js";
-import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import {
   isDeliveryRecoveryOwnedRetry,
   resolveDeliveryNotSentRetryability,
@@ -166,6 +166,7 @@ async function prepareHeartbeatDispatchReply(
       heartbeatToolResponse: response,
       heartbeatTerminalToolFailure: failure,
       replyPayload: selected,
+      replyCompletion: runState.replyCompletion,
     },
     useHeartbeatFailureCopy: prepared.useHeartbeatFailureCopy,
     hasRelayableExecCompletion: prepared.hasRelayableExecCompletion,
@@ -189,7 +190,7 @@ async function prepareHeartbeatDispatchReply(
         const owner = runState.agentTurnOwner;
         const written = await writeCronJobScratch(
           {
-            storePath: resolveCronJobsStorePathFromConfig(cfg),
+            storePath: await resolveCronJobsStorePathFromConfigAsync(cfg),
             jobId: preflight.scratchJobId,
             content: scratch,
             expectedRevision: preflight.scratchRevision ?? 0,

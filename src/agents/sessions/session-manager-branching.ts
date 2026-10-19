@@ -24,6 +24,29 @@ import type { SessionManagerPersistenceTarget } from "./session-manager-view-typ
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 export class SessionManagerBranching extends SessionManagerMetadata {
+  /** A context-only view must not rewind past omitted, user-visible entries. */
+  hasLoadedTranscriptTail(entryId: string, parentId: string | null): boolean {
+    this.assertTranscriptViewAvailable();
+    if (this.appendMode === "side") {
+      return false;
+    }
+    let currentId = this.appendParentId;
+    for (let remaining = this.byId.size; currentId && remaining > 0; remaining--) {
+      const entry = this.byId.get(currentId);
+      if (!entry) {
+        return false;
+      }
+      const currentParentId = this.boundedParentIds.has(currentId)
+        ? (this.boundedParentIds.get(currentId) ?? null)
+        : entry.parentId;
+      if (currentId === entryId) {
+        return currentParentId === parentId;
+      }
+      currentId = currentParentId;
+    }
+    return false;
+  }
+
   private collectBranchedSessionPath(leafId: string): {
     entries: SessionEntry[];
     opaqueEntries: PreservedOpaqueFileEntry[];
@@ -192,7 +215,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         };
         const { restoreSessionColdTranscript } =
           await import("../../config/sessions/session-cold-storage.js");
-        if ("db" in admission.database) {
+        if (!("withMetadata" in admission.database)) {
           await restoreSessionColdTranscript(persistenceTarget, assertCurrent);
         }
         const reader = prepareSessionManagerHydration(persistenceTarget, {
@@ -275,7 +298,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
           failure = { cause };
         }
         try {
-          if (!("db" in admission.database)) {
+          if ("withMetadata" in admission.database) {
             publishCommittedSessionIdentity(
               scope.agentId,
               admission.database.identity.incarnation,

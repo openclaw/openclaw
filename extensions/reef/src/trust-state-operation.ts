@@ -14,7 +14,6 @@ import {
   reserveReefRejection,
 } from "./trust-delivery-transition.js";
 import { transitionReefPeer, type ReefPeerMutations } from "./trust-peer-transition.js";
-import { validateReefPeerIdentity } from "./trust-store-authority.js";
 import {
   currentReefDeliveries,
   listReefPeerTrust,
@@ -22,7 +21,6 @@ import {
   mergeReefRejectionNotice,
   parseReefPeerState,
   ReefOutboundDeliverySchema,
-  ReefPeerTrustChangedError,
   ReefRejectionNoticeStateSchema,
   reefOutboundRequestStatus,
   type ReefOutboundDelivery,
@@ -52,11 +50,6 @@ export type ReefTrustStateOperations = ReefPeerMutations & {
   requestStatus: {
     input: PeerKey & { requestId: string };
     output: "current" | "superseded" | "revoked";
-  };
-  prepareDelivery: { input: ReefDeliveryOperationInput; output: ReefPeerTrust | undefined };
-  recordDelivery: {
-    input: ReefDeliveryOperationInput & { delivery: ReefOutboundDelivery };
-    output: "recorded" | "peer-changed" | "duplicate";
   };
   readDelivery: { input: ReefDeliveryOperationInput; output: DeliveryRead | undefined };
   consumeDelivery: {
@@ -101,44 +94,6 @@ function readReefPeerState(
   return parseReefPeerState(tx.lookup(0, key));
 }
 
-class ReefDuplicateOutboundDeliveryError extends Error {
-  constructor(id: string) {
-    super(`Duplicate outbound Reef delivery id ${id}`);
-    this.name = "ReefDuplicateOutboundDeliveryError";
-  }
-}
-
-export function recordReefOutboundDelivery(
-  tx: PluginStateOperationTransaction,
-  params: {
-    peers: number;
-    deliveries: number;
-    peerKey: string;
-    deliveryKey: string;
-    peer: string;
-    delivery: ReefOutboundDelivery;
-  },
-  prepared?: { peerState: ReefPeerStateSnapshot; delivery: unknown },
-): void {
-  // A composing worker may reuse facts read earlier in this same synchronous transaction.
-  const current =
-    prepared ??
-    (() => {
-      const [peerValue, delivery] = tx.lookupMany([
-        { store: params.peers, key: params.peerKey },
-        { store: params.deliveries, key: params.deliveryKey },
-      ]);
-      return { peerState: parseReefPeerState(peerValue), delivery };
-    })();
-  const delivery = ReefOutboundDeliverySchema.parse(params.delivery);
-  validateReefPeerIdentity(current.peerState.trust, params.peer, delivery.recipient);
-  if (current.delivery !== undefined) {
-    const id = params.deliveryKey.slice(params.deliveryKey.lastIndexOf(":") + 1);
-    throw new ReefDuplicateOutboundDeliveryError(id);
-  }
-  tx.set(params.deliveries, params.deliveryKey, delivery);
-}
-
 function deliveriesForCurrentPeers(
   tx: PluginStateOperationTransaction,
   prefix: string,
@@ -177,21 +132,6 @@ export function runReefTrustStateOperation(
         readReefPeerState(tx, command.input.key),
         command.input.requestId,
       );
-    case "prepareDelivery":
-      return readReefPeerState(tx, command.input.peerKey).trust;
-    case "recordDelivery":
-      try {
-        recordReefOutboundDelivery(tx, { peers: 0, deliveries: 1, ...command.input });
-        return "recorded";
-      } catch (error) {
-        if (error instanceof ReefPeerTrustChangedError) {
-          return "peer-changed";
-        }
-        if (error instanceof ReefDuplicateOutboundDeliveryError) {
-          return "duplicate";
-        }
-        throw error;
-      }
     case "readDelivery": {
       const [peer, value] = tx.lookupMany([
         { store: 0, key: command.input.peerKey },

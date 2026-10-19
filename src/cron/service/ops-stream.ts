@@ -1,15 +1,12 @@
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
+import { createCronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import { loadCronJobsStoreWithConfigJobsReadOnly } from "../store/read-only.js";
 import type {
   CronRuntimeMutationContracts,
   CronExternalStateChange,
 } from "../store/runtime-worker.types.js";
-import {
-  CronStreamSourceRetirementError,
-  createCronStreamSourceIdentity,
-  ownsStreamSource,
-} from "../stream-schedule.js";
+import { CronStreamSourceRetirementError } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
@@ -42,7 +39,7 @@ async function mutateExternalState(
       const job = findJobOrThrow(state, jobId);
       if (
         change.source &&
-        !ownsStreamSource(job, change.source.scheduleKey, change.source.identity)
+        !ownsCronSource(job, change.source.scheduleKey, change.source.identity)
       ) {
         return undefined;
       }
@@ -62,8 +59,7 @@ async function mutateExternalState(
         // A config reload may race this submitted mutation; the worker uses this snapshot.
         snapshot: {
           nowMs: state.deps.nowMs(),
-          cronConfig:
-            change.kind === "failure" ? structuredClone(state.deps.cronConfig) : undefined,
+          cronConfig: change.kind === "failure" ? state.deps.cronConfig : undefined,
         },
         publish(outcome) {
           committed = outcome;
@@ -133,10 +129,7 @@ async function mutateExternalState(
           );
           source.assertStorageCurrent();
           const current = loaded.store.jobs.find((job) => job.id === jobId);
-          if (
-            current &&
-            ownsStreamSource(current, change.source.scheduleKey, change.nextIdentity)
-          ) {
+          if (current && ownsCronSource(current, change.source.scheduleKey, change.nextIdentity)) {
             retiredIdentity = change.nextIdentity;
             applyCronRuntimeRowsToState(state, [current]);
           }
@@ -197,7 +190,7 @@ export async function retireExternalStreamSource(
   const job = await mutateExternalState(state, id, {
     kind: "retire",
     source: { scheduleKey, identity },
-    nextIdentity: createCronStreamSourceIdentity(),
+    nextIdentity: createCronSourceIdentity(),
   });
   return job?.state.streamSourceIdentity;
 }

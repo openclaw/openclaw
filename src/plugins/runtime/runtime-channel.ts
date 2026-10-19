@@ -75,7 +75,7 @@ import { recordInboundSessionMeta } from "../../config/sessions/session-accessor
 import { readSessionUpdatedAtInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { readRemoteMediaBuffer, saveRemoteMedia, saveResponseMedia } from "../../media/fetch.js";
-import { saveMediaBuffer } from "../../media/store.js";
+import { deleteMediaBuffer, saveMediaBuffer } from "../../media/store.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
@@ -222,6 +222,7 @@ export function createRuntimeChannel(options?: {
       saveRemoteMedia,
       saveResponseMedia,
       saveMediaBuffer,
+      deleteMediaBuffer,
     },
     activity: {
       record: recordChannelActivity,

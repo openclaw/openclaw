@@ -1,47 +1,54 @@
+import assert from "node:assert/strict";
 import path from "node:path";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
+  openOpenClawAgentDatabase as openDatabase,
+  runOpenClawAgentWriteTransaction as writeTransaction,
+  type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
-  loadTranscriptEventsSync,
-  resolveSessionTranscriptDatabasePath,
-  upsertSessionEntryCore,
-  validatePreparedAssistantAppendSync,
+  loadTranscriptEventsSync as loadEvents,
+  resolveSessionTranscriptDatabasePath as databasePath,
+  upsertSessionEntryCore as upsertEntry,
+  validatePreparedAssistantAppendSync as validatePrepared,
   type TranscriptEvent,
 } from "./session-accessor.js";
-import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
+import { resolveTranscriptMessageAppendParent as resolveParent } from "./session-accessor.sqlite-transcript-parent.js";
 import {
-  appendTranscriptEventSnapshotSync,
-  appendTranscriptMessageSnapshotSync,
+  appendTranscriptEventSnapshotSync as appendEvent,
+  appendTranscriptMessageSnapshotSync as appendMessage,
 } from "./session-accessor.sqlite-transcript-write.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { replaceTranscriptEventsSync as replaceEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-ancestry-");
+afterEach(() => vi.restoreAllMocks());
 
-async function createTranscript(events: TranscriptEvent[]) {
+async function createTranscript(events: TranscriptEvent[] = chain("root")) {
   const scope = {
     agentId: "main",
     sessionId: "ancestry",
     sessionKey: "agent:main:ancestry",
     storePath: path.join(sessionDirs.make(), "sessions.json"),
   };
-  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  replaceTranscriptEventsSync(scope, [
-    { type: "session", version: 3, id: scope.sessionId },
-    ...events,
-  ]);
+  await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  replaceEvents(scope, [{ type: "session", version: 3, id: scope.sessionId }, ...events]);
+  const database = openDatabase({ agentId: scope.agentId, path: databasePath(scope) });
   return {
     scope,
-    database: openOpenClawAgentDatabase({
-      agentId: scope.agentId,
-      path: resolveSessionTranscriptDatabasePath(scope),
-    }),
+    database,
+    append: (id: string, parentId?: string, owner?: OpenClawAgentDatabase) =>
+      appendMessage(scope, assistant(id, parentId), undefined, undefined, undefined, owner),
+    transaction: <T>(operation: (current: OpenClawAgentDatabase) => T) =>
+      writeTransaction(operation, { agentId: scope.agentId, path: database.path }),
+    parent: (parentId: string | null) =>
+      runSqliteImmediateTransactionSync(database.db, () =>
+        resolveParent(database, scope.sessionId, { appendIntent: "active-branch", parentId }),
+      ),
   };
 }
 
@@ -49,59 +56,35 @@ function message(id: string, parentId: string | null): TranscriptEvent {
   return { type: "message", id, parentId, message: { role: "user", content: id } };
 }
 
+const chain = (...ids: string[]) => ids.map((id, index) => message(id, ids[index - 1] ?? null));
+
+function assistant(eventId: string, parentId?: string) {
+  return { eventId, parentId, message: { role: "assistant", content: eventId } };
+}
+
 it.each(["event", "message"] as const)(
   "keeps %s append rollback with its owning worker transaction without a savepoint",
   async (kind) => {
-    const { database, scope } = await createTranscript([message("root", null)]);
-    const before = loadTranscriptEventsSync(scope);
-    expect(() =>
-      appendTranscriptMessageSnapshotSync(
-        scope,
-        { eventId: "outside-transaction", message: { role: "assistant", content: "refused" } },
-        undefined,
-        undefined,
-        undefined,
-        database,
-      ),
-    ).toThrow("Transcript write lost its owning transaction");
+    const { database, scope, append, transaction } = await createTranscript();
+    const before = loadEvents(scope);
+    expect(() => append("outside-transaction", undefined, database)).toThrow(
+      "Transcript write lost its owning transaction",
+    );
     const transactionSql = vi.spyOn(database.db, "exec");
-    try {
-      expect(() =>
-        runOpenClawAgentWriteTransaction(
-          (current) => {
-            const snapshot =
-              kind === "event"
-                ? appendTranscriptEventSnapshotSync(
-                    scope,
-                    { type: "custom", id: "rolled-back", parentId: "root" },
-                    {},
-                    undefined,
-                    undefined,
-                    current,
-                  )
-                : appendTranscriptMessageSnapshotSync(
-                    scope,
-                    { eventId: "rolled-back", message: { role: "assistant", content: "refused" } },
-                    undefined,
-                    undefined,
-                    undefined,
-                    current,
-                  );
-            expect(snapshot.ok).toBe(true);
-            throw new Error("owning request refused commit");
-          },
-          { agentId: scope.agentId, path: database.path },
-        ),
-      ).toThrow("owning request refused commit");
-      expect(transactionSql.mock.calls.some(([sql]) => /SAVEPOINT/i.test(sql))).toBe(false);
-    } finally {
-      transactionSql.mockRestore();
-    }
-    expect(loadTranscriptEventsSync(scope)).toEqual(before);
-    const next = appendTranscriptMessageSnapshotSync(scope, {
-      eventId: "committed",
-      message: { role: "assistant", content: "accepted" },
-    });
+    expect(() =>
+      transaction((current) => {
+        const event = { type: "custom", id: "rolled-back", parentId: "root" };
+        const snapshot =
+          kind === "event"
+            ? appendEvent(scope, event, {}, undefined, undefined, current)
+            : append("rolled-back", undefined, current);
+        expect(snapshot.ok).toBe(true);
+        throw new Error("owning request refused commit");
+      }),
+    ).toThrow("owning request refused commit");
+    expect(transactionSql.mock.calls.some(([sql]) => /SAVEPOINT/i.test(sql))).toBe(false);
+    expect(loadEvents(scope)).toEqual(before);
+    const next = append("committed");
     expect(next).toMatchObject({ ok: true, value: { result: { messageId: "committed" } } });
   },
 );
@@ -109,33 +92,26 @@ it.each(["event", "message"] as const)(
 it.each(["dirty", "unclassified"] as const)(
   "shares append metadata without retaining facts across rollback or foreign %s writes",
   async (change) => {
-    const { database, scope } = await createTranscript([
-      message("root", null),
-      message("tail", "root"),
-    ]);
+    const fixture = await createTranscript(chain("root", "tail"));
+    const { database, scope, transaction } = fixture;
     const append = (id: string, parentId: string) => {
-      const snapshot = appendTranscriptMessageSnapshotSync(scope, {
-        eventId: id,
-        parentId,
-        message: { role: "assistant", content: id },
-      });
-      if (!snapshot.ok) {
-        throw new Error(`Append refused: ${snapshot.error.code}`);
-      }
+      const snapshot = fixture.append(id, parentId);
+      assert(snapshot.ok);
       return snapshot.value;
     };
-    const queries = trackSqliteStatementExecutions(database.db, ["projection", "tail"], (sql) => {
-      if (!/^select /i.test(sql)) {
-        return null;
-      }
-      if (sql.includes('"session_transcript_index_state"')) {
-        return "projection";
-      }
-      return /^select "seq" from "transcript_events"/i.test(sql) &&
-        sql.includes('order by "seq" desc')
-        ? "tail"
-        : null;
-    });
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["projection", "tail"],
+      (sql) =>
+        !/^select /i.test(sql)
+          ? null
+          : sql.includes('"session_transcript_index_state"')
+            ? "projection"
+            : /^select "seq" from "transcript_events"/i.test(sql) &&
+                sql.includes('order by "seq" desc')
+              ? "tail"
+              : null,
+    );
     let first: ReturnType<typeof append>;
     try {
       first = append("answer", "tail");
@@ -151,13 +127,10 @@ it.each(["dirty", "unclassified"] as const)(
     });
     expect(first.visibleTail).toEqual({ entryId: "answer", generation: first.after.generation });
     expect(() =>
-      runOpenClawAgentWriteTransaction(
-        () => {
-          expect(append("rolled-back", "answer").visibleTail.entryId).toBe("rolled-back");
-          throw new Error("rollback append");
-        },
-        { agentId: scope.agentId, path: database.path },
-      ),
+      transaction(() => {
+        expect(append("rolled-back", "answer").visibleTail.entryId).toBe("rolled-back");
+        throw new Error("rollback append");
+      }),
     ).toThrow("rollback append");
     const second = append("after-rollback", "answer");
     expect(second.result?.anchor).toMatchObject({
@@ -166,8 +139,8 @@ it.each(["dirty", "unclassified"] as const)(
       activeMessagePosition: 3,
     });
 
-    const peer = new (requireNodeSqlite().DatabaseSync)(database.path);
-    try {
+    {
+      using peer = new (requireNodeSqlite().DatabaseSync)(database.path);
       peer
         .prepare(
           change === "dirty"
@@ -175,25 +148,20 @@ it.each(["dirty", "unclassified"] as const)(
             : "UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = ?",
         )
         .run(scope.sessionId);
-    } finally {
-      peer.close();
     }
-    const fresh = append("after-foreign", "after-rollback");
-    expect(fresh.result?.anchor).toBeUndefined();
-    expect(fresh.visibleTail).toEqual({
-      entryId: "after-foreign",
-      generation: fresh.after.generation,
-    });
+    const { result, visibleTail, after } = append("after-foreign", "after-rollback");
+    expect(result?.anchor).toBeUndefined();
+    expect(visibleTail).toEqual({ entryId: "after-foreign", generation: after.generation });
   },
 );
 
 it("returns the newer visible tail after native identity-insert reentry", async () => {
-  const { scope } = await createTranscript([message("root", null)]);
+  const { append } = await createTranscript();
   const { StatementSync } = requireNodeSqlite();
   // oxlint-disable-next-line typescript/unbound-method -- Forwarded below with the original native receiver.
   const original = StatementSync.prototype.run;
   let reentered = false;
-  const spy = vi.spyOn(StatementSync.prototype, "run").mockImplementation(
+  vi.spyOn(StatementSync.prototype, "run").mockImplementation(
     new Proxy(original, {
       apply(target, receiver, args) {
         const value = Reflect.apply(target, receiver, args);
@@ -203,101 +171,60 @@ it("returns the newer visible tail after native identity-insert reentry", async 
           args.includes("outer")
         ) {
           reentered = true;
-          const nested = appendTranscriptMessageSnapshotSync(scope, {
-            eventId: "nested",
-            parentId: "outer",
-            message: { role: "assistant", content: "nested" },
-          });
-          expect(nested.ok).toBe(true);
+          expect(append("nested", "outer").ok).toBe(true);
         }
         return value;
       },
     }),
   );
-  try {
-    const result = appendTranscriptMessageSnapshotSync(scope, {
-      eventId: "outer",
-      parentId: "root",
-      message: { role: "assistant", content: "outer" },
-    });
-    expect(reentered).toBe(true);
-    expect(result).toMatchObject({
-      ok: true,
-      value: {
-        result: { messageId: "outer", anchor: { entryId: "outer", rawSeq: 2 } },
-        visibleTail: { entryId: "nested" },
-        after: { rawSeq: 3 },
-      },
-    });
-  } finally {
-    spy.mockRestore();
-  }
+  const result = append("outer", "root");
+  expect(reentered).toBe(true);
+  expect(result).toMatchObject({
+    ok: true,
+    value: {
+      result: { messageId: "outer", anchor: { entryId: "outer", rawSeq: 2 } },
+      visibleTail: { entryId: "nested" },
+      after: { rawSeq: 3 },
+    },
+  });
 });
 
-describe("SQLite transcript append ancestry", () => {
-  const linear = [message("root", null), message("tail", "root")];
-  const cycle = [message("cycle-a", "cycle-b"), message("cycle-b", "cycle-a")];
-  it.each([
-    {
-      name: "dangling ancestor",
-      events: [message("tail", "missing")],
-      parentId: "missing",
-      expected: "tail",
-    },
-    { name: "unrelated cycle", events: cycle, parentId: "outside", expected: "outside" },
-    { name: "cycle without root", events: cycle, parentId: null, expected: null },
-    {
-      name: "invalid leaf navigation fallback",
-      events: [...linear, { type: "leaf", id: "invalid", parentId: "tail", targetId: "missing" }],
-      parentId: "root",
-      expected: "tail",
-    },
-    {
-      name: "parentless navigation fallback",
-      events: [
-        ...linear,
-        { type: "message", id: "parentless", message: { role: "user", content: "late" } },
-      ],
-      parentId: "root",
-      expected: "root",
-    },
-  ])("preserves $name", async ({ events, parentId, expected }) => {
-    const { database, scope } = await createTranscript(events);
-    expect(
-      runSqliteImmediateTransactionSync(database.db, () =>
-        resolveTranscriptMessageAppendParent(database, scope.sessionId, {
-          appendIntent: "active-branch",
-          parentId,
-        }),
-      ),
-    ).toBe(expected);
-  });
+const linear = chain("root", "tail");
+const cycle = [message("cycle-a", "cycle-b"), message("cycle-b", "cycle-a")];
+const invalidLeaf = { type: "leaf", id: "invalid", parentId: "tail", targetId: "missing" };
+const parentless = {
+  type: "message",
+  id: "parentless",
+  message: { role: "user", content: "late" },
+};
+it.each([
+  ["dangling ancestor", [message("tail", "missing")], "missing", "tail"],
+  ["unrelated cycle", cycle, "outside", "outside"],
+  ["cycle without root", cycle, null, null],
+  ["invalid leaf navigation fallback", [...linear, invalidLeaf], "root", "tail"],
+  ["parentless navigation fallback", [...linear, parentless], "root", "root"],
+] satisfies [string, TranscriptEvent[], string | null, string | null][])(
+  "preserves %s",
+  async (_name, events, parentId, expected) => {
+    const { parent } = await createTranscript(events);
+    expect(parent(parentId)).toBe(expected);
+  },
+);
 
-  it("does not traverse an ancestor from another session", async () => {
-    const { database, scope } = await createTranscript([message("tail", "foreign")]);
-    const other = { ...scope, sessionId: "other", sessionKey: "agent:main:other" };
-    await upsertSessionEntryCore(other, { sessionId: other.sessionId, updatedAt: 1 });
-    replaceTranscriptEventsSync(other, [message("foreign", "root")]);
-    expect(
-      runSqliteImmediateTransactionSync(database.db, () =>
-        resolveTranscriptMessageAppendParent(database, scope.sessionId, {
-          appendIntent: "active-branch",
-          parentId: "root",
-        }),
-      ),
-    ).toBe("root");
-  });
+it("does not traverse an ancestor from another session", async () => {
+  const { scope, parent } = await createTranscript([message("tail", "foreign")]);
+  const other = { ...scope, sessionId: "other", sessionKey: "agent:main:other" };
+  await upsertEntry(other, { sessionId: other.sessionId, updatedAt: 1 });
+  replaceEvents(other, [message("foreign", "root")]);
+  expect(parent("root")).toBe("root");
 });
 
 it.each(["missing-prepared", "missing-admitted", "overflow-prepared"] as const)(
   "preserves prepared assistant %s refusal before parsing newer messages",
   async (scenario) => {
-    const { database, scope } = await createTranscript([
-      message("admitted", null),
-      message("prepared", "admitted"),
-      message("poison", "prepared"),
-      message("tail", "poison"),
-    ]);
+    const { database, scope } = await createTranscript(
+      chain("admitted", "prepared", "poison", "tail"),
+    );
     database.db
       .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 3")
       .run(scope.sessionId);
@@ -305,32 +232,23 @@ it.each(["missing-prepared", "missing-admitted", "overflow-prepared"] as const)(
       runSqliteImmediateTransactionSync(database.db, () => {
         database.db.exec("PRAGMA defer_foreign_keys = ON");
         const offset = 9007199254740993n;
-        database.db
-          .prepare("UPDATE transcript_events SET seq = seq + ? WHERE session_id = ?")
-          .run(offset, scope.sessionId);
-        database.db
-          .prepare("UPDATE transcript_event_identities SET seq = seq + ? WHERE session_id = ?")
-          .run(offset, scope.sessionId);
-        database.db
-          .prepare(
-            "UPDATE session_transcript_active_events SET event_seq = event_seq + ? WHERE session_id = ?",
-          )
-          .run(offset, scope.sessionId);
+        for (const query of [
+          "UPDATE transcript_events SET seq = seq + ? WHERE session_id = ?",
+          "UPDATE transcript_event_identities SET seq = seq + ? WHERE session_id = ?",
+          "UPDATE session_transcript_active_events SET event_seq = event_seq + ? WHERE session_id = ?",
+        ]) {
+          database.db.prepare(query).run(offset, scope.sessionId);
+        }
       });
-      expect(() => validatePreparedAssistantAppendSync(scope, "prepared", "prepared")).toThrow(
+      expect(() => validatePrepared(scope, "prepared", "prepared")).toThrow(
         expect.objectContaining({ code: "ERR_OUT_OF_RANGE" }),
       );
     } else {
+      const admitted = scenario === "missing-prepared" ? "prepared" : "admitted";
       database.db
         .prepare("DELETE FROM transcript_event_identities WHERE session_id = ? AND event_id = ?")
-        .run(scope.sessionId, scenario === "missing-prepared" ? "prepared" : "admitted");
-      expect(
-        validatePreparedAssistantAppendSync(
-          scope,
-          "prepared",
-          scenario === "missing-prepared" ? "prepared" : "admitted",
-        ),
-      ).toBeUndefined();
+        .run(scope.sessionId, admitted);
+      expect(validatePrepared(scope, "prepared", admitted)).toBeUndefined();
     }
     expect(database.db.isTransaction).toBe(false);
   },

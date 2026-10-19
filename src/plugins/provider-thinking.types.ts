@@ -1,3 +1,4 @@
+import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ThinkingLevelMap } from "../llm/types.js";
 
@@ -8,10 +9,7 @@ import type { ThinkingLevelMap } from "../llm/types.js";
  * provider whether a model supports special reasoning UX such as adaptive,
  * xhigh, max, or a binary on/off toggle.
  */
-export type ProviderThinkingPolicyContext = {
-  provider: string;
-  modelId: string;
-};
+export type ProviderThinkingPolicyContext = ModelCatalogRef;
 
 type ProviderThinkingModelCompat = {
   thinkingFormat?: string;

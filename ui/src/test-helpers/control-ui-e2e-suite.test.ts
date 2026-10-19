@@ -30,7 +30,10 @@ type FixtureMode =
   | "scenario-noncooperative"
   | "scenario-late-close"
   | "scenario-close-failure"
+  | "scenario-root-drain"
+  | "scenario-root-leak"
   | "resources-success"
+  | "resources-root-drain"
   | "resources-close-failure"
   | "resources-late-setup"
   | "resources-browser-failure";
@@ -54,16 +57,12 @@ type FixtureJournal = {
 };
 
 function fixtureSource(mode: FixtureMode, root: string): string {
-  const stateImport =
-    mode.startsWith("scenario-") || mode.startsWith("resources-")
-      ? `import { createOpenClawTestState } from ${JSON.stringify(path.join(repoRoot, "src/test-utils/openclaw-test-state.ts"))};`
-      : "";
   return `
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, expect, it, vi } from "vitest";
-${stateImport}
+import { tryBeginGatewayRootWorkAdmission } from ${JSON.stringify(path.join(repoRoot, "src/process/gateway-work-admission.ts"))};
 const state = vi.hoisted(() => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
@@ -114,6 +113,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
         });
         context = Object.assign(new EventEmitter(), {
           setDefaultTimeout() {},
+          addInitScript: async () => {},
           pages: () => pageClosed ? [] : [page],
           newPage: async () => { context.emit("page", page); return page; },
           browser: () => ({ isConnected: () => true }),
@@ -156,6 +156,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             if (!registration) throw new Error("missing held-module route: " + name);
             const route = {
               request: () => ({ url: () => url }),
+              fallback: async () => { state.events.push("fell through " + label); },
               fetch: async () => {
                 if (pageClosed) throw state.disposalFault;
                 if (label === "later" || scope === "context") {
@@ -188,6 +189,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
         });
         context = Object.assign(new EventEmitter(), {
           setDefaultTimeout() {},
+          addInitScript: async () => {},
           pages: () => [page],
           newPage: async () => { context.emit("page", page); return page; },
           route: async (pattern, handler) => { contextHandlers.push({ pattern, handler }); },
@@ -211,6 +213,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
       }
       const context = Object.assign(new EventEmitter(), {
         setDefaultTimeout() {},
+        addInitScript: async () => {},
         pages: () => [],
         newPage: async () => { context.emit("page", closedPage); return closedPage; },
         unrouteAll: async () => {},
@@ -241,14 +244,36 @@ const record = () => fs.writeFileSync(${JSON.stringify(path.join(root, "journal.
 }));
 fs.writeFileSync(${JSON.stringify(path.join(root, "worker.pid"))}, String(process.pid));
 record();
+// These synthetic gateways open no databases. Keep their state fixture limited to
+// the directory and selector whose lifetime belongs to the suite release callback.
+function createFixtureState() {
+  const root = ${JSON.stringify(path.join(root, "retained-state"))};
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  fs.mkdirSync(root);
+  process.env.OPENCLAW_STATE_DIR = root;
+  return {
+    root,
+    stateDir: root,
+    cleanup: async () => {
+      if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      await fs.promises.rm(root, { recursive: true, force: true });
+    },
+  };
+}
 let sharedFixture;
+let gatewayAdmission;
 const suite = createControlUiE2eSuite({ name: "owned context fixture",
   trackBrowserContexts: ${mode.startsWith("tracked-") || mode === "diagnostic-tracked-timeout"},
   ...(${JSON.stringify(mode)}.startsWith("resources-") ? {
     resources: {
       retainedState: () => sharedFixture?.root,
       run: async (signal) => {
-        sharedFixture = await createOpenClawTestState({ label: "native-shared-resource" });
+        sharedFixture = createFixtureState();
+        if (${JSON.stringify(mode)} === "resources-root-drain") {
+          gatewayAdmission = tryBeginGatewayRootWorkAdmission("synthetic shared Gateway request");
+          expect(gatewayAdmission).not.toBeNull();
+        }
         fs.writeFileSync(${JSON.stringify(path.join(root, "retained-root.txt"))}, sharedFixture.root);
         state.events.push("resource acquired"); record();
         if (${JSON.stringify(mode)} === "resources-late-setup") {
@@ -260,6 +285,7 @@ const suite = createControlUiE2eSuite({ name: "owned context fixture",
         }
       },
       close: async () => {
+        gatewayAdmission?.release();
         state.events.push("resource closed"); record();
         if (${JSON.stringify(mode)} === "resources-close-failure") throw new Error("synthetic shared resource close failure");
       },
@@ -352,11 +378,37 @@ suite.define(() => {
       state.events.push("successor"); record();
       fs.writeFileSync(${JSON.stringify(path.join(root, "successor.txt"))}, "started");
     });
+  } else if (${JSON.stringify(mode)}.startsWith("scenario-root-")) {
+    it("closes its Gateway before requiring requests to drain", async (context) => {
+      let fixture;
+      await suite.runScenario(context, {
+        retainedState: () => fixture?.root,
+        run: async () => {
+          fixture = createFixtureState();
+          fs.writeFileSync(${JSON.stringify(path.join(root, "retained-root.txt"))}, fixture.root);
+          gatewayAdmission = tryBeginGatewayRootWorkAdmission("synthetic scenario Gateway request");
+          expect(gatewayAdmission).not.toBeNull();
+          state.events.push("acquired"); record();
+          await suite.withPage({}, async () => {});
+        },
+        close: async () => {
+          state.events.push("gateway closed"); record();
+          if (${JSON.stringify(mode)} === "scenario-root-drain") gatewayAdmission.release();
+        },
+        release: async () => {
+          await fixture.cleanup();
+          state.events.push("released"); record();
+        },
+      });
+    });
   } else if (${JSON.stringify(mode)}.startsWith("resources-")) {
     it.for(["first", "second"])("uses shared resources: %s", async (name, context) => {
       await suite.runScenario(context, { run: async () => {
         expect(process.env.OPENCLAW_STATE_DIR).toBe(sharedFixture.stateDir);
         state.events.push(name); record();
+        if (${JSON.stringify(mode)} === "resources-root-drain") {
+          await suite.withPage({}, async () => {});
+        }
       } });
     });
   } else if (${JSON.stringify(mode)}.startsWith("tracked-")) {
@@ -373,7 +425,9 @@ suite.define(() => {
       const callbacks = [];
       let firstHold;
       let otherHold;
+      let heldPage;
       const outcome = suite.withPage({}, async ({ context, page }) => {
+        heldPage = page;
         firstHold = await holdModuleResponse(page, /module-a/u);
         otherHold = await holdModuleResponse(page, /module-b/u);
         callbacks.push(page.dispatchModule("module-a", "first"));
@@ -394,12 +448,17 @@ suite.define(() => {
       let failure;
       let callbackOutcomes;
       try {
-        // The old helper closes immediately; waiting only for drain would turn red into a timeout.
-        state.firstCleanupEvent = await state.cleanupStarted.promise;
+        await state.contextFetchStarted.promise;
+        await Promise.all(callbacks.slice(0, 2));
+        await nextTurn();
         state.pendingCloseCalls = state.closeCalls;
         state.fulfilledBeforeFetchRelease = state.events.filter(event => event.startsWith("fulfilled "));
+        expect(state.events).not.toContain("drain");
+        callbacks.push(heldPage.dispatchModule("module-a", "late"));
+        await callbacks.at(-1);
         record();
         state.laterFetch.resolve();
+        state.firstCleanupEvent = await state.cleanupStarted.promise;
         state.contextCleanupEvent = await state.contextCleanupStarted.promise;
       } finally {
         firstHold?.release();
@@ -488,7 +547,7 @@ suite.define(() => {
       await suite.runScenario(context, {
         retainedState: () => fixture?.root,
         run: async (signal) => {
-          fixture = await createOpenClawTestState({ label: "native-scenario" });
+          fixture = createFixtureState();
           fs.writeFileSync(${JSON.stringify(path.join(root, "retained-root.txt"))}, fixture.root);
           state.events.push("acquired"); record();
           if (${JSON.stringify(mode)} === "scenario-noncooperative") await new Promise(() => {});
@@ -793,6 +852,7 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
       { label: "other", status: "fulfilled", disposed: false },
       { label: "later", status: "fulfilled", disposed: false },
       { label: "context", status: "fulfilled", disposed: false },
+      { label: "late", status: "fulfilled", disposed: false },
     ]);
     expect(result.journal.pendingCloseCalls).toBe(0);
     expect(result.journal.fulfilledBeforeFetchRelease).toEqual([
@@ -800,6 +860,11 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
       "fulfilled other",
     ]);
     expect(result.journal.events).toContain("fulfilled later");
+    expect(result.journal.events).toContain("fell through late");
+    expect(result.journal.events).not.toContain("fetched late");
+    expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
+      result.journal.events.indexOf("drain"),
+    );
     expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
       result.journal.events.indexOf("close"),
     );
@@ -861,6 +926,21 @@ it("joins late suite setup before closing its acquired server", (context) =>
       published: false,
     });
   }));
+
+it.for(["scenario-root-drain", "resources-root-drain", "scenario-root-leak"] as const)(
+  "drains Gateway requests at the owner close boundary: %s",
+  (mode, context) =>
+    runJoinedShutdownTest(context, async () => {
+      const result = await runFixture(mode, context.signal);
+      const leaked = mode === "scenario-root-leak";
+      expect(result.code, result.output).toBe(leaked ? 1 : 0);
+      expect(result.retainedExists).toBe(leaked);
+      expect(result.journal.events).toContain(
+        mode.startsWith("resources-") ? "resource closed" : "gateway closed",
+      );
+      expect(result.journal.events.includes("released")).toBe(!leaked);
+    }),
+);
 
 it.for([
   ["scenario-timeout", undefined],

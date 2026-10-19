@@ -120,6 +120,11 @@ Register each capability inside `register(api)` alongside your existing
     filenames, including AAC uploads that need an M4A-style filename for
     compatible transcription APIs.
 
+    `requireTranscriptionText(value, message)` validates the response transcript
+    and trims whitespace. An empty string represents audio without detected
+    speech and is returned unchanged; the media runner records a nonfatal skip.
+    Missing or non-string values still throw with the supplied message.
+
     Official plugins can use the private `blob-runtime` helper
     `bufferToBlobPart(buffer)` for other multipart uploads. Pass it directly to
     `new Blob(...)` to preserve the Buffer range without an intermediate copy;
@@ -404,6 +409,16 @@ Register each capability inside `register(api)` alongside your existing
     turn it into a failed-task or retry reply. `TimeoutError` remains a
     failure. Closing a transport and canceling accepted host work are
     separate lifecycle operations.
+
+    Gateway-relay clients express this choice with `talk.session.close`'s
+    optional `disposition`: `"detach"` preserves accepted agent work when
+    the client fails, while `"abort"` (or omission) cancels it on Stop. Check
+    the `talk-session-close-disposition` capability before sending the field.
+    On failure, the original agent answers remain visible alongside any recorded
+    speech; speech alone cannot prove which overlapping consults were delivered.
+    Answers finishing after detachment are visible when first recorded. Already-hidden
+    answers receive a new visible transcript entry, excluded from model context;
+    closing Talk never rewrites the original transcript messages.
 
   </Tab>
   <Tab title="Media understanding">

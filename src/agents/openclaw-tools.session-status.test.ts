@@ -11,6 +11,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import {
   createMockConfig,
   fixedStoreConfig,
@@ -306,6 +307,7 @@ vi.mock("../sessions/session-state-events.js", () => ({
 let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
 
 beforeAll(async () => {
+  await prepareSharedAuthStoreOwnership();
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
 });
 
@@ -611,6 +613,91 @@ describe("session_status tool", () => {
       expect(visibleStateChangesText).not.toContain(omittedField);
       expect(String(details.statusText)).not.toContain(omittedField);
     }
+  });
+
+  it("reports session capabilities from the Gateway tool inventory on request", async () => {
+    resetSessionStore({ main: fixtureSession("s1") });
+    agentToolGatewayCallMock.mockImplementation((opts: { method?: string }) =>
+      opts.method === "tools.effective"
+        ? Promise.resolve({
+            agentId: "main",
+            profile: "coding",
+            groups: [
+              {
+                id: "core",
+                label: "Built-in tools",
+                source: "core",
+                tools: [
+                  {
+                    id: "exec",
+                    label: "Exec",
+                    description: "",
+                    rawDescription: "",
+                    source: "core",
+                  },
+                ],
+              },
+            ],
+            toolAccess: {
+              checked: "live-session",
+              profiles: [],
+              tools: [
+                { id: "exec", status: "available", reasons: [] },
+                {
+                  id: "browser",
+                  status: "excluded",
+                  reasons: [{ kind: "deny", label: "Denied by tools.deny", source: "tools.deny" }],
+                },
+              ],
+            },
+          })
+        : callGatewayMock(opts),
+    );
+
+    const tool = getSessionStatusTool();
+    const plain = await tool.execute("call-plain", {});
+    expect((plain.details as Record<string, unknown>).capabilities).toBeUndefined();
+    expect(agentToolGatewayCallMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "tools.effective" }),
+    );
+
+    const result = await tool.execute("call-capabilities", { capabilities: true });
+    const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(agentToolGatewayCallMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "tools.effective",
+        params: { agentId: "main", sessionKey: "main" },
+      }),
+    );
+    expect(result.details).toMatchObject({
+      capabilities: {
+        checked: "live-session",
+        available: ["exec"],
+        unavailable: [{ reason: "Denied by tools.deny", tools: ["browser"] }],
+      },
+    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(text).toContain("Capabilities (this session only");
+    expect(text).toContain("- Denied by tools.deny: browser");
+  });
+
+  it("keeps status usable when the capability inventory cannot be read", async () => {
+    resetSessionStore({ main: fixtureSession("s1") });
+    agentToolGatewayCallMock.mockImplementation((opts: { method?: string }) =>
+      opts.method === "tools.effective"
+        ? Promise.reject(new Error("missing scope: operator.read"))
+        : callGatewayMock(opts),
+    );
+
+    const tool = getSessionStatusTool();
+    const result = await tool.execute("call-capabilities-error", { capabilities: true });
+    const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(result.details).toMatchObject({
+      ok: true,
+      capabilities: { checked: "unavailable", error: "missing scope: operator.read" },
+    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(text).toContain("not evidence that OpenClaw lacks a capability");
   });
 
   it("returns same-agent group changesSince from main under tree visibility", async () => {

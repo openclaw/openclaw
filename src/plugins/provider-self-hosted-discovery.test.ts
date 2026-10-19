@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -38,6 +39,120 @@ async function discoverModelContexts(
 }
 
 describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
+  it("resolves only the configured provider's request secrets and preserves its transport policy", async () => {
+    const config = {
+      models: {
+        providers: {
+          litellm: {
+            baseUrl: "https://192.168.1.2/v1",
+            headers: {
+              "X-Tenant": { source: "env", provider: "default", id: "PROXY_TENANT" },
+            },
+            request: {
+              allowPrivateNetwork: false,
+              headers: { "X-Request": "discovery" },
+              proxy: {
+                mode: "explicit-proxy",
+                url: "https://proxy.example:8443",
+                tls: { ca: { source: "env", provider: "default", id: "PROXY_CA" } },
+              },
+            },
+            models: [],
+          },
+          unrelated: {
+            baseUrl: "https://other.example/v1",
+            headers: {
+              "X-Unavailable": { source: "env", provider: "default", id: "MISSING_OTHER_KEY" },
+            },
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const source = structuredClone(config);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      guarded(Response.json({ data: [{ id: "local-qwen" }] })),
+    );
+
+    const result = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "https://192.168.1.2/v1",
+      apiKey: "fixture-key",
+      configuredProvider: { config, id: "litellm" },
+      env: { PROXY_TENANT: "fixture-tenant", PROXY_CA: "fixture-proxy-ca" },
+      label: "LiteLLM",
+      rawResult: true,
+      discoverRuntimeContext: false,
+    });
+
+    expect(result).toMatchObject({ kind: "success", rows: [{ model: { id: "local-qwen" } }] });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        url: "https://192.168.1.2/v1/models",
+        init: {
+          headers: {
+            Authorization: "Bearer fixture-key",
+            "X-Tenant": "fixture-tenant",
+            "X-Request": "discovery",
+          },
+        },
+        policy: undefined,
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "https://proxy.example:8443",
+          proxyTls: { ca: "fixture-proxy-ca" },
+        },
+      }),
+    );
+    expect(config).toEqual(source);
+  });
+
+  it("retains discovered total parameter counts and display names", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      guarded(
+        Response.json({
+          data: [
+            { id: "compact-chat", name: "Compact Chat", parameterCount: 4_000_000_000 },
+            { id: "alias", name: "Qwen3 4B" },
+            { id: "invalid", parameterCount: 0 },
+          ],
+        }),
+      ),
+    );
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "self-hosted",
+      discoverRuntimeContext: false,
+      env: {},
+    });
+    expect(models.map(({ id, name, parameterCount }) => ({ id, name, parameterCount }))).toEqual([
+      { id: "compact-chat", name: "Compact Chat", parameterCount: 4_000_000_000 },
+      { id: "alias", name: "Qwen3 4B", parameterCount: undefined },
+      { id: "invalid", name: "invalid", parameterCount: undefined },
+    ]);
+  });
+
+  it("recognizes reasoning aliases without enabling legacy chat models", async () => {
+    const expected = [
+      { id: "yk_nemotron-3-super", reasoning: true },
+      { id: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16", reasoning: true },
+      { id: "nvidia/nemotron-3-8b-chat-4k-sft", reasoning: false },
+      { id: "yk_deepseek_v4", reasoning: true },
+      { id: "DeepSeek-V4-Flash", reasoning: true },
+      { id: "deepseek-chat", reasoning: false },
+      { id: "plain-chat", reasoning: false },
+    ];
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      guarded(new Response(JSON.stringify({ data: expected.map(({ id }) => ({ id })) }))),
+    );
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "vLLM",
+      discoverRuntimeContext: false,
+      env: {},
+    });
+    expect(models.map(({ id, reasoning }) => ({ id, reasoning }))).toEqual(expected);
+  });
+
   it("preserves health and falls back from root /models to /v1/models", async () => {
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce(guarded(new Response(null, { status: 503 })))

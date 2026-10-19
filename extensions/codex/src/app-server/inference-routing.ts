@@ -93,8 +93,11 @@ export function ownCodexInferenceClient(
   };
   client.addCloseHandler(close);
   client.addNotificationHandler((notification) => {
+    // Unsubscribe releases the subscription, but native configuration stays loaded until teardown.
     if (
-      notification.method === "thread/closed" &&
+      (notification.method === "thread/closed" ||
+        notification.method === "thread/archived" ||
+        notification.method === "thread/deleted") &&
       isJsonObject(notification.params) &&
       typeof notification.params.threadId === "string"
     ) {
@@ -341,6 +344,7 @@ async function prepareCodexInferenceRoute(params: {
         assertClient();
         return createCodexInferenceProxy({
           upstream: target,
+          configurationIdentity: key,
           assertCurrent: assertClient,
           oauth: owner.oauth,
           preserveAzureUrlFeatures,
@@ -644,7 +648,7 @@ export function bindCodexInferenceThread(
   owner.threads.set(threadId, { route, providers: projected, qualification });
 }
 
-export function forgetCodexInferenceThread(client: CodexAppServerClient, threadId: string): void {
+function forgetCodexInferenceThread(client: CodexAppServerClient, threadId: string): void {
   const owner = owners.get(client);
   owner?.threads.get(threadId)?.route.context.forget(threadId);
   owner?.threads.delete(threadId);

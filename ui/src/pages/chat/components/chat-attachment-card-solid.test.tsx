@@ -19,6 +19,7 @@ it("keeps downloads separate from opening the attachment, including detached SVG
   ));
   flush();
   const downloadButton = view.getByRole("button", { name: /download/i });
+  expect(downloadButton.textContent).toContain("Download");
   const icon = downloadButton.querySelector("svg")!;
   downloadButton.addEventListener("click", () => icon.remove());
   fireEvent.click(icon);
@@ -46,6 +47,7 @@ it("updates pending download links and file metadata without replacing the card"
   ));
   flush();
   const link = view.getByRole("link", { name: /download/i });
+  expect(link.textContent).toContain("Download");
   expect(link.hasAttribute("href")).toBe(false);
   expect(link.getAttribute("aria-disabled")).toBe("true");
   expect(link.tabIndex).toBe(0);

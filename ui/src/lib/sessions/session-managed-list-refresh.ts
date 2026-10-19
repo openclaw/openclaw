@@ -20,6 +20,7 @@ import type {
   ManagedSessionListRefresh,
   ObservedSessionList,
 } from "./session-list-query.ts";
+import { sessionListReadNeedsEventRefresh } from "./session-list-query.ts";
 import {
   normalizeManagedSessionListQuery,
   requestSessionListParams,
@@ -104,7 +105,7 @@ export function createSessionManagedListRefresh(
     managedLists: ReadonlyMap<string, ManagedSessionList>;
     observations: Pick<
       ReturnType<typeof createSessionRosterObservations>,
-      "accept" | "stageObservedRows" | "mergeRows"
+      "accept" | "stageObservedRows" | "mergeRows" | "rowRevision"
     >;
     nextRevision: () => number;
     isPageActive: () => boolean;
@@ -215,6 +216,18 @@ export function createSessionManagedListRefresh(
             observed && next.append && requestParams.offset && previous
               ? appendSessionResults(previous, observed)
               : observed;
+          if (
+            sessionListReadNeedsEventRefresh(
+              previous,
+              result,
+              nextResult,
+              issuedRevision,
+              entry.scope,
+              observations.rowRevision,
+            )
+          ) {
+            entry.coordinator.schedule();
+          }
           const appending = Boolean(next.append && requestParams.offset && previous);
           const receivedKeys = new Set(appending ? entry.receivedKeys : []);
           for (const row of response.sessions) {

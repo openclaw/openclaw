@@ -218,7 +218,6 @@ async function finalizeMigratedUpdate(): Promise<void> {
       ? { restartRunId: terminal.runId }
       : { terminalRunId: terminal.runId }),
     executorDelegation: "pid-start-v1",
-    automaticTriage: finalized.automaticTriage,
   };
   // Private response publication follows executor settlement and terminal history.
   await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
@@ -341,6 +340,7 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
         },
         {
           repair: input.repair,
+          fullIntegrityCheck: input.fullIntegrityCheck,
           nonInteractive: true,
           ...(input.yes !== undefined ? { yes: input.yes } : {}),
           ...(input.workspaceSuggestions !== undefined
@@ -357,6 +357,9 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
             ref: input.originalRecoveryCapture,
           },
           ...(input.databaseGenerations ? { databaseGenerations: input.databaseGenerations } : {}),
+          ...(input.databasePluginOwners
+            ? { databasePluginOwners: input.databasePluginOwners }
+            : {}),
           ...(input.postCoreSchemaRepair === true
             ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
             : {}),
@@ -494,7 +497,6 @@ async function finalizeInput(
   let result;
   let exitCode = 0;
   let candidateStartAttempted = false;
-  let automaticTriage: MigratedUpdateFinalizationResult["automaticTriage"];
   try {
     // This worker already loaded the candidate; the local flag conveys no authority.
     result = await finishUpdate(
@@ -520,7 +522,6 @@ async function finalizeInput(
     }
     result = error.result;
     exitCode = error.exitCode;
-    automaticTriage = error.automaticTriage;
   } finally {
     await windowsRecovery?.complete(
       result?.status === "ok" ||
@@ -528,7 +529,7 @@ async function finalizeInput(
     );
   }
   executorFence.assertCurrent();
-  return { run, result, exitCode, automaticTriage, candidateStartAttempted };
+  return { run, result, exitCode, candidateStartAttempted };
 }
 
 void (async () => {

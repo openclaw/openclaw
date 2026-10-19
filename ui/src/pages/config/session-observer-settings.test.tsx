@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { updatePickers } from "../../test-helpers/select-picker.ts";
+import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
@@ -31,6 +31,23 @@ describe("session observer settings patches", () => {
     });
   });
 
+  it("preserves the utility chain when changing its primary or restoring automatic routing", () => {
+    const current = { primary: "fixture/utility", fallbacks: ["fixture/backup"] };
+    expect(
+      buildSessionObserverUtilityModelPatch({ kind: "model", model: "fixture/next" }, current),
+    ).toEqual({
+      agents: {
+        defaults: { utilityModel: { primary: "fixture/next", fallbacks: ["fixture/backup"] } },
+      },
+    });
+    expect(buildSessionObserverUtilityModelPatch({ kind: "auto" }, current)).toEqual({
+      agents: { defaults: { utilityModel: { primary: null, fallbacks: ["fixture/backup"] } } },
+    });
+    expect(buildSessionObserverUtilityModelPatch({ kind: "disabled" }, current)).toEqual({
+      agents: { defaults: { utilityModel: { primary: "", fallbacks: ["fixture/backup"] } } },
+    });
+  });
+
   it("keeps auto and disabled selectable when explicit models are unavailable", async () => {
     const container = document.createElement("div");
     mountSolid(
@@ -49,7 +66,10 @@ describe("session observer settings patches", () => {
     );
 
     await updatePickers(container);
-    const select = container.querySelector("openclaw-select-picker.model-picker__select");
+    const select = container.querySelector<HTMLElement>(
+      "openclaw-select-picker.model-picker__select",
+    )!;
+    await openPicker(select);
     const options = [...(select?.querySelectorAll('[role="option"]') ?? [])];
     const option = (label: string) =>
       options.find((candidate) => candidate.textContent?.trim() === label);

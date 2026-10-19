@@ -276,9 +276,36 @@ for (const failure of ["install failure", "tracked source changed"]) {
 async function prewarmFixture() {
   const state = directories.make("openclaw-dependency-prewarm-");
   vi.stubEnv("OPENCLAW_STATE_DIR", state);
-  const config: OpenClawConfig = { agents: { entries: { main: { workspace: source } } } };
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { sandbox: { mode: "non-main" } },
+      entries: { main: { workspace: source } },
+    },
+  };
   return { state, config, env: { ...process.env } };
 }
+
+it.each(["default", "agent-override"] as const)(
+  "does not prepare dependency templates when sandboxing is off (%s)",
+  async (mode) => {
+    const warmed = await prewarmFixture();
+    warmed.config.agents = {
+      ...(mode === "agent-override" ? { defaults: { sandbox: { mode: "all" } } } : {}),
+      entries: {
+        main: {
+          workspace: source,
+          ...(mode === "agent-override" ? { sandbox: { mode: "off" } } : {}),
+        },
+      },
+    };
+    await prewarmLocalWorkspaceTemplates({
+      getConfig: () => warmed.config,
+      signal: new AbortController().signal,
+    });
+    await expectMissing(warmed.state, "worktree-projections");
+    expect(mocks.install).not.toHaveBeenCalled();
+  },
+);
 
 it("lets the first checkout join background preparation through the existing allocation owner", async ({
   signal,

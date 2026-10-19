@@ -34,6 +34,7 @@ import {
 } from "../plugin-model-catalog.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
+import { resolveModelRegistryRequestAuth } from "./model-registry-request-auth.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -57,11 +58,7 @@ import {
 } from "./model-registry-sources.js";
 import type { ProviderConfigInput } from "./provider-config.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
-import {
-  resolveConfigValueOrThrow,
-  resolveConfigValueUncached,
-  resolveHeadersOrThrow,
-} from "./resolve-config-value.js";
+import { resolveConfigValueUncached } from "./resolve-config-value.js";
 
 export type { ProviderConfigInput } from "./provider-config.js";
 export type { ResolvedRequestAuth } from "./model-registry-sources.js";
@@ -180,7 +177,7 @@ export class ModelRegistry {
     this.pluginMetadataSnapshot = source.pluginMetadataSnapshot;
   }
 
-  /** @deprecated Use createAsync for disk discovery or fromCapturedSources for prepared catalogs. */
+  /** @deprecated Use createAsync or fromCapturedSources. Supported through 2026-12-31; removal ships in the first January 2027 stable release. */
   static create(
     authStorage: AuthStorage,
     modelsJsonPath: string = join(getAgentDir(), "models.json"),
@@ -230,12 +227,17 @@ export class ModelRegistry {
     return new ModelRegistry(authStorage, undefined, { sourceSnapshot: this }, publishedModels);
   }
 
-  /** @deprecated Await refreshAsync when refreshing disk-backed catalogs. */
+  /** @deprecated Await refreshAsync for disk-backed catalogs. Supported through 2026-12-31; removal ships in the first January 2027 stable release. */
   refresh(): void {
     if (this.reloadPluginCatalogs && this.modelsJsonPath) {
       ModelRegistry.warnNativeCatalogRead("ModelRegistry.refresh", "ModelRegistry.refreshAsync");
-      // Legacy SDK callers retain synchronous disk freshness until removal in a later stable
-      // release after deprecation ships.
+    }
+    this.refreshFromStorage();
+  }
+
+  private refreshFromStorage(): void {
+    if (this.reloadPluginCatalogs && this.modelsJsonPath) {
+      // Legacy SDK callers retain synchronous disk freshness through 2026-12-31.
       this.pluginCatalogs = undefined;
       this.pluginCatalogReadError = undefined;
     }
@@ -660,6 +662,7 @@ export class ModelRegistry {
       contextWindow: model.contextWindow ?? Math.max(model.contextTokens ?? 0, 128000),
       ...(model.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
       contextTokens: model.contextTokens,
+      ...(model.parameterCount !== undefined ? { parameterCount: model.parameterCount } : {}),
       contextWindows: model.contextWindows,
       contextWindowDefault: model.contextWindowDefault,
       maxTokens: catalog ? (model.maxTokens ?? 16384) : model.maxTokens,
@@ -690,6 +693,9 @@ export class ModelRegistry {
 
   hasConfiguredAuth(model: Model): boolean {
     const providerConfig = this.getModelProviderRequestConfig(model);
+    if (providerConfig?.auth === "none") {
+      return model.api === "openai-completions";
+    }
     return (
       this.authStorage.hasAuth(model.provider) ||
       providerConfig?.auth === "aws-sdk" ||
@@ -708,10 +714,6 @@ export class ModelRegistry {
       return undefined;
     }
     return config;
-  }
-
-  private getModelRequestKey(provider: string, modelId: string): string {
-    return JSON.stringify([provider, modelId]);
   }
 
   private storeProviderRequestConfig(
@@ -747,7 +749,7 @@ export class ModelRegistry {
     modelId: string,
     headers?: Record<string, string>,
   ): void {
-    const key = this.getModelRequestKey(providerName, modelId);
+    const key = JSON.stringify([providerName, modelId]);
     if (!headers || Object.keys(headers).length === 0) {
       this.modelRequestHeaders.delete(key);
       return;
@@ -756,56 +758,12 @@ export class ModelRegistry {
   }
 
   async getApiKeyAndHeaders(model: Model): Promise<ResolvedRequestAuth> {
-    try {
-      const providerConfig = this.getModelProviderRequestConfig(model);
-      const usesAwsSdkAuth = providerConfig?.auth === "aws-sdk";
-      const apiKeyFromAuthStorage = usesAwsSdkAuth
-        ? undefined
-        : await this.authStorage.getApiKey(model.provider, {
-            includeFallback: false,
-            baseUrl: model.baseUrl,
-          });
-      const apiKey =
-        apiKeyFromAuthStorage ??
-        (!usesAwsSdkAuth && providerConfig?.apiKey
-          ? resolveConfigValueOrThrow(
-              providerConfig.apiKey,
-              `API key for provider "${model.provider}"`,
-            )
-          : undefined);
-
-      const providerHeaders = resolveHeadersOrThrow(
-        providerConfig?.headers,
-        `provider "${model.provider}"`,
-      );
-      const modelHeaders = resolveHeadersOrThrow(
-        this.modelRequestHeaders.get(this.getModelRequestKey(model.provider, model.id)),
-        `model "${model.provider}/${model.id}"`,
-      );
-
-      let headers =
-        model.headers || providerHeaders || modelHeaders
-          ? { ...model.headers, ...providerHeaders, ...modelHeaders }
-          : undefined;
-
-      if (providerConfig?.authHeader) {
-        if (!apiKey) {
-          return { ok: false, error: `No API key found for "${model.provider}"` };
-        }
-        headers = { ...headers, Authorization: `Bearer ${apiKey}` };
-      }
-
-      return {
-        ok: true,
-        apiKey,
-        headers: headers && Object.keys(headers).length > 0 ? headers : undefined,
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
+    return resolveModelRegistryRequestAuth({
+      model,
+      providerConfig: this.getModelProviderRequestConfig(model),
+      modelHeaders: this.modelRequestHeaders.get(JSON.stringify([model.provider, model.id])),
+      authStorage: this.authStorage,
+    });
   }
 
   /**
@@ -901,14 +859,20 @@ export class ModelRegistry {
    * Also resets dynamic OAuth and API stream registrations before reapplying
    * remaining dynamic providers.
    * Has no effect if the provider was never registered.
-   * @deprecated Use unregisterProviderAsync for disk-backed registries.
+   * @deprecated Use unregisterProviderAsync for disk-backed registries. Supported through 2026-12-31; removal ships in the first January 2027 stable release.
    */
   unregisterProvider(providerName: string): void {
+    if (this.reloadPluginCatalogs && this.modelsJsonPath) {
+      ModelRegistry.warnNativeCatalogRead(
+        "ModelRegistry.unregisterProvider",
+        "ModelRegistry.unregisterProviderAsync",
+      );
+    }
     if (!this.registeredProviders.has(providerName)) {
       return;
     }
     this.registeredProviders.delete(providerName);
-    this.refresh();
+    this.refreshFromStorage();
   }
 
   async unregisterProviderAsync(providerName: string): Promise<void> {

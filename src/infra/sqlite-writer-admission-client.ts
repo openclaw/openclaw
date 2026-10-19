@@ -4,6 +4,7 @@ import { readAgentDatabaseExecutionAuthority } from "../state/openclaw-agent-exe
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import {
+  readSqliteWorkerMonotonicNs,
   SqliteWorkerAdmissionTimeoutError,
   SqliteWorkerError,
   type SqliteWorkerAdmissionRequest,
@@ -50,12 +51,11 @@ export function requestSqliteWorkerOperationAdmission(
   const deadlineNs =
     request.deadlineMs === undefined
       ? undefined
-      : process.hrtime.bigint() + BigInt(request.deadlineMs) * 1_000_000n;
+      : readSqliteWorkerMonotonicNs() + BigInt(request.deadlineMs) * 1_000_000n;
   scope.port.postMessage(
     {
       ...request,
       decision: decision.buffer,
-      deadlineNs,
       ports: transferList.filter((value) => value instanceof MessagePort),
     },
     transferList,
@@ -64,7 +64,9 @@ export function requestSqliteWorkerOperationAdmission(
   // joins native rollback before the broker releases operation custody.
   while (Atomics.load(decision, 0) === REQUESTED) {
     const remainingMs =
-      deadlineNs === undefined ? undefined : Number(deadlineNs - process.hrtime.bigint()) / 1e6;
+      deadlineNs === undefined
+        ? undefined
+        : Number(deadlineNs - readSqliteWorkerMonotonicNs()) / 1e6;
     if (remainingMs !== undefined && remainingMs <= 0) {
       Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT);
     } else {
@@ -98,4 +100,6 @@ export function requestSqliteWorkerOperationAdmission(
     throw refusal;
   }
   assertRequestCustody(scope.owner);
+  // A fresh live grant authorizes compensation after a previous stage was refused.
+  delete scope.owner.refusal;
 }

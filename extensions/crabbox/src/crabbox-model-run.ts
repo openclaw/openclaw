@@ -1,15 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { parseModelRef } from "openclaw/plugin-sdk/model-ref-parse";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  runCommandWithTimeout,
-  type CommandOptions,
-  type SpawnResult,
-} from "openclaw/plugin-sdk/process-runtime";
+import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import {
   withConfiguredModelEgress,
   type ConfiguredModelEgress,
 } from "openclaw/plugin-sdk/secret-egress-runtime";
+import { shellEscape } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
+import { runCrabboxProcess } from "./crabbox-process.js";
 
 const UPSTREAM_PROXY_ENV = "CRABBOX_MODEL_PROXY";
 const MAX_OUTPUT_BYTES = 1024 * 1024;
@@ -30,7 +29,7 @@ function shellQuote(value: string): string {
   if (value.includes("\0")) {
     throw new Error("Crabbox model command cannot contain NUL bytes");
   }
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
+  return shellEscape(value);
 }
 
 function remoteCommandScript(egress: ConfiguredModelEgress): string {
@@ -67,11 +66,12 @@ export async function runCrabboxModelCommand(params: CrabboxModelRunOptions): Pr
     AbortSignal.timeout(params.timeoutMs),
     ...(params.signal ? [params.signal] : []),
   ]);
+  const { binary } = await ensureManagedCrabboxBinary({ binary: params.binary, signal });
   const command = (
     args: string[],
     options: Pick<CommandOptions, "env" | "input" | "onOutputChunk"> = {},
   ) =>
-    runCommandWithTimeout([params.binary, "egress", "run", ...args], {
+    runCrabboxProcess([binary, "egress", "run", ...args], {
       timeoutMs: params.timeoutMs,
       maxOutputBytes: MAX_OUTPUT_BYTES,
       killProcessTree: true,

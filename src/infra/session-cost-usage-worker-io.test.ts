@@ -11,10 +11,7 @@ import {
 } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   encodeSessionArchiveContent,
   materializeSessionArchiveForRead,
@@ -26,6 +23,7 @@ import {
   appendTranscriptEventsInTransaction,
   rewriteSqliteTranscriptEventRowsInTransaction,
 } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
@@ -33,16 +31,20 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { writeSessionCostUsageRollupInDatabase } from "./session-cost-usage-cache.kernel.js";
-import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
+import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
 import {
-  decodeUsageCostPartition,
-  USAGE_COST_PARTITION_SCOPE,
-} from "./session-cost-usage-partitions.js";
+  readSessionCostUsageRollupRows,
+  readSessionCostUsageRollupEntry,
+} from "./session-cost-usage-cache.test-support.js";
+import { partitionUsageCostRollup } from "./session-cost-usage-partitions.js";
+import { encodeUsageCostRollup } from "./session-cost-usage-rollup-codec.js";
+import {
+  observeUsageWorkerReads,
+  withUsageWorkerPreload,
+} from "./session-cost-usage-worker-io.test-support.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import {
   discoverAllSessions,
@@ -51,7 +53,6 @@ import {
   loadSessionCostSummariesFromCache,
   loadSessionUsageTimeSeries,
 } from "./session-cost-usage.js";
-import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let receipts: FixtureReceiptChannel;
@@ -77,130 +78,35 @@ function transcriptText(sessionId: string, entry: unknown): string {
   ].join("\n");
 }
 
-async function withUsageWorkerPreload(
-  root: string,
-  preload: string,
-  operation: () => Promise<void>,
-) {
-  await closeOpenClawAgentDatabasesAsync();
-  await closeStateDatabaseForTest();
-  await withEnvAsync({ OPENCLAW_STATE_DIR: root, ...sqliteWorkerPreloadEnv(preload) }, async () => {
-    setRuntimeConfigSnapshot({});
-    try {
-      await operation();
-    } finally {
-      await closeOpenClawAgentDatabasesAsync();
-      await closeStateDatabaseForTest();
-      clearRuntimeConfigSnapshot();
-    }
-  });
-}
-
-async function observeUsageWorkerReads(root: string, sessionFiles: string[]) {
-  const preload = path.join(root, "observe-usage-reads.cjs");
-  const log = path.join(root, "usage-reads.jsonl");
-  await fs.writeFile(log, "");
-  await fs.writeFile(
-    preload,
-    `const fs = require("node:fs");
-const { isMainThread } = require("node:worker_threads");
-if (!isMainThread) {
-  const transcripts = new Set(${JSON.stringify(sessionFiles)});
-  const record = (entry) => fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(entry) + "\\n");
-  for (const [owner, method] of [
-    [fs, "createReadStream"], [fs, "open"], [fs, "openSync"],
-    [fs, "readFile"], [fs, "readFileSync"],
-    [fs.promises, "open"], [fs.promises, "readFile"],
-  ]) {
-    const original = owner[method];
-    owner[method] = function(file, ...args) {
-      if (transcripts.has(String(file))) {
-        record({ kind: "transcript", method, start: args[0]?.start ?? 0 });
-      }
-      return Reflect.apply(original, this, [file, ...args]);
-    };
-  }
-  const { DatabaseSync } = require("node:sqlite");
-  const prepare = DatabaseSync.prototype.prepare;
-  DatabaseSync.prototype.prepare = function(sql) {
-    const statement = Reflect.apply(prepare, this, [sql]);
-    if (/^select\\b.*\\bfrom\\s+["\\x60]?transcript_events["\\x60]?/is.test(sql)) {
-      for (const method of ["all", "get", "iterate"]) {
-        const original = statement[method];
-        statement[method] = function(...args) {
-          record({ kind: "transcript-stats" });
-          return Reflect.apply(original, this, args);
-        };
-      }
-    }
-    if (sql.includes('as "is_cold"') && sql.includes('"transcript_rewrite_watermarks"')) {
-      for (const method of ["all", "get", "iterate"]) {
-        const original = statement[method];
-        statement[method] = function(...args) {
-          record({ kind: "hot-watermark" });
-          return Reflect.apply(original, this, args);
-        };
-      }
-    }
-    if (/^select\\b.*\\bfrom\\s+["\\x60]?cache_entries["\\x60]?/is.test(sql)) {
-      for (const method of ["all", "get", "iterate"]) {
-        const original = statement[method];
-        statement[method] = function(...args) {
-          if (!args.includes("session-cost-usage-rollup-v3")) {
-            return Reflect.apply(original, this, args);
-          }
-          record({ kind: "cache" });
-          const observeRow = (row) => record({
-            kind: "cache-row", key: row.key,
-            valueBytes: typeof row.value_json === "string"
-              ? Buffer.byteLength(row.value_json)
-              : ArrayBuffer.isView(row.value_json) ? row.value_json.byteLength : 0,
-          });
-          const result = Reflect.apply(original, this, args);
-          if (method === "iterate") {
-            return (function* () {
-              for (const row of result) {
-                observeRow(row);
-                yield row;
-              }
-            })();
-          }
-          if (method === "all") {
-            for (const row of result) observeRow(row);
-          } else if (result) {
-            observeRow(result);
-          }
-          return result;
-        };
-      }
-    }
-    return statement;
-  };
-  require("node:module").syncBuiltinESMExports();
-}
-`,
-  );
-  return {
-    run: (operation: () => Promise<void>) => withUsageWorkerPreload(root, preload, operation),
-    clear: () => fs.writeFile(log, ""),
-    read: async () =>
-      (await fs.readFile(log, "utf8"))
-        .split("\n")
-        .filter(Boolean)
-        .map(
-          (line) =>
-            JSON.parse(line) as
-              | { kind: "transcript-stats" }
-              | { kind: "hot-watermark" }
-              | { kind: "cache" }
-              | { kind: "cache-row"; key: string; valueBytes: number }
-              | { kind: "transcript"; method: string; start: number },
-        ),
-  };
-}
-
 describe("session cost usage worker I/O", () => {
-  it("reuses receipt-covered usage inputs and refreshes after append, rewrite, and rollup replacement", async () => {
+  it("refuses unvalidated legacy session keys before assigning usage ownership", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      database.db
+        .prepare(
+          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, 1, 1)",
+        )
+        .run(
+          "legacy",
+          "legacy-session",
+          JSON.stringify({ sessionId: "legacy-session", updatedAt: 1 }),
+        );
+      database.db
+        .prepare(
+          "INSERT INTO session_windows (session_id, session_key, created_at, updated_at, transcript_updated_at) VALUES (?, ?, 1, 1, 1)",
+        )
+        .run("legacy-session", "legacy");
+      markCanonicalSessionValidationPending(database, ["legacy"]);
+      await closeOpenClawAgentDatabasesAsync();
+
+      await expect(discoverAllSessions({ agentId: "main" })).rejects.toThrow(
+        "openclaw doctor --fix",
+      );
+    });
+  });
+
+  it("reuses discovered inputs and rollups across append, rewrite, and rollup replacement", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const probe = await observeUsageWorkerReads(state.stateDir, []);
       await probe.run(async () => {
@@ -258,13 +164,28 @@ describe("session cost usage worker I/O", () => {
           });
         await refresh();
         expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 3 }] });
+        let discovered = await discoverAllSessions({ agentId: "main" });
+        const expectDiscovered = async (
+          sessions: Awaited<ReturnType<typeof discoverAllSessions>>,
+          summaries: Array<{ totalTokens: number } | null>,
+          status: "fresh" | "partial" | "stale",
+        ) => {
+          await probe.clear();
+          expect(
+            await loadSessionCostSummariesFromCache({
+              agentId: "main",
+              sessions,
+              requestRefresh: false,
+            }),
+          ).toMatchObject({ summaries, cacheStatus: { status } });
+          expect((await probe.read()).filter((entry) => entry.kind === "transcript-stats")).toEqual(
+            [],
+          );
+        };
+        await expectDiscovered(discovered, [{ totalTokens: 3 }], "fresh");
         await probe.clear();
         await refresh();
-        expect(
-          (await probe.read()).filter(
-            (entry) => entry.kind === "transcript-stats" || entry.kind === "cache",
-          ),
-        ).toEqual([]);
+        expect((await probe.read()).filter((entry) => entry.kind === "cache")).toEqual([]);
         const generation = runOpenClawAgentWriteTransaction(
           (owner) => {
             const rewritten = rewriteSqliteTranscriptEventRowsInTransaction(owner, scope, [
@@ -282,6 +203,8 @@ describe("session cost usage worker I/O", () => {
           { agentId: scope.agentId, path: database.path },
         );
         expect(generation).toEqual(expect.any(String));
+        const rewrittenDiscovery = await discoverAllSessions({ agentId: "main" });
+        await expectDiscovered(rewrittenDiscovery, [null], "stale");
         await probe.clear();
         await refresh();
         expect(await cached()).toMatchObject({
@@ -298,6 +221,8 @@ describe("session cost usage worker I/O", () => {
         const reads = await probe.read();
         expect(reads.some((entry) => entry.kind === "transcript-stats")).toBe(true);
         expect(reads.filter((entry) => entry.kind === "hot-watermark")).toEqual([]);
+        await expectDiscovered(discovered, [null], "partial");
+        discovered = rewrittenDiscovery;
         runOpenClawAgentWriteTransaction(
           (owner) =>
             appendTranscriptEventsInTransaction(owner, scope, [message("fourth", "third", 5)], {
@@ -310,9 +235,10 @@ describe("session cost usage worker I/O", () => {
         const appendReads = await probe.read();
         expect(appendReads.filter((entry) => entry.kind === "cache")).toEqual([]);
         expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 19 }] });
+        await expectDiscovered(discovered, [{ totalTokens: 19 }], "fresh");
 
         // Another in-process writer replaces the derived row. Its receipt must
-        // invalidate the retained rollup, while unchanged transcript stats survive.
+        // invalidate the retained rollup before refresh rebuilds it from canonical stats.
         runOpenClawAgentWriteTransaction(
           (owner) =>
             writeSessionCostUsageRollupInDatabase(owner.db, {
@@ -601,8 +527,7 @@ if (!isMainThread) {
         (await probe.read()).flatMap((entry) =>
           entry.kind === "transcript" && entry.method === "createReadStream" ? [entry.start] : [],
         ),
-        // Refresh advances the checkpoint; exact legacy detail then replays canonical records.
-      ).toEqual([initialEntry.checkpoint.parsedOffset, 0]);
+      ).toEqual([initialEntry.checkpoint.parsedOffset]);
 
       const completeSize = (await fs.stat(sessionFile)).size;
       await fs.appendFile(sessionFile, '\n{"type":"message","timestamp":"2026-02-05', "utf-8");
@@ -634,7 +559,7 @@ if (!isMainThread) {
         (await probe.read()).flatMap((entry) =>
           entry.kind === "transcript" && entry.method === "createReadStream" ? [entry.start] : [],
         ),
-      ).toEqual([0, 0]);
+      ).toEqual([0]);
       const rebuiltRow = requireValue(
         readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
         "expected rebuilt rollup",
@@ -743,7 +668,6 @@ if (!isMainThread) {
         startMs: Date.UTC(2026, 1, 5),
         endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
         dayBucket: { mode: "time-zone", timeZone: "Europe/Vienna" },
-        projection: "overview",
         requestRefresh: false,
       });
 
@@ -754,23 +678,27 @@ if (!isMainThread) {
         ["2026-02-06"],
       ]);
       const reads = await probe.read();
-      expect(reads.filter((entry) => entry.kind === "cache")).toHaveLength(3);
+      expect(
+        reads.filter((entry) => entry.kind === "cache" || entry.kind === "partitions").length,
+        "selected report cache queries must amortize metadata, bodies, and partitions",
+      ).toBeLessThanOrEqual(sessions.length);
       expect(reads.filter((entry) => entry.kind === "transcript")).toEqual([]);
-      const cacheRows = reads.filter((entry) => entry.kind === "cache-row");
+      const cacheRows = reads.flatMap((entry) => (entry.kind === "cache-row" ? [entry] : []));
       const returnedBytes = cacheRows.reduce((total, row) => total + row.valueBytes, 0);
       expect(returnedBytes, "selected cache JSON bytes").toBeGreaterThan(0);
       expect(returnedBytes, "selected cache JSON bytes").toBeLessThan(16 * 1_024);
+      const comparePaths = (a: string, b: string) => a.localeCompare(b);
       expect(
         cacheRows
           .filter((row) => row.valueBytes > 0)
           .map((row) => row.key)
-          .toSorted(),
-      ).toEqual(sessions.map((session) => session.sessionFile).toSorted());
+          .toSorted(comparePaths),
+      ).toEqual(sessions.map((session) => session.sessionFile).toSorted(comparePaths));
     });
   });
 });
 
-it("keeps model addition order when integer timestamp totals hide fractional model costs", async () => {
+it("uses committed aggregates for fractional model costs without replaying transcripts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const config = {};
     const agentId = "usage-model-rounding";
@@ -804,84 +732,202 @@ it("keeps model addition order when integer timestamp totals hide fractional mod
       endMs: Date.UTC(2026, 8, 18, 0, 29, 59, 999),
       dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
     };
-    const canonical = await loadSessionCostSummariesFromCache(request);
-    const overview = await loadSessionCostSummariesFromCache({
-      ...request,
-      projection: "overview",
+    const probe = await observeUsageWorkerReads(state.stateDir, [sessionFile]);
+    await probe.run(async () => {
+      const cached = await loadSessionCostSummariesFromCache(request);
+      expect(cached.cacheStatus.status).toBe("fresh");
+      expect(cached.summaries[0]?.totalTokens).toBe(6);
+      expect(cached.summaries[0]?.totalCost).toBe(3);
+      const model = cached.summaries[0]?.modelUsage?.find((entry) => entry.model === "model-0");
+      expect(model?.totals.totalCost).toBeCloseTo(0.6, 12);
+      expect((await probe.read()).filter((entry) => entry.kind === "transcript")).toEqual([]);
     });
-    expect(overview.cacheStatus.status).toBe("fresh");
-    expect(overview.summaries[0]?.totalCost).toBe(3);
-    expect(overview.summaries[0]?.modelUsage).toEqual(canonical.summaries[0]?.modelUsage);
-    const model = overview.summaries[0]?.modelUsage?.find((entry) => entry.model === "model-0");
-    expect(model?.totals.totalCost).toBe(0.6000000000000001);
   });
 });
 
-it("replaces every monthly partition after cache damage and filters within and across months", async () => {
+it("defers oversized exact ranges without treating valid aggregates as corrupt", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const config = {};
-    const agentId = "usage-missing-partition";
-    const sessionFile = state.path("usage-missing-partition.jsonl");
-    const record = (day: number) =>
+    const agentId = "usage-replay-budget";
+    const sessionFile = state.path("usage-replay-budget.jsonl");
+    const timestamp = Date.UTC(2026, 8, 18, 0, 1);
+    await fs.writeFile(
+      sessionFile,
       JSON.stringify({
         type: "message",
-        timestamp: new Date(Date.UTC(2026, 8, day)).toISOString(),
+        timestamp: new Date(timestamp).toISOString(),
         message: {
           role: "assistant",
-          model: "fixture",
-          provider: "test",
-          usage: { input: 10, output: 0, totalTokens: 10, cost: { total: 1 } },
+          content: "x".repeat(16 * 1024 * 1024),
+          usage: { input: 7, output: 0, totalTokens: 7, cost: { total: 0.1 } },
         },
-      }) + "\n";
-    await fs.writeFile(sessionFile, record(18) + record(19) + record(31));
-    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
-    runOpenClawAgentWriteTransaction(
-      ({ db }) =>
-        db
-          .prepare(
-            "DELETE FROM cache_entries WHERE (scope, key) IN (SELECT scope, key FROM cache_entries WHERE scope = ? ORDER BY key LIMIT 1)",
-          )
-          .run(USAGE_COST_PARTITION_SCOPE),
-      { agentId },
+      }) + "\n",
     );
-    await fs.appendFile(sessionFile, record(20));
-    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
-    const stored = runOpenClawAgentWriteTransaction(
-      ({ db }) =>
-        db
-          .prepare("SELECT key, value_json, blob FROM cache_entries WHERE scope = ? ORDER BY key")
-          .all(USAGE_COST_PARTITION_SCOPE),
-      { agentId },
-    );
-    expect(stored.map((row) => String(row.key).slice(-10))).toEqual(["2026-09-01", "2026-10-01"]);
-    expect(
-      stored.map((row) => {
-        if (typeof row.value_json !== "string" || !(row.blob instanceof Uint8Array)) {
-          throw new Error("Expected partition bytes");
-        }
-        const partition = decodeUsageCostPartition(row.value_json, row.blob);
-        return Object.values(partition!.buckets).reduce(
-          (sum, bucket) => sum + bucket.totals.totalTokens,
-          0,
+    await refreshCostUsageCacheForAgent({ config: {}, agentId, sessionFiles: [sessionFile] });
+    const probe = await observeUsageWorkerReads(state.stateDir, [sessionFile]);
+    await probe.run(async () => {
+      const prepared = prepareUsageCostWorker({ agentId, sessionFiles: [sessionFile] });
+      const rows = readSessionCostUsageRollupRows(agentId);
+      const pricingFingerprint = JSON.parse(rows[0]!.valueJson).pricingFingerprint as string;
+      const exact = await runUsageCostWorker(prepared, {
+        kind: "sessions",
+        sessions: [{ sessionFile }],
+        pricingFingerprint,
+        startMs: timestamp,
+        endMs: timestamp + 1,
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      });
+      expect(exact).toMatchObject({
+        kind: "sessions",
+        summaries: [null],
+        cacheStatus: { status: "partial", cachedFiles: 0, pendingFiles: 1, staleFiles: 0 },
+        staleSessionFiles: [],
+        invalidRows: [],
+      });
+      const computing = await loadSessionCostSummariesFromCache({
+        agentId,
+        sessions: [{ sessionFile }],
+        startMs: timestamp,
+        endMs: timestamp + 1,
+      });
+      expect(computing).toMatchObject({
+        summaries: [null],
+        cacheStatus: { status: "partial", pendingFiles: 1, staleFiles: 0 },
+      });
+      expect((await probe.read()).filter((entry) => entry.kind === "transcript")).toEqual([]);
+      const aligned = await loadSessionCostSummariesFromCache({
+        agentId,
+        sessions: [{ sessionFile }],
+        requestRefresh: false,
+      });
+      expect(aligned).toMatchObject({
+        summaries: [{ totalTokens: 7 }],
+        cacheStatus: { status: "fresh" },
+      });
+    });
+  });
+});
+
+it("bounds stored and compressed cache payloads while keeping other sessions available", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-cache-payload-budget";
+    const sessions = await Promise.all(
+      ["large", "small"].map(async (sessionId) => {
+        const sessionFile = state.path(`agents/${agentId}/sessions/${sessionId}.jsonl`);
+        await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+        await fs.writeFile(
+          sessionFile,
+          transcriptText(sessionId, {
+            type: "message",
+            timestamp: "2026-09-18T00:00:00Z",
+            message: { role: "assistant", usage: { input: 7, output: 0, totalTokens: 7 } },
+          }),
         );
+        return { sessionId, sessionFile };
       }),
-    ).toEqual([30, 10]);
-    for (const [startMs, endMs, totalTokens] of [
-      [Date.UTC(2026, 8, 19), Date.UTC(2026, 8, 20) - 1, 10],
-      [Date.UTC(2026, 8, 20), Date.UTC(2026, 9, 2) - 1, 20],
-    ]) {
-      expect(
-        await loadSessionCostSummariesFromCache({
-          config,
+    );
+    await refreshCostUsageCacheForAgent({
+      config: {},
+      agentId,
+      sessionFiles: sessions.map((session) => session.sessionFile),
+    });
+    const row = requireValue(
+      readSessionCostUsageRollupRows(agentId).find(
+        (candidate) => candidate.key === sessions[0]!.sessionFile,
+      ),
+      "expected large-session checkpoint",
+    );
+    const pricingFingerprint = JSON.parse(row.valueJson).pricingFingerprint as string;
+    const original = requireValue(
+      readSessionCostUsageRollupEntry(row, agentId),
+      "expected valid checkpoint",
+    );
+    const probe = await observeUsageWorkerReads(
+      state.stateDir,
+      sessions.map((session) => session.sessionFile),
+    );
+    for (const variant of ["stored body", "compressed body", "compressed partition"] as const) {
+      const entry = structuredClone(original);
+      const tools = [
+        {
+          name:
+            "synthetic-tool-" +
+            "x".repeat(variant === "stored body" ? 2 * 1024 * 1024 : 35 * 1024 * 1024),
+          count: 1,
+        },
+      ];
+      if (variant === "compressed partition") {
+        entry.rollup.buckets[String(Date.UTC(2026, 8, 18))] = {
+          ...entry.rollup.untimestamped,
+          tools,
+          timestampMs: Date.UTC(2026, 8, 18),
+          latency: { centroids: [], count: 0, max: 0, sum: 0 },
+        };
+      } else {
+        entry.rollup.untimestamped.tools = tools;
+      }
+      const encoded =
+        variant === "compressed partition"
+          ? partitionUsageCostRollup(entry)
+          : { ...encodeUsageCostRollup(entry), partitions: [] };
+      if (variant === "stored body") {
+        encoded.blob = Uint8Array.from(Buffer.from(JSON.stringify(entry.rollup)));
+        const envelope = JSON.parse(encoded.valueJson);
+        envelope.body.encoding = "identity";
+        envelope.body.storedBytes = encoded.blob.byteLength;
+        encoded.valueJson = JSON.stringify(envelope);
+      }
+      const lock = prepareSessionCostUsageRefreshLock(agentId);
+      try {
+        expect(await lock.acquire()).toBe(true);
+        await lock.writeRollup([
+          {
+            rollupId: row.key,
+            valueJson: new TextEncoder().encode(encoded.valueJson),
+            blob: encoded.blob,
+            partitions: encoded.partitions,
+            replacePartitions: true,
+            updatedAt: row.updatedAt,
+          },
+        ]);
+      } finally {
+        await lock.release();
+      }
+      await probe.clear();
+      await probe.run(async () => {
+        const prepared = prepareUsageCostWorker({
           agentId,
-          sessions: [{ sessionFile }],
-          projection: "overview",
-          requestRefresh: false,
-          startMs,
-          endMs,
+          sessionFiles: sessions.map((session) => session.sessionFile),
+        });
+        const result = await runUsageCostWorker(prepared, {
+          kind: "sessions",
+          sessions,
+          pricingFingerprint,
           dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-        }),
-      ).toMatchObject({ summaries: [{ totalTokens }], cacheStatus: { status: "fresh" } });
+        });
+        expect(result, variant).toMatchObject({
+          kind: "sessions",
+          summaries: [null, { totalTokens: 7 }],
+          cacheStatus: { status: "partial", cachedFiles: 1, pendingFiles: 1, staleFiles: 0 },
+          staleSessionFiles: [],
+          invalidRows: [],
+        });
+        const reads = await probe.read();
+        expect(reads.filter((read) => read.kind === "transcript")).toEqual([]);
+        expect(
+          reads
+            .filter((read) => read.kind === "decompress")
+            .every((read) => read.outputLimit < 35 * 1024 * 1024),
+          "large compressed JSON must be deferred before decompression",
+        ).toBe(true);
+        if (variant === "stored body") {
+          expect(
+            reads
+              .flatMap((read) => (read.kind === "cache-row" && read.key === row.key ? [read] : []))
+              .every((read) => read.blobBytes === 0),
+            "oversized stored bodies must remain inside SQLite",
+          ).toBe(true);
+        }
+      });
     }
   });
 });

@@ -1,19 +1,19 @@
 /** Public TTS runtime barrel exposed to core callers and plugin SDK facades. */
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   setSpeechRuntimeAvailabilityGuard,
   setTtsMachinePrefsPathResolver,
 } from "./runtime-api.js";
 import { persistTtsAudioToMediaStore } from "./tts-audio-store.js";
 import { maybeApplyTtsToPayloadCore } from "./tts-payload.js";
+import { getPreparedTtsPreferences } from "./tts-preferences.js";
 import { textToSpeechCore } from "./tts-synthesis.js";
 
 setSpeechRuntimeAvailabilityGuard(() => {
   assertSecretOwnerAvailable("capability", "tts");
 });
 
-setTtsMachinePrefsPathResolver(() => readConfigMachineState<string>("tts.prefsPath"));
+setTtsMachinePrefsPathResolver(() => getPreparedTtsPreferences()?.machinePrefsPath);
 
 export function textToSpeech(params: Parameters<typeof textToSpeechCore>[0]) {
   return textToSpeechCore(params, persistTtsAudioToMediaStore);

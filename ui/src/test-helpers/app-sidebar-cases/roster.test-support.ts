@@ -175,7 +175,7 @@ export async function toggleRoster(sidebar: HTMLElement, agentId = "main") {
     ? `agent:${encodeURIComponent(agentId)}`
     : "scope:all";
   trigger.click();
-  const selector = `.sidebar-agent-menu [value="${value}"]`;
+  const selector = `.sidebar-agent-menu [data-value="${value}"]`;
   await vi.waitFor(() => expect(sidebar.querySelector(selector)).not.toBeNull());
   sidebar.querySelector<HTMLElement>(selector)?.click();
 }

@@ -1,8 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sql } from "kysely";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import {
   ensureProfileForEmailInDatabase,
@@ -37,7 +37,6 @@ import {
 import { MAX_USER_PROFILE_DISPLAY_NAME_LENGTH, type UserProfile } from "./user-profiles.types.js";
 
 export { formatUserProfileAvatarEtag } from "./user-profiles-internal.js";
-export { getUserProfileDisplay, hasMultipleSessionSharingIdentities } from "./user-profile-list.js";
 export { listProfiles } from "./user-profile-reads.js";
 
 export { adoptTailscaleProfileAvatar } from "./user-profiles-avatar.js";
@@ -57,12 +56,12 @@ function ensureProfileForEmailWithInitialName(
   const normalizedEmail = normalizeEmail(email);
   ensureUserProfilesSchema(options);
   const { db: reader } = openOpenClawStateDatabase(options);
-  const assertBinding = (database: DatabaseSync) => {
+  const assertBinding = (database: EngineConnection) => {
     if (options.expectedGitHubAccountId !== undefined) {
       assertGitHubEmailIdentityBinding(database, normalizedEmail, options.expectedGitHubAccountId);
     }
   };
-  const selectExistingProfile = (database: DatabaseSync) => {
+  const selectExistingProfile = (database: EngineConnection) => {
     assertBinding(database);
     const alias = selectUserProfileEmailAlias(database, normalizedEmail);
     return alias
@@ -70,7 +69,7 @@ function ensureProfileForEmailWithInitialName(
       : undefined;
   };
   // Keep alias and merge-head reads coherent without taking writer admission.
-  const found = runSqliteDeferredTransactionSync(reader, () => selectExistingProfile(reader));
+  const found = runSqliteReadSnapshotSync(reader, () => selectExistingProfile(reader));
   if (found) {
     return found;
   }
@@ -110,7 +109,7 @@ function ensureProfileForProviderIdentity(params: {
     params.provider === "github" ? githubAuthenticationSubject(params.subject) : params.subject;
   ensureUserProfilesSchema(params.options);
   const { db: reader } = openOpenClawStateDatabase(params.options);
-  const selectExistingIdentity = (database: DatabaseSync) => {
+  const selectExistingIdentity = (database: EngineConnection) => {
     let query = userProfilesDb(database)
       .selectFrom("user_profile_identities")
       .select(["profile_id", "subject"])
@@ -128,7 +127,7 @@ function ensureProfileForProviderIdentity(params: {
         : query.where("subject", "=", subject);
     return executeSqliteQueryTakeFirstSync(database, query);
   };
-  const existing = runSqliteDeferredTransactionSync(reader, () => {
+  const existing = runSqliteReadSnapshotSync(reader, () => {
     const identity = selectExistingIdentity(reader);
     return identity?.subject === subject
       ? toUserProfile(requireResolvedUserProfileMetadataById(reader, identity.profile_id))
@@ -188,7 +187,7 @@ function adoptDisplayNameIfEmpty(
   options: UserProfileMutationOptions,
 ): UserProfile {
   const { db: reader } = openOpenClawStateDatabase(options);
-  const existing = runSqliteDeferredTransactionSync(reader, () =>
+  const existing = runSqliteReadSnapshotSync(reader, () =>
     requireResolvedUserProfileMetadataById(reader, profileId),
   );
   if (!displayName || existing.display_name?.trim()) {
@@ -226,14 +225,9 @@ export function ensureGatewayOwnerProfile(
   const displayName = normalizeInitialDisplayName(initialDisplayName);
   ensureUserProfilesSchema(options);
   const { db: reader } = openOpenClawStateDatabase(options);
-  const found = runSqliteDeferredTransactionSync(reader, () => {
-    const { existing, identified } = readGatewayOwnerProfileForEnsure(reader);
-    return existing && identified && (!displayName || existing.display_name?.trim())
-      ? existing
-      : undefined;
-  });
-  if (found) {
-    return toUserProfile(found);
+  const { existing, identified } = readGatewayOwnerProfileForEnsure(reader);
+  if (existing && identified && (!displayName || existing.display_name?.trim())) {
+    return toUserProfile(existing);
   }
   return runUserProfileWriteTransaction(
     ({ db }) => toUserProfile(ensureGatewayOwnerProfileRow(db, displayName, options.mutation)),

@@ -1,19 +1,11 @@
 /** HTTP surface: `GET /plugins/geolocation/lookup?ip=<address>`. */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
+import { sendLengthFramedJson as sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
-import type { GeolocationLookup } from "./lookup.js";
+import type { createGeolocationLookup } from "./lookup.js";
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(payload),
-  });
-  res.end(payload);
-}
-
-export function createGeolocationLookupHandler(lookup: GeolocationLookup) {
+export function createGeolocationLookupHandler(lookup: ReturnType<typeof createGeolocationLookup>) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (!url.pathname.endsWith("/lookup")) {

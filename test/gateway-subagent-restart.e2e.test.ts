@@ -13,6 +13,7 @@ import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
+import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -221,6 +222,7 @@ it.skipIf(process.platform === "win32").for([
       signal,
       startTimeoutMs: 120_000,
       stopTimeoutMs: 10_000,
+      gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
       env: {
         OPENAI_API_KEY: undefined,
         OPENAI_BASE_URL: undefined,
@@ -286,7 +288,8 @@ it.skipIf(process.platform === "win32").for([
           url: instance.url,
           token: instance.gatewayToken,
           clientName: "gateway-client",
-          mode: "backend",
+          // Recovery needs the original profiled operator; backend probes are unprofiled.
+          mode: "test",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
             path: instance.state.path("proof-device.sqlite"),
@@ -414,6 +417,8 @@ it.skipIf(process.platform === "win32").for([
               slots: { memory: "none" },
             },
             models: {
+              // Keep this synthetic restart fixture independent of remote catalog adoption.
+              catalogRefresh: { enabled: false },
               mode: "replace",
               providers: {
                 [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
@@ -486,6 +491,10 @@ it.skipIf(process.platform === "win32").for([
               if (!entry) {
                 throw new Error("Child registry row is missing");
               }
+              expect(entry.operatorRecoverySource).toMatchObject({
+                sessionKey: PARENT_KEY,
+                sourceRunId: originalRunId,
+              });
               return entry;
             },
             { timeout: 30_000 },

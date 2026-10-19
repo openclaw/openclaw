@@ -1,7 +1,7 @@
-import { For, Show, createEffect, createSignal } from "solid-js";
+import { For, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { Menu, type MenuHandle } from "../../components/solid/menu.tsx";
+import { Menu } from "../../components/solid/menu.tsx";
 import "../../components/modal-dialog.ts";
 import {
   DocsLink,
@@ -53,7 +53,11 @@ type SecretsStoreViewProps = {
 const DOCS_URL = "https://docs.openclaw.ai/gateway/secrets#shared-secret-store";
 const SECRET_MASK = "••••••••";
 
-function TextAreaField(props: { view: SecretsStoreViewProps; field: "value" | "hosts" | "bulk" }) {
+function TextAreaField(props: {
+  view: SecretsStoreViewProps;
+  field: "value" | "hosts" | "bulk";
+  onInputRef?: (element: HTMLTextAreaElement) => void;
+}) {
   const name = () =>
     props.field === "hosts" ? "allowed-hosts" : props.field === "bulk" ? "bulk-values" : "value";
   const value = () =>
@@ -75,6 +79,7 @@ function TextAreaField(props: { view: SecretsStoreViewProps; field: "value" | "h
     <label class="secrets-store-field">
       <span>{t(props.field === "hosts" ? "secretsStore.allowedHosts" : "secretsStore.value")}</span>
       <textarea
+        ref={props.onInputRef}
         class={[
           "settings-input",
           `secrets-store-dialog__${props.field}`,
@@ -106,11 +111,6 @@ function updatedLabel(entry: SecretStoreEntry): string {
 }
 
 function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry }) {
-  const [menu, setMenu] = createSignal<MenuHandle>();
-  createEffect(
-    () => [menu()?.overlay.trigger, t("secretsStore.actions")] as const,
-    ([trigger, title]) => trigger?.setAttribute("title", title),
-  );
   return (
     <Show when={props.view.canSet || props.view.canDelete}>
       <Menu
@@ -119,7 +119,7 @@ function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry
         placement="bottom-end"
         label={`${t("secretsStore.actions")}: ${props.entry.name}`}
         triggerClass="btn btn--sm btn--ghost secrets-store__menu-trigger"
-        ref={setMenu}
+        triggerAttributes={{ title: t("secretsStore.actions") }}
         trigger={<Icon name="moreHorizontal" />}
         disabled={props.view.busy}
         items={[
@@ -191,7 +191,9 @@ function SecretsTable(props: SecretsStoreViewProps) {
                           </code>
                         </td>
                         <td data-label={t("secretsStore.access")}>
-                          <span class={`secrets-store__mode secrets-store__mode--${entry().kind}`}>
+                          <span
+                            class={["secrets-store__mode", `secrets-store__mode--${entry().kind}`]}
+                          >
                             {t(
                               entry().kind === "secret"
                                 ? "secretsStore.protectedSecret"
@@ -247,6 +249,7 @@ function SecretsTable(props: SecretsStoreViewProps) {
 function SecretDialog(props: {
   view: SecretsStoreViewProps;
   bulk?: boolean;
+  initialFocus: () => HTMLElement;
   children: SolidJSX.Element;
 }) {
   const title = () =>
@@ -260,6 +263,7 @@ function SecretDialog(props: {
   const close = () => (props.bulk ? props.view.onCloseBulk() : props.view.onCloseDialog());
   return (
     <openclaw-modal-dialog
+      prop:initialFocus={props.initialFocus}
       label={title()}
       description={props.bulk ? undefined : t("secretsStore.hint")}
       onModal-cancel={close}
@@ -285,7 +289,7 @@ function SecretDialog(props: {
             {props.view.formError}
           </div>
         </Show>
-        <div class="secrets-store-dialog__actions">
+        <openclaw-modal-actions class="secrets-store-dialog__actions">
           <button
             class="btn primary"
             type="submit"
@@ -302,19 +306,23 @@ function SecretDialog(props: {
           <button class="btn" type="button" disabled={props.view.busy} onClick={close}>
             {t("common.cancel")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </form>
     </openclaw-modal-dialog>
   );
 }
 
 function EntryDialog(props: SecretsStoreViewProps) {
+  let nameInput!: HTMLInputElement;
   return (
     <Show when={props.dialogMode}>
-      <SecretDialog view={props}>
+      <SecretDialog view={props} initialFocus={() => nameInput}>
         <label class="secrets-store-field">
           <span>{t("secretsStore.name")}</span>
           <input
+            ref={(element) => {
+              nameInput = element;
+            }}
             class="settings-input mono"
             name="name"
             autocomplete="off"
@@ -377,10 +385,17 @@ function EntryDialog(props: SecretsStoreViewProps) {
 }
 
 function BulkDialog(props: SecretsStoreViewProps) {
+  let bulkInput!: HTMLTextAreaElement;
   return (
     <Show when={props.bulkOpen}>
-      <SecretDialog view={props} bulk>
-        <TextAreaField view={props} field="bulk" />
+      <SecretDialog view={props} bulk initialFocus={() => bulkInput}>
+        <TextAreaField
+          view={props}
+          field="bulk"
+          onInputRef={(element) => {
+            bulkInput = element;
+          }}
+        />
         <div class="secrets-store-bulk__summary" aria-live="polite">
           {t(props.bulkSecretCount === 1 ? "secretsStore.detectedOne" : "secretsStore.detected", {
             count: String(props.bulkSecretCount),

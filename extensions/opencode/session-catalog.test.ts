@@ -175,6 +175,7 @@ function captureOpenCodeSessionRegistrations(
       id: "opencode",
       pluginConfig,
       runtime: {
+        config: { current: () => ({}) },
         nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) },
       } as unknown as OpenClawPluginApi["runtime"],
       ...(overrides as Partial<OpenClawPluginApi>),
@@ -216,7 +217,7 @@ function capturePairedNodeCatalog(nodes: Array<Record<string, unknown>>, invoke:
   const { provider } = captureOpenCodeSessionRegistrations(
     {},
     {
-      runtime: { nodes: { list: listNodes, invoke } },
+      runtime: { config: { current: () => ({}) }, nodes: { list: listNodes, invoke } },
     },
   );
   return { listNodes, provider };
@@ -232,9 +233,8 @@ const readPairedNode = (
   params: Omit<CatalogReadParams, "hostId" | "threadId"> = {},
 ) => provider.read({ ...pairedNodeLocator, ...params });
 
-const readTestTranscript = (
-  params: Omit<Parameters<typeof readLocalOpenCodeTranscriptPage>[0], "threadId"> = {},
-) => readLocalOpenCodeTranscriptPage({ threadId: "ses_test", ...params });
+const readTestTranscript = (params: Record<string, unknown> = {}) =>
+  readLocalOpenCodeTranscriptPage({ threadId: "ses_test", ...params });
 
 async function expectRejects(promise: Promise<unknown>, message: string) {
   await expect(promise).rejects.toThrow(message);

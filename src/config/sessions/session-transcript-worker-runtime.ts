@@ -46,6 +46,8 @@ const historyPrewarms = new WeakMap<
 
 function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
   switch (input.kind) {
+    case "history-page":
+      return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
     case "transcript-hydration":
     case "current-turn-entry":
     case "recent-active-events":
@@ -53,12 +55,8 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
       return input.resolvedScope;
     case "transcript-anchors":
       return input.resolved;
-    case "session-row-backfill":
-      return input.params;
     case "session-activity-summary-source":
       return input.scope;
-    case "history-page":
-      return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
     default:
       return undefined;
   }
@@ -77,7 +75,7 @@ export function runSessionBranchSummaryWorkerRequest(
 }
 
 export function isSessionHistoryWorkerCold(lane: SessionHistoryWorkerLane = historyLane): boolean {
-  return lane.pending === 0 && lane.nativeSequence <= lane.retiredSequence;
+  return lane.pending === 0 && !lane.native;
 }
 
 /** Reuse normal reader custody; repeated warmups never refresh the idle deadline. */
@@ -93,7 +91,7 @@ export async function prewarmSessionHistoryWorker(
       historyPrewarms.set(resource, prewarms);
     }
     const existing = prewarms.get(lane);
-    if (existing && (existing.pending || resource.nativeSequences.has(lane))) {
+    if (existing && (existing.pending || resource.nativeLanes.has(lane))) {
       return await existing.promise;
     }
     const prewarm: { promise: Promise<void>; pending: boolean } = {
@@ -102,6 +100,7 @@ export async function prewarmSessionHistoryWorker(
         (owner) =>
           owner.prewarm({
             env: captureSessionTranscriptStorageEnvironment(options.env ?? process.env),
+            history: lane === historyLane,
           }),
         lane,
       ).then(
@@ -170,69 +169,76 @@ export function retainSessionHistoryWorkerDatabase(
           aborters: owned.aborters,
         },
         async (admit, requestLane) => {
-          // Reopened lanes check replacement before lending the next request a receipt.
-          const validation = captureOpenClawAgentDatabaseReadValidation(
-            database,
-            owned.nativeSequences.has(requestLane) ? "retained" : "admission",
-          );
           try {
-            const reply = await admit((requestSignal, remaining) =>
-              runWithSqliteDatabaseAdmissionTurn([database.path], () =>
-                requestLane.pool.run(
-                  () => {
-                    assertCurrent();
-                    options.prepareRead?.();
-                    const input = prepare();
-                    const projection = projectionTarget(input);
-                    const projectionReceipt = projection?.sessionId
-                      ? readSessionActorProjectionReceipt({
-                          path: database.path,
-                          sessionKey: projection.sessionKey,
-                          sessionId: projection.sessionId,
-                        })
-                      : undefined;
-                    owned.nativeSequences.set(requestLane, ++requestLane.nativeSequence);
-                    return {
-                      ...input,
-                      database,
-                      validation: validation?.validation,
-                      projectionReceipt: projectionReceipt && {
-                        ...projectionReceipt,
-                        ...(input.kind === "history-page" ? { contextOnly: true } : {}),
-                      },
-                    } satisfies SessionTranscriptWorkerRequest;
-                  },
-                  {
-                    inputBytes: inputBytes + (validation?.inputBytes ?? 0),
-                    timeoutMs: remaining,
-                    signal: requestSignal,
-                    onRequest: onRequest
-                      ? (value, context) => {
-                          const effect = (async () => {
-                            context.signal.throwIfAborted();
-                            const response = await onRequest(value, context.signal);
-                            context.signal.throwIfAborted();
-                            return response ?? { input: null, timeoutMs };
-                          })();
-                          hostEffects.add(effect);
-                          owned.hostEffects.add(effect);
-                          const releaseEffect = () => {
-                            hostEffects.delete(effect);
-                            owned.hostEffects.delete(effect);
-                          };
-                          void effect.then(releaseEffect, releaseEffect);
-                          return effect;
-                        }
-                      : undefined,
-                    onExecutionSettled: ({ retired }) => {
-                      if (retired) {
-                        retirement = rotateDatabaseWorkers(requestLane);
-                      }
+            const reply = await admit((requestSignal, remaining) => {
+              // A writer ahead of this read can renew the receipt during admission.
+              const validation = captureOpenClawAgentDatabaseReadValidation(
+                database,
+                owned.nativeLanes.has(requestLane) ? "retained" : "admission",
+              );
+              return runWithSqliteDatabaseAdmissionTurn(
+                [database.path],
+                () =>
+                  requestLane.pool.run(
+                    () => {
+                      assertCurrent();
+                      options.prepareRead?.();
+                      const input = prepare();
+                      const projection = projectionTarget(input);
+                      const projectionReceipt = projection?.sessionId
+                        ? readSessionActorProjectionReceipt({
+                            path: database.path,
+                            sessionKey: projection.sessionKey,
+                            sessionId: projection.sessionId,
+                          })
+                        : undefined;
+                      requestLane.native = true;
+                      owned.nativeLanes.add(requestLane);
+                      return {
+                        ...input,
+                        database,
+                        validation: validation?.validation,
+                        projectionReceipt: projectionReceipt && {
+                          ...projectionReceipt,
+                          ...(input.kind === "history-page" && !projectionReceipt.entrySessionKey
+                            ? { contextOnly: true }
+                            : {}),
+                        },
+                      } satisfies SessionTranscriptWorkerRequest;
                     },
-                  },
-                ),
-              ),
-            );
+                    {
+                      inputBytes: inputBytes + (validation?.inputBytes ?? 0),
+                      timeoutMs: remaining,
+                      signal: requestSignal,
+                      onRequest: onRequest
+                        ? (value, context) => {
+                            const effect = (async () => {
+                              context.signal.throwIfAborted();
+                              const response = await onRequest(value, context.signal);
+                              context.signal.throwIfAborted();
+                              return response ?? { input: null, timeoutMs };
+                            })();
+                            hostEffects.add(effect);
+                            owned.hostEffects.add(effect);
+                            const releaseEffect = () => {
+                              hostEffects.delete(effect);
+                              owned.hostEffects.delete(effect);
+                            };
+                            void effect.then(releaseEffect, releaseEffect);
+                            return effect;
+                          }
+                        : undefined,
+                      onExecutionSettled: ({ retired }) => {
+                        if (retired) {
+                          retirement = rotateDatabaseWorkers(requestLane);
+                        }
+                      },
+                    },
+                  ),
+                [],
+                requestSignal,
+              );
+            });
             await retirement;
             const received =
               unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
@@ -244,8 +250,7 @@ export function retainSessionHistoryWorkerDatabase(
                 received.kind === "session-cleanup" ||
                 received.kind === "session-exact-entries" ||
                 received.kind === "session-entry-current" ||
-                received.kind === "session-runtime-target" ||
-                received.kind === "session-diagnostic-text") &&
+                received.kind === "session-runtime-target") &&
               received.source
             ) {
               knownSource = true;
@@ -325,7 +330,7 @@ export async function runProcessHeldHistoryTask(
     const value = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(
       await historyLane.pool.run(
         () => {
-          historyLane.nativeSequence++;
+          historyLane.native = true;
           return { kind: "cli-process-history", request };
         },
         {

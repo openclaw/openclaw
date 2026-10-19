@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import type { SpeechListVoicesRequest } from "openclaw/plugin-sdk/speech";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { isTtsProviderConfigured, resolveTtsConfig } from "openclaw/plugin-sdk/tts-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 
@@ -124,6 +125,14 @@ describe("listMicrosoftVoices", () => {
 describe("buildMicrosoftSpeechProvider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("supports the public synchronous TTS readiness API through the compatibility window", () => {
+    const cfg = { tts: { providers: { microsoft: { enabled: true } } } };
+
+    expect(
+      isTtsProviderConfigured(resolveTtsConfig(cfg), buildMicrosoftSpeechProvider(), cfg),
+    ).toBe(true);
   });
 
   it.each([["en-US-MichelleNeural", "zh-CN-XiaoxiaoNeural", "zh-CN"]])(

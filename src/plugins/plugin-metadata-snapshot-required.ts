@@ -3,6 +3,7 @@ import { isPluginSourceModulePath, tryNativeRequireModule } from "./native-modul
 import {
   snapshotReaderSlot,
   type CurrentSnapshotModule,
+  type MetadataPolicyReaders,
   type SnapshotLoaderModule,
 } from "./plugin-metadata-snapshot-readers.js";
 
@@ -41,5 +42,25 @@ export function loadPluginMetadataSnapshotRuntime(
   const reader =
     snapshotReaderSlot.loadPluginMetadataSnapshot ??
     loadRequiredSnapshotReaders().loadPluginMetadataSnapshot;
+  return reader(params);
+}
+
+/** Reuse the canonical manifest reader instead of importing its graph again from an SDK. */
+export function listOpenClawPluginManifestMetadataRuntime(
+  env?: Parameters<MetadataPolicyReaders["listOpenClawPluginManifestMetadata"]>[0],
+): ReturnType<MetadataPolicyReaders["listOpenClawPluginManifestMetadata"]> {
+  const reader =
+    snapshotReaderSlot.listOpenClawPluginManifestMetadata ??
+    loadRequiredSnapshotReaders().listOpenClawPluginManifestMetadata;
+  return reader(env);
+}
+
+/** Keep marker recognition on the same prepared env-name policy as host auth resolution. */
+export function listKnownProviderAuthEnvVarNamesRuntime(
+  params?: Parameters<MetadataPolicyReaders["listKnownProviderAuthEnvVarNamesCore"]>[0],
+): ReturnType<MetadataPolicyReaders["listKnownProviderAuthEnvVarNamesCore"]> {
+  const reader =
+    snapshotReaderSlot.listKnownProviderAuthEnvVarNamesCore ??
+    loadRequiredSnapshotReaders().listKnownProviderAuthEnvVarNamesCore;
   return reader(params);
 }

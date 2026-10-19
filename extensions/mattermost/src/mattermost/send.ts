@@ -215,12 +215,7 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
 async function resolveMattermostSendContext(to: string, opts: MattermostSendOpts) {
   const core = getMattermostRuntime();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
-  if (!opts?.cfg) {
-    throw new Error(
-      "Mattermost send requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
-  }
-  const cfg = requireRuntimeConfig(opts.cfg, "Mattermost send");
+  const cfg = requireRuntimeConfig(opts?.cfg, "Mattermost send");
   const account = resolveMattermostAccount({
     cfg,
     accountId: opts.accountId,
@@ -301,7 +296,7 @@ export async function sendMessageMattermost(
   client.assertRequestCurrent?.();
 
   let props = opts.props;
-  if (!props && Array.isArray(opts.buttons) && opts.buttons.length > 0) {
+  if (!props && opts.buttons?.length) {
     setInteractionSecret(accountId, client.token);
     props = buildButtonProps({
       callbackUrl: resolveInteractionCallbackUrl(accountId, {
@@ -333,7 +328,7 @@ export async function sendMessageMattermost(
         channelId,
         buffer: media.buffer,
         fileName: media.fileName ?? `upload${extensionForMime(media.contentType) ?? ""}`,
-        contentType: media.contentType ?? undefined,
+        contentType: media.contentType,
       });
       fileIds = [fileInfo.id];
     } catch (err) {

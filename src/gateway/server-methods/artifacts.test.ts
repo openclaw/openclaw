@@ -23,6 +23,8 @@ import {
   resultImageMessage,
   runtimeContext,
 } from "./artifacts.test-support.js";
+import { createSessionFileDownloadClient } from "./sessions-files.test-support.js";
+import type { GatewayClient } from "./types.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
@@ -90,11 +92,17 @@ function createResponder() {
 const artifactConfig = { agents: { entries: { main: {} } } };
 
 type ArtifactMethod = "artifacts.list" | "artifacts.get" | "artifacts.download";
+type ArtifactHandlerOptions = {
+  id?: string;
+  context?: unknown;
+  signal?: AbortSignal;
+  client?: GatewayClient;
+};
 
 async function invokeArtifactHandler(
   method: ArtifactMethod,
   params: Record<string, unknown>,
-  options: { id?: string; context?: unknown; signal?: AbortSignal } = {},
+  options: ArtifactHandlerOptions = {},
 ) {
   const responder = createResponder();
   const defaultContext = {
@@ -103,7 +111,7 @@ async function invokeArtifactHandler(
   await artifactsHandlers[method]?.({
     req: { type: "req", id: options.id ?? method, method, params: {} },
     params,
-    client: null,
+    client: options.client ?? null,
     signal: options.signal,
     isWebchatConnect: () => false,
     respond: responder.respond,
@@ -114,21 +122,18 @@ async function invokeArtifactHandler(
 
 async function listArtifacts(
   params: Record<string, unknown>,
-  options: { id?: string; context?: unknown; signal?: AbortSignal } = {},
+  options: ArtifactHandlerOptions = {},
 ) {
   return await invokeArtifactHandler("artifacts.list", params, options);
 }
 
-async function getArtifact(
-  params: Record<string, unknown>,
-  options: { id?: string; context?: unknown; signal?: AbortSignal } = {},
-) {
+async function getArtifact(params: Record<string, unknown>, options: ArtifactHandlerOptions = {}) {
   return await invokeArtifactHandler("artifacts.get", params, options);
 }
 
 async function downloadArtifact(
   params: Record<string, unknown>,
-  options: { id?: string; context?: unknown; signal?: AbortSignal } = {},
+  options: ArtifactHandlerOptions = {},
 ) {
   return await invokeArtifactHandler("artifacts.download", params, options);
 }
@@ -361,7 +366,7 @@ describe("managed artifact lifecycle", () => {
   });
 
   it("rechecks managed download after a shared session becomes draft", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot({});
       hoisted.realSessionFacts = true;
       const owner = ensureProfileForEmail("artifact-owner@example.test");
@@ -374,7 +379,12 @@ describe("managed artifact lifecycle", () => {
         createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
       };
       await upsertSessionEntryCore(scope, { ...entry, visibility: "shared" });
-      const client = sharingPolicyClient({ user: viewer.id, scopes: ["operator.read"] });
+      using connection = createSessionFileDownloadClient();
+      const client = {
+        ...sharingPolicyClient({ user: viewer.id, scopes: ["operator.read"] }),
+        connId: connection.client.connId,
+        connectionSignal: connection.client.connectionSignal,
+      };
       const artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111";
       async function invoke() {
         const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
@@ -388,7 +398,7 @@ describe("managed artifact lifecycle", () => {
         });
         return { calls };
       }
-      const url = "/api/chat/media/outgoing/fixture/id/full?mediaTicket=fixture-ticket";
+      const url = "/api/chat/media/outgoing/fixture/id/full";
       hoisted.resolveManagedArtifactDownload.mockResolvedValue({
         artifactId,
         sessionKey,
@@ -399,7 +409,9 @@ describe("managed artifact lifecycle", () => {
       });
       const baseline = await invoke();
       expect(baseline.calls).toHaveLength(1);
-      expectFields(expectOkPayload(baseline.calls), { url });
+      expectFields(expectOkPayload(baseline.calls), {
+        url: expect.stringContaining(`${url}?mediaTicket=`),
+      });
       await upsertSessionEntryCore(scope, { ...entry, updatedAt: 2, visibility: "draft" });
       vi.clearAllMocks();
       const denied = await invoke();
@@ -491,67 +503,72 @@ describe("managed artifact lifecycle", () => {
       },
     });
   });
-  it("keeps scoped managed downloads bound to their exact artifact id", async () => {
-    const artifactId = "artifact_managed_media_11111111-1111-4111-8111-111111111111";
-    const otherURL =
-      "/api/chat/media/outgoing/agent%3Amain%3Amain/22222222-2222-4222-8222-222222222222/full";
-    const query = {
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      artifactId,
-      runId: "run-output",
-      messageRole: "assistant",
-    };
-    for (const payload of [{ url: otherURL }, { data: "YWx0ZXJuYXRl" }, {}]) {
-      mockedMessages([
-        {
-          role: "assistant",
-          content: [{ type: "file", artifactId, title: "stale-name.txt", ...payload }],
-          __openclaw: { seq: 3, runId: "run-output" },
-        },
-      ]);
-      hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
-      const missing = await downloadArtifact(query);
-      expectFields(expectErrorDetails(missing.calls), { type: "artifact_not_found", artifactId });
-      expect(hoisted.resolveManagedUrlDownload).not.toHaveBeenCalled();
-
-      const url =
-        "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full?mediaTicket=fixture";
-      hoisted.resolveManagedArtifactDownload.mockResolvedValue({
+  it.each([undefined, 480])(
+    "keeps scoped managed downloads bound to their exact artifact id (preview %s)",
+    async (previewWidth) => {
+      using connection = createSessionFileDownloadClient();
+      const artifactId = "artifact_managed_media_11111111-1111-4111-8111-111111111111";
+      const otherURL =
+        "/api/chat/media/outgoing/agent%3Amain%3Amain/22222222-2222-4222-8222-222222222222/full";
+      const query = {
+        sessionKey: "agent:main:main",
+        agentId: "main",
         artifactId,
-        sessionKey: query.sessionKey,
-        type: "file",
-        title: "report.csv",
-        mimeType: "text/csv",
-        sizeBytes: 8,
-        url,
-        expiresAt: "2026-09-14T12:00:00.000Z",
-      });
-      const downloaded = await downloadArtifact(query);
-      expectFields(expectOkPayload(downloaded.calls), {
-        url,
-        artifact: {
-          id: artifactId,
+        runId: "run-output",
+        messageRole: "assistant",
+        ...(previewWidth === undefined ? {} : { previewWidth }),
+      };
+      for (const payload of [{ url: otherURL }, { data: "YWx0ZXJuYXRl" }, {}]) {
+        mockedMessages([
+          {
+            role: "assistant",
+            content: [{ type: "file", artifactId, title: "stale-name.txt", ...payload }],
+            __openclaw: { seq: 3, runId: "run-output" },
+          },
+        ]);
+        hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
+        const missing = await downloadArtifact(query, { client: connection.client });
+        expectFields(expectErrorDetails(missing.calls), { type: "artifact_not_found", artifactId });
+        expect(hoisted.resolveManagedUrlDownload).not.toHaveBeenCalled();
+
+        const url =
+          "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full";
+        hoisted.resolveManagedArtifactDownload.mockResolvedValue({
+          artifactId,
           sessionKey: query.sessionKey,
           type: "file",
           title: "report.csv",
           mimeType: "text/csv",
           sizeBytes: 8,
-          runId: "run-output",
-          messageSeq: 3,
-          source: "session-transcript",
-          download: { mode: "url" },
-        },
-      });
-      expect(hoisted.resolveManagedArtifactDownload).toHaveBeenLastCalledWith({
-        sessionKey: query.sessionKey,
-        agentId: "main",
-        defaultAgentId: "main",
-        artifactId,
-      });
-      expect(hoisted.resolveManagedUrlDownload).not.toHaveBeenCalled();
-    }
-  });
+          url,
+          expiresAt: "2026-09-14T12:00:00.000Z",
+        });
+        const downloaded = await downloadArtifact(query, { client: connection.client });
+        expectFields(expectOkPayload(downloaded.calls), {
+          url: expect.stringContaining(`${url}?mediaTicket=`),
+          artifact: {
+            id: artifactId,
+            sessionKey: query.sessionKey,
+            type: "file",
+            title: "report.csv",
+            mimeType: "text/csv",
+            sizeBytes: 8,
+            runId: "run-output",
+            messageSeq: 3,
+            source: "session-transcript",
+            download: { mode: "url" },
+          },
+        });
+        expect(hoisted.resolveManagedArtifactDownload).toHaveBeenLastCalledWith({
+          sessionKey: query.sessionKey,
+          agentId: "main",
+          defaultAgentId: "main",
+          artifactId,
+        });
+        expect(hoisted.resolveManagedUrlDownload).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("requires filtered transcript membership before issuing a managed download ticket", async () => {
     const artifactId = "artifact_managed_media_11111111-1111-4111-8111-111111111111";
@@ -673,6 +690,7 @@ describe("artifact download lookup", () => {
   });
 
   it("shares one scan for queued downloads while preserving inline, URL, and managed responses", async () => {
+    using connection = createSessionFileDownloadClient();
     const managedId = "artifact_managed_media_11111111-1111-4111-8111-111111111111";
     mockedMessages([
       {
@@ -691,7 +709,7 @@ describe("artifact download lookup", () => {
       sessionKey: "agent:main:main",
       type: "file",
       title: "managed.txt",
-      url: "/api/chat/media/outgoing/synthetic/full?mediaTicket=fixture",
+      url: "/api/chat/media/outgoing/synthetic/full",
       expiresAt: "2030-01-01T00:00:00.000Z",
     });
     const query = {
@@ -706,13 +724,15 @@ describe("artifact download lookup", () => {
       { artifact: summaries[2], url: "https://example.test/result.txt" },
       {
         artifact: { ...summaries[3], download: { mode: "url" } },
-        url: "/api/chat/media/outgoing/synthetic/full?mediaTicket=fixture",
-        expiresAt: "2030-01-01T00:00:00.000Z",
+        url: expect.stringContaining("/api/chat/media/outgoing/synthetic/full?mediaTicket="),
+        expiresAt: expect.any(String),
       },
     ];
     hoisted.visitSessionMessagesAsync.mockClear();
     const results = await Promise.all(
-      summaries.map((artifact) => downloadArtifact({ ...query, artifactId: artifact.id })),
+      summaries.map((artifact) =>
+        downloadArtifact({ ...query, artifactId: artifact.id }, { client: connection.client }),
+      ),
     );
     expect(results.map((result) => expectOkPayload(result.calls))).toEqual(expected);
     expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledTimes(1);

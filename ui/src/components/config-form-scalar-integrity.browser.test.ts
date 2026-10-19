@@ -6,8 +6,8 @@ import {
   renderSelectFixture,
   renderAnalyzedFormFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
+import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
-import { analyzeConfigSchema } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -17,7 +17,52 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
   return element;
 }
 
+const multilinePlaceholder = "Default guidance.\nSecond line.";
+const multilineSchema: JsonSchema = { type: "string", maxLength: 4000 };
+const multilineHints = {
+  reviewInstructions: {
+    label: "Review instructions",
+    multiline: true,
+    placeholder: multilinePlaceholder,
+  },
+};
+
 describe("config form scalar integrity", () => {
+  it.each([false, true])("edits multiline string hints with commitOnBlur=%s", (commitOnBlur) => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    const path = ["reviewInstructions"];
+    renderTextInputFixture(container, {
+      schema: multilineSchema,
+      value: undefined,
+      path,
+      inputType: "text",
+      hints: multilineHints,
+      commitOnBlur,
+      onPatch,
+    });
+    const textarea = expectElement(
+      container.querySelector<HTMLTextAreaElement>("textarea"),
+      "review instructions",
+    );
+    expect(textarea.getAttribute("aria-label")).toBe("Review instructions");
+    expect(textarea.placeholder).toBe(multilinePlaceholder);
+    expect(textarea.value).toBe("");
+    expect(onPatch).not.toHaveBeenCalled();
+    textarea.value = "Look for scope drift.\nPreserve required checks.";
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    if (commitOnBlur) {
+      expect(onPatch).not.toHaveBeenCalled();
+      textarea.dispatchEvent(new FocusEvent("blur"));
+    }
+    expect(onPatch).toHaveBeenLastCalledWith(path, textarea.value);
+    textarea.value = "x".repeat(4001);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(textarea.getAttribute("aria-invalid")).toBe("true");
+    expect(onPatch).toHaveBeenCalledTimes(1);
+  });
+
   it("separates boolean help from its default description", () => {
     const container = document.createElement("div");
     const analysis = analyzeConfigSchema({
@@ -42,43 +87,52 @@ describe("config form scalar integrity", () => {
     expect(container.textContent).toContain("Controls runtime processing. Default: true");
   });
 
-  it("keeps a focused in-flight edit through a snapshot identity refresh", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const renderValue = (value: string, sourceIdentity: unknown) => {
-      renderTextInputFixture(container, {
-        schema: { type: "string" },
-        value,
-        path: ["laboratory", "endpoint"],
-        sourceIdentity,
-        inputType: "text",
-        onPatch: vi.fn(),
-      });
-    };
-    try {
-      renderValue("local-api", { snapshot: 1 });
-      const input = expectElement(
-        container.querySelector<HTMLInputElement>("input[type='text']"),
-        "endpoint input",
-      );
+  it.each(["text", "number"] as const)(
+    "revalidates a focused %s draft through snapshot refresh without untracked reads",
+    (inputType) => {
+      const warning = vi.spyOn(console, "warn");
+      const container = document.createElement("div");
+      document.body.append(container);
+      const schema: JsonSchema =
+        inputType === "text" ? { type: "string", minLength: 3 } : { type: "integer", minimum: 1 };
+      const value = inputType === "text" ? "local-api" : 8080;
+      const draft = inputType === "text" ? "x" : "0";
+      const refreshedValue = inputType === "text" ? "remote-api" : 9000;
+      const renderValue = (current: string | number, sourceIdentity: unknown) => {
+        renderTextInputFixture(container, {
+          schema,
+          value: current,
+          path: ["laboratory", "endpoint"],
+          sourceIdentity,
+          inputType,
+          onPatch: vi.fn(),
+        });
+      };
+      try {
+        renderValue(value, { snapshot: 1 });
+        const input = expectElement(container.querySelector<HTMLInputElement>("input"), "input");
+        // A background snapshot must revalidate, not replace, uncommitted native text.
+        input.focus();
+        input.value = draft;
+        renderValue(value, { snapshot: 2 });
+        expect(input.value).toBe(draft);
+        expect(input.getAttribute("aria-invalid")).toBe("true");
+        expect(input.validationMessage).not.toBe("");
+        expect(container.querySelector(".cfg-field__error")?.textContent).toBe(
+          input.validationMessage,
+        );
 
-      // Mid-typing window: the DOM holds text the model has not committed yet
-      // (no input event dispatched). A background config refresh that only
-      // changes the snapshot identity must not eat it while the field is
-      // focused.
-      input.focus();
-      input.value = "form-api";
-      renderValue("local-api", { snapshot: 2 });
-      expect(input.value).toBe("form-api");
-
-      // The blurred authoritative-reset contract stays intact.
-      input.blur();
-      renderValue("remote-api", { snapshot: 3 });
-      expect(input.value).toBe("remote-api");
-    } finally {
-      container.remove();
-    }
-  });
+        input.blur();
+        renderValue(refreshedValue, { snapshot: 3 });
+        expect(input.value).toBe(String(refreshedValue));
+        expect(input.getAttribute("aria-invalid")).toBe("false");
+        expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
+      } finally {
+        warning.mockRestore();
+        container.remove();
+      }
+    },
+  );
 
   it("shows inherited defaults without turning them into stored overrides", () => {
     const container = document.createElement("div");

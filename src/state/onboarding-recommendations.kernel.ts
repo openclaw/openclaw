@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deleteConfigMachineState,
   updateConfigMachineState,
@@ -21,7 +21,7 @@ import type {
 } from "./worker-operation-registry.js";
 
 export function readOnboardingRecommendationsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   configKey: string,
 ): OnboardingRecommendationsRecord | null {
   const row = readConfigMachineStateRowInDatabase(db, configKey);

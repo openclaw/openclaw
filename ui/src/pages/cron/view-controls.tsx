@@ -47,12 +47,16 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
       trigger={<Icon name="moreHorizontal" />}
       placement="bottom-end"
       items={[
-        {
-          id: "run-if-due",
-          label: t("cron.actions.runIfDue"),
-          class: "cron-job-menu__item",
-          disabled: props.busy || !props.canManage,
-        },
+        ...(props.job.schedule.kind === "event"
+          ? []
+          : [
+              {
+                id: "run-if-due",
+                label: t("cron.actions.runIfDue"),
+                class: "cron-job-menu__item",
+                disabled: props.busy || !props.connected || !props.canManage,
+              },
+            ]),
         ...(systemOwned()
           ? []
           : [
@@ -67,12 +71,12 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
                 label: t("cron.actions.remove"),
                 class: "cron-job-menu__item danger",
                 variant: "danger" as const,
-                disabled: props.busy || !props.canManage,
+                disabled: props.busy || !props.connected || !props.canManage,
               },
             ]),
       ]}
       onSelect={(item) => {
-        if (!props.canManage) {
+        if (!props.canManage || (!props.connected && item.id !== "clone")) {
           return;
         }
         switch (item.id) {
@@ -86,7 +90,7 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
             break;
           case "remove":
             if (!systemOwned()) {
-              props.onRemove(props.job);
+              void props.onRemove(props.job);
             }
             break;
         }
@@ -113,7 +117,7 @@ export function EnabledSwitch(
     >
       <SettingsToggle
         checked={props.job.enabled}
-        disabled={props.busy || !props.canManage}
+        disabled={props.busy || !props.connected || !props.canManage}
         ariaLabel={props.compact ? actionLabel() : stateLabel()}
         onChange={(checked) => {
           if (props.canManage) {

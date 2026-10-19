@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -28,6 +29,46 @@ export type LeaseScenario = {
 
 // A narrow child substitutes for the CLI, not for its cross-process lease.
 export async function runUpdateLeaseChild(): Promise<void> {
+  const observationUrl = new URL(
+    import.meta.url.endsWith(".js")
+      ? "../../infra/owned-directory-observation.js"
+      : "../../infra/owned-directory-observation.ts",
+    import.meta.url,
+  ).href;
+  // These short-lived Doctor fixtures never replace directories externally.
+  // Keep real discovery and repair, without unrelated native watcher setup.
+  const observationHook =
+    process.argv[2] === "doctor"
+      ? registerHooks({
+          load(url, context, nextLoad) {
+            return url === observationUrl || url.startsWith(`${observationUrl}?`)
+              ? {
+                  format: "module",
+                  source: "export function observeOwnedDirectory() { return { close() {} }; }",
+                  shortCircuit: true,
+                }
+              : nextLoad(url, context);
+          },
+        })
+      : undefined;
+  try {
+    await runUpdateLeaseScenario();
+  } finally {
+    try {
+      // Fixture children bypass CLI cleanup and must join their database workers.
+      const { closeOpenClawStateDatabaseAsync } =
+        await import("../../state/openclaw-state-db-cache.js");
+      await closeOpenClawStateDatabaseAsync();
+      const { closeDefaultRetainedNativeWorkerSource } =
+        await import("../../infra/worker-native-lifecycle.js");
+      await closeDefaultRetainedNativeWorkerSource();
+    } finally {
+      observationHook?.deregister();
+    }
+  }
+}
+
+async function runUpdateLeaseScenario(): Promise<void> {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   assert.ok(stateDir && configPath);

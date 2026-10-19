@@ -702,7 +702,6 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
     hasPendingAnswerDelivery: () => state.pendingAnswerDelivery,
     hasPendingFinalTtsMedia: () => state.pendingFinalTtsMedia,
-    hasDeliveredAnswerFinalToUser: () => state.deliveredAnswerFinalToUser,
     hasDeliveredFinalTtsMedia: () => state.deliveredFinalTtsMedia,
     hasDeliveredVisibleText: () => state.deliveredVisibleText,
     hasFailedVisibleTextDelivery: () => state.failedVisibleTextDelivery,

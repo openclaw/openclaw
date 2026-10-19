@@ -66,10 +66,11 @@ function resolveChatComposerMemoryFallback(
   }
   let adoptedFallback = sourceFallback;
   if (sourceKey !== scopeKey && sourceFallback.draftRetry) {
-    const committedRevision = loadChatComposerState(state, sessionKey, scope.agentId).revisions
-      .committed;
-    const latestRevision = loadChatComposerState(state, sessionKey, scope.agentId).revisions
-      .latestAttempt;
+    const { committed: committedRevision, latestAttempt: latestRevision } = loadChatComposerState(
+      state,
+      sessionKey,
+      scope.agentId,
+    ).revisions;
     // Rebase only when this unresolved edit is newer than every resolved
     // attempt. Otherwise its original CAS must keep newer pane input intact.
     if (sourceFallback.draftRetry.draftRevision > latestRevision) {

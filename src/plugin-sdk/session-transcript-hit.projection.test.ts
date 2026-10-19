@@ -1,15 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntry,
-  replaceSessionEntrySync,
-} from "../config/sessions/session-accessor.js";
+import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { loadCombinedSessionStoreForGatewayAsync } from "./session-transcript-hit.js";
 
@@ -37,10 +36,12 @@ it.each([
         entries: { main: {}, research: {} },
       },
     };
+    await loadPinnedRuntimeConfigAsync(async () => ({ config: cfg }));
     const skillsSnapshot = {
       prompt: "Saved plugin skill instructions",
       skills: [{ name: "plugin-fixture" }],
     };
+    const updatedAt = Date.now();
     const systemPromptReport: NonNullable<SessionEntry["systemPromptReport"]> = {
       source: "run",
       generatedAt: 7,
@@ -50,11 +51,11 @@ it.each([
       tools: { listChars: 11, schemaChars: 19, entries: [] },
     };
     for (const agentId of ["main", "research", "retired"]) {
-      replaceSessionEntrySync(
+      await replaceSessionEntry(
         { agentId, sessionKey: `agent:${agentId}:visible` },
         {
           sessionId: `${agentId}-visible`,
-          updatedAt: 7,
+          updatedAt,
           skillsSnapshot,
           systemPromptReport,
         },
@@ -65,17 +66,21 @@ it.each([
       sessionKey: "agent:main:dashboard:incognito-private",
     };
     try {
-      await replaceSessionEntry(incognitoScope, {
+      const incognitoEntry = await replaceSessionEntry(incognitoScope, {
         sessionId: "private-session",
-        updatedAt: 9,
+        updatedAt,
         incognito: true,
         skillsSnapshot: { prompt: "Private plugin instructions", skills: [] },
         systemPromptReport,
       });
-      expect(loadSessionEntry(incognitoScope)).toMatchObject({
+      expect(incognitoEntry).toMatchObject({
         sessionId: "private-session",
         incognito: true,
       });
+
+      // Drain fixture writes and their maintenance before observing the read itself.
+      await closeOpenClawAgentDatabasesAsync();
+      await closeStateDatabaseForTest();
 
       const invocation = new AsyncLocalStorage<boolean>();
       const queries: string[] = [];
@@ -85,20 +90,34 @@ it.each([
           queries.push(query);
         }
       });
+      let store: Awaited<ReturnType<typeof loadCombinedSessionStoreForGatewayAsync>>["store"];
       try {
-        const { store } = await invocation.run(true, () =>
+        ({ store } = await invocation.run(true, () =>
           loadCombinedSessionStoreForGatewayAsync(cfg, options),
-        );
+        ));
         expect(queries).toEqual([]);
-        expect(Object.keys(store).toSorted()).toEqual(expectedKeys);
-        for (const entry of Object.values(store)) {
-          expect.soft(entry.skillsSnapshot).toEqual(skillsSnapshot);
-          expect.soft(entry.systemPromptReport).toEqual(systemPromptReport);
-        }
       } finally {
         sql.restore();
         invocation.disable();
       }
+
+      expect(Object.keys(store).toSorted()).toEqual(expectedKeys);
+      for (const entry of Object.values(store)) {
+        expect.soft(entry.skillsSnapshot).toEqual(skillsSnapshot);
+        expect.soft(entry.systemPromptReport).toEqual(systemPromptReport);
+      }
+      const changedKey = expectedKeys[0]!;
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: changedKey },
+        {
+          sessionId: "new-incarnation",
+          updatedAt: updatedAt + 1,
+          skillsSnapshot,
+          systemPromptReport,
+        },
+      );
+      const current = await loadCombinedSessionStoreForGatewayAsync(cfg, options);
+      expect(current.store[changedKey]?.sessionId).toBe("new-incarnation");
     } finally {
       memorySessionActorOwners.closeDatabase({
         agentId: incognitoScope.agentId,

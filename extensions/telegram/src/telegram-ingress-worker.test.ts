@@ -56,12 +56,14 @@ describe("stopTelegramIngressWorker", () => {
     workerHarness.entries.length = 0;
   });
 
-  it("starts from an existing source entry with a TypeScript preload", () => {
+  it("starts from an existing source entry with runtime-appropriate TypeScript support", () => {
     createWorker();
 
     const entry = workerHarness.entries.at(-1)!;
     expect(existsSync(entry.url)).toBe(true);
-    expect(entry.options.execArgv).toEqual(["--import", expect.stringContaining("tsx")]);
+    expect(entry.options.execArgv).toEqual(
+      process.versions.bun ? ["--no-install"] : ["--import", expect.stringContaining("tsx")],
+    );
   });
 
   it("preserves cooperative worker shutdown", async () => {

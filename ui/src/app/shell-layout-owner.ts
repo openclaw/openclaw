@@ -2,7 +2,6 @@ const TRAITS = [
   ["pluginEmbed", "content--plugin-embed"],
   ["hubHeader", "content--hub-header"],
   ["toolbarHeader", "content--toolbar-header"],
-  ["workbench", "content--workbench"],
   ["settingsPage", "content--settings-page"],
   ["settingsWide", "content--settings-wide"],
   ["settingsWorkspace", "content--settings-workspace"],
@@ -24,9 +23,8 @@ export function shellLayoutOwnerForHost(host: Element): ShellLayoutOwner | undef
 /** Both renderers publish to this synchronous owner before measuring descendants. */
 export class ShellLayoutOwner {
   private readonly reporters = new Map<object, { host: Element; traits: ShellLayoutTraits }>();
+  private readonly footerControls = new Set<HTMLElement>();
   private content?: Element;
-
-  constructor(private readonly onChange: () => void = () => {}) {}
 
   readonly contentRef = (content: Element | undefined) => {
     if (content === this.content) {
@@ -57,15 +55,44 @@ export class ShellLayoutOwner {
     }
     this.reporters.set(token, { host, traits: { ...traits } });
     this.apply();
-    this.onChange();
   }
 
   clear(token: object) {
     if (this.reporters.delete(token)) {
       this.apply();
-      this.onChange();
     }
   }
+
+  registerFooterControlSurface(element: HTMLElement): () => void {
+    this.footerControls.add(element);
+    return () => this.footerControls.delete(element);
+  }
+
+  readonly footerControlsOverlap = (
+    bounds: Pick<DOMRectReadOnly, "left" | "right" | "top" | "bottom">,
+  ): boolean => {
+    for (const surface of this.footerControls) {
+      if (
+        !surface.isConnected ||
+        !this.content?.contains(surface) ||
+        !surface.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+      ) {
+        continue;
+      }
+      const rect = surface.getBoundingClientRect();
+      if (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.left < bounds.right &&
+        rect.right > bounds.left &&
+        rect.top < bounds.bottom &&
+        rect.bottom > bounds.top
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
 
   get current(): ShellLayoutTraits {
     const traits: ShellLayoutTraits = {};
@@ -83,13 +110,6 @@ export class ShellLayoutOwner {
     return traits;
   }
 
-  get className(): string {
-    const traits = this.current;
-    return TRAITS.filter(([key]) => traits[key])
-      .map(([, className]) => className)
-      .join(" ");
-  }
-
   private apply() {
     const traits = this.current;
     for (const [key, className] of TRAITS) {
@@ -97,7 +117,8 @@ export class ShellLayoutOwner {
     }
   }
 
-  hostDisconnected() {
+  dispose() {
+    this.footerControls.clear();
     this.reporters.clear();
     this.apply();
   }

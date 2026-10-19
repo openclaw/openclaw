@@ -10,10 +10,14 @@ import {
   runSqliteWorkerTransactionSync,
 } from "../sqlite-transaction.js";
 import {
+  assertSqliteWorkerCommitReceiptPending,
   createSqliteWorkerOperationAdmission,
+  deferSqliteWorkerCommitReceipt,
+  observeSqliteWorkerCommittedFacts,
   requestSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
 } from "../sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationContext } from "../sqlite-worker-operation-settlement.js";
 import { PostgresSyncConnection } from "./connection.js";
 
 const anchors: DatabaseSync[] = [];
@@ -56,6 +60,53 @@ function postgresFixture() {
 const writeBegin = "BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(-42)";
 
 describe("experimental PostgreSQL transaction protocol", () => {
+  it.each([
+    { rollback: false, sourceReservations: false },
+    { rollback: false, sourceReservations: true },
+    { rollback: true, sourceReservations: false },
+    { rollback: true, sourceReservations: true },
+  ])(
+    "settles one receipt on its anchor (rollback: $rollback, source reservations: $sourceReservations)",
+    ({ rollback, sourceReservations }) => {
+      const { db } = postgresFixture();
+      const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
+      const owner: SqliteWorkerOperationContext = {
+        port: admission.port,
+        sourceReservations: sourceReservations ? true : undefined,
+      };
+      const receipts: unknown[] = [];
+      observeSqliteWorkerCommittedFacts(admission, ({ facts }) => receipts.push(facts));
+      const write = () =>
+        withSqliteWorkerOperationAdmission(owner, () =>
+          runSqliteImmediateTransactionSync(db, () => {
+            deferSqliteWorkerCommitReceipt(db, { value: 7 });
+            assertSqliteWorkerCommitReceiptPending(db);
+            assertSqliteWorkerCommitReceiptPending(db.anchor);
+            expect(owner.committed).toBeUndefined();
+            if (rollback) {
+              throw new Error("cancel receipt");
+            }
+          }),
+        );
+      try {
+        if (rollback) {
+          expect(write).toThrow("cancel receipt");
+        } else {
+          write();
+        }
+        admission.service();
+        if (rollback) {
+          expect(receipts).toEqual([]);
+        } else {
+          expect(receipts).toEqual([{ value: 7 }]);
+        }
+        expect(owner.pendingReceipts?.size).toBe(0);
+      } finally {
+        admission.finish();
+      }
+    },
+  );
+
   it.each(["sqlite", "postgres"] as const)(
     "leaves transaction and commit admission to the domain on %s",
     (engine) => {
@@ -134,12 +185,13 @@ describe("experimental PostgreSQL transaction protocol", () => {
     },
   );
 
-  it("uses a read-only repeatable snapshot and reuses it for nested reads", () => {
+  it("ends a read-only repeatable snapshot without a write receipt and reuses it for nested reads", () => {
     const { db, statements } = postgresFixture();
     expect(
       runSqliteReadSnapshotSync(db, () => runSqliteReadSnapshotSync(db, () => "snapshot")),
     ).toBe("snapshot");
-    expect(statements).toEqual(["BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", "COMMIT"]);
+    expect(statements).toEqual(["BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", "ROLLBACK"]);
+    expect(db.isTransaction).toBe(false);
   });
 
   it("rolls a failed inner write back to its savepoint before the outer commit", () => {

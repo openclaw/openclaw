@@ -22,7 +22,7 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     find: "Find files by glob",
     ls: "List directories",
     exec: params.codeModeActive
-      ? "Run JavaScript Code Mode; call exact catalog tools from code, never shell/Python/imports"
+      ? "Run JavaScript Code Mode; call exact catalog tools from code"
       : promptSurface === "cli_backend"
         ? "Run shell on configured exec target"
         : "Run shell; pty for TTY CLIs",

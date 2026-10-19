@@ -132,6 +132,7 @@ async function runCommandPreflightMaintenance(
   const assertSourceCurrent = opts.assertSourceCurrent;
   if (
     prepared.isNewSession ||
+    prepared.commandRuntimeContext?.freshChild ||
     !sessionEntry ||
     !prepared.sessionKey ||
     prepared.cfg.agents?.defaults?.compaction?.enabled === false

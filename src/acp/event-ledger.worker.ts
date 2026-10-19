@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type {
@@ -42,7 +42,7 @@ type AcpReplaySessionRow = Pick<
   "session_id" | "session_key" | "cwd" | "complete" | "next_seq"
 >;
 
-function createSqliteLedgerQueries(db: DatabaseSync) {
+function createSqliteLedgerQueries(db: EngineConnection) {
   const query = getNodeSqliteKysely<AcpLedgerDatabase>(db);
   return {
     readSession: prepareSqliteQuerySync<string, AcpReplaySessionRow>(db, (parameter) =>
@@ -271,18 +271,18 @@ function sqliteRowToLedgerEvent(row: {
   });
 }
 
-function sqliteSessionMetadataQuery(db: DatabaseSync) {
+function sqliteSessionMetadataQuery(db: EngineConnection) {
   return getNodeSqliteKysely<AcpLedgerDatabase>(db)
     .selectFrom("acp_replay_sessions")
     .select(["session_id", "session_key", "cwd", "complete", "next_seq"]);
 }
 
-function readSqliteSessionById(db: DatabaseSync, sessionId: string) {
+function readSqliteSessionById(db: EngineConnection, sessionId: string) {
   return getSqliteLedgerQueries(db).readSession(sessionId).rows[0];
 }
 
 function upsertSqliteSession(
-  db: DatabaseSync,
+  db: EngineConnection,
   now: number,
   params: {
     sessionId: string;
@@ -338,7 +338,7 @@ function upsertSqliteSession(
 // event rows), maintained at insert/trim time. The budget check therefore
 // sums over at most maxSessions rows instead of scanning every event per
 // append, which was O(events) per message and quadratic while trimming.
-function estimateSqliteLedgerBytes(db: DatabaseSync): number {
+function estimateSqliteLedgerBytes(db: EngineConnection): number {
   const row = getSqliteLedgerQueries(db).readTotalBytes().rows[0];
   return normalizeSqliteInteger(row?.total ?? 0);
 }
@@ -346,7 +346,7 @@ function estimateSqliteLedgerBytes(db: DatabaseSync): number {
 const LEDGER_TRIM_EVENT_BATCH = 64;
 
 // Keep the session's byte aggregate in sync with the deletion in the same transaction.
-function deleteOldestSqliteEvents(db: DatabaseSync, sessionId: string, limit: number): number {
+function deleteOldestSqliteEvents(db: EngineConnection, sessionId: string, limit: number): number {
   const queries = getSqliteLedgerQueries(db);
   const rows = queries.deleteOldestEvents({ sessionId, limit }).rows;
   if (rows.length === 0) {
@@ -357,7 +357,7 @@ function deleteOldestSqliteEvents(db: DatabaseSync, sessionId: string, limit: nu
   return rows.length;
 }
 
-function trimSqliteLedger(db: DatabaseSync, state: AcpReplayLimits): void {
+function trimSqliteLedger(db: EngineConnection, state: AcpReplayLimits): void {
   // Indexed sequence endpoints bound the count even when retained sequences have
   // gaps. Only histories that could exceed the cap need an exact count.
   const queries = getSqliteLedgerQueries(db);
@@ -392,7 +392,7 @@ function trimSqliteLedger(db: DatabaseSync, state: AcpReplayLimits): void {
 }
 
 function appendSqliteUpdate(
-  db: DatabaseSync,
+  db: EngineConnection,
   state: AcpReplayLimits,
   params: AcpReplayAppendInput["events"][number] & {
     sessionId: string;
@@ -430,7 +430,7 @@ function appendSqliteUpdate(
   trimSqliteLedger(db, state);
 }
 
-function readSqliteReplay(db: DatabaseSync, input: AcpReplayReadInput): AcpEventLedgerReplay {
+function readSqliteReplay(db: EngineConnection, input: AcpReplayReadInput): AcpEventLedgerReplay {
   const query = getNodeSqliteKysely<AcpLedgerDatabase>(db);
   let selected = query
     .selectFrom("acp_replay_sessions")

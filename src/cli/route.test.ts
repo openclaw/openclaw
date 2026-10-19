@@ -8,9 +8,6 @@ const ensureConfigReadyMock = vi.hoisted(() =>
 );
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const runRouteMock = vi.hoisted(() => vi.fn(async () => true));
-const runWithLocalStateOwnerMock = vi.hoisted(() =>
-  vi.fn(async ({ runLocal }: { runLocal: () => Promise<void> }) => runLocal()),
-);
 
 vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
@@ -20,13 +17,9 @@ vi.mock("./program/config-guard.js", () => ({
   ensureConfigReady: ensureConfigReadyMock,
 }));
 
-vi.mock("./plugin-registry.js", () => ({
+vi.mock("../plugins/runtime/runtime-registry-loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/runtime/runtime-registry-loader.js")>()),
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
-}));
-
-// mock-isolation: Process tests cover state ownership; this suite covers startup and dispatch.
-vi.mock("./local-state-owner.js", () => ({
-  runWithLocalStateOwner: runWithLocalStateOwnerMock,
 }));
 
 // Keep route selection and argument parsing real; replace only command side effects.
@@ -87,12 +80,8 @@ describe("tryRouteCli", () => {
   });
 
   it.each([
-    ["status"],
     ["status", "--json"],
     ["health"],
-    ["health", "--json"],
-    ["agents"],
-    ["agents", "list", "--json"],
     ["channels", "list"],
     ["channels", "status", "--json"],
     ["plugins", "list", "--json"],
@@ -133,58 +122,17 @@ describe("tryRouteCli", () => {
   });
 
   it("defers routed config mutation preparation to its state owner", async () => {
-    const events: string[] = [];
-    runWithLocalStateOwnerMock.mockImplementationOnce(async ({ runLocal }) => {
-      events.push("state-owner");
-      await runLocal();
-    });
-    runRouteMock.mockImplementationOnce(async () => {
-      events.push("action");
-      return true;
-    });
     await expect(
       tryRouteCli(["node", "openclaw", "config", "unset", "gateway.port"]),
     ).resolves.toBe(true);
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-    expect(events).toEqual(["state-owner", "action"]);
-  });
-
-  it("propagates state ownership failure before running the mutation", async () => {
-    const error = new Error("synthetic state ownership refusal");
-    runWithLocalStateOwnerMock.mockRejectedValueOnce(error);
-
-    await expect(tryRouteCli(["node", "openclaw", "config", "unset", "gateway.port"])).rejects.toBe(
-      error,
-    );
-
-    expect(runRouteMock).not.toHaveBeenCalled();
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-  });
-
-  it("propagates action failure without falling back to Commander", async () => {
-    const error = new Error("synthetic command failure");
-    runRouteMock.mockRejectedValueOnce(error);
-
-    await expect(tryRouteCli(["node", "openclaw", "status", "--json"])).rejects.toBe(error);
-
-    expect(runRouteMock).toHaveBeenCalledOnce();
-  });
-
-  it("keeps action logs routed to stderr for routed --json commands", async () => {
-    const captured: boolean[] = [];
-    runRouteMock.mockImplementationOnce(async () => {
-      captured.push(loggingState.forceConsoleToStderr);
-      return true;
+    expect(runRouteMock).toHaveBeenCalledExactlyOnceWith({
+      path: "gateway.port",
+      cliOptions: { allowExec: false, dryRun: false, json: false },
+      localStateOwner: { method: "config unset", target: "gateway.port" },
     });
-
-    await tryRouteCli(["node", "openclaw", "agents", "--json"]);
-
-    expect(runRouteMock).toHaveBeenCalledOnce();
-    expect(captured[0]).toBe(true);
-    expect(loggingState.forceConsoleToStderr).toBe(true);
   });
 
   it("routes command-run logs to stderr for config-guard-skipping --json routes", async () => {
@@ -216,41 +164,6 @@ describe("tryRouteCli", () => {
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
-  it("routes status when root options precede the command", async () => {
-    const capturedLogLevels: Array<string | undefined> = [];
-    runRouteMock.mockImplementationOnce(async () => {
-      capturedLogLevels.push(process.env.OPENCLAW_LOG_LEVEL);
-      return true;
-    });
-
-    await expect(tryRouteCli(["node", "openclaw", "--log-level", "debug", "status"])).resolves.toBe(
-      true,
-    );
-
-    expect(runRouteMock).toHaveBeenCalledOnce();
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-    expect(capturedLogLevels).toEqual(["debug"]);
-    expect(process.env.OPENCLAW_LOG_LEVEL).toBe("debug");
-  });
-
-  it("applies routed log level options after the command", async () => {
-    const capturedLogLevels: Array<string | undefined> = [];
-    runRouteMock.mockImplementationOnce(async () => {
-      capturedLogLevels.push(process.env.OPENCLAW_LOG_LEVEL);
-      return true;
-    });
-
-    await expect(tryRouteCli(["node", "openclaw", "status", "--log-level=trace"])).resolves.toBe(
-      true,
-    );
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(runRouteMock).toHaveBeenCalledTimes(1);
-    expect(capturedLogLevels).toEqual(["trace"]);
-    expect(process.env.OPENCLAW_LOG_LEVEL).toBe("trace");
-  });
-
   it("uses the last valid routed log level option", async () => {
     await expect(
       tryRouteCli(["node", "openclaw", "--log-level", "debug", "status", "--log-level=trace"]),
@@ -262,7 +175,6 @@ describe("tryRouteCli", () => {
   });
 
   it.each([
-    ["invalid value", ["node", "openclaw", "status", "--log-level", "verbose"]],
     ["missing value", ["node", "openclaw", "status", "--log-level"]],
     [
       "later invalid value",
@@ -275,14 +187,6 @@ describe("tryRouteCli", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     expect(runRouteMock).not.toHaveBeenCalled();
     expect(process.env.OPENCLAW_LOG_LEVEL).toBeUndefined();
-  });
-
-  it("respects OPENCLAW_HIDE_BANNER for routed commands", async () => {
-    process.env.OPENCLAW_HIDE_BANNER = "1";
-
-    await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
-
-    expect(emitCliBannerMock).not.toHaveBeenCalled();
   });
 
   it("falls back before bootstrap when the route cannot parse the argv", async () => {

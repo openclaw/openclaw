@@ -64,8 +64,7 @@ describe("AppSidebar agent menu hover", () => {
         if (!menu) {
           throw new Error("Expected the agent menu after hover intent");
         }
-        menu.dispatchEvent(new Event("wa-after-show"));
-        expect(document.activeElement).toBe(input);
+        await vi.waitFor(() => expect(document.activeElement).toBe(input));
 
         trigger.dispatchEvent(pointerEvent("pointerleave"));
         await vi.advanceTimersByTimeAsync(199);

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   createSqliteQueryCache,
@@ -7,6 +6,7 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
 import {
   getSqliteReadScopeRevision,
@@ -27,7 +27,7 @@ export type { SessionParticipantRecord } from "./session-membership-facts.types.
 
 type SessionParticipantRow = Selectable<OpenClawAgentKyselyDatabase["session_participants"]>;
 
-function selectParticipantRows(database: DatabaseSync) {
+function selectParticipantRows(database: EngineConnection) {
   return getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database)
     .selectFrom("session_participants")
     .select([
@@ -44,10 +44,13 @@ function selectParticipantRows(database: DatabaseSync) {
     .orderBy("identity_namespace");
 }
 
-let participantWriteSnapshot: DatabaseSync | undefined;
+let participantWriteSnapshot: EngineConnection | undefined;
 
 /** The entry CAS owns an immediate transaction before borrowing its unchanged preparation. */
-export function withSessionParticipantWriteSnapshot<T>(database: DatabaseSync, read: () => T): T {
+export function withSessionParticipantWriteSnapshot<T>(
+  database: EngineConnection,
+  read: () => T,
+): T {
   const previous = participantWriteSnapshot;
   participantWriteSnapshot = database;
   try {
@@ -58,7 +61,7 @@ export function withSessionParticipantWriteSnapshot<T>(database: DatabaseSync, r
 }
 
 // Deferred readers must execute their first SELECT to establish the native snapshot.
-const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
+const singleSessionParticipantQuery = createSqliteQueryCache((database: EngineConnection) => {
   const query = prepareSqliteQuerySync<string, SessionParticipantRow>(database, (parameter) =>
     selectParticipantRows(database).where(
       "session_key",
@@ -91,7 +94,7 @@ const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
     });
 });
 
-function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly string[]) {
+function readParticipantRows(database: EngineConnection, sessionKeys?: readonly string[]) {
   const sessionKey = sessionKeys?.length === 1 ? sessionKeys[0] : undefined;
   if (sessionKey !== undefined) {
     return singleSessionParticipantQuery(database)(sessionKey);
@@ -115,7 +118,7 @@ export function readParticipantRecord(
 }
 
 export function participantRecordsBySessionKey(
-  database: DatabaseSync,
+  database: EngineConnection,
   sessionKeys?: readonly string[],
 ): Map<string, SessionParticipantRecord[]> {
   return runSqliteReadOperationSync(database, () => {
@@ -164,7 +167,10 @@ export function withProjectedParticipants(
   return records.length ? { ...entry, ...participantProjection(records) } : entry;
 }
 
-export function readSqliteSessionParticipantProjection(database: DatabaseSync, sessionKey: string) {
+export function readSqliteSessionParticipantProjection(
+  database: EngineConnection,
+  sessionKey: string,
+) {
   const actor = readSessionActorParticipants({ db: database }, sessionKey);
   if (actor !== undefined) {
     return participantProjection(actor);
@@ -179,7 +185,7 @@ export function readSqliteSessionParticipantProjection(database: DatabaseSync, s
 }
 
 export function projectSqliteSessionParticipants(
-  database: DatabaseSync,
+  database: EngineConnection,
   sessionKey: string,
   entry: SessionEntry,
 ): SessionEntry {
@@ -201,7 +207,7 @@ export function projectSqliteSessionParticipants(
 
 /** Acquire one fresh cohort lazily, then decode only the requested session's participants. */
 export function prepareSqliteSessionParticipantProjection(
-  database: DatabaseSync,
+  database: EngineConnection,
   sessionKeys: readonly string[],
 ): (sessionKey: string, entry: SessionEntry) => SessionEntry {
   let recordsByKey: Map<string, SessionParticipantRecord[]> | undefined;
@@ -233,7 +239,7 @@ export function prepareSqliteSessionParticipantProjection(
 }
 
 export function projectSqliteSessionParticipantsBatch(
-  database: DatabaseSync,
+  database: EngineConnection,
   entries: ReadonlyMap<string, SessionEntry>,
 ): Map<string, SessionEntry> {
   const projected = new Map(entries);

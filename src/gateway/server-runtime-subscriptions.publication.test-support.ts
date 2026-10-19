@@ -1,19 +1,36 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
-import { claimAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import {
+  bindAgentAssistantSource,
+  emitAgentEvent,
+  emitAgentEventWithAssistantSourceIfCurrent,
+  type AgentAssistantSourceReceipt,
+  type AgentEventRuntimePayload,
+} from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  getAgentRunContext,
+  getAgentRunContextOwnerStatus,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { registerCommittedTranscriptPublicationTests } from "./server-runtime-subscriptions.commit-publication.test-support.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { registerTerminalReservationPublicationTests } from "./server-runtime-subscriptions.terminal-reservation.test-support.js";
 import type { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
 import { registerSubscriptionChatRun } from "./server-runtime-subscriptions.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -276,82 +293,255 @@ export function registerSessionPublicationTests(fixture: {
       }
     },
   );
-  it("publishes committed transcripts after the producer drains and before Gateway shutdown", async ({
-    signal,
-  }) => {
-    transcriptBroadcastMocks.useActualHandler = true;
-    const readEntered = createDeferred();
-    const releaseRead = createDeferred();
-    const published = createDeferred();
-    const producer = new AsyncWorkScope();
-    const storedMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "committed completion" }],
-      __openclaw: { transcriptPosition: { source: "committed-generation", rawSeq: 1 } },
-    };
-    transcriptBroadcastMocks.readMessageById.mockImplementationOnce(async () => {
-      const readSignal = getAsyncWorkSignal();
-      readEntered.resolve();
-      await releaseRead.promise;
-      readSignal?.throwIfAborted();
-      return { found: true, oversized: false, seq: 1, message: storedMessage };
-    });
-    const params = createParams();
-    params.sessionEventSubscribers.subscribe("conn-transcript");
-    params.broadcastToConnIds = vi.fn(() => published.resolve());
-    const unsubs = start(params);
-    const admission = tryBeginGatewayRootWorkAdmission("test:committed-transcript-publisher");
-    if (!admission) {
-      throw new Error("Transcript publisher admission was closed");
-    }
-    let shutdown: Promise<void> | undefined;
-    try {
-      await admission.run(async () =>
-        producer.run(() =>
-          emitSessionTranscriptUpdate({
-            messageId: "committed-message",
-            message: storedMessage,
-            target: {
-              agentId: "main",
-              sessionId: "committed-session",
-              sessionKey: "agent:main:main",
-              storePath: "/tmp/openclaw-committed-transcript.sqlite",
+  it.for([
+    { terminal: false, mixed: false, claimedError: false, retry: false, failureKind: "exception" },
+    { terminal: false, mixed: false, claimedError: false, retry: true, failureKind: "exception" },
+    { terminal: true, mixed: false, claimedError: false, retry: false, failureKind: "exception" },
+    { terminal: true, mixed: true, claimedError: false, retry: false, failureKind: "exception" },
+    { terminal: true, mixed: false, claimedError: true, retry: false, failureKind: "exception" },
+    { terminal: true, mixed: false, claimedError: false, retry: false, failureKind: "rebuilding" },
+    { terminal: true, mixed: false, claimedError: false, retry: false, failureKind: "overloaded" },
+  ])(
+    "retains failed publication text without duplicating saved rows (terminal=$terminal, mixed=$mixed, claimedError=$claimedError, failure=$failureKind, retry=$retry)",
+    async ({ terminal, mixed, claimedError, failureKind, retry }, { signal }) => {
+      const actual = await vi.importActual<typeof import("./server-chat.js")>("./server-chat.js");
+      transcriptBroadcastMocks.useActualHandler = true;
+      const params = createParams();
+      const runId = "failed-publication-run";
+      const sessionKey = "agent:main:main";
+      const sessionId = "failed-publication-session";
+      const registration = registerSubscriptionChatRun(params, {
+        runId,
+        sessionId,
+        sessionKey,
+        ...(claimedError ? { kind: "agent" as const } : {}),
+      });
+      claimAgentRunContext(runId, { sessionId, sessionKey });
+      const readEntered = createDeferred();
+      const releaseRead = createDeferred();
+      const failureReported = createDeferred();
+      const savedPublished = createDeferred();
+      let processed = createDeferred();
+      let errorClaim: string | undefined;
+      const delivered: Array<{ event: string; payload: unknown }> = [];
+      params.broadcast = (event, payload) => {
+        if (event === "chat") {
+          delivered.push({ event, payload });
+        }
+      };
+      params.broadcastToConnIds = (event, payload) => {
+        if (event === "session.message") {
+          delivered.push({ event, payload });
+          savedPublished.resolve();
+        } else if (event === "sessions.changed") {
+          delivered.push({ event, payload });
+          failureReported.resolve();
+        }
+      };
+      params.sessionEventSubscribers.subscribe("conn-transcript");
+      let directHandler: ReturnType<typeof actual.createAgentEventHandler> | undefined;
+      fixture.installHandlerFactory((options) => {
+        const handler = actual.createAgentEventHandler({
+          ...options,
+          ...(claimedError ? { persistGatewaySessionLifecycleEventForEvent: async () => {} } : {}),
+        });
+        directHandler = handler;
+        return Object.assign(async (event: Parameters<typeof handler>[0]) => {
+          await handler(event);
+          processed.resolve();
+        }, handler);
+      });
+      const emitText = async (
+        itemId: string,
+        text: string,
+        source?: AgentAssistantSourceReceipt,
+      ) => {
+        processed = createDeferred();
+        emitAgentEventWithAssistantSourceIfCurrent(
+          { runId, stream: "assistant", data: { itemId, text, replace: true } },
+          source,
+        );
+        await withinTest(processed.promise, signal);
+      };
+      const persist = (messageId: string, message: unknown) =>
+        emitSessionTranscriptUpdate({
+          sessionKey,
+          messageId,
+          message,
+          target: {
+            agentId: "main",
+            sessionId,
+            sessionKey,
+            storePath: "/synthetic/session.sqlite",
+          },
+        });
+      const failure =
+        failureKind === "rebuilding"
+          ? new SessionTranscriptProjectionUnavailableError(sessionId)
+          : failureKind === "overloaded"
+            ? new WorkerTaskError("transcript reader overloaded", "overloaded")
+            : new Error("transcript read unavailable");
+      if (failureKind === "exception") {
+        warn.mockImplementationOnce(() => failureReported.resolve());
+      }
+      const savedMessage = {
+        role: "assistant",
+        idempotencyKey: "successful-item",
+        content: [{ type: "text", text: "Already published." }],
+        __openclaw: { runId },
+      };
+      if (mixed) {
+        transcriptBroadcastMocks.readMessageById.mockResolvedValueOnce({
+          found: true,
+          oversized: false,
+          seq: 1,
+          message: savedMessage,
+        });
+      }
+      transcriptBroadcastMocks.readMessageById.mockImplementationOnce(async () => {
+        readEntered.resolve();
+        await releaseRead.promise;
+        throw failure;
+      });
+      const source: AgentAssistantSourceReceipt = { itemId: "failed-item" };
+      const failedMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "Keep this reply visible." }],
+        __openclaw: { runId },
+      };
+      bindAgentAssistantSource(failedMessage, source);
+      const unsubs = start(params);
+      try {
+        if (mixed) {
+          await emitText("successful-item", "Already published.");
+          persist("successful-message", savedMessage);
+          await withinTest(savedPublished.promise, signal);
+        }
+        await emitText("failed-item", "Keep this reply visible.", source);
+        source.committedMessageSeq = 2;
+        persist("failed-message", failedMessage);
+        await withinTest(readEntered.promise, signal);
+        if (terminal) {
+          processed = createDeferred();
+          if (claimedError) {
+            const claim = claimAgentRunContext(
+              runId,
+              { sessionId, sessionKey },
+              {
+                trackOwner: true,
+                ownsContext: true,
+              },
+            );
+            errorClaim = claim;
+            if (!claim) {
+              throw new Error("Expected a claimed error lifecycle");
+            }
+            const lifecycleGeneration = getAgentRunContext(runId)?.lifecycleGeneration;
+            if (!directHandler || !lifecycleGeneration) {
+              throw new Error("Expected the loaded chat handler and its run generation");
+            }
+            // Invoke the finalizer after its write is admitted; the subscription's
+            // captured-write queue is not part of this publication-barrier ordering.
+            const terminalEvent: AgentEventRuntimePayload = {
+              runId,
+              seq: 2,
+              ts: Date.now(),
+              stream: "lifecycle",
+              contextClaimId: claim,
+              lifecycleGeneration,
+              data: {
+                phase: "error",
+                error: "Provider failed",
+                fallbackExhaustedFailure: true,
+                assistantTranscriptIdempotencyKey: "failed-message",
+              },
+            };
+            await directHandler(terminalEvent);
+            await vi.waitFor(() =>
+              expect(getAgentRunContextOwnerStatus(runId, claim, lifecycleGeneration)).toBe(
+                "clear-requested",
+              ),
+            );
+          } else {
+            emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+          }
+          if (!claimedError) {
+            await withinTest(processed.promise, signal);
+          }
+        }
+        releaseRead.resolve();
+        await withinTest(failureReported.promise, signal);
+        if (!terminal) {
+          await vi.waitFor(() =>
+            expect(params.chatRunState.resolveBuffer(runId).text).toBe("Keep this reply visible."),
+          );
+          // A later callback carrying the same durable receipt must not hide the fallback again.
+          await emitText("failed-item", "Keep this corrected reply visible.", source);
+          if (retry) {
+            transcriptBroadcastMocks.readMessageById.mockResolvedValueOnce({
+              found: true,
+              oversized: false,
+              seq: 2,
+              message: failedMessage,
+            });
+            persist("failed-message", failedMessage);
+            await withinTest(savedPublished.promise, signal);
+          }
+        }
+        await withinTest(unsubs.agentUnsub(), signal);
+        if (failureKind === "exception") {
+          expect(warn).toHaveBeenCalledWith("Transcript update dispatch failed", {
+            sessionKey,
+            error: failure,
+          });
+        } else {
+          expect(warn).not.toHaveBeenCalled();
+          expect(
+            delivered.filter(
+              ({ event, payload }) =>
+                event === "sessions.changed" && asNullableRecord(payload)?.phase === "message",
+            ),
+          ).toHaveLength(1);
+        }
+        expect(delivered.filter(({ event }) => event === "session.message")).toHaveLength(
+          mixed || retry ? 1 : 0,
+        );
+        const last = delivered.findLast(({ event }) => event === "chat")?.payload;
+        expect(last).toMatchObject({
+          runId,
+          state: claimedError ? "error" : terminal ? "final" : "delta",
+        });
+        const message = asNullableRecord(asNullableRecord(last)?.message);
+        expect(message?.openclawDisplayContent ?? message?.content).toEqual(
+          retry
+            ? [{ type: "text", text: "" }]
+            : [
+                {
+                  type: "text",
+                  text: terminal
+                    ? "Keep this reply visible."
+                    : "Keep this corrected reply visible.",
+                },
+              ],
+        );
+        if (terminal) {
+          expect(message?.content).toEqual([
+            {
+              type: "text",
+              text: (mixed ? "Already published.\n\n" : "") + "Keep this reply visible.",
             },
-          }),
-        ),
-      );
-      await withinTest(readEntered.promise, signal);
-      admission.release();
-      await producer.drain();
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
-      shutdown = unsubs.agentUnsub();
-      const publicationBeforeShutdown = awaitGateBeforeSettlement(
-        published.promise,
-        shutdown,
-        "Gateway shutdown finished before the committed transcript was published",
-      );
-      releaseRead.resolve();
-      await withinTest(publicationBeforeShutdown, signal);
-      await shutdown;
-      expect(params.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-        "session.message",
-        expect.objectContaining({
-          sessionKey: "agent:main:main",
-          messageId: "committed-message",
-          message: expect.objectContaining({ content: storedMessage.content }),
-        }),
-        new Set(["conn-transcript"]),
-        undefined,
-      );
-      expect(warn).not.toHaveBeenCalled();
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    } finally {
-      releaseRead.resolve();
-      admission.release();
-      await producer.drain();
-      await shutdown;
-    }
-  });
+          ]);
+        }
+      } finally {
+        releaseRead.resolve();
+        releaseAgentRunContext(runId, errorClaim);
+        await unsubs.agentUnsub();
+        params.chatRunState.clear();
+        registration.cleanup();
+      }
+    },
+  );
+  registerCommittedTranscriptPublicationTests(fixture);
 
   it("logs real asynchronous transcript failures and recovers the broadcast queue", async ({
     signal,
@@ -430,7 +620,7 @@ export function registerSessionPublicationTests(fixture: {
           }),
         }),
         new Set(["conn-transcript"]),
-        undefined,
+        { sessionEventSubscriptionKeys: ["agent:main:main"] },
       );
       expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledTimes(2);
       expect(warn).toHaveBeenCalledOnce();
@@ -443,4 +633,6 @@ export function registerSessionPublicationTests(fixture: {
       await (shutdown ?? unsubs.agentUnsub());
     }
   });
+
+  registerTerminalReservationPublicationTests(fixture);
 }

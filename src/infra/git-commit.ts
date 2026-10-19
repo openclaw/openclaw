@@ -180,11 +180,7 @@ export const resolveCommitHash = (
   if (pkgCommit) {
     return cacheGitCommit(searchDir, pkgCommit);
   }
-  try {
-    return cacheGitCommit(searchDir, readGitCommit(searchDir, packageRoot) ?? null);
-  } catch {
-    return cacheGitCommit(searchDir, null);
-  }
+  return cacheGitCommit(searchDir, null);
 };
 
 /** Resolve the commit that produced the loaded artifact, not the checkout's current revision. */

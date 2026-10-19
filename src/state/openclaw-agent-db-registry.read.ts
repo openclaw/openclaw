@@ -1,15 +1,19 @@
-import type { DatabaseSync } from "node:sqlite";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawRegisteredAgentDatabase } from "./openclaw-agent-db-contract.js";
+import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertCanonicalAgentDatabasesPrimaryKey,
   detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
@@ -26,21 +30,28 @@ type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_da
 const readableSchemas = new WeakSet<SqliteSchemaFacts>();
 
 /** Read durable registrations from an already opened live or captured database. */
-export function readOpenClawAgentDatabaseRegistryRows(database: DatabaseSync, pathname: string) {
+export function readOpenClawAgentDatabaseRegistryRows(
+  database: EngineConnection,
+  pathname: string,
+) {
   const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database);
   const schema = getAdmittedSqliteSchemaFacts(database);
-  const registryTable = schema
-    ? schema.tables.has("agent_databases")
+  const registryTable = isPostgresSqlConnection(database)
+    ? tableExists(database, "agent_databases")
       ? { type: "table" }
-      : schema.views.has("agent_databases") ||
-          schema.indexes.has("agent_databases") ||
-          schema.triggers.has("agent_databases")
-        ? { type: "invalid" }
-        : undefined
-    : executeSqliteQueryTakeFirstSync(
-        database,
-        db.selectFrom("sqlite_master").select("type").where("name", "=", "agent_databases"),
-      );
+      : undefined
+    : schema
+      ? schema.tables.has("agent_databases")
+        ? { type: "table" }
+        : schema.views.has("agent_databases") ||
+            schema.indexes.has("agent_databases") ||
+            schema.triggers.has("agent_databases")
+          ? { type: "invalid" }
+          : undefined
+      : executeSqliteQueryTakeFirstSync(
+          database,
+          db.selectFrom("sqlite_master").select("type").where("name", "=", "agent_databases"),
+        );
   if (!registryTable) {
     return [];
   }
@@ -53,7 +64,10 @@ export function readOpenClawAgentDatabaseRegistryRows(database: DatabaseSync, pa
   ).rows;
 }
 
-export function readAgentDatabasePreflightTargets(database: DatabaseSync, registryPath: string) {
+export function readAgentDatabasePreflightTargets(
+  database: EngineConnection,
+  registryPath: string,
+) {
   return readOpenClawAgentDatabaseRegistryRows(database, registryPath).flatMap((row) =>
     typeof row.agent_id === "string" && typeof row.path === "string"
       ? [
@@ -67,26 +81,32 @@ export function readAgentDatabasePreflightTargets(database: DatabaseSync, regist
 }
 
 export function readRegisteredAgentDatabaseRows(
-  database: DatabaseSync,
+  database: EngineConnection,
   pathname: string,
   artifactPreserving: boolean,
 ): OpenClawRegisteredAgentDatabase[] {
-  if (artifactPreserving) {
-    assertCanonicalAgentDatabasesPrimaryKey(database, pathname);
-  } else {
-    const schema = getAdmittedSqliteSchemaFacts(database);
-    if (!schema || !readableSchemas.has(schema)) {
-      if (
-        detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).some(
-          ({ kind }) => STATE_SCHEMA_MIGRATION_READ_TABLES[kind].includes("agent_databases"),
-        )
-      ) {
-        throw new Error(
-          `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
-        );
-      }
-      if (schema) {
-        readableSchemas.add(schema);
+  if (isPostgresSqlConnection(database)) {
+    if (artifactPreserving) {
+      requireNativeDatabaseFile("postgres", "file-snapshot");
+    }
+  } else if (!getStateRuntimeSchemaAdmission(database)) {
+    if (artifactPreserving) {
+      assertCanonicalAgentDatabasesPrimaryKey(database, pathname);
+    } else {
+      const schema = getAdmittedSqliteSchemaFacts(database);
+      if (!schema || !readableSchemas.has(schema)) {
+        if (
+          detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).some(
+            ({ kind }) => STATE_SCHEMA_MIGRATION_READ_TABLES[kind].includes("agent_databases"),
+          )
+        ) {
+          throw new Error(
+            `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
+          );
+        }
+        if (schema) {
+          readableSchemas.add(schema);
+        }
       }
     }
   }

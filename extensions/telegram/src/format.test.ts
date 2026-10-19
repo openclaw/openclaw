@@ -138,21 +138,23 @@ describe("Telegram formatting", () => {
     expect(res).toContain("Nova_Core.md");
   });
 
-  it("preserves Telegram list boundary spacing in chunked rendering", () => {
-    const input = [
-      "2. Main invariants:",
-      "",
-      "  • Raw Log is source of truth.",
-      "  • Autonomy starts only with report/draft.",
-      "3. Cognee is a candidate:",
-    ].join("\n");
+  it.each([".", ")"])(
+    "preserves list boundary spacing before numbered sections using %s",
+    (marker) => {
+      const input = [
+        `2${marker} Synthetic checklist:`,
+        "",
+        "  • Verify sample A.",
+        "  • Verify sample B.",
+        `3${marker} Synthetic next section:`,
+      ].join("\n");
+      const expected =
+        "2. Synthetic checklist:\n\n• Verify sample A.\n• Verify sample B.\n\n3. Synthetic next section:";
 
-    const res = markdownToTelegramChunks(input, 4096)
-      .map((chunk) => chunk.html)
-      .join("");
-
-    expect(res).toContain("report/draft.\n\n3. Cognee");
-  });
+      expect(markdownToTelegramHtml(input)).toBe(expected);
+      expect(markdownToTelegramChunks(input, 4096).map((chunk) => chunk.html)).toEqual([expected]);
+    },
+  );
 
   it("splits long multiline html text without breaking balanced tags", () => {
     const chunks = splitTelegramHtmlChunks(`<b>${"A\n".repeat(2500)}</b>`, 4000);
@@ -364,12 +366,18 @@ describe("Telegram formatting", () => {
     expect(chunks[0]?.text).toContain("| 1   | 2   |");
   });
 
-  it("does not insert list spacing inside a longer code fence", () => {
-    const input = "````\n```\n• literal bullet\n3. literal number\n````";
-    const expected = "<pre><code>```\n• literal bullet\n3. literal number\n</code></pre>";
-    expect(markdownToTelegramHtml(input, { wrapFileRefs: false })).toBe(expected);
-    expect(markdownToTelegramChunks(input, 4096).map((chunk) => chunk.html)).toEqual([expected]);
-  });
+  it.each([".", ")"])(
+    "does not insert list spacing inside a longer code fence using %s",
+    (marker) => {
+      const input = ["````", "```", "• literal bullet", `3${marker} literal number`, "````"].join(
+        "\n",
+      );
+      const expected =
+        "<pre><code>```\n• literal bullet\n3" + marker + " literal number\n</code></pre>";
+      expect(markdownToTelegramHtml(input, { wrapFileRefs: false })).toBe(expected);
+      expect(markdownToTelegramChunks(input, 4096).map((chunk) => chunk.html)).toEqual([expected]);
+    },
+  );
 });
 
 describe("file references", () => {

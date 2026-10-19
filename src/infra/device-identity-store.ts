@@ -25,6 +25,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
 const PRIMARY_DEVICE_IDENTITY_KEY = "primary";
@@ -226,7 +227,7 @@ function storedIdentityToRow(
 }
 
 function readStoredIdentityRowFromDatabase(
-  database: { db: Parameters<typeof getNodeSqliteKysely>[0] },
+  database: { db: EngineConnection },
   identityKey: string,
 ): DeviceIdentityRow | null {
   const db = getNodeSqliteKysely<DeviceIdentityDatabase>(database.db);
@@ -239,7 +240,7 @@ function readStoredIdentityRowFromDatabase(
 }
 
 function readStoredIdentityFromDatabase(
-  database: { db: Parameters<typeof getNodeSqliteKysely>[0] },
+  database: { db: EngineConnection },
   identityKey: string,
 ): StoredDeviceIdentity | null {
   const row = readStoredIdentityRowFromDatabase(database, identityKey);
@@ -252,7 +253,7 @@ function readStoredIdentityFromDatabase(
 }
 
 function isEmptyBootstrapIdentityTableMiss(
-  database: { db: Parameters<typeof getNodeSqliteKysely>[0] },
+  database: { db: EngineConnection },
   error: unknown,
 ): boolean {
   if (
@@ -317,6 +318,22 @@ export function readStoredDeviceIdentity(
   return readStoredIdentityFromDatabase(database, resolved.identityKey);
 }
 
+/** Read an admitted connection without opening another database or changing its snapshot. */
+export function readStoredDeviceIdentityReadOnlyInDatabase(
+  db: EngineConnection,
+  identityKey: string,
+): StoredDeviceIdentity | null {
+  try {
+    return readStoredIdentityFromDatabase({ db }, identityKey);
+  } catch (error) {
+    // A creator publishes the file before its schema commits; partial schemas still fail closed.
+    if (isEmptyBootstrapIdentityTableMiss({ db }, error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 /** Read identity rows without creating identities or joining the writer lifecycle. */
 export function readStoredDeviceIdentityReadOnly(
   options: DeviceIdentityStoreOptions = {},
@@ -324,18 +341,7 @@ export function readStoredDeviceIdentityReadOnly(
   const resolved = resolveDeviceIdentityStore(options);
   return (
     withExistingOpenClawStateDatabaseReadOnly(
-      (database) => {
-        try {
-          return readStoredIdentityFromDatabase(database, resolved.identityKey);
-        } catch (error) {
-          // A creator publishes the SQLite file before its schema transaction commits.
-          // Only that empty bootstrap snapshot is a read miss; partial schemas still fail closed.
-          if (isEmptyBootstrapIdentityTableMiss(database, error)) {
-            return null;
-          }
-          throw error;
-        }
-      },
+      ({ db }) => readStoredDeviceIdentityReadOnlyInDatabase(db, resolved.identityKey),
       { env: options.env, path: resolved.databasePath },
     ) ?? null
   );

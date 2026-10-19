@@ -104,6 +104,8 @@ function npmBundles() {
     head_sha: TOOLING_SHA,
     status: "completed",
     conclusion: "success" as string | null,
+    started_at: "2026-08-01T00:00:00Z",
+    completed_at: "2026-08-01T00:10:00Z",
   }));
   return { raw, qualified, outputs, jobs };
 }
@@ -639,60 +641,64 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     });
   });
 
-  it.each(["contents retry", "receipt retry", "replacement preparation failed"] as const)(
-    "collects failed-job recovery with carried-forward npm bytes: %s",
-    (outcome) => {
-      const test = fixture();
-      const current = workflowRun({ run_attempt: 2, status: "completed", conclusion: "success" });
-      test.api("actions/runs/81", current);
-      test.api(
-        "actions/runs/81/attempts/1",
-        workflowRun({ status: "completed", conclusion: "failure" }),
-      );
-      test.api("actions/runs/81/attempts/2", current);
-      if (outcome === "contents retry") {
-        test.qualified.producer.runAttempt = "2";
-        test.qualified.artifact.runAttempt = "2";
-        test.jobs[1]!.run_attempt = 2;
-        test.outputs.qualified_preflight_bundle_json = JSON.stringify(test.qualified);
-      }
-      test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
-        total_count: outcome === "contents retry" ? 1 : 2,
-        jobs: outcome === "contents retry" ? [test.jobs[0]] : test.jobs,
-      });
-      test.api("actions/runs/81/attempts/2/jobs?per_page=100&page=1", {
-        total_count: 1,
-        jobs:
-          outcome === "receipt retry"
-            ? [{ ...test.jobs[0], id: 990, name: "Seal artifact producer receipt", run_attempt: 2 }]
-            : outcome === "contents retry"
-              ? [test.jobs[1]]
+  it.each([
+    "contents retry",
+    "receipt retry",
+    "carried preparation copy",
+    "replacement preparation failed",
+  ] as const)("collects failed-job recovery with carried-forward npm bytes: %s", (outcome) => {
+    const test = fixture();
+    const current = workflowRun({ run_attempt: 2, status: "completed", conclusion: "success" });
+    test.api("actions/runs/81", current);
+    test.api(
+      "actions/runs/81/attempts/1",
+      workflowRun({ status: "completed", conclusion: "failure" }),
+    );
+    test.api("actions/runs/81/attempts/2", current);
+    if (outcome === "contents retry") {
+      test.qualified.producer.runAttempt = "2";
+      test.qualified.artifact.runAttempt = "2";
+      test.jobs[1]!.run_attempt = 2;
+      test.outputs.qualified_preflight_bundle_json = JSON.stringify(test.qualified);
+    }
+    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+      total_count: outcome === "contents retry" ? 1 : 2,
+      jobs: outcome === "contents retry" ? [test.jobs[0]] : test.jobs,
+    });
+    test.api("actions/runs/81/attempts/2/jobs?per_page=100&page=1", {
+      total_count: 1,
+      jobs:
+        outcome === "receipt retry"
+          ? [{ ...test.jobs[0], id: 990, name: "Seal artifact producer receipt", run_attempt: 2 }]
+          : outcome === "contents retry"
+            ? [test.jobs[1]]
+            : outcome === "carried preparation copy"
+              ? [{ ...test.jobs[0], id: 998, run_attempt: 2 }]
               : [{ ...test.jobs[0], id: 999, run_attempt: 2, conclusion: "failure" }],
-      });
-      test.artifact("openclaw-npm-package-descriptor-81-1", "prepared-npm-bundle.json", test.raw);
-      const raw = test.run("wait", { ARTIFACT_OUTPUT: "raw", ARTIFACT_RUN_ATTEMPT: "2" });
-      if (outcome === "replacement preparation failed") {
-        expectRejected(raw, "Successful npm preparation was replaced");
-        return;
-      }
-      expect(raw.status, raw.stderr).toBe(0);
-      expect(JSON.parse(raw.outputs.prepared_bundle_json!)).toEqual(test.raw);
-      const sealed = test.run("receipt", {
-        GITHUB_RUN_ID: "81",
-        GITHUB_RUN_ATTEMPT: "2",
-        ARTIFACT_OUTPUTS_JSON: JSON.stringify(test.outputs),
-      });
-      expect(sealed.status, sealed.stderr).toBe(0);
-      test.artifact(
-        "full-release-artifact-receipt-81-2",
-        "artifact-receipt.json",
-        JSON.parse(readFileSync(join(sealed.outputs.directory!, "artifact-receipt.json"), "utf8")),
-      );
-      const receipt = test.run("wait", { ARTIFACT_OUTPUT: "receipt", ARTIFACT_RUN_ATTEMPT: "2" });
-      expect(receipt.status, receipt.stderr).toBe(0);
-      expect(receipt.outputs).toEqual(test.outputs);
-    },
-  );
+    });
+    test.artifact("openclaw-npm-package-descriptor-81-1", "prepared-npm-bundle.json", test.raw);
+    const raw = test.run("wait", { ARTIFACT_OUTPUT: "raw", ARTIFACT_RUN_ATTEMPT: "2" });
+    if (outcome === "replacement preparation failed") {
+      expectRejected(raw, "Successful npm preparation was replaced");
+      return;
+    }
+    expect(raw.status, raw.stderr).toBe(0);
+    expect(JSON.parse(raw.outputs.prepared_bundle_json!)).toEqual(test.raw);
+    const sealed = test.run("receipt", {
+      GITHUB_RUN_ID: "81",
+      GITHUB_RUN_ATTEMPT: "2",
+      ARTIFACT_OUTPUTS_JSON: JSON.stringify(test.outputs),
+    });
+    expect(sealed.status, sealed.stderr).toBe(0);
+    test.artifact(
+      "full-release-artifact-receipt-81-2",
+      "artifact-receipt.json",
+      JSON.parse(readFileSync(join(sealed.outputs.directory!, "artifact-receipt.json"), "utf8")),
+    );
+    const receipt = test.run("wait", { ARTIFACT_OUTPUT: "receipt", ARTIFACT_RUN_ATTEMPT: "2" });
+    expect(receipt.status, receipt.stderr).toBe(0);
+    expect(receipt.outputs).toEqual(test.outputs);
+  });
 
   it.each([
     "missing record",

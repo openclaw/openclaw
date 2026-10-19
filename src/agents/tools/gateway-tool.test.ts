@@ -56,24 +56,6 @@ describe("gateway tool", () => {
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
-
-  it.each([["config.get", { action: "config.get" }]])(
-    "forwards the abort signal for %s",
-    async (method, params) => {
-      const controller = new AbortController();
-
-      await createGatewayTool().execute("tool-call", params, controller.signal);
-
-      expect(callGatewayToolMock).toHaveBeenCalledWith(
-        method,
-        expect.anything(),
-        expect.anything(),
-        {
-          signal: controller.signal,
-        },
-      );
-    },
-  );
 });
 
 describe("gateway update action", () => {

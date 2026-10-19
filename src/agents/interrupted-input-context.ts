@@ -20,12 +20,14 @@ export async function buildInterruptedInputContext(params: {
   }
   const fragment = (text: string): RuntimeContextFragment => ({ kind: "conversation-data", text });
   try {
-    const { listSessionPendingInputs } =
+    const { readSessionPendingInputContext } =
       await import("../config/sessions/session-pending-input-history.js");
-    const page = await listSessionPendingInputs(
-      { agentId, sessionKey, sessionId, storePath },
-      { limit: 20 },
-    );
+    const page = await readSessionPendingInputContext({
+      agentId,
+      sessionKey,
+      sessionId,
+      storePath,
+    });
     const interrupted = page.items.filter(
       ({ state, message }) =>
         state === "interrupted" && message.display !== false && message.excludeFromContext !== true,

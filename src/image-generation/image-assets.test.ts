@@ -7,6 +7,7 @@ import {
   parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
+  resolveImageSourceUrl,
   sniffImageMimeType,
   toImageDataUrl,
 } from "./image-assets.js";
@@ -14,6 +15,26 @@ import {
 const DEFAULT_TEST_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 
 describe("image asset helpers", () => {
+  it("preserves omitted images, URL precedence, and inline image MIME defaults", () => {
+    expect(resolveImageSourceUrl(undefined, "missing image")).toBeUndefined();
+    expect(
+      resolveImageSourceUrl(
+        { url: " https://example.com/frame.png ", buffer: Buffer.from("unused") },
+        "missing image",
+      ),
+    ).toBe("https://example.com/frame.png");
+    expect(resolveImageSourceUrl({ url: " ", buffer: Buffer.from("png") }, "missing image")).toBe(
+      "data:image/png;base64,cG5n",
+    );
+    expect(
+      resolveImageSourceUrl(
+        { buffer: Buffer.from("jpeg"), mimeType: " image/jpeg " },
+        "missing image",
+      ),
+    ).toBe("data:image/jpeg;base64,anBlZw==");
+    expect(() => resolveImageSourceUrl({}, "missing image")).toThrow("missing image");
+  });
+
   it("converts buffers to image data URLs and parses them back", () => {
     const buffer = Buffer.from("png-bytes");
     const dataUrl = toImageDataUrl({ buffer, mimeType: "image/png" });
