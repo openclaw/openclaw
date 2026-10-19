@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { assertDoctorPreflightMigrationsComplete } from "../commands/doctor-config-preflight-migrations.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
@@ -26,6 +26,15 @@ import {
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+function mutateDatabase(target: string, sql: string, ...values: SQLInputValue[]) {
+  const database = new DatabaseSync(target);
+  try {
+    database.prepare(sql).run(...values);
+  } finally {
+    database.close();
+  }
+}
 
 async function copiedOwnerFixture(
   state: OpenClawTestState,
@@ -62,12 +71,7 @@ it("preserves refused archives when a healthy database shares their directory", 
     fs.mkdirSync(directory, { recursive: true });
     fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
     fs.renameSync(healthy, healthyPath);
-    const database = new DatabaseSync(target);
-    try {
-      database.prepare("UPDATE schema_meta SET updated_at = updated_at + 1").run();
-    } finally {
-      database.close();
-    }
+    mutateDatabase(target, "UPDATE schema_meta SET updated_at = updated_at + 1");
     const original = fs.readFileSync(target);
     const archivePath = path.join(directory, "history.jsonl.deleted.2026-09-10T01-02-03.000Z");
     writeArchive(
@@ -174,24 +178,18 @@ it("recovers an identical wrong-owner copy despite unequal short reads", async (
 
 it("continues independent Doctor repairs while preserving a divergent wrong-owner database", async () => {
   await withOpenClawTestState({ prefix: "openclaw divergent owner " }, async (state) => {
+    const event = { type: "message", id: "shared", timestamp: 1, message: { role: "user" } };
     const { cfg, target, run } = await copiedOwnerFixture(state, {
-      history: [{ type: "message", id: "shared", timestamp: 1, message: { role: "user" } }],
+      history: [event],
     });
-    const database = new DatabaseSync(target);
-    try {
-      database
-        .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = 'history'")
-        .run(
-          JSON.stringify({
-            type: "message",
-            id: "shared",
-            timestamp: 1,
-            message: { role: "user", content: "History present only in the misplaced copy." },
-          }),
-        );
-    } finally {
-      database.close();
-    }
+    mutateDatabase(
+      target,
+      "UPDATE transcript_events SET event_json = ? WHERE session_id = 'history'",
+      JSON.stringify({
+        ...event,
+        message: { ...event.message, content: "History present only in the misplaced copy." },
+      }),
+    );
     const original = fs.readFileSync(target);
     const execPath = await state.writeJson("exec-approvals.json", {
       version: 1,

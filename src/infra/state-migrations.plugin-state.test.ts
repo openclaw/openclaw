@@ -13,22 +13,40 @@ import {
 import { runLegacyMigrationPlans } from "./state-migrations.plugin-state.js";
 
 type ImportPlan = Extract<ChannelLegacyStateMigrationPlan, { kind: "plugin-state-import" }>;
-function importPlan(
-  params: Pick<ImportPlan, "label" | "namespace" | "sourcePath" | "stateDir" | "readEntries"> &
-    Partial<ImportPlan>,
-): ImportPlan {
-  return {
-    kind: "plugin-state-import",
-    pluginId: "migration-fixture",
-    maxEntries: 4,
-    scopeKey: "",
-    targetPath: `plugin state:${params.namespace}`,
-    ...params,
-  };
-}
 
 describe("legacy migration plan failure isolation", () => {
   let state: OpenClawTestState;
+  let importStateDir: string;
+  const store = <T>(namespace: string, maxEntries = 4, directory = importStateDir) =>
+    createPluginStateKeyedStore<T>("migration-fixture", {
+      namespace,
+      maxEntries,
+      env: { ...state.env, OPENCLAW_STATE_DIR: directory },
+    });
+  function importPlan(
+    params: Pick<ImportPlan, "label" | "namespace" | "sourcePath" | "readEntries"> &
+      Partial<ImportPlan>,
+  ): ImportPlan {
+    return {
+      kind: "plugin-state-import",
+      pluginId: "migration-fixture",
+      maxEntries: 4,
+      scopeKey: "",
+      targetPath: `plugin state:${params.namespace}`,
+      stateDir: importStateDir,
+      ...params,
+    };
+  }
+  const artifactPlan = (
+    kind: "move" | "copy",
+    label: string,
+    sourcePath: string,
+  ): ChannelLegacyStateMigrationPlan => ({
+    kind,
+    label,
+    sourcePath,
+    targetPath: `${sourcePath}.${kind === "move" ? "moved" : "copied"}`,
+  });
 
   const runExisting = (plans: ChannelLegacyStateMigrationPlan[]) =>
     runLegacyMigrationPlans(plans.filter((plan) => fs.existsSync(plan.sourcePath)));
@@ -41,6 +59,7 @@ describe("legacy migration plan failure isolation", () => {
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "migration-plan-isolation" });
+    importStateDir = state.statePath("import-owner");
   });
 
   afterEach(async () => {
@@ -52,31 +71,19 @@ describe("legacy migration plan failure isolation", () => {
   it.each(["throw", "reject"] as const)(
     "retains completed work, continues later plans, and retries a failed import (%s)",
     async (failure) => {
-      const importStateDir = state.statePath("import-owner");
       const sourcePath = await state.writeText("legacy-import.json", "legacy source\n");
       const earlierPath = await state.writeText("earlier.txt", "earlier artifact\n");
       const laterPath = await state.writeText("later.txt", "later artifact\n");
-      const env = { ...state.env, OPENCLAW_STATE_DIR: importStateDir };
-      const store = createPluginStateKeyedStore<string>("migration-fixture", {
-        namespace: "failure-isolation",
-        maxEntries: 4,
-        env,
-      });
-      await store.register("scope:conflict", "canonical");
+      const imported = store<string>("failure-isolation");
+      await imported.register("scope:conflict", "canonical");
       let shouldFail = true;
       const plans: ChannelLegacyStateMigrationPlan[] = [
-        {
-          kind: "move",
-          label: "Earlier artifact",
-          sourcePath: earlierPath,
-          targetPath: `${earlierPath}.moved`,
-        },
+        artifactPlan("move", "Earlier artifact", earlierPath),
         importPlan({
           label: "Replacement import",
           sourcePath,
           namespace: "failure-isolation",
           scopeKey: "scope",
-          stateDir: importStateDir,
           cleanupSource: "rename",
           readEntries: () => [{ key: "conflict", value: "incoming" }],
           shouldReplaceExistingEntry: () => {
@@ -90,12 +97,7 @@ describe("legacy migration plan failure isolation", () => {
             throw error;
           },
         }),
-        {
-          kind: "copy",
-          label: "Later artifact",
-          sourcePath: laterPath,
-          targetPath: `${laterPath}.copied`,
-        },
+        artifactPlan("copy", "Later artifact", laterPath),
       ];
       const run = () => runExisting(plans);
 
@@ -112,7 +114,7 @@ describe("legacy migration plan failure isolation", () => {
       expect(fs.readFileSync(`${laterPath}.copied`, "utf8")).toBe("later artifact\n");
       expect(fs.readFileSync(sourcePath, "utf8")).toBe("legacy source\n");
       expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
-      expect(await store.lookup("scope:conflict")).toBe("canonical");
+      expect(await imported.lookup("scope:conflict")).toBe("canonical");
       expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
 
       shouldFail = false;
@@ -122,7 +124,7 @@ describe("legacy migration plan failure isolation", () => {
       expect(repaired.changes).toContainEqual(
         expect.stringContaining("Migrated 1 Replacement import entry"),
       );
-      expect(await store.lookup("scope:conflict")).toBe("incoming");
+      expect(await imported.lookup("scope:conflict")).toBe("incoming");
       await expectRetired(sourcePath, "legacy source\n", run);
     },
   );
@@ -140,13 +142,7 @@ describe("legacy migration plan failure isolation", () => {
       const original = `${JSON.stringify({ shortId: failure === "empty" ? "0" : "9000", timestamp: 0 })}\n`;
       const sourcePath = await state.writeText("reply-cache.jsonl", original);
       const unrelatedPath = await state.writeText("unrelated.txt", "independent artifact\n");
-      const importStateDir = state.statePath("shared-source-owner");
-      const env = { ...state.env, OPENCLAW_STATE_DIR: importStateDir };
-      const counter = createPluginStateKeyedStore<{ counter: number }>("migration-fixture", {
-        namespace: "shared-counter",
-        maxEntries: 1,
-        env,
-      });
+      const counter = store<{ counter: number }>("shared-counter", 1);
       await counter.register(failure === "capacity" ? "occupied" : "counter", { counter: 1 });
       let shouldFail = true;
       const counterObservedMove: boolean[] = [];
@@ -155,7 +151,6 @@ describe("legacy migration plan failure isolation", () => {
         sourcePath,
         namespace: "shared-counter",
         maxEntries: 1,
-        stateDir: importStateDir,
         readEntries: () => {
           counterObservedMove.push(fs.existsSync(`${unrelatedPath}.moved`));
           if (failure === "reader" && shouldFail) {
@@ -176,17 +171,11 @@ describe("legacy migration plan failure isolation", () => {
         label: "Expired reply cache",
         sourcePath,
         namespace: "shared-cache",
-        stateDir: importStateDir,
         cleanupSource: "rename",
         cleanupWhenEmpty: true,
         readEntries: () => [],
       });
-      const unrelatedPlan: ChannelLegacyStateMigrationPlan = {
-        kind: "move",
-        label: "Unrelated artifact",
-        sourcePath: unrelatedPath,
-        targetPath: `${unrelatedPath}.moved`,
-      };
+      const unrelatedPlan = artifactPlan("move", "Unrelated artifact", unrelatedPath);
       const plans = cleanupFirst
         ? [cachePlan, unrelatedPlan, counterPlan]
         : [counterPlan, cachePlan, unrelatedPlan];
@@ -227,17 +216,9 @@ describe("legacy migration plan failure isolation", () => {
   it.each([false, true])(
     "keeps source cleanup scoped and before unrelated imports (cleanup throws: %s)",
     async (cleanupThrows) => {
-      const importStateDir = state.statePath("cleanup-owner");
-      const env = { ...state.env, OPENCLAW_STATE_DIR: importStateDir };
       const storeOptions = { namespace: "old-rows", maxEntries: 4 };
-      const ambient = createPluginStateKeyedStore<string>("migration-fixture", {
-        ...storeOptions,
-        env: state.env,
-      });
-      const owner = createPluginStateKeyedStore<string>("migration-fixture", {
-        ...storeOptions,
-        env,
-      });
+      const ambient = store<string>("old-rows", 4, state.stateDir);
+      const owner = store<string>("old-rows");
       await ambient.register("legacy", "ambient");
       await owner.register("legacy", "owner");
       const cleanupScopes: Array<string | undefined> = [];
@@ -247,7 +228,6 @@ describe("legacy migration plan failure isolation", () => {
           label: "Scoped rows",
           sourcePath: "plugin state:old-rows",
           namespace: "first-import",
-          stateDir: importStateDir,
           readEntries: () => [{ key: "first", value: "imported" }],
           removeSource: async () => {
             cleanupScopes.push(process.env.OPENCLAW_STATE_DIR);
@@ -262,7 +242,6 @@ describe("legacy migration plan failure isolation", () => {
           label: "Later rows",
           sourcePath: "plugin state:unrelated-rows",
           namespace: "later-import",
-          stateDir: importStateDir,
           readEntries: async () => {
             const scopedStore = createPluginStateKeyedStore("migration-fixture", storeOptions);
             laterObservedCleanup.push((await scopedStore.lookup("legacy")) === undefined);

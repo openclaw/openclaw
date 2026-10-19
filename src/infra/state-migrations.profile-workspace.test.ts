@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -28,10 +27,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function sha256(value: string): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
-
 async function makeFixture() {
   const root = tempDirs.make("openclaw-profile-workspace-");
   const homeDir = path.join(root, "home");
@@ -56,6 +51,10 @@ async function makeFixture() {
   const fixture = { root, homeDir, stateDir, configPath, env };
   return {
     ...fixture,
+    source: path.join(homeDir, ".openclaw", "workspace-work"),
+    target: path.join(homeDir, ".openclaw-work", "workspace"),
+    writeConfig: (cfg: OpenClawConfigWithLegacyRoster) =>
+      fs.writeFileSync(configPath, JSON.stringify(cfg)),
     migrate: (
       cfg: Parameters<typeof autoMigrateLegacyState>[0]["cfg"],
       log?: Parameters<typeof autoMigrateLegacyState>[0]["log"],
@@ -83,6 +82,10 @@ async function makeFixture() {
 }
 
 const marker = (directory: string) => fs.readFileSync(path.join(directory, "marker.txt"), "utf8");
+function seedWorkspace(directory: string, content = directory) {
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "marker.txt"), content);
+}
 
 describe("configured profile workspace preservation", () => {
   it.each(["profile", "state-dir"])(
@@ -96,8 +99,7 @@ describe("configured profile workspace preservation", () => {
       const defaultState = path.join(fixture.homeDir, ".openclaw");
       const ownWorkspace = path.join(defaultState, "workspace-work");
       for (const directory of ["agent", "workspace-work", "workspace-other"]) {
-        fs.mkdirSync(path.join(defaultState, directory), { recursive: true });
-        fs.writeFileSync(path.join(defaultState, directory, "marker.txt"), directory);
+        seedWorkspace(path.join(defaultState, directory), directory);
       }
       const ownAgent = path.join(fixture.stateDir, "agent");
       fs.mkdirSync(ownAgent);
@@ -159,13 +161,12 @@ describe("configured profile workspace preservation", () => {
     "preserves configured $roster $endpoint workspace (alias=$alias, targetExists=$targetExists)",
     async ({ roster, endpoint, alias, targetExists }) => {
       const fixture = await makeFixture();
-      const source = path.join(fixture.homeDir, ".openclaw", "workspace-work");
-      const target = path.join(fixture.homeDir, ".openclaw-work", "workspace");
+      const { source, target } = fixture;
       const directories = targetExists ? [source, target] : [source];
       for (const directory of directories) {
-        fs.mkdirSync(directory, { recursive: true });
-        fs.writeFileSync(path.join(directory, "marker.txt"), directory);
+        seedWorkspace(directory);
       }
+      const before = directories.map(snapshotFiles);
       const configured = endpoint === "source" ? source : target;
       const aliasPath = path.join(fixture.homeDir, "workspace-alias");
       const linkTarget = alias === "ancestor" ? path.dirname(target) : configured;
@@ -187,7 +188,7 @@ describe("configured profile workspace preservation", () => {
             ? { entries: { main: { workspace } } }
             : { list: [{ id: "main", workspace }] };
       const cfg = { agents };
-      fs.writeFileSync(fixture.configPath, JSON.stringify(cfg));
+      fixture.writeConfig(cfg);
       const plan = await fixture.plan();
       const step = plan.steps.find((entry) => entry.id === "profile-workspace");
       expect(step).toMatchObject({ source: [], target: [], requiredness: "not-required" });
@@ -216,12 +217,7 @@ describe("configured profile workspace preservation", () => {
         } else {
           expect(fs.existsSync(target)).toBe(false);
         }
-        for (const directory of directories) {
-          expect(snapshotFiles(directory)).toEqual({
-            ".": "directory",
-            "marker.txt": sha256(directory).replace("sha256:", "file:sha256:"),
-          });
-        }
+        expect(directories.map(snapshotFiles)).toEqual(before);
         expect(fs.readFileSync(fixture.configPath, "utf8")).toBe(JSON.stringify(cfg));
         if (linked) {
           expect(fs.readlinkSync(aliasPath)).toBe(linkTarget);
@@ -232,11 +228,8 @@ describe("configured profile workspace preservation", () => {
 
   it("honors native case semantics for an absent configured target", async () => {
     const fixture = await makeFixture();
-    fixture.env.OPENCLAW_PROFILE = "work";
-    const source = path.join(fixture.homeDir, ".openclaw", "workspace-work");
-    const target = path.join(fixture.homeDir, ".openclaw-work", "workspace");
-    fs.mkdirSync(source, { recursive: true });
-    fs.writeFileSync(path.join(source, "marker.txt"), "workspace marker");
+    const { source, target } = fixture;
+    seedWorkspace(source, "workspace marker");
     const caseInsensitive = fs.existsSync(
       path.join(fixture.homeDir, ".OPENCLAW", "WORKSPACE-WORK"),
     );
@@ -245,7 +238,7 @@ describe("configured profile workspace preservation", () => {
         defaults: { workspace: path.join(fixture.homeDir, ".OpenClaw-work", "workspace") },
       },
     };
-    fs.writeFileSync(fixture.configPath, JSON.stringify(cfg));
+    fixture.writeConfig(cfg);
     const plan = await fixture.plan();
     expect(plan.steps.find((step) => step.id === "profile-workspace")).toMatchObject({
       source: caseInsensitive ? [] : [{ kind: "path", path: source }],

@@ -242,31 +242,25 @@ describe("legacy managed outgoing image migration", () => {
     expect(await legacy.read()).toBeNull();
   });
 
-  it("keeps JSON when the source changes before cleanup", async () => {
+  it.each([
+    ["beforeClaim", "Failed claiming legacy managed outgoing"],
+    ["removeSource", "synthetic remove failure"],
+  ] as const)("preserves sources after %s failure", async (hook, warning) => {
     const legacy = await writeLegacyRecord();
-
     const result = migrate({
-      beforeClaim: () => {
+      [hook]: () => {
+        if (hook === "removeSource") {
+          throw new Error(warning);
+        }
         fs.appendFileSync(legacy.sourcePath, "\n");
       },
     });
-
-    expect(result.warnings.join("\n")).toContain("Failed claiming legacy managed outgoing");
+    expect(result.warnings.join("\n")).toContain(warning);
     await fsp.access(legacy.sourcePath);
-    expect(await legacy.read()).toBeNull();
-  });
-
-  it("restores JSON when cleanup fails and succeeds on retry", async () => {
-    const legacy = await writeLegacyRecord();
-
-    const failed = migrate({
-      removeSource: () => {
-        throw new Error("synthetic remove failure");
-      },
-    });
-    expect(failed.warnings.join("\n")).toContain("synthetic remove failure");
-    await fsp.access(legacy.sourcePath);
-
+    if (hook === "beforeClaim") {
+      expect(await legacy.read()).toBeNull();
+      return;
+    }
     const retried = migrate();
     expect(retried.warnings).toEqual([]);
     await expect(fsp.access(legacy.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });

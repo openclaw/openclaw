@@ -141,22 +141,19 @@ it("preserves filesystem traversal for registered paths containing dot-dot segme
   await expect(ready()).resolves.toBeUndefined();
 });
 
-it.each(
-  [
-    {
-      owner: "media-persistence",
-      migrate: migrateLegacyMediaPersistence,
-      failures: ["discovery"],
-    },
-    {
-      owner: "transcript-directives",
-      migrate: migrateHistoricalTranscriptDirectives,
-      failures: ["none", "database"],
-    },
-  ].flatMap(({ owner, migrate, failures }) =>
-    failures.map((failure) => ({ owner, migrate, failure })),
-  ),
-)(
+it.each([
+  { owner: "media-persistence", migrate: migrateLegacyMediaPersistence, failure: "discovery" },
+  {
+    owner: "transcript-directives",
+    migrate: migrateHistoricalTranscriptDirectives,
+    failure: "none",
+  },
+  {
+    owner: "transcript-directives",
+    migrate: migrateHistoricalTranscriptDirectives,
+    failure: "database",
+  },
+])(
   "unregisters foreign registry paths without touching their databases ($owner, failure=$failure)",
   async ({ owner, migrate, failure }) => {
     const foreignStateDir = tempDir();
@@ -197,8 +194,10 @@ it.each(
       },
       result,
     );
-    expect(receipt.outcome).toBe(failure !== "none" ? "refused" : "warning");
-    expect(receipt.refusal?.code).toBe(failure !== "none" ? "step-refused" : undefined);
+    expect({ outcome: receipt.outcome, code: receipt.refusal?.code }).toEqual({
+      outcome: failure !== "none" ? "refused" : "warning",
+      code: failure !== "none" ? "step-refused" : undefined,
+    });
     if (failure !== "none") {
       expect(result.warnings).toContainEqual(expect.stringContaining(ownedDatabasePath));
       expect(fs.readFileSync(ownedDatabasePath, "utf8")).toBe("not a SQLite database");
