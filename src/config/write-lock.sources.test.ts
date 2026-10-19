@@ -42,12 +42,18 @@ async function createSourceFile(name: string, content = "{}") {
   await fs.writeFile(filename, content);
   return filename;
 }
-const writeLocked = (filename: string, content: string) =>
-  withConfigWriteLock(filename, () => fs.writeFile(filename, content));
+const writeLocked = (filename: string, content: string, onWrite?: () => void) =>
+  withConfigWriteLock(filename, async () => {
+    onWrite?.();
+    await fs.writeFile(filename, content);
+  });
 const lockOptions = {
   retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
   stale: 30_000,
 };
+const probeLock = (filename: string) =>
+  fileLocks.withFileLock(filename, lockOptions, async () => {});
+const sourceWriteError = "not allowed inside a config source scope";
 
 it("keeps root and include writers outside cleanup and closes captured source admission", async () => {
   const root = await createSourceFile("root.json");
@@ -64,40 +70,27 @@ it("keeps root and include writers outside cleanup and closes captured source ad
     includeGuard = captureConfigWriteLockGuard(include);
     lateWrite = afterScope.promise.then(() => writeLocked(include, "late"));
     void lateWrite.catch(() => {});
-    await expect(writeLocked(include, "nested")).rejects.toThrow(
-      "not allowed inside a config source scope",
-    );
-    expect(() => markActiveConfigMutationPath(root)).toThrow(
-      "not allowed inside a config source scope",
-    );
+    await expect(writeLocked(include, "nested")).rejects.toThrow(sourceWriteError);
+    expect(() => markActiveConfigMutationPath(root)).toThrow(sourceWriteError);
     entered.resolve();
     await finish.promise;
     assertCurrent();
     events.push("cleanup settled");
     expect(await fs.readFile(include, "utf8")).toBe("original include");
   });
-  const writers: Promise<unknown>[] = [];
-  try {
-    await entered.promise;
-    writers.push(
-      ...[root, include].map((target) =>
-        withConfigWriteLock(target, async () => {
-          events.push(path.basename(target));
-          await fs.writeFile(target, "changed");
-        }),
-      ),
-    );
-  } finally {
-    finish.resolve();
-    await scope;
-    await Promise.all(writers);
-    afterScope.resolve();
-  }
+  await entered.promise;
+  const writers = [root, include].map((target) =>
+    writeLocked(target, "changed", () => events.push(path.basename(target))),
+  );
+  finish.resolve();
+  await scope;
+  await Promise.all(writers);
+  afterScope.resolve();
   expect(events[0]).toBe("cleanup settled");
   expect(events.slice(1).toSorted()).toEqual(["plugins.json", "root.json"]);
   expect(captured).toThrow("ownership has closed");
   expect(includeGuard).toThrow("no live source ownership");
-  await expect(lateWrite).rejects.toThrow("not allowed inside a config source scope");
+  await expect(lateWrite).rejects.toThrow(sourceWriteError);
 });
 
 it("releases partial source locks before waiting on an inverted include writer", async () => {
@@ -124,10 +117,7 @@ it("releases partial source locks before waiting on an inverted include writer",
   let released = false;
   try {
     await firstAcquired.promise;
-    writer = withConfigWriteLock(first, async () => {
-      events.push("peer writer");
-      await fs.writeFile(first, "updated include");
-    });
+    writer = writeLocked(first, "updated include", () => events.push("peer writer"));
     await writer;
     await peer.release();
     released = true;
@@ -173,15 +163,13 @@ it.each(["regular", "symlink"])("locks every case spelling of %s config sources"
     acquisition.mockRestore();
     assertCurrent();
     for (const source of sources) {
-      await expect(
-        fileLocks.withFileLock(source, lockOptions, async () => {}),
-      ).rejects.toMatchObject({
+      await expect(probeLock(source)).rejects.toMatchObject({
         code: fileLocks.FILE_LOCK_TIMEOUT_ERROR_CODE,
       });
     }
   });
   for (const source of sources) {
-    await fileLocks.withFileLock(source, lockOptions, async () => {});
+    await probeLock(source);
   }
 });
 

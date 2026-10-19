@@ -132,22 +132,20 @@ it.each(
   },
 );
 
-it("uses manifest metadata to skip nested-only DM config shapes", () => {
+it.each([
+  ["nested-only config", { matrix: { dm: { policy: "open" } } }, { dmAllowFromMode: "nestedOnly" }],
+  [
+    "disabled channels/accounts",
+    {
+      mattermost: { enabled: false, dmPolicy: "open", accounts: { team: { dmPolicy: "open" } } },
+      slack: { accounts: { work: { enabled: false, dmPolicy: "open" } } },
+    },
+    undefined,
+  ],
+] as const)("does not warn for %s", (_name, channels, capabilities) => {
   expect(
-    forChannel(
-      dmWarnings({ matrix: { dm: { policy: "open" } } }, { dmAllowFromMode: "nestedOnly" }),
-      "matrix",
-    ),
+    dmWarnings(channels, capabilities).filter((issue) => issue.path.startsWith("channels.")),
   ).toEqual([]);
-});
-
-it("does not warn for disabled channels or accounts", () => {
-  const issues = dmWarnings({
-    mattermost: { enabled: false, dmPolicy: "open", accounts: { team: { dmPolicy: "open" } } },
-    slack: { accounts: { work: { enabled: false, dmPolicy: "open" } } },
-  });
-  expect(forChannel(issues, "mattermost")).toEqual([]);
-  expect(forChannel(issues, "slack")).toEqual([]);
 });
 
 it("does not suggest channel allowFrom as sufficient when account allowFrom overrides it", () => {

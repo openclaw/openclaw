@@ -97,12 +97,8 @@ function retainedCustody() {
       ),
     release: () => store.release(parent.lease),
     rows: () => {
-      const db = new DatabaseSync(database, { readOnly: true });
-      try {
-        return JSON.stringify(db.prepare("SELECT * FROM managed_update_handoffs").all());
-      } finally {
-        db.close();
-      }
+      using db = new DatabaseSync(database, { readOnly: true });
+      return JSON.stringify(db.prepare("SELECT * FROM managed_update_handoffs").all());
     },
   };
 }
@@ -146,9 +142,8 @@ it.each([
         }
         return "outer result";
       }, guard),
-    ).then((result) => {
+    ).finally(() => {
       ownerSettled = true;
-      return result;
     });
     try {
       await returned.promise;
@@ -163,11 +158,9 @@ it.each([
     }
     const result = await owner;
     expect(await child).toEqual({ ok: false, error: childFailure });
-    expect(result.ok).toBe(false);
     if (result.ok) {
       throw new Error("Outer config interval lost its pending child's failure");
     }
-    expect(childSettled).toBe(true);
     expect(result.error).toBeInstanceOf(AggregateError);
     const failures = outerFails ? [outerFailure, childFailure] : [childFailure];
     expect(result.error).toMatchObject({
@@ -180,7 +173,6 @@ it.each([
         : failures,
     });
     if (guarded) {
-      expect(captured).toBeDefined();
       expect(captured).toThrow("no live source ownership");
     }
     if (retained) {
@@ -211,12 +203,7 @@ it("checks shared nested authority once per assertion and revalidates after awai
   const includePath = path.join(fixture.root, "include.json");
   fs.writeFileSync(includePath, "{}\n");
   const refusal = new Error("nested authority revoked");
-  let revoked = false;
-  const authority = vi.fn(() => {
-    if (revoked) {
-      throw refusal;
-    }
-  });
+  const authority = vi.fn<() => void>();
   let captured: (() => void) | undefined;
   await lock(async () => {
     await lock(
@@ -226,13 +213,14 @@ it("checks shared nested authority once per assertion and revalidates after awai
           throw new Error("Missing nested source guard");
         }
         authority.mockClear();
-        captured();
-        expect(authority).toHaveBeenCalledTimes(1);
-        await Promise.resolve();
-        captured();
-        expect(authority).toHaveBeenCalledTimes(2);
-        await Promise.resolve();
-        revoked = true;
+        for (const calls of [1, 2]) {
+          captured();
+          expect(authority).toHaveBeenCalledTimes(calls);
+          await Promise.resolve();
+        }
+        authority.mockImplementation(() => {
+          throw refusal;
+        });
         expect(captured).toThrow(refusal);
         expect(authority).toHaveBeenCalledTimes(3);
       },
@@ -247,25 +235,21 @@ it("checks shared nested authority once per assertion and revalidates after awai
 it("retains ordered refusal latches when a composed authority was checked earlier", async () => {
   const events: string[] = [];
   const refusal = new Error("composed authority revoked");
-  let revoked = false;
-  const original = () => {
-    events.push("original");
-  };
-  const retained = createConfigWriteAuthorityGuard(() => {
-    if (revoked) {
-      throw refusal;
-    }
+  const original = () => events.push("original");
+  const check = vi.fn(() => {
     events.push("retained");
   });
-  const combined = composeConfigWriteAssertions(original, retained, original, () => {
-    events.push("later");
-  });
+  const retained = createConfigWriteAuthorityGuard(check);
+  const combined = composeConfigWriteAssertions(original, retained, original, () =>
+    events.push("later"),
+  );
   combined();
   expect(events).toEqual(["original", "retained", "later"]);
   await Promise.resolve();
-  revoked = true;
+  check.mockImplementationOnce(() => {
+    throw refusal;
+  });
   expect(retained).toThrow(refusal);
-  revoked = false;
   events.length = 0;
   expect(combined).toThrow(refusal);
   expect(events).toEqual(["original"]);
