@@ -1,10 +1,46 @@
 import { expect, vi } from "vitest";
+import {
+  claimAgentRunDelegatedAuthority,
+  clearAgentRunContext,
+  registerAgentRunContext,
+  releaseAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
+} from "../../../infra/agent-run-registry.js";
 import type {
   GatewayClient,
   GatewayRequestHandlerOptions,
   RespondFn,
 } from "../../server-methods/types.js";
 import { talkVoiceHandlers } from "./voice.js";
+
+export function voiceRuntimes() {
+  const authorities: AgentRunDelegatedAuthority[] = [];
+  return {
+    create(agentId: string, sessionKey: string) {
+      const runId = `voice-rpc-run-${authorities.length}`;
+      registerAgentRunContext(runId, { agentId, sessionKey });
+      const authority = claimAgentRunDelegatedAuthority({ instanceId: `${runId}-instance`, runId });
+      authorities.push(authority);
+      const client = voiceClient(`runtime-${runId}`);
+      client.internal = {
+        agentRuntimeIdentity: {
+          kind: "agentRuntime",
+          agentId,
+          sessionKey,
+          operationalRunInstance: authority.operationalRunInstance,
+          delegatedAuthority: { kind: "local", ...authority },
+        },
+      };
+      return { authority, runId, client, connId: client.connId };
+    },
+    cleanup() {
+      for (const authority of authorities.splice(0)) {
+        releaseAgentRunDelegatedAuthority(authority);
+        clearAgentRunContext(authority.operationalRunInstance.runId);
+      }
+    },
+  };
+}
 
 export function voiceClient(connId: string): GatewayClient & { connId: string } {
   return {

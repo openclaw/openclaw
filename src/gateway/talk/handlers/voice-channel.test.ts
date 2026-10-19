@@ -1,13 +1,7 @@
 import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  clearAgentRunContext,
-  registerAgentRunContext,
-  releaseAgentRunDelegatedAuthority,
-  type AgentRunDelegatedAuthority,
-} from "../../../infra/agent-run-registry.js";
+import { releaseAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { createPluginRuntimeStore } from "../../../plugin-sdk/runtime-store.js";
 import { PluginInstance } from "../../../plugins/plugin-instance.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -21,35 +15,19 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
-import type { GatewayClient } from "../../server-methods/types.js";
-import { expectFailure, expectSuccess, voiceClient, voiceRpc } from "./voice-rpc.test-support.js";
+import { expectFailure, expectSuccess, voiceRpc, voiceRuntimes } from "./voice-rpc.test-support.js";
 
 describe("channel-owned voice selection RPC", () => {
   let state: OpenClawTestState;
   const agentId = "main";
   const sessionKey = "agent:main:discord:channel:voice-room";
-  const authorities: AgentRunDelegatedAuthority[] = [];
+  const runtimes = voiceRuntimes();
   const cleanup: Array<() => void> = [];
   const pending: Promise<void>[] = [];
   const broadcast = vi.fn();
 
   function managedCall(change?: (request: RealtimeVoiceSelectionRequest) => Promise<void>) {
-    const runId = `channel-voice-run-${authorities.length}`;
-    registerAgentRunContext(runId, { agentId, sessionKey });
-    const authority = claimAgentRunDelegatedAuthority({ instanceId: `${runId}-instance`, runId });
-    authorities.push(authority);
-    const client: GatewayClient = {
-      ...voiceClient(`runtime-${runId}`),
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId,
-          sessionKey,
-          operationalRunInstance: authority.operationalRunInstance,
-          delegatedAuthority: { kind: "local", ...authority },
-        },
-      },
-    };
+    const runtime = runtimes.create(agentId, sessionKey);
     let voice = "marin";
     let speakerCurrent = true;
     const apply = vi.fn(async (next: string, request: RealtimeVoiceSelectionRequest) => {
@@ -66,7 +44,7 @@ describe("channel-owned voice selection RPC", () => {
       assertCurrent: () => {},
     });
     const release = handle.bindRun({
-      runId,
+      runId: runtime.runId,
       assertCurrent: () => {
         if (!speakerCurrent) {
           throw new Error("Speaker authorization changed");
@@ -75,8 +53,7 @@ describe("channel-owned voice selection RPC", () => {
     });
     cleanup.push(release, handle.unregister);
     return {
-      client,
-      authority,
+      ...runtime,
       apply,
       handle,
       release,
@@ -104,10 +81,7 @@ describe("channel-owned voice selection RPC", () => {
       dispose();
     }
     await Promise.allSettled(pending.splice(0));
-    for (const authority of authorities.splice(0)) {
-      releaseAgentRunDelegatedAuthority(authority);
-      clearAgentRunContext(authority.operationalRunInstance.runId);
-    }
+    runtimes.cleanup();
     await state.cleanup();
   });
 

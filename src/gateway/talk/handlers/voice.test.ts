@@ -2,13 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { assertNoRetainedSessionSharingReads } from "../../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  clearAgentRunContext,
-  registerAgentRunContext,
-  releaseAgentRunDelegatedAuthority,
-  type AgentRunDelegatedAuthority,
-} from "../../../infra/agent-run-registry.js";
+import { releaseAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import {
   createOrResumeClientVoiceSession,
   registerClientVoiceConsultRun,
@@ -31,7 +25,13 @@ import {
   registerTalkVoiceSession,
   unregisterTalkVoiceSession,
 } from "../voice-selection.js";
-import { expectFailure, expectSuccess, voiceClient, voiceRpc } from "./voice-rpc.test-support.js";
+import {
+  expectFailure,
+  expectSuccess,
+  voiceClient,
+  voiceRpc,
+  voiceRuntimes,
+} from "./voice-rpc.test-support.js";
 
 describe("Talk voice RPC ownership", () => {
   let state: OpenClawTestState;
@@ -40,9 +40,11 @@ describe("Talk voice RPC ownership", () => {
   let browser: ReturnType<typeof voiceClient>;
   let originalId: string;
   let dispatchCurrent: boolean;
-  let changeRequested: ReturnType<typeof createDeferred<void>>;
+  let changeRequested: ReturnType<
+    typeof createDeferred<Parameters<GatewayRequestContext["broadcastToConnIds"]>>
+  >;
   const connections = new Set<string>();
-  const authorities: AgentRunDelegatedAuthority[] = [];
+  const runtimes = voiceRuntimes();
   const pending: Promise<void>[] = [];
   const broadcast = vi.fn<GatewayRequestContext["broadcastToConnIds"]>();
 
@@ -52,38 +54,17 @@ describe("Talk voice RPC ownership", () => {
   }
 
   async function runtimeClient(bindVoice = true) {
-    const runId = `voice-rpc-run-${authorities.length}`;
-    registerAgentRunContext(runId, {
-      agentId: sessionTarget.agentId,
-      sessionKey: sessionTarget.canonicalKey,
-    });
-    const authority = claimAgentRunDelegatedAuthority({ instanceId: `${runId}-instance`, runId });
-    authorities.push(authority);
+    const runtime = runtimes.create(sessionTarget.agentId, sessionTarget.canonicalKey);
+    connections.add(runtime.connId);
     if (bindVoice) {
       await registerClientVoiceConsultRun({
         agentId: sessionTarget.agentId,
         sessionKey: sessionTarget.sessionKey,
         voiceSessionId: originalId,
-        runId,
+        runId: runtime.runId,
       });
     }
-    const connId = `agent-runtime-${runId}`;
-    return {
-      authority,
-      connId,
-      client: {
-        ...client(connId),
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime" as const,
-            agentId: sessionTarget.agentId,
-            sessionKey: sessionTarget.canonicalKey,
-            operationalRunInstance: authority.operationalRunInstance,
-            delegatedAuthority: { kind: "local" as const, ...authority },
-          },
-        },
-      },
-    };
+    return runtime;
   }
 
   const { start, invoke } = voiceRpc(pending, () => ({
@@ -97,13 +78,12 @@ describe("Talk voice RPC ownership", () => {
   }));
 
   async function requestedChangeId(completed: Promise<void>) {
-    await awaitGateBeforeSettlement(
+    const frame = await awaitGateBeforeSettlement(
       changeRequested.promise,
       completed,
       "Voice change settled before requesting a replacement",
     );
-    const frame = broadcast.mock.calls.find(([event]) => event === "talk.voice.change");
-    const payload = frame?.[1];
+    const payload = frame[1];
     if (
       !payload ||
       typeof payload !== "object" ||
@@ -118,7 +98,7 @@ describe("Talk voice RPC ownership", () => {
       sessionKey: sessionTarget.sessionKey,
       voice: "ember",
     });
-    expect(frame?.[2]).toEqual(new Set([browser.connId]));
+    expect(frame[2]).toEqual(new Set([browser.connId]));
     return payload.changeId;
   }
 
@@ -149,9 +129,7 @@ describe("Talk voice RPC ownership", () => {
       connId: browser.connId,
       sessionTarget,
       selection: {
-        provider: launch.provider,
-        model: launch.model,
-        voice: launch.voice,
+        ...launch,
         voices: ["cove", "ember"],
         canChange: true,
       },
@@ -176,15 +154,9 @@ describe("Talk voice RPC ownership", () => {
     const cfg = {};
     setRuntimeConfigSnapshot(cfg);
     broadcast.mockClear();
-    broadcast.mockImplementation((event, payload) => {
-      if (
-        event === "talk.voice.change" &&
-        payload &&
-        typeof payload === "object" &&
-        "phase" in payload &&
-        payload.phase === "requested"
-      ) {
-        changeRequested.resolve();
+    broadcast.mockImplementation((...frame) => {
+      if (frame[0] === "talk.voice.change") {
+        changeRequested.resolve(frame);
       }
     });
     dispatchCurrent = true;
@@ -209,10 +181,7 @@ describe("Talk voice RPC ownership", () => {
     }
     connections.clear();
     await Promise.allSettled(pending.splice(0));
-    for (const authority of authorities.splice(0)) {
-      releaseAgentRunDelegatedAuthority(authority);
-      clearAgentRunContext(authority.operationalRunInstance.runId);
-    }
+    runtimes.cleanup();
     clientVoiceSessionTesting.reset();
     try {
       assertNoRetainedSessionSharingReads();
@@ -222,14 +191,9 @@ describe("Talk voice RPC ownership", () => {
   });
 
   it("rejects another browser's call even for an admin", async () => {
-    expectFailure(
-      await invoke(
-        "talk.voice.set",
-        { voiceSessionId: originalId, voice: "ember" },
-        client("other-browser"),
-      ),
-      "No active voice call",
-    );
+    const params = { voiceSessionId: originalId, voice: "ember" };
+    const respond = await invoke("talk.voice.set", params, client("other-browser"));
+    expectFailure(respond, "No active voice call");
     expect(broadcast).not.toHaveBeenCalled();
   });
 
@@ -248,17 +212,9 @@ describe("Talk voice RPC ownership", () => {
     },
   );
 
-  it("keeps the current voice connected and rejects voices outside the call catalog", async () => {
-    const unchanged = await invoke("talk.voice.set", { voice: " COVE " });
-    expectSuccess(unchanged, { status: "applied", voiceSessionId: originalId, voice: "cove" });
-    const invalid = await invoke("talk.voice.set", { voice: "missing-voice" });
-    expectFailure(invalid, "not in this call's catalog");
-    expect(broadcast).not.toHaveBeenCalled();
-  });
-
   it.each([
     { method: "talk.voice.get", params: {}, succeeds: true },
-    { method: "talk.voice.set", params: { voice: "cove" }, succeeds: true },
+    { method: "talk.voice.set", params: { voice: " COVE " }, succeeds: true },
     { method: "talk.voice.set", params: { voice: "missing-voice" }, succeeds: false },
   ])("releases session authorization after $method with $params", async (scenario) => {
     browser.connect.scopes = ["operator.read", "operator.write"];
@@ -276,15 +232,16 @@ describe("Talk voice RPC ownership", () => {
       });
     try {
       const respond = await invoke(scenario.method, scenario.params);
-      expect(respond).toHaveBeenCalledWith(
-        scenario.succeeds,
-        scenario.succeeds ? expect.any(Object) : undefined,
-        scenario.succeeds
-          ? undefined
-          : expect.objectContaining({
-              message: expect.stringContaining("not in this call's catalog"),
-            }),
-      );
+      if (scenario.succeeds) {
+        expectSuccess(respond, {
+          voiceSessionId: originalId,
+          voice: "cove",
+          ...(scenario.method === "talk.voice.set" ? { status: "applied" } : {}),
+        });
+      } else {
+        expectFailure(respond, "not in this call's catalog");
+      }
+      expect(broadcast).not.toHaveBeenCalled();
       expect(spy).toHaveBeenCalledOnce();
       expect(release).toHaveBeenCalledOnce();
     } finally {
