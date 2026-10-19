@@ -6989,7 +6989,6 @@
 ["src/infra/tailscale.claim.test.ts","./runtime-worker-url.js","79d05b4587ff154d9d0e01d0049cf05c8736a9e3478090cbd0d85f420f5a4fa5",1]
 ["src/infra/telemetry.async.test.ts","../plugins/plugin-runtime-inventory.js","37094e2188727f2b7d094fb0fee7e238197287332377db967cb6cf270374e4e3",1]
 ["src/infra/telemetry.async.test.ts","../state/openclaw-state-worker-store.js","5980be4d44a7e6489842e740dee97131b73b6b31959ee6027786d3575b559de5",1]
-["src/infra/tls/gateway.test.ts","../resolve-system-bin.js","72e76747c28a1a9ec02ec102ae88c72534c9915c9cee0302aff184f4bd33d4bb",1]
 ["src/infra/transport-ready.test.ts","./backoff.js","5688da2b7cfb0966ccb44b2d0d4b41dd12d1b09875ef01b7ddc99dcf8a4a96e0",1]
 ["src/infra/triage-boundary-cleanup.test.ts","../../scripts/lib/managed-child-process.mts","4a8f5c864b9f11be92cfebe3a37b734f825f40fa3e3deadce00748c7e8ab87ac",1]
 ["src/infra/triage-boundary-cleanup.test.ts","./sqlite-busy-timeout.js","6462306cee8f462f3695558d799701b49ca65d8d2e418e6c35f8122379e14751",1]
