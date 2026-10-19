@@ -6,12 +6,16 @@ import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import * as transcriptMaintenance from "./session-transcript-index-maintenance.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import { readSessionTranscriptProjectionStatus } from "./session-transcript-reconcile-readiness.js";
+import {
+  closeReconcileDatabases,
+  holdReconcileAck,
+  rows,
+  seedTranscript,
+} from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
@@ -19,7 +23,6 @@ import {
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
 import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
-import { transcriptMessage } from "./transcript-message.test-support.js";
 
 vi.mock("node:worker_threads", async () =>
   (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
@@ -38,10 +41,7 @@ it("observes foreground traversal completion while foreign writes continue", asy
   setRuntimeConfigSnapshot({});
   let restoreDrain: (() => void) | undefined;
   try {
-    await persistSessionTranscriptTurn(scope, {
-      messages: [transcriptMessage("late", null, { role: "user", content: "Late projection" })],
-      touchSessionEntry: false,
-    });
+    await seedTranscript(scope, "late", "Late projection", null);
     await waitForSessionTranscriptIndexReconcile(options);
     const database = openOpenClawAgentDatabase(options);
     database.db
@@ -123,15 +123,14 @@ it("observes foreground traversal completion while foreign writes continue", asy
       reconciledSessions: 1,
     });
     expect(worklists).toEqual([[scope.sessionId]]);
-    expect(
-      database.db.prepare("SELECT needs_rebuild FROM session_transcript_index_state").all(),
-    ).toEqual([{ needs_rebuild: 0 }]);
+    expect(rows(database.db, "SELECT needs_rebuild FROM session_transcript_index_state")).toEqual([
+      { needs_rebuild: 0 },
+    ]);
   } finally {
     restoreDrain?.();
     observer.onTask = undefined;
     await waitForSessionTranscriptIndexReconcile(options);
-    await closeOpenClawAgentDatabasesAsync();
-    await closeOpenClawStateDatabaseAsync();
+    await closeReconcileDatabases();
     clearRuntimeConfigSnapshot();
   }
 });
@@ -147,37 +146,16 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
       sessionKey: "agent:main:retired-read",
     };
     setRuntimeConfigSnapshot({});
-    const paused = createDeferred();
     let resume: (() => void) | undefined;
     try {
-      await persistSessionTranscriptTurn(scope, {
-        messages: [transcriptMessage("seed", null, { role: "user", content: "Read owner" })],
-        touchSessionEntry: false,
-      });
+      await seedTranscript(scope, "seed", "Read owner", null);
       await waitForSessionTranscriptIndexReconcile(options);
       const database = openOpenClawAgentDatabase(options);
       database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
-      observer.onTask = ({ port, observeMessage }) => {
-        let claiming = false;
-        observeMessage((message) => {
-          claiming = message.type === "plan-start";
-        });
-        const post = port.postMessage.bind(port);
-        port.postMessage = (message, transferList) => {
-          const postOptions = Array.isArray(transferList)
-            ? { transfer: transferList }
-            : transferList;
-          if (claiming) {
-            claiming = false;
-            resume = () => post(message, postOptions);
-            paused.resolve();
-            return;
-          }
-          post(message, postOptions);
-        };
-      };
+      const held = holdReconcileAck(observer, "plan-start");
+      resume = held.release;
       startSessionTranscriptIndexReconcile(options);
-      await paused.promise;
+      await held.paused;
       const retire = async () => {
         const closing = closeOpenClawAgentDatabasesAsync();
         observer.onTask = undefined;
@@ -304,8 +282,7 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
     } finally {
       resume?.();
       await waitForSessionTranscriptIndexReconcile(options);
-      await closeOpenClawAgentDatabasesAsync();
-      await closeOpenClawStateDatabaseAsync();
+      await closeReconcileDatabases();
       clearRuntimeConfigSnapshot();
     }
   },

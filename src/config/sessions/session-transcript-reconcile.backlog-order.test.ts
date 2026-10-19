@@ -8,8 +8,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import * as reconcilePool from "./session-transcript-reconcile-pool.js";
+import { rows, seedTranscript } from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
@@ -24,8 +24,6 @@ vi.mock("node:worker_threads", async () =>
 
 const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => clearRuntimeConfigSnapshot());
-
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
@@ -33,12 +31,10 @@ async function seedPendingBacklogs(env: NodeJS.ProcessEnv, backlogs: Record<stri
   for (const [agentId, count] of Object.entries(backlogs)) {
     const options = { agentId, env };
     for (let index = 0; index < count; index++) {
-      await persistSessionTranscriptTurn(
+      await seedTranscript(
         { ...options, sessionId: `s${index}`, sessionKey: `agent:${agentId}:s${index}` },
-        {
-          messages: [{ eventId: `e${index}`, message: { role: "user", content: agentId } }],
-          touchSessionEntry: false,
-        },
+        `e${index}`,
+        agentId,
       );
     }
     await waitForSessionTranscriptIndexReconcile(options);
@@ -53,11 +49,10 @@ function expectIndexedBacklogs(env: NodeJS.ProcessEnv, backlogs: Record<string, 
   for (const [agentId, count] of Object.entries(backlogs)) {
     const { db } = openOpenClawAgentDatabase({ agentId, env });
     expect(
-      db
-        .prepare(
-          "SELECT session_id, needs_rebuild FROM session_transcript_index_state ORDER BY session_id",
-        )
-        .all(),
+      rows(
+        db,
+        "SELECT session_id, needs_rebuild FROM session_transcript_index_state ORDER BY session_id",
+      ),
     ).toEqual(
       Array.from({ length: count }, (_, index) => ({
         session_id: `s${index}`,
@@ -65,11 +60,10 @@ function expectIndexedBacklogs(env: NodeJS.ProcessEnv, backlogs: Record<string, 
       })),
     );
     expect(
-      db
-        .prepare(
-          "SELECT session_id, message_id, text FROM session_transcript_fts ORDER BY session_id",
-        )
-        .all(),
+      rows(
+        db,
+        "SELECT session_id, message_id, text FROM session_transcript_fts ORDER BY session_id",
+      ),
     ).toEqual(
       Array.from({ length: count }, (_, index) => ({
         session_id: `s${index}`,
@@ -85,7 +79,6 @@ it("gives another agent a turn at a session boundary without a priority queue", 
 }) => {
   const stateDir = tempDirs.make("openclaw-reconcile-backlog-order-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  setRuntimeConfigSnapshot({});
   const backlogs = { "large-a": 4, "large-b": 3, small: 1 };
   const paused = createDeferredCore();
   const planStarts: string[] = [];
@@ -97,7 +90,6 @@ it("gives another agent a turn at a session boundary without a priority queue", 
   let releaseAcknowledgement: (() => void) | undefined;
   let heldFirstFinish = false;
   try {
-    setRuntimeConfigSnapshot({});
     await seedPendingBacklogs(env, backlogs);
     const runOperation = reconcilePool.runSessionTranscriptReconcileOperation;
     operationSpy = vi

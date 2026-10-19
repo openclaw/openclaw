@@ -15,11 +15,9 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import {
-  persistSessionTranscriptTurn,
-  readSessionTranscriptMessageEvents,
-} from "./session-accessor.js";
+import { readSessionTranscriptMessageEvents } from "./session-accessor.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import { row, rows, seedTranscript } from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   reconcileSessionTranscriptIndexes,
@@ -134,10 +132,7 @@ it.each(cases)(
       let outcome: Promise<unknown> | undefined;
       let drain: Promise<void> | undefined;
       try {
-        await persistSessionTranscriptTurn(scope, {
-          messages: [{ eventId: "seed", message: { role: "user", content: "synthetic seed" } }],
-          touchSessionEntry: false,
-        });
+        await seedTranscript(scope, "seed", "synthetic seed");
         const database = openOpenClawAgentDatabase(databaseOptions);
         database.db
           .prepare(
@@ -145,36 +140,37 @@ it.each(cases)(
           )
           .run(scope.sessionId);
         const sourceRows = () =>
-          database.db
-            .prepare(
-              "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
-            )
-            .all(scope.sessionId);
+          rows(
+            database.db,
+            "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
+            scope.sessionId,
+          );
         const snapshot = () => ({
-          state: database.db
-            .prepare("SELECT * FROM session_transcript_index_state WHERE session_id = ?")
-            .get(scope.sessionId),
-          active: database.db
-            .prepare(
-              "SELECT * FROM session_transcript_active_events WHERE session_id = ? ORDER BY active_position",
-            )
-            .all(scope.sessionId),
-          fts: database.db
-            .prepare(
-              "SELECT * FROM session_transcript_fts WHERE session_id = ? ORDER BY message_id",
-            )
-            .all(scope.sessionId),
+          state: row(
+            database.db,
+            "SELECT * FROM session_transcript_index_state WHERE session_id = ?",
+            scope.sessionId,
+          ),
+          active: rows(
+            database.db,
+            "SELECT * FROM session_transcript_active_events WHERE session_id = ? ORDER BY active_position",
+            scope.sessionId,
+          ),
+          fts: rows(
+            database.db,
+            "SELECT * FROM session_transcript_fts WHERE session_id = ? ORDER BY message_id",
+            scope.sessionId,
+          ),
         });
         const originalSource = sourceRows();
-        const params = databaseOptions;
         let settled = false;
         if (scheduled) {
-          startSessionTranscriptIndexReconcile(params);
+          startSessionTranscriptIndexReconcile(databaseOptions);
           outcome = waitForSessionTranscriptIndexReconcile(databaseOptions).then(() => {
             settled = true;
           });
         } else {
-          outcome = reconcileSessionTranscriptIndexes(params).then(
+          outcome = reconcileSessionTranscriptIndexes(databaseOptions).then(
             (value) => {
               settled = true;
               return { status: "fulfilled", value };
@@ -215,7 +211,7 @@ it.each(cases)(
         expect(snapshot()).toEqual(atSettlement);
         expect(sourceRows()).toEqual(originalSource);
         await reconcileSessionTranscriptIndexes(databaseOptions);
-        expect(readSessionTranscriptMessageEvents(scope).map((row) => row.event)).toEqual([
+        expect(readSessionTranscriptMessageEvents(scope).map((entry) => entry.event)).toEqual([
           expect.objectContaining({ id: "seed" }),
         ]);
         await fence.cleanup();

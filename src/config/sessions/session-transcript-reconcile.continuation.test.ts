@@ -2,21 +2,20 @@ import type { WorkerOptions } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type {
-  SqliteWorkerOperations,
-  SqliteWorkerStore,
-} from "../../infra/sqlite-worker-contract.js";
-import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import { resolveSessionStorePathCore } from "./paths.js";
-import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 import { closeSessionTranscriptReconcileWorkerPool } from "./session-transcript-reconcile-pool.js";
+import {
+  closeReconcileDatabases,
+  interceptWorkerExecution,
+  rows,
+  seedTranscript,
+} from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
@@ -64,8 +63,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   observer.onTask = undefined;
   await closeSessionTranscriptReconcileWorkerPool();
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
+  await closeReconcileDatabases();
   clearRuntimeConfigSnapshot();
 });
 
@@ -89,17 +87,10 @@ it.each([
       session: { store: resolveSessionStorePathCore(undefined, options) },
     });
     for (const sessionId of ["first", "second"]) {
-      await persistSessionTranscriptTurn(
+      await seedTranscript(
         { ...options, sessionId, sessionKey: `agent:main:${sessionId}` },
-        {
-          messages: [
-            {
-              eventId: `${sessionId}-message`,
-              message: { role: "user", content: `${sessionId} continuation transcript` },
-            },
-          ],
-          touchSessionEntry: false,
-        },
+        `${sessionId}-message`,
+        `${sessionId} continuation transcript`,
       );
     }
     await waitForSessionTranscriptIndexReconcile(options);
@@ -140,112 +131,79 @@ it.each([
     let orphanInserted = false;
     let sweepFailure: unknown;
     const controller = new AbortController();
-    const runOperation = workerStore.runSqliteWorkerStoreOperation;
     const operationSpy =
       continuation !== "continues"
-        ? vi
-            .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-            .mockImplementation(
-              <Operations extends SqliteWorkerOperations, T>(
-                target: SqliteWorkerStore<Operations>,
-                operation: (
-                  worker: Pick<SqliteWorkerStore<Operations>, "execute">,
-                ) => T | Promise<T>,
-                stateContext?: Parameters<typeof runOperation>[2],
-                assertCurrent?: Parameters<typeof runOperation>[3],
-                createAdmission?: Parameters<typeof runOperation>[4],
-              ) =>
-                runOperation(
-                  target,
-                  (worker) =>
-                    operation({
-                      execute: async (command, commandOptions) => {
-                        const publication =
-                          command.type === "database.domain.publish" &&
-                          isRecord(command.input) &&
-                          isRecord(command.input.command)
-                            ? command.input.command
-                            : undefined;
-                        const sweep = publication?.type === "sweep";
-                        if (sweep) {
-                          sweepDispatches++;
-                          if (continuation === "retires-between-batches" && sweepDispatches === 2) {
-                            closing = runInDetachedAsyncContext(() =>
-                              closeOpenClawAgentDatabasesAsync(stateDir),
-                            );
-                          }
-                        }
-                        const result = await worker
-                          .execute(command, commandOptions)
-                          .catch((error: unknown) => {
-                            if (failsBeforeCancellation && sweep) {
-                              sweepFailure = error;
-                              controller.abort(
-                                new Error("caller cancelled after native sweep failure"),
-                              );
-                            }
-                            throw error;
-                          });
-                        if (
-                          publication?.type === "finalize" &&
-                          isRecord(publication.input) &&
-                          isRecord(publication.input.plan) &&
-                          publication.input.plan.sessionId === "first" &&
-                          isRecord(result) &&
-                          result.finalized === true
-                        ) {
-                          if (continuation === "redirtied" && !dirtiedAgain) {
-                            dirtiedAgain = true;
-                            dirty.run("first");
-                            database.db
-                              .prepare(
-                                "DELETE FROM session_transcript_fts_rows WHERE session_id = ?",
-                              )
-                              .run("first");
-                          } else if (failsBeforeCancellation && !orphanInserted) {
-                            orphanInserted = true;
-                            database.db
-                              .prepare(
-                                "INSERT INTO session_transcript_fts_rows (session_id) VALUES (?)",
-                              )
-                              .run("orphan-sweep-failure");
-                          }
-                        }
-                        if (sweep) {
-                          sweepResults++;
-                          if (continuation === "retires") {
-                            expect(result).toMatchObject({
-                              sessionIds: ["second"],
-                              hasMore: false,
-                            });
-                            // Revocation is immediate; awaiting close would join this operation.
-                            closing = runInDetachedAsyncContext(() =>
-                              closeOpenClawAgentDatabasesAsync(stateDir),
-                            );
-                          } else if (continuation === "retires-between-batches") {
-                            expect(result).toMatchObject({
-                              hasMore: true,
-                              traversalComplete: false,
-                            });
-                          } else if (closesPool && !closing) {
-                            expect(result).toMatchObject({
-                              sessionIds: ["second"],
-                              hasMore: false,
-                            });
-                            // Closing joins this accepted task; await it after the owner settles.
-                            closing = runInDetachedAsyncContext(
-                              closeSessionTranscriptReconcileWorkerPool,
-                            );
-                          }
-                        }
-                        return result;
-                      },
-                    }),
-                  stateContext,
-                  assertCurrent,
-                  createAdmission,
-                ),
-            )
+        ? interceptWorkerExecution((execute) => async (command, commandOptions) => {
+            const publication =
+              command.type === "database.domain.publish" &&
+              isRecord(command.input) &&
+              isRecord(command.input.command)
+                ? command.input.command
+                : undefined;
+            const sweep = publication?.type === "sweep";
+            if (sweep) {
+              sweepDispatches++;
+              if (continuation === "retires-between-batches" && sweepDispatches === 2) {
+                closing = runInDetachedAsyncContext(() =>
+                  closeOpenClawAgentDatabasesAsync(stateDir),
+                );
+              }
+            }
+            const result = await execute(command, commandOptions).catch((error: unknown) => {
+              if (failsBeforeCancellation && sweep) {
+                sweepFailure = error;
+                controller.abort(new Error("caller cancelled after native sweep failure"));
+              }
+              throw error;
+            });
+            if (
+              publication?.type === "finalize" &&
+              isRecord(publication.input) &&
+              isRecord(publication.input.plan) &&
+              publication.input.plan.sessionId === "first" &&
+              isRecord(result) &&
+              result.finalized === true
+            ) {
+              if (continuation === "redirtied" && !dirtiedAgain) {
+                dirtiedAgain = true;
+                dirty.run("first");
+                database.db
+                  .prepare("DELETE FROM session_transcript_fts_rows WHERE session_id = ?")
+                  .run("first");
+              } else if (failsBeforeCancellation && !orphanInserted) {
+                orphanInserted = true;
+                database.db
+                  .prepare("INSERT INTO session_transcript_fts_rows (session_id) VALUES (?)")
+                  .run("orphan-sweep-failure");
+              }
+            }
+            if (sweep) {
+              sweepResults++;
+              if (continuation === "retires") {
+                expect(result).toMatchObject({
+                  sessionIds: ["second"],
+                  hasMore: false,
+                });
+                // Revocation is immediate; awaiting close would join this operation.
+                closing = runInDetachedAsyncContext(() =>
+                  closeOpenClawAgentDatabasesAsync(stateDir),
+                );
+              } else if (continuation === "retires-between-batches") {
+                expect(result).toMatchObject({
+                  hasMore: true,
+                  traversalComplete: false,
+                });
+              } else if (closesPool && !closing) {
+                expect(result).toMatchObject({
+                  sessionIds: ["second"],
+                  hasMore: false,
+                });
+                // Closing joins this accepted task; await it after the owner settles.
+                closing = runInDetachedAsyncContext(closeSessionTranscriptReconcileWorkerPool);
+              }
+            }
+            return result;
+          })
         : undefined;
     try {
       let reconciliation:
@@ -269,9 +227,11 @@ it.each([
         expect(sweepDispatches).toBe(1);
         expect(sweepResults).toBe(0);
         expect(
-          database.db
-            .prepare("SELECT session_id FROM session_transcript_fts_rows WHERE session_id = ?")
-            .all("orphan-sweep-failure"),
+          rows(
+            database.db,
+            "SELECT session_id FROM session_transcript_fts_rows WHERE session_id = ?",
+            "orphan-sweep-failure",
+          ),
         ).toEqual([{ session_id: "orphan-sweep-failure" }]);
       } else if (closesPool) {
         await expect(reconciliation).resolves.toBeUndefined();
@@ -296,21 +256,20 @@ it.each([
       }
       const verified = openOpenClawAgentDatabase(options);
       expect(
-        verified.db
-          .prepare(
-            "SELECT session_id, needs_rebuild FROM session_transcript_index_state ORDER BY session_id",
-          )
-          .all(),
+        rows(
+          verified.db,
+          "SELECT session_id, needs_rebuild FROM session_transcript_index_state ORDER BY session_id",
+        ),
       ).toEqual([
         { session_id: "first", needs_rebuild: 0 },
         { session_id: "second", needs_rebuild: retires ? 1 : 0 },
       ]);
       expect(
-        verified.db
-          .prepare(
-            "SELECT session_id, message_id FROM session_transcript_fts WHERE session_transcript_fts MATCH ?",
-          )
-          .all(continuedSession),
+        rows(
+          verified.db,
+          "SELECT session_id, message_id FROM session_transcript_fts WHERE session_transcript_fts MATCH ?",
+          continuedSession,
+        ),
       ).toEqual(
         retires
           ? []

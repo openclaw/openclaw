@@ -19,7 +19,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { persistSessionTranscriptTurn } from "./session-accessor.js";
+import { rows, seedTranscript } from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
@@ -41,10 +41,7 @@ it("preserves verification until the writer closes after read-only reconciliatio
   await withEnvAsync(env, async () => {
     setRuntimeConfigSnapshot({});
     try {
-      await persistSessionTranscriptTurn(scope, {
-        messages: [{ eventId: "seed", message: { role: "user", content: "lease fixture" } }],
-        touchSessionEntry: false,
-      });
+      await seedTranscript(scope, "seed", "lease fixture");
       await waitForSessionTranscriptIndexReconcile(options);
       const database = openOpenClawAgentDatabase(options);
       expect(readSqliteDatabaseCleanClose(database.path)).toBe(false);
@@ -82,10 +79,7 @@ it.each(["startup", "claim-before", "claim-after", "planner-ack"] as const)(
         admit(request, grant);
       });
       try {
-        await persistSessionTranscriptTurn(scope, {
-          messages: [{ eventId: "seed", message: { role: "user", content: "lease fixture" } }],
-          touchSessionEntry: false,
-        });
+        await seedTranscript(scope, "seed", "lease fixture");
         await waitForSessionTranscriptIndexReconcile(options);
         // Exercise cold publication admission independently of the seed writer.
         await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
@@ -93,7 +87,7 @@ it.each(["startup", "claim-before", "claim-after", "planner-ack"] as const)(
         database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
         const state = openOpenClawStateDatabase();
         const readLeases = () =>
-          state.db.prepare("SELECT lease_id FROM agent_database_leases ORDER BY lease_id").all();
+          rows(state.db, "SELECT lease_id FROM agent_database_leases ORDER BY lease_id");
         const baseline = readLeases();
         let leasesAtNativeFault: ReturnType<typeof readLeases> | undefined;
         expect(baseline).toHaveLength(1);
