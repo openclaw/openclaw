@@ -43,11 +43,14 @@ it.each(["assistant", "toolResult"])("persists normalized run ownership on %s ro
   );
 });
 
-it("does not assign output run ownership to user rows", () => {
-  const message = { role: "user", content: "prompt" };
+it.each([{ role: "user" }, { role: "custom", customType: "unrelated" }])(
+  "does not assign output run ownership to unrelated $role rows",
+  (fields) => {
+    const message = { ...fields, content: "prompt" };
 
-  expect(attachSessionTranscriptRunId(message, "run-owned")).toBe(message);
-});
+    expect(attachSessionTranscriptRunId(message, "run-owned")).toBe(message);
+  },
+);
 
 it("does not expose file-only archive updates to public listeners", () => {
   const { publicListener, internalListener } = listen();

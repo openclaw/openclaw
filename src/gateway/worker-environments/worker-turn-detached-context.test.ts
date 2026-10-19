@@ -244,9 +244,14 @@ describe("worker detached model-context branch parity", () => {
     }
   });
 
-  it.each([false, true])(
-    "commits a fallback after the failed candidate's own output (tool activity: %s)",
-    async (withToolActivity) => {
+  it.each([
+    [false, undefined],
+    [true, undefined],
+    [false, "openclaw.runtime-context"],
+    [true, "openclaw.system-update"],
+  ] as const)(
+    "commits a fallback after the failed candidate's own output (tool activity: %s; context: %s)",
+    async (withToolActivity, customType) => {
       const runId = "worker-model-fallback";
       const inputRecorder = recorder();
       const committer = createWorkerTranscriptCommitter({
@@ -292,6 +297,21 @@ describe("worker detached model-context branch parity", () => {
               const { baseLeafId, nextSeq } = plan.assignment.transcript;
               if (candidate === 1) {
                 await commit(baseLeafId, nextSeq, [
+                  ...(customType
+                    ? [
+                        {
+                          role: "custom" as const,
+                          customType,
+                          content: "runtime context",
+                          display: false,
+                          details:
+                            customType === "openclaw.system-update"
+                              ? { kind: "runtime-context", turnScoped: true }
+                              : { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+                          timestamp: 1,
+                        },
+                      ]
+                    : []),
                   ...(withToolActivity
                     ? [
                         makeAgentAssistantMessage({
