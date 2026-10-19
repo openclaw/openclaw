@@ -1,20 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { createDevicePlacementDemandReader } from "../worker-environments/device-placement-demand.js";
 import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
+import { createNodeWorkerBundleTestNode } from "../worker-environments/node-worker-bundle.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "../worker-environments/placement-dispatch-coordinator.js";
 import {
   ACTIVE_PLACEMENT,
@@ -39,13 +35,11 @@ const dispatchTestMocks = getDispatchTestMocks();
 
 function connectedNode(deviceId: string): NodeWorkerSupervisorNodeProof {
   return {
+    ...createNodeWorkerBundleTestNode(),
     nodeId: deviceId,
     connId: `conn-${deviceId}`,
     pairingIdentity: `identity-${deviceId}`,
     pairingGeneration: `generation-${deviceId}`,
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: GATEWAY_CLIENT_MODES.NODE,
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: {
       enabled: true,
       capacity: { total: 2, available: 2 },
@@ -190,6 +184,29 @@ async function withDemandFixture(
       heldTurns.set(turn.session.entry!.sessionId, turn);
     });
     const sessionKey = (id: string) => `agent:main:${id}`;
+    const invoke = async (
+      operation: "dispatch" | "send",
+      sessionId: string,
+      params: Record<string, unknown>,
+    ) => {
+      const respond = vi.fn();
+      const method = `sessions.${operation}` as const;
+      const handler =
+        operation === "dispatch"
+          ? getSessionDispatchHandler()
+          : expectDefined(sessionMessagingHandlers[method], method);
+      await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
+        handler({
+          req: { type: "req", id: `${operation}:${sessionId}`, method },
+          params: { key: sessionKey(sessionId), ...params },
+          respond,
+          context,
+          client,
+          isWebchatConnect: () => false,
+        }),
+      );
+      return respond;
+    };
     const dispatch = async (sessionId: string, deviceId?: string) => {
       const key = sessionKey(sessionId);
       await upsertSessionEntryCore(
@@ -202,16 +219,10 @@ async function withDemandFixture(
           worktree: { id: key, branch: "test", repoRoot: state.workspaceDir },
         },
       );
-      const respond = vi.fn();
-      await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
-        getSessionDispatchHandler()({
-          req: { type: "req", id: `dispatch:${sessionId}`, method: "sessions.dispatch" },
-          params: { key, ...(deviceId ? { deviceId } : { autoDevice: true }) },
-          respond,
-          context,
-          client,
-          isWebchatConnect: () => false,
-        }),
+      const respond = await invoke(
+        "dispatch",
+        sessionId,
+        deviceId ? { deviceId } : { autoDevice: true },
       );
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -226,24 +237,10 @@ async function withDemandFixture(
       return expectDefined(environment.nodeDeviceId, "placed node");
     };
     const send = async (sessionId: string) => {
-      const respond = vi.fn();
-      await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
-        expectDefined(
-          sessionMessagingHandlers["sessions.send"],
-          "sessions.send",
-        )({
-          req: { type: "req", id: `send:${sessionId}`, method: "sessions.send" },
-          params: {
-            key: sessionKey(sessionId),
-            message: "Run the node workload",
-            idempotencyKey: `run:${sessionId}`,
-          },
-          respond,
-          context,
-          client,
-          isWebchatConnect: () => false,
-        }),
-      );
+      const respond = await invoke("send", sessionId, {
+        message: "Run the node workload",
+        idempotencyKey: `run:${sessionId}`,
+      });
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({ runId: `run:${sessionId}`, status: "started" }),

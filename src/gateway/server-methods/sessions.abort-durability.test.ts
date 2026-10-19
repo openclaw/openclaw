@@ -1,6 +1,7 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { expect, it, vi, type MockInstance } from "vitest";
+import { createMockSubsystemLogger } from "../../../test/helpers/mock-subsystem-logger.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -15,7 +16,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import {
@@ -37,18 +37,7 @@ import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 import type { RespondFn } from "./types.js";
 
-const log: SubsystemLogger = {
-  subsystem: "sessions-abort-durability-test",
-  isEnabled: () => false,
-  trace: vi.fn(),
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  fatal: vi.fn(),
-  raw: vi.fn(),
-  child: () => log,
-};
+const log = createMockSubsystemLogger("sessions-abort-durability-test");
 
 it.each([
   { mode: "controller", outcome: "persisted" },
@@ -180,6 +169,10 @@ it.each([
         const respond = vi.fn<RespondFn>(() => {
           responseRows.push(loadSessionEntry(target));
         });
+        const expectActiveRow = (lifecycleRunId = runId) => {
+          expect(loadSessionEntry(target)).toMatchObject({ lifecycleRunId, abortedLastRun: false });
+          expect(loadSessionEntry(target)?.status).toBeUndefined();
+        };
         try {
           await replaceSessionEntry(target, { sessionId, updatedAt: 1_000 });
           const startEvent = {
@@ -194,11 +187,7 @@ it.each([
             agentId: target.agentId,
             event: startEvent,
           });
-          expect(loadSessionEntry(target)).toMatchObject({
-            lifecycleRunId: runId,
-            abortedLastRun: false,
-          });
-          expect(loadSessionEntry(target)?.status).toBeUndefined();
+          expectActiveRow();
           heldWriter = patchSessionEntryCore(target, async () => {
             writerEntered.resolve();
             await releaseWriter.promise;
@@ -246,11 +235,7 @@ it.each([
           if (outcome === "write-failed") {
             await expect(request).rejects.toThrow(writeFailure);
             expect(respond).not.toHaveBeenCalled();
-            expect(loadSessionEntry(target)).toMatchObject({
-              lifecycleRunId: runId,
-              abortedLastRun: false,
-            });
-            expect(loadSessionEntry(target)?.status).toBeUndefined();
+            expectActiveRow();
             return;
           }
           await request;
@@ -259,11 +244,7 @@ it.each([
             expect.objectContaining({ ok: true, status: "aborted" }),
           ]);
           if (outcome === "replacement") {
-            expect(loadSessionEntry(target)).toMatchObject({
-              lifecycleRunId: "replacement-run",
-              abortedLastRun: false,
-            });
-            expect(loadSessionEntry(target)?.status).toBeUndefined();
+            expectActiveRow("replacement-run");
             return;
           }
           expect(responseRows[0]).toMatchObject({ status: "killed", abortedLastRun: true });

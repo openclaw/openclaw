@@ -106,6 +106,19 @@ export async function proveSubscriptionDoesNotWaitForDisplayRows(
       displayReleased = true;
       releaseDisplay.resolve();
     };
+    const request = (id: string, params: Record<string, unknown>, requestClient = client) => {
+      const respond = vi.fn();
+      const completion = handleGatewayRequest({
+        req: { type: "req", id, method: "sessions.messages.subscribe", params },
+        client: requestClient,
+        context,
+        respond,
+        isWebchatConnect: () => false,
+        extraHandlers: sessionSubscriptionHandlers,
+      });
+      pending.push(completion);
+      return { respond, completion };
+    };
     try {
       const turn = await persistSessionTranscriptTurn(scope, {
         messages: [
@@ -133,26 +146,14 @@ export async function proveSubscriptionDoesNotWaitForDisplayRows(
       clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
       const wallStartedAt = realNow();
       const responses = [false, true].map((includeApprovals) => {
-        const respond = vi.fn();
-        const completion = handleGatewayRequest({
-          req: {
-            type: "req",
-            id: `subscribe-${includeApprovals}`,
-            method: "sessions.messages.subscribe",
-            params: {
-              key: scope.sessionKey,
-              ...(includeApprovals ? { includeApprovals: true } : {}),
-              subscriptionId: `observer-${includeApprovals}`,
-            },
-          },
-          client,
-          context,
-          respond,
-          isWebchatConnect: () => false,
-          extraHandlers: sessionSubscriptionHandlers,
-        });
-        pending.push(completion);
-        return { respond, completion, includeApprovals };
+        return Object.assign(
+          request(`subscribe-${includeApprovals}`, {
+            key: scope.sessionKey,
+            ...(includeApprovals ? { includeApprovals: true } : {}),
+            subscriptionId: `observer-${includeApprovals}`,
+          }),
+          { includeApprovals },
+        );
       });
       const subscriptions = Promise.all(responses.map(({ completion }) => completion));
       const first = await withinTest(
@@ -203,24 +204,13 @@ export async function proveSubscriptionDoesNotWaitForDisplayRows(
       expect([...subscribers.getApprovals(scope.sessionKey)]).toEqual([client.connId]);
 
       replaceSessionEntrySync(scope, { ...shared, updatedAt: 3, visibility: "draft" });
-      const denied = vi.fn();
-      await withinTest(
-        handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "revoked",
-            method: "sessions.messages.subscribe",
-            params: { key: scope.sessionKey },
-          },
-          client: { ...client, connId: "revoked-reader" },
-          context,
-          respond: denied,
-          isWebchatConnect: () => false,
-          extraHandlers: sessionSubscriptionHandlers,
-        }),
-        signal,
+      const denied = request(
+        "revoked",
+        { key: scope.sessionKey },
+        { ...client, connId: "revoked-reader" },
       );
-      expect(denied).toHaveBeenCalledExactlyOnceWith(
+      await withinTest(denied.completion, signal);
+      expect(denied.respond).toHaveBeenCalledExactlyOnceWith(
         false,
         undefined,
         expect.objectContaining({ code: "INVALID_REQUEST" }),
