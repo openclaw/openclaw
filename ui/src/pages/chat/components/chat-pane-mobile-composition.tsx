@@ -31,10 +31,10 @@ import { isSessionTitlePending } from "../../../lib/session-display.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { MobileHostDestination } from "../chat-mobile-host.ts";
 import { companionClearAction } from "../chat-pane-embedded-view.tsx";
-import { ChatHeaderSessionMenu } from "./chat-header-session-menu.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { chatPaneLayoutModel, ChatPaneLayoutHeaderActions } from "./chat-header-panel-actions.tsx";
 import type { HeaderSessionMenuPage } from "./chat-header-session-menu-mobile.tsx";
+import { ChatHeaderSessionMenu } from "./chat-header-session-menu.tsx";
 import { ChatMobilePeopleGrid } from "./chat-mobile-people-grid.tsx";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import { ChatPaneMobileHeader } from "./chat-pane-mobile-header.tsx";
@@ -482,12 +482,12 @@ export function ChatPaneMobileComposition(props: {
         <Show
           when={props.header.sessionMenuAction}
           fallback={
-            <openclaw-chat-header-session-menu
-              ref={[elementRef(registerActionsMenu)]}
-              prop:paneTitle={props.header.title}
-              prop:mobile={false}
-              prop:sessionActions={desktopSessionActions()}
-              prop:viewActions={desktopViewActions()}
+            <ChatHeaderSessionMenu
+              ref={elementRef(registerActionsMenu)}
+              paneTitle={props.header.title}
+              mobile={false}
+              sessionActions={desktopSessionActions()}
+              viewActions={desktopViewActions()}
             />
           }
         >

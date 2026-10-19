@@ -1,6 +1,5 @@
 import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
 import { Match, Show, Switch, createMemo } from "solid-js";
-
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
@@ -254,7 +253,6 @@ function WorkspacePanel(props: Props & { workspaceState: SessionWorkspaceState }
       data-sidebar-panel-host
       ref={[elementRef(props.registerPanelHost)]}
       prop:sessionKey={props.state.sessionKey}
-
       prop:tabsInHeader={sidebarMainPanel(props.state.sidebarLayout)?.slot !== "workspace"}
       prop:previews={presented() ? props.workspaceState.previews : []}
       prop:activeId={presented() ? props.workspaceState.activePreviewId : null}
