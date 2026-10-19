@@ -127,36 +127,50 @@ function prependFailedExec(
   turn.attempt.itemLifecycle = { startedCount: 2, completedCount: 2, activeCount: 0 };
 }
 
-it.each([false, true])("continues once after settled tools (exec refusal: %s)", async (refused) => {
-  const turn = refused ? await refusedExecThenRejectedCall() : rejectedCallAfterSettledTool();
-  if (!refused) {
-    expect(turn.attempt.replayMetadata.hadPotentialSideEffects).toBe(true);
-  }
-  const { resolve, activateInternalPrompt } = terminalCase(turn);
-  await expect(resolve()).resolves.toEqual({ action: "retry" });
-  if (refused) {
-    expect(turn.attempt.lastToolError).toEqual({
-      toolName: "exec",
-      executionStarted: false,
-      mutatingAction: false,
-    });
-  }
-  expect(activateInternalPrompt).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining("Do not repeat completed tool calls"),
-  );
-  if (!refused) {
-    expect(activateInternalPrompt.mock.calls[0]?.[0]).toContain("rejected before it ran");
-  }
-  await expect(resolve()).resolves.toMatchObject(
-    refused
-      ? { action: "complete" }
-      : {
-          action: "complete",
-          result: { meta: { error: { kind: "incomplete_turn" } } },
-        },
-  );
-  expect(activateInternalPrompt).toHaveBeenCalledOnce();
-});
+it.each(["message", "error code", "exec refusal"])(
+  "continues once after settled tools (%s)",
+  async (shape) => {
+    const refused = shape === "exec refusal";
+    const turn = refused
+      ? await refusedExecThenRejectedCall()
+      : rejectedCallAfterSettledTool(
+          {},
+          shape === "error code"
+            ? {
+                errorMessage: "Provider completed tool call with malformed JSON arguments",
+                errorCode: "malformed_tool_call_arguments",
+              }
+            : {},
+        );
+    if (!refused) {
+      expect(turn.attempt.replayMetadata.hadPotentialSideEffects).toBe(true);
+    }
+    const { resolve, activateInternalPrompt } = terminalCase(turn);
+    await expect(resolve()).resolves.toEqual({ action: "retry" });
+    if (refused) {
+      expect(turn.attempt.lastToolError).toEqual({
+        toolName: "exec",
+        executionStarted: false,
+        mutatingAction: false,
+      });
+    }
+    expect(activateInternalPrompt).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("Do not repeat completed tool calls"),
+    );
+    if (!refused) {
+      expect(activateInternalPrompt.mock.calls[0]?.[0]).toContain("rejected before it ran");
+    }
+    await expect(resolve()).resolves.toMatchObject(
+      refused
+        ? { action: "complete" }
+        : {
+            action: "complete",
+            result: { meta: { error: { kind: "incomplete_turn" } } },
+          },
+    );
+    expect(activateInternalPrompt).toHaveBeenCalledOnce();
+  },
+);
 
 it("continues after multiple consumed preflight refusals", async () => {
   const turn = await refusedExecThenRejectedCall();

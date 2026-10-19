@@ -47,7 +47,7 @@ describe("buildWorkspaceSkillStatus", () => {
   ] as const)(
     "preserves installer preference (prefer brew: %s, available: %s, kinds: %j)",
     async (preferBrew, brewAvailable, kinds, expectedId) => {
-      const workspaceDir = await createTempWorkspaceDir();
+      const workspaceDir = createTempWorkspaceDir();
       if (brewAvailable) {
         await fs.writeFile(path.join(workspaceDir, "brew"), "", { mode: 0o755 });
       }
@@ -67,7 +67,7 @@ describe("buildWorkspaceSkillStatus", () => {
   );
 
   it("keeps config-disabled skills visible in status when eligibility is passed", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
+    const workspaceDir = createTempWorkspaceDir();
     await writeSkill({
       dir: path.join(workspaceDir, "skills"),
       name: "hot-reload-probe",
@@ -86,7 +86,7 @@ describe("buildWorkspaceSkillStatus", () => {
   });
 
   it("requires explicit enablement before exposing bundled coding-agent", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
+    const workspaceDir = createTempWorkspaceDir();
     const config = { skills: { allowBundled: ["coding-agent"] } };
     const entries = loadWorkspaceSkills(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, ".managed"),

@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
-import type { WizardStartResult } from "../../../packages/gateway-protocol/src/schema/wizard.js";
 import * as embeddedAgent from "../../agents/embedded-agent.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -32,41 +31,48 @@ import { wizardHandlers } from "./wizard.js";
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
 
 afterEach(() => vi.restoreAllMocks());
-const device = { deviceId: "wizard-device", role: "operator" };
 
 it.each([
   { revoked: false, progress: false },
   { revoked: false, progress: true },
   { revoked: true, progress: true },
 ])(
-  "wizard.next probe authority (revoked=$revoked, progress=$progress)",
+  "runs the post-start setup-inference probe under wizard.next authority (revoked=$revoked, progress=$progress)",
   async ({ revoked, progress }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const client = createOperatorClient({
         profileName: "wizard-authority",
         scopes: ["operator.admin"],
       });
-      const context = Object.assign(createContext(), createWizardSessionTracker());
+      const context = createContext();
+      Object.assign(context, createWizardSessionTracker());
       const connection = new AbortController();
       const continueProbe = createDeferredCore();
+      let captureError: unknown;
       let probe: Awaited<ReturnType<typeof runSetupInferenceTurn>> | undefined;
-      const run = vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async () => {
+      vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async () => {
         if (revoked) {
-          invalidateGatewayDeviceRevocation(context, device.deviceId, device.role);
+          invalidateGatewayDeviceRevocation(context, "wizard-device", "operator");
         }
         const scope = expectDefined(getPluginRuntimeGatewayRequestScope(), "probe scope");
-        const captured = expectDefined(
-          await captureGatewayOperatorRunAuthority({
-            ...scope,
-            context,
-            client: scope.client ?? null,
-          }),
-          "probe operator authority",
-        );
         try {
-          captured.authority.assertCurrent();
-        } finally {
-          captured.release();
+          const captured = expectDefined(
+            await captureGatewayOperatorRunAuthority({
+              client: scope.client ?? null,
+              context,
+              hasCurrentClientAuthority: scope.hasCurrentClientAuthority,
+            }),
+            "probe operator authority",
+          );
+          try {
+            captured.authority.assertCurrent();
+          } finally {
+            captured.release();
+          }
+        } catch (error) {
+          captureError = error;
+          console.info("setup-inference authority capture:", error);
+          throw error;
         }
         return {
           payloads: [{ text: "OK" }],
@@ -107,30 +113,38 @@ it.each([
       ) {
         const authority = captureGatewayDeviceRevocation(
           context,
-          device,
+          { deviceId: "wizard-device", role: "operator" },
           () => true,
           connection.signal,
         );
         const respond = vi.fn();
-        const scope = {
-          client,
-          context,
-          isWebchatConnect: () => false,
-          hasCurrentClientAuthority: authority.isCurrent,
-        };
         const options: GatewayRequestHandlerOptions = {
           req: { type: "req", id: method, method, params },
           params,
           respond,
-          ...scope,
+          context,
+          client,
+          isWebchatConnect: () => false,
+          hasCurrentClientAuthority: authority.isCurrent,
         };
         try {
-          await withPluginRuntimeGatewayRequestScope(scope, () =>
-            expectDefined(wizardHandlers[method], method)(options),
+          await withPluginRuntimeGatewayRequestScope(
+            {
+              client,
+              context,
+              isWebchatConnect: () => false,
+              hasCurrentClientAuthority: authority.isCurrent,
+            },
+            () => expectDefined(wizardHandlers[method], method)(options),
           );
           expect(respond).toHaveBeenCalledOnce();
           expect(respond.mock.calls[0]?.[0]).toBe(true);
-          return respond.mock.calls[0]?.[1] as WizardStartResult;
+          return respond.mock.calls[0]?.[1] as {
+            sessionId: string;
+            step: { id: string };
+            status: string;
+            error?: string;
+          };
         } finally {
           authority.release();
         }
@@ -142,7 +156,7 @@ it.each([
       try {
         let result = await request("wizard.next", {
           sessionId: start.sessionId,
-          answer: { stepId: expectDefined(start.step, "initial step").id, value: true },
+          answer: { stepId: start.step.id, value: true },
         });
         if (progress) {
           expect(result).toMatchObject({ status: "running", step: { type: "progress" } });
@@ -151,12 +165,13 @@ it.each([
         }
         if (revoked) {
           expect(result.status).toBe("error");
-          await expect(run.mock.results[0]?.value).rejects.toMatchObject({
+          expect(captureError).toMatchObject({
             message: "Gateway caller authority is no longer active.",
           });
           expect(probe).toMatchObject({ ok: false });
         } else {
-          expect([result.status, result.error]).toEqual(["done", undefined]);
+          expect(result.error).toBeUndefined();
+          expect(result).toMatchObject({ status: "done" });
           expect(probe).toMatchObject({ ok: true, text: "OK" });
         }
       } finally {
@@ -173,11 +188,13 @@ it.each(["admission", "publication"])(
   async (phase) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const connection = new AbortController();
-      const client = Object.assign(
-        createOperatorClient({ profileId: "login-owner", scopes: ["operator.admin"] }),
-        { connectionSignal: connection.signal },
-      );
-      const context = Object.assign(createContext(), createWizardSessionTracker());
+      const client = createOperatorClient({
+        profileId: "login-owner",
+        scopes: ["operator.admin"],
+      });
+      client.connectionSignal = connection.signal;
+      const context = createContext();
+      Object.assign(context, createWizardSessionTracker());
       const respond = vi.fn();
       const createSession = vi.fn(
         () =>
@@ -193,17 +210,26 @@ it.each(["admission", "publication"])(
         assertCurrent: vi.fn(),
         createSession,
       };
-      const closed = new Error(`Connection closed before ${phase}`);
-      const session =
-        phase === "publication"
-          ? expectDefined(
-              await createAdmittedWizardSession(createSession),
-              "admitted login session",
-            )
-          : undefined;
-      connection.abort(closed);
-      try {
-        if (session) {
+      if (phase === "admission") {
+        connection.abort(new Error("Connection closed before admission"));
+        try {
+          await expect(startWizardLogin(params)).rejects.toThrow(
+            "Connection closed before admission",
+          );
+        } finally {
+          for (const session of context.wizardSessions.values()) {
+            session.cancel();
+            await whenAdmittedWizardSessionSettled(session);
+          }
+        }
+        expect(createSession).not.toHaveBeenCalled();
+      } else {
+        const session = expectDefined(
+          await createAdmittedWizardSession(createSession),
+          "admitted login session",
+        );
+        try {
+          connection.abort(new Error("Connection closed before publication"));
           await publishWizardLoginSession({ ...params, session });
           expect(session.signal.aborted).toBe(true);
           expect(respond).toHaveBeenCalledWith(
@@ -213,14 +239,9 @@ it.each(["admission", "publication"])(
               message: "Login is no longer available on this connection.",
             }),
           );
-        } else {
-          await expect(startWizardLogin(params)).rejects.toThrow(closed.message);
-          expect(createSession).not.toHaveBeenCalled();
-        }
-      } finally {
-        for (const active of session ? [session] : context.wizardSessions.values()) {
-          active.cancel();
-          await whenAdmittedWizardSessionSettled(active);
+        } finally {
+          session.cancel();
+          await whenAdmittedWizardSessionSettled(session);
         }
       }
       expect(context.wizardSessions.size).toBe(0);

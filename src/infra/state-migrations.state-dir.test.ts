@@ -12,7 +12,7 @@ function stateDirFixture(root: string) {
     root,
     legacyDir: path.join(root, ".clawdbot"),
     targetDir: path.join(root, ".openclaw"),
-    write(file: string, bytes: string | Buffer) {
+    write: (file: string, bytes: string | Buffer) => {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, bytes);
     },

@@ -39,7 +39,7 @@ import {
 
 const { compactionLogger } = await vi.hoisted(async () => {
   const { createMockSubsystemLogger } =
-    await import("../../../../test/helpers/mock-subsystem-logger.js");
+    await import("../../../test/helpers/mock-subsystem-logger.js");
   return { compactionLogger: vi.mocked(createMockSubsystemLogger("compaction-safeguard"), true) };
 });
 

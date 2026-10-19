@@ -4,6 +4,7 @@ import { createQaBusState } from "../../bus-state.js";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { runLoadedScenarioFlow } from "../../scenario-flow-runner.test-support.js";
 import { selectQaFlowSuiteScenarios } from "../../suite-planning.js";
+import { resolveTelegramQaScenarioIds } from "./scenario-selection.js";
 import type { TelegramUserbotUpdate } from "./userbot-driver.runtime.js";
 
 const scenarioId = "telegram-participant-identity-inspection";
@@ -155,7 +156,10 @@ function runIdentityFlow(fault?: Fault) {
   return { call, restart, runQaCli, turns, result };
 }
 
-it("excludes live identity proof from crabline", () => {
+it("selects live identity proof explicitly and excludes it from crabline", () => {
+  expect(
+    resolveTelegramQaScenarioIds({ providerMode: "mock-openai", scenarioIds: [scenarioId] }),
+  ).toEqual([scenarioId]);
   expect(
     selectQaFlowSuiteScenarios({
       scenarios: [readQaScenarioById(scenarioId)],

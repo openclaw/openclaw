@@ -133,7 +133,11 @@ it("publishes complete private handoffs before accepting native UI acknowledgeme
     }
     const settings = typeof options === "object" && options !== null ? options : undefined;
     const handle = await fsp.open(file, settings?.flag ?? "w", settings?.mode);
-    await handle.writeFile(data, options).finally(() => handle.close());
+    try {
+      await handle.writeFile(data, options);
+    } finally {
+      await handle.close();
+    }
   });
 
   const realStdoutWrite = process.stdout.write.bind(process.stdout);

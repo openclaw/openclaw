@@ -189,39 +189,48 @@ it("uses shell-neutral native capabilities for fallback, Gateway selection, and 
   text(page).not.toContain("openclaw onboard");
 });
 
-it("updates native recovery when its capability snapshot arrives", async () => {
-  const snapshot = createNativeDeviceSettingsSnapshot();
-  const post = vi.fn().mockResolvedValue(snapshot);
-  vi.stubGlobal("webkit", { messageHandlers: { openclawDeviceSettings: { postMessage: post } } });
-  vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
-  const nativeDeviceSettings = createNativeDeviceSettingsCapability()!;
-  const request = vi.fn(async () =>
-    unavailable([{ kind: "codex", label: "ChatGPT", error: "Could not prepare the plugin" }]),
-  );
-  const { context } = setupContext(request);
-  try {
-    const { page } = await mountPage({ ...context, nativeDeviceSettings });
-    await settled(page);
-    text(page).toContain("openclaw onboard");
-    text(page).toContain("Could not prepare the plugin");
-    text(page).toContain("only connect tools you trust");
-    expect(request).toHaveBeenCalledTimes(1);
-    window.dispatchEvent(
-      new CustomEvent("openclaw:native-device-settings-changed", {
-        detail: {
-          ...snapshot,
-          capabilities: { ...snapshot.capabilities, aiSetupAvailable: true },
-        },
-      }),
+it.each([false, true])(
+  "updates native recovery when its capability snapshot arrives (failed attempt: %s)",
+  async (failedAttempt) => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    const post = vi.fn().mockResolvedValue(snapshot);
+    vi.stubGlobal("webkit", { messageHandlers: { openclawDeviceSettings: { postMessage: post } } });
+    vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
+    const nativeDeviceSettings = createNativeDeviceSettingsCapability()!;
+    const request = vi.fn(async () =>
+      unavailable(
+        failedAttempt
+          ? [{ kind: "codex", label: "ChatGPT", error: "Could not prepare the plugin" }]
+          : [],
+      ),
     );
-    await settled(page);
-    await click(page, "Open AI setup");
-    expect(post).toHaveBeenCalledWith({ type: "open", panel: "ai-setup" });
-    text(page).not.toContain("openclaw onboard");
-  } finally {
-    nativeDeviceSettings.dispose();
-  }
-});
+    const { context } = setupContext(request);
+    try {
+      const { page } = await mountPage({ ...context, nativeDeviceSettings });
+      await settled(page);
+      text(page).toContain("openclaw onboard");
+      if (failedAttempt) {
+        text(page).toContain("Could not prepare the plugin");
+      }
+      text(page).toContain("only connect tools you trust");
+      expect(request).toHaveBeenCalledTimes(1);
+      window.dispatchEvent(
+        new CustomEvent("openclaw:native-device-settings-changed", {
+          detail: {
+            ...snapshot,
+            capabilities: { ...snapshot.capabilities, aiSetupAvailable: true },
+          },
+        }),
+      );
+      await settled(page);
+      await click(page, "Open AI setup");
+      expect(post).toHaveBeenCalledWith({ type: "open", panel: "ai-setup" });
+      text(page).not.toContain("openclaw onboard");
+    } finally {
+      nativeDeviceSettings.dispose();
+    }
+  },
+);
 
 it("shows RPC failures and retries without a premature greeting", async () => {
   const request = setupRequest(() => {

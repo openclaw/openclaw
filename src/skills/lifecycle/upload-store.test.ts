@@ -346,8 +346,14 @@ describe("skill upload store", () => {
           { kind: "skill-archive", slug: "too-many", sizeBytes: 1, force: false, ttlMs: 60_000 },
           { database },
         );
-      expect(rejectAtCapacity).toThrow(SkillUploadRequestError);
-      expect(rejectAtCapacity).toThrow("too many active skill uploads");
+      let capacityError: unknown;
+      try {
+        rejectAtCapacity();
+      } catch (error) {
+        capacityError = error;
+      }
+      expect(capacityError).toBeInstanceOf(SkillUploadRequestError);
+      expect(capacityError).toHaveProperty("message", "too many active skill uploads");
       expect(capacityReads.counts.capacity).toBeGreaterThan(0);
       expect(capacityReads.rowCounts.capacity).toBeLessThanOrEqual(1);
     } finally {

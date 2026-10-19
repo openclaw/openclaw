@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, expect, it, vi, type Mocked } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { OpenShellFsBridge } from "./fs-bridge.js";
 import {
   createMirrorBackendMock,
@@ -16,7 +16,7 @@ const boundaryError = "Sandbox boundary checks failed";
 let workspaceDir: string;
 const agentDir = () => path.join(workspaceDir, "..", "agent");
 const outsideDir = () => path.join(workspaceDir, "..", "outside");
-let backend: Mocked<ReturnType<typeof createMirrorBackendMock>>;
+let backend: ReturnType<typeof createMirrorBackendMock>;
 let bridge: OpenShellFsBridge;
 const local = (filePath: string) => path.join(workspaceDir, filePath);
 const readLocal = (filePath: string) => fs.readFile(local(filePath), "utf8");
@@ -89,7 +89,7 @@ beforeEach(async ({ onTestFinished }) => {
   onTestFinished(() => workspace[Symbol.asyncDispose]());
   workspaceDir = path.join(workspace.dir, "workspace");
   await Promise.all([workspaceDir, agentDir(), outsideDir()].map((dir) => fs.mkdir(dir)));
-  backend = vi.mocked(createMirrorBackendMock());
+  backend = createMirrorBackendMock();
   bridge = createBridge();
 });
 

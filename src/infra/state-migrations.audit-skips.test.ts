@@ -137,63 +137,72 @@ it.each([
   }),
 );
 
-it.each(["rewritten", "checkpointless empty", "append-only", "missing"])(
-  "preserves migrated history and continues Doctor after a %s raw archive",
-  (shape) =>
-    withDoctorAudit(async (state, audit, migrate) => {
-      const { source, raw: rawPath, sanitized: sanitizedPath } = audit.config;
-      const directory = path.dirname(rawPath);
-      const records = [0, 1, 2].map((index) =>
-        configAuditRecord("***", { ts: `2026-07-01T00:00:0${index}.000Z` }),
-      );
-      if (shape === "checkpointless empty") {
-        await audit.writeJsonLines(sanitizedPath, records);
-        await audit.write(rawPath, "");
-      } else {
-        await audit.writeJsonLines(source, records);
-        expect((await audit.migrate()).warnings).toEqual([]);
-      }
-      const sanitized = await fs.readFile(sanitizedPath);
-      const retained = audit.configRecords();
-      const backup = `${rawPath}.bak`;
-      await audit.write(backup, " \t\n");
-      await audit.write(`${source}.bak`, sanitized);
-      if (shape === "rewritten") {
-        await audit.writeJsonLines(rawPath, records.slice(1));
-      } else if (shape === "append-only") {
-        await audit.appendJsonLines(rawPath, [records[0]]);
-      } else if (shape === "missing") {
-        await fs.rm(rawPath);
-      }
-      const raw = shape === "missing" ? undefined : await fs.readFile(rawPath);
-      const execPath = await seedApprovals(state);
+it.each([
+  "rewritten",
+  "malformed rewrite",
+  "empty",
+  "checkpointless empty",
+  "append-only",
+  "missing",
+])("preserves migrated history and continues Doctor after a %s raw archive", (shape) =>
+  withDoctorAudit(async (state, audit, migrate) => {
+    const { source, raw: rawPath, sanitized: sanitizedPath } = audit.config;
+    const directory = path.dirname(rawPath);
+    const records = [0, 1, 2].map((index) =>
+      configAuditRecord("***", { ts: `2026-07-01T00:00:0${index}.000Z` }),
+    );
+    if (shape === "checkpointless empty") {
+      await audit.writeJsonLines(sanitizedPath, records);
+      await audit.write(rawPath, "");
+    } else {
+      await audit.writeJsonLines(source, records);
+      expect((await audit.migrate()).warnings).toEqual([]);
+    }
+    const sanitized = await fs.readFile(sanitizedPath);
+    const retained = audit.configRecords();
+    const backup = `${rawPath}.bak`;
+    await audit.write(backup, " \t\n");
+    await audit.write(`${source}.bak`, sanitized);
+    if (shape === "rewritten") {
+      await audit.writeJsonLines(rawPath, records.slice(1));
+    } else if (shape === "malformed rewrite") {
+      await audit.write(rawPath, "{bad json\n");
+    } else if (shape === "empty") {
+      await audit.write(rawPath, "");
+    } else if (shape === "append-only") {
+      await audit.appendJsonLines(rawPath, [records[0]]);
+    } else if (shape === "missing") {
+      await fs.rm(rawPath);
+    }
+    const raw = shape === "missing" ? undefined : await fs.readFile(rawPath);
+    const execPath = await seedApprovals(state);
 
-      const result = await migrate();
+    const result = await migrate();
 
-      await expectContinued(result, execPath);
-      const quarantines = (await fs.readdir(directory)).filter((name) =>
-        name.includes(".quarantined-"),
+    await expectContinued(result, execPath);
+    const quarantines = (await fs.readdir(directory)).filter((name) =>
+      name.includes(".quarantined-"),
+    );
+    if (shape === "append-only" || shape === "missing") {
+      expect(result.warnings).toEqual([]);
+      expect(quarantines).toEqual([]);
+      expect(audit.configRecords()).toHaveLength(
+        retained.length + (shape === "append-only" ? 1 : 0),
       );
-      if (shape === "append-only" || shape === "missing") {
-        expect(result.warnings).toEqual([]);
-        expect(quarantines).toEqual([]);
-        expect(audit.configRecords()).toHaveLength(
-          retained.length + (shape === "append-only" ? 1 : 0),
-        );
-      } else {
-        expect(quarantines).toHaveLength(1);
-        const quarantined = path.join(directory, quarantines[0]!);
-        expect(result.warnings).toEqual([expect.stringContaining(quarantined)]);
-        expect(result.warnings[0]).toContain("expected append-only growth");
-        await expect(fs.readFile(quarantined)).resolves.toEqual(raw);
-        await expect(fs.access(rawPath)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(audit.configRecords()).toEqual(retained);
-        await expect(fs.readFile(sanitizedPath)).resolves.toEqual(sanitized);
-      }
-      await expect(fs.readFile(backup, "utf8")).resolves.toBe(" \t\n");
-      await expect(fs.readFile(`${source}.bak`)).resolves.toEqual(sanitized);
-      expect((await migrate()).warnings).toEqual([]);
-    }),
+    } else {
+      expect(quarantines).toHaveLength(1);
+      const quarantined = path.join(directory, quarantines[0]!);
+      expect(result.warnings).toEqual([expect.stringContaining(quarantined)]);
+      expect(result.warnings[0]).toContain("expected append-only growth");
+      await expect(fs.readFile(quarantined)).resolves.toEqual(raw);
+      await expect(fs.access(rawPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(audit.configRecords()).toEqual(retained);
+      await expect(fs.readFile(sanitizedPath)).resolves.toEqual(sanitized);
+    }
+    await expect(fs.readFile(backup, "utf8")).resolves.toBe(" \t\n");
+    await expect(fs.readFile(`${source}.bak`)).resolves.toEqual(sanitized);
+    expect((await migrate()).warnings).toEqual([]);
+  }),
 );
 
 it("keeps an unsafe interrupted recovery refusing alongside an independent skip", () =>

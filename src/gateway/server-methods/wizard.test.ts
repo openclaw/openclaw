@@ -383,7 +383,7 @@ describe("wizard setup ownership", () => {
       let sessionId = "";
       await runWithGatewayIndependentRootWorkAdmission(async () => {
         const start = await invokeWizard("wizard.start", { mode: "local" }, context);
-        sessionId = String(start.sessionId ?? "");
+        sessionId = start.sessionId ?? "";
       });
       expect(sessionId).not.toBe("");
       expect(getActiveGatewayRootWorkCount()).toBe(1);

@@ -119,6 +119,7 @@ vi.mock("../../agents/exec-defaults.legacy.js", () => ({
   resolveNodeExecEligibilityLegacy: resolveNodeExecEligibilityMock,
 }));
 
+// mock-isolation: Command discovery supplies synthetic agent filters independently of runtime agent configuration.
 vi.mock("./agent-filter.js", () => ({
   resolveEffectiveAgentSkillFilter: skillFilter,
 }));

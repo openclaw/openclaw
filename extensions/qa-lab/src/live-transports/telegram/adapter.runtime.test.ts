@@ -106,7 +106,7 @@ function inbound(
   return { conversation: { id, kind: "group" as const }, senderId: "primary", text, ...options };
 }
 
-function observeParticipants<T>(sends: T[]) {
+function observeParticipants(sends: ReturnType<typeof vi.fn>[]) {
   const updates: Array<(update: unknown) => Promise<void>> = [];
   mocks.userbotStart.mockImplementation(async (params) => {
     const index = updates.length;
