@@ -2080,6 +2080,7 @@
                     "group": "Web search",
                     "pages": [
                       "tools/web",
+                      "tools/deep-research",
                       "tools/brave-search",
                       "tools/duckduckgo-search",
                       "tools/exa-search",
