@@ -1,9 +1,7 @@
+import assert from "node:assert/strict";
 import { vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type {
-  SqliteWorkerAdmissionFactory,
-  SqliteWorkerOperationAdmission,
-} from "../../../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationAdmission } from "../../../infra/sqlite-worker-operation-admission.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { closeSwarmScheduler } from "../swarm/swarm-scheduler.js";
@@ -18,6 +16,34 @@ import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
 
+function createWriteHold(phase: "before" | "ack") {
+  const entered = createDeferred<void>();
+  const gate = createDeferred<void>();
+  let loseNativeReceipt = false;
+  return {
+    phase,
+    entered: entered.promise,
+    release: gate.resolve,
+    reject: gate.reject,
+    loseReceipt(error: unknown) {
+      loseNativeReceipt = true;
+      gate.reject(error);
+    },
+    async wait(admission?: SqliteWorkerOperationAdmission) {
+      entered.resolve();
+      try {
+        await gate.promise;
+      } catch (error) {
+        // Drop the native receipt too, rather than simulating only a recoverable transport loss.
+        if (loseNativeReceipt && admission) {
+          Object.defineProperty(admission, "committed", { value: undefined });
+        }
+        throw error;
+      }
+    },
+  };
+}
+
 function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecord>()) {
   const pending: Promise<unknown>[] = [];
   const track = <T>(work: T | Promise<T>): Promise<T> => {
@@ -26,12 +52,7 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
     void promise.catch(() => {});
     return promise;
   };
-  const holds: Array<{
-    phase: "before" | "ack";
-    entered: ReturnType<typeof createDeferred<void>>;
-    gate: ReturnType<typeof createDeferred<void>>;
-    loseNativeReceipt?: boolean;
-  }> = [];
+  const holds: ReturnType<typeof createWriteHold>[] = [];
   const allHolds: typeof holds = [];
   const execute = stateWorker.runOpenClawStateWorkerOperation;
   let writes = 0;
@@ -51,36 +72,24 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
               writes += 1;
               const hold = holds.shift();
               if (hold?.phase === "before") {
-                hold.entered.resolve();
-                await hold.gate.promise;
+                await hold.wait();
               }
               const receipt = await scope.execute(command, executeOptions);
               if (hold?.phase === "ack") {
-                hold.entered.resolve();
-                try {
-                  await hold.gate.promise;
-                } catch (error) {
-                  if (hold.loseNativeReceipt && admission) {
-                    // Losing only the transport reply is recoverable from this native receipt.
-                    Object.defineProperty(admission, "committed", { value: undefined });
-                  }
-                  throw error;
-                }
+                await hold.wait(admission);
               }
               return receipt;
             },
           }),
         {
           ...options,
-          ...(createAdmission
-            ? {
-                createAdmission: (nativeOperation: Parameters<SqliteWorkerAdmissionFactory>[0]) => {
-                  const prepared = createAdmission(nativeOperation);
-                  admission = prepared.admission;
-                  return prepared;
-                },
-              }
-            : {}),
+          createAdmission:
+            createAdmission &&
+            ((nativeOperation) => {
+              const prepared = createAdmission(nativeOperation);
+              admission = prepared.admission;
+              return prepared;
+            }),
         },
       );
     });
@@ -142,36 +151,20 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
       return writes;
     },
     get scope() {
-      if (!scope) {
-        throw new Error("Queued intent has not published its scope");
-      }
+      assert(scope, "Queued intent has not published its scope");
       return scope;
     },
     current: () => {
       const row = runs.get(registration.runId);
-      if (!row) {
-        throw new Error("Queued row has not published");
-      }
+      assert(row, "Queued row has not published");
       return row;
     },
     stored: () => loadSubagentRegistryFromSqlite().get(registration.runId),
     holdNextWrite: (phase: "before" | "ack" = "ack") => {
-      const hold: (typeof holds)[number] = {
-        phase,
-        entered: createDeferred(),
-        gate: createDeferred(),
-      };
+      const hold = createWriteHold(phase);
       holds.push(hold);
       allHolds.push(hold);
-      return {
-        entered: hold.entered.promise,
-        release: hold.gate.resolve,
-        reject: hold.gate.reject,
-        loseReceipt: (error: unknown) => {
-          hold.loseNativeReceipt = true;
-          hold.gate.reject(error);
-        },
-      };
+      return hold;
     },
     register: (assertCurrent?: () => void) =>
       track(
@@ -188,9 +181,7 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
           [registration.runId],
           (rows) => {
             const current = rows.get(registration.runId);
-            if (!current) {
-              throw new Error("Fixture row is absent");
-            }
+            assert(current, "Fixture row is absent");
             const draft = structuredClone(current);
             plan(draft);
             return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
@@ -200,7 +191,7 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
       ),
     async close() {
       for (const hold of allHolds) {
-        hold.gate.resolve();
+        hold.release();
       }
       await Promise.allSettled(pending);
       await closeSwarmScheduler();
