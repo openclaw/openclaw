@@ -22,7 +22,11 @@ import {
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stateMigrations } from "./doctor-contract-api.js";
+import {
+  migrationById,
+  writeLegacySyncCache,
+  writeSqliteDedupeSource,
+} from "./doctor-contract-api.test-support.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
 import {
   MATRIX_CREDENTIALS_MAX_ENTRIES,
@@ -80,50 +84,6 @@ function accountStorageRoot(stateDir: string, accountId = "default", token = "01
   return path.join(stateDir, "matrix", "accounts", accountId, "matrix.example.org__bot", token);
 }
 
-function migrationById(id: string) {
-  const migration = stateMigrations.find((entry) => entry.id === id);
-  if (!migration) {
-    throw new Error(`missing migration ${id}`);
-  }
-  return migration;
-}
-
-function writeSqliteDedupeSource(
-  storageRootDir: string,
-  accountId: string,
-  eventId: string,
-  ts: number,
-): string {
-  const databasePath = path.join(storageRootDir, "state", "openclaw.sqlite");
-  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const roomId = "!room:example.org";
-  const key = `${accountId}:${createHash("sha256")
-    .update(`${accountId}\0${roomId}\0${eventId}`)
-    .digest("hex")}`;
-  const db = new DatabaseSync(databasePath);
-  try {
-    // July's per-account store used this row shape and schema version.
-    db.exec(`
-      CREATE TABLE plugin_state_entries (
-        plugin_id TEXT NOT NULL,
-        namespace TEXT NOT NULL,
-        entry_key TEXT NOT NULL,
-        value_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        expires_at INTEGER,
-        PRIMARY KEY (plugin_id, namespace, entry_key)
-      ) STRICT;
-      PRAGMA user_version = 1;
-    `);
-    db.prepare(`
-      INSERT INTO plugin_state_entries VALUES ('matrix', 'inbound-dedupe', ?, ?, ?, NULL)
-    `).run(key, JSON.stringify({ roomId, eventId, ts }), ts);
-  } finally {
-    db.close();
-  }
-  return databasePath;
-}
-
 describe("matrix doctor contract state migrations", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async () => {
@@ -163,24 +123,7 @@ describe("matrix doctor contract state migrations", () => {
   it("migrates legacy sync cache JSON to SQLite plugin state", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const storageRootDir = accountStorageRoot(stateDir);
-    fs.mkdirSync(storageRootDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(storageRootDir, "bot-storage.json"),
-      JSON.stringify({
-        version: 1,
-        savedSync: {
-          nextBatch: "legacy-token",
-          accountData: [],
-          roomsData: {
-            join: {},
-            invite: {},
-            leave: {},
-            knock: {},
-          },
-        },
-        cleanShutdown: true,
-      }),
-    );
+    writeLegacySyncCache(storageRootDir, "legacy-token");
 
     const migration = migrationById("matrix-sync-cache-json-to-plugin-state");
     await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
@@ -212,18 +155,7 @@ describe("matrix doctor contract state migrations", () => {
       ],
     });
 
-    fs.writeFileSync(
-      sourcePath,
-      JSON.stringify({
-        version: 1,
-        savedSync: {
-          nextBatch: "newer-legacy-token",
-          accountData: [],
-          roomsData: { join: {}, invite: {}, leave: {}, knock: {} },
-        },
-        cleanShutdown: true,
-      }),
-    );
+    writeLegacySyncCache(storageRootDir, "newer-legacy-token");
     await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
       changes: [`Archived Matrix sync cache legacy source -> ${sourcePath}.migrated.2`],
       warnings: [],
