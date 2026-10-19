@@ -1,20 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
-import type { AssistantMessage, AssistantMessageEvent, Model } from "../types.js";
+import type { AssistantMessage, AssistantMessageEvent } from "../types.js";
 import { createResponsesAssistantOutput } from "./openai-responses-shared.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
-const nativeOpenAIModel = {
-  id: "gpt-5.5",
+const nativeOpenAIModel = makeProviderModel("openai-responses", "openai", "gpt-5.5", {
   name: "GPT-5.5",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+});
 
 function captureResponses() {
   const output: AssistantMessage = {
@@ -22,24 +16,21 @@ function captureResponses() {
     timestamp: 0,
   };
   const events: AssistantMessageEvent[] = [];
-  const signatures: Array<[string, number, string | undefined]> = [];
+  const signatures: Array<[string, string | undefined]> = [];
   const sink = {
     push(event: AssistantMessageEvent) {
       events.push(event);
       if (event.type === "text_start" || event.type === "text_delta" || event.type === "text_end") {
         const block = event.partial?.content[event.contentIndex];
-        signatures.push([
-          event.type,
-          event.contentIndex,
-          block?.type === "text" ? block.textSignature : undefined,
-        ]);
+        signatures.push([event.type, block?.type === "text" ? block.textSignature : undefined]);
       }
     },
   };
   return {
     output,
     events,
-    signatures,
+    signatures: (exclude: string) =>
+      signatures.filter(([type]) => type !== exclude).map(([, value]) => value),
     run: (input: readonly unknown[]) =>
       processResponsesStream(responseEvents(input), output, sink, nativeOpenAIModel),
   };
@@ -47,12 +38,15 @@ function captureResponses() {
 function signature(id: string) {
   return JSON.stringify({ v: 1, id, phase: "final_answer" });
 }
-function eventIndexes(events: AssistantMessageEvent[]) {
-  return events.map((event) => [
-    event.type,
-    "contentIndex" in event ? event.contentIndex : undefined,
-  ]);
+function eventTrace(events: AssistantMessageEvent[]) {
+  return events
+    .map((event) => `${event.type}@${"contentIndex" in event ? event.contentIndex : "-"}`)
+    .join(" ");
 }
+function textDelta(delta: string) {
+  return { type: "response.output_text.delta", delta };
+}
+const emptyPart = { type: "response.content_part.added", part: { type: "output_text", text: "" } };
 
 function messageAdded(id: string, phase = "final_answer") {
   return { type: "response.output_item.added", item: { type: "message", id, phase } };
@@ -85,16 +79,15 @@ describe("Responses cumulative message snapshots", () => {
 
     await run([
       messageAdded("msg_1"),
-      { type: "response.content_part.added", part: { type: "output_text", text: "" } },
-      { type: "response.output_text.delta", delta: snapshot1 },
+      emptyPart,
+      textDelta(snapshot1),
       messageDone("msg_1", snapshot1),
       messageAdded("msg_2"),
-      { type: "response.output_text.delta", delta: "" },
-      ...Array.from({ length: Math.ceil(snapshot2.length / 16) }, (_, index) => ({
-        type: "response.output_text.delta",
-        delta: snapshot2.slice(index * 16, (index + 1) * 16),
-      })),
-      { type: "response.output_text.delta", delta: "" },
+      textDelta(""),
+      ...Array.from({ length: Math.ceil(snapshot2.length / 16) }, (_, index) =>
+        textDelta(snapshot2.slice(index * 16, (index + 1) * 16)),
+      ),
+      textDelta(""),
       messageDone("msg_2", snapshot2),
       messageAdded("msg_3"),
       messageDone("msg_3", snapshot3),
@@ -102,25 +95,15 @@ describe("Responses cumulative message snapshots", () => {
     ]);
 
     expect(output.content).toEqual([textBlock("msg_3", snapshot3)]);
-    // Balanced lifecycle: exactly one text_start, every event on index 0, and
-    // each collapsed snapshot re-ends the same block with its grown content.
-    expect(
-      events.map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
-    ).toEqual([
-      ["text_start", 0],
-      ["text_delta", 0],
-      ["text_end", 0],
-      ["text_end", 0],
-      ["text_end", 0],
-    ]);
+    expect(eventTrace(events)).toBe("text_start@0 text_delta@0 text_end@0 text_end@0 text_end@0");
     expect(
       events.filter((event) => event.type === "text_end").map((event) => event.content),
     ).toEqual([snapshot1, snapshot2, snapshot3]);
-    expect(signatures.filter(([type]) => type !== "text_delta")).toEqual([
-      ["text_start", 0, signature("msg_1")],
-      ["text_end", 0, signature("msg_1")],
-      ["text_end", 0, signature("msg_2")],
-      ["text_end", 0, signature("msg_3")],
+    expect(signatures("text_delta")).toEqual([
+      signature("msg_1"),
+      signature("msg_1"),
+      signature("msg_2"),
+      signature("msg_3"),
     ]);
   });
 
@@ -146,8 +129,8 @@ describe("Responses cumulative message snapshots", () => {
             ]
           : []),
         messageAdded("msg_2"),
-        { type: "response.output_text.delta", delta: b.slice(0, 4) },
-        { type: "response.output_text.delta", delta: b.slice(4) },
+        textDelta(b.slice(0, 4)),
+        textDelta(b.slice(4)),
         messageDone("msg_2", b),
         completed,
       ]);
@@ -165,23 +148,12 @@ describe("Responses cumulative message snapshots", () => {
           : []),
         textBlock("msg_2", b),
       ]);
-      expect(eventIndexes(events)).toEqual([
-        ["text_start", 0],
-        ["text_end", 0],
-        ...(reasoning
-          ? [
-              ["thinking_start", 1],
-              ["thinking_end", 1],
-              ["text_start", 2],
-              ["text_delta", 2],
-              ["text_delta", 2],
-              ["text_end", 2],
-            ]
-          : [
-              ["text_start", 1],
-              ["text_end", 1],
-            ]),
-      ]);
+      expect(eventTrace(events)).toBe(
+        "text_start@0 text_end@0 " +
+          (reasoning
+            ? "thinking_start@1 thinking_end@1 text_start@2 text_delta@2 text_delta@2 text_end@2"
+            : "text_start@1 text_end@1"),
+      );
     },
   );
 
@@ -197,10 +169,10 @@ describe("Responses cumulative message snapshots", () => {
         messageAdded("msg_1"),
         messageDone("msg_1", prior),
         messageAdded("msg_2"),
-        { type: "response.content_part.added", part: { type: "output_text", text: "" } },
-        { type: "response.output_text.delta", delta: prefix },
-        { type: "response.output_text.delta", delta: divergentDelta },
-        { type: "response.output_text.delta", delta: remainingDelta },
+        emptyPart,
+        textDelta(prefix),
+        textDelta(divergentDelta),
+        textDelta(remainingDelta),
         messageDone("msg_2", prefix + divergentDelta + remainingDelta),
         completed,
       ]);
@@ -209,26 +181,17 @@ describe("Responses cumulative message snapshots", () => {
         textBlock("msg_1", prior),
         textBlock("msg_2", prefix + divergentDelta + remainingDelta),
       ]);
-      // Replay the entire withheld prefix at divergence, then stream subsequent deltas live.
+      expect(eventTrace(events)).toBe(
+        "text_start@0 text_end@0 text_start@1 text_delta@1 text_delta@1 text_end@1",
+      );
       expect(
-        events.map((event) => [
-          event.type,
-          "contentIndex" in event ? event.contentIndex : undefined,
-          event.type === "text_delta" ? event.delta : null,
-        ]),
-      ).toEqual([
-        ["text_start", 0, null],
-        ["text_end", 0, null],
-        ["text_start", 1, null],
-        ["text_delta", 1, prefix + divergentDelta],
-        ["text_delta", 1, remainingDelta],
-        ["text_end", 1, null],
-      ]);
-      expect(signatures.filter(([type]) => type !== "text_end")).toEqual([
-        ["text_start", 0, signature("msg_1")],
-        ["text_start", 1, signature("msg_2")],
-        ["text_delta", 1, undefined],
-        ["text_delta", 1, undefined],
+        events.filter((event) => event.type === "text_delta").map((event) => event.delta),
+      ).toEqual([prefix + divergentDelta, remainingDelta]);
+      expect(signatures("text_end")).toEqual([
+        signature("msg_1"),
+        signature("msg_2"),
+        undefined,
+        undefined,
       ]);
     },
   );
