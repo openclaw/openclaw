@@ -73,26 +73,18 @@ function classifyProcessArtifactCustody(
   command: ProcessCommand | undefined,
   pid: number,
   cwd: string | undefined,
+  parentCommand: ProcessCommand | undefined,
 ): ArtifactCustody {
   const argv = command && "argv" in command ? command.argv : [];
-  const executable =
-    command && "executable" in command ? (command.executable ?? argv[0] ?? "") : (argv[0] ?? "");
   const references = [
     ...argv.map((value) => value.replace(/^--[^=]+=/u, "").replace(/^-r(?=.)/u, "")),
     cwd ?? "",
-    executable,
+    command && "executable" in command ? (command.executable ?? "") : "",
   ].filter(referencesRetainedArtifact);
   if (!command || "argvUnavailable" in command || argv.length === 0) {
     return references.length ? { kind: "holder" } : { kind: "not-holder" };
   }
-  const { position, operands, sourceIndices } = resolveRuntimeScriptPosition(argv);
-  if (
-    typeof position === "number" &&
-    !path.isAbsolute(argv[position]!) &&
-    (!cwd || !path.isAbsolute(cwd))
-  ) {
-    return { kind: "unknown", reason: "working directory is unavailable" };
-  }
+  const { position, operands } = resolveRuntimeScriptPosition(argv);
   const options = {
     pid,
     cwd: cwd ?? "",
@@ -113,42 +105,44 @@ function classifyProcessArtifactCustody(
     return unknown ? { kind: "unknown", reason: unknown } : { kind: "holder", paths };
   }
   const identity = classifyOpenClawArgv(argv, options);
-  if (identity.kind === "openclaw" && !identity.artifactPath) {
-    return { kind: "holder" };
-  }
-  let holder: Extract<ArtifactCustody, { kind: "holder" }> | undefined =
-    identity.kind === "openclaw"
-      ? {
-          kind: "holder",
-          ...(identity.artifactPath ? { paths: [...paths, identity.artifactPath] } : {}),
-        }
-      : paths.length
-        ? { kind: "holder", paths }
-        : undefined;
-  const referenceUnknown = unknown;
-  unknown ??= identity.kind === "unclassified" ? identity.reason : undefined;
-  let scripts: Record<string, unknown> = {};
-  if (typeof position !== "number" && position.kind !== "not-runtime") {
-    if (!cwd || !path.isAbsolute(cwd)) {
-      if (!sourceIndices.length || operands.length || !path.isAbsolute(executable)) {
-        unknown ??= "working directory is unavailable";
-      }
-    } else {
-      const pkg = readProcessPackageIdentity(cwd, true);
-      if (pkg.kind === "unknown") {
-        unknown ??= pkg.reason;
-      } else {
-        if (pkg.kind === "package") {
-          if (pkg.name === "openclaw") {
-            holder = { kind: "holder" };
-          }
-          scripts = pkg.scripts;
-        }
-        if (identity.kind === "unclassified" && identity.cause === "runtime-syntax") {
-          unknown = referenceUnknown;
-        }
-      }
+  if (identity.kind === "openclaw") {
+    if (!identity.artifactPath) {
+      return { kind: "holder" };
     }
+    paths.push(identity.artifactPath);
+  }
+  let holder: Extract<ArtifactCustody, { kind: "holder" }> | undefined = paths.length
+    ? { kind: "holder", paths }
+    : undefined;
+  unknown ??=
+    identity.kind === "unclassified" && identity.cause !== "runtime-syntax"
+      ? identity.reason
+      : undefined;
+  if (!cwd || !path.isAbsolute(cwd)) {
+    const inspectorUid = process.getuid?.();
+    if (
+      cwd === undefined &&
+      identity.kind === "other" &&
+      typeof position !== "number" &&
+      position.kind === "not-runtime" &&
+      (command.owner === "different" ||
+        (command.uid !== undefined && inspectorUid !== undefined && command.uid !== inspectorUid) ||
+        isStandardSystemdLoginProcess(command, parentCommand, inspectorUid))
+    ) {
+      return { kind: "not-holder" };
+    }
+    return { kind: "unknown", reason: unknown ?? "working directory is unavailable" };
+  }
+  const pkg =
+    typeof position !== "number" && position.kind !== "not-runtime"
+      ? readProcessPackageIdentity(cwd, true)
+      : undefined;
+  if (pkg?.kind === "package" && pkg.name === "openclaw") {
+    holder = { kind: "holder" };
+  }
+  const scripts = pkg?.kind === "package" ? pkg.scripts : {};
+  if (pkg?.kind === "unknown") {
+    unknown ??= pkg.reason;
   }
   for (const { value, module } of operands) {
     let candidate = value;
@@ -410,7 +404,12 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
         }
         continue;
       }
-      const custody = classifyProcessArtifactCustody(command, pid, directories.get(pid));
+      const custody = classifyProcessArtifactCustody(
+        command,
+        pid,
+        directories.get(pid),
+        byPid.get(command?.ppid ?? 0)?.command,
+      );
       if (custody.kind === "not-holder") {
         continue;
       }

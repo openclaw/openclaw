@@ -224,23 +224,25 @@ it.each([
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
 });
 
-it("retains unknown relative entrypoints without losing scoped holders later in the census", () => {
+it.each([
+  ["node", "worker.js"],
+  ["/bin/sh", "worker.sh"],
+  ["/usr/bin/node", "-e", "1"],
+])("retains unavailable cwd for %j without losing scoped holders", (...argv) => {
   const held = "/tmp/openclaw-update-runtime-Held01";
   const free = "/tmp/openclaw-update-runtime-Free01";
-  rows.set(peer, { ppid: 1, argv: ["node", "worker.js"], cwd: denied() });
+  rows.set(peer, { ppid: 1, argv, cwd: denied() });
   rows.set(peer + 1, { ppid: 1, argv: ["node", `${held}/worker.js`] });
-  expect(inspectOtherOpenClawProcesses()).toEqual({
-    pids: [peer, peer + 1],
-    warnings: [expect.stringContaining(`PID ${peer}: working directory is unavailable`)],
-  });
-  expect(inspectOtherOpenClawProcesses(free)).toEqual({
-    pids: [peer],
-    warnings: [expect.stringContaining(`PID ${peer}: working directory is unavailable`)],
-  });
-  expect(inspectOtherOpenClawProcesses(held)).toEqual({
-    pids: [peer, peer + 1],
-    warnings: [expect.stringContaining(`PID ${peer}: working directory is unavailable`)],
-  });
+  for (const [runtime, pids] of [
+    [undefined, [peer, peer + 1]],
+    [free, [peer]],
+    [held, [peer, peer + 1]],
+  ] as const) {
+    expect(inspectOtherOpenClawProcesses(runtime)).toEqual({
+      pids,
+      warnings: [expect.stringContaining(`PID ${peer}: working directory is unavailable`)],
+    });
+  }
   rows.delete(peer);
   expect(inspectOtherOpenClawProcesses(free)).toEqual({ pids: [] });
 });
@@ -622,29 +624,24 @@ it("retains Darwin cwd holders from one partial batch without trusting other PID
 it.each([
   { script: "dist/index.js", partial: false },
   { script: "/unrelated-app/dist/index.js", partial: true },
-])(
-  "retains only unresolved entrypoints when cwd is unavailable ($script)",
-  ({ script, partial }) => {
-    rows.set(peer, { ppid: 1, argv: ["node", script] });
-    mockDarwinBatch(
-      partial
-        ? { status: 1, stdout: `p1\0n/\0` }
-        : {
-            status: null,
-            error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
-            stdout: "",
-          },
-    );
-    expect(inspectOtherOpenClawProcesses()).toEqual(
-      partial
-        ? { pids: [] }
-        : {
-            pids: [peer],
-            warnings: [expect.stringContaining("working directory is unavailable")],
-          },
-    );
-  },
-);
+])("retains processes after an incomplete cwd batch ($script)", ({ script, partial }) => {
+  rows.set(peer, { ppid: 1, argv: ["node", script] });
+  mockDarwinBatch(
+    partial
+      ? { status: 1, stdout: `p1\0n/\0` }
+      : {
+          status: null,
+          error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
+          stdout: "",
+        },
+  );
+  expect(inspectOtherOpenClawProcesses()).toEqual({
+    pids: partial ? [peer] : [1, peer],
+    warnings: (partial ? [peer] : [1, peer]).map((pid) =>
+      expect.stringContaining(`PID ${pid}: working directory is unavailable`),
+    ),
+  });
+});
 
 const references = { runId: "update-run-123", artifactPaths: ["/tmp/retained runtime"] };
 const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
@@ -661,21 +658,39 @@ it("does not let protected systemd login processes block update-repair evidence"
     runId: "systemd-update-run",
     artifactPaths: ["/tmp/openclaw-update-runtime-Ab1234"],
   };
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
   expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
     matchingPids: [],
     unverifiedPids: [],
   });
   rows.get(peer + 1)!.cwd = handoffRefs.artifactPaths[0];
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer + 1] });
   expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
     matchingPids: [peer + 1],
     unverifiedPids: [],
   });
   rows.get(peer + 1)!.cwd = denied();
   rows.get(peer + 1)!.ppid = 1;
+  expect(inspectOtherOpenClawProcesses()).toEqual({
+    pids: [peer + 1],
+    warnings: [expect.stringContaining(`PID ${peer + 1}: working directory is unavailable`)],
+  });
   expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
     matchingPids: [],
     unverifiedPids: [peer + 1],
   });
+});
+
+it.each([0, 1000])("requires foreign ownership to exempt non-runtime cwd (UID %i)", (uid) => {
+  rows.set(peer, { ppid: 1, argv: ["/bin/sh", "worker.sh"], uid, cwd: denied() });
+  expect(inspectOtherOpenClawProcesses()).toEqual(
+    uid === 0
+      ? { pids: [] }
+      : {
+          pids: [peer],
+          warnings: [expect.stringContaining(`PID ${peer}: working directory is unavailable`)],
+        },
+  );
 });
 
 it.each([
@@ -885,21 +900,17 @@ it.each([
     name: "denied unrelated process, same account",
     sid: "S-1-5-21-100",
     facts: { accessDenied: true },
-    matching: false,
-    unverified: false,
   },
   {
     name: "denied process, different account",
     sid: "S-1-5-21-200",
     facts: { accessDenied: true },
-    matching: false,
     unverified: true,
   },
   {
     name: "denied process, unknown caller",
     sid: undefined,
     facts: { accessDenied: true },
-    matching: false,
     unverified: true,
   },
   {
@@ -907,56 +918,45 @@ it.each([
     sid: "S-1-5-21-100",
     legacy: true,
     facts: { accessDenied: true },
-    matching: false,
     unverified: true,
   },
   {
     name: "unexplained missing identity",
     sid: "S-1-5-21-100",
     facts: {},
-    matching: false,
     unverified: true,
   },
   {
     name: "protected unrelated process",
     sid: "S-1-5-21-100",
     facts: { parentPid: peer + 10, startIdentity: "100" },
-    matching: false,
-    unverified: false,
   },
   {
     name: "pre-handoff process with reused parent PID",
     sid: "S-1-5-21-100",
     facts: { parentPid: launcher, startIdentity: "100" },
-    matching: false,
-    unverified: false,
   },
   {
     name: "readable unrelated process from another account",
     sid: "S-1-5-21-200",
     facts: { parentPid: peer + 10, startIdentity: "100" },
-    matching: false,
-    unverified: false,
   },
   {
     name: "descendant born in the same millisecond",
     sid: "S-1-5-21-100",
     facts: { parentPid: launcher, startIdentity: "200" },
     matching: true,
-    unverified: false,
   },
   {
     name: "unreadable descendant",
     sid: "S-1-5-21-100",
     facts: { parentPid: launcher, startIdentity: "300" },
     matching: true,
-    unverified: false,
   },
   {
     name: "surviving worker with an exited intermediate parent",
     sid: "S-1-5-21-100",
     facts: { parentPid: peer + 10, startIdentity: "300" },
-    matching: false,
     unverified: true,
   },
   {
@@ -964,7 +964,6 @@ it.each([
     sid: "S-1-5-21-100",
     facts: { parentPid: peer + 10, startIdentity: "300" },
     parents: [{ pid: peer + 10, accessDenied: true }],
-    matching: false,
     unverified: true,
   },
   {
@@ -977,18 +976,16 @@ it.each([
       cwd: "C:\\app",
     },
     matching: true,
-    unverified: false,
   },
   {
     name: "positive artifact evidence on denied row",
     sid: "S-1-5-21-100",
     facts: { accessDenied: true, commandLine: "node --id=update-run-123" },
     matching: true,
-    unverified: false,
   },
 ])(
   "Windows handoff repair census: $name",
-  ({ sid, facts, matching, unverified, legacy, parents }) => {
+  ({ sid, facts, matching = false, unverified = false, legacy, parents }) => {
     mockProcessPlatform("win32");
     windowsSid.mockReturnValue(sid);
     windows.mockReturnValue([
