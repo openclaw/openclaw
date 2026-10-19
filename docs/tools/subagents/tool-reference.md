@@ -24,11 +24,14 @@ replacement for writing a clear task prompt.
 
 ## Tool: `sessions_spawn`
 
-Pass `user` (the requester's verified `requester_profile.id`) to act for a participant. It is required after several
-people have steered the turn, across native, visible, and ACP spawns. The child
-retains that person's authority independently of the parent turn; later revocation
-still stops it. Codex native `spawn_agent` rejects multi-person turns; use
-`sessions_spawn` with `user` instead.
+Pass optional `user` (an admitted participant's verified `requester_profile.id`)
+to select that person's authority for a new child. Omit it to keep the active
+execution's original requester, including after collaborative steering. New child
+admission resolves current destination policy for that requester; accepted work
+survives normal parent completion, while revocation still stops it. The child does
+not inherit the parent's participant roster. Codex native `spawn_agent` retains the
+original requester and permits collaborative turns. Selecting a person does not
+establish that they requested or approved the work.
 
 Starts a sub-agent run on the spawning session's sub-agent queue, with
 [per-session concurrency](/tools/subagents/operations#concurrency). Ordinary one-shot runs

@@ -224,28 +224,31 @@ describe("handleInlineActions", () => {
     ]);
   });
 
-  it("propagates an explicit steer queue override into the prepared-turn result", async () => {
-    const ctx = commandCtx("/steer use the monochrome version");
-    handleCommandsMock.mockImplementationOnce(async (params) => {
-      params.command.rawBodyNormalized = "use the monochrome version";
-      params.command.commandBodyNormalized = "use the monochrome version";
-      params.ctx.agentText = "use the monochrome version";
-      return { shouldContinue: true, queueModeOverride: "steer" };
-    });
+  it.each(["steer", "followup"] as const)(
+    "propagates an explicit %s queue override into the prepared-turn result",
+    async (mode) => {
+      const ctx = commandCtx(`/${mode} use the monochrome version`);
+      handleCommandsMock.mockImplementationOnce(async (params) => {
+        params.command.rawBodyNormalized = "use the monochrome version";
+        params.command.commandBodyNormalized = "use the monochrome version";
+        params.ctx.agentText = "use the monochrome version";
+        return { shouldContinue: true, queueModeOverride: mode };
+      });
 
-    const result = await runTestInlineActions({
-      ctx,
-      overrides: {
-        cfg: { commands: { text: true } },
-      },
-    });
+      const result = await runTestInlineActions({
+        ctx,
+        overrides: {
+          cfg: { commands: { text: true } },
+        },
+      });
 
-    expect(result).toMatchObject({
-      kind: "continue",
-      queueModeOverride: "steer",
-    });
-    expect(ctx.agentText).toBe("use the monochrome version");
-  });
+      expect(result).toMatchObject({
+        kind: "continue",
+        queueModeOverride: mode,
+      });
+      expect(ctx.agentText).toBe("use the monochrome version");
+    },
+  );
 
   it("prefers the target session entry when routing inline status through the shared status builder", async () => {
     const ctx = commandCtx("/status", {

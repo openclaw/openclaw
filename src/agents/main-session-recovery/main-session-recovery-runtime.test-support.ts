@@ -1,9 +1,12 @@
+import path from "node:path";
 import { expect, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { callGateway } from "../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import type { RequesterOrigin } from "../requester-origin.js";
 
 type RecoveryScope = { storePath: string; sessionKey: string };
 
@@ -121,4 +124,124 @@ export function createRecoveryRuntimeFixture(params: {
     },
     sendRecoveryNotice: params.sendRecoveryNotice,
   };
+}
+
+export async function runRecoveryCommandDuringStop(params: {
+  entry: SessionEntry;
+  requesterOrigin: RequesterOrigin;
+  runId: string;
+  sessionKey: string;
+  storePath: string;
+  stateDir: string;
+  signal: AbortSignal;
+}): Promise<void> {
+  const [
+    { getAcpSessionManager },
+    { getAgentEventLifecycleGeneration },
+    { markGatewayRestartDraining },
+    { prepareAgentCommandExecutionIdentity },
+    { runEmbeddedAgentAttempt },
+  ] = await Promise.all([
+    import("../../acp/control-plane/manager.js"),
+    import("../../infra/agent-events.js"),
+    import("../../process/gateway-work-admission.js"),
+    import("../agent-command-execution-identity.js"),
+    import("../command/run-embedded-attempt.js"),
+  ]);
+  const opts = {
+    message: "Resume the interrupted task.",
+    requesterOrigin: params.requesterOrigin,
+    abortSignal: params.signal,
+    mainRestartRecoveryAdmitted: true,
+    mainRestartRecoveryAttempt: params.entry.mainRestartRecovery!.chargedAttempts,
+    onActiveModelSelected: () => markGatewayRestartDraining("stop (SIGTERM)"),
+  };
+  const provider = "anthropic";
+  const model = "claude-sonnet-4-6";
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const prepared: Parameters<typeof runEmbeddedAgentAttempt>[0]["prepared"] = {
+    opts,
+    cfg: {},
+    body: opts.message,
+    transcriptBody: opts.message,
+    configuredThinkingCatalog: [],
+    normalizedSpawned: {},
+    agentCfg: undefined,
+    thinkOverride: undefined,
+    thinkOnce: undefined,
+    verboseOverride: undefined,
+    timeoutMs: 10_000,
+    runTimeoutOverrideMs: undefined,
+    sessionId: params.entry.sessionId,
+    sessionEntry: params.entry,
+    sessionStore: { [params.sessionKey]: params.entry },
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    runId: params.runId,
+    isNewSession: false,
+    previousSessionId: undefined,
+    persistedThinking: undefined,
+    persistedVerbose: undefined,
+    sessionAgentId: "main",
+    outboundSession: undefined,
+    workspaceDir: params.stateDir,
+    cwd: undefined,
+    agentDir: path.join(params.stateDir, "agents", "main", "agent"),
+    pluginsEnabled: false,
+    manifestMetadataSnapshot: undefined,
+    modelManifestContext: { manifestPlugins: [] },
+    isSubagentLane: false,
+    acpManager: getAcpSessionManager(),
+    acpResolution: null,
+    runLease: undefined,
+  };
+  const admission = prepareAgentCommandExecutionIdentity({
+    opts,
+    prepared,
+    ingress: { kind: "system", boundary: "restart-recovery-test", state: "present" },
+    lifecycleGeneration,
+  });
+  try {
+    await runEmbeddedAgentAttempt({
+      prepared,
+      preparedRunAdmission: admission,
+      opts,
+      sessionEntry: params.entry,
+      lifecycleGeneration,
+      onLifecycleGenerationChanged: () => {},
+      suppressVisibleSessionEffects: false,
+      preserveUserFacingSessionModelState: false,
+      trackInternalModelRunTarget: () => {},
+      embeddedSessionState: {
+        sessionEntry: params.entry,
+        requestedThinkLevel: "off",
+        resolvedVerboseLevel: undefined,
+        skillsSnapshot: { prompt: "", skills: [] },
+        runContext: {},
+      },
+      modelSelection: {
+        sessionEntry: params.entry,
+        provider,
+        model,
+        requestedRouteResolution: "resolved",
+        defaultProvider: provider,
+        defaultModel: model,
+        configuredDefaultAuthProfileId: undefined,
+        providerForAuthProfileValidation: provider,
+        hasExplicitRunOverride: false,
+        storedProviderOverride: undefined,
+        storedModelOverride: undefined,
+        storedModelOverrideSource: undefined,
+        hasStoredAutoFallbackProvenance: false,
+        autoFallbackPrimaryProbe: undefined,
+        sessionEntryForAttempt: params.entry,
+        thinkingCatalog: [],
+        immutableThinkLevel: "off",
+        effectiveTurnThinkLevel: "off",
+        sessionFile: path.join(path.dirname(params.storePath), `${params.entry.sessionId}.jsonl`),
+      },
+    });
+  } finally {
+    await admission.finish();
+  }
 }

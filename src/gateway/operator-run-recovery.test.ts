@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
+import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
@@ -22,6 +24,7 @@ import {
 } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { changeCanonicalUserChannelIdentity } from "../state/user-channel-identity-operations.js";
 import { setCanonicalUserProfileDisplayName } from "../state/user-profile-writes.js";
 import {
   linkEmail,
@@ -38,9 +41,12 @@ import {
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import {
   readGatewayOperatorRecoverySource,
   restoreGatewayOperatorSource,
+  restoreGatewayQueuedOperatorRecovery,
 } from "./operator-run-recovery.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -193,6 +199,121 @@ describe("restart recovery authenticated operator source", () => {
         { scopes: ["operator.write"] },
       ),
   );
+  it("preserves live channel work at recovery bounds and rejects revoked ingress", async () => {
+    await withAdminIngress(
+      async ({ admins, context, gateway, retire, cfg, activatePolicy }) => {
+        const admin = expectDefined(admins[0], "linked administrator");
+        cfg.agents = { entries: { main: { model: "fixture/permitted" } } };
+        const roles = expectDefined(cfg.gateway?.roles, "configured channel roles");
+        for (const count of [256, 257]) {
+          await activatePolicy({
+            roles: {
+              ...roles,
+              definitions: {
+                ...roles.definitions,
+                admin: {
+                  ...expectDefined(roles.definitions.admin, "administrator role"),
+                  modelPolicy: {
+                    sourceAgent: "main",
+                    allow: ["fixture/*"],
+                    deny: Array.from({ length: count }, (_, index) => `fixture/blocked-${index}/*`),
+                  },
+                },
+              },
+            },
+          });
+          const bounded = expectDefined(
+            getCommandOwnerAuthority(await context(admin.identity.senderId))?.operatorAuthority,
+            "live linked operator with configured model policy",
+          );
+          expect(bounded.modelPolicy?.allows({ provider: "fixture", model: "permitted" })).toBe(
+            true,
+          );
+          expect(
+            bounded.modelPolicy?.allows({
+              provider: "fixture",
+              model: `blocked-${count - 1}/test`,
+            }),
+          ).toBe(false);
+          const captured = captureQueuedOperatorRecoverySource(bounded);
+          expect(bounded.assertCurrent).not.toThrow();
+          const serialized = JSON.stringify(captured);
+          const persisted: unknown = JSON.parse(serialized);
+          if (count === 256) {
+            expect(captured?.kind).toBe("channel");
+            const resumed = await restoreGatewayQueuedOperatorRecovery({
+              source: decodeQueuedOperatorRecoverySource(persisted),
+              context: gateway,
+              assertCurrent: () => {},
+            });
+            try {
+              expect(
+                resumed.authority.modelPolicy?.allows({ provider: "fixture", model: "permitted" }),
+              ).toBe(true);
+              expect(
+                resumed.authority.modelPolicy?.allows({
+                  provider: "fixture",
+                  model: "blocked-255/test",
+                }),
+              ).toBe(false);
+            } finally {
+              resumed.release();
+            }
+          } else {
+            expect(captured).toEqual({ kind: "unavailable" });
+            await expect(
+              restoreGatewayQueuedOperatorRecovery({
+                source: decodeQueuedOperatorRecoverySource(persisted),
+                context: gateway,
+                assertCurrent: () => {},
+              }),
+            ).rejects.toThrow(
+              "Queued operator authority cannot be recovered; submit a new request.",
+            );
+            await changeCanonicalUserChannelIdentity("unlink", admin.profile.id, admin.identity);
+            expect(() => captureQueuedOperatorRecoverySource(bounded)).toThrow(
+              "Channel operator authority changed",
+            );
+            await changeCanonicalUserChannelIdentity("link", admin.profile.id, admin.identity);
+          }
+        }
+        await activatePolicy({ roles });
+        const original = expectDefined(
+          getCommandOwnerAuthority(await context(admin.identity.senderId))?.operatorAuthority,
+          "authenticated channel operator",
+        );
+        const source = expectDefined(
+          captureQueuedOperatorRecoverySource(original),
+          "queued source",
+        );
+        expect(source.kind).toBe("channel");
+        const serializedSource = JSON.stringify(source);
+        const persisted: unknown = JSON.parse(serializedSource);
+        retire();
+        expect(original.assertCurrent).toThrow();
+        const restore = () =>
+          restoreGatewayQueuedOperatorRecovery({
+            source: decodeQueuedOperatorRecoverySource(persisted),
+            context: gateway,
+            assertCurrent: () => {},
+          });
+        const restored = await restore();
+        try {
+          expect(restored.authority.assertCurrent).not.toThrow();
+          expect(restored.authority.profileId).toBe(admin.profile.id);
+          await changeCanonicalUserChannelIdentity("unlink", admin.profile.id, admin.identity);
+          await changeCanonicalUserChannelIdentity("link", admin.profile.id, admin.identity);
+          expect(restored.authority.assertCurrent).toThrow();
+          await expect(restore()).rejects.toThrow("Queued channel operator authority changed");
+        } finally {
+          restored.release();
+        }
+      },
+      "role",
+      "slack",
+    );
+  });
+
   it("keeps restored authority current during unrelated issuance", () =>
     withRecovery(async (fixture, stateDir) => {
       const restored = expectDefined(await fixture.restore(), "exact device source");

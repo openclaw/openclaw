@@ -10,7 +10,10 @@ import { createReplyOperation } from "../sessions/session-controller.operation.j
 import { steerSessionControllerOperation } from "../sessions/session-controller.steer.js";
 import { testing } from "../sessions/session-controller.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { steerEmbeddedSessionInput } from "./embedded-session-steering.js";
+
+const senderId = "local-client";
 
 async function createLocalTurn(
   beforeAdmission?: (preparation: ReplyToolAuthorityPreparation) => Promise<void>,
@@ -23,7 +26,7 @@ async function createLocalTurn(
   });
   const queue = vi.fn((_text: string, _options?: ReplyBackendQueueMessageOptions) => {});
   const snapshot = prepareReplyToolAuthority({
-    originatingChannel: "internal",
+    originatingChannel: INTERNAL_MESSAGE_CHANNEL,
     disableTools: false,
     run: {
       sessionId: "local-session",
@@ -32,7 +35,8 @@ async function createLocalTurn(
       provider: "openai",
       model: "gpt-test",
       config: {},
-      messageProvider: "internal",
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+      senderId,
       permissionMode: "full",
       senderIsOwner: false,
       traceAuthorized: false,
@@ -85,6 +89,7 @@ describe("local TUI steering authority", () => {
       steerEmbeddedSessionInput({
         operation,
         text: "use the release branch",
+        senderId,
         sessionEntry: { sessionId: "local-session", updatedAt: 0, permissionMode: "full" },
         debounceMs: 0,
         abortSignal: new AbortController().signal,
@@ -95,21 +100,23 @@ describe("local TUI steering authority", () => {
   });
 
   it.each([
-    { permissionMode: "guarded" },
-    { toolOverrides: { webSearch: false } },
-  ] satisfies Partial<SessionEntry>[])(
-    "rejects changed local policy before native enqueue: %j",
+    { sessionEntry: { permissionMode: "guarded" } },
+    { sessionEntry: { toolOverrides: { webSearch: false } } },
+    { senderId: "other-local-client" },
+  ] satisfies { sessionEntry?: Partial<SessionEntry>; senderId?: string }[])(
+    "rejects a different local caller or policy before native enqueue: %j",
     async (changed) => {
       const { operation, queue } = await createLocalTurn();
       await expect(
         steerEmbeddedSessionInput({
           operation,
           text: "use the release branch",
+          senderId: changed.senderId ?? senderId,
           sessionEntry: {
             sessionId: "local-session",
             updatedAt: 0,
             permissionMode: "full",
-            ...changed,
+            ...changed.sessionEntry,
           },
           debounceMs: 0,
           abortSignal: new AbortController().signal,
@@ -131,6 +138,7 @@ describe("local TUI steering authority", () => {
     const pending = steerEmbeddedSessionInput({
       operation,
       text: "do not execute after stop",
+      senderId,
       sessionEntry: { sessionId: "local-session", updatedAt: 0, permissionMode: "full" },
       debounceMs: 0,
       abortSignal: source.signal,

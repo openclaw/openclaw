@@ -708,6 +708,38 @@ describe("loadSessionDiff", () => {
     expect(filePaths(result)).toEqual(["AGENTS.md"]);
   });
 
+  it.each([false, true])(
+    "reads uncommitted changes once when the baseline has no matching paths (prior changes: %s)",
+    async (priorChanges) => {
+      seedRepo({ "changed.txt": "before\n", "prior.txt": "before\n" });
+      if (priorChanges) {
+        append("prior.txt", "prior change\n");
+      }
+      await useBaseline();
+      if (priorChanges) {
+        commitFiles("save prior change");
+      }
+      append("changed.txt", "new change\n");
+
+      const runCommand = execRunner.runCommandBuffersWithTimeout;
+      let commandCount = 0;
+      vi.spyOn(execRunner, "runCommandBuffersWithTimeout").mockImplementation((argv, options) => {
+        if (argv[argv.indexOf("-C") + 1] === repoRoot) {
+          commandCount++;
+        }
+        return runCommand(argv, options);
+      });
+
+      const result = await readDiff({ scope: "uncommitted" });
+      expect(result.files).toEqual([
+        expect.objectContaining({ path: "changed.txt", additions: 1, deletions: 0 }),
+      ]);
+      expect(result.files[0]?.patch).toContain("+new change");
+      // One checkout read, base selection, tracked inventory/patch, and untracked listing.
+      expect(commandCount).toBeLessThanOrEqual(6);
+    },
+  );
+
   it("keeps exact large-file counts and later previews when untracked patches are omitted", async () => {
     initRepo(repoRoot);
     const additions = 140_000;

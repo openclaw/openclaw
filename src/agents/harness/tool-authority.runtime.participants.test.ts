@@ -22,11 +22,7 @@ import {
   detachActiveEmbeddedRun,
   isActiveEmbeddedRunId,
 } from "../embedded-agent-runner/runs.js";
-import {
-  createEmbeddedRunHandle,
-  registerTestEmbeddedRun as setActiveEmbeddedRun,
-  testing,
-} from "../embedded-agent-runner/runs.test-support.js";
+import { createEmbeddedRunHandle, testing } from "../embedded-agent-runner/runs.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import {
   getGatewayToolCallerIdentity,
@@ -35,6 +31,7 @@ import {
 import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.js";
 import {
   attempt,
+  interceptMessages,
   published,
   sessionId,
   sessionKey,
@@ -137,7 +134,7 @@ describe("host-prepared embedded tool authority", () => {
         alice.retire();
 
         expect(() => first?.assertCurrent()).toThrow(
-          "Personal-tool turn authority is no longer active",
+          "embedded reply authority is no longer active",
         );
         expect(() => second?.assertCurrent()).not.toThrow();
         expect(isActiveEmbeddedRunId(alice.runId)).toBe(false);
@@ -150,10 +147,15 @@ describe("host-prepared embedded tool authority", () => {
     });
   });
 
-  it("binds accepted direct-turn participants before queue settlement and releases them at close", async () => {
+  it("refuses another person while preserving same-requester reconnect and participant lifetime", async () => {
     const modelPolicy = prepareOperatorModelPolicy({ cfg: {}, policy: {} });
-    const releaseSteerer = vi.fn();
-    const retainSteerer = vi.fn(() => releaseSteerer);
+    const ownerReleases: ReturnType<typeof vi.fn>[] = [];
+    const retainOwner = vi.fn(() => {
+      const release = vi.fn();
+      ownerReleases.push(release);
+      return release;
+    });
+    const retainOtherRequester = vi.fn(() => vi.fn());
     const authority = (profileId: string) =>
       createAdmittedRunOperatorAuthority({
         profileId,
@@ -161,13 +163,19 @@ describe("host-prepared embedded tool authority", () => {
         gatewayAccessGrant: null,
         modelPolicy,
         assertCurrent() {},
-        ...(profileId === "bob" ? { retain: retainSteerer } : {}),
+        retain: profileId === "alice" ? retainOwner : retainOtherRequester,
       });
     const dispatch = await createPersonalToolScreenDispatcher(["alice", "bob"]);
-    const releaseQueue = createDeferred();
-    let queueReturned = false;
     const retained = await published(
       async ({ handle }) => {
+        const releaseQueue = createDeferred();
+        let queueReturned = false;
+        handle.supportsTranscriptCommitWait = true;
+        interceptMessages(handle, async (_text, options) => {
+          options?.onQueueAccepted?.(true);
+          await releaseQueue.promise;
+          queueReturned = true;
+        });
         const incoming: ReplyToolAuthorityOverlay = {
           senderIsOwner: true,
           disableTools: false,
@@ -181,10 +189,12 @@ describe("host-prepared embedded tool authority", () => {
         };
         let pending: Awaited<ReturnType<typeof beginReplyMessageInjectionTarget>> | undefined;
         try {
-          const restricted = { ...handle, supportsCrossProfileSteering: false };
-          setActiveEmbeddedRun(sessionId, restricted, sessionKey, attempt.sessionFile);
-          const restrictedTarget = captureCurrentReplyMessageInjectionTarget(sessionKey)!;
-          pending = await beginReplyMessageInjectionTarget(restrictedTarget, "Change my view", {
+          const target = captureCurrentReplyMessageInjectionTarget(sessionKey);
+          expect(getSessionControllerOperation(sessionKey)).toBeDefined();
+          if (!target) {
+            throw new Error("Expected the direct admitted owner to be injectable");
+          }
+          pending = await beginReplyMessageInjectionTarget(target, "Change my view", {
             isInboundUserMessage: true,
             toolAuthorityOverlay: incoming,
           });
@@ -196,34 +206,28 @@ describe("host-prepared embedded tool authority", () => {
           expect(
             getGatewayToolCallerIdentity()?.personalToolParticipants?.resolve()?.profileId,
           ).toBe("alice");
-          expect(retainSteerer).not.toHaveBeenCalled();
-          setActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
-          const target = captureCurrentReplyMessageInjectionTarget(sessionKey);
-          expect(getSessionControllerOperation(sessionKey)).toBeDefined();
-          if (!target) {
-            throw new Error("Expected the direct admitted owner to be injectable");
+          expect(retainOtherRequester).not.toHaveBeenCalled();
+          expect(ownerReleases.length).toBeGreaterThan(0);
+          for (const release of ownerReleases) {
+            expect(release).not.toHaveBeenCalled();
           }
           pending = await beginReplyMessageInjectionTarget(target, "Change my view", {
             isInboundUserMessage: true,
-            toolAuthorityOverlay: incoming,
+            toolAuthorityOverlay: {
+              ...incoming,
+              operatorAuthority: authority("alice"),
+              senderId: "alice-sender",
+              senderName: "Alice renamed",
+              gatewayUiCommandTarget: { connId: "alice-reconnected", profileId: "alice" },
+            },
           });
           await expect(pending.acceptance).resolves.toBe(true);
-          const ambiguous = await dispatch();
-          expect(ambiguous.respond).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({
-              code: "INVALID_REQUEST",
-              message: expect.stringMatching(/Alice \(user: alice\)[\s\S]*Bob \(user: bob\)/),
-            }),
-          );
-          expect(ambiguous.broadcastToConnIds).not.toHaveBeenCalled();
-          const selected = await dispatch("bob");
+          const selected = await dispatch();
           expect(selected.respond).toHaveBeenCalledWith(true, { ok: true });
           expect(selected.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
             "ui.command",
             { command: { kind: "sidebar", visible: false } },
-            new Set(["bob-tab"]),
+            new Set(["alice-tab"]),
           );
           expect(queueReturned).toBe(false);
           releaseQueue.resolve();
@@ -241,23 +245,12 @@ describe("host-prepared embedded tool authority", () => {
         gatewayUiCommandTarget: { connId: "alice-tab", profileId: "alice" },
       },
       authority("alice"),
-      (handle) => {
-        handle.supportsTranscriptCommitWait = true;
-        handle.messageInjectionV2 = {
-          version: 2,
-          isAvailable: () => true,
-          queueMessage: async (_text, options, assertCurrent) => {
-            assertCurrent();
-            options?.onQueueAccepted?.(true);
-            await releaseQueue.promise;
-            queueReturned = true;
-          },
-        };
-      },
     );
-    expect(retainSteerer).toHaveBeenCalledOnce();
-    expect(releaseSteerer).toHaveBeenCalledOnce();
-    const closed = await withGatewayToolCallerIdentity(retained, () => dispatch("bob"));
+    expect(retainOtherRequester).not.toHaveBeenCalled();
+    for (const release of ownerReleases) {
+      expect(release).toHaveBeenCalledOnce();
+    }
+    const closed = await withGatewayToolCallerIdentity(retained, () => dispatch("alice"));
     expect(closed.respond).toHaveBeenCalledWith(
       false,
       undefined,

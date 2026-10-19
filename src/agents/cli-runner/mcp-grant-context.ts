@@ -9,6 +9,7 @@ import {
   captureCronRequesterGrantIssuer,
 } from "../cron-creator-authority-context.js";
 import type { DelegationCapability } from "../delegation-capability.js";
+import { captureRequesterOrigin } from "../requester-origin.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
 import { resolveStoredSessionPermissionPolicy } from "../tool-fs-policy.js";
 import type { RunCliAgentParams } from "./types.js";
@@ -22,6 +23,7 @@ export function finalizeCliMcpGrant(
   nativeAuthorityPending: boolean,
   source: Pick<
     RunCliAgentParams,
+    | "config"
     | "admittedRunContext"
     | "assertCurrent"
     | "messageActionTurnCapability"
@@ -48,6 +50,7 @@ export function finalizeCliMcpGrant(
     ...(cronRequesterGrantIssuer ? { cronRequesterGrantIssuer } : {}),
     ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
     admittedRunContext: source.admittedRunContext,
+    toolPolicyConfig: source.config,
     messageActionTurnCapability: source.messageActionTurnCapability,
     abortSignal: source.abortSignal,
     assertCurrent: source.assertCurrent,
@@ -199,6 +202,10 @@ export function buildCliMcpGrantContext(params: {
     grantedToolsAllow[0] === "message";
   return {
     sessionKey,
+    requesterOrigin: captureRequesterOrigin({ ...params.run, sessionKey }),
+    operatorProfileId: params.run.operatorProfileId,
+    conversationId: params.run.conversationId,
+    chatType: params.run.chatType,
     ...(sessionPermissionPolicy ? { sessionPermissionPolicy } : {}),
     ...(params.run.conversationToolPolicy
       ? { conversationToolPolicy: structuredClone(params.run.conversationToolPolicy) }

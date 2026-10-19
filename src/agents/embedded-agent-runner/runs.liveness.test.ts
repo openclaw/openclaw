@@ -27,6 +27,7 @@ import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
+import { installSessionPlacementAdmissionProvider } from "../session-placement-admission.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -88,19 +89,24 @@ beforeEach(async () => {
     {
       ...caller,
       watchdogAttempt,
-      embeddedRunToolAuthorityBinding: (registration) => ({
-        source: "reply",
-        operation,
-        watchdogAttempt,
-        project: () => undefined,
-        projectAsync: async () => undefined,
-        assertActive: () => {
+      embeddedRunToolAuthorityBinding: (registration) => {
+        const assertActive = () => {
           assertSessionControllerOperation(operation);
           if (registration.handle !== handle) {
             throw new Error("liveness fixture handle changed");
           }
-        },
-      }),
+        };
+        return {
+          source: "reply",
+          acceptsRequesterOrigin: () => false,
+          operation,
+          watchdogAttempt,
+          project: () => undefined,
+          projectAsync: async () => undefined,
+          assertRegistrationActive: assertActive,
+          assertActive,
+        };
+      },
     },
     () => setActiveEmbeddedRun(sessionId, handle, sessionKey),
   );
@@ -138,6 +144,18 @@ it("keeps runtime waits steerable after the stale window", async () => {
 });
 
 it("reports quiet runtime waits without scheduling abort", async () => {
+  const resumeRecovery = createDeferred();
+  const releasePlacementProvider = installSessionPlacementAdmissionProvider({
+    assertCompactionSuccessorAllowed() {},
+    executeLocalTurn: async (_claim, runLocal) => await runLocal(),
+    executeTurn: async (_claim, _params, runLocal) => await runLocal(),
+    recoverTerminalTurn: async (_session, assertCurrent) => {
+      // Keep recovery pending at the diagnostic tick regardless of module import warmth.
+      await resumeRecovery.promise;
+      assertCurrent?.();
+      return undefined;
+    },
+  });
   const events: DiagnosticEventPayload[] = [];
   const unsubscribe = onDiagnosticEvent((event) => events.push(event));
   let recoveryAtDiagnosticTick: ReturnType<typeof operation.watchdog.snapshot>["recovery"];
@@ -173,10 +191,15 @@ it("reports quiet runtime waits without scheduling abort", async () => {
       reason: "active_reply_work",
     });
     // The controller timer started recovery before the diagnostic projection observed it.
+    resumeRecovery.resolve();
     await operation.ownerSettlement;
     expect(abort).toHaveBeenCalledOnce();
     expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
   } finally {
+    resumeRecovery.resolve();
+    operation.complete();
+    await operation.ownerSettlement;
+    releasePlacementProvider();
     unsubscribe();
   }
 });

@@ -113,10 +113,10 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
             }
           }
           const captured = binding
-            ? structuredClone({
+            ? {
                 ...commandSnapshot,
                 input: { ...commandSnapshot.input, source: binding.predicate },
-              })
+              }
             : commandSnapshot;
           const operationContext = binding?.context ?? context;
           let admission: SqliteWorkerOperationAdmission | undefined;

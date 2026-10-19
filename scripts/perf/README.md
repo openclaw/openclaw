@@ -157,6 +157,54 @@ then swap halves for the next pair. Record the exact revision, fixture counts
 and physical database bytes; a 64 MiB text fixture preserves roster/run shape
 but does not reproduce multi-GB transcript page-cache pressure.
 
+## Measure history pages and checkout diffs
+
+Prepare a team-shape fixture offline, then add this workload's small synthetic
+transcript and Git worktree. Run generation and measurements on the authorized
+benchmark host:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/history-diff-measure.ts \
+  --state-dir /path/to/team-shape --seed
+node --import ./scripts/tsx.mjs scripts/perf/history-diff-measure.ts \
+  --state-dir /path/to/team-shape --port 41072 --clients 4 \
+  --operations 25 --rounds 5 --revision <commit-sha>
+```
+
+`--seed` requires exclusive offline custody and refuses a second seed. It adds
+one session with 64 completed tool turns (8 KiB, 64 KiB, and 256 KiB tool results),
+captures a clean checkout baseline, then changes 32 tracked files and creates 32
+untracked files. All repositories, worktrees and data remain inside the fixture.
+Measurement never writes the database directly. The driver owns and stops its
+loopback Gateway; `--entry` defaults to `dist/entry.js` and also accepts a prepared
+source entry. It issues small, default, and large `chat.history` requests, plus
+full `sessions.diff` requests for both `all` and `uncommitted` scopes. Summary
+requests are excluded because their 10-second result cache would make repeated
+requests measure cached throughput instead of checkout and baseline work.
+Each operation is one concurrent cohort with one request per client. Empty
+history, missing tracked/untracked changes, missing full patches, or RPC failures
+reject the run.
+
+The first request for each variant is recorded separately as warmup. Later
+cohorts can still include burst-worker startup: warming one client does not warm
+all concurrent readers, and an idle start barrier can retire burst workers.
+Keep those first-cohort tails separate when attributing steady service costs.
+Measured rounds include raw latency samples, p50/p95/p99, payload bytes, returned row
+counts, main-thread/process CPU, CPU profiles and existing worker queue, run,
+and transfer diagnostics. Payload bytes measure re-encoded JSON in the driver,
+not WebSocket frame overhead. Profiles sample the main isolate; worker task
+diagnostics provide worker timings. They do not count Git subprocesses.
+`--output` names a new artifact directory (by default below the fixture).
+`--scenario` defaults to `all`; individual choices are `history-small`,
+`history-default`, `history-large`, `diff-all-full`, and
+`diff-uncommitted-full`. For a concurrent A/B
+comparison, select one matching scenario on both sides so faster completion does
+not move one side into a different workload. Generate independent, identical
+fixtures for each side, with matching client/operation/round counts and the same
+`--start-at <epoch-ms>`. The barrier waits after readiness and warmup, and fails
+if the deadline has passed. Hold the shared measurement lock around the pair,
+and swap the two CPU halves for the next pair.
+
 ## Measure transcript broadcast fanout
 
 With runtime artifacts built on the authorized benchmark host, seed a fixture
@@ -203,6 +251,19 @@ concurrency on both revisions, and report the actual database size. For a roughl
 `--transcript-mib 1500` rather than the 64 MiB logical-text default. The driver
 stops its Gateway and model fixture on completion or interruption and retains
 synthetic state for inspection. Never target a running Gateway's state.
+
+For completed-attempt retention, use `--scenario attempt-retention --clients 1
+--runs 10 --rounds 10 --chunks 1 --prompt-kib 128 --heap-snapshot`. Each round
+resets the ten child session generations, submits deterministic synthetic prompt
+text and a 256×128 synthetic noise PNG, executes three real `read` tools with
+16 KiB text results, receives one synthetic output-limit stop,
+and completes the resulting transcript continuation. The driver requires one
+completed tool batch, output-limit response, and recovered response per child,
+and verifies inline images reach all three provider requests. These are
+direct child-session `agent` calls, not model-driven `sessions_spawn` calls.
+Post-GC Gateway heap samples follow every completed cohort, and the optional
+final `settled.heapsnapshot` permits retainer inspection. Session resets exclude
+intentionally retained live histories from the trend.
 
 To start an existing fixture without regenerating it, set `HOME` and
 `OPENCLAW_HOME` to `<state-dir>/home`, `OPENCLAW_STATE_DIR` to `<state-dir>`,

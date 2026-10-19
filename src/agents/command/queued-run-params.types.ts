@@ -15,12 +15,17 @@ import type { ProviderReviewAcknowledgment } from "../../sessions/provider-revie
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ReplyExpectation } from "../reply-completion.js";
+import type { RequesterOrigin } from "../requester-origin.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
 /** Prepared execution inputs retained by queued turns, without live attempt ownership. */
 export type QueuedAgentRunParams = {
+  requesterOrigin?: RequesterOrigin;
+  operatorProfileId?: string;
+  conversationId?: string | null;
+  messageThreadId?: string | number;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   sessionId: string;
   sessionKey?: string;

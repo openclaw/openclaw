@@ -18,7 +18,10 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
-import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  GetReplyOptions,
+  ReplyDispatchRun,
+} from "../../auto-reply/get-reply-options.types.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
@@ -51,6 +54,7 @@ import {
 } from "../../sessions/session-controller.js";
 import {
   bindSessionControllerTarget,
+  captureSessionControllerSettlement,
   captureSessionTarget,
   getSessionControllerWorkCount,
   runSessionMutation,
@@ -88,11 +92,13 @@ import { registerChatSourceMediaTests } from "./chat.directive-tags.source-media
 import {
   ChatDirectiveDedupe,
   createChatDirectiveReplyBackend,
+  createExpectedAcpUserTurn,
   createGlobalChatDirectiveConfig,
   createChatDirectiveSender,
   createChatDirectiveSuiteResources,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
+  managedAudioBlocks,
   createUnconfirmedTranscriptDelivery,
   expectClaimOnlyTranscriptMedia,
   readChatDirectiveConfig,
@@ -154,7 +160,7 @@ const mockState = vi.hoisted(() => {
     lastDispatchThinkingLevelOverride: undefined as string | undefined,
     lastDispatchOriginatingLeafEntryId: undefined as string | null | undefined,
     lastTaskSuggestionDeliveryMode: undefined as "gateway" | undefined,
-    lastMessageInjectionDisposition: undefined as "none" | "accepted" | "rejected" | undefined,
+    lastMessageInjectionDisposition: undefined as GetReplyOptions["messageInjectionDisposition"],
     lastDispatchUserTurnInput: undefined as unknown,
     modelCatalog: null as ModelCatalogEntry[] | null,
     emittedTranscriptUpdates: [] as TranscriptUpdate[],
@@ -820,10 +826,9 @@ function findAssistantTranscriptUpdates() {
 }
 
 function findUserUpdate() {
-  return mockState.emittedTranscriptUpdates.find((update) => {
-    const message = update.message as { role?: unknown } | undefined;
-    return message?.role === "user";
-  });
+  return mockState.emittedTranscriptUpdates.find(
+    (update) => asOptionalRecord(update.message)?.role === "user",
+  );
 }
 
 function expectUserUpdateIdentity(update: ReturnType<typeof findUserUpdate>) {
@@ -994,10 +999,6 @@ function createSlashCommandMediaReply(
   payload: (typeof mockState.dispatchedReplies)[number]["payload"] = {},
 ): (typeof mockState.dispatchedReplies)[number] {
   return { kind, payload: { mediaUrls, trustedLocalMedia: true, ...payload } };
-}
-
-function managedAudioBlocks(content: Array<Record<string, unknown>>) {
-  return content.filter((block) => block.type === "audio");
 }
 
 function bindTestToolAuthority(operation: ReplyOperation) {
@@ -1287,6 +1288,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).toHaveBeenCalledTimes(accepted ? 1 : 0);
     if (accepted) {
       expect(response[1]).toEqual(expect.objectContaining({ status: "started" }));
+      await captureSessionControllerSettlement({
+        scope: mockState.storePath,
+        identities: [requestedSessionId],
+      });
     } else {
       expect(response).toEqual([
         false,
@@ -4142,18 +4147,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(mockState.lastDispatchCtx?.RawBody).toBe("bench update");
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("bench update");
-    expect(mockState.lastDispatchUserTurnInput).toEqual({
-      role: "user",
-      content: "bench update",
-      timestamp: expect.any(Number),
-      idempotencyKey: "idem-system-provenance-acp:user",
-      __openclaw: {
-        chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    expect(mockState.lastDispatchUserTurnInput).toEqual(
+      createExpectedAcpUserTurn({
+        content: "bench update",
+        idempotencyKey: "idem-system-provenance-acp:user",
         senderIsOwner: true,
-        transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },
-      },
-      provenance,
-    });
+        provenance,
+      }),
+    );
   });
 
   it("does not emit pre-gate user transcript content when before_agent_run hooks are registered", async () => {
@@ -4294,16 +4295,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       expect(mockState.savedMediaCalls).toStrictEqual([]);
       expect(findUserUpdate()).toBeUndefined();
-      expect(mockState.lastDispatchUserTurnInput).toEqual({
-        role: "user",
-        content: "bridge image",
-        timestamp: expect.any(Number),
-        idempotencyKey: "idem-user-transcript-acp-images:user",
-        __openclaw: {
-          chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
-          transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },
-        },
-      });
+      expect(mockState.lastDispatchUserTurnInput).toEqual(
+        createExpectedAcpUserTurn({
+          content: "bridge image",
+          idempotencyKey: "idem-user-transcript-acp-images:user",
+        }),
+      );
     });
   });
 

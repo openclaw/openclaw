@@ -660,7 +660,7 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Original host-admitted operator basis, owned by the exact restart source claim. */
-  restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
+  restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
   /** Unhanded exec completion obligations; no command arguments or output. */
   pendingExecNotifications?: Record<
     string,
@@ -677,6 +677,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
       > & { toolsAllow?: readonly string[][] };
     }
   >;
+  /** Original requester facts retained by the exact host-admitted restart source claim. */
+  restartRecoveryRequesterSource?: import("../../agents/requester-run-recovery-source.js").RestartRecoveryRequesterSource;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

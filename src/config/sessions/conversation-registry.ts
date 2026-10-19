@@ -122,7 +122,6 @@ function readConversationsAsync(
   scope: ConversationRegistryScope,
   query: ConversationReadQuery,
 ): Promise<ConversationRecord[]> {
-  const capturedQuery = structuredClone(query);
   const selected = captureSessionActorStorageOwner(
     {
       agentId: scope.databaseAgentId ?? scope.agentId,
@@ -132,6 +131,7 @@ function readConversationsAsync(
     conversationAuthority,
   );
   if (selected) {
+    const capturedQuery = structuredClone(query);
     if (
       selected.binding &&
       selected.agentId === selected.binding.agentId &&
@@ -150,7 +150,7 @@ function readConversationsAsync(
     );
   }
   return withConversationRead(scope, ({ reader, database }) =>
-    reader.readConversations({ query: capturedQuery, env: database.env }),
+    reader.readConversations({ query, env: database.env }),
   );
 }
 
@@ -270,9 +270,9 @@ export async function registerConversationAddresses(
   }
   const { options } = pinConversationDatabaseScope(scope);
   const input = {
-    identities: structuredClone(identities),
+    identities,
     discoveredAt,
-    query: query && structuredClone(query),
+    query,
   };
   const selectCurrent = () => {
     const selected = selectEligible(input.identities);
@@ -378,7 +378,6 @@ export async function withConversationAuthority<T>(
     return await select(facts)();
   }
   const { options } = pinConversationDatabaseScope(scope);
-  const input = structuredClone(query);
   const execution = captureOpenClawAgentDatabaseExecution(options);
   let consumed: Promise<{ ok: true; value: T } | { ok: false; error: unknown }> | undefined;
   try {
@@ -423,7 +422,7 @@ export async function withConversationAuthority<T>(
               });
             },
           },
-          (worker) => worker.execute({ type: "conversation.authority", input }),
+          (worker) => worker.execute({ type: "conversation.authority", input: query }),
         );
         if (!consumed && settled !== undefined) {
           throw new Error("Conversation authority omitted its transaction grant");

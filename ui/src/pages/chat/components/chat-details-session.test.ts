@@ -1,10 +1,16 @@
 /* @vitest-environment jsdom */
 import { createComponent } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
@@ -205,6 +211,99 @@ it("renders unknown without invented zero counts and keeps the All changes actio
   expect(button.textContent).not.toContain("0 files");
   button.click();
   expect(open).toHaveBeenCalledOnce();
+});
+
+it("admits only the latest visible native summary inputs and retires detached work", async () => {
+  vi.useFakeTimers();
+  const result = { files: [{ path: "accepted.ts" }], additions: 3, deletions: 1 };
+  const first = createDeferred<typeof result>();
+  const retired = createDeferred<typeof result>();
+  let requestedAt = 0;
+  const diff = vi.fn<(params: unknown) => Promise<typeof result>>().mockImplementation(() => {
+    requestedAt = Date.now();
+    return Promise.resolve(result);
+  });
+  diff.mockReturnValueOnce(first.promise);
+  const request = createGatewayRequestMock((method, params) =>
+    method === "sessions.diff"
+      ? diff(params)
+      : { jobs: [], total: 0, hasMore: false, nextOffset: null, snapshotRevision: "1" },
+  );
+  const { gateway, publish } = createApplicationGateway();
+  publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+  const element = document.createElement("openclaw-chat-details-session");
+  onTestFinished(async () => {
+    element.remove();
+    await Promise.resolve();
+    vi.useRealTimers();
+  });
+  const select = (id: string) => {
+    element.props = {
+      sessionKey: `agent:main:${id}`,
+      currentAgentId: "main",
+      selectedSession: { key: `agent:main:${id}`, kind: "direct", sessionId: id },
+      messages: [],
+      pullRequestsGateway: gateway,
+      onOpenSessionDiff: () => {},
+    };
+  };
+  select("hidden");
+  document.body.append(element);
+  await element.updateComplete;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(diff).not.toHaveBeenCalled();
+
+  element.presented = true;
+  select("intermediate");
+  select("first");
+  await element.updateComplete;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(diff).toHaveBeenCalledExactlyOnceWith({
+    sessionKey: "agent:main:first",
+    agentId: "main",
+    scope: "all",
+    summaryOnly: true,
+  });
+  select("accepted");
+  first.resolve({ ...result, additions: 999 });
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForSolid(() =>
+    expect(element.querySelector(".chat-details__change-lines--add")?.textContent).toBe("+3"),
+  );
+  expect(diff).toHaveBeenCalledTimes(2);
+  expect(diff).toHaveBeenLastCalledWith({
+    sessionKey: "agent:main:accepted",
+    agentId: "main",
+    scope: "all",
+    summaryOnly: true,
+  });
+
+  const button = element.querySelector(".chat-details__all-changes");
+  element.remove();
+  document.body.append(element);
+  await element.updateComplete;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(element.querySelector(".chat-details__all-changes")).toBe(button);
+  expect(diff).toHaveBeenCalledTimes(2);
+
+  element.props = { ...element.props!, runActive: true };
+  await vi.advanceTimersByTimeAsync(requestedAt + 4_999 - Date.now());
+  expect(diff).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(diff).toHaveBeenCalledTimes(3);
+  element.presented = false;
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(diff).toHaveBeenCalledTimes(3);
+
+  diff.mockReturnValueOnce(retired.promise);
+  element.presented = true;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(diff).toHaveBeenCalledTimes(4);
+  element.remove();
+  await Promise.resolve();
+  retired.resolve({ ...result, additions: 999 });
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(diff).toHaveBeenCalledTimes(4);
 });
 
 it("shows abbreviated colored deltas with exact accessible totals, partial and stale states", async () => {

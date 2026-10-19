@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -353,7 +353,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
   };
   return database.db.isTransaction
     ? read()
-    : runSqliteDeferredTransactionSync(database.db, read, {
+    : runSqliteReadSnapshotSync(database.db, read, {
         databaseLabel: database.path,
         operationLabel: "session transcript anchors read",
       });

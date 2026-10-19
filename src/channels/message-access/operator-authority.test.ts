@@ -131,9 +131,9 @@ installDiscordRegistryHooks();
 registerOperatorAssignmentTests();
 
 it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as const)(
-  "compares linked-channel steering permissions with %s roles",
-  (difference) =>
-    withOperator(
+  "keeps linked-channel steering requester-bound with %s roles",
+  async (difference) => {
+    await withAdminIngress(
       async ({ cfg, admins, context, activatePolicy, gateway }) => {
         if (difference !== "roles-disabled") {
           const roles = structuredClone(cfg.gateway!.roles!);
@@ -150,9 +150,12 @@ it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as con
           await activatePolicy({ roles });
         }
         const overlays = [];
-        for (const { identity } of admins) {
+        for (const { identity } of [admins[0]!, admins[1]!, admins[0]!]) {
           const ctx = await context(identity.senderId);
-          const operatorAuthority = expectDefined(authorityFor(ctx), "linked-channel authority");
+          const operatorAuthority = expectDefined(
+            prepareInternalGetReplyOptions(undefined, ctx)?.operatorAuthority,
+            "linked-channel operator authority",
+          );
           overlays.push(
             resolveInboundReplyToolAuthorityOverlay({
               ctx,
@@ -164,6 +167,7 @@ it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as con
         }
         const owner = expectDefined(overlays[0], "owner overlay");
         const steerer = expectDefined(overlays[1], "steerer overlay");
+        const reconnect = expectDefined(overlays[2], "same-requester reconnect overlay");
         expect(owner.operatorAuthority!.scopes).toEqual(steerer.operatorAuthority!.scopes);
         expect(owner.operatorAuthority!.gatewayAccessGrant).toBeNull();
         expect(steerer.operatorAuthority!.gatewayAccessGrant).toBeNull();
@@ -190,18 +194,30 @@ it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as con
           const queueMessage = vi.fn(async () => {});
           operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
           operation.setPhase("running");
-          const accepted = difference === "equivalent" || difference === "roles-disabled";
+          const equivalent = difference === "equivalent" || difference === "roles-disabled";
+          if (equivalent) {
+            expect(owner.operatorAuthority!.rolePolicy).toEqual(
+              steerer.operatorAuthority!.rolePolicy,
+            );
+          } else {
+            expect(owner.operatorAuthority!.rolePolicy).not.toEqual(
+              steerer.operatorAuthority!.rolePolicy,
+            );
+          }
           await expect(
             queueCurrentReplyRunMessage(run.run.sessionId, "Steering from another linked user", {
               isInboundUserMessage: true,
               toolAuthorityOverlay: steerer,
             }),
-          ).resolves.toEqual(
-            accepted
-              ? { status: "accepted" }
-              : { status: "rejected", reason: "tool_authority_mismatch" },
-          );
-          expect(queueMessage).toHaveBeenCalledTimes(accepted ? 1 : 0);
+          ).resolves.toEqual({ status: "rejected", reason: "tool_authority_mismatch" });
+          expect(queueMessage).not.toHaveBeenCalled();
+          await expect(
+            queueCurrentReplyRunMessage(run.run.sessionId, "Steering after reconnect", {
+              isInboundUserMessage: true,
+              toolAuthorityOverlay: reconnect,
+            }),
+          ).resolves.toEqual({ status: "accepted" });
+          expect(queueMessage).toHaveBeenCalledOnce();
           expect(owner.operatorAuthority!.rolePolicy).toEqual(uiCapture.authority.rolePolicy);
           if (difference === "roles-disabled") {
             expect(owner.operatorAuthority!.rolePolicy).toBeUndefined();
@@ -213,7 +229,8 @@ it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as con
         }
       },
       difference === "roles-disabled" ? "identity-grant" : "role",
-    ),
+    );
+  },
 );
 
 it("exposes verified requester metadata without widening owner tools", () =>

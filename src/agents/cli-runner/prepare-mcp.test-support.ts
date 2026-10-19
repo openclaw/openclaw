@@ -136,6 +136,17 @@ export function registerCliMcpPreparationTests({
     expect(mintMcpLoopbackClientGrant).toHaveBeenCalledWith({
       context: {
         sessionKey: "agent:main:telegram:group:chat123",
+        requesterOrigin: {
+          sessionKey: "agent:main:telegram:group:chat123",
+          messageProvider: "discord",
+          senderId: "canonical-sender",
+          senderName: "Canonical Name",
+          senderUsername: "canonical-user",
+          senderE164: "+15551234567",
+          groupId: "chat123",
+          groupChannel: "ops",
+          groupSpace: "workspace-a",
+        },
         runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
         runtimePolicyAgentId: "worker",
         agentId: "main",
@@ -191,6 +202,7 @@ export function registerCliMcpPreparationTests({
       },
       runtimeOwnerToken: "loopback-owner-token",
       admittedRunContext: context.params.admittedRunContext,
+      toolPolicyConfig: {},
       sessionEventSourcePolicy: {
         toolsAllow: undefined,
         settings: { permissionMode: undefined, toolOverrides: undefined },
@@ -417,4 +429,14 @@ export function setRawCliBackendForPrepareTest(backend: CliBackendPlugin & { plu
     resolvePluginSetupCliBackend: () => undefined,
     resolveRuntimeCliBackends: () => [backend],
   });
+}
+
+export function createJsonlStdinBackendConfig(command: string): CliBackendPlugin["config"] {
+  return {
+    command,
+    args: ["--print"],
+    output: "jsonl",
+    input: "stdin",
+    sessionMode: "existing",
+  };
 }
