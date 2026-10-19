@@ -47,8 +47,8 @@ function resolveViewportBounds() {
   const viewport = window.visualViewport;
   const left = viewport?.offsetLeft ?? 0;
   const top = viewport?.offsetTop ?? 0;
-  const width = viewport?.width ?? window.innerWidth ?? document.documentElement.clientWidth;
-  const height = viewport?.height ?? window.innerHeight ?? document.documentElement.clientHeight;
+  const width = viewport?.width ?? window.innerWidth;
+  const height = viewport?.height ?? window.innerHeight;
 
   return {
     bottom: top + height,
@@ -59,10 +59,7 @@ function resolveViewportBounds() {
 }
 
 function clampConfirmedActionPosition(value: number, min: number, max: number) {
-  if (max < min) {
-    return min;
-  }
-  return Math.min(Math.max(value, min), max);
+  return Math.max(min, Math.min(value, max));
 }
 
 function placeConfirmedActionPopover(trigger: HTMLElement, popover: HTMLElement) {

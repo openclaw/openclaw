@@ -30,25 +30,25 @@ export function mountThreadMenu(
           aria-label={t("chat.messages.actions")}
           style={{ left: `${x}px`, top: `${y}px` }}
         >
-          {actions.map((action) => {
+          {actions.map(({ label, ariaLabel, disabled, tooltip, className, onClick }) => {
             const button = (
               <button
                 ref={(node) => {
-                  if (!action.disabled && !firstButton) {
+                  if (!disabled && !firstButton) {
                     firstButton = node;
                   }
                 }}
                 type="button"
                 role="menuitem"
-                aria-label={action.ariaLabel}
-                disabled={action.disabled}
-                onClick={action.onClick}
+                aria-label={ariaLabel}
+                disabled={disabled}
+                onClick={onClick}
               >
-                {action.tooltip ? <span data-copy-label="">{action.label}</span> : action.label}
+                {tooltip ? <span data-copy-label="">{label}</span> : label}
               </button>
             );
-            return action.tooltip ? (
-              <openclaw-tooltip prop:content={action.tooltip} class={action.className}>
+            return tooltip ? (
+              <openclaw-tooltip prop:content={tooltip} class={className}>
                 {button}
               </openclaw-tooltip>
             ) : (
