@@ -159,6 +159,7 @@ describe("Matrix sync admission", () => {
       const roomId = "!ordered:example.org";
       const event = {
         event_id: "$z-first",
+        origin_server_ts: now,
         sender: "@alice:example.org",
         type: "m.room.message",
         content: { msgtype: "m.text", body: "First" },

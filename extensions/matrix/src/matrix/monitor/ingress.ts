@@ -153,12 +153,12 @@ export function createMatrixIngressMonitor(params: {
       return;
     }
     await (initializeOrder ??= (async () => {
-      const queue = getQueue();
-      const { pending, claims } = queue.listUnsettled
-        ? await queue.listUnsettled()
+      const ingressQueue = getQueue();
+      const { pending, claims } = ingressQueue.listUnsettled
+        ? await ingressQueue.listUnsettled()
         : {
-            pending: await queue.listPending({ limit: "all" }),
-            claims: await queue.listClaims(),
+            pending: await ingressQueue.listPending({ limit: "all" }),
+            claims: await ingressQueue.listClaims(),
           };
       for (const row of [...pending, ...claims]) {
         lastReceivedAt = Math.max(lastReceivedAt, row.receivedAt);
