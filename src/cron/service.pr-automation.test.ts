@@ -38,8 +38,9 @@ import {
   resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./isolated-agent/run.test-harness.js";
+import { cronTestDeps } from "./service.fixture-builders.test-support.js";
 import type { CronEvent } from "./service.js";
-import { createCronServiceWithStateForTest, createNoopLogger } from "./service.test-harness.js";
+import { createCronServiceWithStateForTest } from "./service.test-harness.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { resolveCronSessionTargetSessionKey } from "./session-target.js";
 
@@ -63,16 +64,13 @@ beforeEach(() => {
   mockRunCronFallbackPassthrough();
 });
 
-// This synthetic model consumes only the serialized recipe target. It does not
-// evaluate prose, reviews, CI, or GitHub authority and cannot prove autonomous merging.
+// Synthetic model: transports recipe targets; does not prove autonomous merging.
 function readRecipeTarget(prompt: string) {
   const line = expectDefined(
     prompt.split("\n").find((value) => value.includes("for this exact target: ")),
     "recipe target line",
   );
-  const start = line.indexOf("{");
-  const end = line.lastIndexOf("}");
-  const target = asRecord(JSON.parse(line.slice(start, end + 1)));
+  const target = asRecord(JSON.parse(line.slice(line.indexOf("{"), line.lastIndexOf("}") + 1)));
   if (
     typeof target.owner !== "string" ||
     typeof target.repo !== "string" ||
@@ -109,16 +107,14 @@ async function createFixture(option: CiAutomationOption) {
   });
   vi.mocked(resolveAgentDir).mockReturnValue(path.join(stateDir, "agents", "main", "agent"));
   setRuntimeConfigSnapshot(config);
-  const seed = async (sessionId: string) =>
-    await accessor.replaceSessionEntry(
-      { agentId: "main", sessionKey: SESSION },
-      {
-        sessionId,
-        updatedAt: Date.now(),
-        sessionStartedAt: Date.now(),
-        lastInteractionAt: Date.now(),
-      },
-    );
+  const sessionRef = { agentId: "main", sessionKey: SESSION };
+  const seed = (sessionId: string) =>
+    accessor.replaceSessionEntry(sessionRef, {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionStartedAt: Date.now(),
+      lastInteractionAt: Date.now(),
+    });
   await seed(SESSION_ID);
   const creator = createCronFixture(undefined, config);
   const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] });
@@ -130,20 +126,20 @@ async function createFixture(option: CiAutomationOption) {
     repo: "fixture-repo",
     number: 41,
   };
+  const rpc = (method: string, params: Record<string, unknown>) => ({
+    req: { type: "req" as const, id: method, method, params },
+    params,
+    context: creator.context,
+    client,
+    isWebchatConnect: () => false,
+  });
   const add = async (selected: CiAutomationTarget) => {
     const definition = { ...ciAutomationJobSpec(selected, option), enabled: false };
     const respond = vi.fn();
     await expectDefined(
       cronHandlers["cron.add"],
       "cron.add",
-    )({
-      req: { type: "req", id: "recipe-create", method: "cron.add", params: definition },
-      params: definition,
-      respond,
-      context: creator.context,
-      client,
-      isWebchatConnect: () => false,
-    });
+    )({ ...rpc("cron.add", definition), respond });
     expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
     return expectDefined(
       (await creator.read()).find((job) => job.declarationKey === definition.declarationKey),
@@ -156,33 +152,31 @@ async function createFixture(option: CiAutomationOption) {
   const clock = createGatewaySchedulerClock(Date.now());
   let finished = createDeferredCore<CronEvent>();
   const work = new AsyncWorkScope();
-  const { cron: execution, state: executionState } = createCronServiceWithStateForTest({
-    scheduler: createTestGatewayScheduler(clock.clock),
-    nowMs: clock.clock.now,
-    storePath: path.join(stateDir, "cron", "jobs.json"),
-    cronEnabled: true,
-    defaultAgentId: "main",
-    log: createNoopLogger(),
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    onEvent: (event) => {
-      if (event.action === "finished") {
-        finished.resolve(event);
-      }
-    },
-    runIsolatedAgentJob: (request) =>
-      work.track(() =>
-        runCronIsolatedAgentTurn({
-          ...request,
-          cfg: config,
-          deps: {},
-          agentId: "main",
-          sessionKey:
-            resolveCronSessionTargetSessionKey(request.job.sessionTarget) ??
-            `cron:${request.job.id}`,
-        }),
-      ),
-  });
+  const { cron: execution, state: executionState } = createCronServiceWithStateForTest(
+    cronTestDeps({
+      scheduler: createTestGatewayScheduler(clock.clock),
+      nowMs: clock.clock.now,
+      storePath: path.join(stateDir, "cron", "jobs.json"),
+      defaultAgentId: "main",
+      onEvent: (event) => {
+        if (event.action === "finished") {
+          finished.resolve(event);
+        }
+      },
+      runIsolatedAgentJob: (request) =>
+        work.track(() =>
+          runCronIsolatedAgentTurn({
+            ...request,
+            cfg: config,
+            deps: {},
+            agentId: "main",
+            sessionKey:
+              resolveCronSessionTargetSessionKey(request.job.sessionTarget) ??
+              `cron:${request.job.id}`,
+          }),
+        ),
+    }),
+  );
   // Reload through a distinct scheduler owner rather than reuse cron.add's memory.
   await execution.start();
   expect((await execution.list({ includeDisabled: true })).map((job) => job.id).toSorted()).toEqual(
@@ -202,11 +196,26 @@ async function createFixture(option: CiAutomationOption) {
     // Cancellation publishes its result before the core finishes touching session state.
     await work.drain();
   };
-  return { creator, client, target, add, selected, other, execution, seed, tick, stop };
+  return {
+    creator,
+    rpc,
+    sessionRef,
+    target,
+    add,
+    selected,
+    other,
+    execution,
+    seed,
+    tick,
+    stop,
+    [Symbol.asyncDispose]: stop,
+  };
 }
 
 it("transports autoFix for only the selected PR across session replacement and disables future effects", async () => {
-  const fixture = await createFixture("autoFix");
+  await using fixture = await createFixture("autoFix");
+  const effectTarget = (number: number) => ({ owner: "fixture-org", repo: "fixture-repo", number });
+  const effect41 = effectTarget(41);
   const finalEffect =
     vi.fn<(target: { owner: string; repo: string; number: number }, sessionId: string) => void>();
   runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
@@ -222,35 +231,25 @@ it("transports autoFix for only the selected PR across session replacement and d
     );
     return { payloads: [{ text: "Synthetic endpoint accepted" }], meta: { agentMeta: {} } };
   });
-  try {
-    await fixture.execution.update(fixture.selected.id, { enabled: true });
-    expect(await fixture.tick()).toMatchObject({ jobId: fixture.selected.id, status: "ok" });
-    expect(finalEffect.mock.calls).toEqual([
-      [{ owner: "fixture-org", repo: "fixture-repo", number: 41 }, SESSION_ID],
-    ]);
-    await fixture.seed("replacement-session");
-    expect(await fixture.tick()).toMatchObject({ jobId: fixture.selected.id, status: "ok" });
-    expect(finalEffect.mock.calls[1]).toEqual([
-      { owner: "fixture-org", repo: "fixture-repo", number: 41 },
-      "replacement-session",
-    ]);
-    await fixture.execution.update(fixture.selected.id, { enabled: false });
-    await fixture.execution.update(fixture.other.id, { enabled: true });
-    // The second job supplies a real completed scheduler turn, not a sleep used
-    // to infer that the disabled job probably did not run.
-    expect(await fixture.tick()).toMatchObject({ jobId: fixture.other.id, status: "ok" });
-    expect(finalEffect.mock.calls).toEqual([
-      [{ owner: "fixture-org", repo: "fixture-repo", number: 41 }, SESSION_ID],
-      [{ owner: "fixture-org", repo: "fixture-repo", number: 41 }, "replacement-session"],
-      [{ owner: "fixture-org", repo: "fixture-repo", number: 42 }, "replacement-session"],
-    ]);
-    expect(fixture.execution.getJob(fixture.selected.id)?.enabled).toBe(false);
-    expect((await fixture.add({ ...fixture.target, sessionId: "replacement-session" })).id).toBe(
-      fixture.selected.id,
-    );
-  } finally {
-    await fixture.stop();
-  }
+  await fixture.execution.update(fixture.selected.id, { enabled: true });
+  expect(await fixture.tick()).toMatchObject({ jobId: fixture.selected.id, status: "ok" });
+  expect(finalEffect.mock.calls).toEqual([[effect41, SESSION_ID]]);
+  await fixture.seed("replacement-session");
+  expect(await fixture.tick()).toMatchObject({ jobId: fixture.selected.id, status: "ok" });
+  expect(finalEffect.mock.calls[1]).toEqual([effect41, "replacement-session"]);
+  await fixture.execution.update(fixture.selected.id, { enabled: false });
+  await fixture.execution.update(fixture.other.id, { enabled: true });
+  // Completing the other job proves the disabled job stayed silent.
+  expect(await fixture.tick()).toMatchObject({ jobId: fixture.other.id, status: "ok" });
+  expect(finalEffect.mock.calls).toEqual([
+    [effect41, SESSION_ID],
+    [effect41, "replacement-session"],
+    [effectTarget(42), "replacement-session"],
+  ]);
+  expect(fixture.execution.getJob(fixture.selected.id)?.enabled).toBe(false);
+  expect((await fixture.add({ ...fixture.target, sessionId: "replacement-session" })).id).toBe(
+    fixture.selected.id,
+  );
 });
 
 it.each([false, true])(
@@ -278,19 +277,14 @@ it.each([false, true])(
         expectedSessionId: expectDefined(target.sessionId, "archive incarnation"),
         archived: true,
       };
-      // Synthetic model decision; the native archive handler and its exact-ID
-      // precondition are real. No GitHub lookup or merge is performed.
+      // Native archive handler and exact-ID precondition; no GitHub lookup or merge.
       archiveRequest = Promise.resolve(
         expectDefined(
           sessionMutationHandlers["sessions.patch"],
           "sessions.patch",
         )({
-          req: { type: "req", id: "recipe-archive", method: "sessions.patch", params: patch },
-          params: patch,
+          ...fixture.rpc("sessions.patch", patch),
           respond,
-          context: fixture.creator.context,
-          client: fixture.client,
-          isWebchatConnect: () => false,
         }),
       );
       await archiveRequest;
@@ -306,9 +300,7 @@ it.each([false, true])(
       await fixture.execution.update(fixture.selected.id, { enabled: true });
       const event = await fixture.tick();
       releaseArchiveEffects.resolve();
-      // Successful archive disables bound jobs through the native cleanup owner,
-      // cancelling this occurrence after the archive commits. A scheduler
-      // cancellation is not evidence that the archive failed.
+      // Archive commits before cancellation settles the occurrence and RPC.
       expect(event).toMatchObject({
         jobId: fixture.selected.id,
         ...(replaced
@@ -316,9 +308,8 @@ it.each([false, true])(
           : { status: "error", error: "Cron job disabled by operator." }),
       });
       expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      // Cancellation settles the cron occurrence before the archive RPC completes.
       await expectDefined(archiveRequest, "archive request");
-      const stored = accessor.loadSessionEntry({ agentId: "main", sessionKey: SESSION });
+      const stored = accessor.loadSessionEntry(fixture.sessionRef);
       if (replaced) {
         expect(respond).toHaveBeenCalledWith(
           false,

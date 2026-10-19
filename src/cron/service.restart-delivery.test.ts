@@ -9,6 +9,7 @@ import {
 import { advanceCronActiveJobGeneration } from "./active-jobs.js";
 import { sendCronAnnouncePayloadStrict } from "./delivery.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
+import { cronTestDeps } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import {
   createCronServiceWithStateForTest,
@@ -43,13 +44,13 @@ const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-restart-
 afterEach(() => vi.unstubAllGlobals());
 
 it.each([
-  { mode: "announce", interrupted: "after-acceptance" },
-  { mode: "webhook", interrupted: "after-acceptance" },
-  { mode: "announce", interrupted: "before-delivery" },
-  { mode: "webhook", interrupted: "before-delivery" },
+  ["announce", "after-acceptance"],
+  ["webhook", "after-acceptance"],
+  ["announce", "before-delivery"],
+  ["webhook", "before-delivery"],
 ] as const)(
-  "recovers $mode interrupted $interrupted without duplicating its completion",
-  async ({ mode, interrupted }) => {
+  "recovers %s interrupted %s without duplicating its completion",
+  async (mode, interrupted) => {
     const { storePath } = await makeStorePath();
     const clock = createGatewaySchedulerClock(Date.now());
     const reachedInterruption = createDeferred();
@@ -109,39 +110,45 @@ it.each([
       }
       return { status: "ok", summary: "scheduled result", delivered: mode === "announce" };
     };
-    const deps: CronServiceDeps = {
+    const deps = cronTestDeps({
       storePath,
       scheduler: createTestGatewayScheduler(clock.clock),
       nowMs: clock.clock.now,
-      cronEnabled: true,
       log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       sendCronWebhook: async (params) =>
         await sendGatewayCronWebhook({
           ...params,
           ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
         }),
-    };
-    const { cron: first, state: firstState } = createCronServiceWithStateForTest(deps);
-    const replacementClock = createGatewaySchedulerClock(Date.now() + 60_000);
-    const { cron: replacement, state: replacementState } = createCronServiceWithStateForTest({
-      ...deps,
-      scheduler: createTestGatewayScheduler(replacementClock.clock),
-      nowMs: replacementClock.clock.now,
     });
-    const secondReplacementClock = createGatewaySchedulerClock(Date.now() + 240_000);
-    const { cron: secondReplacement, state: secondReplacementState } =
-      createCronServiceWithStateForTest({
+    const createOwner = (ownerClock: typeof clock) => ({
+      ...createCronServiceWithStateForTest({
         ...deps,
-        scheduler: createTestGatewayScheduler(secondReplacementClock.clock),
-        nowMs: secondReplacementClock.clock.now,
-      });
+        scheduler: createTestGatewayScheduler(ownerClock.clock),
+        nowMs: ownerClock.clock.now,
+      }),
+      clock: ownerClock,
+    });
+    const first = createOwner(clock);
+    const replacement = createOwner(createGatewaySchedulerClock(Date.now() + 60_000));
+    const secondReplacement = createOwner(createGatewaySchedulerClock(Date.now() + 240_000));
+    const restart = async (previous: typeof first, next: typeof first) => {
+      previous.cron.stop();
+      advanceCronActiveJobGeneration();
+      await next.cron.start();
+      await next.clock.advanceBy(120_000);
+      await onTimer(next.state);
+    };
+    const expectedDeliveries = interrupted === "after-acceptance" ? ["scheduled result"] : [];
+    const expectNoReplay = () => {
+      expect(received).toEqual(expectedDeliveries);
+      expect(executionCount).toBe(1);
+    };
     let tick: Promise<void> | undefined;
     try {
-      await first.start();
-      const job = await first.add({
+      await first.cron.start();
+      const job = await first.cron.add({
         name: "one completion across restart",
         enabled: true,
         ...(interrupted === "before-delivery" ? { deleteAfterRun: false } : {}),
@@ -155,25 +162,18 @@ it.each([
             : { mode, to: "http://127.0.0.1/completion" },
       });
       clock.setTime(job.state.nextRunAtMs!);
-      tick = onTimer(firstState);
+      tick = onTimer(first.state);
       await reachedInterruption.promise;
-      expect(received).toEqual(interrupted === "after-acceptance" ? ["scheduled result"] : []);
+      expect(received).toEqual(expectedDeliveries);
       const receipt = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
       expect(receipt).toBeDefined();
-      expect((await first.readJob(job.id))?.state.runningReceiptId).toBe(receipt?.receiptId);
+      expect((await first.cron.readJob(job.id))?.state.runningReceiptId).toBe(receipt?.receiptId);
 
       // Retire the old launcher while its payload remains unresolved; startup
       // recovery consumes the real persisted request without replaying its effect.
-      first.stop();
-      advanceCronActiveJobGeneration();
-      await replacement.start();
-      await replacementClock.advanceBy(120_000);
-      await onTimer(replacementState);
-
-      const expectedDeliveries = interrupted === "after-acceptance" ? ["scheduled result"] : [];
-      expect(received).toEqual(expectedDeliveries);
-      expect(executionCount).toBe(1);
-      const recovered = await replacement.readJob(job.id);
+      await restart(first, replacement);
+      expectNoReplay();
+      const recovered = await replacement.cron.readJob(job.id);
       expect(recovered).toMatchObject({
         enabled: false,
         state: {
@@ -206,19 +206,14 @@ it.each([
           .get(receipt!.receiptId),
       ).toMatchObject({ status: "interrupted" });
 
-      replacement.stop();
-      advanceCronActiveJobGeneration();
-      await secondReplacement.start();
-      await secondReplacementClock.advanceBy(120_000);
-      await onTimer(secondReplacementState);
-      expect(received).toEqual(expectedDeliveries);
-      expect(executionCount).toBe(1);
-      expect(await secondReplacement.readJob(job.id)).toEqual(recovered);
+      await restart(replacement, secondReplacement);
+      expectNoReplay();
+      expect(await secondReplacement.cron.readJob(job.id)).toEqual(recovered);
       expect(readHistory()).toEqual(history);
     } finally {
-      first.stop();
-      replacement.stop();
-      secondReplacement.stop();
+      for (const owner of [first, replacement, secondReplacement]) {
+        owner.cron.stop();
+      }
       acknowledgment.resolve();
       await tick;
     }
@@ -237,16 +232,14 @@ it("records a rejected durable attempt as not delivered before webhook dispatch"
       }
       await runMutation(params);
     });
-  const cron = new CronService({
-    storePath,
-    scheduler: createTestGatewayScheduler(),
-    cronEnabled: true,
-    log: logger,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: async () => ({ status: "ok", summary: "scheduled result" }),
-    sendCronWebhook,
-  });
+  const cron = new CronService(
+    cronTestDeps({
+      storePath,
+      log: logger,
+      runIsolatedAgentJob: async () => ({ status: "ok", summary: "scheduled result" }),
+      sendCronWebhook,
+    }),
+  );
   try {
     await cron.start();
     const job = await cron.add({
