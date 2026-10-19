@@ -381,8 +381,8 @@ it.each<AuditCliCase>([
     fs.writeFileSync(path.join(docsRoot, "page.mdx"), `${pageSource.join("\n")}\n`);
 
     const result = runAuditCli(fixtureRoot, { anchors, clawHubRoot });
+    expect(result.error).toBeUndefined();
     expect(result, result.stdout).toMatchObject({
-      error: undefined,
       stderr: "",
       status: broken ? 1 : 0,
     });
@@ -464,7 +464,8 @@ describe("ClawHub routes mirrored from openclaw/clawhub", () => {
       "pnpm-workspace.yaml": "packages: []\n",
     });
     const result = runAuditCli(fixtureRoot, { fixtureSync });
-    expect(result).toMatchObject({ error: undefined, status: 0 });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
     expect(result.stdout).toContain("broken_links=0\n");
     expect(result.stdout).not.toContain("Synced ");
     expect(result.stdout).not.toContain("fragment unverified");

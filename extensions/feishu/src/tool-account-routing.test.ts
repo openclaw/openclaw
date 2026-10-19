@@ -191,9 +191,11 @@ describe("feishu tool account routing", () => {
 
   test("wiki tool routes a mixed-case enabled contextual account without sibling fallback", async () => {
     const { api, resolveTool } = createToolFactoryHarness(
-      createMixedCaseConfig({
-        toolsOps: { wiki: true },
-        toolsAdmin: { wiki: true },
+      createConfig({
+        accounts: {
+          Ops: makeAccount("app-ops", { wiki: true }),
+          admin: makeAccount("app-admin", { wiki: true }),
+        },
       }),
     );
     registerFeishuWikiTools(api);
@@ -201,7 +203,7 @@ describe("feishu tool account routing", () => {
     const tool = resolveTool("feishu_wiki", { agentAccountId: "ops" });
     await tool.execute("call", { action: "search" });
 
-    expect(lastClientAppId()).toBe("app-ops");
+    expect(clientAppIdAt()).toBe("app-ops");
   });
 
   test("wiki tool implicit fallback selects an account with wiki enabled", async () => {
@@ -211,7 +213,7 @@ describe("feishu tool account routing", () => {
     });
     await tool.execute("call", { action: "search" });
 
-    expect(lastClientAppId()).toBe("app-b");
+    expect(clientAppIdAt()).toBe("app-b");
   });
 
   test("wiki tool prefers the active contextual account over configured defaultAccount", async () => {
@@ -226,7 +228,7 @@ describe("feishu tool account routing", () => {
     );
     await tool.execute("call", { action: "search" });
 
-    expect(lastClientAppId()).toBe("app-a");
+    expect(clientAppIdAt()).toBe("app-a");
   });
 
   test("wiki tool rejects number-typed space IDs before Lark receives precision-corrupted values", async () => {

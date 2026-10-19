@@ -131,7 +131,7 @@ it("does not dispatch user reply hooks for a detached experience review", async 
   );
   await expect(
     runBeforeAgentReplyForTurn({
-      runId: candidate.ctx.runId,
+      runId: "review-user-reply-hook",
       trigger: candidate.ctx.foregroundPromptContext.trigger,
       event: { cleanedBody: "Remember the verified procedure." },
       context: { sessionKey: candidate.source.sessionKey },

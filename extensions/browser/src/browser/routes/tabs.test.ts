@@ -1,5 +1,6 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserTab } from "../client.types.js";
 import { makeBrowserProfile } from "../server-context.test-harness.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
@@ -16,12 +17,7 @@ vi.mock("../navigation-guard.js", () => navigationGuardMocks);
 const { registerBrowserTabRoutes } = await import("./tabs.js");
 
 type ProfileContext = ReturnType<typeof createProfileContext>;
-type TabFixture = {
-  targetId: string;
-  title: string;
-  url: string;
-  type: "page";
-};
+type TabFixture = BrowserTab;
 
 const publicTab = (overrides: Partial<TabFixture> = {}): TabFixture => ({
   targetId: "T1",
@@ -588,7 +584,7 @@ describe("browser tab routes", () => {
 
   it("blocks /tabs/action select when target tab URL fails SSRF checks", async () => {
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
-      ssrfBlockedError(),
+      Object.assign(new Error("blocked"), { name: "SsrFBlockedError" }),
     );
     const profileCtx = createProfileWithTabs([publicTab(), internalTab()]);
 

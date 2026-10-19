@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "../errors.js";
+import {
+  BROWSER_ERROR_REASONS,
+  BrowserProfileUnavailableError,
+  type BrowserNoDisplayErrorMetadata,
+} from "../errors.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 type Send = (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -140,7 +144,7 @@ describe("browser permission routes", () => {
   });
 
   it("preserves structured browser availability errors", async () => {
-    const metadata = {
+    const metadata: BrowserNoDisplayErrorMetadata = {
       reason: BROWSER_ERROR_REASONS.noDisplayForHeadedProfile,
       details: {
         profile: "openclaw",

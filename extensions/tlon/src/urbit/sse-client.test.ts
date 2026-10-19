@@ -28,7 +28,7 @@ async function* stopAfterStream(client: UrbitSSEClient, stream: AsyncIterable<st
 }
 describe("UrbitSSEClient", () => {
   let client: UrbitSSEClient;
-  let handler: ReturnType<typeof vi.fn>;
+  let handler: ReturnType<typeof vi.fn<(data: unknown) => void | Promise<void>>>;
   const mockUrbitFetch = vi.mocked(urbitFetch);
   beforeEach(() => {
     vi.clearAllMocks();

@@ -62,6 +62,7 @@ async function expectRedirectAuthorization(
       : ["graph.microsoft.com", "sharepoint.com"],
     authorizationAllowHosts,
     fetchFn: fetchMock,
+    resolveFn: publicResolve,
     requestInit: { headers: { Authorization: "Bearer secret" } },
   });
   expect(res.status).toBe(200);

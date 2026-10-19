@@ -79,7 +79,7 @@ async function create(
       updatedAt: 1,
       incognito: true,
       ...patch,
-    };
+    } satisfies SessionEntry;
     const result = await actor.storage!.mutate(
       { type: "session.entry.create", input: { entry } },
       authority,
