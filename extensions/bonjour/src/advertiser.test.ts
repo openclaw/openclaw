@@ -92,7 +92,11 @@ async function startAdvertiser(
 }
 
 function serviceOptions() {
-  return createService.mock.calls[0][0] as {
+  const call = createService.mock.calls[0];
+  if (!call) {
+    throw new Error("expected Bonjour service creation");
+  }
+  return call[0] as {
     name: string;
     hostname: string;
     domain: string;
