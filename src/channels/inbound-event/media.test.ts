@@ -29,37 +29,25 @@ beforeEach(() => {
   probeMediaFilesWithinBudget.mockReset();
 });
 
-type MergeMatrixSource = MediaFactLegacyProjection & {
-  media?: readonly MediaFactInput[];
-  MediaStaged?: boolean;
-  MediaWorkspaceDir?: string;
-};
+type MergeMatrixSource = Parameters<typeof resolveStagedMediaFacts>[0];
 
-function canonical(
-  file: string,
-  kind: MediaFactInput["kind"],
-  contentType: string,
-): MediaFactInput {
-  return { path: `/canonical/${file}`, kind, contentType, messageId: file.split(".")[0] };
+function canonical(file: string, metadata: MediaFactInput): MediaFactInput {
+  return { path: `/canonical/${file}`, messageId: file.split(".")[0], ...metadata };
 }
-const unstagedPhoto = canonical("photo.jpg", "image", "image/jpeg");
-const photo: MediaFactInput = {
-  ...unstagedPhoto,
-  url: "https://canonical.test/photo.jpg",
-  transcribed: true,
-};
-const voice: MediaFactInput = {
-  ...canonical("voice.ogg", "audio", "audio/ogg"),
+const unstagedPhoto = canonical("photo.jpg", { kind: "image", contentType: "image/jpeg" });
+const photo = { ...unstagedPhoto, url: "https://canonical.test/photo.jpg", transcribed: true };
+const voice = canonical("voice.ogg", {
+  kind: "audio",
+  contentType: "audio/ogg",
   hydrationSuppressed: true,
-};
-const document: MediaFactInput = {
-  ...canonical("one.bin", "document", "application/octet-stream"),
-  transcribed: true,
-};
-const audio: MediaFactInput = {
-  ...canonical("two.bin", "audio", "application/octet-stream"),
+});
+const binary = "application/octet-stream";
+const document = canonical("one.bin", { kind: "document", contentType: binary, transcribed: true });
+const audio = canonical("two.bin", {
+  kind: "audio",
+  contentType: binary,
   hydrationSuppressed: true,
-};
+});
 
 function stagedPair(first: string, second: string): MergeMatrixSource {
   return {
@@ -90,20 +78,13 @@ const stagedMediaMergeMatrix: Array<
 > = [
   [
     "staged singular plus multi-canonical",
-    {
-      media: [{ ...photo }, { ...voice }],
-      MediaPath: "/staged/photo.jpg",
-      MediaStaged: true,
-    },
+    { media: [{ ...photo }, { ...voice }], MediaPath: "/staged/photo.jpg", MediaStaged: true },
     [{ ...photo, path: "/staged/photo.jpg", staged: true }, voice],
     false,
   ],
   [
     "staged aligned arrays plus canonical metadata",
-    {
-      media: [{ ...document }, { ...audio }],
-      ...stagedPair("one.jpg", "two.ogg"),
-    },
+    { media: [{ ...document }, { ...audio }], ...stagedPair("one.jpg", "two.ogg") },
     [
       { ...document, ...staged("one.jpg", "image/jpeg", { url: "file:///staged/one.jpg" }) },
       { ...audio, ...staged("two.ogg", "audio/ogg", { url: "file:///staged/two.ogg" }) },
@@ -112,10 +93,7 @@ const stagedMediaMergeMatrix: Array<
   ],
   [
     "staged-only",
-    {
-      ...stagedPair("photo.jpg", "voice.ogg"),
-      MediaTranscribedIndexes: [1],
-    },
+    { ...stagedPair("photo.jpg", "voice.ogg"), MediaTranscribedIndexes: [1] },
     [
       staged("photo.jpg", "image/jpeg", { kind: "image", transcribed: false }),
       staged("voice.ogg", "audio/ogg", { kind: "audio", transcribed: true }),
@@ -124,20 +102,13 @@ const stagedMediaMergeMatrix: Array<
   ],
   [
     "canonical-only with an empty staged projection",
-    {
-      media: [{ ...unstagedPhoto, hydrationSuppressed: true }],
-      MediaStaged: true,
-    },
+    { media: [{ ...unstagedPhoto, hydrationSuppressed: true }], MediaStaged: true },
     [{ ...unstagedPhoto, hydrationSuppressed: true, staged: true }],
     true,
   ],
   [
     "canonical path with staged URL metadata only",
-    {
-      media: [{ ...unstagedPhoto }],
-      MediaUrl: "file:///canonical/photo.jpg",
-      MediaStaged: true,
-    },
+    { media: [{ ...unstagedPhoto }], MediaUrl: "file:///canonical/photo.jpg", MediaStaged: true },
     [{ ...unstagedPhoto, url: "file:///canonical/photo.jpg", staged: true }],
     true,
   ],
@@ -145,10 +116,8 @@ const stagedMediaMergeMatrix: Array<
 
 describe("channel inbound media facts", () => {
   it("probes local audio and video facts without probing images or URL-only media", async () => {
-    probeMediaFilesWithinBudget.mockResolvedValueOnce([
-      { durationMs: 1500 },
-      { durationMs: 2500, width: 1280, height: 720 },
-    ]);
+    const videoMetadata = { durationMs: 2500, width: 1280, height: 720 };
+    probeMediaFilesWithinBudget.mockResolvedValueOnce([{ durationMs: 1500 }, { ...videoMetadata }]);
 
     await expect(
       toInboundMediaFactsWithMetadata([
@@ -157,16 +126,11 @@ describe("channel inbound media facts", () => {
         { path: "/tmp/photo.png", contentType: "image/png" },
         { url: "https://example.test/remote.mp3", contentType: "audio/mpeg" },
       ]),
-    ).resolves.toEqual([
-      expect.objectContaining({ path: "/tmp/voice.ogg", durationMs: 1500 }),
-      expect.objectContaining({
-        path: "/tmp/clip.mp4",
-        durationMs: 2500,
-        width: 1280,
-        height: 720,
-      }),
-      expect.objectContaining({ path: "/tmp/photo.png" }),
-      expect.objectContaining({ url: "https://example.test/remote.mp3" }),
+    ).resolves.toMatchObject([
+      { path: "/tmp/voice.ogg", durationMs: 1500 },
+      { path: "/tmp/clip.mp4", ...videoMetadata },
+      { path: "/tmp/photo.png" },
+      { url: "https://example.test/remote.mp3" },
     ]);
     expect(probeMediaFilesWithinBudget).toHaveBeenCalledWith(
       [
@@ -207,25 +171,26 @@ describe("channel inbound media facts", () => {
   });
 
   it("normalizes provider media into inbound media facts", () => {
-    const input = [
-      {
-        path: " /tmp/image.png ",
-        contentType: " image/png ",
-        fileName: " original image.png ",
-        messageId: " ",
-      },
-      {
-        url: "https://example.test/audio.mp3",
-        contentType: "audio/mpeg",
-        kind: "audio" as const,
-      },
-    ];
-    const defaults = {
-      kind: "image" as const,
-      messageId: "msg-1",
-      transcribed: (_media: ChannelInboundMediaInput, index: number): boolean => index === 1,
-    };
-    const expected = [
+    const url = "https://example.test/audio.mp3";
+    const remoteAudio = { url, contentType: "audio/mpeg", kind: "audio" } as const;
+    expect(
+      toInboundMediaFacts(
+        [
+          {
+            path: " /tmp/image.png ",
+            contentType: " image/png ",
+            fileName: " original image.png ",
+            messageId: " ",
+          },
+          { ...remoteAudio },
+        ],
+        {
+          kind: "image",
+          messageId: "msg-1",
+          transcribed: (_media, index) => index === 1,
+        },
+      ),
+    ).toEqual([
       {
         path: "/tmp/image.png",
         url: undefined,
@@ -235,16 +200,8 @@ describe("channel inbound media facts", () => {
         transcribed: false,
         messageId: "msg-1",
       },
-      {
-        path: undefined,
-        url: "https://example.test/audio.mp3",
-        contentType: "audio/mpeg",
-        kind: "audio",
-        transcribed: true,
-        messageId: "msg-1",
-      },
-    ];
-    expect(toInboundMediaFacts(input, defaults)).toEqual(expected);
+      { ...remoteAudio, path: undefined, transcribed: true, messageId: "msg-1" },
+    ]);
   });
 
   it("does not smear a singular legacy MediaUrl onto later slots after plural paths", () => {
@@ -309,10 +266,7 @@ describe("channel inbound media facts", () => {
 
   it.each(stagedMediaMergeMatrix)("merges %s", (_name, source, expected, expectedStaged) => {
     const facts = resolveStagedMediaFacts(source);
-    expect(facts).toHaveLength(expected.length);
-    for (const [index, expectedFact] of expected.entries()) {
-      expect(facts[index]).toMatchObject(expectedFact);
-    }
+    expect(facts).toMatchObject(expected);
     expect(hasStagedMediaFacts(facts)).toBe(expectedStaged);
   });
 
