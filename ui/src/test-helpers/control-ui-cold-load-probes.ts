@@ -472,6 +472,10 @@ function installColdLoadProbes(
     readLive() {
       return {
         elapsedMs: (liveFinishedAt || performance.now()) - liveStartedAt,
+        longTasks: longTasks.filter(
+          (task) =>
+            task.start >= liveStartedAt && (!liveFinishedAt || task.start <= liveFinishedAt),
+        ),
         rpcs: rpcs.slice(liveRpcOffset),
         rpcOffset: liveRpcOffset,
         sentEvents: [...liveEvents.values()].reduce((sum, count) => sum + count, 0),

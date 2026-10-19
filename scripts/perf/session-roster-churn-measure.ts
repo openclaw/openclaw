@@ -389,8 +389,14 @@ try {
   } as const;
   const queries: Array<{ name: string; query: SessionListScope }> = [
     { name: "sidebar-general", query: common },
-    { name: "sidebar-owner", query: { ...common, ownerId: profileId } },
-    { name: "sidebar-involving", query: { ...common, involvingMe: true } },
+    {
+      name: "sidebar-owner",
+      query: { ...common, ownerFirst: undefined, agentId: undefined, ownerId: profileId },
+    },
+    {
+      name: "sidebar-involving",
+      query: { ...common, ownerFirst: undefined, involvingMe: true },
+    },
     {
       name: "compact-children",
       query: {
