@@ -5,6 +5,8 @@ import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles/base.css";
+// The app loads the shared overlay sheet before the composer sheet.
+import "../../../components/solid/overlay.css";
 import "../../../styles/chat/composer.css";
 import { focusChatComposerFromPrintableKeydown } from "../chat-pane-shared.ts";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
@@ -12,17 +14,19 @@ import { ChatModelPicker } from "./chat-model-picker.tsx";
 import { installChatComposerPickerDismissal } from "./chat-picker-overlay.ts";
 
 const container = document.createElement("div");
+const originalViewport = { width: window.innerWidth, height: window.innerHeight };
 let dispose: (() => void) | undefined;
-afterEach(() => {
+afterEach(async () => {
   dispose?.();
   container.replaceChildren();
   container.remove();
+  await page.viewport(originalViewport.width, originalViewport.height);
 });
 
-function mountPicker(optionsReady = true) {
+function mountPicker(optionsReady = true, labels = ["Alpha", "Beta", "Gamma"]) {
   document.body.append(container);
   dispose = installChatComposerPickerDismissal(document);
-  const modelOptions = ["Alpha", "Beta", "Gamma"].map((label) => ({
+  const modelOptions = labels.map((label) => ({
     label,
     value: (label === "Gamma" ? "other/" : "example/") + label.toLowerCase(),
     commitValue: (label === "Gamma" ? "other/" : "example/") + label.toLowerCase(),
@@ -301,3 +305,33 @@ it.each(["trigger", "Escape", "selection"])(
     expect(params.onModelSelect).toHaveBeenLastCalledWith("other/gamma", "main", undefined);
   },
 );
+
+it("returns above the composer at full height once a cramped phone layout regains room", async () => {
+  await page.viewport(430, 700);
+  const labels = ["Alpha", ...Array.from({ length: 23 }, (_, index) => `Model ${index + 1}`)];
+  const { picker, toggle } = mountPicker(true, labels);
+  const composer = container.querySelector<HTMLElement>(".agent-chat__input")!;
+  const surface = picker.querySelector<HTMLElement>("[data-anchored-overlay]")!;
+  // An open keyboard lifts the composer until neither side holds the full panel.
+  Object.assign(composer.style, {
+    position: "fixed",
+    insetInline: "16px",
+    top: "250px",
+    height: "140px",
+  });
+  const settledBox = () => {
+    for (const animation of surface.getAnimations()) {
+      animation.finish();
+    }
+    return surface.getBoundingClientRect();
+  };
+  await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
+  expect(settledBox().bottom).toBeLessThanOrEqual(250);
+  // Closing the keyboard lowers the composer while the picker stays open.
+  composer.style.top = "500px";
+  await new Promise(requestAnimationFrame);
+  await new Promise(requestAnimationFrame);
+  expect(settledBox().bottom).toBeLessThanOrEqual(500);
+  // Full height is the panel's content up to the shared 420px overlay cap.
+  expect(surface.clientHeight).toBe(Math.min(surface.scrollHeight, 420));
+});

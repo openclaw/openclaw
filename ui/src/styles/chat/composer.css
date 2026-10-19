@@ -20,21 +20,10 @@
 }
 
 .chat-picker-overlay {
-  /* Try the full panel before shrinking it to the preferred side's remaining space. */
-  max-height: min(var(--oc-overlay-max-height, 420px), calc(100dvh - 16px));
-  position-try-fallbacks:
-    --chat-picker-fit flip-block,
-    --chat-picker-fit,
-    --chat-picker-fit flip-inline,
-    --chat-picker-fit flip-block flip-inline;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--text);
-}
-
-@position-try --chat-picker-fit {
-  max-height: min(var(--oc-overlay-max-height, 420px), calc(100% - 16px));
 }
 
 @keyframes chat-composer-picker-in {

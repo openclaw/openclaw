@@ -49,20 +49,32 @@
     var(--oc-overlay-max-width, calc(100dvw - 16px)),
     var(--oc-overlay-available-width, calc(100dvw - 16px))
   );
+  /* A long panel shrinks into its side only down to a 200px floor; below that it
+     overflows, so the engine tries the other side. Overflow also makes an open
+     panel re-choose when its remembered side shrinks (a phone keyboard closing). */
   max-height: min(
     var(--oc-overlay-max-height, 420px),
-    var(--oc-overlay-available-height, calc(100% - 16px)),
+    var(--oc-overlay-available-height, max(200px, 100% - 16px)),
     calc(100dvh - 16px)
   );
   margin: var(--oc-overlay-distance, 6px) 0 0;
   overflow: auto;
   overscroll-behavior: contain;
   position-area: bottom span-right;
+  /* When neither side holds the floor, fill the placed side, else the other. */
   position-try-fallbacks:
     flip-block,
     flip-inline,
-    flip-block flip-inline;
+    flip-block flip-inline,
+    --oc-overlay-fill,
+    --oc-overlay-fill flip-block,
+    --oc-overlay-fill flip-inline,
+    --oc-overlay-fill flip-block flip-inline;
   transform-origin: top left;
+}
+
+@position-try --oc-overlay-fill {
+  max-height: min(var(--oc-overlay-max-height, 420px), calc(100% - 16px));
 }
 
 .oc-overlay[data-placement="top"],
@@ -100,7 +112,12 @@
 .oc-overlay[data-placement="left-start"],
 .oc-overlay[data-placement="left-end"] {
   margin: 0 var(--oc-overlay-distance, 6px) 0 0;
-  position-try-fallbacks: flip-inline, --oc-overlay-below, --oc-overlay-above;
+  position-try-fallbacks:
+    flip-inline,
+    --oc-overlay-fill,
+    --oc-overlay-fill flip-inline,
+    --oc-overlay-below,
+    --oc-overlay-above;
   transform-origin: right;
 }
 
@@ -108,7 +125,12 @@
 .oc-overlay[data-placement="right-start"],
 .oc-overlay[data-placement="right-end"] {
   margin: 0 0 0 var(--oc-overlay-distance, 6px);
-  position-try-fallbacks: flip-inline, --oc-overlay-below, --oc-overlay-above;
+  position-try-fallbacks:
+    flip-inline,
+    --oc-overlay-fill,
+    --oc-overlay-fill flip-inline,
+    --oc-overlay-below,
+    --oc-overlay-above;
   transform-origin: left;
 }
 

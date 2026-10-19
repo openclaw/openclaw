@@ -152,6 +152,21 @@ describe("native overlay presentation", () => {
     }
   });
 
+  it("flips a long menu above when too little room remains below", async () => {
+    await page.viewport(800, 600);
+    mountMenu({
+      items: Array.from({ length: 28 }, (_, index) => ({
+        id: `action-${index}`,
+        label: `Action ${index + 1}`,
+      })),
+    });
+    Object.assign(trigger().style, { position: "fixed", left: "8px", bottom: "120px" });
+    await openMenu();
+    const box = expectWithinViewport(surface());
+    expect(box.bottom).toBeLessThanOrEqual(trigger().getBoundingClientRect().top);
+    expect(box.height).toBe(420);
+  });
+
   it.each(["ltr", "rtl"] as const)(
     "flips a large nested menu within the viewport in %s at enlarged text",
     async (dir) => {
