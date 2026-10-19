@@ -320,9 +320,10 @@ node scripts/diagnostic-writer-occupancy.mts gateway.log --json \
 
 The report splits observed reservation and queue-wait intervals into UTC minutes,
 ranks operation categories, and lists the longest observed reservations. Native
-transaction phases appear separately: `hostAdmissionWaitMs` measures time awaiting
-the host, while `sqlMs` is the remaining execution time, including JavaScript
-processing. Do not add transaction time to enclosing reservation time.
+transaction phases appear separately. `hostAdmissionWaitMs` measures waits for
+transaction authority, while `databaseAdmissionWaitMs` measures database metadata
+exchanges with the host. `sqlMs` is the remaining execution time, including
+JavaScript processing. Do not add transaction time to enclosing reservation time.
 
 This is a warning census, not complete writer utilization. Fast operations are
 absent, `direct` reservations do not identify their underlying command, and logs
@@ -760,6 +761,10 @@ transport. If a worker cannot handle port messages, native V8 interrupts still
 refresh its heap and external counters; ArrayBuffer coverage remains unavailable
 until the worker responds. Memory pressure warnings include these counters and the external-memory
 limit caveat; Node does not provide a worker limit for external/native allocations.
+
+Linux samples add anonymous-page counters asynchronously. Worker sample ages
+include that delay; coverage and heap counters describe acquisition. These fields
+are not an atomic process snapshot.
 
 Critical memory pressure retires idle workers through their existing cleanup owners,
 including when diagnostic event collection is disabled. Warnings do not retire

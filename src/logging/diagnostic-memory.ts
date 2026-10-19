@@ -71,6 +71,7 @@ export function createDiagnosticMemorySampler(isCurrent: () => boolean) {
       return;
     }
     const linuxSample = emitSample && process.platform === "linux";
+    const sampledAt = performance.now();
     const memory = emitDiagnosticMemorySample({ emitSample: emitSample && !linuxSample });
     if (!linuxSample || pending) {
       return;
@@ -80,7 +81,23 @@ export function createDiagnosticMemorySampler(isCurrent: () => boolean) {
     void readProcessFootprint().then((processFootprint) => {
       pending = false;
       if (isCurrent()) {
-        publishMemorySample({ ...memory, ...processFootprint }, uptimeMs);
+        const publicationDelayMs = Math.round(performance.now() - sampledAt);
+        // The event timestamp is publication time; age the acquired samples without
+        // mutating rows already shared with pressure events. Coverage stays acquisition-scoped.
+        publishMemorySample(
+          {
+            ...memory,
+            ...processFootprint,
+            workerHeaps: memory.workerHeaps?.map((worker) =>
+              worker.sampleAgeMs === undefined
+                ? worker
+                : Object.assign({}, worker, {
+                    sampleAgeMs: worker.sampleAgeMs + publicationDelayMs,
+                  }),
+            ),
+          },
+          uptimeMs,
+        );
       }
     });
   };
