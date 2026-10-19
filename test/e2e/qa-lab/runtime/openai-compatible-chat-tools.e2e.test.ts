@@ -1,10 +1,9 @@
 // OpenAI-compatible chat tools tests cover QA Lab HTTP tool-call evidence.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
+import { createServer, type RequestListener, type Server } from "node:http";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveSlotSelection } from "../../../../src/plugins/slots.js";
 import { runNodeScript } from "../../../helpers/run-node-script.js";
 import { cleanupTempDirs, makeTempDir } from "../../../helpers/temp-dir.js";
@@ -12,6 +11,8 @@ import { cleanupTempDirs, makeTempDir } from "../../../helpers/temp-dir.js";
 const clientPath = path.resolve("scripts/e2e/lib/openai-chat-tools/client.mjs");
 const dockerRunnerPath = path.resolve("scripts/e2e/openai-chat-tools-docker.sh");
 const writeConfigPath = path.resolve("scripts/e2e/lib/openai-chat-tools/write-config.mjs");
+const tempDirs: string[] = [];
+afterEach(() => cleanupTempDirs(tempDirs));
 
 async function listen(server: Server): Promise<number> {
   await new Promise<void>((resolve, reject) => {
@@ -28,19 +29,28 @@ async function listen(server: Server): Promise<number> {
   return address.port;
 }
 
-function runClient(port: number | string, env: Record<string, string> = {}, timeout = 5_000) {
-  return runNodeScript(
-    clientPath,
-    {
-      ...process.env,
-      MODEL_REF: "openai/gpt-5.4-mini",
-      OPENCLAW_GATEWAY_TOKEN: "test-token",
-      OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: "1",
-      PORT: String(port),
-      ...env,
-    },
-    timeout,
-  );
+async function runClient(
+  handler: RequestListener,
+  env: Record<string, string> = {},
+  timeout = 5_000,
+) {
+  const server = createServer(handler);
+  try {
+    return await runNodeScript(
+      clientPath,
+      {
+        ...process.env,
+        MODEL_REF: "openai/gpt-5.4-mini",
+        OPENCLAW_GATEWAY_TOKEN: "test-token",
+        OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: "1",
+        PORT: String(await listen(server)),
+        ...env,
+      },
+      timeout,
+    );
+  } finally {
+    server.close();
+  }
 }
 
 function runWriteConfig(root: string, env: Record<string, string> = {}) {
@@ -96,34 +106,6 @@ function toolCallResponse(messageOverrides: Record<string, unknown> = {}) {
 }
 
 describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
-  let bodyReadTimeoutProbe: {
-    elapsedMs: number;
-    responseClosed: boolean;
-    result: Awaited<ReturnType<typeof runClient>>;
-  };
-
-  beforeAll(async () => {
-    let responseClosed = false;
-    const server = createServer((_request, response) => {
-      response.on("close", () => {
-        responseClosed = true;
-      });
-      response.writeHead(200, { "content-type": "application/json" });
-      response.write('{"choices":');
-    });
-    const port = await listen(server);
-    const startedAt = Date.now();
-    try {
-      bodyReadTimeoutProbe = {
-        result: await runClient(port, {}, 4_000),
-        elapsedMs: Date.now() - startedAt,
-        responseClosed,
-      };
-    } finally {
-      server.close();
-    }
-  });
-
   it("keeps full profile exports out of the Docker build phase", () => {
     const runner = readFileSync(dockerRunnerPath, "utf8");
     const preflightSourceIndex = runner.indexOf('source "$profile_file"');
@@ -136,45 +118,36 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
   });
 
   it("treats placeholder profile auth as missing before Docker build work starts", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-openai-chat-tools-"));
-    try {
-      const profile = path.join(root, "profile");
-      writeFileSync(profile, "OPENAI_API_KEY=undefined\n");
-      const result = runDockerRunnerAuthPreflight(root, {
-        OPENCLAW_OPENAI_CHAT_TOOLS_PROFILE_FILE: profile,
-      });
-      const output = `${result.stdout}\n${result.stderr}`;
+    const root = makeTempDir(tempDirs, "openclaw-openai-chat-tools-");
+    const profile = path.join(root, "profile");
+    writeFileSync(profile, "OPENAI_API_KEY=undefined\n");
+    const result = runDockerRunnerAuthPreflight(root, {
+      OPENCLAW_OPENAI_CHAT_TOOLS_PROFILE_FILE: profile,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
 
-      expect(result.status).toBe(1);
-      expect(output).toContain("OPENAI_API_KEY was not available");
-      expect(output).not.toContain("Building Docker image:");
-      expect(output).not.toContain("Reusing Docker image:");
-      expect(output).not.toContain("Running OpenAI Chat Completions tools Docker E2E");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(result.status).toBe(1);
+    expect(output).toContain("OPENAI_API_KEY was not available");
+    expect(output).not.toContain("Building Docker image:");
+    expect(output).not.toContain("Reusing Docker image:");
+    expect(output).not.toContain("Running OpenAI Chat Completions tools Docker E2E");
   });
 
   it("disables background memory indexing while keeping the OpenAI provider enabled", () => {
-    const tempDirs: string[] = [];
     const root = makeTempDir(tempDirs, "openclaw-openai-chat-tools-");
-    try {
-      const result = runWriteConfig(root);
-      expect(result.status, result.stderr).toBe(0);
-      const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
-      // An allowlist alone does not disable the implicit memory slot. Its startup
-      // catch-up reads would restore the fixture before the chat recall boundary.
-      expect(resolveSlotSelection("memory", config.plugins.slots?.memory)).toEqual({ kind: "off" });
-      expect(config.plugins.enabled).toBe(true);
-      expect(config.plugins.entries.openai.enabled).toBe(true);
-      expect(config.session.maintenance.coldStorage.enabled).toBe(true);
-    } finally {
-      cleanupTempDirs(tempDirs);
-    }
+    const result = runWriteConfig(root);
+    expect(result.status, result.stderr).toBe(0);
+    const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+    // An allowlist alone does not disable the implicit memory slot. Its startup
+    // catch-up reads would restore the fixture before the chat recall boundary.
+    expect(resolveSlotSelection("memory", config.plugins.slots?.memory)).toEqual({ kind: "off" });
+    expect(config.plugins.enabled).toBe(true);
+    expect(config.plugins.entries.openai.enabled).toBe(true);
+    expect(config.session.maintenance.coldStorage.enabled).toBe(true);
   });
 
   it("accepts a matching chat completions tool call response", async () => {
-    const server = createServer((request, response) => {
+    const result = await runClient((request, response) => {
       expect(request.method).toBe("POST");
       expect(request.url).toBe("/v1/chat/completions");
       expect(request.headers.authorization).toBe("Bearer test-token");
@@ -182,66 +155,61 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify(toolCallResponse()));
     });
-    const port = await listen(server);
-    try {
-      const result = await runClient(port);
-
-      expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        args: { city: "Paris, France" },
-        finishReason: "tool_calls",
-        ok: true,
-        toolName: "get_weather",
-      });
-    } finally {
-      server.close();
-    }
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      args: { city: "Paris, France" },
+      finishReason: "tool_calls",
+      ok: true,
+      toolName: "get_weather",
+    });
   });
 
   it("rejects chat completions responses that include content beside the tool call", async () => {
-    const server = createServer((_request, response) => {
+    const result = await runClient((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify(toolCallResponse({ content: "I will call the tool now." })));
     });
-    const port = await listen(server);
-    try {
-      const result = await runClient(port);
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("expected tool call only response");
-    } finally {
-      server.close();
-    }
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("expected tool call only response");
   });
 
   it("keeps the request timeout active while reading the response body", async () => {
-    expect(bodyReadTimeoutProbe.result.error).toBeUndefined();
-    expect(bodyReadTimeoutProbe.result.status).not.toBe(0);
-    expect(bodyReadTimeoutProbe.result.stderr).toMatch(/timed out|aborted|AbortError/iu);
-    expect(bodyReadTimeoutProbe.elapsedMs).toBeLessThan(3_500);
-    expect(bodyReadTimeoutProbe.responseClosed).toBe(true);
+    let responseClosed = false;
+    const startedAt = Date.now();
+    const result = await runClient(
+      (_request, response) => {
+        response.on("close", () => {
+          responseClosed = true;
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.write('{"choices":');
+      },
+      {},
+      4_000,
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/timed out|aborted|AbortError/iu);
+    expect(Date.now() - startedAt).toBeLessThan(3_500);
+    expect(responseClosed).toBe(true);
   });
 
   it("rejects unsafe declared chat completion body lengths before waiting on the stream", async () => {
-    const server = createServer((_request, response) => {
-      response.writeHead(200, {
-        "content-length": "9007199254740993",
-        "content-type": "application/json",
-      });
-      response.flushHeaders();
-    });
-    const port = await listen(server);
-    try {
-      const startedAt = Date.now();
-      const result = await runClient(port, { OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES: "64" });
-
-      expect(result.error).toBeUndefined();
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("chat completions response body exceeded 64 bytes");
-      expect(result.stderr).not.toContain("timed out");
-      expect(Date.now() - startedAt).toBeLessThan(3_500);
-    } finally {
-      server.close();
-    }
+    const startedAt = Date.now();
+    const result = await runClient(
+      (_request, response) => {
+        response.writeHead(200, {
+          "content-length": "9007199254740993",
+          "content-type": "application/json",
+        });
+        response.flushHeaders();
+      },
+      { OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES: "64" },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("chat completions response body exceeded 64 bytes");
+    expect(result.stderr).not.toContain("timed out");
+    expect(Date.now() - startedAt).toBeLessThan(3_500);
   });
 });

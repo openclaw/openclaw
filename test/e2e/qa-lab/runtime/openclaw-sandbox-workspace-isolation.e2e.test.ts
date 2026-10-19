@@ -249,45 +249,18 @@ test("Docker confines subagent attachments to the authorized session", async () 
     expect(attached.runtimeId).not.toBe(sibling.runtimeId);
 
     const exposedPath = `/openclaw/attachments/${attachmentId}/proof.txt`;
-    const firstRead = await attached.backend.runShellCommand({
-      script: 'test "$(cat "$1")" = authorized',
-      args: [exposedPath],
-      allowFailure: false,
-    });
-    expect(firstRead.code, firstRead.stderr.toString()).toBe(0);
-    const retainedRead = await attached.backend.runShellCommand({
-      script: 'test "$(cat "$1")" = authorized',
-      args: [exposedPath],
-      allowFailure: false,
-    });
-    expect(retainedRead.code, retainedRead.stderr.toString()).toBe(0);
-
-    const mutation = await attached.backend.runShellCommand({
-      script: 'printf denied > "$1"',
-      args: [exposedPath],
-      allowFailure: true,
-    });
+    await expectOk(attached, 'test "$(cat "$1")" = authorized', [exposedPath]);
+    await expectOk(attached, 'test "$(cat "$1")" = authorized', [exposedPath]);
+    const mutation = await run(attached, 'printf denied > "$1"', [exposedPath], true);
     expect(mutation.code).not.toBe(0);
-    await expect(
-      fs.readFile(
-        path.join(
-          resolveSubagentSessionAttachmentRootDir({
-            agentId: "main",
-            childSessionKey: attachedSessionKey,
-          }),
-          attachmentId,
-          "proof.txt",
-        ),
-        "utf8",
-      ),
-    ).resolves.toBe("authorized");
-
-    const siblingProbe = await sibling.backend.runShellCommand({
-      script: 'test ! -e "$1"',
-      args: [exposedPath],
-      allowFailure: false,
+    const attachmentRoot = resolveSubagentSessionAttachmentRootDir({
+      agentId: "main",
+      childSessionKey: attachedSessionKey,
     });
-    expect(siblingProbe.code, siblingProbe.stderr.toString()).toBe(0);
+    await expect(
+      fs.readFile(path.join(attachmentRoot, attachmentId, "proof.txt"), "utf8"),
+    ).resolves.toBe("authorized");
+    await expectOk(sibling, 'test ! -e "$1"', [exposedPath]);
 
     for (const runtimeId of runtimes.splice(0)) {
       await removeSandboxContainer(runtimeId);

@@ -1,5 +1,5 @@
 // OpenWebUI probe tests cover QA Lab OpenAI-compatible API evidence.
-import { createServer, type Server as HttpServer } from "node:http";
+import { createServer, type RequestListener, type Server as HttpServer } from "node:http";
 import { createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -43,6 +43,47 @@ function runProbe(baseUrl: string, env: Record<string, string> = {}, timeout = 3
   );
 }
 
+async function probe(
+  routes: Record<string, RequestListener>,
+  env: Record<string, string> = {},
+  timeout = 3_000,
+) {
+  const server = createServer((request, response) => {
+    const handler = routes[request.url ?? ""];
+    if (handler) {
+      handler(request, response);
+    } else {
+      response.writeHead(404).end();
+    }
+  });
+  try {
+    return await runProbe(await listen(server), env, timeout);
+  } finally {
+    server.close();
+  }
+}
+
+function jsonResponse(response: Parameters<RequestListener>[1], body: unknown, status = 200) {
+  response.writeHead(status, { "content-type": "application/json" });
+  response.end(JSON.stringify(body));
+}
+
+function signin(token = "test-token", cookie = "test"): RequestListener {
+  return (_request, response) => {
+    response.writeHead(200, {
+      "content-type": "application/json",
+      "set-cookie": `openwebui-session=${cookie}; Path=/`,
+    });
+    response.end(JSON.stringify({ token }));
+  };
+}
+
+function expectFailure(result: Awaited<ReturnType<typeof runProbe>>, message: string) {
+  expect(result.error).toBeUndefined();
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain(message);
+}
+
 describe("scripts/e2e/openwebui-probe.mjs", () => {
   it("uses a short control-plane timeout for stalled sign-in requests", async () => {
     const sockets = new Set<Socket>();
@@ -64,9 +105,7 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
       );
       const elapsedMs = Date.now() - startedAt;
 
-      expect(result.error).toBeUndefined();
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Open WebUI signin timed out after 25ms");
+      expectFailure(result, "Open WebUI signin timed out after 25ms");
       expect(elapsedMs).toBeLessThan(1500);
     } finally {
       for (const socket of sockets) {
@@ -77,244 +116,141 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
   });
 
   it("keeps the control-plane timeout active while reading sign-in bodies", async () => {
-    const server = createServer((request, response) => {
-      if (request.url === "/api/v1/auths/signin") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.flushHeaders();
-        response.write("{");
-        return;
-      }
-      response.writeHead(404).end();
-    });
-    const baseUrl = await listen(server);
-    try {
-      const result = await runProbe(
-        baseUrl,
-        {
-          OPENWEBUI_CONTROL_TIMEOUT_MS: "25",
-          OPENWEBUI_FETCH_TIMEOUT_MS: "5000",
+    const result = await probe(
+      {
+        "/api/v1/auths/signin": (_request, response) => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.flushHeaders();
+          response.write("{");
         },
-        2_000,
-      );
-
-      expect(result.error).toBeUndefined();
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Open WebUI signin timed out after 25ms");
-    } finally {
-      server.close();
-    }
+      },
+      { OPENWEBUI_CONTROL_TIMEOUT_MS: "25", OPENWEBUI_FETCH_TIMEOUT_MS: "5000" },
+      2_000,
+    );
+    expectFailure(result, "Open WebUI signin timed out after 25ms");
   });
 
   it("bounds sign-in error response bodies", async () => {
-    const server = createServer((request, response) => {
-      if (request.url === "/api/v1/auths/signin") {
-        response.writeHead(500, { "content-type": "text/plain" });
-        response.end("x".repeat(64));
-        return;
-      }
-      response.writeHead(404).end();
-    });
-    const baseUrl = await listen(server);
-    try {
-      const result = await runProbe(baseUrl, {
-        OPENWEBUI_RESPONSE_BODY_MAX_BYTES: "16",
-      });
-
-      expect(result.error).toBeUndefined();
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Open WebUI signin response body exceeded 16 bytes");
-      expect(result.stderr).not.toContain("x".repeat(64));
-    } finally {
-      server.close();
-    }
+    const result = await probe(
+      {
+        "/api/v1/auths/signin": (_request, response) => {
+          response.writeHead(500, { "content-type": "text/plain" });
+          response.end("x".repeat(64));
+        },
+      },
+      { OPENWEBUI_RESPONSE_BODY_MAX_BYTES: "16" },
+    );
+    expectFailure(result, "Open WebUI signin response body exceeded 16 bytes");
+    expect(result.stderr).not.toContain("x".repeat(64));
   });
 
   it("redacts admin credentials from sign-in error bodies", async () => {
     const adminEmail = "openwebui-e2e@example.com";
-    const server = createServer((request, response) => {
-      if (request.url === "/api/v1/auths/signin") {
-        response.writeHead(401, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            error: "invalid credentials",
-            email: adminEmail,
-            password: 'pa"ss',
-          }),
-        );
-        return;
-      }
-      response.writeHead(404).end();
-    });
-    const baseUrl = await listen(server);
-    try {
-      const result = await runProbe(baseUrl, { OPENWEBUI_ADMIN_PASSWORD: 'pa"ss' });
-
-      expect(result.error).toBeUndefined();
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("signin failed: HTTP 401");
-      expect(result.stderr).toContain("<redacted>");
-      expect(result.stderr).not.toContain(adminEmail);
-      expect(result.stderr).not.toContain('pa"ss');
-      expect(result.stderr).not.toContain('pa\\"ss');
-    } finally {
-      server.close();
+    const result = await probe(
+      {
+        "/api/v1/auths/signin": (_request, response) => {
+          jsonResponse(
+            response,
+            { error: "invalid credentials", email: adminEmail, password: 'pa"ss' },
+            401,
+          );
+        },
+      },
+      { OPENWEBUI_ADMIN_PASSWORD: 'pa"ss' },
+    );
+    expectFailure(result, "signin failed: HTTP 401");
+    expect(result.stderr).toContain("<redacted>");
+    for (const secret of [adminEmail, 'pa"ss', 'pa\\"ss']) {
+      expect(result.stderr).not.toContain(secret);
     }
   });
 
   it("redacts auth material from model-list error bodies", async () => {
-    const server = createServer((request, response) => {
-      if (request.url === "/api/v1/auths/signin") {
-        response.writeHead(200, {
-          "content-type": "application/json",
-          "set-cookie": "openwebui-session=model=secret=cookie; Path=/",
-        });
-        response.end(JSON.stringify({ token: "model-secret-token" }));
-        return;
-      }
-      if (request.url === "/api/models") {
-        response.writeHead(502, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
+    const result = await probe({
+      "/api/v1/auths/signin": signin("model-secret-token", "model=secret=cookie"),
+      "/api/models": (_request, response) => {
+        jsonResponse(
+          response,
+          {
             error: "upstream rejected Authorization Bearer model-secret-token",
             cookieValue: "model=secret=cookie",
-          }),
+          },
+          502,
         );
-        return;
-      }
-      response.writeHead(404).end();
+      },
     });
-    const baseUrl = await listen(server);
-    try {
-      const result = await runProbe(baseUrl);
-
-      expect(result.error).toBeUndefined();
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("HTTP 502");
-      expect(result.stderr).toContain("<redacted>");
-      expect(result.stderr).not.toContain("model-secret-token");
-      expect(result.stderr).not.toContain("model=secret=cookie");
-    } finally {
-      server.close();
-    }
+    expectFailure(result, "HTTP 502");
+    expect(result.stderr).toContain("<redacted>");
+    expect(result.stderr).not.toContain("model-secret-token");
+    expect(result.stderr).not.toContain("model=secret=cookie");
   });
 
   it("does not sleep after the final model-list attempt", async () => {
-    const server = createServer((request, response) => {
-      if (request.url === "/api/v1/auths/signin") {
-        response.writeHead(200, {
-          "content-type": "application/json",
-          "set-cookie": "openwebui-session=chat=secret=cookie; Path=/",
-        });
-        response.end(JSON.stringify({ token: "chat-secret-token" }));
-        return;
-      }
-      if (request.url === "/api/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ data: [{ id: "other-model" }] }));
-        return;
-      }
-      response.writeHead(404).end();
-    });
-    const baseUrl = await listen(server);
-    try {
-      const result = await runProbe(
-        baseUrl,
-        {
-          OPENWEBUI_MODEL_ATTEMPTS: "1",
-          OPENWEBUI_MODEL_RETRY_MS: "1500",
+    const result = await probe(
+      {
+        "/api/v1/auths/signin": signin("chat-secret-token", "chat=secret=cookie"),
+        "/api/models": (_request, response) => {
+          jsonResponse(response, { data: [{ id: "other-model" }] });
         },
-        1_000,
-      );
-
-      expect(result.error).toBeUndefined();
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("openclaw model missing from Open WebUI model list");
-    } finally {
-      server.close();
-    }
+      },
+      {
+        OPENWEBUI_MODEL_ATTEMPTS: "1",
+        OPENWEBUI_MODEL_RETRY_MS: "1500",
+      },
+      1_000,
+    );
+    expectFailure(result, "openclaw model missing from Open WebUI model list");
   });
 
   it("passes in models mode when Open WebUI exposes the OpenClaw model", async () => {
-    const server = createServer((request, response) => {
-      if (request.url === "/api/v1/auths/signin") {
-        setTimeout(() => {
-          response.writeHead(200, {
-            "content-type": "application/json",
-            "set-cookie": "openwebui-session=test; Path=/",
-          });
-          response.end(JSON.stringify({ token: "test-token" }));
-        }, 25);
-        return;
-      }
-      if (request.url === "/api/models") {
-        expect(request.headers.authorization).toBe("Bearer test-token");
-        expect(request.headers.cookie).toContain("openwebui-session=test");
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ data: [{ id: "openclaw/default" }] }));
-        return;
-      }
-      response.writeHead(404).end();
-    });
-    const baseUrl = await listen(server);
-    try {
-      const result = await runProbe(baseUrl, {
+    const result = await probe(
+      {
+        "/api/v1/auths/signin": (request, response) => {
+          setTimeout(() => {
+            signin()(request, response);
+          }, 25);
+        },
+        "/api/models": (request, response) => {
+          expect(request.headers.authorization).toBe("Bearer test-token");
+          expect(request.headers.cookie).toContain("openwebui-session=test");
+          jsonResponse(response, { data: [{ id: "openclaw/default" }] });
+        },
+      },
+      {
         OPENWEBUI_CONTROL_TIMEOUT_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
         OPENWEBUI_FETCH_TIMEOUT_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
-      });
-
-      expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        mode: "models",
-        model: "openclaw/default",
-        ok: true,
-      });
-    } finally {
-      server.close();
-    }
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      mode: "models",
+      model: "openclaw/default",
+      ok: true,
+    });
   });
 
   it("fails chat mode when the Open WebUI reply omits the expected nonce", async () => {
-    const server = createServer((request, response) => {
-      if (request.url === "/api/v1/auths/signin") {
-        response.writeHead(200, {
-          "content-type": "application/json",
-          "set-cookie": "openwebui-session=test; Path=/",
-        });
-        response.end(JSON.stringify({ token: "test-token" }));
-        return;
-      }
-      if (request.url === "/api/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ data: [{ id: "openclaw/default" }] }));
-        return;
-      }
-      if (request.url === "/api/chat/completions") {
-        const authorization = request.headers.authorization ?? "";
-        const cookie = request.headers.cookie ?? "";
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
+    const result = await probe(
+      {
+        "/api/v1/auths/signin": signin(),
+        "/api/models": (_request, response) => {
+          jsonResponse(response, { data: [{ id: "openclaw/default" }] });
+        },
+        "/api/chat/completions": (request, response) => {
+          const authorization = request.headers.authorization ?? "";
+          const cookie = request.headers.cookie ?? "";
+          jsonResponse(response, {
             message: {
               content: `missing the marker with ${authorization} and ${cookie}`,
             },
-          }),
-        );
-        return;
-      }
-      response.writeHead(404).end();
-    });
-    const baseUrl = await listen(server);
-    try {
-      const result = await runProbe(baseUrl, { OPENWEBUI_SMOKE_MODE: "chat" });
-
-      expect(result.error).toBeUndefined();
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("chat reply missing nonce");
-      expect(result.stderr).toContain("<redacted>");
-      expect(result.stderr).not.toContain("test-token");
-      expect(result.stderr).not.toContain("openwebui-session=test");
-    } finally {
-      server.close();
-    }
+          });
+        },
+      },
+      { OPENWEBUI_SMOKE_MODE: "chat" },
+    );
+    expectFailure(result, "chat reply missing nonce");
+    expect(result.stderr).toContain("<redacted>");
+    expect(result.stderr).not.toContain("test-token");
+    expect(result.stderr).not.toContain("openwebui-session=test");
   });
 });

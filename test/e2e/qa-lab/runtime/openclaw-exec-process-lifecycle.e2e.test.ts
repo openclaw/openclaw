@@ -49,9 +49,11 @@ function nodeEvalCommand(source: string): string {
 
 function requireSession(result: ToolResult): { pid: number; sessionId: string } {
   const details = result.details as ProcessDetails;
-  expect(details.status).toBe("running");
-  expect(details.sessionId).toEqual(expect.any(String));
-  expect(details.pid).toEqual(expect.any(Number));
+  expect(details).toMatchObject({
+    status: "running",
+    sessionId: expect.any(String),
+    pid: expect.any(Number),
+  });
   return { pid: details.pid as number, sessionId: details.sessionId as string };
 }
 
@@ -131,23 +133,15 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
 }) => {
   resetProcessRegistryForTests();
   const scopeKey = `agent:qa:exec-lifecycle-${process.pid}`;
-  const execTool = createExecTool({
+  const execOptions = {
     host: "gateway",
     security: "full",
     ask: "off",
-    allowBackground: true,
-    backgroundMs: 20,
     notifyOnExit: false,
     scopeKey,
-  });
-  const foregroundExecTool = createExecTool({
-    host: "gateway",
-    security: "full",
-    ask: "off",
-    allowBackground: false,
-    notifyOnExit: false,
-    scopeKey,
-  });
+  } as const;
+  const execTool = createExecTool({ ...execOptions, allowBackground: true, backgroundMs: 20 });
+  const foregroundExecTool = createExecTool({ ...execOptions, allowBackground: false });
   const processTool = createProcessTool({ scopeKey });
   const cleanupPids = new Set<number>();
   let cleanupPromise: Promise<void> | undefined;
@@ -337,9 +331,9 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
     await clearFinished(processTool, killedSession.sessionId);
     await waitForExitedPids([killedSession.pid], signal);
     expect(pidExists(killedSession.pid)).toBe(false);
-    expect(child.listenerCount("error")).toBe(0);
-    expect(child.listenerCount("exit")).toBe(0);
-    expect(child.listenerCount("close")).toBe(0);
+    for (const event of ["error", "exit", "close"]) {
+      expect(child.listenerCount(event)).toBe(0);
+    }
     cleanupPids.delete(killedSession.pid);
 
     const finalList = await processTool.execute("list-final", { action: "list" });

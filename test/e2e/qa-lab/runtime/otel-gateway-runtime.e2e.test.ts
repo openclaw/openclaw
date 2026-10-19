@@ -76,6 +76,36 @@ function expectResolvedParent(
   return parent!;
 }
 
+function expectTraceParents(spans: CapturedSpan[], tool: CapturedSpan, counts?: number[]) {
+  const spansById = indexSpansById(spans);
+  const terminal = spans.find(
+    (span) =>
+      span.name === "openclaw.message.processed" &&
+      span.attributes["openclaw.channel"] === "qa-channel" &&
+      span.attributes["openclaw.outcome"] === "completed",
+  );
+  expect(terminal).toBeDefined();
+  expect(terminal?.parentSpanId).toBeFalsy();
+  const levels = ["openclaw.harness.run", "openclaw.run", "openclaw.model.call"];
+  for (const [index, name] of levels.entries()) {
+    const children = spans.filter((span) => span.name === name);
+    if (counts) {
+      expect(children).toHaveLength(counts[index]!);
+    } else {
+      expect(children.length).toBeGreaterThanOrEqual(1);
+    }
+    for (const child of children) {
+      const parent = expectResolvedParent(child, spansById);
+      if (index === 0) {
+        expect(parent).toBe(terminal);
+      } else {
+        expect(parent.name).toBe(levels[index - 1]);
+      }
+    }
+  }
+  expect(expectResolvedParent(tool, spansById).name).toBe("openclaw.run");
+}
+
 describe("diagnostics-otel gateway runtime", () => {
   test("exports linked success and failed-read recovery spans from a real qa-channel run", async () => {
     const repoRoot = path.resolve(import.meta.dirname, "../../../..");
@@ -198,50 +228,12 @@ describe("diagnostics-otel gateway runtime", () => {
                   message.text.includes(expectedText),
               ),
           30_000,
-          async () => {
-            let requests: unknown;
-            try {
-              const response = await fetch(`${mock!.baseUrl}/debug/requests`, {
-                signal: AbortSignal.timeout(2_000),
-              });
-              const captured = (await response.json()) as Array<Record<string, unknown>>;
-              requests = captured.slice(-8).map((request) => ({
-                cursor: request.cursor,
-                requestKind: request.requestKind,
-                outcome: request.outcome,
-                errorCode: request.errorCode,
-                plannedToolName: request.plannedToolName,
-                plannedWireToolName: request.plannedWireToolName,
-                toolOutputCallId: request.toolOutputCallId,
-                toolOutputStructuredError: request.toolOutputStructuredError,
-                toolOutputLength:
-                  typeof request.toolOutput === "string" ? request.toolOutput.length : undefined,
-                reconciliation:
-                  typeof request.allInputText === "string" &&
-                  request.allInputText.includes(CODE_MODE_RECONCILIATION_NEEDLE),
-              }));
-            } catch {
-              requests = { unavailable: true };
-            }
-            return {
-              expectedText,
-              targetConversation,
-              messages: state
-                .getSnapshot()
-                .messages.slice(cursor)
-                .slice(-8)
-                .map((message) => ({
-                  id: message.id,
-                  direction: message.direction,
-                  conversation: message.conversation,
-                  isError: message.isError,
-                  deleted: message.deleted,
-                  text: message.text.slice(0, 2_000),
-                })),
-              requests,
-              gatewayLogs: gateway.logs().slice(-12_000),
-            };
-          },
+          () => ({
+            expectedText,
+            targetConversation,
+            traces: activeReceiver.recentTraceSummary(),
+            gatewayLogs: gateway.logs().slice(-12_000),
+          }),
         );
       };
 
@@ -334,23 +326,7 @@ describe("diagnostics-otel gateway runtime", () => {
       );
 
       phase = "failed-read span assertions";
-      expect(failureEvidence.runs).toHaveLength(1);
-      expect(failureEvidence.harnesses).toHaveLength(1);
-      expect(failureEvidence.modelCalls).toHaveLength(2);
-      const failureSpansById = indexSpansById(failureEvidence.sameTrace);
-      expect(failureEvidence.terminal.parentSpanId).toBeFalsy();
-      for (const harness of failureEvidence.harnesses) {
-        expect(expectResolvedParent(harness, failureSpansById)).toBe(failureEvidence.terminal);
-      }
-      for (const run of failureEvidence.runs) {
-        expect(expectResolvedParent(run, failureSpansById).name).toBe("openclaw.harness.run");
-      }
-      for (const modelCall of failureEvidence.modelCalls) {
-        expect(expectResolvedParent(modelCall, failureSpansById).name).toBe("openclaw.run");
-      }
-      expect(expectResolvedParent(failureEvidence.toolError, failureSpansById).name).toBe(
-        "openclaw.run",
-      );
+      expectTraceParents(failureEvidence.sameTrace, failureEvidence.toolError, [1, 1, 2]);
 
       const successEvidence = activeReceiver.capturedSpans.find(
         (span) =>
@@ -363,31 +339,7 @@ describe("diagnostics-otel gateway runtime", () => {
       const successTrace = activeReceiver.capturedSpans.filter(
         (span) => span.traceId === successEvidence?.traceId,
       );
-      const successTerminal = successTrace.find(
-        (span) =>
-          span.name === "openclaw.message.processed" &&
-          span.attributes["openclaw.channel"] === "qa-channel" &&
-          span.attributes["openclaw.outcome"] === "completed",
-      );
-      const successHarnesses = successTrace.filter((span) => span.name === "openclaw.harness.run");
-      const successRuns = successTrace.filter((span) => span.name === "openclaw.run");
-      const successModelCalls = successTrace.filter((span) => span.name === "openclaw.model.call");
-      expect(successTerminal).toBeDefined();
-      expect(successHarnesses.length).toBeGreaterThanOrEqual(1);
-      expect(successRuns.length).toBeGreaterThanOrEqual(1);
-      expect(successModelCalls.length).toBeGreaterThanOrEqual(1);
-      const successSpansById = indexSpansById(successTrace);
-      expect(successTerminal?.parentSpanId).toBeFalsy();
-      for (const harness of successHarnesses) {
-        expect(expectResolvedParent(harness, successSpansById)).toBe(successTerminal);
-      }
-      for (const run of successRuns) {
-        expect(expectResolvedParent(run, successSpansById).name).toBe("openclaw.harness.run");
-      }
-      for (const modelCall of successModelCalls) {
-        expect(expectResolvedParent(modelCall, successSpansById).name).toBe("openclaw.run");
-      }
-      expect(expectResolvedParent(successEvidence!, successSpansById).name).toBe("openclaw.run");
+      expectTraceParents(successTrace, successEvidence!);
 
       const llmTaskConversation = { id: "qa-plugin-usage", kind: "direct" as const };
       const llmTaskSpanCursor = activeReceiver.capturedSpans.length;
@@ -459,25 +411,12 @@ describe("diagnostics-otel gateway runtime", () => {
 
       const exportedBodies = Object.values(activeReceiver.capturedBodyText).flat().join("\n");
       expect(exportedBodies).not.toContain("qa-plugin-usage-secret-sentinel");
-      console.info(
-        `[otel-gateway-runtime] plugin usage proof ${JSON.stringify({
-          spanName: llmTaskUsage.name,
-          pluginId: llmTaskUsage.attributes["openclaw.plugin"],
-          inputTokens: llmTaskUsage.attributes["openclaw.tokens.input"],
-          outputTokens: llmTaskUsage.attributes["openclaw.tokens.output"],
-          totalTokens: llmTaskUsage.attributes["openclaw.tokens.total"],
-          attributedUsageSpanCount: attributedUsageSpans.length,
-          requestContentPresent: exportedBodies.includes("qa-plugin-usage-secret-sentinel"),
-        })}`,
-      );
       phase = "fixture cleanup";
     } finally {
       cleanupStartedAfterMs = Math.round(performance.now() - startedAt);
       await settleCleanup(
         {
-          gateway: async () => {
-            await stopQaGatewayFixture(gatewayOwner);
-          },
+          gateway: () => stopQaGatewayFixture(gatewayOwner),
           provider: async () => {
             await mock?.stop();
           },
