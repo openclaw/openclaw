@@ -41,7 +41,9 @@ export function event(params: {
   };
 }
 
-export function modelMessage(value: Record<string, unknown>) {
+export function modelMessage(
+  value: Record<string, unknown>,
+): Awaited<ReturnType<NonNullable<SessionObserverDeps["completeModel"]>>> {
   return {
     text: JSON.stringify(value),
     provider: "openai",
@@ -50,12 +52,16 @@ export function modelMessage(value: Record<string, unknown>) {
   };
 }
 
-export function preparedModel() {
+export function preparedModel(): Awaited<
+  ReturnType<NonNullable<SessionObserverDeps["prepareModel"]>>
+> {
   return {
     config: cfg,
     provider: "openai",
     model: "gpt-test",
-    outputTextPolicy: "strict-visible" as const,
+    authProfileId: undefined,
+    outputTextPolicy: "strict-visible",
+    thinkLevel: "off",
     agentId: "main",
     agentDir: "/tmp/agent",
   };
@@ -83,6 +89,26 @@ export async function flushObserver(): Promise<void> {
   }
 }
 
+export function createObserverTimerTracker() {
+  // Gateway workers share a fake clock; disposal owns only this observer's handles.
+  const ownedTimers = new Set<ReturnType<typeof setTimeout>>();
+  const setTimeoutFn = Object.assign((callback: () => void, delay?: number) => {
+    const timer = setTimeout(() => {
+      ownedTimers.delete(timer);
+      callback();
+    }, delay);
+    ownedTimers.add(timer);
+    return timer;
+  }, setTimeout);
+  const clearTimeoutFn: typeof clearTimeout = (timer) => {
+    if (timer && typeof timer === "object") {
+      ownedTimers.delete(timer);
+    }
+    clearTimeout(timer);
+  };
+  return { ownedTimers, setTimeoutFn, clearTimeoutFn };
+}
+
 export function createHarness(options?: {
   setTimeoutFn?: SessionObserverDeps["setTimeoutFn"];
   clearTimeoutFn?: SessionObserverDeps["clearTimeoutFn"];
@@ -91,7 +117,7 @@ export function createHarness(options?: {
   visible?: boolean;
   completeModel?: ReturnType<typeof vi.fn>;
   prepareModel?: ReturnType<typeof vi.fn>;
-  persistDigest?: ReturnType<typeof vi.fn>;
+  persistDigest?: ReturnType<typeof vi.fn<(params: PersistDigestParams) => Promise<unknown>>>;
   readSession?: ReturnType<typeof vi.fn>;
   config?: OpenClawConfig;
   utilityModelRef?: string | null;

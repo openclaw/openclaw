@@ -7,6 +7,7 @@ enum DeviceSettingsConsent: Equatable {
     case cookieDomains([String])
     case cookieProfile(String)
     case computerControl
+    case desktopSharing
     case unattendedDesktop
     case peekabooBridge
     case camera
@@ -27,6 +28,7 @@ enum DeviceSettingsConsent: Equatable {
         switch (key, value) {
         case (.cookieSyncEnabled, .boolean(true)): .cookieSync
         case (.computerControlEnabled, .boolean(true)): .computerControl
+        case (.desktopSharingEnabled, .boolean(true)): .desktopSharing
         case (.unattendedDesktopEnabled, .boolean(true)): .unattendedDesktop
         case (.peekabooBridgeEnabled, .boolean(true)): .peekabooBridge
         case (.cameraEnabled, .boolean(true)): .camera
@@ -68,14 +70,16 @@ enum DeviceSettingsConsent: Equatable {
             String(localized: "Change the browser cookie sync destination?")
         case .computerControl:
             String(localized: "Allow the Gateway to control this Mac?")
+        case .desktopSharing:
+            String(localized: "Allow desktop sharing from this Mac?")
         case .unattendedDesktop:
-            String(localized: "Keep this Mac available for unattended desktop work?")
+            String(localized: "Keep this computer awake?")
         case .peekabooBridge:
             String(localized: "Enable the Peekaboo bridge on this Mac?")
         case .camera:
             String(localized: "Allow the Gateway to use this Mac's camera?")
         case .activityReporting:
-            String(localized: "Share this Mac's activity with the Gateway?")
+            String(localized: "Enable system-wide presence detection?")
         case .voiceWake:
             String(localized: "Enable continuous microphone listening?")
         case .locationWhileUsing:
@@ -123,6 +127,13 @@ enum DeviceSettingsConsent: Equatable {
                 The Gateway can capture your screen and interact with apps on this Mac, \
                 including clicking and typing, subject to macOS permissions.
                 """)
+        case .desktopSharing:
+            String(
+                localized: """
+                Your paired Gateway can view and control this Mac through its existing Screen Sharing service. \
+                You may need to approve the updated node capabilities in Devices. \
+                macOS Screen Sharing and agent Computer Control remain separate settings.
+                """)
         case .peekabooBridge:
             String(
                 localized: """
@@ -137,7 +148,12 @@ enum DeviceSettingsConsent: Equatable {
         case .voiceWake:
             String(localized: "Voice Wake will continuously listen for wake phrases through this Mac's microphone.")
         case .activityReporting:
-            String(localized: "The Gateway will receive this Mac's idle time to determine when you are active.")
+            String(
+                localized: """
+                OpenClaw activity already identifies this Mac without extra permissions. \
+                This also shares idle duration from activity in other apps and requires Accessibility. \
+                It never sends keys, pointer positions, app names, or window titles.
+                """)
         case .locationWhileUsing:
             String(localized: "The Gateway can request this Mac's location while OpenClaw is in use.")
         case .locationAlways:

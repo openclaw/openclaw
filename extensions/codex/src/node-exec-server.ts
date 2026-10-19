@@ -36,7 +36,7 @@ function parseCodexNodePlacementWorkspace(value: unknown) {
     throw new Error("Codex node exec-server requires an exact managed placement workspace.");
   }
   return {
-    cwd: value.cwd,
+    workspaceDir: value.cwd,
     environmentId: value.environmentId,
     sessionId: value.sessionId,
     ownerEpoch: value.ownerEpoch,
@@ -52,6 +52,7 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
     cap: CODEX_NODE_EXEC_SERVER_CAPABILITY,
     dangerous: true,
     duplex: true,
+    hasActiveWork: () => activeProcesses.size > 0,
     onDisconnect: async () => {
       await Promise.all([...activeProcesses].map(async (terminate) => await terminate()));
     },
@@ -74,49 +75,38 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
           "Codex node exec-server requires an authorized managed placement workspace launch.",
         );
       }
-      const placement = parseCodexNodePlacementWorkspace(request.placement);
+      const workspaceRequest = parseCodexNodePlacementWorkspace(request.placement);
       if (
-        !context?.acquireManagedWorkspace ||
-        context.sessionKey !== placement.sessionKey ||
+        !context?.acquireManagedWorkspaceAsync ||
+        context.sessionKey !== workspaceRequest.sessionKey ||
         io.signal.aborted
       ) {
         throw new Error("Codex node exec-server requires active managed placement authority.");
       }
-      const workspace = context.acquireManagedWorkspace({
-        workspaceDir: placement.cwd,
-        environmentId: placement.environmentId,
-        sessionId: placement.sessionId,
-        ownerEpoch: placement.ownerEpoch,
-        sessionKey: placement.sessionKey,
-      });
-      const frames = io.frames;
-      let unsubscribe: (() => void) | undefined;
-      try {
-        if (!context.prepareExecAuthorization) {
-          throw new Error(
-            "Codex node execution requires node-local exec policy support; update the node.",
-          );
-        }
-        const assertExecAuthorized = context.prepareExecAuthorization(request.authorization);
-        const { runCodexNodeExecServer } = await import("./node-exec-server.runtime.js");
-        return await runCodexNodeExecServer({
-          workspaceDir: workspace.workspaceDir,
-          homeDir: workspace.homeDir,
-          io,
-          activeProcesses,
-          assertExecAuthorized,
-          // Listener registration announces readiness, so the child must own it first.
-          onFrameReceiver: (receiver) => {
-            unsubscribe = frames.onMessage(receiver);
-          },
-        });
-      } finally {
-        try {
-          unsubscribe?.();
-        } finally {
-          workspace.release();
-        }
+      if (!context.prepareExecAuthorization) {
+        throw new Error(
+          "Codex node execution requires node-local exec policy support; update the node.",
+        );
       }
+      const runtimeIo = context.signal
+        ? { ...io, signal: AbortSignal.any([io.signal, context.signal]) }
+        : io;
+      const assertExecAuthorized = context.prepareExecAuthorization(request.authorization);
+      const { runCodexNodeExecServer } = await import("./node-exec-server.runtime.js");
+      runtimeIo.signal.throwIfAborted();
+      const workspace = await context.acquireManagedWorkspaceAsync(workspaceRequest);
+      try {
+        runtimeIo.signal.throwIfAborted();
+      } catch (error) {
+        workspace.release();
+        throw error;
+      }
+      return await runCodexNodeExecServer({
+        workspace,
+        io: runtimeIo,
+        activeProcesses,
+        assertExecAuthorized,
+      });
     },
   };
 }
@@ -136,9 +126,9 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
           message: "Codex node execution requires an available approval reviewer.",
         };
       }
-      let placement: ReturnType<typeof parseCodexNodePlacementWorkspace>;
+      let workspace: ReturnType<typeof parseCodexNodePlacementWorkspace>;
       try {
-        placement = parseCodexNodePlacementWorkspace(context.params);
+        workspace = parseCodexNodePlacementWorkspace(context.params);
       } catch {
         return {
           ok: false,
@@ -146,12 +136,12 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
           message: "Codex node execution requires an exact managed placement workspace.",
         };
       }
-      const workspace = {
-        workspaceDir: placement.cwd,
-        environmentId: placement.environmentId,
-        sessionId: placement.sessionId,
-        ownerEpoch: placement.ownerEpoch,
-        sessionKey: placement.sessionKey,
+      const placement = {
+        cwd: workspace.workspaceDir,
+        environmentId: workspace.environmentId,
+        sessionId: workspace.sessionId,
+        ownerEpoch: workspace.ownerEpoch,
+        sessionKey: workspace.sessionKey,
       };
       const fullLaunch = await context.invokeNodeWithSessionFull?.({
         workspace,

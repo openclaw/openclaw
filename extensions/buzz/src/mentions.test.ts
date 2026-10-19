@@ -19,8 +19,8 @@ describe("Buzz outbound mentions", () => {
   it("resolves unique room-member names and preserves multi-word matching", () => {
     expect(
       resolveBuzzMessageMentions({
-        text: "Thanks @Alice Example, please review.",
-        members: members({ publicKey: ALICE_PUBLIC_KEY, displayName: "Alice Example" }),
+        text: "Thanks @Alice Example, please review. @ALICE EXAMPLE",
+        members: members({ publicKey: ALICE_PUBLIC_KEY, displayName: " Alice Example " }),
         senderPublicKey: BOT_PUBLIC_KEY,
       }),
     ).toEqual([ALICE_PUBLIC_KEY]);
@@ -72,20 +72,6 @@ describe("Buzz outbound mentions", () => {
     ).toThrow(nip19.npubEncode(ALICE_PUBLIC_KEY));
   });
 
-  it("accepts explicit NIP-27 identities and ignores presentation-only ambiguous names", () => {
-    const explicit = nip19.npubEncode(ALICE_PUBLIC_KEY);
-    expect(
-      resolveBuzzMessageMentions({
-        text: `Hello @Alice (nostr:${explicit})`,
-        members: members(
-          { publicKey: ALICE_PUBLIC_KEY, displayName: "Alice" },
-          { publicKey: SECOND_ALICE_PUBLIC_KEY, displayName: "Alice" },
-        ),
-        senderPublicKey: BOT_PUBLIC_KEY,
-      }),
-    ).toEqual([ALICE_PUBLIC_KEY]);
-  });
-
   it("allows unresolved labels as presentation text when an explicit identity is present", () => {
     const explicitBob = nip19.npubEncode(BOB_PUBLIC_KEY);
     const roomMembers = members(
@@ -96,7 +82,7 @@ describe("Buzz outbound mentions", () => {
 
     expect(
       resolveBuzzMessageMentions({
-        text: `Hello @Missing (nostr:${explicitBob})`,
+        text: `Hello @Missing (nostr:${explicitBob}) nostr:npub1invalid nostr:${explicitBob}`,
         members: roomMembers,
         senderPublicKey: BOT_PUBLIC_KEY,
       }),

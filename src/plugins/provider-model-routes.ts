@@ -52,7 +52,12 @@ export function resolveProviderModelPolicySurface(
       allowScopedSnapshot: true,
       allowWorkspaceScopedSnapshot: true,
     });
-  return metadata ? resolveProviderPolicySurface(provider, { manifestRegistry: metadata }) : null;
+  return metadata
+    ? resolveProviderPolicySurface(provider, {
+        manifestRegistry: metadata,
+        directSurface: bundled,
+      })
+    : null;
 }
 
 /** Binds one provider's identity facts for an authored-row lookup. */
@@ -108,6 +113,7 @@ function projectConfiguredModelRoute(model: ModelDefinitionConfig): ProviderMode
 /** Captures one provider artifact and config view for repeated row resolution. */
 export function createProviderModelRoutesResolver(params: {
   provider: string;
+  capability?: string;
   config?: OpenClawConfig;
   env?: Readonly<Record<string, string | undefined>>;
   requestTransportOverrides?: ProviderRouteOverridePresence;
@@ -137,19 +143,19 @@ export function createProviderModelRoutesResolver(params: {
   const providerRuntimeId = providerConfig?.agentRuntime?.id?.trim();
   const canonicalizeModelId = (modelId: string) =>
     normalizeModelId(provider, modelId, surface) ?? modelId.trim();
-  const configuredModels = new Map(
-    Array.from(
-      resolveMergedModelProviderModels({
-        models: providerConfig?.models,
-        normalizeModelId: canonicalizeModelId,
-      }),
-      ([modelId, model]) =>
-        [
-          modelId,
-          { route: projectConfiguredModelRoute(model), runtimeId: model.agentRuntime?.id?.trim() },
-        ] as const,
-    ),
-  );
+  const configuredModels = new Map<
+    string,
+    { route: ProviderModelRouteSource; runtimeId: string | undefined }
+  >();
+  for (const [modelId, model] of resolveMergedModelProviderModels({
+    models: providerConfig?.models,
+    normalizeModelId: canonicalizeModelId,
+  })) {
+    configuredModels.set(modelId, {
+      route: projectConfiguredModelRoute(model),
+      runtimeId: model.agentRuntime?.id?.trim(),
+    });
+  }
   const resolveRouteOverridePresence =
     params.requestTransportOverrides === "present"
       ? () => "present" as const
@@ -159,12 +165,10 @@ export function createProviderModelRoutesResolver(params: {
           canonicalizeModelId,
         });
   const providerRouteOverridePresence = resolveRouteOverridePresence();
-  const routeOverridePresenceByModel = new Map(
-    Array.from(
-      configuredModels.keys(),
-      (modelId) => [modelId, resolveRouteOverridePresence(modelId)] as const,
-    ),
-  );
+  const routeOverridePresenceByModel = new Map<string, ProviderRouteOverridePresence>();
+  for (const modelId of configuredModels.keys()) {
+    routeOverridePresenceByModel.set(modelId, resolveRouteOverridePresence(modelId));
+  }
   const env = params.env ?? process.env;
 
   return (observed) => {
@@ -189,6 +193,7 @@ export function createProviderModelRoutesResolver(params: {
     return (
       resolveModelRoutes({
         provider,
+        ...(params.capability ? { capability: params.capability } : {}),
         ...(modelId ? { modelId } : {}),
         requestTransportOverrides,
         ...(configuredModel ? { configuredModel: configuredModel.route } : {}),
@@ -204,6 +209,7 @@ export function createProviderModelRoutesResolver(params: {
 /** Resolves one model route through its bundled provider public artifact. */
 export function resolveProviderModelRoutes(params: {
   provider: string;
+  capability?: string;
   modelId?: string;
   api?: ModelApi | null;
   baseUrl?: unknown;

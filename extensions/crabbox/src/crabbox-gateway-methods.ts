@@ -13,6 +13,7 @@ import {
 } from "./crabbox-worker-profile.js";
 import type { CrabboxSnapshotActions } from "./crabbox-worker-snapshot-actions.js";
 import {
+  type CrabboxState,
   CrabboxWarmImageRequestError,
   crabboxWarmImageRecoveryHint,
   isCrabboxWarmImageHeld,
@@ -49,9 +50,9 @@ export async function mutateCrabboxImage(
   }
   try {
     if (action === "pin") {
-      respond(true, snapshotSummary(images.pin(checkpointId, params.pinned === true)));
+      respond(true, snapshotSummary(await images.pin(checkpointId, params.pinned === true)));
     } else if (action === "rollback") {
-      respond(true, snapshotSummary(images.rollback(checkpointId)));
+      respond(true, snapshotSummary(await images.rollback(checkpointId)));
     } else {
       const profiles = Object.values(api.runtime.config.current().cloudWorkers?.profiles ?? {})
         .filter((profile) => profile.provider.trim().toLowerCase() === CRABBOX_WORKER_PROVIDER_ID)
@@ -81,7 +82,7 @@ function sendError(respond: Request["respond"], error: unknown, invalidRequest =
 function profileStatus(settings: Readonly<Record<string, unknown>>) {
   try {
     const configured = parseCrabboxProfile(settings);
-    // Resolve the provider's default without reading forwarded environment values.
+    // Snapshot status uses secret references without opening the secret store.
     const profile = resolveCrabboxWarmImageProfile(configured);
     const warmImages = profile.warmImage && profile.class ? "on" : "off";
     const reason =
@@ -89,13 +90,11 @@ function profileStatus(settings: Readonly<Record<string, unknown>>) {
         ? "Disabled in this profile."
         : profile.target !== "linux"
           ? "Warm images require Linux."
-          : configured.warmImage !== true && configured.setupEnv?.length
-            ? "Forwarded setup environment keeps warm images off by default."
-            : !profile.class
-              ? "Requires a configured or placement machine class."
-              : configured.warmImage === true
-                ? "Explicitly enabled in this profile."
-                : "Enabled by default for Linux with a known machine class and no setup environment.";
+          : !profile.class
+            ? "Requires a configured or placement machine class."
+            : configured.warmImage === true
+              ? "Explicitly enabled in this profile."
+              : "Enabled by default for Linux with a known machine class.";
     return {
       backend: configured.provider,
       machineClass: configured.class,
@@ -108,7 +107,7 @@ function profileStatus(settings: Readonly<Record<string, unknown>>) {
   }
 }
 
-function snapshotSummary(image: ReturnType<typeof listCrabboxWarmImages>[number]) {
+function snapshotSummary(image: Awaited<ReturnType<typeof listCrabboxWarmImages>>[number]) {
   const allocations = Object.entries(image.allocations).toSorted(([a], [b]) => a.localeCompare(b));
   return {
     ...image,
@@ -118,16 +117,19 @@ function snapshotSummary(image: ReturnType<typeof listCrabboxWarmImages>[number]
   };
 }
 
-function snapshotStatus() {
+async function snapshotStatus(state: CrabboxState) {
   return {
-    images: listCrabboxWarmImages().map(snapshotSummary),
-    legacyLeases: listCrabboxLegacyWarmLeases().map((lease) =>
+    images: (await listCrabboxWarmImages(state)).map(snapshotSummary),
+    legacyLeases: (await listCrabboxLegacyWarmLeases(state)).map((lease) =>
       Object.assign(lease, { recoveryHint: crabboxWarmImageRecoveryHint(lease.selector) }),
     ),
   };
 }
 
-export function listCrabboxImages(api: OpenClawPluginApi, { params, respond }: Request): void {
+export async function listCrabboxImages(
+  api: OpenClawPluginApi,
+  { params, respond }: Request,
+): Promise<void> {
   if (params !== undefined && (!isRecord(params) || Object.keys(params).length > 0)) {
     sendError(respond, new Error("crabbox.images.list takes no parameters."), true);
     return;
@@ -137,13 +139,16 @@ export function listCrabboxImages(api: OpenClawPluginApi, { params, respond }: R
       .filter(([, profile]) => profile.provider.trim().toLowerCase() === CRABBOX_WORKER_PROVIDER_ID)
       .toSorted(([a], [b]) => a.localeCompare(b))
       .map(([id, profile]) => Object.assign({ id }, profileStatus(profile.settings ?? {})));
-    respond(true, { ...snapshotStatus(), profiles });
+    respond(true, { ...(await snapshotStatus(api.runtime.state)), profiles });
   } catch (error) {
     sendError(respond, error);
   }
 }
 
-export function recoverCrabboxImage({ params, respond }: Request): void {
+export async function recoverCrabboxImage(
+  state: CrabboxState,
+  { params, respond }: Request,
+): Promise<void> {
   const selector = isRecord(params) ? normalizeOptionalString(params.selector) : undefined;
   if (
     !selector ||
@@ -159,9 +164,9 @@ export function recoverCrabboxImage({ params, respond }: Request): void {
     return;
   }
   try {
-    recoverCrabboxWarmImageCapture(selector, true);
+    await recoverCrabboxWarmImageCapture(state, selector, true);
     respond(true, {
-      ...snapshotStatus(),
+      ...(await snapshotStatus(state)),
       recoveredCapture: selector,
       nextSteps:
         "Restart the Gateway after manual reconciliation; the next eligible worker can capture again.",

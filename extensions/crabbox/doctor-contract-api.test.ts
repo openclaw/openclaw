@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type {
@@ -11,6 +11,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
+import { crabboxState } from "./src/crabbox-state.test-support.js";
 import { crabboxLegacyWarmImageCaptureSelector } from "./src/crabbox-worker-warm-image-records.js";
 import {
   listCrabboxLegacyWarmLeases,
@@ -47,7 +48,11 @@ afterEach(() => {
 });
 
 function openStore<T>(options: OpenKeyedStoreOptions) {
-  return createPluginStateKeyedStoreForTests<T>("crabbox", { ...options, env });
+  return createPluginStateKeyedStoreV2ForTests<T>(
+    "crabbox",
+    { ...options, env },
+    { assertCurrent() {} },
+  );
 }
 
 function legacyImages() {
@@ -66,7 +71,6 @@ function input(
 
 describe("Crabbox warm-profile Doctor migration", () => {
   it.each<{ name: string; record: typeof image & { operation?: unknown } }>([
-    { name: "available image", record: image },
     {
       name: "in-flight capture",
       record: {
@@ -81,15 +85,13 @@ describe("Crabbox warm-profile Doctor migration", () => {
         },
       },
     },
-    {
-      name: "pending retirement",
-      record: { ...image, operation: { type: "retire", checkpointId: "chk_previous" } },
-    },
   ])(
     "preserves $name across SQLite reopen without fabricating an allocation",
     async ({ record }) => {
       await legacyImages().register("profile", record);
-      expect(() => openCrabboxWarmImageStore(env).lookup("profile")).toThrow("doctor --fix");
+      await expect(openCrabboxWarmImageStore(crabboxState, env).lookup("profile")).rejects.toThrow(
+        "doctor --fix",
+      );
       const before = await legacyImages().lookup("profile");
       expect(await migration.detectLegacyState(input())).not.toBeNull();
       expect(await legacyImages().lookup("profile")).toEqual(before);
@@ -99,7 +101,7 @@ describe("Crabbox warm-profile Doctor migration", () => {
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
       const { operation, lastUsedAtMs: _lastUsedAtMs, ...metadata } = record;
-      expect(openCrabboxWarmImageStore(env).lookup("profile")).toEqual({
+      expect(await openCrabboxWarmImageStore(crabboxState, env).lookup("profile")).toEqual({
         version: 3,
         image: {
           ...metadata,
@@ -155,7 +157,7 @@ describe("Crabbox warm-profile Doctor migration", () => {
       expect((await migration.migrateLegacyState(input())).warnings).toEqual([]);
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
-      const migrated = openCrabboxWarmImageStore(env).lookup("profile");
+      const migrated = await openCrabboxWarmImageStore(crabboxState, env).lookup("profile");
       expect(migrated).toEqual({
         version: 3,
         projectKey: "project-v2",
@@ -195,7 +197,7 @@ describe("Crabbox warm-profile Doctor migration", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    expect(openCrabboxWarmImageStore(env).lookup("reserved")).toEqual({
+    expect(await openCrabboxWarmImageStore(crabboxState, env).lookup("reserved")).toEqual({
       version: 3,
       allocations: {},
       operation: {
@@ -214,7 +216,7 @@ describe("Crabbox warm-profile Doctor migration", () => {
       overflowPolicy: "evict-oldest",
     });
     await store.register("cbx_legacy", { machineClass: "tiny" });
-    const [lease] = listCrabboxLegacyWarmLeases(env);
+    const [lease] = await listCrabboxLegacyWarmLeases(crabboxState, env);
     const command = `openclaw crabbox warm-images --recover ${lease!.selector} --acknowledge-provider-cleanup`;
 
     expect((await migration.detectLegacyState(input()))?.preview.join("\n")).toContain(command);
@@ -246,20 +248,22 @@ describe("Crabbox warm-profile Doctor migration", () => {
     ).toEqual(Object.fromEntries(rows.map((row, index) => [String(index), row])));
   });
 
-  it.each(["changed", "write-failed"])(
+  it.each(["changed", "write-failed", "metadata-conflict"])(
     "preserves paid ownership when publication is %s",
     async (failure) => {
       const store = legacyImages();
       await store.register("profile", image);
       const newer = { ...image, operation: { type: "retire", checkpointId: "chk_new_obligation" } };
-      const update = store.update!.bind(store);
-      vi.spyOn(store, "update").mockImplementationOnce(async (key, callback, options) => {
-        if (failure === "write-failed") {
-          throw new Error("write unavailable");
-        }
-        await store.register(key, newer);
-        return update(key, callback, options);
-      });
+      const compareAndApply = store.compareAndApply.bind(store);
+      const publication = vi
+        .spyOn(store, "compareAndApply")
+        .mockImplementationOnce(async (...args) => {
+          if (failure === "write-failed") {
+            throw new Error("write unavailable");
+          }
+          await store.register(args[0], failure === "changed" ? newer : image, { ttlMs: 60_000 });
+          return compareAndApply(...args);
+        });
       const context: PluginDoctorStateMigrationContext = { openPluginStateKeyedStore: openStore };
       vi.spyOn(context, "openPluginStateKeyedStore").mockImplementation((options) =>
         options.namespace === "warm-images" ? store : openStore(options),
@@ -267,9 +271,20 @@ describe("Crabbox warm-profile Doctor migration", () => {
 
       const result = await migration.migrateLegacyState(input(context));
 
-      expect(result.changes).toEqual([]);
-      expect(result.warnings).toHaveLength(1);
-      expect(await store.lookup("profile")).toEqual(failure === "changed" ? newer : image);
+      if (failure === "metadata-conflict") {
+        expect(result.changes).toHaveLength(1);
+        expect(result.warnings).toEqual([]);
+        expect(await store.lookup("profile")).toMatchObject({
+          version: 3,
+          image: { checkpointId: image.checkpointId },
+        });
+        expect(publication).toHaveBeenCalledTimes(2);
+      } else {
+        expect(result.changes).toEqual([]);
+        expect(result.warnings).toHaveLength(1);
+        expect(await store.lookup("profile")).toEqual(failure === "changed" ? newer : image);
+        expect(publication).toHaveBeenCalledOnce();
+      }
     },
   );
 });

@@ -1,9 +1,4 @@
-import type {
-  SessionDeliveryState,
-  SessionEntry,
-  SessionOrigin,
-} from "../config/sessions/types.js";
-// Shared delivery context helpers expose route normalization shared by modules.
+import type { SessionDeliveryState, SessionOrigin } from "../config/sessions/types.js";
 import {
   channelRouteCompactKey,
   channelRouteThreadId,
@@ -95,17 +90,12 @@ export function deliveryContextFromChannelRoute(
   });
 }
 
-/** Converts delivery context fields into the SDK channel route reference shape. */
-function channelRouteFromDeliveryContext(context?: DeliveryContext): ChannelRouteRef | undefined {
-  return normalizeChannelRouteTarget(normalizeDeliveryContext(context));
-}
-
 function mergeRouteMetadataWithDeliveryContext(
   route: ChannelRouteRef | undefined,
   context: DeliveryContext,
 ): ChannelRouteRef | undefined {
   if (!route) {
-    return channelRouteFromDeliveryContext(context);
+    return normalizeChannelRouteTarget(normalizeDeliveryContext(context));
   }
   return normalizeChannelRouteRef({
     channel: route.channel ?? context.channel,
@@ -246,32 +236,6 @@ export function projectSessionDeliveryFields(
     lastAccountId: delivery.context.accountId,
     lastThreadId: delivery.context.threadId,
   };
-}
-
-/** Reads only the canonical persisted delivery record. */
-export function deliveryContextFromSession(
-  entry?: Pick<SessionEntry, "delivery">,
-): DeliveryContext | undefined {
-  return entry?.delivery?.kind === "external" ? entry.delivery.context : undefined;
-}
-
-export function sessionDeliveryRoute(
-  entry?: Pick<SessionEntry, "delivery">,
-): ChannelRouteRef | undefined {
-  return entry?.delivery?.kind === "external" ? entry.delivery.route : undefined;
-}
-
-export function sessionDeliveryOrigin(
-  entry?: Pick<SessionEntry, "delivery">,
-): SessionOrigin | undefined {
-  return entry?.delivery?.kind === "external" ? entry.delivery.origin : undefined;
-}
-
-export function sessionDeliveryChannel(entry?: Pick<SessionEntry, "delivery">): string | undefined {
-  const delivery = entry?.delivery;
-  return delivery?.kind === "external"
-    ? (delivery.context.channel ?? delivery.origin.provider)
-    : undefined;
 }
 
 /** Merges delivery contexts without mixing target/account/thread fields across route owners. */

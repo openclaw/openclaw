@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements vault behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -33,13 +32,6 @@ const WIKI_VAULT_DIRECTORIES = [
 ] as const;
 
 const WIKI_VAULT_SCAFFOLD = ["AGENTS.md", "WIKI.md", "index.md", ".openclaw-wiki/log.jsonl"];
-
-type InitializeMemoryWikiVaultResult = {
-  rootDir: string;
-  created: boolean;
-  createdDirectories: string[];
-  createdFiles: string[];
-};
 
 function buildIndexMarkdown(): string {
   return withTrailingNewline(
@@ -108,7 +100,7 @@ async function writeFileIfMissing(
 export async function initializeMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
   options?: { nowMs?: number; signal?: AbortSignal },
-): Promise<InitializeMemoryWikiVaultResult> {
+) {
   options?.signal?.throwIfAborted();
   const rootDir = config.vault.path;
   const createdDirectories: string[] = [];

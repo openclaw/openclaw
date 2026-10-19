@@ -1,4 +1,3 @@
-// Memory Core tests cover dreaming command plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -12,13 +11,18 @@ function resolveStoredDreaming(config: OpenClawConfig): Record<string, unknown> 
   return asNullableRecord(pluginConfig?.dreaming) ?? {};
 }
 
+function dreamingConfig(
+  dreaming: Record<string, unknown>,
+  config: OpenClawConfig = {},
+): OpenClawConfig {
+  return { ...config, plugins: { entries: { "memory-core": { config: { dreaming } } } } };
+}
+
 function createHarness(initialConfig: OpenClawConfig = {}) {
   let runtimeConfig: OpenClawConfig = initialConfig;
 
   const runtime = {
     config: {
-      current: vi.fn(() => runtimeConfig),
-      loadConfig: vi.fn(() => runtimeConfig),
       mutateConfigFile: vi.fn(async ({ mutate }: { mutate: (draft: OpenClawConfig) => void }) => {
         const draft = structuredClone(runtimeConfig);
         mutate(draft);
@@ -34,12 +38,6 @@ function createHarness(initialConfig: OpenClawConfig = {}) {
           result: undefined,
         };
       }),
-      replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
-        runtimeConfig = nextConfig;
-      }),
-      writeConfigFile: vi.fn(async (nextConfig: OpenClawConfig) => {
-        runtimeConfig = nextConfig;
-      }),
     },
   } as unknown as OpenClawPluginApi["runtime"];
 
@@ -54,34 +52,22 @@ function createHarness(initialConfig: OpenClawConfig = {}) {
   };
 }
 
-function createCommandContext(
-  args?: string,
-  config: OpenClawConfig = {},
-  overrides?: Partial<Pick<PluginCommandContext, "gatewayClientScopes" | "senderIsOwner">>,
-): PluginCommandContext {
-  return {
-    channel: "webchat",
-    isAuthorizedSender: true,
-    commandBody: args ? `/dreaming ${args}` : "/dreaming",
-    args,
-    config,
-    gatewayClientScopes: overrides?.gatewayClientScopes,
-    senderIsOwner: overrides?.senderIsOwner,
-    requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
-    detachConversationBinding: async () => ({ removed: false }),
-    getCurrentConversationBinding: async () => null,
-  };
-}
-
 async function runDreamingCommand(
   harness: ReturnType<typeof createHarness>,
   args?: string,
   overrides?: Partial<Pick<PluginCommandContext, "gatewayClientScopes" | "senderIsOwner">>,
 ) {
-  return await handleDreamingCommand(
-    harness.api,
-    createCommandContext(args, harness.getRuntimeConfig(), overrides),
-  );
+  return await handleDreamingCommand(harness.api, {
+    channel: "webchat",
+    isAuthorizedSender: true,
+    commandBody: args ? `/dreaming ${args}` : "/dreaming",
+    args,
+    config: harness.getRuntimeConfig(),
+    ...overrides,
+    requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
 }
 
 describe("memory-core /dreaming command", () => {
@@ -97,105 +83,53 @@ describe("memory-core /dreaming command", () => {
     );
   });
 
-  it("blocks non-owner external channel callers from persisting dreaming config", async () => {
+  it.each([
+    { caller: "non-owner channel", authority: {} },
+    { caller: "write-scoped gateway", authority: { gatewayClientScopes: ["operator.write"] } },
+  ])("blocks $caller from persisting dreaming config", async ({ authority }) => {
     const harness = createHarness();
-
-    const result = await runDreamingCommand(harness, "off");
-
+    const result = await runDreamingCommand(harness, "off", authority);
     expect(result.text).toContain(
       "requires owner status for channel callers or operator.admin for gateway clients",
     );
     expect(harness.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
   });
 
-  it("allows owner external channel callers to persist global enablement", async () => {
-    const harness = createHarness({
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                phases: {
-                  deep: {
-                    minScore: 0.9,
-                  },
-                },
-                frequency: "0 */6 * * *",
-              },
-            },
-          },
-        },
-      },
-    });
-
-    const result = await runDreamingCommand(harness, "off", {
-      senderIsOwner: true,
-    });
-
-    expect(harness.runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
-    const storedDreaming = resolveStoredDreaming(harness.getRuntimeConfig());
-    expect(storedDreaming.enabled).toBe(false);
-    expect(storedDreaming.frequency).toBe("0 */6 * * *");
-    expect(result.text).toContain("Dreaming disabled.");
-  });
-
-  it("blocks unscoped gateway callers from persisting dreaming config", async () => {
-    const harness = createHarness();
-
-    const result = await runDreamingCommand(harness, "off", {
-      gatewayClientScopes: [],
-    });
-
-    expect(result.text).toContain(
-      "requires owner status for channel callers or operator.admin for gateway clients",
-    );
-    expect(harness.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("blocks write-scoped gateway callers from persisting dreaming config", async () => {
-    const harness = createHarness();
-
-    const result = await runDreamingCommand(harness, "off", {
-      gatewayClientScopes: ["operator.write"],
-    });
-
-    expect(result.text).toContain(
-      "requires owner status for channel callers or operator.admin for gateway clients",
-    );
-    expect(harness.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("allows admin-scoped gateway callers to persist dreaming config", async () => {
-    const harness = createHarness();
-
-    const result = await runDreamingCommand(harness, "on", {
-      gatewayClientScopes: ["operator.admin"],
-    });
-
-    expect(harness.runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
-    expect(resolveStoredDreaming(harness.getRuntimeConfig()).enabled).toBe(true);
-    expect(result.text).toContain("Dreaming enabled.");
-  });
+  it.each([
+    {
+      caller: "owner channel",
+      args: "off",
+      authority: { senderIsOwner: true },
+      config: dreamingConfig({ phases: { deep: { minScore: 0.9 } }, frequency: "0 */6 * * *" }),
+      stored: { enabled: false, frequency: "0 */6 * * *" },
+      message: "disabled",
+    },
+    {
+      caller: "admin gateway",
+      args: "on",
+      authority: { gatewayClientScopes: ["operator.admin"] },
+      config: {},
+      stored: { enabled: true },
+      message: "enabled",
+    },
+  ])(
+    "allows $caller to persist enablement",
+    async ({ args, authority, config, stored, message }) => {
+      const harness = createHarness(config);
+      const result = await runDreamingCommand(harness, args, authority);
+      expect(harness.runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
+      expect(resolveStoredDreaming(harness.getRuntimeConfig())).toMatchObject(stored);
+      expect(result.text).toContain(`Dreaming ${message}.`);
+    },
+  );
 
   it("returns status without mutating config", async () => {
-    const harness = createHarness({
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                frequency: "15 */8 * * *",
-              },
-            },
-          },
-        },
-      },
-      agents: {
-        defaults: {
-          userTimezone: "America/Los_Angeles",
-        },
-      },
-    });
+    const harness = createHarness(
+      dreamingConfig(
+        { frequency: "15 */8 * * *" },
+        { agents: { defaults: { userTimezone: "America/Los_Angeles" } } },
+      ),
+    );
 
     const result = await runDreamingCommand(harness, "status");
 

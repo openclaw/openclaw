@@ -1,53 +1,159 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
-import type { ModelCatalogEntry } from "../../api/types.ts";
+import { createComponent, createSignal, merge } from "solid-js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
-import { makeChatHost } from "./chat-host.test-support.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { switchChatModel } from "./chat-session.ts";
-import { renderChatModelControls } from "./components/chat-model-controls.ts";
+import { ChatModelControls } from "./components/chat-model-controls.tsx";
 
+const codexChoice = {
+  agentRuntime: { id: "codex", source: "model" },
+  available: true,
+} satisfies NonNullable<ModelCatalogEntry["runtimeChoices"]>[number];
+const codexSelector = '[data-chat-model-runtime="codex"]';
+const solSelector = '[data-chat-model-option="openai/gpt-5.6-sol"]';
 const model: ModelCatalogEntry = {
   id: "gpt-5.6-sol",
   name: "GPT-5.6 Sol",
   provider: "openai",
   available: true,
-  contextWindow: 1_000_000,
   agentRuntime: { id: "openclaw", source: "model" },
-  runtimeChoices: [
-    { agentRuntime: { id: "codex", source: "model" }, available: true, contextWindow: 200_000 },
-  ],
+  runtimeChoices: [codexChoice],
 };
 
-function renderRuntimeModel(entry: ModelCatalogEntry, selectedRuntime?: string) {
-  const result = createSessionsListResult({ model: entry.id, defaultsModel: entry.id });
-  if (selectedRuntime) {
-    result.sessions[0]!.agentRuntime = { id: selectedRuntime, source: "session-key" };
+type ModelControlsProps = Parameters<typeof ChatModelControls>[0];
+const mountedControls = new WeakMap<HTMLElement, (props: ModelControlsProps) => void>();
+
+function renderControls(
+  result: SessionsListResult,
+  models: ModelCatalogEntry[],
+  options: Pick<ModelControlsProps, "onModelSelect" | "onModelSetup" | "modelSelectionLocked"> = {},
+  container = document.createElement("div"),
+) {
+  const props: ModelControlsProps = {
+    activeRunId: null,
+    connected: true,
+    gatewayAvailable: true,
+    loading: false,
+    modelCatalog: models,
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    modelSwitching: false,
+    modelPickerOpen: true,
+    sending: false,
+    sessionKey: "main",
+    selectedSession: result.sessions[0],
+    sessionsResult: result,
+    stream: null,
+    ...options,
+  };
+  const update = mountedControls.get(container);
+  if (update) {
+    update(props);
+  } else {
+    document.body.append(container);
+    const [current, setCurrent] = createSignal(props);
+    const view = mountSolid(() => createComponent(ChatModelControls, merge(current)), {
+      container,
+    });
+    mountedControls.set(container, setCurrent);
+    onTestFinished(() => {
+      view.unmount();
+      mountedControls.delete(container);
+      container.remove();
+    });
   }
-  const container = document.createElement("div");
-  render(
-    renderChatModelControls({
-      activeRunId: null,
-      connected: true,
-      gatewayAvailable: true,
-      loading: false,
-      modelCatalog: [entry],
-      modelSwitching: false,
-      sending: false,
-      sessionKey: "main",
-      selectedSession: result.sessions[0],
-      sessionsResult: result,
-      stream: null,
-    }),
-    container,
-  );
+  flush();
   return container;
 }
 
+function renderRuntimeModel(
+  entry: ModelCatalogEntry,
+  selectedRuntime?: string,
+  observedModel = false,
+) {
+  const result = createSessionsListResult({
+    model: entry.id,
+    modelProvider: entry.provider,
+    defaultsModel: entry.id,
+    defaultsProvider: entry.provider,
+  });
+  if (selectedRuntime) {
+    result.sessions[0]!.agentRuntime = { id: selectedRuntime, source: "session-key" };
+  }
+  if (observedModel) {
+    result.sessions[0]!.activeModel = entry.id;
+    result.sessions[0]!.activeModelProvider = entry.provider;
+  }
+  return renderControls(result, [entry]);
+}
+
+function selectionControls(result: SessionsListResult, models: ModelCatalogEntry[]) {
+  const host = makeChatHost({
+    sessionKey: "main",
+    sessionsResult: result,
+    chatModelCatalog: models,
+    chatModelSwitchPromises: {},
+    requestHandlers: {
+      "sessions.patch": { ok: true, key: "main", path: "", entry: { sessionId: "main" } },
+      "sessions.list": result,
+    },
+  });
+  onTestFinished(() => host.sessions.dispose());
+  const container = document.createElement("div");
+  let selection: Promise<boolean> | undefined;
+  const draw = () =>
+    renderControls(
+      result,
+      models,
+      {
+        onModelSelect: (value, key, runtime) => {
+          selection = switchChatModel(host, value, key, runtime);
+          return selection;
+        },
+      },
+      container,
+    );
+  const row = (selector: string) => container.querySelector<HTMLButtonElement>(selector)!;
+  return {
+    host,
+    container,
+    draw,
+    row,
+    select: async (button: HTMLButtonElement) => {
+      button.click();
+      await selection;
+    },
+    patches: () => requestCalls(host.request, "sessions.patch"),
+  };
+}
+
+const triggerLabel = (container: HTMLElement) =>
+  container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim();
+const optionName = (row: Element) =>
+  row.querySelector(".chat-controls__model-option-name")?.textContent;
+function expectPatch(
+  host: ReturnType<typeof selectionControls>["host"],
+  patch: Record<string, unknown>,
+) {
+  expect(host.request).toHaveBeenCalledWith("sessions.patch", { key: "main", ...patch });
+}
+
 describe("chat model runtime choices", () => {
+  it("keeps an automatic-only model's name on a runtime reset", () => {
+    const container = renderRuntimeModel(
+      { id: "automatic", name: "Automatic", provider: "fixture", manualSelectionAllowed: false },
+      "openclaw",
+    );
+    expect(container.querySelector("[data-chat-model-default]")).not.toBeNull();
+    expect(triggerLabel(container)).toBe("Automatic");
+  });
+
   it.each([false, true])(
-    "follows configured routing with runtime ownership locked: %s",
+    "preserves runtime selection when changing only the model (locked: %s)",
     async (runtimeLocked) => {
       const defaultModel: ModelCatalogEntry = {
         id: "gpt-5.6-luna",
@@ -69,134 +175,69 @@ describe("chat model runtime choices", () => {
         ? { id: "acpx", source: "session-key" }
         : defaultModel.agentRuntime;
       result.sessions[0]!.runtimeSelectionLocked = runtimeLocked || undefined;
-      const host = makeChatHost({
-        sessionKey: "main",
-        sessionsResult: result,
-        chatModelCatalog: models,
-        chatModelSwitchPromises: {},
-        requestHandlers: {
-          "sessions.patch": { ok: true, key: "main", path: "", entry: { sessionId: "main" } },
-          "sessions.list": result,
-        },
+      const { host, container, draw, row, select, patches } = selectionControls(result, models);
+      draw();
+      const rows = container.querySelectorAll<HTMLButtonElement>(solSelector);
+      await select(rows[0]!);
+      expectPatch(host, {
+        model: "openai/gpt-5.6-sol",
+        ...(runtimeLocked ? {} : { agentRuntime: null }),
       });
-      const container = document.createElement("div");
-      let selection: Promise<boolean> | undefined;
-      const draw = () =>
-        render(
-          renderChatModelControls({
-            activeRunId: null,
-            connected: true,
-            gatewayAvailable: true,
-            loading: false,
-            modelCatalog: models,
-            modelSwitching: false,
-            sending: false,
-            sessionKey: "main",
-            selectedSession: result.sessions[0],
-            sessionsResult: result,
-            stream: null,
-            onModelSelect: (value, key, runtime) => {
-              selection = switchChatModel(host, value, key, runtime);
-              return selection;
-            },
-          }),
-          container,
-        );
-      try {
-        draw();
-        const rows = container.querySelectorAll<HTMLButtonElement>(
-          '[data-chat-model-option="openai/gpt-5.6-sol"]',
-        );
-        rows[0]!.click();
-        await selection;
-        expect(host.request).toHaveBeenCalledWith("sessions.patch", {
-          key: "main",
-          model: "openai/gpt-5.6-sol",
-          ...(runtimeLocked ? {} : { agentRuntime: null }),
-        });
-        expect(
-          Array.from(
-            rows,
-            (row) => row.querySelector(".chat-controls__model-option-name")?.textContent,
-          ),
-        ).toEqual(runtimeLocked ? ["GPT-5.6 Sol"] : ["GPT-5.6 Sol", "GPT-5.6 Sol"]);
-        expect(rows[0]?.getAttribute("data-chat-model-default")).toBeNull();
-        expect(rows[0]?.getAttribute("data-chat-model-runtime")).toBe(
-          runtimeLocked ? null : "custom-harness",
-        );
-        result.sessions[0]!.model = customModel.id;
-        result.sessions[0]!.modelOverrideSource = "user";
-        result.sessions[0]!.agentRuntime = runtimeLocked
-          ? { id: "acpx", source: "session-key" }
-          : customModel.agentRuntime;
-        draw();
-        if (runtimeLocked) {
-          expect(container.querySelector('[data-chat-model-runtime="codex"]')).toBeNull();
-          container.querySelector<HTMLButtonElement>('[data-chat-model-default="true"]')!.click();
-          await selection;
-          expect(host.request).toHaveBeenCalledWith("sessions.patch", { key: "main", model: null });
-          return;
-        }
-        container.querySelector<HTMLButtonElement>('[data-chat-model-runtime="codex"]')!.click();
-        await selection;
-        expect(host.request).toHaveBeenCalledWith("sessions.patch", {
-          key: "main",
-          model: "openai/gpt-5.6-sol",
-          agentRuntime: "codex",
-        });
-        result.sessions[0]!.agentRuntime = { id: "codex", source: "session-key" };
-        customModel.runtimeChoices = undefined;
-        draw();
-        const patchesBeforeReset = host.request.mock.calls.filter(
-          ([method]) => method === "sessions.patch",
-        ).length;
-        container
-          .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')!
-          .click();
-        await selection;
-        const patches = host.request.mock.calls.filter(([method]) => method === "sessions.patch");
-        expect(patches).toHaveLength(patchesBeforeReset + 1);
-        expect(patches.at(-1)?.[1]).toEqual({
-          key: "main",
-          model: "openai/gpt-5.6-sol",
-          agentRuntime: null,
-        });
-      } finally {
-        host.sessions.dispose();
+      expect(Array.from(rows, optionName)).toEqual(
+        runtimeLocked ? ["GPT-5.6 Sol"] : ["GPT-5.6 Sol", "GPT-5.6 Sol"],
+      );
+      expect(rows[0]?.getAttribute("data-chat-model-default")).toBeNull();
+      expect(rows[0]?.getAttribute("data-chat-model-runtime")).toBe(
+        runtimeLocked ? null : "custom-harness",
+      );
+      result.sessions[0]!.model = customModel.id;
+      result.sessions[0]!.modelOverrideSource = "user";
+      result.sessions[0]!.agentRuntime = runtimeLocked
+        ? { id: "acpx", source: "session-key" }
+        : customModel.agentRuntime;
+      draw();
+      if (runtimeLocked) {
+        expect(container.querySelector(codexSelector)).toBeNull();
+        await select(row('[data-chat-model-default="true"]'));
+        expectPatch(host, { model: null });
+        return;
       }
+      await select(row(codexSelector));
+      expectPatch(host, { model: "openai/gpt-5.6-sol", agentRuntime: "codex" });
+      result.sessions[0]!.agentRuntime = { id: "codex", source: "session-key" };
+      customModel.runtimeChoices = undefined;
+      draw();
+      expect(triggerLabel(container)).toBe("GPT-5.6 Sol");
+      const patchesBeforeReset = patches().length;
+      await select(row(solSelector));
+      expect(patches()).toHaveLength(patchesBeforeReset);
     },
   );
 
-  it.each([undefined, "codex"])(
-    "selects exactly one row with absent base runtime metadata and selected runtime %s",
-    (selectedRuntime) => {
-      const { agentRuntime: _runtime, ...unknownRuntimeModel } = model;
-      const container = renderRuntimeModel(
-        {
-          ...unknownRuntimeModel,
-          runtimeChoices: [
-            { agentRuntime: { id: "codex", source: "model" }, available: true },
-            { agentRuntime: { id: "openclaw", source: "model" }, available: true },
-          ],
-        },
-        selectedRuntime,
-      );
-      expect(container.querySelectorAll("[data-chat-model-runtime]")).toHaveLength(2);
-      expect(
-        container.querySelectorAll('[data-chat-model-runtime][aria-selected="true"]'),
-      ).toHaveLength(selectedRuntime ? 1 : 0);
-      expect(
-        container.querySelectorAll('[data-chat-model-option][aria-selected="true"]'),
-      ).toHaveLength(1);
-    },
-  );
+  it("selects exactly one row with absent base runtime metadata", () => {
+    const { agentRuntime: _runtime, ...unknownRuntimeModel } = model;
+    const container = renderRuntimeModel({
+      ...unknownRuntimeModel,
+      runtimeChoices: [
+        codexChoice,
+        { agentRuntime: { id: "openclaw", source: "model" }, available: true },
+      ],
+    });
+    expect(container.querySelectorAll("[data-chat-model-runtime]")).toHaveLength(2);
+    expect(
+      container.querySelectorAll('[data-chat-model-runtime][aria-selected="true"]'),
+    ).toHaveLength(0);
+    expect(
+      container.querySelectorAll('[data-chat-model-option][aria-selected="true"]'),
+    ).toHaveLength(1);
+  });
 
   it("uses the selected harness capability for the model trigger", () => {
     const container = renderRuntimeModel(
       {
         ...model,
         supportsTools: true,
-        runtimeChoices: [{ ...model.runtimeChoices![0]!, supportsTools: false }],
+        runtimeChoices: [{ ...codexChoice, supportsTools: false }],
       },
       "codex",
     );
@@ -208,6 +249,25 @@ describe("chat model runtime choices", () => {
     ).toContain("Chat only");
   });
 
+  it("labels an observed Codex default with an alternate runtime", () => {
+    const container = renderRuntimeModel(
+      {
+        ...model,
+        agentRuntime: { id: "codex", source: "implicit" },
+        runtimeChoices: [{ agentRuntime: { id: "openclaw", source: "model" }, available: true }],
+      },
+      "codex",
+      true,
+    );
+    expect(
+      Array.from(
+        container.querySelectorAll(".chat-controls__model-option-name"),
+        (row) => row.textContent,
+      ),
+    ).toEqual(["GPT-5.6 Sol codex", "GPT-5.6 Sol"]);
+    expect(triggerLabel(container)).toBe("GPT-5.6 Sol codex");
+  });
+
   it("uses alternate thinking metadata when the base runtime identity is absent", () => {
     const { agentRuntime: _runtime, ...unknownRuntimeModel } = model;
     const container = renderRuntimeModel(
@@ -217,7 +277,7 @@ describe("chat model runtime choices", () => {
         thinkingDefault: "medium",
         runtimeChoices: [
           {
-            ...model.runtimeChoices![0]!,
+            ...codexChoice,
             thinkingLevels: [{ id: "high", label: "High" }],
             thinkingDefault: "high",
           },
@@ -225,144 +285,79 @@ describe("chat model runtime choices", () => {
       },
       "codex",
     );
+    container.querySelector<HTMLElement>(".chat-controls__effort-picker summary")!.click();
+    flush();
     expect(container.querySelector('[data-chat-thinking-option="high"]')).not.toBeNull();
     expect(container.querySelector('[data-chat-thinking-option="medium"]')).toBeNull();
   });
 
-  it.each([
-    { name: "an inherited default model", initialRuntime: "openclaw", modelOverrideSource: null },
-    { name: "a pinned model", initialRuntime: "openclaw", modelOverrideSource: "user" },
-    {
-      name: "an effective matching harness without a runtime pin",
-      initialRuntime: "codex",
-      modelOverrideSource: "user",
-    },
-  ] as const)(
-    "pins the chosen harness for $name and resets through Default",
-    async ({ initialRuntime, modelOverrideSource }) => {
-      const result = createSessionsListResult({
-        model: model.id,
-        defaultsModel: model.id,
-        modelOverrideSource,
-      });
-      result.sessions[0]!.agentRuntime = { id: initialRuntime, source: "provider" };
-      const host = makeChatHost({
-        sessionKey: "main",
-        sessionsResult: result,
-        chatModelCatalog: [model],
-        chatModelSwitchPromises: {},
-        requestHandlers: {
-          "sessions.patch": { ok: true, key: "main", path: "", entry: { sessionId: "main" } },
-          "sessions.list": result,
-        },
-      });
-      const container = document.createElement("div");
-      let selection: Promise<boolean> | undefined;
-      const draw = () =>
-        render(
-          renderChatModelControls({
-            activeRunId: null,
-            connected: true,
-            gatewayAvailable: true,
-            loading: false,
-            modelCatalog: [model],
-            modelSwitching: false,
-            sending: false,
-            sessionKey: "main",
-            selectedSession: result.sessions[0],
-            sessionsResult: result,
-            stream: null,
-            onModelSelect: (value, key, runtime) => {
-              selection = switchChatModel(host, value, key, runtime);
-              return selection;
-            },
-          }),
-          container,
-        );
-      try {
-        draw();
-        const rows = () =>
-          Array.from(container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"));
-        expect(
-          rows().map((row) => row.querySelector(".chat-controls__model-option-name")?.textContent),
-        ).toEqual(["GPT-5.6 Sol", "GPT-5.6 Sol"]);
-        expect(rows().map((row) => row.getAttribute("aria-selected"))).toEqual(
-          initialRuntime === "codex" ? ["false", "true"] : ["true", "false"],
-        );
-        expect(rows()[0]?.textContent).toContain("1M · OpenClaw");
-        expect(rows()[1]?.textContent).toContain("200k · Codex");
-        rows()[1]!.click();
-        await selection;
-        expect(host.request).toHaveBeenCalledWith("sessions.patch", {
-          key: "main",
-          model: "openai/gpt-5.6-sol",
-          agentRuntime: "codex",
-        });
-        result.sessions[0]!.agentRuntime = { id: "codex", source: "session-key" };
-        draw();
-        expect(rows().map((row) => row.getAttribute("aria-selected"))).toEqual(["false", "true"]);
-        const patches = () =>
-          host.request.mock.calls.filter(([method]) => method === "sessions.patch");
-        expect(patches()).toHaveLength(1);
-        rows()[1]!.click();
-        await selection;
-        expect(patches()).toHaveLength(1);
-        rows()[0]!.click();
-        await selection;
-        expect(host.request).toHaveBeenCalledWith("sessions.patch", {
-          key: "main",
-          model: null,
-          agentRuntime: null,
-        });
-      } finally {
-        host.sessions.dispose();
-      }
-    },
-  );
+  it("pins the chosen harness for an inherited default model and resets through Default", async () => {
+    const result = createSessionsListResult({
+      model: model.id,
+      defaultsModel: model.id,
+      modelOverrideSource: null,
+    });
+    result.sessions[0]!.agentRuntime = { id: "openclaw", source: "provider" };
+    const { host, container, draw, row, select, patches } = selectionControls(result, [model]);
+    draw();
+    const runtimeRow = () => row(codexSelector);
+    const defaultRow = () => row("[data-chat-model-default]");
+    expect([defaultRow(), runtimeRow()].map(optionName)).toEqual([
+      "GPT-5.6 Sol",
+      "GPT-5.6 Sol codex",
+    ]);
+    expect(defaultRow().parentElement?.querySelector("[data-chat-model-option]")).toBe(
+      defaultRow(),
+    );
+    expect(runtimeRow().getAttribute("aria-selected")).toBe("false");
+    expect(defaultRow().getAttribute("aria-selected")).toBe("true");
+    await select(runtimeRow());
+    expectPatch(host, { model: "openai/gpt-5.6-sol", agentRuntime: "codex" });
+    result.sessions[0]!.agentRuntime = { id: "codex", source: "session-key" };
+    draw();
+    expect(triggerLabel(container)).toBe("GPT-5.6 Sol codex");
+    expect(runtimeRow().getAttribute("aria-selected")).toBe("true");
+    expect(defaultRow().getAttribute("aria-selected")).toBe("false");
+    expect(patches()).toHaveLength(1);
+    await select(runtimeRow());
+    expect(patches()).toHaveLength(1);
+    await select(defaultRow());
+    expectPatch(host, { model: null, agentRuntime: null });
+  });
 
-  it.each(["missing-auth", "cooldown", "unsupported-runtime", "locked"] as const)(
+  it.each(["missing-auth", "unsupported-runtime", "locked"] as const)(
     "preserves the %s guard for additional harness rows",
     (guard) => {
       const onSelect = vi.fn();
       const onSetup = vi.fn();
       const result = createSessionsListResult({ model: model.id, defaultsModel: model.id });
       result.sessions[0]!.agentRuntime = model.agentRuntime;
-      const container = document.createElement("div");
-      render(
-        renderChatModelControls({
-          activeRunId: null,
-          connected: true,
-          gatewayAvailable: true,
-          loading: false,
-          modelCatalog: [
-            {
-              ...model,
-              runtimeChoices: [
-                {
-                  ...model.runtimeChoices![0]!,
-                  available: false,
-                  ...(guard === "locked" ? {} : { unavailableReason: guard }),
-                },
-              ],
-            },
-          ],
+      const container = renderControls(
+        result,
+        [
+          {
+            ...model,
+            runtimeChoices: [
+              {
+                ...codexChoice,
+                available: false,
+                ...(guard === "locked" ? {} : { unavailableReason: guard }),
+              },
+            ],
+          },
+        ],
+        {
           modelSelectionLocked: guard === "locked",
-          modelSwitching: false,
-          sending: false,
-          sessionKey: "main",
-          selectedSession: result.sessions[0],
-          sessionsResult: result,
-          stream: null,
           onModelSelect: onSelect,
           onModelSetup: onSetup,
-        }),
-        container,
+        },
       );
-      const row = container.querySelector<HTMLButtonElement>('[data-chat-model-runtime="codex"]');
+      const row = container.querySelector<HTMLButtonElement>(codexSelector);
       if (guard === "locked") {
         expect(row).toBeNull();
       } else {
-        expect(row?.disabled).toBe(guard === "cooldown" || guard === "unsupported-runtime");
+        expect(row && optionName(row)).toBe("GPT-5.6 Sol codex");
+        expect(row?.disabled).toBe(guard === "unsupported-runtime");
         if (guard === "unsupported-runtime") {
           expect(row?.title).toBe("This harness is unavailable for this model.");
         }

@@ -9,6 +9,10 @@ export type PreparedGatewayModelCatalog = {
   pluginRegistry?: ProviderThinkingRegistry;
 };
 
+export type PreparedGatewayModelCatalogReadResult = PromiseSettledResult<
+  PreparedGatewayModelCatalog | undefined
+>;
+
 export type GatewayModelCatalogSnapshot = ModelCatalogSnapshot & {
   agentId: string;
   agentDir: string;

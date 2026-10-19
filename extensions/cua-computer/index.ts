@@ -39,7 +39,7 @@ export default definePluginEntry({
     registerCuaDriverDoctorChecks();
     const artifactVerification = verifyInstalledCuaDriverArtifacts();
     if (!artifactVerification.ok) {
-      api.logger?.error(artifactVerification.diagnostic);
+      api.logger.error(artifactVerification.diagnostic);
     }
     registerComputerUseProvider(api, createCuaComputerProvider());
   },

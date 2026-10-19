@@ -1,11 +1,11 @@
-// Discord plugin module implements runtime behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDiscordActionGate } from "../accounts.js";
-import { handleDiscordGuildAction } from "./runtime.guild.js";
+import { handleDiscordGuildAction, isDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordMessagingAction } from "./runtime.messaging.js";
 import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
+import { isDiscordModerationAction } from "./runtime.moderation-shared.js";
 import { handleDiscordModerationAction } from "./runtime.moderation.js";
 import { handleDiscordPresenceAction } from "./runtime.presence.js";
 
@@ -29,32 +29,6 @@ const messagingActions = new Set([
   "searchMessages",
 ]);
 
-const guildActions = new Set([
-  "memberInfo",
-  "roleInfo",
-  "emojiList",
-  "emojiUpload",
-  "stickerUpload",
-  "roleAdd",
-  "roleRemove",
-  "channelInfo",
-  "channelList",
-  "voiceStatus",
-  "eventList",
-  "eventCreate",
-  "channelCreate",
-  "channelEdit",
-  "channelDelete",
-  "channelMove",
-  "categoryCreate",
-  "categoryEdit",
-  "categoryDelete",
-  "channelPermissionSet",
-  "channelPermissionRemove",
-]);
-
-const moderationActions = new Set(["timeout", "kick", "ban"]);
-
 export async function handleDiscordAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
@@ -67,10 +41,10 @@ export async function handleDiscordAction(
   if (messagingActions.has(action)) {
     return await handleDiscordMessagingAction(action, params, isActionEnabled, cfg, options);
   }
-  if (guildActions.has(action)) {
+  if (isDiscordGuildAction(action)) {
     return await handleDiscordGuildAction(action, params, isActionEnabled, cfg, options);
   }
-  if (moderationActions.has(action)) {
+  if (isDiscordModerationAction(action)) {
     return await handleDiscordModerationAction(action, params, isActionEnabled, cfg);
   }
   if (action === "setPresence") {

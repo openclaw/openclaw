@@ -1,16 +1,13 @@
-// Google plugin module implements transport stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   getEnvApiKey,
   resolveProviderContext,
-  type AssistantMessage,
   type Context,
   type Model,
   type ProviderCallStreamOptions,
   type ProviderContext,
   type ProviderModel,
   type SimpleStreamOptions,
-  type ThinkingLevel,
   type VideoContent,
 } from "openclaw/plugin-sdk/llm";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -24,6 +21,9 @@ import {
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  buildAssistantMessage,
+  buildGoogleGenerationConfig,
+  buildGoogleSimpleThinking,
   buildGuardedModelFetch,
   consumeGoogleGenerateContentStream,
   projectGoogleMessages,
@@ -35,6 +35,7 @@ import {
   failTransportStream,
   mergeTransportHeaders,
   notifyProviderHttpResponse,
+  iterateSseFrames,
   sanitizeTransportPayloadText,
   stripSystemPromptCacheBoundary,
   transformTransportMessages,
@@ -44,17 +45,16 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
 import { isGoogleNativeVideoModelId } from "./provider-models.js";
 import { isOfficialGoogleAiStudioBaseUrl, normalizeGoogleApiBaseUrl } from "./provider-policy.js";
 import {
-  isGoogleGemini25ThinkingBudgetModel,
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
+  isGoogleGemini3ThinkingLevelModel,
   resolveGoogleGemini3ThinkingLevel,
-  stripInvalidGoogleThinkingBudget,
-  type GoogleThinkingInputLevel,
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
 import { isGoogleVertexCredentialsMarker } from "./vertex-adc-config.js";
@@ -116,19 +116,13 @@ type GoogleVideoSlots = Map<Record<string, unknown>, VideoContent>;
 
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
-const GOOGLE_SSE_EVENT_BOUNDARY_RE = /(?:\r\n|\r(?!\n)|\n){2}/u;
 // Compare Google-owned publisher resources without changing outbound request paths.
 const GOOGLE_VERTEX_MODEL_RESOURCE_PREFIX =
   /^(?:projects\/[^/]+\/locations\/[^/]+\/)?publishers\/google\/models\//u;
 
-type MutableAssistantOutput = AssistantMessage & { api: CanonicalGoogleTransportApi };
-
 const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
 
 let toolCallCounter = 0;
-function requiresToolCallThoughtSignature(modelId: string): boolean {
-  return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
-}
 
 function normalizeGoogleTransportRouteApi(
   api: string | undefined,
@@ -197,14 +191,10 @@ function mapToolChoice(
 }
 
 function mapStopReasonString(reason: string): "stop" | "length" | "error" {
-  switch (reason) {
-    case "STOP":
-      return "stop";
-    case "MAX_TOKENS":
-      return "length";
-    default:
-      return "error";
+  if (reason === "STOP") {
+    return "stop";
   }
+  return reason === "MAX_TOKENS" || reason === "CONTINUATION" ? "length" : "error";
 }
 
 function normalizeToolCallId(id: string): string {
@@ -286,121 +276,6 @@ function buildGoogleVertexRequestUrl(
   return `${origin}/${GOOGLE_VERTEX_DEFAULT_API_VERSION}/projects/${project}/locations/${location}/publishers/google/models/${modelId}:streamGenerateContent?alt=sse`;
 }
 
-function resolveThinkingLevel(level: ThinkingLevel, modelId: string): GoogleThinkingLevel {
-  const resolved = resolveGoogleGemini3ThinkingLevel({ modelId, thinkingLevel: level });
-  if (resolved) {
-    return resolved;
-  }
-  throw new Error("Unsupported thinking level");
-}
-
-function resolveExplicitThinkingLevel(
-  level: GoogleThinkingLevel,
-  modelId: string,
-): GoogleThinkingLevel {
-  return (
-    resolveGoogleGemini3ThinkingLevel({
-      modelId,
-      thinkingLevel: level.toLowerCase() as GoogleThinkingInputLevel,
-    }) ?? level
-  );
-}
-
-function getDisabledThinkingConfig(modelId: string): Record<string, unknown> | undefined {
-  const thinkingLevel = resolveGoogleGemini3ThinkingLevel({ modelId, thinkingLevel: "off" });
-  if (thinkingLevel) {
-    return { thinkingLevel };
-  }
-  return normalizeGoogleThinkingConfig(modelId, { thinkingBudget: 0 });
-}
-
-function getGoogleThinkingBudget(
-  modelId: string,
-  effort: ThinkingLevel,
-  customBudgets?: GoogleTransportOptions["thinkingBudgets"],
-): number | undefined {
-  const normalizedEffort = effort === "xhigh" || effort === "max" ? "high" : effort;
-  if (customBudgets?.[normalizedEffort] !== undefined) {
-    return customBudgets[normalizedEffort];
-  }
-  if (modelId.includes("2.5-pro")) {
-    return { minimal: 128, low: 2048, medium: 8192, high: 32768 }[normalizedEffort];
-  }
-  if (modelId.includes("2.5-flash-lite")) {
-    return { minimal: 512, low: 2048, medium: 8192, high: 24576 }[normalizedEffort];
-  }
-  if (modelId.includes("2.5-flash")) {
-    return { minimal: 128, low: 2048, medium: 8192, high: 24576 }[normalizedEffort];
-  }
-  return undefined;
-}
-
-function isAdaptiveReasoningLevel(value: unknown): value is "adaptive" {
-  return value === "adaptive";
-}
-
-function resolveGoogleThinkingConfig(
-  model: GoogleTransportModel,
-  options: GoogleTransportOptions | undefined,
-): Record<string, unknown> | undefined {
-  if (!model.reasoning) {
-    return undefined;
-  }
-  if (options?.thinking) {
-    if (!options.thinking.enabled) {
-      return getDisabledThinkingConfig(model.id);
-    }
-    const config: Record<string, unknown> = { includeThoughts: true };
-    if (options.thinking.level) {
-      config.thinkingLevel = resolveExplicitThinkingLevel(options.thinking.level, model.id);
-    } else if (typeof options.thinking.budgetTokens === "number") {
-      const thinkingLevel = resolveGoogleGemini3ThinkingLevel({
-        modelId: model.id,
-        thinkingBudget: options.thinking.budgetTokens,
-      });
-      if (thinkingLevel) {
-        config.thinkingLevel = thinkingLevel;
-      } else {
-        config.thinkingBudget = options.thinking.budgetTokens;
-      }
-    }
-    return normalizeGoogleThinkingConfig(model.id, config);
-  }
-  if (!options?.reasoning || options.reasoning === "off") {
-    return getDisabledThinkingConfig(model.id);
-  }
-  if (isAdaptiveReasoningLevel(options.reasoning)) {
-    if (isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id)) {
-      return { includeThoughts: true };
-    }
-    if (isGoogleGemini25ThinkingBudgetModel(model.id)) {
-      return normalizeGoogleThinkingConfig(model.id, {
-        includeThoughts: true,
-        thinkingBudget: -1,
-      });
-    }
-  }
-  if (isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id)) {
-    return {
-      includeThoughts: true,
-      thinkingLevel: resolveThinkingLevel(options.reasoning, model.id),
-    };
-  }
-  const budget = getGoogleThinkingBudget(model.id, options.reasoning, options.thinkingBudgets);
-  return normalizeGoogleThinkingConfig(model.id, {
-    includeThoughts: true,
-    ...(typeof budget === "number" ? { thinkingBudget: budget } : {}),
-  });
-}
-
-function normalizeGoogleThinkingConfig(
-  modelId: string,
-  thinkingConfig: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  stripInvalidGoogleThinkingBudget({ thinkingConfig, modelId });
-  return Object.keys(thinkingConfig).length > 0 ? thinkingConfig : undefined;
-}
-
 function convertGoogleMessages(
   model: GoogleTransportModel,
   context: Context | ProviderContext,
@@ -413,10 +288,10 @@ function convertGoogleMessages(
       normalizeGoogleTransportMessageRoutes(context.messages as Context["messages"]),
       canonicalGoogleModel(routeModel),
       (id) => (requiresGoogleToolCallId(model.id) ? normalizeToolCallId(id) : id),
-      { preserveCrossModelToolCallThoughtSignature: requiresToolCallThoughtSignature(model.id) },
+      { preserveCrossModelToolCallThoughtSignature: isGoogleGemini3ThinkingLevelModel(model.id) },
     ) as ProviderContext["messages"],
     replay: "managed",
-    requiresToolCallSignature: requiresToolCallThoughtSignature(model.id),
+    requiresToolCallSignature: isGoogleGemini3ThinkingLevelModel(model.id),
     videoPart: (video) => {
       const placeholder = { text: GOOGLE_VIDEO_SLOT_OMISSION };
       videoSlots?.set(placeholder, video);
@@ -431,19 +306,18 @@ export function buildGoogleGenerativeAiParams(
   options?: GoogleTransportOptions,
   videoSlots?: GoogleVideoSlots,
 ): GoogleGenerateContentRequest {
-  const generationConfig: Record<string, unknown> = {};
+  const generationConfig: Record<string, unknown> = {
+    ...buildGoogleGenerationConfig(
+      model,
+      options?.thinking ?? buildGoogleSimpleThinking(canonicalGoogleModel(model), options),
+      options?.maxTokens,
+    ),
+  };
   if (typeof options?.temperature === "number") {
     generationConfig.temperature = options.temperature;
   }
-  if (typeof options?.maxTokens === "number") {
-    generationConfig.maxOutputTokens = options.maxTokens;
-  }
   if (options?.stop !== undefined && options.stop.length > 0) {
     generationConfig.stopSequences = options.stop;
-  }
-  const thinkingConfig = resolveGoogleThinkingConfig(model, options);
-  if (thinkingConfig) {
-    generationConfig.thinkingConfig = thinkingConfig;
   }
 
   const params: GoogleGenerateContentRequest = {
@@ -637,11 +511,8 @@ function buildGoogleTransportRequestUrl(
     : buildGoogleGenerativeAiRequestUrl(model);
 }
 
-function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
-  const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
-  if (raw === undefined || raw.trim() === "") {
-    return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
-  }
+function resolveGoogleGemini3FirstResponseRetryMs(): number {
+  const raw = process.env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   return parseStrictNonNegativeInteger(raw) ?? GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
 }
 
@@ -658,40 +529,21 @@ function shouldRetryGoogleGemini3FirstResponse(params: {
   return isGoogleGemini3ProModel(params.model.id) || isGoogleGemini3FlashModel(params.model.id);
 }
 
-function resolveGoogleGemini3RetryThinkingLevel(modelId: string): GoogleThinkingLevel | undefined {
-  if (isGoogleGemini3ProModel(modelId)) {
-    return "LOW";
-  }
-  if (isGoogleGemini3FlashModel(modelId)) {
-    return "MINIMAL";
-  }
-  return undefined;
-}
-
-function cloneGoogleGenerateContentRequest(
-  params: GoogleGenerateContentRequest,
-): GoogleGenerateContentRequest {
-  const serialized = JSON.stringify(params);
-  return JSON.parse(serialized) as GoogleGenerateContentRequest;
-}
-
 function buildGoogleGemini3FirstResponseRetryParams(params: {
   model: GoogleTransportModel;
   request: GoogleGenerateContentRequest;
 }): GoogleGenerateContentRequest | undefined {
-  const thinkingLevel = resolveGoogleGemini3RetryThinkingLevel(params.model.id);
+  const thinkingLevel = resolveGoogleGemini3ThinkingLevel({
+    modelId: params.model.id,
+    thinkingLevel: "off",
+  });
   if (!thinkingLevel) {
     return undefined;
   }
-  const retryRequest = cloneGoogleGenerateContentRequest(params.request);
-  const generationConfig =
-    retryRequest.generationConfig && typeof retryRequest.generationConfig === "object"
-      ? retryRequest.generationConfig
-      : {};
-  const thinkingConfig =
-    generationConfig.thinkingConfig && typeof generationConfig.thinkingConfig === "object"
-      ? { ...(generationConfig.thinkingConfig as Record<string, unknown>) }
-      : {};
+  const generationConfig = params.request.generationConfig;
+  const thinkingConfig = {
+    ...(generationConfig?.thinkingConfig as Record<string, unknown> | undefined),
+  };
 
   // Gemini 3 defaults to dynamic high thinking when the request omits an
   // explicit level. On a zero-output stall, retry with the smallest supported
@@ -700,9 +552,10 @@ function buildGoogleGemini3FirstResponseRetryParams(params: {
   delete thinkingConfig.thinkingBudget;
   delete thinkingConfig.includeThoughts;
   thinkingConfig.thinkingLevel = thinkingLevel;
-  generationConfig.thinkingConfig = thinkingConfig;
-  retryRequest.generationConfig = generationConfig;
-  return retryRequest;
+  return {
+    ...params.request,
+    generationConfig: { ...generationConfig, thinkingConfig },
+  };
 }
 
 function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
@@ -744,24 +597,22 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
   };
 }
 
-function iteratorToAsyncGenerator<T>(
-  iterator: AsyncIterator<T>,
+async function* iterateGoogleSseChunks(
+  iterator: AsyncIterator<GoogleSseChunk>,
   cleanup?: () => void,
-): AsyncGenerator<T> {
-  return (async function* () {
-    try {
-      for (;;) {
-        const next = await iterator.next();
-        if (next.done) {
-          return;
-        }
-        yield next.value;
+): AsyncGenerator<GoogleSseChunk> {
+  try {
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) {
+        return;
       }
-    } finally {
-      cleanup?.();
-      await iterator.return?.();
+      yield next.value;
     }
-  })();
+  } finally {
+    cleanup?.();
+    await iterator.return?.();
+  }
 }
 
 type GoogleSseAttempt =
@@ -771,20 +622,6 @@ type GoogleSseAttempt =
       chunks: AsyncGenerator<GoogleSseChunk>;
     }
   | { type: "timeout" };
-
-async function notifyGoogleTransportHttpResponse(
-  model: GoogleTransportModel,
-  options: GoogleTransportOptions | undefined,
-  response: Response,
-  signal?: AbortSignal,
-): Promise<void> {
-  await notifyProviderHttpResponse({
-    options,
-    response,
-    model: canonicalGoogleModel(model),
-    signal,
-  });
-}
 
 async function openGoogleSseAttempt(params: {
   guardedFetch: ReturnType<typeof buildGuardedModelFetch>;
@@ -824,7 +661,12 @@ async function openGoogleSseAttempt(params: {
   try {
     // Response hooks share the first-response deadline. A stalled hook must cancel
     // the unread body and enter the same Gemini fallback as a stalled fetch or body.
-    await notifyGoogleTransportHttpResponse(params.model, params.options, response, signal);
+    await notifyProviderHttpResponse({
+      options: params.options,
+      response,
+      model: canonicalGoogleModel(params.model),
+      signal,
+    });
   } catch (error) {
     return handleTimedOperationError(error);
   }
@@ -833,6 +675,9 @@ async function openGoogleSseAttempt(params: {
     throw await createProviderHttpError(response, params.errorPrefix);
   }
   const chunks = parseGoogleSseChunks(response, signal);
+  if (!attemptSignal) {
+    return { type: "ready", chunks };
+  }
   const iterator = chunks[Symbol.asyncIterator]();
   let first: IteratorResult<GoogleSseChunk>;
   try {
@@ -840,17 +685,11 @@ async function openGoogleSseAttempt(params: {
   } catch (error) {
     return handleTimedOperationError(error);
   }
-  attemptSignal?.clearDeadline();
-  if (first.done) {
-    return {
-      type: "ready",
-      chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
-    };
-  }
+  attemptSignal.clearDeadline();
   return {
     type: "ready",
-    firstChunk: first.value,
-    chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
+    ...(!first.done ? { firstChunk: first.value } : {}),
+    chunks: iterateGoogleSseChunks(iterator, attemptSignal.cleanup),
   };
 }
 
@@ -868,62 +707,14 @@ async function openGoogleSseChunks(params: {
     params.kind === "google-vertex"
       ? "Google Vertex AI API error"
       : "Google Generative AI API error";
-  if (!shouldRetryGoogleGemini3FirstResponse({ kind: params.kind, model: params.model })) {
-    const response = await params.guardedFetch(params.url, {
-      method: "POST",
-      headers: params.headers,
-      body: serializeGoogleRequest(params.request, params.videoSlots),
-      signal: params.options?.signal,
-    });
-    await notifyGoogleTransportHttpResponse(
-      params.model,
-      params.options,
-      response,
-      params.options?.signal,
-    );
-    if (!response.ok) {
-      throw await createProviderHttpError(response, errorPrefix);
-    }
-    return {
-      type: "ready",
-      chunks: parseGoogleSseChunks(response, params.options?.signal),
-    };
-  }
-
-  const retryMs = resolveGoogleGemini3FirstResponseRetryMs();
-  if (retryMs <= 0) {
-    const response = await params.guardedFetch(params.url, {
-      method: "POST",
-      headers: params.headers,
-      body: serializeGoogleRequest(params.request, params.videoSlots),
-      signal: params.options?.signal,
-    });
-    await notifyGoogleTransportHttpResponse(
-      params.model,
-      params.options,
-      response,
-      params.options?.signal,
-    );
-    if (!response.ok) {
-      throw await createProviderHttpError(response, errorPrefix);
-    }
-    return {
-      type: "ready",
-      chunks: parseGoogleSseChunks(response, params.options?.signal),
-    };
-  }
-
+  const retryMs = shouldRetryGoogleGemini3FirstResponse(params)
+    ? resolveGoogleGemini3FirstResponseRetryMs()
+    : 0;
   const firstAttempt = await openGoogleSseAttempt({
-    guardedFetch: params.guardedFetch,
-    url: params.url,
-    headers: params.headers,
-    request: params.request,
-    videoSlots: params.videoSlots,
+    ...params,
     parentSignal: params.options?.signal,
     firstResponseTimeoutMs: retryMs,
     errorPrefix,
-    model: params.model,
-    options: params.options,
   });
   if (firstAttempt.type === "ready") {
     return firstAttempt;
@@ -936,38 +727,16 @@ async function openGoogleSseChunks(params: {
     request: params.request,
   })!;
   const retryAttempt = await openGoogleSseAttempt({
-    guardedFetch: params.guardedFetch,
-    url: params.url,
-    headers: params.headers,
+    ...params,
     request: retryRequest,
-    videoSlots: params.videoSlots,
     parentSignal: params.options?.signal,
     firstResponseTimeoutMs: 0,
     errorPrefix,
-    model: params.model,
-    options: params.options,
   });
   if (retryAttempt.type === "timeout") {
     throw new Error("Google Gemini first response retry timed out unexpectedly");
   }
   return retryAttempt;
-}
-
-async function buildGoogleTransportHeaders(params: {
-  kind: CanonicalGoogleTransportApi;
-  model: GoogleTransportModel;
-  apiKey: string | undefined;
-  optionHeaders: Record<string, string> | undefined;
-  fetchImpl?: typeof fetch;
-}): Promise<Record<string, string>> {
-  return params.kind === "google-vertex"
-    ? await buildGoogleVertexHeaders(
-        params.model,
-        params.apiKey,
-        params.optionHeaders,
-        params.fetchImpl,
-      )
-    : buildGoogleHeaders(params.model, params.apiKey, params.optionHeaders);
 }
 
 async function* parseGoogleSseChunks(
@@ -978,78 +747,59 @@ async function* parseGoogleSseChunks(
     throw new Error("No response body");
   }
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let completed = false;
   const abortHandler = () => {
     void reader.cancel().catch(() => undefined);
   };
   signal?.addEventListener("abort", abortHandler);
   try {
-    while (true) {
+    for await (const { frame, terminated } of iterateSseFrames(async () => {
       signal?.throwIfAborted();
-      const { done, value } = await reader.read();
+      const chunk = await reader.read();
       // Cancellation settles a pending read as done; never mistake that for EOF.
       signal?.throwIfAborted();
-      if (done) {
-        buffer += decoder.decode();
-        const trailingData = buffer
-          .split(/\r\n|\n|\r/u)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trim())
-          .join("\n");
-        const trailingPayload = trailingData || buffer.trim();
-        if (!trailingPayload || (!trailingData && !trailingPayload.startsWith("{"))) {
-          completed = true;
-          break;
-        }
-        let trailingChunk: unknown;
-        try {
-          trailingChunk = JSON.parse(trailingPayload);
-        } catch {
-          throw new Error("Google SSE stream ended with an incomplete frame");
-        }
-        if (!isRecord(trailingChunk) || !isRecord(trailingChunk.error)) {
-          throw new Error("Google SSE stream ended with an incomplete frame");
+      return chunk;
+    })) {
+      const data = frame
+        .split(/\r\n|\n|\r/u)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("\n");
+      let chunk: unknown;
+      if (!terminated) {
+        const trailingPayload = data || frame.trim();
+        if (!trailingPayload || (!data && !trailingPayload.startsWith("{"))) {
+          continue;
         }
         // Provider errors can arrive as bare JSON or data frames without their final delimiter.
-        buffer = `data: ${JSON.stringify(trailingChunk)}\n\n`;
+        chunk = safeParseJson(trailingPayload);
+        if (!isRecord(chunk) || !isRecord(chunk.error)) {
+          throw new Error("Google SSE stream ended with an incomplete frame");
+        }
       } else {
-        buffer += decoder.decode(value, { stream: true });
-      }
-      let boundary = GOOGLE_SSE_EVENT_BOUNDARY_RE.exec(buffer);
-      while (boundary) {
-        const rawEvent = buffer.slice(0, boundary.index);
-        buffer = buffer.slice(boundary.index + boundary[0].length);
-        boundary = GOOGLE_SSE_EVENT_BOUNDARY_RE.exec(buffer);
-        const data = rawEvent
-          .split(/\r\n|\n|\r/u)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trim())
-          .join("\n");
         if (!data || data === "[DONE]") {
           continue;
         }
-        let chunk: unknown;
         try {
           chunk = JSON.parse(data);
         } catch {
           throw new Error("Google SSE stream returned malformed JSON");
         }
-        if (isRecord(chunk) && isRecord(chunk.error)) {
-          const providerError = chunk.error;
-          throw Object.assign(
-            new Error(normalizeOptionalString(providerError.message) ?? "Google stream failed"),
-            {
-              code: normalizeOptionalString(providerError.status) ?? "GOOGLE_STREAM_ERROR",
-              status: typeof providerError.code === "number" ? providerError.code : undefined,
-              type: "google_stream_failed",
-            },
-          );
-        }
-        yield chunk as GoogleSseChunk;
       }
+      if (isRecord(chunk) && isRecord(chunk.error)) {
+        const providerError = chunk.error;
+        throw Object.assign(
+          new Error(normalizeOptionalString(providerError.message) ?? "Google stream failed"),
+          {
+            code: normalizeOptionalString(providerError.status) ?? "GOOGLE_STREAM_ERROR",
+            status: typeof providerError.code === "number" ? providerError.code : undefined,
+            type: "google_stream_failed",
+          },
+        );
+      }
+      yield chunk as GoogleSseChunk;
     }
+    completed = true;
   } finally {
     signal?.removeEventListener("abort", abortHandler);
     if (!completed) {
@@ -1066,18 +816,14 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
     const options = rawOptions as GoogleTransportOptions | undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
-      const output: MutableAssistantOutput = {
-        role: "assistant",
+      const output = buildAssistantMessage({
+        model: { api: kind, provider: model.provider, id: model.id },
         content: [],
-        api: kind,
-        provider: model.provider,
-        model: model.id,
         usage: createEmptyTransportUsage(),
         stopReason: "stop",
-        timestamp: Date.now(),
-      };
+      });
       try {
-        const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? undefined;
+        const apiKey = options?.apiKey ?? getEnvApiKey(model.provider);
         const guardedFetch = buildGuardedModelFetch(canonicalModel);
         const providerContext = supportsGoogleNativeVideo(model)
           ? await resolveProviderContext(context, options)
@@ -1092,13 +838,10 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         const requestUrl = buildGoogleTransportRequestUrl(kind, model, options);
         const fetchImpl = (options as { fetch?: typeof fetch } | undefined)?.fetch;
         const openSse = async (apiKeyForRequest: string | undefined) => {
-          const requestHeaders = await buildGoogleTransportHeaders({
-            kind,
-            model,
-            apiKey: apiKeyForRequest,
-            optionHeaders: options?.headers,
-            fetchImpl,
-          });
+          const requestHeaders =
+            kind === "google-vertex"
+              ? await buildGoogleVertexHeaders(model, apiKeyForRequest, options?.headers, fetchImpl)
+              : buildGoogleHeaders(model, apiKeyForRequest, options?.headers);
           return await openGoogleSseChunks({
             kind,
             model,

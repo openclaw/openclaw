@@ -1,0 +1,316 @@
+import { deepStrictEqual } from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveGatewayStartupFailureExitCode } from "../cli/gateway-cli/startup-maintenance.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { activateGatewayAgentDatabaseStartup } from "../gateway/server-agent-database-startup.js";
+import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
+import {
+  readSqliteDatabaseCleanClose,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import {
+  createAgentDatabaseAdmissionErrorShape,
+  listAgentDatabaseAdmissionRefusals,
+  readAgentDatabaseAdmissionRefusal,
+} from "./agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
+import {
+  databaseFixture,
+  agentConfig,
+  openRawDatabase,
+} from "./database-preflight-fixtures.test-support.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  resolveOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const repairMessage = "Rebuilt canonical agent SQLite indexes";
+
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeStateDatabaseForTest();
+  await flushLogger();
+  clearRuntimeConfigSnapshot();
+  setLoggerOverride(null);
+  resetLogger();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+async function createFixture(ids: string[], damage: "missing" | "drifted" | "missing table") {
+  const stateDir = fs.realpathSync.native(tempDirs.make("startup-index-"));
+  const base = databaseFixture(stateDir, process.env);
+  const { env } = base;
+  const logPath = path.join(stateDir, "startup.log");
+  const configPath = path.join(stateDir, "openclaw.json");
+  const config = {
+    // Keep unrelated age-based reclamation from reopening writers during fixture shutdown.
+    session: { maintenance: { mode: "warn" as const } },
+    agents: {
+      ownership: "explicit" as const,
+      entries: Object.fromEntries(ids.map((id) => [id, {}] as const)),
+    },
+  };
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  vi.stubEnv("OPENCLAW_LOG_LEVEL", "warn");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({ ...config, logging: { level: "warn", file: logPath } }),
+  );
+  setRuntimeConfigSnapshot(config);
+  setLoggerOverride({ level: "warn", file: logPath, consoleLevel: "silent" });
+  const agents: Array<{
+    agentId: string;
+    path: string;
+    session: { agentId: string; env: typeof env; sessionKey: string };
+    entry: Awaited<ReturnType<typeof replaceSessionEntry>>;
+  }> = [];
+  for (const agentId of ids) {
+    const session = { agentId, env, sessionKey: `agent:${agentId}:retained` };
+    const entry = await replaceSessionEntry(session, {
+      sessionId: `${agentId}-history`,
+      updatedAt: 1,
+    });
+    expect(entry).not.toBeNull();
+    agents.push({ agentId, path: resolveOpenClawAgentSqlitePath(session), session, entry });
+  }
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeStateDatabaseForTest();
+  for (const agent of agents) {
+    const writer = openRawDatabase(agent.path);
+    writer.exec(
+      "DROP INDEX idx_agent_session_nodes_active; UPDATE schema_meta SET app_version = '2026.9.1';",
+    );
+    if (damage === "drifted") {
+      writer.exec("CREATE INDEX idx_agent_session_nodes_active ON session_nodes(session_key);");
+    } else if (damage === "missing table") {
+      writer.exec("DROP TABLE session_key_contract;");
+    }
+    writer.close();
+    retireSqliteDatabaseAdmissionForPath(agent.path);
+  }
+  const bytes = () => agents.map((agent) => fs.readFileSync(agent.path));
+  return {
+    ...base,
+    config,
+    agents,
+    logPath,
+    bytes,
+    before: bytes(),
+    ready: (
+      cfg: Parameters<typeof base.ready>[0] = config,
+      operation: "gateway-startup" | "gateway-restart" = "gateway-startup",
+    ) => base.ready(cfg, operation),
+    prepare: () =>
+      prepareGatewayStartupSessions({ cfg: config, env, log: { info: vi.fn(), warn: vi.fn() } }),
+  };
+}
+
+it.for(["missing", "drifted"] as const)(
+  "defers every agent's %s index repair until startup activation and repairs it once",
+  async (damage, { signal }) => {
+    const fixture = await createFixture(["memes", "main", "friends"], damage);
+    const { env, config, agents } = fixture;
+    for (const agent of agents) {
+      expect(readSqliteDatabaseCleanClose(agent.path)).toBe(false);
+    }
+    const allAdmitted = createDeferredCore();
+    const admitted = new Set<string>();
+    const unsubscribe = sessionChanges.subscribe((change) => {
+      if (!("all" in change) || typeof change.scope !== "object" || !change.scope.topology) {
+        return;
+      }
+      const agentId = change.scope.agentId;
+      if (
+        agentId &&
+        agents.some((agent) => agent.agentId === agentId) &&
+        !listAgentDatabaseAdmissionRefusals({ env }).some((refusal) => refusal.agentId === agentId)
+      ) {
+        admitted.add(agentId);
+        if (admitted.size === agents.length) {
+          allAdmitted.resolve();
+        }
+      }
+    });
+    try {
+      await withAgentDatabaseStartupAdmission(async (admission) => {
+        await fixture.ready();
+        const owner = admission.adopt();
+        try {
+          for (const agent of agents) {
+            const refusal = readAgentDatabaseAdmissionRefusal(agent.agentId, { env });
+            expect(refusal?.code).toBe("agent-database-inspection-pending");
+            expect(createAgentDatabaseAdmissionErrorShape(refusal!)).toMatchObject({
+              code: "UNAVAILABLE",
+              retryable: true,
+            });
+            expect(() => fixture.agent(agent.agentId, agent.path)).toThrow(
+              "has not completed startup inspection and preparation",
+            );
+          }
+          await expect(fixture.prepare()).resolves.toEqual([]);
+          expect(
+            listAgentDatabaseAdmissionRefusals({ env })
+              .map(({ agentId }) => agentId)
+              .toSorted(),
+          ).toEqual(agents.map(({ agentId }) => agentId).toSorted());
+          deepStrictEqual(fixture.bytes(), fixture.before);
+          const activate = admission.activate.bind(admission);
+          // Keep real worker opening and session preparation; model publication is unrelated.
+          vi.spyOn(admission, "activate").mockImplementation((activation) =>
+            activate({ ...activation, publishAgent: async () => {} }),
+          );
+          activateGatewayAgentDatabaseStartup({
+            admission,
+            preparationReady: Promise.resolve(),
+            waitForPostReadyWork: async () => {},
+            getConfig: () => config,
+            getPluginRegistry: vi.fn(),
+            getPluginMetadataSnapshot: () => undefined,
+            isCurrent: () => true,
+            log: { info: vi.fn(), warn: vi.fn() },
+          });
+          await withinTest(allAdmitted.promise, signal);
+        } finally {
+          await owner.stop();
+        }
+      });
+    } finally {
+      unsubscribe();
+    }
+    for (const agent of agents) {
+      {
+        using reader = openRawDatabase(agent.path, { readOnly: true });
+        expect(
+          reader
+            .prepare("SELECT sql FROM sqlite_schema WHERE name='idx_agent_session_nodes_active'")
+            .get()?.sql,
+        ).toMatch(/WHERE archived_at IS NULL/i);
+        expect(reader.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      }
+      expect(loadSessionEntry(agent.session)).toEqual(agent.entry);
+    }
+    // Worker-local log queues drain on close; the parent logger cannot flush them.
+    await closeOpenClawAgentDatabasesAsync();
+    await flushLogger();
+    const repairs = () =>
+      fs
+        .readFileSync(fixture.logPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line): { message?: string; "1"?: unknown } => JSON.parse(line))
+        .filter((record) => record.message?.startsWith(repairMessage));
+    const ordered = agents.toSorted((a, b) => a.agentId.localeCompare(b.agentId));
+    expect(repairs().toSorted((a, b) => (a.message ?? "").localeCompare(b.message ?? ""))).toEqual(
+      ordered.map((agent) =>
+        expect.objectContaining({
+          message: `${repairMessage} for ${agent.agentId} (${agent.path}): idx_agent_session_nodes_active`,
+          "1": expect.objectContaining({
+            agentId: agent.agentId,
+            path: agent.path,
+            indexes: ["idx_agent_session_nodes_active"],
+            elapsedMs: expect.any(Number),
+          }),
+        }),
+      ),
+    );
+    await expect(fixture.ready(config, "gateway-restart")).resolves.toBeUndefined();
+    await fixture.prepare();
+    await closeOpenClawAgentDatabasesAsync();
+    await flushLogger();
+    expect(repairs()).toHaveLength(3);
+  },
+);
+
+it.each([
+  ["unscoped", "schema", "schema", 78],
+  ["unscoped", "unavailable", "schema", 78],
+  ["unscoped", "schema", "unavailable", 78],
+  ["unscoped", "unavailable", "unavailable", 1],
+  ["scoped", "schema", "unavailable", 78],
+  ["scoped", "unavailable", "schema", 1],
+] as const)("classifies %s %s / %s startup as exit %i", async (scope, first, second, exitCode) => {
+  const allSchema = first === "schema" && second === "schema";
+  const { env, config, agents, before, bytes, ready } = await createFixture(
+    allSchema ? ["work", "memes", "main", "friends"] : ["main", "worker"],
+    "missing table",
+  );
+  const failures = allSchema ? agents.map(() => first) : [first, second];
+  const unavailable = agents
+    .filter((_, index) => failures[index] === "unavailable")
+    .map((agent) => agent.agentId);
+  if (unavailable.length > 0) {
+    const preload = path.join(env.OPENCLAW_STATE_DIR, "schema-read-failure.cjs");
+    fs.writeFileSync(
+      preload,
+      `const { DatabaseSync } = require('node:sqlite');
+     const prepare = DatabaseSync.prototype.prepare;
+     DatabaseSync.prototype.prepare = function(sql) {
+       if (sql === 'PRAGMA table_list' &&
+           prepare.call(this, 'SELECT role FROM schema_meta').get()?.role === 'agent' &&
+           ${JSON.stringify(unavailable)}.includes(prepare.call(this, 'SELECT agent_id FROM schema_meta').get()?.agent_id)) {
+         throw Object.assign(new Error('synthetic schema read unavailable'), {code: 'SQLITE_IOERR', errcode: 10});
+       }
+       return prepare.call(this, sql);
+     };`,
+    );
+    for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preload))) {
+      vi.stubEnv(key, value);
+    }
+  }
+  const inspect = () =>
+    ready(scope === "scoped" ? agentConfig(["main", "worker"], "main") : config);
+  const failure = await (
+    scope === "scoped"
+      ? withAgentDatabaseStartupAdmission(inspect, { deferInspections: false })
+      : inspect()
+  ).catch((error: unknown) => error);
+  const message = String(failure);
+  if (scope === "unscoped") {
+    const rows = message.split("\n").filter((line) => line.startsWith("agent "));
+    expect(rows).toEqual(
+      (allSchema ? agents.toSorted((a, b) => a.agentId.localeCompare(b.agentId)) : agents).map(
+        (agent) => expect.stringContaining(`agent ${agent.agentId} ${agent.path}:`),
+      ),
+    );
+    for (const [index, kind] of failures.entries()) {
+      if (kind === "schema") {
+        expect(rows[index]).toContain("missing or drifted index idx_agent_session_nodes_active");
+        expect(rows[index]).toContain("openclaw doctor --fix");
+      }
+      expect(rows[index]).toContain(
+        kind === "schema"
+          ? "missing table session_key_contract"
+          : "synthetic schema read unavailable",
+      );
+    }
+  } else {
+    expect(message).toContain(agents[0]?.path);
+    expect(message).not.toContain(agents[1]?.path);
+    expect(message).toContain(
+      first === "schema"
+        ? "missing table session_key_contract"
+        : "synthetic schema read unavailable",
+    );
+  }
+  expect(resolveGatewayStartupFailureExitCode(failure)).toBe(exitCode);
+  deepStrictEqual(bytes(), before);
+});

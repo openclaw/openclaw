@@ -1,7 +1,7 @@
-// TTS config helpers read and normalize text-to-speech provider settings.
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  asNonArrayRecord,
   asOptionalRecord as asObjectRecord,
   isRecord as isPlainObject,
 } from "@openclaw/normalization-core/record-coerce";
@@ -11,13 +11,33 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { TtsAutoMode, TtsConfig, TtsMode } from "../config/types.tts.js";
+import type { TtsAutoMode, TtsConfig, TtsMode, TtsProvider } from "../config/types.tts.js";
 import { mergeDeep } from "../infra/deep-merge.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
+import type { PreparedTtsPreferences } from "./tts-preferences.js";
 export { normalizeTtsAutoMode } from "./tts-auto-mode.js";
+
+const TTS_CONFIG_RESERVED_KEYS = new Set([
+  "auto",
+  "enabled",
+  "maxTextLength",
+  "mode",
+  "modelOverrides",
+  "persona",
+  "personas",
+  "prefsPath",
+  "provider",
+  "providers",
+  "summaryModel",
+  "timeoutMs",
+]);
+
+export function isTtsConfigReservedKey(key: string): boolean {
+  return TTS_CONFIG_RESERVED_KEYS.has(key);
+}
 
 /** Routing context used to layer global, agent, channel, and account TTS config. */
 export type TtsConfigResolutionContext = {
@@ -25,24 +45,6 @@ export type TtsConfigResolutionContext = {
   channelId?: string;
   accountId?: string;
 };
-
-function resolveAgentTtsOverride(
-  cfg: OpenClawConfig,
-  agentId: string | undefined,
-): TtsConfig | undefined {
-  if (!agentId) {
-    return undefined;
-  }
-  return resolveAgentConfig(cfg, agentId)?.tts;
-}
-
-function resolveTtsConfigContext(
-  contextOrAgentId?: string | TtsConfigResolutionContext,
-): TtsConfigResolutionContext {
-  return typeof contextOrAgentId === "string"
-    ? { agentId: contextOrAgentId }
-    : (contextOrAgentId ?? {});
-}
 
 function resolveRecordEntry<T>(
   entries: Record<string, T> | undefined,
@@ -65,53 +67,24 @@ function asTtsConfig(value: unknown): TtsConfig | undefined {
   return isPlainObject(value) ? (value as TtsConfig) : undefined;
 }
 
-function resolveChannelConfig(
-  cfg: OpenClawConfig,
-  channelId: string | undefined,
-): Record<string, unknown> | undefined {
-  if (!isPlainObject(cfg.channels)) {
-    return undefined;
-  }
-  const normalizedChannelId = normalizeOptionalString(channelId);
-  if (!normalizedChannelId) {
-    return undefined;
-  }
-  return asObjectRecord(
-    resolveRecordEntry(
-      cfg.channels as Record<string, unknown>,
-      normalizedChannelId,
-      normalizeLowercaseStringOrEmpty,
-    ),
-  );
-}
-
-function resolveChannelTtsOverride(
-  cfg: OpenClawConfig,
-  context: TtsConfigResolutionContext,
-): TtsConfig | undefined {
-  return asTtsConfig(resolveChannelConfig(cfg, context.channelId)?.tts);
-}
-
-function resolveAccountTtsOverride(
-  cfg: OpenClawConfig,
-  context: TtsConfigResolutionContext,
-): TtsConfig | undefined {
-  const channelConfig = resolveChannelConfig(cfg, context.channelId);
-  const accounts = isPlainObject(channelConfig?.accounts) ? channelConfig.accounts : undefined;
-  const accountConfig = resolveRecordEntry(accounts, context.accountId, normalizeAccountId);
-  return asTtsConfig(asObjectRecord(accountConfig)?.tts);
-}
-
 /** Resolve effective TTS config after applying global, agent, channel, and account layers. */
 export function resolveEffectiveTtsConfig(
   cfg: OpenClawConfig,
   contextOrAgentId?: string | TtsConfigResolutionContext,
 ): TtsConfig {
-  const context = resolveTtsConfigContext(contextOrAgentId);
+  const context =
+    typeof contextOrAgentId === "string" ? { agentId: contextOrAgentId } : (contextOrAgentId ?? {});
   const base = cfg.tts ?? {};
-  const agentOverride = resolveAgentTtsOverride(cfg, context.agentId);
-  const channelOverride = resolveChannelTtsOverride(cfg, context);
-  const accountOverride = resolveAccountTtsOverride(cfg, context);
+  const agentOverride = context.agentId ? resolveAgentConfig(cfg, context.agentId)?.tts : undefined;
+  const channelConfig = isPlainObject(cfg.channels)
+    ? asObjectRecord(
+        resolveRecordEntry(cfg.channels, context.channelId, normalizeLowercaseStringOrEmpty),
+      )
+    : undefined;
+  const channelOverride = asTtsConfig(channelConfig?.tts);
+  const accounts = isPlainObject(channelConfig?.accounts) ? channelConfig.accounts : undefined;
+  const accountConfig = resolveRecordEntry(accounts, context.accountId, normalizeAccountId);
+  const accountOverride = asTtsConfig(asObjectRecord(accountConfig)?.tts);
   let merged: unknown = base;
   for (const override of [agentOverride, channelOverride, accountOverride]) {
     merged = mergeDeep(merged, override ?? {});
@@ -127,9 +100,9 @@ export function resolveConfiguredTtsMode(
   return resolveEffectiveTtsConfig(cfg, contextOrAgentId).mode ?? "final";
 }
 
-function resolveTtsPrefsPathValue(
+export function resolveTtsPrefsPathValue(
   prefsPath: string | undefined,
-  machinePrefsPath?: string,
+  machinePrefsPath: () => string | undefined,
 ): string {
   if (prefsPath?.trim()) {
     return resolveUserPath(prefsPath.trim());
@@ -138,29 +111,51 @@ function resolveTtsPrefsPathValue(
   if (envPath) {
     return resolveUserPath(envPath);
   }
-  if (machinePrefsPath?.trim()) {
-    return resolveUserPath(machinePrefsPath.trim());
+  const machinePath = machinePrefsPath()?.trim();
+  if (machinePath) {
+    return resolveUserPath(machinePath);
   }
   return path.join(resolveConfigDir(process.env), "settings", "tts.json");
 }
 
-function readTtsPrefsAutoMode(prefsPath: string): TtsAutoMode | undefined {
+export type TtsUserPrefs = {
+  tts?: {
+    auto?: TtsAutoMode;
+    enabled?: boolean;
+    provider?: TtsProvider;
+    persona?: string | null;
+    maxLength?: number;
+    summarize?: boolean;
+  };
+};
+
+export function readTtsPrefs(prefsPath: string, options?: { forUpdate?: boolean }): TtsUserPrefs {
   try {
-    if (!existsSync(prefsPath)) {
-      return undefined;
+    return asNonArrayRecord(JSON.parse(readFileSync(prefsPath, "utf8"))) as TtsUserPrefs;
+  } catch (cause) {
+    if (hasErrnoCode(cause, "ENOENT")) {
+      // Missing preferences are a normal first-run state.
+      return {};
     }
-    const prefs = JSON.parse(readFileSync(prefsPath, "utf8")) as {
-      tts?: { auto?: unknown; enabled?: unknown };
-    };
-    const auto = normalizeTtsAutoMode(prefs.tts?.auto);
-    if (auto) {
-      return auto;
+    const error = new Error(
+      `Unable to read TTS preferences at ${prefsPath}. Repair the file or its permissions.`,
+      { cause },
+    );
+    if (options?.forUpdate) {
+      throw error;
     }
-    if (typeof prefs.tts?.enabled === "boolean") {
-      return prefs.tts.enabled ? "always" : "off";
-    }
-  } catch {
-    return undefined;
+    console.warn(`[tts] ${error.message} Using configured defaults.`);
+    return {};
+  }
+}
+
+export function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | undefined {
+  const auto = normalizeTtsAutoMode(prefs.tts?.auto);
+  if (auto) {
+    return auto;
+  }
+  if (typeof prefs.tts?.enabled === "boolean") {
+    return prefs.tts.enabled ? "always" : "off";
   }
   return undefined;
 }
@@ -168,6 +163,7 @@ function readTtsPrefsAutoMode(prefsPath: string): TtsAutoMode | undefined {
 /** Return whether this payload should attempt TTS based on session, prefs, and config. */
 export function shouldAttemptTtsPayload(params: {
   cfg: OpenClawConfig;
+  preparedTtsPreferences: PreparedTtsPreferences;
   ttsAuto?: string;
   agentId?: string;
   channelId?: string;
@@ -180,8 +176,13 @@ export function shouldAttemptTtsPayload(params: {
 
   const raw = resolveEffectiveTtsConfig(params.cfg, params);
   const scopedPrefsPath = (raw as TtsConfig & { prefsPath?: string }).prefsPath;
-  const prefsAuto = readTtsPrefsAutoMode(
-    resolveTtsPrefsPathValue(scopedPrefsPath, readConfigMachineState<string>("tts.prefsPath")),
+  const prefsAuto = resolveTtsAutoModeFromPrefs(
+    readTtsPrefs(
+      resolveTtsPrefsPathValue(
+        scopedPrefsPath,
+        () => params.preparedTtsPreferences.machinePrefsPath,
+      ),
+    ),
   );
   if (prefsAuto) {
     return prefsAuto !== "off";
@@ -195,13 +196,9 @@ export function shouldAttemptTtsPayload(params: {
 }
 
 /** Return whether TTS directive markup should be stripped from user-visible text. */
-export function shouldCleanTtsDirectiveText(params: {
-  cfg: OpenClawConfig;
-  ttsAuto?: string;
-  agentId?: string;
-  channelId?: string;
-  accountId?: string;
-}): boolean {
+export function shouldCleanTtsDirectiveText(
+  params: Parameters<typeof shouldAttemptTtsPayload>[0],
+): boolean {
   if (!shouldAttemptTtsPayload(params)) {
     return false;
   }

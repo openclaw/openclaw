@@ -11,6 +11,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { captureAsyncWorkTracker, trackAsyncWork } from "../shared/async-work-scope.js";
@@ -389,6 +390,11 @@ describe("music generation registration resources", () => {
             fixture.resume.resolve();
             await settled;
             await inspection?.release();
+            if (ownership === "raw") {
+              clearPluginMetadataLifecycleCaches();
+              const cleanup = await waitForPluginCacheRetirement();
+              expect(cleanup.failures).toEqual([]);
+            }
           }
         });
       } finally {

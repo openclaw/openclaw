@@ -1,9 +1,9 @@
-// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { formatChatWorkContext } from "../../../../src/chat/work-context.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   buildHomeWorkContext,
-  formatChatWorkContext,
   publishChatWorkContext,
   subscribeChatWorkContext,
 } from "./chat-work-context.ts";

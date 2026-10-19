@@ -10,6 +10,8 @@ import {
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { landingSnapshotQuery } from "./pr-merge-snapshot.test-support.js";
+import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -40,6 +42,7 @@ function fixture() {
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_ALLOW_PROTOCOL: "file",
+    GH_REPO: "fixture/repo",
   };
   const git = (repo: string, args: string[], input?: string) =>
     execFileSync("git", ["-C", repo, ...args], {
@@ -70,6 +73,12 @@ function fixture() {
   const capture = join(worktree, ".local/merge-output.log");
   writeFileSync(capture, "retained capture\n");
   const repo = { id: 123, nameWithOwner: "fixture/repo", url: "https://github.com/fixture/repo" };
+  const repoAuthority = {
+    id: repo.id,
+    node_id: "fixture-repo",
+    full_name: repo.nameWithOwner,
+    html_url: repo.url,
+  };
   const record = {
     version: 1,
     repo,
@@ -93,6 +102,8 @@ function fixture() {
     data: {
       repository: {
         ...repo,
+        id: repoAuthority.node_id,
+        databaseId: repo.id,
         ref: { target: { oid: landed } },
         pullRequest: {
           id: record.prId,
@@ -112,6 +123,14 @@ function fixture() {
       },
     },
   };
+  const pullResponse = (baseRef: string) =>
+    JSON.stringify({
+      number: 123,
+      html_url: `${repo.url}/pull/123`,
+      base: { ref: baseRef, repo: repoAuthority },
+      head: { sha: "" },
+    });
+  const snapshotCall = `${owner}\tapi graphql --hostname github.com -H Cache-Control: max-age=0 -f owner=fixture -f name=repo -F number=123 -f ${landingSnapshotQuery} --include`;
   const calls = join(root, "calls.log");
   const gh = join(bin, "gh");
   writeFileSync(
@@ -119,14 +138,21 @@ function fixture() {
     `#!/bin/sh
 printf '%s\\t%s\\n' "$(git rev-parse --show-toplevel)" "$*" >> '${calls}'
 case "$1 $2" in
-  "repo view") printf '%s\\n' '${JSON.stringify(repo)}' ;;
-  "api graphql") printf '%s\\n' '${JSON.stringify(response)}' ;;
-  "pr view")
-    if [ "$(git rev-parse --show-toplevel)" = '${owner}' ]; then
-      printf '%s\\n' '{"baseRefName":"owner-release","headRefOid":""}'
-    else
-      printf '%s\\n' '{"baseRefName":"caller-release","headRefOid":""}'
-    fi ;;
+  "browse ") printf '%s\\n' '${repo.url}' ;;
+  "api --hostname")
+    case "$4" in
+      repos/fixture/repo/pulls/123)
+        if [ "$(git rev-parse --show-toplevel)" = '${owner}' ]; then
+          printf '%s\\n' '${pullResponse("owner-release")}'
+        else
+          printf '%s\\n' '${pullResponse("caller-release")}'
+        fi ;;
+      repos/fixture/repo/pulls/123/files?per_page=100) printf '%s\\n' '[[]]' ;;
+      *) echo "Unexpected GitHub operation: $*" >&2; exit 99 ;;
+    esac ;;
+  "api graphql")
+    case " $* " in *" --include "*) printf 'HTTP/2.0 200 OK\\n\\n' ;; esac
+    printf '%s\\n' '${JSON.stringify(response)}' ;;
   *) echo "Unexpected GitHub operation: $*" >&2; exit 99 ;;
 esac
 `,
@@ -142,6 +168,13 @@ esac
     return { ...result, output: result.stdout + result.stderr };
   };
   const readCalls = () => readFileSync(calls, "utf8").trim().split("\n");
+  const expectedCalls = (...extra: string[]) => [
+    `${owner}\tbrowse`,
+    `${owner}\tapi --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0`,
+    ...extra,
+  ];
+  const refs = (repoPath: string, prefix: string) =>
+    git(repoPath, ["for-each-ref", "--format=%(refname)", prefix]);
   return {
     root,
     owner,
@@ -152,9 +185,12 @@ esac
     landed,
     intent,
     record,
+    snapshotCall,
     git,
     run,
     readCalls,
+    expectedCalls,
+    refs,
   };
 }
 
@@ -186,12 +222,8 @@ describePosix("native PR wrapper repository ownership", () => {
       f.git(f.owner, ["merge-base", "--is-ancestor", f.intent, outcomeRef]);
       expect(readFileSync(f.capture, "utf8")).toBe("retained capture\n");
       expect(f.git(f.caller, ["show-ref"])).toBe(callerRefs);
-      expect(f.git(f.owner, ["for-each-ref", "--format=%(refname)", lockRef])).toBe("");
-      expect(f.readCalls()).toHaveLength(3);
-      expect(f.readCalls().every((call) => call.startsWith(`${f.owner}\t`))).toBe(true);
-      expect(f.readCalls().some((call) => call.includes("pr merge") || call.includes("POST"))).toBe(
-        false,
-      );
+      expect(f.refs(f.owner, lockRef)).toBe("");
+      expect(f.readCalls()).toEqual(f.expectedCalls(f.snapshotCall, f.snapshotCall));
     },
   );
 
@@ -202,7 +234,7 @@ describePosix("native PR wrapper repository ownership", () => {
     expect(result.status, result.output).toBe(0);
     expect(result.output).toContain("completion pending");
     expect(existsSync(f.worktree)).toBe(false);
-    expect(f.git(f.caller, ["for-each-ref", "--format=%(refname)", "refs/openclaw"])).toBe("");
+    expect(f.refs(f.caller, "refs/openclaw")).toBe("");
   });
 
   it("rejects corrupt owner evidence even when the caller has a valid retained intent", () => {
@@ -215,13 +247,20 @@ describePosix("native PR wrapper repository ownership", () => {
     expect(f.git(f.owner, ["rev-parse", outcomeRef])).toBe(f.head);
     expect(f.git(f.caller, ["rev-parse", outcomeRef])).toBe(f.intent);
     expect(readFileSync(f.capture, "utf8")).toBe("retained capture\n");
-    expect(f.readCalls()).toEqual([`${f.owner}\trepo view --json id,nameWithOwner,url`]);
+    expect(f.readCalls()).toEqual(f.expectedCalls());
   });
 
   it.each(["prepare-run", "merge-recover", "ci-dispatch", "review-init"])(
     "uses owner repository metadata for early %s validation",
     (command) => {
       const f = fixture();
+      if (command === "prepare-run") {
+        const review = validReview(f.head);
+        review.pr.number = 123;
+        review.recommendation = "READY FOR /prepare-pr";
+        review.issueValidation.status = "valid";
+        writeReviewArtifacts(f.worktree, review, { prNumber: 123, headSha: f.head });
+      }
       const result = f.run(f.caller, [
         command,
         "123",
@@ -235,11 +274,16 @@ describePosix("native PR wrapper repository ownership", () => {
             ? "did not include a head SHA"
             : "targets owner-release",
       );
-      expect(f.readCalls()).toHaveLength(1);
-      expect(f.readCalls()[0]).toContain(`${f.owner}\tpr view 123 --json `);
+      const calls = f.expectedCalls();
+      if (command === "review-init") {
+        calls.push(
+          `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123/files?per_page=100 --paginate --slurp -H Cache-Control: max-age=0`,
+        );
+      }
+      expect(f.readCalls()).toEqual(calls);
       expect(f.git(f.owner, ["rev-parse", outcomeRef])).toBe(f.intent);
-      expect(f.git(f.owner, ["for-each-ref", "--format=%(refname)", lockRef])).toBe("");
-      expect(f.git(f.caller, ["for-each-ref", "--format=%(refname)", "refs/openclaw"])).toBe("");
+      expect(f.refs(f.owner, lockRef)).toBe("");
+      expect(f.refs(f.caller, "refs/openclaw")).toBe("");
     },
   );
 });

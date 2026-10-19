@@ -1,27 +1,29 @@
-import type { Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { hasErrnoCode } from "./errno.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
+import { sameFileMutationFingerprint, type FileMutationFingerprint } from "./file-descriptor.js";
 
 export type BackupSqliteSource = {
   path: string;
-  identity: Stats;
+  identity: BigIntStats;
 };
 
 export type BackupSqliteSourceGroup = {
   sources: [BackupSqliteSource, ...BackupSqliteSource[]];
   sourcePath: string;
-  walIdentity: Stats | null;
+  walIdentity: BigIntStats | null;
+  databaseFingerprint: FileMutationFingerprint;
 };
 
-function hasKnownIdentity(identity: Stats): boolean {
-  return process.platform !== "win32" || (identity.dev !== 0 && identity.ino !== 0);
+function hasKnownIdentity(identity: BigIntStats): boolean {
+  return process.platform !== "win32" || (identity.dev !== 0n && identity.ino !== 0n);
 }
 
-async function readRegularSidecar(pathname: string): Promise<Stats | null> {
-  let identity: Stats;
+async function readRegularSidecar(pathname: string): Promise<BigIntStats | null> {
+  let identity: BigIntStats;
   try {
-    identity = await fs.lstat(pathname);
+    identity = await fs.lstat(pathname, { bigint: true });
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       return null;
@@ -36,7 +38,7 @@ async function readRegularSidecar(pathname: string): Promise<Stats | null> {
 
 async function assertGroupPaths(group: BackupSqliteSourceGroup): Promise<void> {
   for (const source of group.sources) {
-    const current = await fs.lstat(source.path);
+    const current = await fs.lstat(source.path, { bigint: true });
     if (
       !current.isFile() ||
       !sameFileIdentity(source.identity, current) ||
@@ -45,7 +47,7 @@ async function assertGroupPaths(group: BackupSqliteSourceGroup): Promise<void> {
     ) {
       throw new Error(`SQLite backup source identity changed: ${source.path}`);
     }
-    if (current.nlink !== group.sources.length) {
+    if (current.nlink !== BigInt(group.sources.length)) {
       throw new Error(
         `SQLite hardlink journal owner may be outside the backup inventory: ${source.path} has ${current.nlink} links, but ${group.sources.length} paths were admitted. Include every database hardlink before retrying.`,
       );
@@ -55,18 +57,18 @@ async function assertGroupPaths(group: BackupSqliteSourceGroup): Promise<void> {
 
 async function readGroupWalOwners(
   group: BackupSqliteSourceGroup,
-): Promise<Array<{ path: string; identity: Stats }>> {
-  const owners: Array<{ path: string; identity: Stats }> = [];
+): Promise<Array<{ path: string; identity: BigIntStats }>> {
+  const owners: Array<{ path: string; identity: BigIntStats }> = [];
   for (const source of group.sources) {
     const wal = await readRegularSidecar(`${source.path}-wal`);
     const journal = await readRegularSidecar(`${source.path}-journal`);
     await readRegularSidecar(`${source.path}-shm`);
-    if (journal && journal.size > 0) {
+    if (journal && journal.size > 0n) {
       throw new Error(
         `SQLite hardlink journal ownership cannot be established safely while a rollback journal is present: ${source.path}. Close the database cleanly before retrying.`,
       );
     }
-    if (wal && wal.size > 0) {
+    if (wal && wal.size > 0n) {
       if (!hasKnownIdentity(wal)) {
         throw new Error(`SQLite hardlink WAL identity cannot be verified: ${source.path}-wal`);
       }
@@ -81,7 +83,7 @@ async function readGroupWalOwners(
   return owners;
 }
 
-async function assertGroupBinding(group: BackupSqliteSourceGroup): Promise<void> {
+export async function assertBackupSqliteSourceGroup(group: BackupSqliteSourceGroup): Promise<void> {
   await assertGroupPaths(group);
   if (group.sources.length === 1) {
     return;
@@ -96,24 +98,42 @@ async function assertGroupBinding(group: BackupSqliteSourceGroup): Promise<void>
   ) {
     throw new Error(`SQLite hardlink journal ownership changed during backup: ${group.sourcePath}`);
   }
+  // An alias can checkpoint and truncate its WAL between journal checks.
+  if (
+    !sameFileMutationFingerprint(
+      group.databaseFingerprint,
+      await fs.stat(group.sourcePath, { bigint: true }),
+    )
+  ) {
+    throw new Error(
+      `SQLite hardlink database changed during backup: ${group.sourcePath}. Close database writers cleanly before retrying.`,
+    );
+  }
 }
 
-/** Canonical database owners are resolved before generic pathname journal ownership. */
+/** Resolve journal ownership after canonical role validation and physical path resolution. */
 export async function planBackupSqliteSourceGroups(
   sources: readonly BackupSqliteSource[],
 ): Promise<Map<string, BackupSqliteSourceGroup>> {
   const groups = new Map<string, BackupSqliteSourceGroup>();
   for (const source of sources) {
     const knownIdentity = hasKnownIdentity(source.identity);
-    if (!knownIdentity && source.identity.nlink > 1) {
+    if (!knownIdentity && source.identity.nlink > 1n) {
       throw new Error(`SQLite hardlink identity cannot be verified: ${source.path}`);
     }
     const key = knownIdentity ? `${source.identity.dev}:${source.identity.ino}` : source.path;
     const group = groups.get(key);
     if (group) {
-      group.sources.push(source);
+      if (!group.sources.some((entry) => entry.path === source.path)) {
+        group.sources.push(source);
+      }
     } else {
-      groups.set(key, { sources: [source], sourcePath: source.path, walIdentity: null });
+      groups.set(key, {
+        sources: [source],
+        sourcePath: source.path,
+        walIdentity: null,
+        databaseFingerprint: await fs.stat(source.path, { bigint: true }),
+      });
     }
   }
   const byPath = new Map<string, BackupSqliteSourceGroup>();
@@ -137,9 +157,9 @@ export async function captureBackupSqliteSourceGroup(
   group: BackupSqliteSourceGroup,
   capture: () => Promise<unknown>,
 ): Promise<void> {
-  await assertGroupBinding(group);
+  await assertBackupSqliteSourceGroup(group);
   // SQLite owns source descriptors: closing a raw fs descriptor can release
   // another connection's POSIX locks in this process. WAL appends remain valid.
   await capture();
-  await assertGroupBinding(group);
+  await assertBackupSqliteSourceGroup(group);
 }

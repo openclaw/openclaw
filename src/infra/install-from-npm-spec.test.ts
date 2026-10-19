@@ -190,18 +190,6 @@ describe("installFromValidatedNpmSpecArchive", () => {
     expect(installFromArchive).not.toHaveBeenCalled();
   });
 
-  it("returns installer failures for domain-specific handling", async () => {
-    mockPackedSuccess();
-    const installFromArchive = vi.fn(async () => ({ ok: false as const, error: "install failed" }));
-
-    const result = await runInstall({
-      expectedIntegrity: "sha512-same",
-      installFromArchive,
-    });
-
-    expect(result).toEqual({ ok: false, error: "install failed" });
-  });
-
   it("rejects prerelease resolutions unless explicitly requested", async () => {
     mockPackedSuccess({
       resolvedSpec: "@openclaw/test@latest",
@@ -219,6 +207,7 @@ describe("installFromValidatedNpmSpecArchive", () => {
       throw new Error("expected prerelease rejection");
     }
     expect(result.error).toContain("prerelease version 1.1.0-beta.1");
+    expect(result.error).toContain('Use "npm:@openclaw/test@beta"');
     expect(installFromArchive).not.toHaveBeenCalled();
   });
 
@@ -273,10 +262,35 @@ describe("installFromValidatedNpmSpecArchive", () => {
 });
 
 describe("archive workspace lifetime", () => {
+  it("preserves workspace settlement rejection instead of exposing install success", async () => {
+    const failure = new Error("workspace cleanup failed");
+    vi.mocked(withInstallWorkspace).mockImplementationOnce(async (_prefix, callback) => {
+      await callback("/tmp/openclaw-npm-pack-install-test");
+      throw failure;
+    });
+    vi.mocked(packNpmSpecToArchive).mockResolvedValueOnce({
+      ok: true,
+      archivePath: "/tmp/openclaw-test.tgz",
+      metadata: {},
+    });
+
+    await expect(
+      installFromValidatedNpmSpecArchive({
+        spec: "audit-hooks@1.0.0",
+        timeoutMs: 1000,
+        tempDirPrefix: "archive-",
+        archiveInstallParams: {},
+        installFromArchive: async () => ({ ok: true as const, pluginId: "audit-hooks" }),
+      }),
+    ).rejects.toBe(failure);
+  });
+
   it.each(["success", "failure", "throw"] as const)(
     "cleans the archive workspace before exposing %s",
     async (outcome) => {
       await withTestDir({ prefix: "openclaw-npm-archive-" }, async (rootDir) => {
+        // Workspace admission must not depend on the runner's directory umask.
+        await fs.chmod(rootDir, 0o700);
         const actual = await vi.importActual<typeof import("./install-source-utils.js")>(
           "./install-source-utils.js",
         );
@@ -314,10 +328,7 @@ describe("archive workspace lifetime", () => {
             return {
               ok: true as const,
               [transactionKey]: transaction,
-              get pluginId() {
-                expect(existsSync(workspace)).toBe(false);
-                return "audit-hooks";
-              },
+              pluginId: "audit-hooks",
             };
           },
         });

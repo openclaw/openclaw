@@ -1,4 +1,3 @@
-/** Adaptive Node heap policy for the managed Gateway service. */
 import os from "node:os";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
@@ -131,7 +130,7 @@ export function resolveGatewayHeapNodeOptions(
   return limit === null ? "" : `--max-old-space-size=${Math.min(GATEWAY_HEAP_CAP_MIB, limit)}`;
 }
 
-function readServiceHeapExecArgv(programArguments: readonly string[]): string[] {
+export function readServiceHeapExecArgv(programArguments: readonly string[]): string[] {
   const entrypointIndex = resolveServiceEntrypointIndex(programArguments);
   return parseHeapControls(programArguments.slice(1, entrypointIndex ?? 1));
 }

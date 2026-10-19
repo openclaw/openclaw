@@ -1,16 +1,18 @@
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTavilyWebSearchProvider } from "./tavily-search-provider.js";
-import { createTavilySearchTool } from "./tavily-search-tool.js";
+import { captureTavilyTools } from "./tavily-tools.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe.each(["web_search", "tavily_search"] as const)("%s cache TTL", (kind) => {
-  it.each([0, 1])(
-    "applies the current %s-minute TTL to cached results",
-    async (cacheTtlMinutes) => {
+describe("Tavily search cache TTL", () => {
+  it.each([
+    { kind: "web_search", cacheTtlMinutes: 1 },
+    { kind: "tavily_search", cacheTtlMinutes: 0 },
+  ])(
+    "$kind applies the current $cacheTtlMinutes-minute TTL to cached results",
+    async ({ kind, cacheTtlMinutes }) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
       let requests = 0;
       const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
@@ -35,7 +37,7 @@ describe.each(["web_search", "tavily_search"] as const)("%s cache TTL", (kind) =
         };
         const query = `Tavily ${kind} current TTL ${cacheTtlMinutes}`;
         if (kind === "tavily_search") {
-          const tool = createTavilySearchTool(createTestPluginApi({ config }));
+          const tool = captureTavilyTools(config)("tavily_search");
           return (await tool.execute("cache-ttl", { query })).details as Record<string, unknown>;
         }
         const tool = createTavilyWebSearchProvider().createTool({ config, searchConfig });

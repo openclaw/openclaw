@@ -27,6 +27,15 @@ export function readSessionInputProfileId(ctx: SessionParticipantInputContext): 
   return identity?.type === "profile" ? identity.id : undefined;
 }
 
+/** Only external turns may load the session's personal preferences; sender identity does not select them. */
+export function isSessionPersonalBootstrapTurn(ctx: SessionParticipantInputContext): boolean {
+  return (
+    ctx.InternalTurnSource === undefined &&
+    (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user") &&
+    Boolean(ctx[sessionParticipantInput]?.length)
+  );
+}
+
 /** An unqualified transport sender remains an observation, never a Gateway profile. */
 export function prepareChannelParticipantObservation(ctx: SessionParticipantInputContext): void {
   const channel = ctx.Provider ?? ctx.Surface;

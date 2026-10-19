@@ -1,9 +1,19 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-// Defines shared TUI state, backend, and event types.
 import type { SessionProjectionState } from "../../packages/gateway-client/src/session-projection.js";
+import type { AgentSummary as GatewayAgentSummary } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { SessionGoal } from "../config/sessions/types.js";
+import type { SessionScope } from "../config/types.base.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import type { TuiPendingSubmit } from "./tui-submit-state.js";
+
+/** Exact pre-probed Gateway target and its selection provenance for an in-process handoff. */
+export type TuiBoundGateway = {
+  url: string;
+  configuredRemote?: boolean;
+  token?: string;
+  password?: string;
+  tlsFingerprint?: string;
+};
 
 export type TuiOptions = {
   local?: boolean;
@@ -19,11 +29,14 @@ export type TuiOptions = {
   message?: string;
   /** Overrides timeoutMs only for the message sent automatically at startup. */
   initialMessageTimeoutMs?: number;
-  /**
-   * Internal CLI guard: after the standalone TUI returns, force the child
-   * process out if imported runtime handles keep the event loop alive.
-   */
-  forceProcessExitOnReturn?: boolean;
+};
+
+export type TuiGatewayConnectionOptions = Pick<
+  TuiOptions,
+  "url" | "token" | "password" | "tlsFingerprint"
+> & {
+  allowConfiguredAuthForExactTarget?: boolean;
+  suppressEnvAuthFallback?: boolean;
 };
 
 type TuiExitReason = "exit" | "return-to-system-agent";
@@ -49,7 +62,10 @@ export type ChatEvent = {
   seq?: number;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
+  deltaText?: string;
+  replace?: boolean;
   errorMessage?: string;
+  localModelMayStillBeFinishing?: boolean;
 };
 
 export type BtwEvent = {
@@ -85,6 +101,8 @@ export type SessionMessageEvent = {
   message?: unknown;
   messageId?: string;
   messageSeq?: number;
+  /** Recipient-authorized session row the Gateway attaches to each message. */
+  session?: TuiSessionRow;
 };
 
 export type AgentEvent = {
@@ -98,7 +116,7 @@ export type AgentEvent = {
   agentId?: string;
 };
 
-export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
+type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 
 export type SessionInfo = {
   thinkingLevel?: string;
@@ -128,21 +146,35 @@ export type SessionInfo = {
   displayName?: string;
 };
 
-export type SessionScope = "per-sender" | "global";
-
-export type AgentSummary = {
-  id: string;
-  kind?: "agent" | "system";
-  name?: string;
+/** Session row the Gateway lists, describes and attaches to session messages. */
+export type TuiSessionRow = Omit<SessionInfo, "effectiveResponseUsage"> & {
+  key: string;
+  sessionId?: string;
+  archived?: boolean;
+  incognito?: boolean;
+  sendPolicy?: string;
+  label?: string;
+  provider?: string;
+  groupChannel?: string;
+  space?: string;
+  subject?: string;
+  chatType?: string;
+  origin?: {
+    label?: string;
+    provider?: string;
+    surface?: string;
+  };
+  lastChannel?: string;
+  lastProvider?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
 };
 
-type QueuedMessageMode = "steer" | "followUp";
+export type { SessionScope } from "../config/types.base.js";
 
-type QueuedMessage = {
-  runId: string;
-  text: string;
-  mode: QueuedMessageMode;
-};
+export type AgentSummary = Pick<GatewayAgentSummary, "id" | "kind" | "name">;
 
 export type GatewayStatusSummary = {
   runtimeVersion?: string | null;
@@ -195,7 +227,6 @@ export type TuiStateAccess = {
   sessionProjection?: SessionProjectionState;
   activeChatRunId: string | null;
   pendingSubmit: TuiPendingSubmit | null;
-  queuedMessages?: QueuedMessage[];
   historyLoaded: boolean;
   sessionInfo: SessionInfo;
   initialSessionApplied: boolean;

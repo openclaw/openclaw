@@ -1,11 +1,11 @@
 /** Describes package-authored plugin install source metadata and pinning warnings. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { isExactSemverVersion, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type {
   PluginInstallSourceInfo,
   PluginInstallSourceWarning,
-  PluginInstallNpmPinState,
   PluginInstallNpmSourceInfo,
   PluginInstallClawHubSourceInfo,
 } from "./install-source-info.types.js";
@@ -13,21 +13,6 @@ import type { PluginPackageInstall } from "./package-manifest.types.js";
 import { normalizePluginInstallDefaultChoice } from "./plugin-install-default-choice.js";
 
 export type { PluginInstallSourceInfo } from "./install-source-info.types.js";
-
-/** Options for describing expected plugin install source metadata. */
-type DescribePluginInstallSourceOptions = {
-  expectedPackageName?: string | null;
-};
-
-function resolveNpmPinState(params: {
-  exactVersion: boolean;
-  hasIntegrity: boolean;
-}): PluginInstallNpmPinState {
-  if (params.exactVersion) {
-    return params.hasIntegrity ? "exact-with-integrity" : "exact-without-integrity";
-  }
-  return params.hasIntegrity ? "floating-with-integrity" : "floating-without-integrity";
-}
 
 function normalizeExpectedPackageName(value: string | null | undefined): string | undefined {
   const expected = normalizeOptionalString(value);
@@ -40,7 +25,7 @@ function normalizeExpectedPackageName(value: string | null | undefined): string 
 /** Describes plugin install source metadata and warnings without mutating manifests. */
 export function describePluginInstallSource(
   install: PluginPackageInstall,
-  options?: DescribePluginInstallSourceOptions,
+  options?: { expectedPackageName?: string | null },
 ): PluginInstallSourceInfo {
   const clawhubSpec = normalizeOptionalString(install.clawhubSpec);
   const npmSpec = normalizeOptionalString(install.npmSpec);
@@ -96,7 +81,7 @@ export function describePluginInstallSource(
           : {}),
         selectorKind: parsed.selectorKind,
         exactVersion,
-        pinState: resolveNpmPinState({ exactVersion, hasIntegrity }),
+        pinState: `${exactVersion ? "exact" : "floating"}-${hasIntegrity ? "with" : "without"}-integrity`,
         ...(parsed.selector ? { selector: parsed.selector } : {}),
         ...(expectedIntegrity ? { expectedIntegrity } : {}),
       };
@@ -104,16 +89,17 @@ export function describePluginInstallSource(
       warnings.push("invalid-npm-spec");
     }
   }
-  if (defaultChoice === "clawhub" && !clawhub) {
+  if (
+    (defaultChoice === "clawhub" && !clawhub) ||
+    (defaultChoice === "npm" && !npm) ||
+    (defaultChoice === "local" && !localPath)
+  ) {
     warnings.push("default-choice-missing-source");
   }
-  if (defaultChoice === "npm" && !npm) {
-    warnings.push("default-choice-missing-source");
-  }
-  if (defaultChoice === "local" && !localPath) {
-    warnings.push("default-choice-missing-source");
-  }
-  if (expectedIntegrity && !npm) {
+  // Integrity belongs to npm when declared, otherwise to a ClawHub-only source.
+  const hasClawHubIntegrity =
+    !npmSpec && clawhub && expectedIntegrity && normalizeClawHubSha256Integrity(expectedIntegrity);
+  if (expectedIntegrity && !npm && !hasClawHubIntegrity) {
     warnings.push("npm-integrity-without-source");
   }
 

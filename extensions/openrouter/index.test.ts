@@ -1,5 +1,6 @@
 // Openrouter tests cover index plugin behavior.
 import { readFileSync } from "node:fs";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import {
   registerProviderPlugin,
@@ -10,21 +11,20 @@ import {
   expectPassthroughReplayPolicy,
   expectUnifiedModelCatalogProviderRegistration,
 } from "openclaw/plugin-sdk/provider-test-contracts";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getOpenRouterModelCapabilitiesMock, loadOpenRouterModelCapabilitiesMock } = vi.hoisted(
-  () => ({
-    getOpenRouterModelCapabilitiesMock: vi.fn(),
+const { getLoadedOpenRouterModelCapabilitiesMock, loadOpenRouterModelCapabilitiesMock } =
+  vi.hoisted(() => ({
+    getLoadedOpenRouterModelCapabilitiesMock: vi.fn(),
     loadOpenRouterModelCapabilitiesMock: vi.fn(async () => {}),
-  }),
-);
+  }));
 
 vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/provider-stream-family")>();
   return {
     ...actual,
-    getOpenRouterModelCapabilities: getOpenRouterModelCapabilitiesMock,
+    getLoadedOpenRouterModelCapabilities: getLoadedOpenRouterModelCapabilitiesMock,
     loadOpenRouterModelCapabilities: loadOpenRouterModelCapabilitiesMock,
   };
 });
@@ -36,6 +36,26 @@ import {
   isOpenRouterProxyReasoningUnsupportedModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
+
+function runtimeModel(id: string, overrides: Partial<Parameters<StreamFn>[0]> = {}) {
+  return {
+    provider: "openrouter",
+    id,
+    name: id,
+    api: "openai-completions",
+    baseUrl: "https://openrouter.ai/api/v1",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+    ...overrides,
+  };
+}
+
+function providerConfig<T>(openrouter: T) {
+  return { models: { providers: { openrouter } } };
+}
 
 function createOpenRouterDoneStreamWithoutGeneration() {
   const stream = createAssistantMessageEventStream();
@@ -57,7 +77,7 @@ function createOpenRouterDoneStreamWithoutGeneration() {
   return stream;
 }
 
-async function captureOpenRouterWrappedPayload(params: {
+async function capturePayload(params: {
   modelId: string;
   thinkingLevel: string;
   payload: Record<string, unknown>;
@@ -66,17 +86,13 @@ async function captureOpenRouterWrappedPayload(params: {
 }) {
   const provider = await registerSingleProviderPlugin(openrouterPlugin);
   let capturedPayload: Record<string, unknown> | undefined;
-  const baseStreamFn = vi.fn(
-    (
-      ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
-    ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
-      void args[2]?.onPayload?.(params.payload, args[0]);
-      if (!params.forwardPayload) {
-        capturedPayload = params.payload;
-      }
-      return { async *[Symbol.asyncIterator]() {} } as never;
-    },
-  );
+  const baseStreamFn = vi.fn((...args: Parameters<StreamFn>): ReturnType<StreamFn> => {
+    void args[2]?.onPayload?.(params.payload, args[0]);
+    if (!params.forwardPayload) {
+      capturedPayload = params.payload;
+    }
+    return { async *[Symbol.asyncIterator]() {} } as never;
+  });
   const wrapped = provider.wrapStreamFn?.({
     provider: "openrouter",
     modelId: params.modelId,
@@ -253,8 +269,14 @@ describe("openrouter provider hooks", () => {
     expect(buildOpenrouterProvider().models?.map((model) => model.id)).not.toContain("auto");
   });
 
+  let provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
+  beforeEach(async () => {
+    getLoadedOpenRouterModelCapabilitiesMock.mockReset();
+    loadOpenRouterModelCapabilitiesMock.mockClear();
+    provider = await registerSingleProviderPlugin(openrouterPlugin);
+  });
+
   it("forwards configured proxy destination and request policy into authenticated catalog discovery", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const configuredProvider = {
       apiKey: "synthetic-private-proxy-key",
       baseUrl: "https://private.example.invalid/router/v1///",
@@ -267,7 +289,7 @@ describe("openrouter provider hooks", () => {
 
     try {
       await provider.catalog?.run({
-        config: { models: { providers: { openrouter: configuredProvider } } },
+        config: providerConfig(configuredProvider),
         resolveProviderApiKey: () => ({
           apiKey: "OPENROUTER_API_KEY",
           discoveryApiKey: "synthetic-private-proxy-key",
@@ -286,7 +308,6 @@ describe("openrouter provider hooks", () => {
   });
 
   it("keeps dynamic proxy models on their configured credential destination", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const model = provider.resolveDynamicModel?.({
       provider: "openrouter",
       modelId: "private/unknown-model",
@@ -298,51 +319,25 @@ describe("openrouter provider hooks", () => {
   });
 
   it("resolves dynamic proxy destinations from canonical provider config when runtime config is absent", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const model = provider.resolveDynamicModel?.({
       provider: "openrouter",
       modelId: "private/unknown-model",
       modelRegistry: { find: vi.fn(() => null) },
-      config: {
-        models: {
-          providers: {
-            openrouter: { baseUrl: "https://private.example.invalid/router/v1/", models: [] },
-          },
-        },
-      },
+      config: providerConfig({ baseUrl: "https://private.example.invalid/router/v1/", models: [] }),
     } as never);
 
     expect(model?.baseUrl).toBe("https://private.example.invalid/router/v1");
   });
 
-  it("preserves the canonical official destination for dynamically resolved default models", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const model = provider.resolveDynamicModel?.({
-      provider: "openrouter",
-      modelId: "openrouter/auto",
-      modelRegistry: { find: vi.fn(() => null) },
-      providerConfig: { baseUrl: "https://openrouter.ai/v1///" },
-    } as never);
-
-    expect(model?.baseUrl).toBe("https://openrouter.ai/api/v1");
-  });
-
   it("forwards configured proxy destination and headers to both usage requests", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const fetchFn = vi.fn<typeof fetch>(async () => Response.json({ data: { usage: 1 } }));
 
     await provider.fetchUsageSnapshot?.({
-      config: {
-        models: {
-          providers: {
-            openrouter: {
-              baseUrl: "https://private.example.invalid/router/v1///",
-              request: { headers: { "X-Private-Proxy-Tenant": "synthetic-tenant" } },
-              models: [],
-            },
-          },
-        },
-      },
+      config: providerConfig({
+        baseUrl: "https://private.example.invalid/router/v1///",
+        request: { headers: { "X-Private-Proxy-Tenant": "synthetic-tenant" } },
+        models: [],
+      }),
       env: {},
       provider: "openrouter",
       token: "synthetic-private-proxy-key",
@@ -360,19 +355,12 @@ describe("openrouter provider hooks", () => {
   });
 
   it("does not start authenticated catalog discovery when no credential exists", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const catalogSpy = vi.spyOn(openRouterCatalog, "buildOpenrouterLiveProvider");
 
     try {
       await expect(
         provider.catalog?.run({
-          config: {
-            models: {
-              providers: {
-                openrouter: { baseUrl: "https://private.example.invalid/v1", models: [] },
-              },
-            },
-          },
+          config: providerConfig({ baseUrl: "https://private.example.invalid/v1", models: [] }),
           resolveProviderApiKey: () => ({}),
         } as never),
       ).resolves.toBeNull();
@@ -383,18 +371,19 @@ describe("openrouter provider hooks", () => {
   });
 
   it("normalizes OpenRouter API ids before capability loading and lookup", async () => {
-    getOpenRouterModelCapabilitiesMock.mockReset();
+    getLoadedOpenRouterModelCapabilitiesMock.mockReset();
     loadOpenRouterModelCapabilitiesMock.mockClear();
-    getOpenRouterModelCapabilitiesMock.mockReturnValue({
+    getLoadedOpenRouterModelCapabilitiesMock.mockReturnValue({
       name: "Claude Sonnet 4.6",
       reasoning: true,
+      compat: { supportedReasoningEfforts: ["high", "low"] },
+      thinkingLevelMap: { off: null },
       input: ["text", "image"],
       supportsTools: true,
       cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200_000,
       maxTokens: 64_000,
     });
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const modelId = "openrouter/anthropic/claude-sonnet-4.6";
     const context = {
       provider: "openrouter",
@@ -406,22 +395,43 @@ describe("openrouter provider hooks", () => {
     const model = provider.resolveDynamicModel?.(context);
 
     expect(loadOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6");
-    expect(getOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("anthropic/claude-sonnet-4.6");
+    expect(getLoadedOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith(
+      "anthropic/claude-sonnet-4.6",
+    );
     expect(model).toMatchObject({
       id: modelId,
       name: "Claude Sonnet 4.6",
       reasoning: true,
       input: ["text", "image"],
-      compat: { supportsTools: true },
+      compat: { supportsTools: true, supportedReasoningEfforts: ["high", "low"] },
+      thinkingLevelMap: { off: null },
       contextWindow: 200_000,
       maxTokens: 64_000,
     });
   });
 
+  it.each(["typesafe/jev-1.13", "typesafe/jev-1.14", "openrouter/~typesafe/jev-latest"])(
+    "keeps %s out of dynamic chat resolution",
+    async (modelId) => {
+      getLoadedOpenRouterModelCapabilitiesMock.mockClear();
+      loadOpenRouterModelCapabilitiesMock.mockClear();
+      const jevProvider = await registerSingleProviderPlugin(openrouterPlugin);
+      const context = {
+        provider: "openrouter",
+        modelId,
+        modelRegistry: { find: vi.fn(() => null) },
+      } as never;
+
+      await jevProvider.prepareDynamicModel?.(context);
+      expect(jevProvider.resolveDynamicModel?.(context)).toBeUndefined();
+      expect(loadOpenRouterModelCapabilitiesMock).not.toHaveBeenCalled();
+      expect(getLoadedOpenRouterModelCapabilitiesMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps native OpenRouter namespace ids for capability lookup", async () => {
-    getOpenRouterModelCapabilitiesMock.mockReset();
+    getLoadedOpenRouterModelCapabilitiesMock.mockReset();
     loadOpenRouterModelCapabilitiesMock.mockClear();
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const context = {
       provider: "openrouter",
       modelId: "openrouter/auto",
@@ -432,239 +442,7 @@ describe("openrouter provider hooks", () => {
     provider.resolveDynamicModel?.(context);
 
     expect(loadOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("openrouter/auto");
-    expect(getOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("openrouter/auto");
-  });
-
-  it("describes configured Fusion analysis models in the system prompt", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const contribution = provider.resolveSystemPromptContribution?.({
-      provider: "openrouter",
-      modelId: "openrouter/fusion",
-      promptMode: "full",
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/openrouter/fusion": {
-                params: {
-                  extraBody: {
-                    plugins: [
-                      {
-                        id: "fusion",
-                        analysis_models: [
-                          "google/gemini-3.5-flash",
-                          "moonshotai/kimi-k2.6",
-                          "deepseek/deepseek-v4-pro",
-                        ],
-                        model: "google/gemini-3.5-flash",
-                      },
-                    ],
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    } as never);
-
-    expect(contribution?.dynamicSuffix).toContain("OpenRouter Fusion Configuration");
-    expect(contribution?.dynamicSuffix).toContain(
-      "Analysis models: google/gemini-3.5-flash, moonshotai/kimi-k2.6, deepseek/deepseek-v4-pro.",
-    );
-    expect(contribution?.dynamicSuffix).toContain("Final Fusion model: google/gemini-3.5-flash.");
-  });
-
-  it("keeps bounded Fusion model IDs on valid UTF-16 boundaries", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const boundaryModelId = `${"a".repeat(255)}😀tail`;
-    const contribution = provider.resolveSystemPromptContribution?.({
-      provider: "openrouter",
-      modelId: "openrouter/fusion",
-      promptMode: "full",
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/fusion": {
-                params: {
-                  extraBody: {
-                    plugins: [
-                      {
-                        id: "fusion",
-                        analysis_models: [boundaryModelId],
-                        model: boundaryModelId,
-                      },
-                    ],
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    } as never);
-
-    expect(contribution?.dynamicSuffix).toContain(`Analysis models: ${"a".repeat(255)}.`);
-    expect(contribution?.dynamicSuffix).toContain(`Final Fusion model: ${"a".repeat(255)}.`);
-  });
-
-  it("describes Fusion config from the canonical OpenRouter model key", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const contribution = provider.resolveSystemPromptContribution?.({
-      provider: "openrouter",
-      modelId: "openrouter/fusion",
-      promptMode: "full",
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/fusion": {
-                params: {
-                  extraBody: {
-                    plugins: [
-                      {
-                        id: "fusion",
-                        analysis_models: ["deepseek/deepseek-v4-pro"],
-                      },
-                    ],
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    } as never);
-
-    expect(contribution?.dynamicSuffix).toContain("Analysis models: deepseek/deepseek-v4-pro.");
-  });
-
-  it("matches transport alias precedence for Fusion extra body", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const contribution = provider.resolveSystemPromptContribution?.({
-      provider: "openrouter",
-      modelId: "openrouter/fusion",
-      promptMode: "full",
-      config: {
-        agents: {
-          defaults: {
-            params: {
-              extra_body: {
-                plugins: [
-                  {
-                    id: "fusion",
-                    analysis_models: ["google/gemini-3.5-flash"],
-                  },
-                ],
-              },
-            },
-            models: {
-              "openrouter/fusion": {
-                params: {
-                  extraBody: {
-                    plugins: [
-                      {
-                        id: "fusion",
-                        analysis_models: ["deepseek/deepseek-v4-pro"],
-                      },
-                    ],
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    } as never);
-
-    expect(contribution?.dynamicSuffix).toContain("Analysis models: google/gemini-3.5-flash.");
-    expect(contribution?.dynamicSuffix).not.toContain("deepseek/deepseek-v4-pro");
-  });
-
-  it("reads per-agent Fusion config from the canonical agent roster", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const contribution = provider.resolveSystemPromptContribution?.({
-      provider: "openrouter",
-      modelId: "openrouter/fusion",
-      promptMode: "full",
-      agentId: "reviewer",
-      config: {
-        agents: {
-          entries: {
-            reviewer: {
-              params: {
-                extraBody: {
-                  plugins: [{ id: "fusion", analysis_models: ["deepseek/deepseek-v4-pro"] }],
-                },
-              },
-            },
-          },
-        },
-      },
-    } as never);
-
-    expect(contribution?.dynamicSuffix).toContain("Analysis models: deepseek/deepseek-v4-pro.");
-  });
-
-  it("keeps arbitrary OpenRouter extraBody fields out of the system prompt", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const contribution = provider.resolveSystemPromptContribution?.({
-      provider: "openrouter",
-      modelId: "openrouter/fusion",
-      promptMode: "full",
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/openrouter/fusion": {
-                params: {
-                  extraBody: {
-                    metadata: { private: "do-not-render" },
-                    plugins: [{ id: "not-fusion", model: "private-model" }],
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    } as never);
-
-    expect(contribution).toBeUndefined();
-  });
-
-  it("does not describe disabled Fusion plugin config in the system prompt", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const contribution = provider.resolveSystemPromptContribution?.({
-      provider: "openrouter",
-      modelId: "openrouter/fusion",
-      promptMode: "full",
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/fusion": {
-                params: {
-                  extraBody: {
-                    plugins: [
-                      {
-                        id: "fusion",
-                        enabled: false,
-                        analysis_models: ["deepseek/deepseek-v4-pro"],
-                        model: "google/gemini-3.5-flash",
-                      },
-                    ],
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    } as never);
-
-    expect(contribution).toBeUndefined();
+    expect(getLoadedOpenRouterModelCapabilitiesMock).toHaveBeenCalledWith("openrouter/auto");
   });
 
   it("does not include retired stealth models in the bundled catalog", () => {
@@ -707,7 +485,6 @@ describe("openrouter provider hooks", () => {
       ["nested openrouter/mistralai", "openrouter/mistralai/mistral-small"],
       ["bare mistral provider prefix", "mistral/mistral-medium"],
     ])("applies strict9 sanitisation for %s", async (_label, modelId) => {
-      const provider = await registerSingleProviderPlugin(openrouterPlugin);
       const policy = provider.buildReplayPolicy?.({
         provider: "openrouter",
         modelApi: "openai-completions",
@@ -724,7 +501,6 @@ describe("openrouter provider hooks", () => {
       ["Anthropic", "anthropic/claude-sonnet-4-6"],
       ["DeepSeek", "deepseek/deepseek-v4-flash"],
     ])("keeps passthrough policy for %s (no strict9)", async (_label, modelId) => {
-      const provider = await registerSingleProviderPlugin(openrouterPlugin);
       const policy = provider.buildReplayPolicy?.({
         provider: "openrouter",
         modelApi: "openai-completions",
@@ -736,7 +512,6 @@ describe("openrouter provider hooks", () => {
     });
 
     it("preserves Gemini thought-signature sanitisation alongside strict9 logic", async () => {
-      const provider = await registerSingleProviderPlugin(openrouterPlugin);
       const geminiPolicy = provider.buildReplayPolicy?.({
         provider: "openrouter",
         modelApi: "openai-completions",
@@ -748,8 +523,6 @@ describe("openrouter provider hooks", () => {
   });
 
   it("owns native reasoning output mode", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-
     expect(
       provider.resolveReasoningOutputMode?.({
         provider: "openrouter",
@@ -759,39 +532,20 @@ describe("openrouter provider hooks", () => {
     ).toBe("native");
   });
 
-  it("advertises xhigh thinking for OpenRouter-routed DeepSeek V4 models", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const expectedV4Levels = ["off", "minimal", "low", "medium", "high", "xhigh"];
-
-    expect(
-      provider
-        .resolveThinkingProfile?.({
-          provider: "openrouter",
-          modelId: "deepseek/deepseek-v4-pro",
-        } as never)
-        ?.levels.map((level) => level.id),
-    ).toEqual(expectedV4Levels);
-    expect(
-      provider.resolveThinkingProfile?.({
-        provider: "openrouter",
-        modelId: "openrouter/deepseek/deepseek-v4-flash",
-      } as never)?.defaultLevel,
-    ).toBe("high");
-    expect(
-      provider.resolveThinkingProfile?.({
-        provider: "openrouter",
-        modelId: "openai/gpt-5.4",
-      } as never),
-    ).toBe(undefined);
-  });
-
   it("exposes DeepSeek V4 thinking levels through the lightweight policy artifact", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "openrouter",
-        modelId: "openrouter/deepseek/deepseek-v4-pro",
-      })?.levels.map((level) => level.id),
-    ).toContain("xhigh");
+    const profile = resolveThinkingProfile({
+      provider: "openrouter",
+      modelId: "openrouter/deepseek/deepseek-v4-pro",
+    });
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(profile?.defaultLevel).toBe("high");
     expect(
       resolveThinkingProfile({
         provider: "openrouter",
@@ -801,8 +555,6 @@ describe("openrouter provider hooks", () => {
   });
 
   it("canonicalizes stale OpenRouter /v1 config and runtime metadata", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-
     const normalizedConfig = provider.normalizeConfig?.({
       provider: "openrouter",
       providerConfig: {
@@ -815,72 +567,39 @@ describe("openrouter provider hooks", () => {
 
     const normalizedGptModel = provider.normalizeResolvedModel?.({
       provider: "openrouter",
-      model: {
-        provider: "openrouter",
-        id: "openai/gpt-5.4",
-        name: "openai/gpt-5.4",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 8192,
-      },
+      model: runtimeModel("openai/gpt-5.4", { baseUrl: "https://openrouter.ai/v1" }),
     } as never);
     expect(normalizedGptModel?.baseUrl).toBe("https://openrouter.ai/api/v1");
 
     const normalizedHunterModel = provider.normalizeResolvedModel?.({
       provider: "openrouter",
-      model: {
-        provider: "openrouter",
-        id: "openrouter/hunter-alpha",
+      model: runtimeModel("openrouter/hunter-alpha", {
         name: "Hunter Alpha",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: true,
         input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1_048_576,
         maxTokens: 65_536,
-      },
+      }),
     } as never);
     expect(normalizedHunterModel?.reasoning).toBe(false);
     expect(normalizedHunterModel?.id).toBe("openrouter/hunter-alpha");
 
     const normalizedAnthropicModel = provider.normalizeResolvedModel?.({
       provider: "openrouter",
-      model: {
-        provider: "openrouter",
-        id: "openrouter/anthropic/claude-sonnet-4.6",
+      model: runtimeModel("openrouter/anthropic/claude-sonnet-4.6", {
         name: "anthropic/claude-sonnet-4.6",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 8192,
-      },
+      }),
     } as never);
     expect(normalizedAnthropicModel?.id).toBe("anthropic/claude-sonnet-4.6");
 
+    const autoModel = runtimeModel("openrouter/auto", {
+      name: "OpenRouter Auto",
+      reasoning: false,
+    });
     expect(
       provider.normalizeResolvedModel?.({
         provider: "openrouter",
         modelId: "openrouter/auto",
-        model: {
-          provider: "openrouter",
-          id: "openrouter/auto",
-          name: "OpenRouter Auto",
-          api: "openai-completions",
-          baseUrl: "https://openrouter.ai/api/v1",
-          reasoning: false,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 200_000,
-          maxTokens: 8192,
-        },
+        model: autoModel,
       } as never),
     ).toBeUndefined();
 
@@ -888,16 +607,8 @@ describe("openrouter provider hooks", () => {
       provider: "openrouter",
       modelId: "openrouter/openrouter/auto",
       model: {
-        provider: "openrouter",
+        ...autoModel,
         id: "openrouter/openrouter/auto",
-        name: "OpenRouter Auto",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: false,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 8192,
       },
     } as never);
     expect(normalizedDuplicatedAutoModel?.id).toBe("openrouter/auto");
@@ -915,18 +626,13 @@ describe("openrouter provider hooks", () => {
   });
 
   it("injects provider routing into compat before applying stream wrappers", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
     let capturedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn = vi.fn(
-      (
-        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
-      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
-        const payload: Record<string, unknown> = {};
-        void args[2]?.onPayload?.(payload, args[0]);
-        capturedPayload = payload;
-        return { async *[Symbol.asyncIterator]() {} } as never;
-      },
-    );
+    const baseStreamFn = vi.fn((...args: Parameters<StreamFn>): ReturnType<StreamFn> => {
+      const payload: Record<string, unknown> = {};
+      void args[2]?.onPayload?.(payload, args[0]);
+      capturedPayload = payload;
+      return { async *[Symbol.asyncIterator]() {} } as never;
+    });
 
     const wrapped = provider.wrapStreamFn?.({
       provider: "openrouter",
@@ -962,7 +668,6 @@ describe("openrouter provider hooks", () => {
   });
 
   it("forwards resolved API keys as explicit OpenRouter auth headers", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const baseStreamFn = vi.fn((..._args: unknown[]) =>
       createOpenRouterDoneStreamWithoutGeneration(),
     );
@@ -993,12 +698,9 @@ describe("openrouter provider hooks", () => {
     const options = baseStreamFn.mock.calls[0]?.[2] as { headers?: HeadersInit } | undefined;
     const headers = new Headers(options?.headers);
     expect(headers.get("authorization")).toBe("Bearer or-test-key");
-    expect(headers.get("http-referer")).toBe("https://openclaw.ai");
-    expect(headers.get("x-openrouter-title")).toBe("OpenClaw");
   });
 
   it("merges resolved OpenRouter model params into transport params", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const patch = provider.extraParamsForTransport?.({
       config: {
         models: {
@@ -1049,7 +751,7 @@ describe("openrouter provider hooks", () => {
   });
 
   it("does not inject OpenRouter reasoning for Hunter Alpha", async () => {
-    const capturedPayload = await captureOpenRouterWrappedPayload({
+    const capturedPayload = await capturePayload({
       modelId: "openrouter/hunter-alpha",
       thinkingLevel: "high",
       payload: {},
@@ -1059,7 +761,7 @@ describe("openrouter provider hooks", () => {
   });
 
   it("uses OpenRouter reasoning for DeepSeek V4 replay turns", async () => {
-    const capturedPayload = await captureOpenRouterWrappedPayload({
+    const capturedPayload = await capturePayload({
       modelId: "deepseek/deepseek-v4-flash",
       thinkingLevel: "xhigh",
       baseUrl: "https://openrouter.ai/api/v1",
@@ -1087,7 +789,6 @@ describe("openrouter provider hooks", () => {
   });
 
   it("clamps OpenRouter DeepSeek V4 reasoning.effort to supported OpenRouter values", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn = vi.fn(
       (
@@ -1135,7 +836,7 @@ describe("openrouter provider hooks", () => {
   });
 
   it("strips disabled OpenRouter DeepSeek V4 reasoning replay fields", async () => {
-    const capturedPayload = await captureOpenRouterWrappedPayload({
+    const capturedPayload = await capturePayload({
       modelId: "openrouter/deepseek/deepseek-v4-pro",
       thinkingLevel: "off",
       baseUrl: "https://openrouter.ai/api/v1",
@@ -1144,77 +845,32 @@ describe("openrouter provider hooks", () => {
         messages: [{ role: "assistant", content: "done", reasoning_content: "" }],
       },
     });
-    expect(capturedPayload).not.toHaveProperty("reasoning");
+    expect(capturedPayload?.reasoning).toEqual({ effort: "none" });
     expect(capturedPayload).not.toHaveProperty("thinking");
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");
     expect(capturedPayload?.messages).toEqual([{ role: "assistant", content: "done" }]);
   });
 
   it("recognizes full OpenRouter DeepSeek V4 refs but skips custom proxy routes", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn = vi.fn(
-      (
-        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
-      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
-        const payload = {
-          messages: [{ role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] }],
-        };
-        void args[2]?.onPayload?.(payload, args[0]);
-        payloads.push(payload);
-        return { async *[Symbol.asyncIterator]() {} } as never;
-      },
-    );
-
-    const fullRef = provider.wrapStreamFn?.({
-      provider: "openrouter",
+    const messages = [{ role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] }];
+    const fullRef = await capturePayload({
       modelId: "openrouter/deepseek/deepseek-v4-pro",
-      streamFn: baseStreamFn,
       thinkingLevel: "high",
-    } as never);
-    void fullRef?.(
-      {
-        provider: "openrouter",
-        api: "openai-completions",
-        id: "openrouter/deepseek/deepseek-v4-pro",
-        baseUrl: "https://openrouter.ai/api/v1",
-        compat: {},
-      } as never,
-      { messages: [] } as never,
-      {},
-    );
-
-    const customRoute = provider.wrapStreamFn?.({
-      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      payload: { messages: structuredClone(messages) },
+    });
+    const customRoute = await capturePayload({
       modelId: "deepseek/deepseek-v4-pro",
-      streamFn: baseStreamFn,
       thinkingLevel: "high",
-    } as never);
-    void customRoute?.(
-      {
-        provider: "openrouter",
-        api: "openai-completions",
-        id: "deepseek/deepseek-v4-pro",
-        baseUrl: "https://proxy.example.com/v1",
-        compat: {},
-      } as never,
-      { messages: [] } as never,
-      {},
-    );
-
-    expect(payloads[0]?.messages).toEqual([
-      {
-        role: "assistant",
-        tool_calls: [{ id: "call_1", type: "function" }],
-      },
-    ]);
-    expect(payloads[1]?.messages).toEqual([
-      { role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] },
-    ]);
+      baseUrl: "https://proxy.example.com/v1",
+      payload: { messages: structuredClone(messages) },
+    });
+    expect(fullRef?.messages).toEqual(messages);
+    expect(customRoute?.messages).toEqual(messages);
   });
 
   it("strips OpenRouter-routed Anthropic assistant prefill when reasoning is enabled", async () => {
-    const capturedPayload = await captureOpenRouterWrappedPayload({
+    const capturedPayload = await capturePayload({
       modelId: "anthropic/claude-opus-4.6",
       thinkingLevel: "high",
       baseUrl: "https://openrouter.ai/api/v1",
@@ -1237,7 +893,7 @@ describe("openrouter provider hooks", () => {
         content: [{ type: "tool_use", id: "toolu_1", name: "lookup", input: {} }],
       },
     ];
-    const capturedPayload = await captureOpenRouterWrappedPayload({
+    const capturedPayload = await capturePayload({
       modelId: "anthropic/claude-opus-4.6",
       thinkingLevel: "high",
       baseUrl: "https://openrouter.ai/api/v1",
@@ -1248,7 +904,6 @@ describe("openrouter provider hooks", () => {
   });
 
   it("keeps OpenRouter Anthropic prefill when reasoning is disabled or the route is custom", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn = vi.fn(
       (
@@ -1309,4 +964,3 @@ describe("openrouter provider hooks", () => {
     expect(payloads[1]?.reasoning).toEqual({ effort: "high" });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

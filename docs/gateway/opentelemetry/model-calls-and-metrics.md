@@ -29,6 +29,24 @@ request latency separate from full-turn latency. OpenClaw's OTEL model-call
 metrics also include `openclaw.model_call.observation_unit`; the Prometheus
 model-call metrics expose the equivalent `observation_unit` label.
 
+Request-level telemetry also covers native background completions, including
+session titles, Activity recaps, and plugin `runtime.llm.complete` calls.
+Each request records a start and one completion or error with its duration;
+token and cost accounting remains separate in `model.usage`.
+
+Codex app-server turns also emit one `model.response.observed` diagnostic for
+each distinct provider response received during the turn. OpenTelemetry records
+it as an `openclaw.model.response.observed` event on the turn's model-call span,
+with a hashed response identifier and token fields reported by the native
+runtime (`usage_source = native-normalized`, `usage_scope = response`).
+Its timestamp records receipt by OpenClaw, not provider completion. Missing
+usage stays absent, including cache-write counts or totals omitted by the native
+runtime. Uncached input is derived only when every cache component was reported;
+prompt tokens use the native input count. No request duration or tool-to-response relationship is
+inferred. These events do not add token or duration metrics. Aggregate accounting
+continues to use `model.usage`; dropped diagnostic events or missing provider
+usage can leave the response observations incomplete.
+
 ## Claude Code CLI model-call fidelity
 
 Claude Code CLI turns emit one synthetic, turn-level `openclaw.model.call`
@@ -116,8 +134,9 @@ malformed request frames, and HTTP routes.
 | `openclaw.gateway.rpc.queue_wait_ms`     | histogram | Operator start-queue or worker frame-queue wait, when applicable  |
 | `openclaw.gateway.rpc.outcomes`          | counter   | Observations by phase and outcome                                 |
 
-Request and timing metrics have only `openclaw.gateway.rpc.method`: a canonical
-core or worker method name, `other` for plugin methods, or `unknown`. Outcome metrics have
+Request and timing metrics have only `openclaw.gateway.rpc.method`: an exact
+core, worker, or registered plugin method name, `other` for unregistered generic
+requests, or `unknown` for unrecognized dedicated worker RPCs. Outcome metrics have
 only `openclaw.gateway.rpc.phase` and `openclaw.gateway.rpc.outcome`, so errors do
 not multiply every method's series. No request, connection, session, or trace IDs
 appear in metric attributes.
@@ -148,6 +167,88 @@ CPU time or event-loop blocking time.
 Observations use the bounded diagnostic queue. Check
 `openclaw.diagnostic.async_queue.dropped` before treating counts or latency
 distributions as complete during saturation.
+
+### Session-list retention
+
+Session-list retention also exports three gauges with no attributes:
+`openclaw.sessions.list.retained_views`, `openclaw.sessions.list.retained_refs`,
+and `openclaw.sessions.list.retained_bytes`. They report process-wide totals
+across live projections. Counters update when views are inserted, changed, evicted,
+or retired; gauge reports coalesce to the final values once per event-loop turn.
+References include row/history references and cached selection/partition
+entries. Bytes estimate eight bytes per row reference, 48 per selection entry,
+1 KiB per view, UTF-16 query keys, and small array/partition overhead. Shared row
+objects and encodings are excluded; this is a retention budget estimate, not V8
+heap attribution. Each projection retains at most 512 slots and 32 MiB estimated
+bytes, and disposal clears its contribution. Prometheus exposes these names
+with underscores in place of dots.
+
+### Gateway WebSocket events
+
+| Metric                                     | Type    | Measurement                                                    |
+| ------------------------------------------ | ------- | -------------------------------------------------------------- |
+| `openclaw.gateway.ws.events`               | counter | Outbound event frames accepted by the sender, once per socket  |
+| `openclaw.gateway.ws.event_bytes`          | counter | Encoded UTF-8 bytes of those full JSON frames, once per socket |
+| `openclaw.gateway.ws.event_wire_bytes`     | counter | Post-codec payload bytes handed to each socket                 |
+| `openclaw.gateway.ws.event_frame_bytes`    | counter | Cumulative accepted raw frame counts by byte-size upper bound  |
+| `openclaw.gateway.ws.operator_connections` | gauge   | Connected authenticated operator sockets                       |
+
+The traffic counters have `openclaw.gateway.ws.event`: a known protocol event name,
+or `other` for an unrecognized name. The connection gauge has no attributes; it
+updates on connect/disconnect and refreshes every 30 seconds to recover dropped
+snapshots or initialize late-starting exporters.
+Event observations are batched by event name within one event-loop turn; fan-out
+still counts each socket separately. Raw bytes exclude framing and compression;
+wire bytes use the deflated payload length when compressed and raw length
+otherwise. Wire bytes exclude WebSocket, TLS, and TCP headers. Compression
+completion can follow raw-frame acceptance; direct local delivery contributes
+its raw payload size. Observations without a wire size do not fabricate a
+wire-byte measurement. Send acceptance does not prove client receipt. No event payload,
+session, user, or connection identifiers are exported. These metrics use the
+same bounded diagnostic queue as Gateway RPC observations; check
+`openclaw.diagnostic.async_queue.dropped` when interpreting traffic totals.
+
+`openclaw.gateway.ws.event_frame_bytes` has unit `1` and also carries `le`, with
+byte-size upper bounds `256`, `512`, `1024`, `2048`, `4096`, `8192`, `16384`,
+`65536`, and `+Inf`. Counts are cumulative across upper bounds, with each accepted
+raw frame counted in every matching bucket. These bounded counters support
+p50/p90 frame-size estimates; they are not individual byte observations.
+
+`openclaw.gateway.ws.presence_frames` (counter, unit `1`) and
+`openclaw.gateway.ws.presence_bytes` (counter, unit `By`) split presence traffic
+by `openclaw.gateway.ws.mode`: `delta`, `reset` (full snapshots for capable
+clients), or `legacy` (full frames without delta negotiation). They count the
+same accepted per-socket frames and encoded bytes as the aggregate counters.
+
+`openclaw.gateway.ws.session_event_frames` (counter, unit `1`) and
+`openclaw.gateway.ws.session_event_bytes` (counter, unit `By`) attribute the same
+session event traffic. Their attributes are `openclaw.gateway.ws.event`,
+`openclaw.gateway.ws.reason`, and `openclaw.gateway.ws.delivery`, with the value
+sets below (shown without the attribute prefix).
+
+The session counters use `event`, `reason`, and `delivery`. `event` is only
+`sessions.changed` or `session.message`. For `sessions.changed`, `reason` is the
+producer's reason (or lifecycle phase when no reason is present):
+`abort`, `activity-summary`, `agent.input.settled`, `agent.run.started`,
+`archive`, `board`, `branch-switch`, `chat.dispatch-error`, `chat.title`,
+`cleanup`, `compact`, `create`, `cron-continuation`, `delete`, `dispatch`,
+`fork`, `github-publication`, `goal`, `groups`, `involvement`, `move`, `new`,
+`owner`, `participants`, `patch`, `placement`, `plugin-patch`, `progress-card-reset`,
+`project`, `reclaim`, `recovery`, `reset`, `rewind`, `run-capacity`, `send`,
+`sharing`, `steer`, `subagent-status`, `swarm-note`, `title`, `unarchive`,
+`update`, `updated`, `worker-disk-space`, and `worker-runtime-install`.
+Lifecycle phases are `start`, `model`, `end`, `error`, and `message`.
+For `session.message`, `reason` is the message role: `user`, `assistant`, `system`,
+`developer`, `tool`, or `toolResult`; an absent role uses `message`.
+Unknown reasons, phases, and roles use `other`.
+`delivery="subscribed"` means the recipient holds an exact
+`sessions.messages.subscribe` subscription for that session, including its
+producer-resolved alias; all other recipients use `delivery="roster"`.
+This describes subscription membership, not whether a tab is visible or a peer
+acknowledged receipt. Keyless roster invalidations use `roster`.
+The counters reuse the existing encoded byte length without serializing again,
+and batch by label set within the same event-loop turn. No message content,
+IDs, or session keys enter the labels. Existing event counter labels stay unchanged.
 
 ### Model usage
 
@@ -275,6 +376,10 @@ see [Prometheus event-loop windows](/gateway/prometheus#event-loop-observation-w
 - `openclaw.tool.execution.duration_ms` (histogram, attrs: `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.tool.source`, `openclaw.tool.owner`, `openclaw.tool.params.kind`, plus `openclaw.errorCategory` on errors)
 - `openclaw.tool.execution.blocked` (counter, attrs: `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.tool.source`, `openclaw.tool.owner`, `openclaw.tool.params.kind`, `openclaw.deniedReason`)
 - `openclaw.tool.loop` (counter, attrs: `openclaw.toolName`, `openclaw.loop.level`, `openclaw.loop.action`, `openclaw.loop.detector`, `openclaw.loop.count`, optional `openclaw.loop.paired_tool`; emitted when a repetitive tool-call loop is detected)
+
+Exact string and array parameter lengths are recorded on tool spans, not metric
+labels. This keeps cumulative tool metrics from retaining a separate series for
+every observed length.
 
 ### Exec
 

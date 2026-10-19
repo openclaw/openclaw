@@ -1,11 +1,12 @@
-import { vi } from "vitest";
+import assert from "node:assert/strict";
+import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { createHookRunner } from "../plugins/hooks.js";
 import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { activeSessions } from "../transcripts/capture-startup.js";
 import type {
   TranscriptOccupancyWatchRequest,
   TranscriptSourceProvider,
@@ -13,6 +14,10 @@ import type {
 } from "../transcripts/provider-types.js";
 import type { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import type { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
+import {
+  installGatewayStartupModuleMocks,
+  installGatewaySubagentModuleLoad,
+} from "./server-startup-module-mocks.test-support.js";
 import { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
 
 export async function startTranscriptReloadFixtureSidecars(
@@ -29,61 +34,31 @@ export async function startTranscriptReloadFixtureSidecars(
 ) {
   const { runtime } = fixture;
   const startupWork = new AsyncWorkScope();
+  const startupModuleRestorers: Array<() => void> = [];
   const sidecars = runtime.runtimeState.gatewayLifetimeSidecars;
   cleanups.push(async () => {
-    startupWork.beginClose();
-    await sidecars.stop().catch(() => {});
-    await startupWork.drain();
+    try {
+      startupWork.beginClose();
+      await sidecars.stop().catch(() => {});
+      await runtime.runtimeState.postReadySidecars.stop().catch(() => {});
+      await startupWork.drain();
+    } finally {
+      for (const restore of startupModuleRestorers.toReversed()) {
+        restore();
+      }
+    }
   });
+  await installGatewaySubagentModuleLoad(
+    async () => {},
+    async () => {},
+    startupModuleRestorers,
+  );
   const config = fixture.getConfig();
   const unusedRecovery = async (): Promise<never> => {
     throw new Error("unexpected main-session recovery");
   };
-  const startup = await startGatewayPostAttachRuntime(
+  installGatewayStartupModuleMocks(
     {
-      minimalTestGateway: false,
-      cfgAtStart: config,
-      getConfig: fixture.getConfig,
-      bindHost: "127.0.0.1",
-      bindHosts: ["127.0.0.1"],
-      port: 0,
-      tlsEnabled: false,
-      log,
-      isNixMode: false,
-      broadcastToConnIds: vi.fn(),
-      getClientConnIds: () => new Set(),
-      controlUiBasePath: "/",
-      gatewayPluginConfigAtStart: config,
-      activationSourceConfig: config,
-      pluginManifestRecords: [],
-      pluginRegistry: fixture.registryOwner.registry,
-      defaultWorkspaceDir: workspaceDir,
-      deps: {},
-      startChannels: async () => {},
-      recoveryRuntime: {
-        dispatchSessionMethod: unusedRecovery,
-        dispatchAgent: unusedRecovery,
-        waitForAgent: unusedRecovery,
-        sendRecoveryNotice: unusedRecovery,
-      },
-      resolveGatewayContext: () => undefined,
-      logHooks: log,
-      logChannels: log,
-      unlockStartupMethods: () => {},
-      waitForPostReadyWork,
-      pluginRuntimeClaim: fixture.owner.currentClaim(),
-      getCurrentPluginRegistry: () => fixture.registryOwner.registry,
-      getCurrentPluginServices: () => fixture.owner.currentServices() ?? null,
-      onPostReadySidecars: runtime.runtimeState.postReadySidecars.publish,
-      onGatewayLifetimeSidecars: sidecars.publish,
-      unregisterConnectionDependentSidecar: vi.fn(),
-      trackStartupWork: (run) => {
-        const operation = Promise.resolve().then(() => run(startupWork.signal));
-        return startupWork.track(() => operation);
-      },
-    },
-    {
-      createHookRunner,
       logGatewayStartup: () => {},
       refreshLatestUpdateRestartSentinel: async () => null,
       createGatewayUpdateCheck: () => ({
@@ -95,11 +70,53 @@ export async function startTranscriptReloadFixtureSidecars(
         start: () => {},
         stop: async () => {},
       }),
-      startGatewaySidecars: async () => 0,
       warmSystemCa: async () => {},
-      loadSubagentRegistryActivation: () => () => {},
     },
+    startupModuleRestorers,
   );
+  const startup = await startGatewayPostAttachRuntime({
+    scheduler: runtime.scheduler,
+    minimalTestGateway: false,
+    cfgAtStart: config,
+    getConfig: fixture.getConfig,
+    getReadiness: () => ({ ready: true, failing: [], uptimeMs: 0 }),
+    port: 0,
+    log,
+    isNixMode: false,
+    broadcastToConnIds: vi.fn(),
+    getClientConnIds: () => new Set(),
+    gatewayPluginConfigAtStart: config,
+    activationSourceConfig: config,
+    pluginManifestRecords: [],
+    pluginRegistry: fixture.registryOwner.registry,
+    defaultWorkspaceDir: workspaceDir,
+    deps: {},
+    startChannels: async () => {},
+    mainSessionRecoveryStartupCheckedStorePaths: new Set<string>(),
+    recoveryRuntime: {
+      prepareRestartRecovery: unusedRecovery,
+      dispatchSessionMethod: unusedRecovery,
+      dispatchAgent: unusedRecovery,
+      waitForAgent: unusedRecovery,
+      sendRecoveryNotice: unusedRecovery,
+    },
+    resolveGatewayContext: () => undefined,
+    logHooks: log,
+    logChannels: log,
+    unlockStartupMethods: () => {},
+    waitForPostReadyWork,
+    isClosing: () => startupWork.isClosing,
+    getCurrentPluginRegistry: () => fixture.registryOwner.registry,
+    shouldStartPluginServices: () =>
+      fixture.owner.currentServices() === null && fixture.owner.getReloadStatus() === undefined,
+    onPostReadySidecars: runtime.runtimeState.postReadySidecars.publish,
+    onGatewayLifetimeSidecars: sidecars.publish,
+    unregisterConnectionDependentSidecar: vi.fn(),
+    trackStartupWork: (run) => {
+      const operation = Promise.resolve().then(() => run(startupWork.signal));
+      return startupWork.track(() => operation);
+    },
+  });
   cleanups.push(async () => {
     await startup.stopGatewayUpdateCheck();
   });
@@ -133,15 +150,51 @@ export function registerTranscriptFixture(api: OpenClawPluginApi, owner: "first"
     },
     stop,
   });
+  const waitForCapture = async (count: number, signal: AbortSignal) => {
+    while (captures.length < count) {
+      await racePromiseWithAbortSignal(nextCapture.promise, signal);
+    }
+  };
   return {
     watches,
     captures,
     unwatch,
     stop,
-    async waitForCapture(count: number, signal: AbortSignal) {
-      while (captures.length < count) {
-        await racePromiseWithAbortSignal(nextCapture.promise, signal);
-      }
+    waitForCapture,
+    getActiveCaptureForChannel(source: { guildId: string; channelId: string }) {
+      // Concurrent startup can deliver captures in a different order than their config entries.
+      const request = captures.find(
+        ({ session }) =>
+          session.source.guildId === source.guildId &&
+          session.source.channelId === source.channelId,
+      );
+      assert(request);
+      const capture = activeSessions.get(request.session.sessionId);
+      assert(capture);
+      expect(capture.phase).toBe("active");
+      return capture;
+    },
+    async waitForActiveCapture(count: number, signal: AbortSignal) {
+      // Gateway readiness precedes deferred capture startup and its session write.
+      await waitForCapture(count, signal);
+      await vi.waitFor(() => {
+        expect(captures).toHaveLength(count);
+        expect(activeSessions.get(captures[count - 1]!.session.sessionId)?.phase).toBe("active");
+      });
+      return captures[count - 1]!;
+    },
+  };
+}
+
+export function createTranscriptFixtures() {
+  const providers = {
+    first: [] as ReturnType<typeof registerTranscriptFixture>[],
+    sibling: [] as ReturnType<typeof registerTranscriptFixture>[],
+  };
+  return {
+    providers,
+    register: (api: OpenClawPluginApi, owner: "first" | "sibling") => {
+      providers[owner].push(registerTranscriptFixture(api, owner));
     },
   };
 }

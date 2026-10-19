@@ -1,4 +1,3 @@
-// Discord plugin module implements runtime.messaging behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -26,12 +25,12 @@ export async function handleDiscordMessagingAction(
     cfg,
     options,
   });
-  return (
+  const result =
     (await handleDiscordReactionMessagingAction(ctx)) ??
     (await handleDiscordMessageSendAction(ctx)) ??
-    (await handleDiscordMessageManagementAction(ctx)) ??
-    (() => {
-      throw new Error(`Unknown action: ${action}`);
-    })()
-  );
+    (await handleDiscordMessageManagementAction(ctx));
+  if (result == null) {
+    throw new Error(`Unknown action: ${action}`);
+  }
+  return result;
 }

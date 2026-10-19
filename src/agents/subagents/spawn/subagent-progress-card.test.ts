@@ -4,11 +4,17 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
 import { resolveEffectiveToolInventory } from "../../tools-effective-inventory.js";
 
 vi.mock("../../../infra/device-pairing.js", () => ({
   hasPairedCardRenderer: async () => true,
+}));
+
+// mock-isolation: Progress-card availability uses synthetic sessions without auth database admission.
+vi.mock("../../auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
 }));
 
 describe("subagent progress-card availability", () => {
@@ -50,11 +56,12 @@ describe("subagent progress-card availability", () => {
   });
 
   afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync(tempDir);
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it.each([parent, ...children])("exposes tools and guidance for %s", async (sessionKey) => {
-    const inventory = resolveEffectiveToolInventory({
+    const inventory = await resolveEffectiveToolInventory({
       cfg: config,
       sessionKey,
       workspaceDir: tempDir,

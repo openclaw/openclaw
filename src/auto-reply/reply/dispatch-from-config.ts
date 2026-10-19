@@ -1,4 +1,4 @@
-/** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
+import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { SessionRestartRecoveryTombstoneError } from "../../config/sessions/lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
@@ -9,7 +9,6 @@ import { chooseDispatchRoute } from "./dispatch-from-config.choose-route.js";
 import { executeDispatch } from "./dispatch-from-config.execute.js";
 import { finalizeDispatchAndAudit } from "./dispatch-from-config.finalize.js";
 import { gatherDispatchRequest } from "./dispatch-from-config.gather.js";
-import { DispatchSessionRefreshRequiredError } from "./dispatch-from-config.lifecycle.js";
 import { prepareDispatchOperationContext } from "./dispatch-from-config.prepare-context.js";
 import { prepareDispatchDelivery } from "./dispatch-from-config.prepare-delivery.js";
 import { prepareDispatchExecution } from "./dispatch-from-config.prepare-execution.js";
@@ -18,13 +17,13 @@ import type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
-import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
+import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
+import { prepareInternalGetReplyOptions } from "./get-reply.types.js";
+import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-source-binding.js";
 import { sendReplyRestartRecoveryNotice } from "./reply-turn-recovery-notice.js";
-import "./dispatch-from-config.events.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
-/** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
@@ -40,26 +39,22 @@ export async function dispatchLowLevelChannelReplyFromConfig(
 }
 
 async function dispatchReplyFromConfigWithQueuePolicy(
-  params: DispatchFromConfigParams,
+  inputParams: DispatchFromConfigParams,
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
-  const ticket = reserveReplyAdmissionTicket([
-    params.ctx.SessionKey,
-    params.ctx.CommandTargetSessionKey,
-  ]);
-  const ticketedParams = ticket
-    ? {
-        ...params,
-        replyOptions: { ...params.replyOptions, [REPLY_ADMISSION_TICKET]: ticket },
-      }
-    : params;
+  const source = prepareReplySourceInput(
+    inputParams.ctx,
+    inputParams.cfg,
+    prepareInternalGetReplyOptions(inputParams.replyOptions, inputParams.ctx),
+  );
+  const params = { ...inputParams, replyOptions: source.options };
   const messageAuditTerminal = createInboundMessageAuditTerminal(params);
   let refreshedSessionSnapshot = false;
   try {
     while (true) {
       try {
         const result = await dispatchReplyFromConfigInner(
-          ticketedParams,
+          params,
           messageAuditTerminal,
           allowActiveQueueResolution,
         );
@@ -69,6 +64,8 @@ async function dispatchReplyFromConfigWithQueuePolicy(
         if (
           error instanceof DispatchSessionRefreshRequiredError &&
           !refreshedSessionSnapshot &&
+          source.input?.retirementRequested !== true &&
+          source.input?.claim?.releaseRequested !== true &&
           params.replyOptions?.abortSignal?.aborted !== true
         ) {
           // Rebuild once from the latest store entry. If another lifecycle mutation wins the
@@ -81,7 +78,9 @@ async function dispatchReplyFromConfigWithQueuePolicy(
       }
     }
   } finally {
-    ticket?.release();
+    if (source.created) {
+      retireUnadoptedReplySource(source.input);
+    }
   }
 }
 
@@ -90,19 +89,25 @@ async function dispatchReplyFromConfigInner(
   messageAuditTerminal: ReturnType<typeof createInboundMessageAuditTerminal>,
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
+  await using runtimeResources = new AsyncDisposableStack();
+  let runtimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
   const gathered = await gatherDispatchRequest(
     params,
     messageAuditTerminal,
     allowActiveQueueResolution,
+    (lease) => {
+      runtimeLease = runtimeResources.use(scopePreparedModelRuntimeLease(lease));
+    },
+    (dispose) => runtimeResources.defer(dispose),
   );
   if (gathered.status === "complete") {
     return gathered.result;
   }
 
-  return await withPluginRuntimeRegistryScope(gathered.state.pluginRegistry, async () => {
+  const execute = async () => {
     const delivery = await prepareDispatchDelivery(gathered.state);
 
-    const context = await prepareDispatchOperationContext(delivery.state);
+    const context = await prepareDispatchOperationContext(delivery);
     if (context.status === "complete") {
       return context.result;
     }
@@ -121,13 +126,12 @@ async function dispatchReplyFromConfigInner(
 
       const execution = await prepareDispatchExecution(route.state);
 
-      const executed = await executeDispatch(execution.state);
+      const executed = await executeDispatch(execution);
       if (executed.status === "complete") {
         return executed.result;
       }
 
-      const finalized = await finalizeDispatchAndAudit(executed.state);
-      return finalized.result;
+      return await finalizeDispatchAndAudit(executed.state);
     } catch (err) {
       const {
         failDispatchReplyOperation,
@@ -195,5 +199,8 @@ async function dispatchReplyFromConfigInner(
       }
       throw err;
     }
-  });
+  };
+  const runWithRegistry = () =>
+    withPluginRuntimeRegistryScope(gathered.state.pluginRegistry, execute);
+  return runtimeLease ? await runtimeLease.run(runWithRegistry) : await runWithRegistry();
 }

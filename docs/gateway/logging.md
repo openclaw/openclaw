@@ -37,7 +37,47 @@ With config hot reload enabled, changes to `logging.level`, `logging.file`, and
 long-lived channel loggers. Queued records finish writing to their original file.
 Explicit logger-level overrides, such as Baileys verbosity, remain in effect.
 
+Startup guidance to keep local CLI/SDK and Gateway versions aligned uses `info`;
+it does not indicate that a version mismatch was detected. In-memory auth storage
+initialization does not emit synchronous-storage deprecation warnings. Explicit
+calls to deprecated storage APIs still warn with their replacements.
+
+Subsystem file logs omit call-site metadata (`_meta.path`) for `trace`, `debug`,
+`info`, and `warn` records, including `raw()` lines, to avoid capturing and parsing
+a stack on every routine message. `error` and `fatal` records retain it. Other than
+`info`, all levels retain call-site metadata while diagnostics are enabled and an
+internal log-record consumer is subscribed, preserving [OTLP code locations](/gateway/opentelemetry/privacy-and-trace-context).
+`info` records, including `raw()` lines, remain stack-free with diagnostic consumers;
+their severity, message, structured attributes, and trace context are still exported.
+This follows diagnostic enablement and subscriptions on the next record, including
+for existing subsystem loggers. Log messages, structured fields, and error stacks
+supplied by callers are unchanged.
+
 Talk, realtime voice, and managed-room code paths use the shared file logger for bounded lifecycle records intended for operational debugging and OTLP log export. Transcript text, audio payloads, turn ids, call ids, and provider item ids are never copied into the log record.
+
+Discord realtime voice keeps session lifecycle transitions at `info`; audio chunks
+and transcript deltas use `debug`. Model-fetch starts and successful responses
+also use `debug`, regardless of duration. Non-2xx responses remain at `info`;
+transport failures remain warnings. The existing
+[model transport diagnostic flags](/logging#targeted-model-transport-diagnostics)
+promote transport details to `info` when enabled.
+
+Successful secret egress forwarding, including credential substitution, uses
+`debug`. Refusals remain at `info`, and certificate failures remain
+warnings. Their structured fields record the proxy outcome without request
+payloads or credentials; see [secret egress proxy](/gateway/secrets/secret-store-and-egress#secret-egress-proxy).
+Code Mode and Tool Search catalog preparation summaries also use `debug`.
+[Prometheus metrics](/gateway/prometheus) count egress outcomes, catalog
+preparations, and model calls independently of log levels.
+
+Per-request GitHub API timing records also use `debug`, including fetches over
+500 ms. Transport failures and rate-limit errors retain their normal handling.
+
+Plugin host cleanup failures during session reset or deletion emit one
+`plugins/cleanup` warning per failure, including the operation, plugin, hook, and
+error. Check the reported cleanup error before retrying. Successful cleanup
+stays quiet, and failures remain best effort. Console diagnostics use the shared
+secret redactor; plain-text console fields are capped at 2,048 characters.
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
 
@@ -45,7 +85,7 @@ The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI d
 openclaw logs --follow
 ```
 
-If a tail read observes that the active file has disappeared, the Control UI clears its previous records and follows the recreated file. Missing files still return an empty tail; filesystem read errors remain visible.
+If a tail read observes that the active file has disappeared, the Control UI clears its previous records and follows the recreated file. Missing files still return an empty tail. Filesystem read errors, including a log path that points to a directory, remain visible while the Control UI keeps the last successfully read records as stale data.
 
 ### Verbose vs. log levels
 
@@ -82,7 +122,7 @@ any driver waits, scheduling, and ownership revalidation. When admission uses a
 separate integrity Worker, its lifetime is included. This does not isolate
 native-check or CPU time.
 
-When canonical-index validation completes, `canonicalIndexMs` reports the
+When required-index validation completes, `canonicalIndexMs` reports the
 subsequent synchronous inspection and any repair or rechecks, and
 `repairedIndexCount` counts indexes successfully repaired by that operation.
 A healthy initial integrity check can still require an index-definition repair.
@@ -139,6 +179,51 @@ Fast requests and requests with diagnostics disabled emit no summary. The
 record adds no job identifiers, content, query strings, targets or error text,
 and does not change individual slow-page warnings or response payloads.
 
+### Slow Codex catalog pages
+
+With diagnostics and warning logging enabled, a Codex catalog page taking at
+least one second emits `slow Codex catalog page producer`. Its existing phase
+totals distinguish client acquisition, request waiting, and page processing.
+`diagnosticEpoch` and `operationId` identify the page observation;
+`listOperationId` links its originating logical list when available.
+
+`controlWaitersV1` is a JSON-encoded array joining sampled page waits to the
+physical client and JSON-RPC attempt. Decode the string with `JSON.parse` to
+read its tuples. It keeps the first two and latest two completed waiter summaries.
+`controlWaitersOmitted` counts summaries excluded by the bounds. Each entry has
+these positions:
+
+| Index | Meaning                                                       |
+| ----: | ------------------------------------------------------------- |
+|     0 | Control request ordinal within the page                       |
+|     1 | Overload attempt ordinal within that control request          |
+|     2 | Physical client instance UUID                                 |
+|     3 | JSON-RPC request id                                           |
+|     4 | Waiter ordinal within that wire attempt                       |
+|     5 | `new` or `joined` attempt                                     |
+|     6 | Attempt creation time                                         |
+|     7 | First possible write time, or `null` before any write attempt |
+|     8 | Waiter attachment time                                        |
+|     9 | Waiter settlement time                                        |
+|    10 | Waiter outcome                                                |
+|    11 | Wire outcome observed when the waiter settled                 |
+|    12 | Wire outcome observation time, or `null` while pending        |
+
+Times are rounded process-local monotonic milliseconds, comparable within the
+same process. A later waiter retains the original attempt and possible-write
+times. Waiter outcomes distinguish `resolved`, `native-error`, `timed-out`,
+`aborted`, `authority-rejected`, `local-failed`, and `client-closed`. Wire outcomes
+are `retained-pending`, `native-ok`, `native-error`, `ingress-rejected`,
+`correlation-closed`, or `not-written`.
+
+A possible write does not prove native acceptance. A joined waiter does not
+mean another request was sent, and a timed-out waiter can leave the wire attempt
+pending. Later wire settlement is not promised after the page observation closes.
+These records contain no query, cursor, path, title, authentication data, or raw
+error. Existing bounds remain 64 active observations, 60 warnings per minute,
+28 metadata keys, and 2,048 bytes. Missing or omitted summaries are unavailable
+evidence, not zero activity; durations do not attribute native CPU or client receipt.
+
 ## Console capture
 
 The CLI captures `console.log/info/warn/error/debug/trace`, writes them to file logs, and still prints to stdout/stderr.
@@ -154,53 +239,180 @@ Tune console verbosity independently:
 
 ## Redaction
 
-OpenClaw masks sensitive tokens before log or transcript output leaves the process. This redaction policy applies at console, file-log, OTLP log-record, and session transcript text sinks. Matching secret values are masked before JSONL lines or messages are written to disk.
+File logs store raw records under the Gateway account with owner-only (`0600`)
+permissions. Redaction runs when logs widen their audience: `logs.tail` (including
+the CLI and Control UI), console output, diagnostic/support bundles, and remote
+or OTLP export. Each output redacts independently; direct reads of the file do
+not. Protect raw log files like the agent/state databases and review them before
+sharing.
 
-The OpenClaw harness masks finalized tool-result text after middleware, before
-it enters live model context, including exec output and tool errors. Media bytes
-and the original execution arguments stay intact; later replay reuses the masked
-result. Model-visible tool-result text preserves ambiguous source assignments such as
-`token = timeObserverToken`. Registered secrets and explicit credential forms,
-including structured fields, authorization headers, URL credentials, and known
-token formats, remain masked. Direct reads of `.env`
-files apply broader assignment masking before their content becomes a tool
-result. Other config and source reads preserve opaque values. Register actual
-secrets instead of relying on key-name matching. Other transcript fields and
-diagnostic sinks retain broad assignment matching.
+Tool arguments, tool results, and session transcripts are not secret-masked.
+This includes source-code output and direct reads of `.env` files. Tool payloads
+still receive size limits, image/base64 handling, and structural normalization.
+Configuration snapshots, audit output, command-line diagnostics, and
+credential-bearing URLs retain their masking.
 
-- Sensitive-value redaction is always enabled.
+- Egress log and diagnostic redaction is always enabled.
 - `logging.redactPatterns`: array of regex strings (replaces the default string list). Built-in structural protections for form bodies, structured authorization headers, and bare AWS secret access keys always apply.
   - Use raw regex strings (auto `gi`), or `/pattern/flags` for custom flags.
   - Matches are masked keeping the first 6 + last 4 chars (values >= 18 chars). Shorter values become `***`.
   - Defaults cover common key assignments, CLI flags, JSON fields, bearer headers, PEM blocks, popular vendor token prefixes, and payment credential field names (card number, CVC/CVV, shared payment token, payment credential).
 
-File and JSON console records finish masking before final JSON encoding. Rules run in order over decoded values, then serialized record context, with later rules seeing earlier masks. String matches retain their existing token hints so later rules can match those hints. Structured credential fields use full masks; matched numbers, booleans, and null become the JSON string `"***"`. File records retain built-in credential patterns when custom patterns are configured.
+JSON console output and log tails preserve valid JSON while masking decoded values and serialized record context. Later rules see earlier masks. Structured credential fields use full masks; matched numbers, booleans, and null become the JSON string `"***"`. Log tails retain built-in credential patterns when custom patterns are configured.
 
-Safety boundaries such as Control UI tool-call events, `sessions_history` output, diagnostics exports, provider errors, exec approval display, and Gateway WebSocket logs always redact. `logging.redactPatterns` adds deployment-specific patterns.
+Diagnostics exports and captured provider/WebSocket console output retain redaction. `logging.redactPatterns` supplies deployment-specific patterns at these egress boundaries. Log IDs, sizes, and outcomes rather than message text, prompts, tool arguments, or tool results. WebSocket agent-event summaries contain character counts instead of assistant text or tool metadata.
 
 ## Gateway WebSocket logs
 
 The gateway prints WebSocket protocol logs in two modes:
 
-- **Normal mode (no `--verbose`)**: only "interesting" RPC results print - errors (`ok=false`), slow calls (default threshold: `>= 50ms`), and parse errors.
+- **Normal mode (no `--verbose`)**: failed RPC results (`ok=false`), slow calls (`>= 1,000ms`), and parse errors remain visible at the default log level. Successful responses below one second, including large session lists, log at `debug`. Set `logging.level: "debug"` to retain them in file logs or `logging.consoleLevel: "debug"` to print them.
 - **Verbose mode (`--verbose`)**: prints all WS request/response traffic.
 
-With `diagnostics.enabled: true` and warning logging enabled, `sessions.list`
-handlers taking at least one second also emit `slow session list`. The record
-includes process/thread identity, the request trace, and `cacheRole`: a completed
-cache hit, an in-flight follower, a projection owner, or `unreached` if the handler
-failed before selecting a cache path. Followers can include `workTraceId` and
-`workSpanId` to identify the request producing their shared result. Successful
-list results report `selectedRowCount` for every cache role.
+The validated `connect` handshake also participates in the existing Gateway RPC
+metrics as `method="connect"`, including handler duration, first-response latency,
+response bytes, and delivery failures. Handler time includes completion work after
+the hello write; first-response time ends at the transport's write callback, not
+at browser receipt. These are server wall times, including awaited work. A validated connect rejected
+by restart or suspension admission reports a rejected dispatch and its response;
+it has no handler sample because authentication was never entered.
 
-Projection owners report phase totals, visibility-repair counts, synchronous
-preparation/row time, and `yieldWaitMs`/`yieldCount` for time spent awaiting the
-event loop. Hits and followers omit those projection counters. `rows` includes
-its synchronous and yielded intervals; do not add those details to the phase
-total again. `handlerElapsedMs` starts before parameter validation and excludes
+Connect response logs follow the same slow-response threshold and include `authMs`
+(credentials through authentication), `attachMs` (device authorization, identity,
+scopes, and session attachment), `helloMs` (hello payload preparation), and
+`sendMs` (serialization and transport write callback). Unreached phases are absent.
+Bootstrap redemption or admission work between payload preparation and writing
+can make total response time exceed the sum of these fields. No payload fields
+or credentials are included. Failed connects also record `failurePhase` and the
+existing admission `failureCause` so a rejection before attachment remains attributable.
+
+The attach interval also includes these sub-phase wall times on connect response
+logs: `deviceAuthorizationMs` (pairing policy, lookup and token issuance),
+`nodePreparationMs` (node admission and pairing capture), `identityMs` (profile
+admission), `scopeGrantMs` (scope/role policy and the identity-elevation audit log),
+`operatorDeviceMs` (accepted device credential lookup), and
+`sessionRegistrationMs` (remaining client preparation, access binding and transport
+handoff). Nested fields `deviceLookupMs`, `deviceTokensMs`,
+`profileEnsureMs` and `profileAuthorityMs` isolate pairing and profile operations,
+including cache hits and worker queue/lock waits. Nested times overlap their parent interval;
+do not add them to the total. These are elapsed times, so event-loop stalls during
+awaited work also count. Unused or unreached sub-phases are absent.
+
+The hello interval includes `snapshotMs` (presence, session defaults, update details,
+and cached health) and `helloDescriptorsMs` (method and event descriptors). These
+are nested wall times, not additional phases. Model catalog publication runs after
+hello and is outside these intervals. Hello replies remain uncompressed even when
+the connection negotiates permessage-deflate, because they can contain credentials.
+
+With `diagnostics.enabled: true` and warning logging enabled, `sessions.list`
+handlers and `sessions.subscribe` snapshot handlers taking at least one second
+also emit `slow session list`. The `operation` field identifies which request
+produced the record. The record
+includes process/thread identity, the request trace, and row counts:
+`selectedRowCount`, `dirtyRowCount`, `materializedRowCount`, and `reusedRowCount`.
+The latter two distinguish selected rows refreshed during this request from
+selected rows already resident when it began. Dirty counts describe pending
+owner work at the start of the request.
+
+`sessions.messages.subscribe` requests taking at least one second emit
+`slow session messages subscribe` with `operation`, `elapsedMs`, and
+`phaseDurationsMs`. Timing starts in the router, before the handler, and separates
+`projectionReadiness`, `accessFacts`, `handlerPreparation`,
+`retainedReadAdmission`, `replayPreparation`, and `observerCommit` from response
+and cleanup work. Ordinary subscriptions prepare committed access facts without
+waiting for display-row refreshes; incognito reads retain their exact-row
+preparation. Approval subscriptions still prepare and validate the authoritative
+replay before acknowledging. Records contain no session keys or message content.
+
+The `materialize` phase measures the wait for session-row projection readiness. In-flight
+catalog renewals no longer block lists or descriptions once a catalog is loaded:
+reads use the current catalog while its replacement loads in the background, then
+rows refresh with the new catalog. Startup still waits for the first catalog.
+Renewals that retain identical catalog content do not dirty resident rows.
+
+Concurrent lists share metadata preparation and selected-row materialization.
+Selected pages yield to the event loop between bounded materialization batches,
+including when stored facts are already cached. A long `materialize` wait does
+not by itself indicate an event-loop stall or repeated work for each caller.
+
+Profile and run-registry publications refresh their derived display facts without
+rereading session entries. Worker environment and placement publications refresh
+only the selected rows' worker facts on their next presentation. Stored session
+writes publish exact keys; broad list notifications do not schedule an all-row
+drain. Sidebar preferences, `talk.realtime.model`, and other projection-neutral
+config commits retain session rows. Agent identity edits refresh display facts on
+presentation; store admission reconciles physical generations and retains unchanged
+rows. Session policy, roster, sharing, and adopted model catalog changes still
+refresh affected live rows before lists respond. Archived rows stay cold until selected.
+
+Transcript-only row refreshes use a one-second window per resident session: the
+first notification refreshes promptly, and further notifications collapse into a
+trailing refresh. These pending notifications are not dirty rows until that
+refresh is due. Transcript freshness can therefore lag by up to one window;
+optional previews still wait for idle background backfill. Metadata, lifecycle,
+catalog, and topology publications continue to invalidate immediately.
+Transcript notifications do not invalidate parents or children: relationships,
+inherited model settings, and subagent activity have their own metadata or
+registry publications.
+
+Records report phase totals, synchronous selection/row time, and
+`yieldWaitMs`/`yieldCount` for awaiting shared projection readiness. These waits
+can include coalesced work shared with other callers. Phase totals include their
+wait intervals; do not add the detailed counters to those totals again.
+`handlerElapsedMs` starts before parameter validation and excludes
 admission before the handler. The `response` phase includes the synchronous response callback. These are elapsed
 durations, not CPU time or proof of client receipt. No query text or session
 contents are included.
+
+The same record includes fractional-millisecond current-thread CPU measurements
+for synchronous work: `prepareThreadCpuMs`, `rowThreadCpuMs`, and
+`responseThreadCpuMs`. Preparation covers resident selection, filtering, and
+sorting after projection readiness. Row CPU includes presentation and final list
+construction. Both intervals finish before the response callback is measured;
+response CPU excludes network waits. Measurements finish before this diagnostic
+record is published or logged. Projection readiness waits, background
+materialization, intervening microtasks, and worker CPU are not included.
+These are selected inclusive CPU intervals, including same-thread native work and
+garbage collection, not SQL-only CPU or a complete request CPU total.
+
+Unvisited measurements are omitted. Each request retains its own selection,
+presentation, and response CPU without inheriting shared background work.
+If a CPU counter read fails, all CPU fields are omitted for that request;
+its result and elapsed diagnostics are preserved. Existing activation and the
+one-second warning threshold are unchanged, so missing slow records do not account
+for CPU consumed by faster requests.
+
+`chat.send` records `slow chat send <N>ms stage=request` when authorization,
+input admission, and acknowledgement take at least one second. Phase durations
+appear in the message text, including authority, run admission, attachments,
+persistence, and response. A separate `stage=startup ack=<N>ms` record attributes
+post-acknowledgement preparation to workspace setup, reply initialization,
+skill preparation, and authoring. `worktree` covers pending workspace creation;
+ordinary sandbox readiness remains inside inclusive `preparation`.
+`replyInitialization` includes routing, admission-ticket waits, workspace bootstrap,
+media processing, and session initialization until the prepared-session callback.
+Initial session row-reader waits are included in that interval, rather than timed
+separately. `snapshot` measures the agent-run transcript-start reader preparation,
+nested inside `preparation`.
+Startup measurement ends when the agent run starts, or when dispatch exits before starting one.
+Accepted steering instead reports `stage=steer`; a deferred follow-up reports
+`stage=queued`. These records include waits for the active run to commit the input
+at its next boundary, including the steering receipt timeout. They use the same
+one-second threshold and emit at most one post-acknowledgement record per send;
+they are not startup latency. Rejected steering that starts a new run retains
+`stage=startup`.
+These records do not contain message text or session identifiers. Nested phases
+can overlap; their sum is not the request duration. The
+[Prometheus exporter](/gateway/prometheus) records the same fixed phases for fast
+and slow sends when diagnostics are enabled.
+
+Catalog lists additionally expose fixed request-stage observations through the
+existing diagnostic event stream and [Prometheus exporter](/gateway/prometheus#catalog-list-stages).
+These include initial/final projection readiness, provider or coalesced waits,
+and synchronous planning/final-delivery thread CPU. Unlike slow logs, these
+observations include requests below one second when an interested trusted
+consumer is active. They do not change warning thresholds, startup-phase history,
+request behavior or diagnostic collection settings.
 
 ### WS log style
 
@@ -212,7 +424,7 @@ contents are included.
 - `--compact`: alias for `--ws-log compact`.
 
 ```bash
-# optimized (only errors/slow)
+# optimized (connections, errors, and slow responses)
 openclaw gateway
 
 # show all WS traffic (paired)
@@ -221,6 +433,23 @@ openclaw gateway --verbose --ws-log compact
 # show all WS traffic (full meta)
 openclaw gateway --verbose --ws-log full
 ```
+
+Normal logging emits one `client connected` record per admitted operator or node
+connection, including CLI and backend clients. It includes the connection ID, client ID and
+display name, mode, role, authentication method, version, platform, build, remote
+address, and authenticated user when present. This replaces the separate
+`authenticated user connected` and `webchat connected` records; those records
+overlapped and did not count ephemeral clients. Request content and credentials
+are not included.
+
+Compare these records with the `connect` RPC counter when investigating
+connection churn. The counter includes failed handshakes; `client connected`
+records admission before the hello response is sent. Client metadata is
+caller-declared, so it identifies the claimed client kind, not a verified process.
+For external pollers, reuse an authenticated Gateway connection for repeated
+requests. Gateway-hosted plugins should use `api.runtime.gateway.request` or
+`api.runtime.nodes`, which dispatch in-process; see
+[Gateway and node runtime](/plugins/sdk-runtime/gateway-and-nodes).
 
 ## Console formatting (subsystem logging)
 

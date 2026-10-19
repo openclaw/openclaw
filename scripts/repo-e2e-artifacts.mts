@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { writeBuildStamp, writeRuntimePostBuildStamp } from "./lib/local-build-metadata.mts";
+import { refreshLocalBuildStampTimes } from "./lib/local-build-metadata.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 
 const archiveName = "repo-e2e-build.tar.gz";
@@ -68,8 +68,7 @@ export function transferRepoE2eArtifacts(
   execFileSync("tar", ["-xzf", archive], { cwd: root });
   // Checkout config mtimes are newer than the producer's stamps. Refresh only
   // local freshness metadata after exact identity verification, before readers start.
-  writeBuildStamp({ cwd: root });
-  writeRuntimePostBuildStamp({ cwd: root });
+  refreshLocalBuildStampTimes({ cwd: root });
 }
 
 function digest(file: string) {

@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { afterEach, expect, it, vi } from "vitest";
 
 afterEach(() => {

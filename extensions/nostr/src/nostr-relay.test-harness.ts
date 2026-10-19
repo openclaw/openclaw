@@ -12,15 +12,23 @@ export async function createNostrRelayFixture(
     accepted?: boolean;
     reason?: string;
     rejectUpgrade?: boolean;
+    holdUpgrades?: boolean;
     holdAcknowledgements?: boolean;
     onEvent?: (event: Event) => void;
   } = {},
 ) {
+  const subscriptions: unknown[][] = [];
+  let acceptSubscription: (() => void) | undefined;
+  const subscribed = new Promise<void>((resolve) => {
+    acceptSubscription = resolve;
+  });
+  const inboundSends: Array<(events: Event[]) => void> = [];
   const events: Event[] = [];
   const acknowledgements: Array<["OK", string, boolean, string]> = [];
   const errors: unknown[] = [];
   const connections = new Set<Socket>();
   const pendingAcknowledgements: Array<() => void> = [];
+  const pendingUpgrades: Array<() => void> = [];
   let upgradeAttempts = 0;
   const server = createServer((_request, response) => {
     response.writeHead(404).end();
@@ -34,7 +42,12 @@ export async function createNostrRelayFixture(
     maxPayload: 64 * 1024,
     verifyClient: (_info, done) => {
       upgradeAttempts += 1;
-      done(!options.rejectUpgrade, 503, "fixture refusal");
+      const complete = () => done(!options.rejectUpgrade, 503, "fixture refusal");
+      if (options.holdUpgrades) {
+        pendingUpgrades.push(complete);
+      } else {
+        complete();
+      }
     },
   });
   sockets.on("error", (error) => errors.push(error));
@@ -42,8 +55,19 @@ export async function createNostrRelayFixture(
     socket.on("error", (error) => errors.push(error));
     socket.on("message", (data) => {
       try {
-        const [kind, value] = JSON.parse(rawDataToString(data)) as [string, string | Event];
+        const [kind, value, ...filters] = JSON.parse(rawDataToString(data)) as [
+          string,
+          string | Event,
+          ...unknown[],
+        ];
         if (kind === "REQ" && typeof value === "string") {
+          subscriptions.push(filters);
+          inboundSends.push((incoming) => {
+            for (const event of incoming) {
+              socket.send(JSON.stringify(["EVENT", value, event]));
+            }
+          });
+          acceptSubscription?.();
           // Settle the real pool's EOSE timer through the wire, including cleanup paths.
           socket.send(JSON.stringify(["EOSE", value]));
         } else if (kind === "EVENT" && typeof value !== "string") {
@@ -114,10 +138,22 @@ export async function createNostrRelayFixture(
     }
     return {
       url: `ws://127.0.0.1:${address.port}/`,
+      subscribed,
+      subscriptions,
+      sendIncoming: (incoming: Event[]) => {
+        for (const send of inboundSends) {
+          send(incoming);
+        }
+      },
       events,
       acknowledgements,
       errors,
       upgradeAttempts: () => upgradeAttempts,
+      releaseUpgrades: () => {
+        for (const complete of pendingUpgrades.splice(0)) {
+          complete();
+        }
+      },
       acknowledgeAll: () => {
         for (const acknowledge of pendingAcknowledgements.splice(0)) {
           acknowledge();

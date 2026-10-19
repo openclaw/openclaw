@@ -1,21 +1,23 @@
-// Qa Channel API module exposes the plugin public contract.
+export type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+  ChannelGatewayContext,
+} from "openclaw/plugin-sdk/channel-contract";
+export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export {
   buildChannelConfigSchema,
   buildChannelOutboundSessionRoute,
-  type ChannelGatewayContext,
-  type ChannelMessageActionAdapter,
-  type ChannelMessageActionName,
-  type ChannelPlugin,
   createChatChannelPlugin,
+  defineChannelPluginEntry,
+} from "openclaw/plugin-sdk/channel-core";
+export { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
+export { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
+export {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
-  createPluginRuntimeStore,
-  defineChannelPluginEntry,
-  getChatChannelMeta,
-  jsonResult,
-  type OpenClawConfig,
-  type PluginRuntime,
-  readStringParam,
-  type RuntimeEnv,
-} from "./src/runtime-api.js";
+} from "openclaw/plugin-sdk/status-helpers";
+export { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 export { getQaChannelRuntime, setQaChannelRuntime } from "./src/runtime.js";

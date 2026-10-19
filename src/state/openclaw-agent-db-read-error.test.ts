@@ -1,0 +1,90 @@
+import { expect, it, vi } from "vitest";
+import * as sqlite from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withFreshOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
+import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  openOpenClawAgentDatabase,
+} from "./openclaw-agent-db.js";
+
+it("preserves programming failures when required tables remain available", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { agentId: "main", env: state.env };
+    openOpenClawAgentDatabase(options);
+    const failure = new TypeError("invalid reader operation");
+    expect(() =>
+      withOpenClawAgentDatabaseReadOnly(() => {
+        throw failure;
+      }, options),
+    ).toThrow(failure);
+    expect(() =>
+      withOpenClawAgentDatabaseReadOnly(
+        ({ db }) => db.prepare("SELECT * FROM missing_readonly_table").all(),
+        options,
+      ),
+    ).toThrow(/no such table: missing_readonly_table/);
+  });
+});
+
+it.each([false, true])(
+  "classifies missing tables before and after close (%s)",
+  async (freshOnly) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const options = { agentId: "main", env: state.env };
+      const owner = openOpenClawAgentDatabase(options);
+      owner.db.exec("DROP TABLE session_canonical_validation_pending;");
+      let readDb: EngineConnection = owner.db;
+      const nativeOpen = sqlite.openNodeSqliteDatabase;
+      const open = vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+        const database = nativeOpen(...args);
+        if (args[0] === owner.path) {
+          readDb = database;
+        }
+        return database;
+      });
+      const readOnly = freshOnly
+        ? withFreshOpenClawAgentDatabaseReadOnly
+        : withOpenClawAgentDatabaseReadOnly;
+      const operation = vi.fn(({ db }: { db: EngineConnection }) =>
+        db.prepare("SELECT * FROM session_canonical_validation_pending").all(),
+      );
+      const read = () => readOnly(operation, options);
+      const unavailable = {
+        name: "SessionMetadataUnavailableError",
+        reason: "table-missing",
+        missingTables: ["session_canonical_validation_pending"],
+      };
+      const coldCause = /canonical validation schema is missing or drifted.*openclaw doctor --fix/u;
+
+      try {
+        expect(read).toThrow(
+          expect.objectContaining({
+            ...unavailable,
+            cause: expect.objectContaining({
+              message: expect.stringMatching(
+                freshOnly ? coldCause : /no such table: session_canonical_validation_pending/u,
+              ),
+            }),
+          }),
+        );
+        expect(operation).toHaveBeenCalledTimes(freshOnly ? 0 : 1);
+        expect(readDb === owner.db).toBe(!freshOnly);
+        expect(readDb.isOpen).toBe(!freshOnly);
+        expect(owner.db.isOpen).toBe(true);
+        expect(closeOpenClawAgentDatabaseByPath(owner.path)).toBe(true);
+        expect(read).toThrow(
+          expect.objectContaining({
+            ...unavailable,
+            cause: expect.objectContaining({ message: expect.stringMatching(coldCause) }),
+          }),
+        );
+        expect(operation).toHaveBeenCalledTimes(freshOnly ? 0 : 1);
+        expect(readDb.isOpen).toBe(false);
+      } finally {
+        open.mockRestore();
+      }
+    });
+  },
+);

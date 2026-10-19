@@ -1,10 +1,10 @@
-import { readNonEmptyStringPreservingWhitespace as readOptionalNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import type {
   JsonValue,
   NativeHookRelayEvent,
   NativeHookRelayProvider,
 } from "./native-hook-relay-types.js";
+export { readNonEmptyStringPreservingWhitespace as readOptionalNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 
 const MAX_NATIVE_HOOK_RELAY_JSON_DEPTH = 64;
 const MAX_NATIVE_HOOK_RELAY_JSON_NODES = 20_000;
@@ -16,9 +16,7 @@ const MAX_NATIVE_HOOK_RELAY_HISTORY_ARRAY_ITEMS = 50;
 const MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS = 50;
 
 export function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : fallback;
+  return normalizeOptionalPositiveInteger(value) ?? fallback;
 }
 
 export function normalizeOptionalPositiveInteger(value: number | undefined): number | undefined {
@@ -66,8 +64,6 @@ export function readNonEmptyString(value: unknown, name: string): string {
   }
   throw new Error(`native hook relay ${name} is required`);
 }
-
-export { readOptionalNonEmptyString };
 
 export function readOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;

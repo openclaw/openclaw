@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   createPluginGatewayMethodDescriptor,
   type GatewayMethodProfileAccess,
@@ -11,7 +11,7 @@ import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findPluginHttpRouteRegistrationConflicts } from "./http-route-overlap.js";
 import { getPluginHttpRouteViews, replacePluginHttpRoutes } from "./http-route-owner.js";
-import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
+import { getPluginInstance, wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import { capturePluginLifecycleAuthority, getPluginRecordRegistry } from "./registry-lifecycle.js";
 import {
   resolvePluginRegistrationCapabilities,
@@ -22,9 +22,17 @@ import type {
   PluginHttpRouteRegistration,
   PluginRecord,
 } from "./registry-types.js";
+import {
+  PluginCapabilityRemovedError,
+  removedPluginCapabilityDescriptor,
+} from "./removed-capability-error.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "./runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
-  OpenClawPluginChannelRegistration,
+  OpenClawPluginApi,
   OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginMcpServerConnectionResolver,
@@ -32,17 +40,56 @@ import type {
 } from "./types.js";
 
 const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
+const REMOVED_SESSION_CONTEXT_CAPABILITIES = Object.fromEntries(
+  ["chatAbortControllers", "chatQueuedTurns"].map((name) => [
+    name,
+    removedPluginCapabilityDescriptor(
+      `context.${name}`,
+      'Use dispatchGatewayMethod from openclaw/plugin-sdk/gateway-method-runtime with chat.send, chat.abort, sessions.abort, or agent.wait; declare contracts.gatewayMethodDispatch: ["authenticated-request"].',
+    ),
+  ]),
+);
 
-function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): GatewayRequestHandler {
+function adaptPluginGatewayMethodHandler(
+  handler: GatewayRequestHandler,
+  mayDispatch: boolean,
+): GatewayRequestHandler {
   return async (opts) => {
+    // Preserve the real context identity; these accessors expose no mutable state.
+    Object.defineProperties(opts.context, REMOVED_SESSION_CONTEXT_CAPABILITIES);
     let responded = false;
     const respond: RespondFn = (ok, payload, error, meta) => {
       responded = true;
       opts.respond(ok, payload, error, meta);
     };
-    const result = (await handler({ ...opts, respond })) as unknown;
-    if (!responded && result !== undefined) {
-      respond(true, result);
+    const scope = getPluginRuntimeGatewayRequestScope();
+    const invoke = () => handler({ ...opts, respond });
+    // A declared authenticated-request contract composes RPCs with the exact
+    // admitted client, never a synthetic identity or inherited unrelated grant.
+    try {
+      const result = (
+        scope
+          ? await withPluginRuntimeGatewayRequestScope(
+              { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
+              invoke,
+            )
+          : await invoke()
+      ) as unknown;
+      if (!responded && result !== undefined) {
+        respond(true, result);
+      }
+    } catch (error) {
+      if (!(error instanceof PluginCapabilityRemovedError) || responded) {
+        throw error;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+          retryable: false,
+          details: { code: error.code, capability: error.capability },
+        }),
+      );
     }
   };
 }
@@ -63,7 +110,14 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     method: string,
     handler: GatewayRequestHandler,
-    opts?: { scope?: OperatorScope; profileAccess?: GatewayMethodProfileAccess },
+    opts?: {
+      scope?: OperatorScope;
+      profileAccess?: GatewayMethodProfileAccess;
+      sessionAccess?: import("../gateway/methods/descriptor.js").GatewayMethodSessionAccess;
+      shareKey?: import("../gateway/methods/descriptor.js").GatewayReadSharing["shareKey"];
+      shareInvalidationEvents?: readonly string[];
+      shareMaxAgeMs?: number;
+    },
   ) => {
     const trimmed = method.trim();
     if (!trimmed) {
@@ -73,7 +127,10 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `gateway method already registered: ${trimmed}`);
       return;
     }
-    const wrappedHandler = adaptPluginGatewayMethodHandler(handler);
+    const wrappedHandler = adaptPluginGatewayMethodHandler(
+      handler,
+      canDispatchGatewayMethods(record),
+    );
     registry.gatewayHandlers[trimmed] = wrappedHandler;
     const normalizedScope = normalizePluginGatewayMethodScope(trimmed, opts?.scope);
     if (normalizedScope.coercedToReservedAdmin) {
@@ -89,6 +146,19 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         handler: wrappedHandler,
         scope: normalizedScope.scope,
         ...(opts?.profileAccess ? { profileAccess: opts.profileAccess } : {}),
+        ...(opts?.sessionAccess ? { sessionAccess: opts.sessionAccess } : {}),
+        ...(opts?.shareKey
+          ? {
+              shareKey: (caller, params) =>
+                capturePluginLifecycleAuthority(getPluginRecordRegistry(registry, record), record, {
+                  scopedRuntime: true,
+                })?.() === true
+                  ? opts.shareKey!(caller, params)
+                  : null,
+              shareInvalidationEvents: opts.shareInvalidationEvents,
+              shareMaxAgeMs: opts.shareMaxAgeMs,
+            }
+          : {}),
       }),
     );
   };
@@ -118,13 +188,16 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       );
       return;
     }
+    if (provider.continueSession) {
+      getPluginInstance(record)?.admitFactory(provider.continueSession, ["afterConversationBound"]);
+    }
     const normalizedProvider = { ...provider, id, label };
-    registry.sessionCatalogs.push(
-      createRegistration(record, {
-        provider:
-          state.getNativeCatalogGate(record)?.catalog(normalizedProvider) ?? normalizedProvider,
-      }),
-    );
+    const catalog =
+      state.getNativeCatalogGate(record)?.catalog(normalizedProvider) ?? normalizedProvider;
+    if (catalog.continueSession) {
+      getPluginInstance(record)?.admitFactory(catalog.continueSession, ["afterConversationBound"]);
+    }
+    registry.sessionCatalogs.push(createRegistration(record, { provider: catalog }));
   };
 
   const describeHttpRouteOwner = (entry: PluginHttpRouteRegistration): string => {
@@ -133,7 +206,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     return `${plugin} (${source})`;
   };
 
-  const canDispatchGatewayMethodsFromHttpRoute = (record: PluginRecord): boolean =>
+  const canDispatchGatewayMethods = (record: PluginRecord): boolean =>
     (record.contracts?.gatewayMethodDispatch ?? []).includes(GATEWAY_METHOD_DISPATCH_CONTRACT);
 
   const registerHttpRoute = (record: PluginRecord, params: OpenClawPluginHttpRouteParams) => {
@@ -177,9 +250,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       ...(params.gatewayRuntimeScopeSurface
         ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
         : {}),
-      ...(canDispatchGatewayMethodsFromHttpRoute(record)
-        ? { gatewayMethodDispatchAllowed: true }
-        : {}),
+      ...(canDispatchGatewayMethods(record) ? { gatewayMethodDispatchAllowed: true } : {}),
       ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
       source: record.source,
     } satisfies PluginHttpRouteRegistration;
@@ -255,7 +326,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
 
   const registerChannel = (
     record: PluginRecord,
-    registration: OpenClawPluginChannelRegistration | ChannelPlugin,
+    registration: Parameters<OpenClawPluginApi["registerChannel"]>[0],
     mode: PluginRegistrationMode = "full",
     resolveChannelRuntime?: PluginChannelRegistration["resolveChannelRuntime"],
   ) => {
@@ -267,14 +338,11 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       return;
     }
     const registrationCapabilities = resolvePluginRegistrationCapabilities(mode);
-    const normalized =
-      typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
-        ? (registration as OpenClawPluginChannelRegistration)
-        : { plugin: registration as ChannelPlugin };
+    const pluginRegistration = "plugin" in registration ? registration.plugin : registration;
     const plugin = normalizeRegisteredChannelPlugin({
       pluginId: record.id,
       source: record.source,
-      plugin: normalized.plugin,
+      plugin: pluginRegistration,
       pushDiagnostic,
     });
     if (!plugin) {
@@ -293,6 +361,11 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       );
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
+    }
+    const agentTools = plugin.agentTools;
+    if (agentTools) {
+      plugin.agentTools = typeof agentTools === "function" ? agentTools : () => agentTools;
+      getPluginInstance(record)?.admitFactory(plugin.agentTools, "tool");
     }
     const metadata = {
       // Normalization copied the input; teardown must retain its registration owner.

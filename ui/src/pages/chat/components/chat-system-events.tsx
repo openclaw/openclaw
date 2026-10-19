@@ -1,0 +1,64 @@
+import { For, Show, createMemo, createSignal } from "solid-js";
+import { Icon } from "../../../components/solid/icon.tsx";
+import type { SystemEventGroup, SystemEventItem } from "../../../lib/chat/chat-types.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
+import { ChatDivider, ChatNotice } from "./chat-divider.tsx";
+
+function SystemEvent(props: { item: SystemEventItem }) {
+  return (
+    <Show
+      when={props.item.kind === "notice" ? props.item : undefined}
+      fallback={
+        <Show when={props.item.kind === "divider" ? props.item : undefined}>
+          {(divider) => <ChatDivider item={divider()} />}
+        </Show>
+      }
+    >
+      {(notice) => <ChatNotice item={notice()} />}
+    </Show>
+  );
+}
+
+export function ChatSystemEvents(props: { item: SystemEventGroup }) {
+  const [expanded, setExpanded] = createSignal(false);
+  const deliveryWarning = createMemo(() =>
+    props.item.events.some((event) => event.systemEvent === "delivery-warning"),
+  );
+  return (
+    <details
+      class="chat-system-events"
+      data-chat-row-key={props.item.key}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary class="chat-system-events__summary">
+        <span class="chat-system-events__line" aria-hidden="true" />
+        <span class="chat-system-events__label">
+          <span class="chat-system-events__chevron" aria-hidden="true">
+            <Icon name="chevronRight" />
+          </span>
+          <span>
+            {t(
+              props.item.events.length === 1
+                ? "chat.systemNotice.event"
+                : "chat.systemNotice.events",
+              { count: String(props.item.events.length) },
+            )}
+          </span>
+          <Show when={deliveryWarning()}>
+            <span class="chat-system-events__warning">
+              {t("chat.systemNotice.updatesNotDelivered")}
+            </span>
+          </Show>
+        </span>
+        <span class="chat-system-events__line" aria-hidden="true" />
+      </summary>
+      <Show when={expanded()}>
+        <div class="chat-system-events__body">
+          <For each={props.item.events} keyed={(event) => event.key}>
+            {(event) => <SystemEvent item={event()} />}
+          </For>
+        </div>
+      </Show>
+    </details>
+  );
+}

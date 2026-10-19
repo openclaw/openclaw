@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import type { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
-import type { MeetingAudioBackendSelection } from "./audio-backend.js";
 import type {
   MeetingBrowserJoinSession,
   MeetingPlatformAdapter,
   MeetingPlatformRuntimeMetadata,
 } from "./platform-adapter-contract.js";
+import type { MeetingPluginConfig } from "./plugin-config.js";
 import type { startMeetingAgentRealtimeEngine } from "./realtime-agent-engine.js";
 import type {
   startMeetingRealtimeEngine,
@@ -18,26 +18,11 @@ import type { createNodeMeetingRealtimeAudioTransport } from "./realtime-node-au
 import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-types.js";
 
 export type MeetingChromeTransportConfig = MeetingRealtimeEngineConfig & {
-  chrome: MeetingRealtimeEngineConfig["chrome"] & {
-    audioBackend: MeetingAudioBackendSelection;
+  chrome: Omit<MeetingPluginConfig["chrome"], "audioInputCommand" | "audioOutputCommand"> & {
     audioBridgeCommand?: string[];
     audioBridgeHealthCommand?: string[];
-    audioBufferBytes: number;
     audioInputCommand?: string[];
-    audioInputCommandOverride?: string[];
     audioOutputCommand?: string[];
-    audioOutputCommandOverride?: string[];
-    autoJoin: boolean;
-    bargeInCooldownMs: number;
-    bargeInInputCommand?: string[];
-    bargeInPeakThreshold: number;
-    bargeInRmsThreshold: number;
-    browserProfile?: string;
-    guestName: string;
-    joinTimeoutMs: number;
-    launch: boolean;
-    reuseExistingTab: boolean;
-    waitForInCallMs: number;
   };
   chromeNode: { node?: string };
   realtime: MeetingRealtimeEngineConfig["realtime"] & {

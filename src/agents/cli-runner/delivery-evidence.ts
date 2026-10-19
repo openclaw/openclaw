@@ -3,8 +3,6 @@
  */
 import type { CliOutput } from "../cli-output-contracts.js";
 
-const CLI_MESSAGING_DELIVERY_EVIDENCE_KEY = "cliMessagingDeliveryEvidence";
-
 type CliMessagingDeliveryEvidence = Pick<
   CliOutput,
   | "didSendViaMessagingTool"
@@ -16,31 +14,42 @@ type CliMessagingDeliveryEvidence = Pick<
   | "messagingToolSourceReplyPayloads"
 >;
 
+const deliveryEvidence = new WeakMap<object, CliMessagingDeliveryEvidence>();
+
+export function projectCliMessagingDeliveryEvidence(
+  output: CliMessagingDeliveryEvidence,
+  snapshot = false,
+): CliMessagingDeliveryEvidence {
+  const evidence: CliMessagingDeliveryEvidence = {};
+  for (const key of [
+    "didSendViaMessagingTool",
+    "didDeliverSourceReplyViaMessageTool",
+    "sourceReplyDelivered",
+  ] as const) {
+    if (output[key]) {
+      evidence[key] = true;
+    }
+  }
+  for (const key of [
+    "messagingToolSentTexts",
+    "messagingToolSentMediaUrls",
+    "messagingToolSentTargets",
+    "messagingToolSourceReplyPayloads",
+  ] as const) {
+    const values = output[key];
+    if (values?.length) {
+      Object.assign(evidence, { [key]: snapshot ? values.slice() : values });
+    }
+  }
+  return evidence;
+}
+
 function snapshotCliMessagingDeliveryEvidence(
   output: CliMessagingDeliveryEvidence,
 ): CliMessagingDeliveryEvidence | undefined {
-  if (output.didSendViaMessagingTool !== true) {
-    return undefined;
-  }
-  return {
-    didSendViaMessagingTool: true,
-    ...(output.didDeliverSourceReplyViaMessageTool
-      ? { didDeliverSourceReplyViaMessageTool: true }
-      : {}),
-    ...(output.sourceReplyDelivered ? { sourceReplyDelivered: true } : {}),
-    ...(output.messagingToolSentTexts?.length
-      ? { messagingToolSentTexts: output.messagingToolSentTexts.slice() }
-      : {}),
-    ...(output.messagingToolSentMediaUrls?.length
-      ? { messagingToolSentMediaUrls: output.messagingToolSentMediaUrls.slice() }
-      : {}),
-    ...(output.messagingToolSentTargets?.length
-      ? { messagingToolSentTargets: output.messagingToolSentTargets.slice() }
-      : {}),
-    ...(output.messagingToolSourceReplyPayloads?.length
-      ? { messagingToolSourceReplyPayloads: output.messagingToolSourceReplyPayloads.slice() }
-      : {}),
-  };
+  return output.didSendViaMessagingTool === true
+    ? projectCliMessagingDeliveryEvidence(output, true)
+    : undefined;
 }
 
 /** Attaches confirmed delivery evidence so caller retries cannot duplicate a visible send. */
@@ -52,19 +61,10 @@ export function attachCliMessagingDeliveryEvidence(
   if (!evidence) {
     return error;
   }
-  if (error && typeof error === "object") {
-    try {
-      Object.assign(error, { [CLI_MESSAGING_DELIVERY_EVIDENCE_KEY]: evidence });
-      return error;
-    } catch {
-      // Frozen and non-extensible failures need a mutable wrapper.
-    }
-  }
-  const wrapped = new Error(error instanceof Error ? error.message : String(error), {
-    cause: error,
-  });
-  Object.assign(wrapped, { [CLI_MESSAGING_DELIVERY_EVIDENCE_KEY]: evidence });
-  return wrapped;
+  const failure =
+    error && typeof error === "object" ? error : new Error(String(error), { cause: error });
+  deliveryEvidence.set(failure, evidence);
+  return failure;
 }
 
 /** Reads confirmed delivery evidence from a failed CLI attempt. */
@@ -74,8 +74,5 @@ export function getCliMessagingDeliveryEvidence(
   if (!error || typeof error !== "object") {
     return undefined;
   }
-  const evidence = (error as Record<string, unknown>)[CLI_MESSAGING_DELIVERY_EVIDENCE_KEY];
-  return evidence && typeof evidence === "object"
-    ? snapshotCliMessagingDeliveryEvidence(evidence as CliMessagingDeliveryEvidence)
-    : undefined;
+  return deliveryEvidence.get(error);
 }

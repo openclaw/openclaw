@@ -1,26 +1,17 @@
 import fs from "node:fs";
-import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
+import type { DatabaseSync } from "node:sqlite";
 
 export type MemoryShadowConnection = {
   fileIdentity: { device: string; inode: string };
   extensionPath?: string;
+  // Checkpoint cadence belongs to each connection's WAL maintenance owner, not to publication policy.
   pragmas: {
     busy_timeout: number;
     synchronous: number;
     foreign_keys: number;
-    wal_autocheckpoint: number;
     journal_size_limit: number;
     checkpoint_fullfsync: number;
   };
-};
-
-export type MemoryShadowSessionInput = MemoryShadowConnection & {
-  kind: "replace-session";
-  databasePath: string;
-  beginDeadlineNs: bigint;
-  replacement: Extract<MemorySourceIndexReplacement, { source: "sessions" }>;
-  vector: { enabled: boolean; available: boolean | null };
-  fts: { enabled: boolean; available: boolean };
 };
 
 export type MemoryShadowFailure = {
@@ -29,53 +20,6 @@ export type MemoryShadowFailure = {
   code?: string;
   errcode?: number;
 };
-
-export type MemoryShadowSessionResult =
-  | { kind: "session-replaced" }
-  | {
-      kind: "session-failed";
-      error: MemoryShadowFailure;
-      cleanupError?: MemoryShadowFailure;
-      entered: boolean;
-      committed: boolean;
-    };
-
-// The indexing pool already has this 256 MiB pending-input limit. Placement
-// preserves larger supported sources on their original path until active-input
-// framing can retain them without charging a complete value to the pending queue.
-export const MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES = 256 * 1024 * 1024;
-
-export function memoryShadowSessionInputBytes(input: MemoryShadowSessionInput): number {
-  const { replacement } = input;
-  let bytes =
-    512 +
-    2 *
-      (input.databasePath.length +
-        input.fileIdentity.device.length +
-        input.fileIdentity.inode.length +
-        (input.extensionPath?.length ?? 0) +
-        replacement.entry.path.length +
-        replacement.entry.hash.length +
-        replacement.model.length +
-        replacement.agentId.length +
-        replacement.sessionId.length);
-  for (const chunk of replacement.chunks) {
-    bytes +=
-      256 +
-      2 *
-        (chunk.text.length +
-          chunk.hash.length +
-          (chunk.triggers?.length ?? 0) +
-          (chunk.projectKey?.length ?? 0) +
-          (chunk.provenance?.originClass.length ?? 0) +
-          (chunk.provenance?.sessionKind.length ?? 0) +
-          (chunk.provenance?.supersedesKey?.length ?? 0));
-  }
-  for (const embedding of replacement.embeddings) {
-    bytes += 32 + embedding.length * 8;
-  }
-  return bytes;
-}
 
 export function readMemoryShadowIdentity(filename: string): MemoryShadowConnection["fileIdentity"] {
   const info = fs.statSync(filename, { bigint: true });
@@ -93,4 +37,22 @@ export function assertMemoryShadowIdentity(
   if (actual.device !== expected.device || actual.inode !== expected.inode) {
     throw new Error("Memory reindex shadow file changed during its owned lifetime");
   }
+}
+
+export function readMemoryConnectionPragmas(db: DatabaseSync, errorMessage: string) {
+  const read = (name: keyof MemoryShadowConnection["pragmas"]): number => {
+    const row = db.prepare(`PRAGMA ${name}`).get();
+    const value = row?.[name] ?? row?.timeout;
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+      throw new Error(errorMessage);
+    }
+    return value;
+  };
+  return {
+    busy_timeout: read("busy_timeout"),
+    synchronous: read("synchronous"),
+    foreign_keys: read("foreign_keys"),
+    journal_size_limit: read("journal_size_limit"),
+    checkpoint_fullfsync: read("checkpoint_fullfsync"),
+  };
 }

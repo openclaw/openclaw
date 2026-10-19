@@ -1,33 +1,24 @@
-// Telegram plugin module implements error policy behavior.
 import type {
   TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import {
-  asDateTimestampMs,
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { buildTelegramGroupPeerId, type TelegramThreadSpec } from "./bot/helpers.js";
 
 type TelegramErrorPolicy = "always" | "once" | "silent";
 
-type TelegramErrorConfig =
-  | TelegramAccountConfig
-  | TelegramDirectConfig
-  | TelegramGroupConfig
-  | TelegramTopicConfig;
-
 const errorCooldownStore = new Map<string, Map<string, number>>();
 const DEFAULT_ERROR_COOLDOWN_MS = 14400000;
 
-function pruneExpiredCooldowns(messageStore: Map<string, number>, now: number) {
+function pruneExpiredCooldowns(scope: string, messageStore: Map<string, number>, now: number) {
   for (const [message, expiresAt] of messageStore) {
-    if (!isFutureDateTimestampMs(expiresAt, { nowMs: now })) {
+    if (expiresAt <= now) {
       messageStore.delete(message);
     }
+  }
+  if (messageStore.size === 0) {
+    errorCooldownStore.delete(scope);
   }
 }
 
@@ -39,20 +30,14 @@ export function resolveTelegramErrorPolicy(params: {
   policy: TelegramErrorPolicy;
   cooldownMs: number;
 } {
-  const configs: Array<TelegramErrorConfig | undefined> = [
-    params.accountConfig,
-    params.groupConfig,
-    params.topicConfig,
-  ];
-  let policy: TelegramErrorPolicy = "always";
-
-  for (const config of configs) {
-    if (config?.errorPolicy) {
-      policy = config.errorPolicy;
-    }
-  }
-
-  return { policy, cooldownMs: DEFAULT_ERROR_COOLDOWN_MS };
+  return {
+    policy:
+      params.topicConfig?.errorPolicy ||
+      params.groupConfig?.errorPolicy ||
+      params.accountConfig?.errorPolicy ||
+      "always",
+    cooldownMs: DEFAULT_ERROR_COOLDOWN_MS,
+  };
 }
 
 export function buildTelegramErrorScopeKey(params: {
@@ -72,46 +57,26 @@ export function shouldSuppressTelegramError(params: {
   errorMessage?: string;
 }): boolean {
   const { scopeKey, cooldownMs, errorMessage } = params;
-  const now = asDateTimestampMs(Date.now());
+  const now = Date.now();
   const messageKey = errorMessage ?? "";
   const scopeStore = errorCooldownStore.get(scopeKey);
-  if (now === undefined) {
-    errorCooldownStore.delete(scopeKey);
-    return false;
-  }
-
   if (scopeStore) {
-    pruneExpiredCooldowns(scopeStore, now);
-    if (scopeStore.size === 0) {
-      errorCooldownStore.delete(scopeKey);
-    }
+    pruneExpiredCooldowns(scopeKey, scopeStore, now);
   }
 
   if (errorCooldownStore.size > 100) {
-    for (const [scope, messageStore] of errorCooldownStore) {
-      pruneExpiredCooldowns(messageStore, now);
-      if (messageStore.size === 0) {
-        errorCooldownStore.delete(scope);
-      }
+    for (const [scope, messages] of errorCooldownStore) {
+      pruneExpiredCooldowns(scope, messages, now);
     }
   }
 
   const expiresAt = scopeStore?.get(messageKey);
-  if (isFutureDateTimestampMs(expiresAt, { nowMs: now })) {
+  if (expiresAt !== undefined && expiresAt > now) {
     return true;
   }
 
-  const nextExpiresAt = resolveExpiresAtMsFromDurationMs(cooldownMs, { nowMs: now });
-  if (nextExpiresAt === undefined) {
-    scopeStore?.delete(messageKey);
-    return false;
-  }
   const nextScopeStore = scopeStore ?? new Map<string, number>();
-  nextScopeStore.set(messageKey, nextExpiresAt);
+  nextScopeStore.set(messageKey, now + cooldownMs);
   errorCooldownStore.set(scopeKey, nextScopeStore);
   return false;
-}
-
-export function isSilentErrorPolicy(policy: TelegramErrorPolicy): boolean {
-  return policy === "silent";
 }

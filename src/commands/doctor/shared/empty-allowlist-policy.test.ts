@@ -11,32 +11,12 @@ vi.mock("../channel-capabilities.js", () => ({
   }),
 }));
 
-vi.mock("./channel-doctor.js", () => ({
-  shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: ({
-    channelName,
-  }: {
-    channelName?: string;
-  }) => channelName === "zalouser",
-}));
-
 describe("doctor empty allowlist policy warnings", () => {
-  it("warns when dm allowlist mode has no allowFrom entries", () => {
-    const warnings = collectEmptyAllowlistPolicyWarningsForAccount({
-      account: { dmPolicy: "allowlist" },
-      channelName: "signal",
-      doctorFixCommand: "openclaw doctor --fix",
-      prefix: "channels.signal",
-    });
-
-    expect(warnings).toEqual([
-      '- channels.signal.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
-    ]);
-  });
-
   it("warns when non-telegram group allowlist mode does not fall back to allowFrom", () => {
     const warnings = collectEmptyAllowlistPolicyWarningsForAccount({
       account: { groupPolicy: "allowlist" },
       channelName: "imessage",
+      shouldSkipDefaultEmptyGroupAllowlistWarning: () => false,
       doctorFixCommand: "openclaw doctor --fix",
       prefix: "channels.imessage",
     });
@@ -46,10 +26,11 @@ describe("doctor empty allowlist policy warnings", () => {
     ]);
   });
 
-  it("stays quiet for zalouser hybrid route-and-sender group access", () => {
+  it("respects the channel hook for hybrid route-and-sender group access", () => {
     const warnings = collectEmptyAllowlistPolicyWarningsForAccount({
       account: { groupPolicy: "allowlist" },
       channelName: "zalouser",
+      shouldSkipDefaultEmptyGroupAllowlistWarning: () => true,
       doctorFixCommand: "openclaw doctor --fix",
       prefix: "channels.zalouser",
     });
@@ -61,6 +42,7 @@ describe("doctor empty allowlist policy warnings", () => {
     const warnings = collectEmptyAllowlistPolicyWarningsForAccount({
       account: { groupPolicy: "allowlist" },
       channelName: "discord",
+      shouldSkipDefaultEmptyGroupAllowlistWarning: () => false,
       doctorFixCommand: "openclaw doctor --fix",
       prefix: "channels.discord",
     });

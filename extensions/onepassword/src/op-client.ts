@@ -3,29 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { canAccess, canAccessSync } from "openclaw/plugin-sdk/path-existence-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import { asRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTrustedOnePasswordCli } from "../onepassword-op-path.js";
 import { OnePasswordError } from "./errors.js";
 
 const MAX_STDOUT_BYTES = 1024 * 1024;
-
-type OpProcessResult = {
-  stdout: string;
-  stderr: string;
-};
-
-type OpProcessOptions = {
-  env: NodeJS.ProcessEnv;
-  timeoutMs: number;
-  maxBufferBytes: number;
-};
-
-type OpProcessRunner = (
-  file: string,
-  args: string[],
-  options: OpProcessOptions,
-) => Promise<OpProcessResult>;
 
 export type ResolvedSecret = {
   value: string;
@@ -37,67 +22,31 @@ type OpClientOptions = {
   opBin?: string;
   tokenFile: string;
   timeoutMs: number;
-  runner?: OpProcessRunner;
-  home?: string;
-  pathEnv?: string;
   warn?: (message: string) => void;
 };
 
-type OpField = {
-  id?: unknown;
-  label?: unknown;
-  value?: unknown;
-};
-
-async function defaultRunner(
-  file: string,
-  args: string[],
-  options: OpProcessOptions,
-): Promise<OpProcessResult> {
-  return await runExec(file, args, {
-    baseEnv: {},
-    env: options.env,
-    logOutput: false,
-    maxBuffer: options.maxBufferBytes,
-    timeoutMs: options.timeoutMs,
-  });
-}
-
-function isExecutable(filePath: string): boolean {
-  try {
-    fsSync.accessSync(filePath, fsSync.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function resolveOpBinary(configuredPath: string | undefined, pathEnv: string): string | undefined {
+function resolveOpBinary(configuredPath: string | undefined): string | undefined {
   if (configuredPath) {
-    return isExecutable(configuredPath) ? configuredPath : undefined;
+    return canAccessSync(configuredPath, fsSync.constants.X_OK) ? configuredPath : undefined;
   }
   const executable = process.platform === "win32" ? "op.exe" : "op";
-  for (const directory of pathEnv.split(path.delimiter)) {
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
     if (!directory) {
       continue;
     }
     const candidate = path.resolve(directory, executable);
-    if (isExecutable(candidate)) {
+    if (canAccessSync(candidate, fsSync.constants.X_OK)) {
       return candidate;
     }
   }
   return undefined;
 }
 
-function errorRecord(error: unknown): Record<string, unknown> {
-  return error && typeof error === "object" ? (error as Record<string, unknown>) : {};
-}
-
 function classifyOpError(error: unknown): OnePasswordError {
   if (error instanceof OnePasswordError) {
     return error;
   }
-  const record = errorRecord(error);
+  const record = asRecord(error);
   const stderr = typeof record.stderr === "string" ? record.stderr : "";
   const normalized = stderr.toLowerCase();
   if (record.code === "ENOENT") {
@@ -137,13 +86,13 @@ function classifyOpError(error: unknown): OnePasswordError {
 }
 
 function parseField(stdout: string, requestedField: string, itemTitle: string): ResolvedSecret {
-  let field: OpField;
+  let field: Record<string, unknown>;
   try {
     const parsed: unknown = JSON.parse(stdout);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (!isRecord(parsed)) {
       throw new Error("field response is not an object");
     }
-    field = parsed as OpField;
+    field = parsed;
   } catch (error) {
     throw new OnePasswordError("OP_ERROR", "1Password CLI returned invalid JSON", {
       cause: error,
@@ -169,27 +118,20 @@ export class OpClient {
   readonly opBin: string | undefined;
   readonly tokenFile: string;
   private readonly timeoutMs: number;
-  private readonly runner: OpProcessRunner;
   private readonly home: string;
   private readonly warn: (message: string) => void;
   private permissionWarningEmitted = false;
 
   constructor(options: OpClientOptions) {
-    this.opBin = resolveOpBinary(options.opBin, options.pathEnv ?? process.env.PATH ?? "");
+    this.opBin = resolveOpBinary(options.opBin);
     this.tokenFile = options.tokenFile;
     this.timeoutMs = options.timeoutMs;
-    this.runner = options.runner ?? defaultRunner;
-    this.home = options.home ?? os.homedir();
+    this.home = os.homedir();
     this.warn = options.warn ?? (() => undefined);
   }
 
   async tokenFilePresent(): Promise<boolean> {
-    try {
-      await fs.access(this.tokenFile, fsSync.constants.R_OK);
-      return true;
-    } catch {
-      return false;
-    }
+    return canAccess(this.tokenFile, fsSync.constants.R_OK);
   }
 
   private async readToken(): Promise<string> {
@@ -255,7 +197,8 @@ export class OpClient {
       "--cache=false",
     ];
     try {
-      const result = await this.runner(trustedOpBin, args, {
+      const result = await runExec(trustedOpBin, args, {
+        baseEnv: {},
         env: {
           OP_SERVICE_ACCOUNT_TOKEN: token,
           HOME: this.home,
@@ -267,7 +210,8 @@ export class OpClient {
           OP_BIOMETRIC_UNLOCK_ENABLED: "false",
         },
         timeoutMs: this.timeoutMs,
-        maxBufferBytes: MAX_STDOUT_BYTES,
+        maxBuffer: MAX_STDOUT_BYTES,
+        logOutput: false,
       });
       return parseField(result.stdout, params.field, params.item);
     } catch (error) {

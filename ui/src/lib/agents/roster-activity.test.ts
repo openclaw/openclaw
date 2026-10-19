@@ -3,6 +3,97 @@ import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { agentRosterCards } from "./roster-activity.ts";
 
 describe("agent roster activity", () => {
+  it("selects the latest assistant reply across sessions without using user activity", () => {
+    const cards = agentRosterCards(
+      {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }, { id: "unanswered" }],
+      },
+      [
+        {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 100,
+          lastMessagePreview: "New user question",
+          lastAssistantMessage: { text: "Earlier main reply", timestamp: 10 },
+        },
+        {
+          key: "agent:main:work",
+          kind: "direct",
+          updatedAt: 30,
+          lastMessagePreview: "Another user question",
+          lastAssistantMessage: { text: "I have set up the template.", timestamp: 20 },
+        },
+        {
+          key: "agent:main:tied",
+          kind: "direct",
+          updatedAt: 50,
+          lastAssistantMessage: { text: "Tied reply", timestamp: 20 },
+        },
+        {
+          key: "agent:unanswered:main",
+          kind: "direct",
+          updatedAt: 200,
+          lastMessagePreview: "Only a user message",
+        },
+      ],
+    );
+    expect(cards.map((card) => card.assistantPreview)).toEqual([
+      "I have set up the template.",
+      undefined,
+    ]);
+    expect(cards.map((card) => card.sessionCount)).toEqual([3, 1]);
+    expect(cards[0]?.mainKey).toBe("agent:main:main");
+  });
+
+  it("preserves row ownership, recency ties, and canonical main precedence", () => {
+    const identities: string[] = [];
+    const rows: GatewaySessionRow[] = [
+      { key: "agent:alpha:alias", kind: "direct", isMain: true, lastMessagePreview: "Alias" },
+      { key: "agent::ALPHA:task", agentId: "beta", kind: "direct", updatedAt: 9, unread: true },
+      {
+        key: "foreign-key",
+        agentId: "beta",
+        kind: "direct",
+        updatedAt: 7,
+        lastMessagePreview: "First beta",
+      },
+      { key: "agent:beta:second", kind: "direct", updatedAt: 7, lastMessagePreview: "Tied beta" },
+      { key: "agent:alpha:main", kind: "direct", updatedAt: 1, lastMessagePreview: "Canonical" },
+      { key: "unscoped", kind: "direct", updatedAt: 10, hasActiveRun: true },
+      { key: "agent:system:main", kind: "direct", updatedAt: 99, hasActiveRun: true },
+    ];
+    const before = structuredClone(rows);
+    const cards = agentRosterCards(
+      {
+        defaultId: "alpha",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [
+          { id: "beta" },
+          { id: "system", kind: "system" },
+          { id: "alpha" },
+          { id: "empty" },
+        ],
+      },
+      rows,
+      (id) => {
+        identities.push(id);
+        return null;
+      },
+    );
+
+    expect(cards).toMatchObject([
+      { id: "beta", lastActiveAt: 7, preview: "First beta", activeNow: false, unreadCount: 0 },
+      { id: "alpha", lastActiveAt: 10, preview: "Canonical", activeNow: true, unreadCount: 1 },
+      { id: "empty", lastActiveAt: 0, preview: undefined, activeNow: false, unreadCount: 0 },
+    ]);
+    expect(identities).toEqual(["beta", "alpha", "empty"]);
+    expect(rows).toEqual(before);
+  });
+
   it("uses the canonical global main stream rather than a synthesized agent key", () => {
     const cards = agentRosterCards(
       { defaultId: "main", mainKey: "main", scope: "global", agents: [{ id: "main" }] },
@@ -56,6 +147,7 @@ describe("agent roster activity", () => {
       name: "Ember",
       textAvatar: "🔥",
       activeNow: true,
+      sessionCount: 3,
       lastActiveAt: 6,
       preview: "Main summary",
       mainKey: "agent:ember:team",
@@ -65,7 +157,7 @@ describe("agent roster activity", () => {
       lastActiveAt: 9,
       preview: "Recent fallback",
     });
-    expect(cards[2]).toMatchObject({ activeNow: false, lastActiveAt: 0, preview: undefined });
+    expect(cards[2]).toMatchObject({ activeNow: false, sessionCount: 0, lastActiveAt: 0 });
   });
 
   it("honors terminal run state and uses the main flag when its canonical key is absent", () => {

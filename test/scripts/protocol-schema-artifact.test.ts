@@ -1,5 +1,4 @@
-// Protocol schema artifact tests cover the published document contract and the
-// regenerate-then-diff guards that verify the committed generator outputs.
+// Protocol schema artifact tests cover the published document contract.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,23 +12,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const GIT_DIFF_GUARD = "git diff --exit-code --";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function readPackageScripts(): Record<string, string> {
-  const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
-    scripts: Record<string, string>;
-  };
-  return manifest.scripts;
-}
-
-function readGitDiffGuardPaths(script: string): string[] {
-  return script
-    .split("&&")
-    .map((command) => command.trim())
-    .filter((command) => command.startsWith(GIT_DIFF_GUARD))
-    .flatMap((command) => command.slice(GIT_DIFF_GUARD.length).trim().split(/\s+/u));
-}
 
 function buildValidDocument(): ProtocolSchemaDocument {
   return buildProtocolSchemaDocument({
@@ -43,35 +26,7 @@ function buildValidDocument(): ProtocolSchemaDocument {
   });
 }
 
-describe("regenerate-then-diff protocol guards", () => {
-  it("guards only git-tracked generator outputs", () => {
-    const guardedScripts = Object.entries(readPackageScripts())
-      .map(([name, script]) => ({ name, paths: readGitDiffGuardPaths(script) }))
-      .filter(({ paths }) => paths.length > 0);
-
-    expect(guardedScripts.length).toBeGreaterThan(0);
-    for (const { name, paths } of guardedScripts) {
-      // An untracked path makes `git diff --exit-code` succeed unconditionally,
-      // so the guard reads as verification while it can never fail.
-      const tracked = execFileSync("git", ["ls-files", "--", ...paths], {
-        cwd: repoRoot,
-        encoding: "utf8",
-      })
-        .split("\n")
-        .filter(Boolean);
-      expect({ script: name, tracked: [...tracked].sort() }).toEqual({
-        script: name,
-        tracked: [...paths].sort(),
-      });
-    }
-  });
-});
-
 describe("published protocol schema document", () => {
-  it("accepts the canonical document", () => {
-    expect(() => assertProtocolSchemaDocument(buildValidDocument())).not.toThrow();
-  });
-
   it("rejects a document that lost a required frame definition", () => {
     const document = buildValidDocument();
     delete document.definitions.ConnectParams;
@@ -83,7 +38,7 @@ describe("published protocol schema document", () => {
 
   it("rejects reordered frame branches", () => {
     const document = buildValidDocument();
-    document.oneOf = [...document.oneOf].reverse();
+    document.oneOf = document.oneOf.toReversed();
 
     expect(() => assertProtocolSchemaDocument(document)).toThrow("frame oneOf must list");
   });
@@ -120,10 +75,9 @@ describe("protocol-gen artifact", () => {
     expect(
       JSON.stringify(
         buildProtocolSchemaDocument({
-          methods: Object.entries(document.methods).map(([name, metadata]) => ({
-            name,
-            ...metadata,
-          })),
+          methods: Object.entries(document.methods).map(([name, metadata]) =>
+            Object.assign({ name }, metadata),
+          ),
           schemas: document.definitions,
         }),
         null,

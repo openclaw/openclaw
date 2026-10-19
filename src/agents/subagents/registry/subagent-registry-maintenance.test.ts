@@ -1,22 +1,29 @@
-import { DatabaseSync } from "node:sqlite";
+import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { collectSessionMaintenancePreserveKeys } from "../../../config/sessions/store-maintenance-preserve.js";
+import { prepareSessionMaintenancePreservation } from "../../../config/sessions/store-maintenance-preserve.js";
+import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
-  persistSubagentRunsToDisk,
   publishSubagentRunsAfterAtomicStore,
 } from "./subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import "./subagent-registry-maintenance.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let storePath: string;
 
 function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {
@@ -38,12 +45,19 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
   };
 }
 
-function protectedKeys() {
-  return [...(collectSessionMaintenancePreserveKeys() ?? [])].toSorted();
+async function protectedKeys() {
+  const prepared = await prepareSessionMaintenancePreservation(storePath);
+  try {
+    return prepared.capture().providerKeys;
+  } finally {
+    prepared.dispose();
+  }
 }
 
 beforeEach(() => {
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("subagent-maintenance-"));
+  const stateDir = tempDirs.make("subagent-maintenance-");
+  storePath = path.join(stateDir, "sessions.json");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
   clearSubagentRunsReadCacheForTest();
   subagentRuns.clear();
@@ -58,7 +72,7 @@ afterEach(async () => {
 });
 
 describe("subagent maintenance protection", () => {
-  it("collects protection keys without decoding retained task and reply text", () => {
+  it("loads protection once without decoding retained task and reply text", async () => {
     const publicRun = createRun();
     const privateRun = createRun({
       runId: "private",
@@ -68,9 +82,29 @@ describe("subagent maintenance protection", () => {
     saveSubagentRegistryToSqlite(
       new Map([publicRun, privateRun].map((entry) => [entry.runId, entry])),
     );
+    subagentRuns.set("duplicate", {
+      ...publicRun,
+      runId: "duplicate",
+      childSessionKey: `  ${publicRun.childSessionKey}  `,
+    });
+    subagentRuns.set("blank", { ...publicRun, runId: "blank", childSessionKey: "  " });
     const parse = vi.spyOn(JSON, "parse");
+    const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     try {
-      expect(protectedKeys()).toEqual([publicRun.childSessionKey, privateRun.childSessionKey]);
+      expect(await protectedKeys()).toEqual([
+        publicRun.childSessionKey,
+        privateRun.childSessionKey,
+      ]);
+      expect(await protectedKeys()).toEqual([
+        publicRun.childSessionKey,
+        privateRun.childSessionKey,
+      ]);
+      expect(
+        read.mock.calls.filter(
+          ([, command]) =>
+            command.type === "subagents.runs" && command.scope.kind === "maintenance",
+        ),
+      ).toHaveLength(1);
       expect(
         parse.mock.calls.some(
           ([text]) =>
@@ -79,10 +113,11 @@ describe("subagent maintenance protection", () => {
       ).toBe(false);
     } finally {
       parse.mockRestore();
+      read.mockRestore();
     }
   });
 
-  it("preserves canonical parser and protection decisions for persisted payloads", () => {
+  it("preserves canonical parser and protection decisions for persisted payloads", async () => {
     const run = createRun();
     saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
     const write = openOpenClawStateDatabase().db.prepare(
@@ -167,48 +202,88 @@ describe("subagent maintenance protection", () => {
     for (const [name, text, protectedRun] of cases) {
       write.run(text, run.runId);
       clearSubagentRunsReadCacheForTest();
-      expect(protectedKeys(), name).toEqual(protectedRun ? [run.childSessionKey] : []);
+      expect(await protectedKeys(), name).toEqual(protectedRun ? [run.childSessionKey] : []);
     }
   });
 
-  it("retains external freshness, live overlays, and both write publication paths", () => {
+  it("uses committed registry writes for prepared protection without rereading SQLite", async () => {
+    const first = createRun({
+      runId: "first",
+      childSessionKey: "agent:main:subagent:first",
+      cleanupCompletedAt: 3,
+    });
+    const second = createRun({
+      runId: "second",
+      childSessionKey: "agent:main:subagent:second",
+    });
+    saveSubagentRegistryToSqlite(new Map([first, second].map((entry) => [entry.runId, entry])));
+    const runs = new Map<string, SubagentRunRecord>();
+    const prepared = await prepareSessionMaintenancePreservation(storePath, { native: true });
+    try {
+      expect(prepared.capture().providerKeys).toEqual([second.childSessionKey]);
+      await mutateSubagentRuns(
+        [first.runId],
+        () => ({
+          value: undefined,
+          postimages: new Map([[first.runId, { ...first, cleanupCompletedAt: undefined }]]),
+        }),
+        { runs },
+      );
+      const observation = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        expect(prepared.refreshCandidates([first.childSessionKey]).providerKeys).toEqual([
+          first.childSessionKey,
+          second.childSessionKey,
+        ]);
+        expect(observation.queries).toEqual([]);
+      } finally {
+        observation.restore();
+      }
+      expect(await protectedKeys()).toEqual([first.childSessionKey, second.childSessionKey]);
+      await mutateSubagentRuns(
+        [first.runId],
+        () => ({ value: undefined, postimages: new Map([[first.runId, null]]) }),
+        { runs },
+      );
+      expect(prepared.capture().providerKeys).toEqual([second.childSessionKey]);
+      expect(await protectedKeys()).toEqual([second.childSessionKey]);
+    } finally {
+      prepared.dispose();
+    }
+  });
+
+  it("retains live overlays and acknowledged row publications", async () => {
     const run = createRun();
     saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(1_000);
-    expect(protectedKeys()).toEqual([run.childSessionKey]);
-    const database = openOpenClawStateDatabase();
-    const external = new DatabaseSync(database.path);
+    expect(await protectedKeys()).toEqual([run.childSessionKey]);
+    persistRegistryFixture(new Map([[run.runId, { ...run, cleanupCompletedAt: 3 }]]), [run.runId]);
+    expect(await protectedKeys()).toEqual([]);
+    subagentRuns.set(run.runId, run);
+    expect(await protectedKeys()).toEqual([run.childSessionKey]);
+    const completed = { ...run, cleanupCompletedAt: Number.NaN };
+    subagentRuns.set(run.runId, completed);
+    expect(await protectedKeys()).toEqual([]);
+    subagentRuns.set(run.runId, {
+      ...completed,
+      killIntent: { requestedAt: Number.NaN, reason: "live pending intent" },
+    });
+    expect(await protectedKeys()).toEqual([run.childSessionKey]);
+    subagentRuns.clear();
+    const changed = createRun({ expectsCompletionMessage: false });
+    // The runtime owner installs live rows before publishing its acknowledged write.
+    subagentRuns.set(changed.runId, changed);
+    persistRegistryFixture(new Map([[changed.runId, changed]]), [changed.runId]);
+    expect(await protectedKeys()).toEqual([run.childSessionKey]);
+    const prepared = await prepareSessionMaintenancePreservation(storePath);
     try {
-      external
-        .prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?")
-        .run(JSON.stringify({ ...run, cleanupCompletedAt: 3 }), run.runId);
-      vi.setSystemTime(1_499);
-      expect(protectedKeys()).toEqual([run.childSessionKey]);
-      vi.setSystemTime(1_500);
-      expect(protectedKeys()).toEqual([]);
-      subagentRuns.set(run.runId, run);
-      expect(protectedKeys()).toEqual([run.childSessionKey]);
-      run.cleanupCompletedAt = Number.NaN;
-      expect(protectedKeys()).toEqual([]);
-      run.killIntent = { requestedAt: Number.NaN, reason: "live pending intent" };
-      expect(protectedKeys()).toEqual([run.childSessionKey]);
-      subagentRuns.clear();
-      const changed = createRun({ expectsCompletionMessage: false });
-      persistSubagentRunsToDisk(new Map([[changed.runId, changed]]), [changed.runId]);
-      // Published memory retains pending delivery; persisted normalization is disk-reader owned.
-      expect(protectedKeys()).toEqual([run.childSessionKey]);
-      changed.cleanupCompletedAt = 4;
-      saveSubagentRegistryToSqlite(new Map([[changed.runId, changed]]));
-      const events: Array<() => void> = [];
-      publishSubagentRunsAfterAtomicStore(
-        new Map([[changed.runId, changed]]),
-        [changed.runId],
-        events,
-      );
-      expect(protectedKeys()).toEqual([]);
+      const cleaned = { ...changed, cleanupCompletedAt: 4 };
+      saveSubagentRegistryToSqlite(new Map([[cleaned.runId, cleaned]]));
+      subagentRuns.set(cleaned.runId, cleaned);
+      publishSubagentRunsAfterAtomicStore(new Map([[cleaned.runId, cleaned]]), [cleaned.runId]);
+      expect(prepared.capture().providerKeys).toEqual([]);
     } finally {
-      external.close();
+      prepared.dispose();
     }
+    expect(await protectedKeys()).toEqual([]);
   });
 });

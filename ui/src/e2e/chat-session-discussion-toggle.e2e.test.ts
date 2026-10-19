@@ -1,143 +1,96 @@
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext } from "playwright";
-import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContextOptions, Page } from "playwright";
+import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import {
-  canRunPlaywrightChromium,
-  controlUiSessionUrl,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { activateChatHeaderPanelAction } from "./chat-side-panel.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({ name: "session discussion toggle" });
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("session-discussion-toggle");
-  }
-});
-
-let server: ControlUiE2eServer;
-let browser: Browser;
-const openContexts = new Set<BrowserContext>();
-
-async function closeOpenContexts(): Promise<void> {
-  const contexts = Array.from(openContexts);
-  openContexts.clear();
-  await Promise.all(contexts.map((context) => context.close()));
+async function openDiscussion(
+  page: Page,
+  sessionKey: string,
+  methodResponses: Record<string, unknown>,
+) {
+  const gateway = await installMockGateway(page, {
+    sessionKey,
+    methodResponses,
+    featureMethods: ["session.discussion.info", "session.discussion.open"],
+    historyMessages: [
+      {
+        content: [{ type: "text", text: "Discussion proof." }],
+        role: "assistant",
+        timestamp: Date.now(),
+      },
+    ],
+  });
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+  await gateway.waitForRequest("session.discussion.info");
+  return gateway;
+}
+async function withDiscussionPage(
+  run: (page: Page, capture: (name: string) => Promise<void>) => Promise<void>,
+  options: BrowserContextOptions = {},
+) {
+  const dir = captureUiProof ? createControlUiE2eArtifactDir("session-discussion-toggle") : null;
+  await suite.withPage(
+    {
+      viewport: { height: 720, width: 1280 },
+      ...(dir ? { recordVideo: { dir, size: { height: 720, width: 1280 } } } : {}),
+      ...options,
+    },
+    async ({ page }) =>
+      run(page, async (name) => {
+        if (dir) {
+          await page.screenshot({ path: path.join(dir, name + ".png") });
+        }
+      }),
+  );
 }
 
-describeControlUiE2e("session discussion toggle", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    server = await startControlUiE2eServer();
-  });
-
-  afterEach(closeOpenContexts);
-
-  afterAll(async () => {
-    await closeOpenContexts();
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("keeps an existing discussion closed until the header action opens it", async () => {
-    const context = await browser.newContext({
-      ...(captureUiProof
-        ? { recordVideo: { dir: proofDir, size: { height: 720, width: 1280 } } }
-        : {}),
-      viewport: { height: 720, width: 1280 },
+    await withDiscussionPage(async (page, capture) => {
+      const open = { openUrl: "https://discussion.example/session", state: "open" };
+      const gateway = await openDiscussion(page, "agent:main:discussion-proof", {
+        "session.discussion.info": open,
+        "session.discussion.open": open,
+      });
+      const discussionPanel = page.locator('.side-panel__panel[data-panel-slot="discussion"]');
+      const closeDiscussion = page.getByRole("button", { name: "Close Discussion" });
+      await expect.poll(() => discussionPanel.count()).toBe(0);
+      await capture("discussion-initial-closed");
+
+      await activateChatHeaderPanelAction(page, "Show discussion");
+
+      await expect.poll(() => discussionPanel.count()).toBe(1);
+      await expect.poll(() => closeDiscussion.isVisible()).toBe(true);
+      // The lazy panel must be registered, not an empty custom-element host.
+      await expect
+        .poll(() =>
+          page.locator("openclaw-session-discussion").evaluate((node) => node.childElementCount),
+        )
+        .toBeGreaterThan(0);
+      expect(await gateway.getRequests("session.discussion.open")).toHaveLength(0);
+      await capture("discussion-open");
+
+      await activateChatHeaderPanelAction(page, "Hide discussion");
+
+      await expect.poll(() => closeDiscussion.isVisible()).toBe(false);
+      await expect.poll(() => discussionPanel.count()).toBe(0);
+      expect(await gateway.getRequests("session.discussion.open")).toHaveLength(0);
+      await capture("discussion-closed");
     });
-    openContexts.add(context);
-    const page = await context.newPage();
-    const sessionKey = "agent:main:discussion-proof";
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["session.discussion.info", "session.discussion.open"],
-      historyMessages: [
-        {
-          content: [{ type: "text", text: "Discussion toggle proof." }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-      ],
-      methodResponses: {
-        "session.discussion.info": {
-          openUrl: "https://discussion.example/session",
-          state: "open",
-        },
-        "session.discussion.open": {
-          openUrl: "https://discussion.example/session",
-          state: "open",
-        },
-      },
-      sessionKey,
-    });
-
-    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
-    await gateway.waitForRequest("session.discussion.info");
-
-    // An existing discussion stays closed until the operator asks for it, and
-    // showing it must never re-open the discussion on the gateway.
-    const discussionPanel = page.locator('.side-panel__panel[data-panel-slot="discussion"]');
-    const closeDiscussion = page.getByRole("button", { name: "Close Discussion" });
-    await expect.poll(() => discussionPanel.count()).toBe(0);
-    if (captureUiProof) {
-      await page.screenshot({ path: path.join(proofDir, "discussion-initial-closed.png") });
-    }
-
-    await activateChatHeaderPanelAction(page, "Show discussion");
-
-    await expect.poll(() => discussionPanel.count()).toBe(1);
-    await expect.poll(() => closeDiscussion.isVisible()).toBe(true);
-    // The tab must carry the upgraded panel, not an empty box: the element is
-    // defined lazily per slot, so a missing runtime registration renders as a
-    // silently blank tab.
-    await expect
-      .poll(() =>
-        page.locator("openclaw-session-discussion").evaluate((node) => node.childElementCount),
-      )
-      .toBeGreaterThan(0);
-    expect(await gateway.getRequests("session.discussion.open")).toHaveLength(0);
-    if (captureUiProof) {
-      await page.screenshot({ path: path.join(proofDir, "discussion-open.png") });
-    }
-
-    await activateChatHeaderPanelAction(page, "Hide discussion");
-
-    await expect.poll(() => closeDiscussion.isVisible()).toBe(false);
-    await expect.poll(() => discussionPanel.count()).toBe(0);
-    expect(await gateway.getRequests("session.discussion.open")).toHaveLength(0);
-    if (captureUiProof) {
-      await page.screenshot({ path: path.join(proofDir, "discussion-closed.png") });
-    }
   });
 
   it("keeps a cross-origin discussion in sync when the real host color scheme changes", async () => {
-    const context = await browser.newContext({
-      colorScheme: "light",
-      ...(captureUiProof
-        ? { recordVideo: { dir: proofDir, size: { height: 720, width: 1280 } } }
-        : {}),
-      viewport: { height: 720, width: 1280 },
-    });
-    openContexts.add(context);
-    const page = await context.newPage();
-    const sessionKey = "agent:main:discussion-theme-proof";
-
-    await page.route("https://discussion.example/embed/channel/**", (route) =>
-      route.fulfill({
-        contentType: "text/html; charset=utf-8",
-        body: `<!doctype html><html><head><meta charset="utf-8">
+    await withDiscussionPage(
+      async (page, capture) => {
+        await page.route("https://discussion.example/embed/channel/**", (route) =>
+          route.fulfill({
+            contentType: "text/html; charset=utf-8",
+            body: `<!doctype html><html><head><meta charset="utf-8">
           <style>
             :root { font: 14px system-ui, sans-serif; }
             body { margin: 0; padding: 20px; background: var(--host-surface, #fff);
@@ -160,86 +113,71 @@ describeControlUiE2e("session discussion toggle", () => {
               }
             });
           </script></body></html>`,
-      }),
-    );
+          }),
+        );
 
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["session.discussion.info", "session.discussion.open"],
-      historyMessages: [
-        {
-          content: [{ type: "text", text: "Cross-origin theme proof." }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-      ],
-      methodResponses: {
-        "session.discussion.info": { state: "available" },
-        "session.discussion.open": {
-          embedUrl: "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1",
-          openUrl: "https://discussion.example/app/T1/C1",
-          state: "open",
-        },
+        await openDiscussion(page, "agent:main:discussion-theme-proof", {
+          "session.discussion.info": { state: "available" },
+          "session.discussion.open": {
+            embedUrl: "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1",
+            openUrl: "https://discussion.example/app/T1/C1",
+            state: "open",
+          },
+        });
+        await activateChatHeaderPanelAction(page, "Show discussion");
+
+        const frameElement = page.locator("iframe.session-discussion__frame");
+        await expect.poll(() => frameElement.count()).toBe(1);
+        const discussionFrame = () =>
+          page
+            .frames()
+            .find((candidate) =>
+              candidate.url().startsWith("https://discussion.example/embed/channel/"),
+            );
+        await expect.poll(() => Boolean(discussionFrame())).toBe(true);
+        const frame = discussionFrame();
+        expect(frame).toBeDefined();
+
+        const frameUrl = new URL(frame!.url());
+        expect(frameUrl.searchParams.get("theme")).toBe("light");
+        expect(frameUrl.searchParams.get("hostOrigin")).toBe(new URL(suite.server.baseUrl).origin);
+        await expect
+          .poll(() => frame!.locator("html").getAttribute("data-host-mode"))
+          .toBe("light");
+        await expect
+          .poll(() =>
+            frame!.evaluate(() =>
+              getComputedStyle(document.documentElement).getPropertyValue("--host-surface").trim(),
+            ),
+          )
+          .not.toBe("");
+        await capture("discussion-theme-light");
+
+        await page.emulateMedia({ colorScheme: "dark" });
+
+        await expect
+          .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
+          .toBe("dark");
+        await expect.poll(() => frame!.locator("html").getAttribute("data-host-mode")).toBe("dark");
+        await expect
+          .poll(async () => {
+            const [hostSurface, embeddedSurface] = await Promise.all([
+              page.evaluate(() =>
+                getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
+              ),
+              frame!.evaluate(() =>
+                getComputedStyle(document.documentElement)
+                  .getPropertyValue("--host-surface")
+                  .trim(),
+              ),
+            ]);
+            return { hostSurface, embeddedSurface };
+          })
+          .toEqual({ hostSurface: "#0e1015", embeddedSurface: "#0e1015" });
+        expect(new URL(frame!.url()).searchParams.get("theme")).toBe("light");
+        await capture("discussion-theme-dark");
       },
-      sessionKey,
-    });
-
-    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
-    await gateway.waitForRequest("session.discussion.info");
-    await activateChatHeaderPanelAction(page, "Show discussion");
-
-    const frameElement = page.locator("iframe.session-discussion__frame");
-    await expect.poll(() => frameElement.count()).toBe(1);
-    await expect
-      .poll(() =>
-        page
-          .frames()
-          .some((candidate) =>
-            candidate.url().startsWith("https://discussion.example/embed/channel/"),
-          ),
-      )
-      .toBe(true);
-    const frame = page
-      .frames()
-      .find((candidate) => candidate.url().startsWith("https://discussion.example/embed/channel/"));
-    expect(frame).toBeDefined();
-
-    const frameUrl = new URL(frame!.url());
-    expect(frameUrl.searchParams.get("theme")).toBe("light");
-    expect(frameUrl.searchParams.get("hostOrigin")).toBe(new URL(server.baseUrl).origin);
-    await expect.poll(() => frame!.locator("html").getAttribute("data-host-mode")).toBe("light");
-    await expect
-      .poll(() =>
-        frame!.evaluate(() =>
-          getComputedStyle(document.documentElement).getPropertyValue("--host-surface").trim(),
-        ),
-      )
-      .not.toBe("");
-    if (captureUiProof) {
-      await page.screenshot({ path: path.join(proofDir, "discussion-theme-light.png") });
-    }
-
-    await page.emulateMedia({ colorScheme: "dark" });
-
-    await expect
-      .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
-      .toBe("dark");
-    await expect.poll(() => frame!.locator("html").getAttribute("data-host-mode")).toBe("dark");
-    await expect
-      .poll(async () => {
-        const [hostSurface, embeddedSurface] = await Promise.all([
-          page.evaluate(() =>
-            getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
-          ),
-          frame!.evaluate(() =>
-            getComputedStyle(document.documentElement).getPropertyValue("--host-surface").trim(),
-          ),
-        ]);
-        return { hostSurface, embeddedSurface };
-      })
-      .toEqual({ hostSurface: "#0e1015", embeddedSurface: "#0e1015" });
-    expect(new URL(frame!.url()).searchParams.get("theme")).toBe("light");
-    if (captureUiProof) {
-      await page.screenshot({ path: path.join(proofDir, "discussion-theme-dark.png") });
-    }
+      { colorScheme: "light" },
+    );
   });
 });

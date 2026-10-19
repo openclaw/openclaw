@@ -1,156 +1,105 @@
-/** Doctor-owned migration of shipped generated provider catalogs into agent SQLite. */
-import type { Dirent } from "node:fs";
-import fs from "node:fs/promises";
+import fs from "node:fs";
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { repairPluginModelCatalogTransportMetadata } from "../agents/plugin-model-catalog-repair.js";
 import {
-  decodePluginModelCatalogRelativePathPluginId,
-  isGeneratedPluginModelCatalog,
-  isPluginModelCatalogMigrationFile,
+  reviewRootProviderCopies,
+  type RootProviderCopyReview,
+} from "../agents/plugin-model-catalog-root-copies.js";
+import {
+  inspectLegacyPluginModelCatalogs,
+  loadPersistedPluginModelCatalogsReadOnly,
   migrateLegacyPluginModelCatalogs,
+  repairPersistedPluginModelCatalogs,
 } from "../agents/plugin-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { privateFileStore } from "../infra/private-file-store.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-
-type LegacyPluginModelCatalogMigration = {
-  agentDir: string;
-  pluginId: string;
-  relativePath: string;
-  contents: string;
-};
 
 function resolveMigrationAgentDirs(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   agentDirs?: readonly string[];
 }): string[] {
-  if (params.agentDirs) {
-    return [...new Set(params.agentDirs)].toSorted((left, right) => left.localeCompare(right));
-  }
+  let agentDirs = params.agentDirs;
   const env = params.env ?? process.env;
-  const agentIds = listAgentIds(params.cfg);
-  const configuredAgentDirs =
-    agentIds.length > 0
-      ? agentIds.map((agentId) => resolveAgentDir(params.cfg, agentId, env))
-      : [resolveDefaultAgentDir(params.cfg, env)];
-  return [...new Set(configuredAgentDirs)].toSorted((left, right) => left.localeCompare(right));
-}
-
-async function readLegacyPluginCatalogContents(params: {
-  agentDir: string;
-  relativePath: string;
-}): Promise<string | null> {
-  const pluginDir = path.dirname(path.join(params.agentDir, params.relativePath));
-  return await privateFileStore(pluginDir).readTextIfExists(path.basename(params.relativePath));
-}
-
-/** Detects only marker-backed catalogs produced by tagged OpenClaw releases. */
-async function collectLegacyPluginModelCatalogMigrations(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  agentDirs?: readonly string[];
-  warnings?: string[];
-}): Promise<LegacyPluginModelCatalogMigration[]> {
-  const migrations: LegacyPluginModelCatalogMigration[] = [];
-  for (const agentDir of resolveMigrationAgentDirs(params)) {
-    const pluginsDir = path.join(agentDir, "plugins");
-    let pluginDirs: Dirent[];
-    try {
-      pluginDirs = await fs.readdir(pluginsDir, { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      params.warnings?.push(
-        `Could not inspect legacy provider catalogs: ${shortenHomePath(pluginsDir)}`,
-      );
-      continue;
-    }
-    for (const pluginDir of pluginDirs) {
-      if (!pluginDir.isDirectory()) {
-        continue;
-      }
-      const canonicalRelativePath = path.join("plugins", pluginDir.name, "catalog.json");
-      const pluginId = decodePluginModelCatalogRelativePathPluginId(canonicalRelativePath);
-      if (!pluginId) {
-        continue;
-      }
-      const pluginPath = path.join(pluginsDir, pluginDir.name);
-      let catalogFiles: Dirent[];
-      try {
-        catalogFiles = await fs.readdir(pluginPath, { withFileTypes: true });
-      } catch {
-        params.warnings?.push(
-          `Could not inspect legacy provider catalogs: ${shortenHomePath(pluginPath)}`,
-        );
-        continue;
-      }
-      const sourceFiles = catalogFiles
-        .filter((entry) => entry.isFile() && isPluginModelCatalogMigrationFile(entry.name))
-        .toSorted((left, right) => {
-          if (left.name === "catalog.json") {
-            return 1;
-          }
-          if (right.name === "catalog.json") {
-            return -1;
-          }
-          return left.name.localeCompare(right.name);
-        });
-      const pluginMigrations: LegacyPluginModelCatalogMigration[] = [];
-      let hasUnreadableCatalog = false;
-      for (const sourceFile of sourceFiles) {
-        const relativePath = path.join("plugins", pluginDir.name, sourceFile.name);
-        let contents: string | null;
-        try {
-          contents = await readLegacyPluginCatalogContents({ agentDir, relativePath });
-        } catch {
-          hasUnreadableCatalog = true;
-          params.warnings?.push(
-            `Could not read legacy provider catalog: ${shortenHomePath(path.join(agentDir, relativePath))}`,
-          );
-          continue;
-        }
-        if (contents === null) {
-          continue;
-        }
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(contents) as unknown;
-        } catch {
-          continue;
-        }
-        if (isGeneratedPluginModelCatalog(parsed)) {
-          pluginMigrations.push({ agentDir, pluginId, relativePath, contents });
-        }
-      }
-      if (hasUnreadableCatalog) {
-        continue;
-      }
-      if (
-        !pluginMigrations.some(
-          (migration) => path.basename(migration.relativePath) === "catalog.json",
-        ) &&
-        new Set(pluginMigrations.map((migration) => migration.contents)).size > 1
-      ) {
-        params.warnings?.push(
-          `Conflicting retained legacy provider catalogs: ${shortenHomePath(pluginPath)}`,
-        );
-        continue;
-      }
-      migrations.push(...pluginMigrations);
-    }
+  if (!agentDirs) {
+    const agentIds = listAgentIds(params.cfg);
+    agentDirs =
+      agentIds.length > 0
+        ? agentIds.map((agentId) => resolveAgentDir(params.cfg, agentId, env))
+        : [resolveDefaultAgentDir(params.cfg, env)];
   }
-  return migrations.toSorted((left, right) => {
-    const agentOrder = left.agentDir.localeCompare(right.agentDir);
-    return agentOrder !== 0 ? agentOrder : left.pluginId.localeCompare(right.pluginId);
-  });
+  return [...new Set(agentDirs)].toSorted((left, right) => left.localeCompare(right));
 }
 
-/** Imports and verifies released sidecars before Doctor removes any legacy bytes. */
+type RootModelsFile = Readonly<{
+  raw: string;
+  root: Record<string, unknown>;
+  providers: Record<string, unknown>;
+}>;
+
+function readRootModelsFile(agentDir: string): RootModelsFile | undefined {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(agentDir, "models.json"), "utf8");
+  } catch {
+    return undefined;
+  }
+  try {
+    const root: unknown = JSON.parse(raw);
+    return isRecord(root) && isRecord(root.providers)
+      ? { raw, root, providers: root.providers }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Removes generated plugin copies from the root file. The exact previous bytes stay beside it as
+ * `models.json.bak-<ms>`; the file is rewritten, never deleted, because registry reads require it.
+ */
+async function removeRootProviderCopies(params: {
+  agentDir: string;
+  file: RootModelsFile;
+  review: RootProviderCopyReview;
+}): Promise<string> {
+  const providers = { ...params.file.providers };
+  for (const { providerId } of params.review.copies) {
+    delete providers[providerId];
+  }
+  const store = privateFileStore(params.agentDir);
+  const backupName = `models.json.bak-${Date.now()}`;
+  await store.writeText(backupName, params.file.raw);
+  await store.writeText(
+    "models.json",
+    `${JSON.stringify({ ...params.file.root, providers }, null, 2)}\n`,
+  );
+  return path.join(params.agentDir, backupName);
+}
+
+function describeRootProviderCopies(agentDir: string, review: RootProviderCopyReview): string[] {
+  const rootPath = shortenHomePath(path.join(agentDir, "models.json"));
+  return [
+    ...review.copies.map(
+      ({ providerId, pluginId, catalogProviderId }) =>
+        `${rootPath} provider "${providerId}" is an exact copy of plugin ${pluginId} catalog block "${catalogProviderId}"; its frozen rows override current model metadata and prices.`,
+    ),
+    ...review.keptPluginOwnedIds.map(
+      (providerId) =>
+        `${rootPath} provider "${providerId}" stays: it differs from every generated catalog block.`,
+    ),
+  ];
+}
+
+/** Imports released sidecars and repairs persisted SQLite catalogs only with Doctor authority. */
 export async function maybeMigrateLegacyPluginModelCatalogs(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -158,52 +107,118 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
   prompter: DoctorPrompter;
   runtime: RuntimeEnv;
   note?: typeof note;
-}): Promise<{ detected: number; migrated: number; warnings: string[] }> {
+}): Promise<{
+  detected: number;
+  migrated: number;
+  repaired: number;
+  removedRootCopies: number;
+  warnings: string[];
+}> {
   const warnings: string[] = [];
-  const migrations = await collectLegacyPluginModelCatalogMigrations({ ...params, warnings });
+  const agents: Array<{
+    agentDir: string;
+    migrations: ReturnType<typeof inspectLegacyPluginModelCatalogs>["catalogs"];
+    warnings: string[];
+    repairablePluginIds: string[];
+    rootCopies: RootProviderCopyReview;
+  }> = [];
+  const explicitProviderIds = new Set(
+    Object.keys(params.cfg.models?.providers ?? {}).map((providerId) =>
+      normalizeProviderId(providerId),
+    ),
+  );
+  let pluginMetadataSnapshot: ReturnType<typeof resolvePluginMetadataSnapshot> | undefined;
+  const reviewRootFile = (
+    file: RootModelsFile | undefined,
+    catalogs: Parameters<typeof reviewRootProviderCopies>[0]["catalogs"],
+  ): RootProviderCopyReview => {
+    if (!file || catalogs.length === 0) {
+      return { copies: [], keptPluginOwnedIds: [] };
+    }
+    pluginMetadataSnapshot ??= resolvePluginMetadataSnapshot({
+      config: params.cfg,
+      env: params.env ?? process.env,
+    });
+    return reviewRootProviderCopies({
+      rootProviders: file.providers,
+      explicitProviderIds,
+      catalogs,
+      pluginMetadataSnapshot,
+    });
+  };
+  for (const agentDir of resolveMigrationAgentDirs(params)) {
+    const inspected = inspectLegacyPluginModelCatalogs(agentDir);
+    const agentWarnings = inspected.warnings.map((warning) => shortenHomePath(warning));
+    const migrations = inspected.catalogs;
+    const persisted = loadPersistedPluginModelCatalogsReadOnly(agentDir);
+    const repairablePluginIds = persisted
+      .filter(({ contents }) => {
+        return repairPluginModelCatalogTransportMetadata(contents).contents !== contents;
+      })
+      .map(({ pluginId }) => pluginId);
+    const rootCopies = reviewRootFile(readRootModelsFile(agentDir), [...persisted, ...migrations]);
+    agents.push({ agentDir, migrations, warnings: agentWarnings, repairablePluginIds, rootCopies });
+    warnings.push(...agentWarnings);
+  }
+  const migrations = agents.flatMap((agent) => agent.migrations);
+  const detected =
+    migrations.length +
+    agents.reduce(
+      (count, agent) => count + agent.repairablePluginIds.length + agent.rootCopies.copies.length,
+      0,
+    );
   for (const warning of warnings) {
     params.runtime.error(warning);
   }
-  if (migrations.length === 0) {
-    return { detected: 0, migrated: 0, warnings };
-  }
 
   const emitNote = params.note ?? note;
-  emitNote(
-    [
-      "Legacy generated provider catalogs contain model and credential state.",
-      ...migrations.map(
-        (migration) =>
-          `- ${shortenHomePath(path.join(migration.agentDir, migration.relativePath))}`,
-      ),
-      "Run openclaw doctor --fix to verify and migrate these catalogs into agent SQLite.",
-    ].join("\n"),
-    "Plugin model catalogs",
-  );
+  if (detected > 0) {
+    const details =
+      migrations.length > 0
+        ? [
+            "Legacy generated provider catalogs contain model and credential state.",
+            ...migrations.map((migration) => `- ${shortenHomePath(migration.pathname)}`),
+          ]
+        : [];
+    for (const agent of agents) {
+      for (const pluginId of agent.repairablePluginIds) {
+        details.push(
+          `Generated catalog ${pluginId} in ${shortenHomePath(agent.agentDir)} contains repairable model rows (missing transport API metadata or an incomplete cost).`,
+        );
+      }
+      if (agent.rootCopies.copies.length > 0) {
+        details.push(...describeRootProviderCopies(agent.agentDir, agent.rootCopies));
+      }
+    }
+    details.push("Run openclaw doctor --fix to verify and repair these catalogs.");
+    emitNote(details.join("\n"), "Plugin model catalogs");
+  }
   const shouldRepair =
     params.prompter.shouldRepair ||
-    (await params.prompter.confirmAutoFix({
-      message: "Migrate generated provider model catalogs into agent SQLite now?",
-      initialValue: true,
-    }));
+    (detected > 0 &&
+      (await params.prompter.confirmAutoFix({
+        message: "Repair generated provider model catalogs now?",
+        initialValue: true,
+      })));
   if (!shouldRepair) {
-    return { detected: migrations.length, migrated: 0, warnings };
-  }
-
-  const grouped = new Map<string, LegacyPluginModelCatalogMigration[]>();
-  for (const migration of migrations) {
-    const agentMigrations = grouped.get(migration.agentDir) ?? [];
-    agentMigrations.push(migration);
-    grouped.set(migration.agentDir, agentMigrations);
+    return { detected, migrated: 0, repaired: 0, removedRootCopies: 0, warnings };
   }
 
   let migrated = 0;
-  for (const [agentDir, agentMigrations] of grouped) {
+  let removedRootCopies = 0;
+  const rootCopyChanges: string[] = [];
+  const repairs: ReturnType<typeof repairPersistedPluginModelCatalogs> = [];
+  for (const agent of agents) {
+    // Fix also retires verified orphaned migration recovery rows when no sidecar remains.
     const result = migrateLegacyPluginModelCatalogs({
-      agentDir,
-      expectedContents: new Map(
-        agentMigrations.map((migration) => [migration.pluginId, migration.contents]),
-      ),
+      agentDir: agent.agentDir,
+      ...(agent.migrations.length > 0
+        ? {
+            expectedContents: new Map(
+              agent.migrations.map((migration) => [migration.pluginId, migration.contents]),
+            ),
+          }
+        : {}),
     });
     migrated += result.migrated;
     for (const warning of result.warnings) {
@@ -214,6 +229,39 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
       warnings.push(displayWarning);
       params.runtime.error(displayWarning);
     }
+    if (agent.warnings.length === 0 && result.warnings.length === 0) {
+      // Migration can publish a malformed legacy payload. Re-read it before planning
+      // repair; the storage owner still compares those bytes at the write boundary.
+      repairs.push(
+        ...repairPersistedPluginModelCatalogs({
+          agentDir: agent.agentDir,
+          catalogs: loadPersistedPluginModelCatalogsReadOnly(agent.agentDir),
+        }),
+      );
+    }
+    if (agent.rootCopies.copies.length === 0) {
+      continue;
+    }
+    // Compare against the catalogs as they stand after migration, from the bytes being replaced.
+    const file = readRootModelsFile(agent.agentDir);
+    const review = reviewRootFile(file, loadPersistedPluginModelCatalogsReadOnly(agent.agentDir));
+    if (!file || review.copies.length === 0) {
+      continue;
+    }
+    try {
+      const backupPath = await removeRootProviderCopies({ agentDir: agent.agentDir, file, review });
+      removedRootCopies += review.copies.length;
+      rootCopyChanges.push(
+        ...review.copies.map(
+          ({ providerId, pluginId }) =>
+            `Removed provider "${providerId}" (a copy of plugin ${pluginId}'s generated catalog) from ${shortenHomePath(path.join(agent.agentDir, "models.json"))}; backup: ${shortenHomePath(backupPath)}.`,
+        ),
+      );
+    } catch (error) {
+      const warning = `Could not remove generated provider copies from ${shortenHomePath(agent.agentDir)}: ${error instanceof Error ? error.message : String(error)}`;
+      warnings.push(warning);
+      params.runtime.error(warning);
+    }
   }
 
   if (migrated > 0) {
@@ -222,5 +270,26 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
       "Doctor changes",
     );
   }
-  return { detected: migrations.length, migrated, warnings };
+  if (repairs.length > 0) {
+    emitNote(
+      repairs
+        .map(({ pluginId, removedModelCount, completedCostModelCount }) => {
+          const actions = [
+            removedModelCount > 0
+              ? `removed ${removedModelCount} model row(s) without transport API metadata`
+              : undefined,
+            completedCostModelCount > 0
+              ? `completed the cost of ${completedCostModelCount} model row(s)`
+              : undefined,
+          ].filter((action) => action !== undefined);
+          return `Repaired generated model catalog ${pluginId}: ${actions.join("; ")}.`;
+        })
+        .join("\n"),
+      "Doctor changes",
+    );
+  }
+  if (rootCopyChanges.length > 0) {
+    emitNote(rootCopyChanges.join("\n"), "Doctor changes");
+  }
+  return { detected, migrated, repaired: repairs.length, removedRootCopies, warnings };
 }

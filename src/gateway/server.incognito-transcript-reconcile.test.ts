@@ -2,21 +2,18 @@ import fs from "node:fs";
 import { expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
-import {
-  isSessionTranscriptIndexReconcileRunning,
-  waitForSessionTranscriptIndexReconcile,
-} from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
-  getOpenClawAgentDatabaseIfOpen,
   resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
-it("serves the reconciled incognito branch through authenticated Gateway history", async () => {
+it("serves authorized incognito descriptions, events, and active-branch history", async () => {
   const state = await createOpenClawTestState({
     label: "incognito-reconcile-gateway",
     env: {
@@ -33,6 +30,7 @@ it("serves the reconciled incognito branch through authenticated Gateway history
     },
   });
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+  const events: Array<{ event?: string; payload?: unknown }> = [];
   await runQaGatewayFixture(
     async () => {
       const cfg = {
@@ -40,6 +38,7 @@ it("serves the reconciled incognito branch through authenticated Gateway history
           defaults: {
             workspace: state.workspaceDir,
             skipBootstrap: true,
+            model: { primary: "openai/gpt-5.5" },
             heartbeat: { every: "0m" },
           },
         },
@@ -52,8 +51,14 @@ it("serves the reconciled incognito branch through authenticated Gateway history
         configPath: state.configPath,
         token: "incognito-reconcile-test",
         scopes: ["operator.admin", "operator.read", "operator.write"],
+        onEvent: (event) => {
+          if (event.event === "sessions.changed" || event.event === "session.message") {
+            events.push(event);
+          }
+        },
       });
       await gateway.server.startupSettled;
+      await gateway.client.request("sessions.subscribe", {});
       const created = await gateway.client.request<{
         key: string;
         sessionId: string;
@@ -62,17 +67,19 @@ it("serves the reconciled incognito branch through authenticated Gateway history
       }>("sessions.create", { agentId: "main", incognito: true });
       expect(created.entry.incognito).toBe(true);
       expect(created.runStarted).toBe(false);
+      const described = await gateway.client.request<{ session: unknown }>("sessions.describe", {
+        agentId: "main",
+        key: created.key,
+      });
+      expect.soft(described.session).toMatchObject({
+        key: created.key,
+        sessionId: created.sessionId,
+        incognito: true,
+      });
       const options = {
         agentId: "main",
         path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
       };
-      const database = getOpenClawAgentDatabaseIfOpen(options)!;
-      const projection = () =>
-        database.db
-          .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
-          .get(created.sessionId);
-      let committedProjection: unknown;
-      let scheduled = false;
       // Incognito state belongs to this process. Seed the branch through its
       // canonical writer, then exercise the authenticated public history route.
       await persistSessionTranscriptTurn(
@@ -92,21 +99,65 @@ it("serves the reconciled incognito branch through authenticated Gateway history
               message: { role: "assistant", content: "active" },
             },
           ],
-          onMessageCommitted: () => {
-            committedProjection = projection();
-            scheduled = isSessionTranscriptIndexReconcileRunning(options);
-          },
         },
       );
-      expect(committedProjection).toEqual({ needs_rebuild: 1 });
-      expect(scheduled).toBe(true);
-      await waitForSessionTranscriptIndexReconcile(options);
-      expect(projection()).toEqual({ needs_rebuild: 0 });
       const history = await gateway.client.request<{
         sessionId: string;
+        sessionInfo?: {
+          key: string;
+          sessionId: string;
+          incognito: boolean;
+          modelProvider: string;
+          model: string;
+        };
         messages: Array<{ role: string; content: unknown }>;
       }>("chat.history", { agentId: "main", sessionKey: created.key, limit: 10 });
+      await persistSessionTranscriptTurn(
+        { agentId: "main", sessionKey: created.key, sessionId: created.sessionId },
+        {
+          expectedSessionId: created.sessionId,
+          messages: [
+            {
+              eventId: "published",
+              parentId: "active",
+              message: { role: "assistant", content: "published" },
+            },
+          ],
+        },
+      );
+      await expect
+        .poll(() => events)
+        .toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              event: "sessions.changed",
+              payload: expect.objectContaining({
+                sessionKey: created.key,
+                session: expect.objectContaining({ sessionId: created.sessionId, incognito: true }),
+              }),
+            }),
+            expect.objectContaining({
+              event: "session.message",
+              payload: expect.objectContaining({
+                sessionKey: created.key,
+                session: expect.objectContaining({ sessionId: created.sessionId, incognito: true }),
+              }),
+            }),
+          ]),
+        );
+      const roster = await gateway.client.request<{ sessions: Array<{ key: string }> }>(
+        "sessions.list",
+        {},
+      );
+      expect(roster.sessions.map(({ key }) => key)).not.toContain(created.key);
       expect(history.sessionId).toBe(created.sessionId);
+      expect(history.sessionInfo).toMatchObject({
+        key: created.key,
+        sessionId: created.sessionId,
+        incognito: true,
+        modelProvider: "openai",
+        model: "gpt-5.5",
+      });
       expect(history.messages.map(({ role, content }) => ({ role, content }))).toEqual([
         { role: "user", content: "root" },
         { role: "assistant", content: "active" },
@@ -123,11 +174,25 @@ it("serves the reconciled incognito branch through authenticated Gateway history
         }),
         { agentId: "main" },
       );
-      expect(durable).toEqual(
-        durable.found
-          ? { found: true, value: { events: { count: 0 }, nodes: { count: 0 } } }
-          : { found: false, reason: "database-missing" },
-      );
+      if (durable.found) {
+        expect(durable.value).toEqual({ events: { count: 0 }, nodes: { count: 0 } });
+      } else {
+        expect(["database-missing", "schema-missing"]).toContain(durable.reason);
+        if (durable.reason === "schema-missing") {
+          // Admission may reserve an empty file without creating durable session storage.
+          using empty = openNodeSqliteDatabase(
+            resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+            { readOnly: true },
+          );
+          expect(
+            empty
+              .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('transcript_events', 'session_nodes')",
+              )
+              .all(),
+          ).toEqual([]);
+        }
+      }
     },
     async () => {
       if (gateway) {

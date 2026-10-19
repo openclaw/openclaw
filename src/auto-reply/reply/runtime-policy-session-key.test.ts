@@ -1,7 +1,7 @@
 // Tests runtime policy session-key derivation for routed replies.
 import { describe, expect, it } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
@@ -12,7 +12,7 @@ describe("resolveRuntimePolicySessionKey", () => {
       defaults: {
         sandbox: { mode: "non-main", scope: "agent" },
       },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
   };
 
@@ -30,7 +30,10 @@ describe("resolveRuntimePolicySessionKey", () => {
     });
 
     expect(sessionKey).toBe("agent:main:whatsapp:personal:direct:15555550123");
-    expect(resolveSandboxRuntimeStatus({ cfg, sessionKey }).sandboxed).toBe(true);
+    expect(
+      resolvePreparedSandboxRuntimeStatus({ cfg, sessionKey, preparedSessionEntry: null })
+        .sandboxed,
+    ).toBe(true);
   });
 
   it("normalizes dm chat type aliases", () => {
@@ -61,7 +64,10 @@ describe("resolveRuntimePolicySessionKey", () => {
     });
 
     expect(sessionKey).toBe("agent:main:main");
-    expect(resolveSandboxRuntimeStatus({ cfg, sessionKey }).sandboxed).toBe(false);
+    expect(
+      resolvePreparedSandboxRuntimeStatus({ cfg, sessionKey, preparedSessionEntry: null })
+        .sandboxed,
+    ).toBe(false);
   });
 
   it("keeps already-isolated sessions unchanged", () => {

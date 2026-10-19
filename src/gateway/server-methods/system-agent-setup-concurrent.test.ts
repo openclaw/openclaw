@@ -12,7 +12,10 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/io.js
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import type { WizardSession } from "../../wizard/session.js";
 import { readSetupConfigFileSnapshot } from "../../wizard/setup.shared.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
@@ -43,6 +46,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     resetCommandQueueStateForTest();
     clearConfigCache();
     clearRuntimeConfigSnapshot();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     cleanup();

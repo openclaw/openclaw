@@ -3,56 +3,61 @@
 import { undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { expectDefined } from "@openclaw/normalization-core";
-import { html, nothing, render, type LitElement } from "lit";
-import "./components/chat-detail-panel.ts";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createComponent, createSignal } from "solid-js";
+import "./components/chat-detail-panel.tsx";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../api/types.ts";
+import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
-import type { TaskSummary } from "../../lib/tasks/task-summary.ts";
-import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { resolveChatAgentId } from "./chat-agent-id.ts";
-import { resolveChatMessageAccess } from "./chat-message-access.ts";
+import * as videoPosters from "../../lib/media/video-poster.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
-  availableSidebarSlots,
-  sidebarPanelDefinitions,
-  sidebarPanelTemplates,
-} from "./chat-pane-embedded-panels.ts";
-import { createChatPaneRails } from "./chat-pane-rails.ts";
-import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
+  createReviewFixture as createUnboundReviewFixture,
+  renderPanelFixture,
+  sidebarPanelFixtureParams,
+} from "../../test-helpers/chat-pane-embedded-panels.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { resolveChatAgentId } from "./chat-agent-id.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
-  createSessionCapabilityFixture,
 } from "./chat-pane.test-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import type { ChatProps } from "./chat-view.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
-import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
+import type { ChatProps } from "./chat-view.tsx";
+import { ChatDetailSlot } from "./components/chat-detail-slot-view.tsx";
+import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
 import {
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type AttachmentItem,
 } from "./components/chat-message-media.ts";
 import {
+  clearSessionWorkspacePreviews,
+  getSessionWorkspace,
+  loadSessionWorkspace,
+  openSessionWorkspacePreview,
+} from "./components/chat-session-workspace-state.ts";
+import { loadedSidebarContent } from "./components/chat-session-workspace.test-support.ts";
+import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
-  renderSessionWorkspaceRail,
-  retireSessionWorkspaceCheckout,
 } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
-import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
-import { renderChatThread } from "./components/chat-thread.ts";
-import "./components/chat-sidebar-region.runtime.ts";
+import { createChatSidebarContainer } from "./components/chat-sidebar.test-support.ts";
+import { ChatThread } from "./components/chat-thread-view.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   threadProps,
 } from "./components/chat-transcript.test-support.ts";
-import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
+import "./components/chat-sidebar-region.runtime.tsx";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import {
   closeSlot,
   ensureSidebarConversation,
@@ -61,161 +66,63 @@ import {
   setSidebarExpanded,
   setSidebarOpen,
   type SidebarLayout,
-  type SidebarSlotId,
 } from "./sidebar-layout.ts";
+
+function createReviewFixture() {
+  const fixture = createUnboundReviewFixture();
+  const provider = createChatSidebarContainer();
+  fixture.mount.before(provider);
+  provider.append(fixture.mount);
+  return fixture;
+}
 
 function discussionSlots(discussionAvailable: boolean) {
   const discussion = {} as SessionDiscussionPanelConfig;
-  const definitions = sidebarPanelDefinitions({
-    discussion,
-    discussionAvailable,
-  } as Parameters<typeof sidebarPanelDefinitions>[0]);
-  return availableSidebarSlots(definitions);
+  const { state } = createReviewFixture();
+  const definitions = sidebarPanelDefinitions(
+    sidebarPanelFixtureParams(state, { discussion, discussionAvailable }),
+  );
+  return definitions
+    .filter((definition) => definition.available)
+    .map((definition) => definition.slot);
 }
 
 afterEach(() => {
   document.body.replaceChildren();
 });
 
-async function renderPanelFixture(
-  mount: HTMLElement,
-  layout: SidebarLayout,
-  definitions: ReturnType<typeof sidebarPanelDefinitions>,
-  closePanelSlot: (slot: SidebarSlotId) => void = vi.fn(),
-) {
-  render(
-    renderSidebarRegion({
-      availableWidth: 1400,
-      availableSlots: ["detail", "workspace"],
-      callbacks: {
-        activatePanel: vi.fn(),
-        togglePanelExpanded: vi.fn(),
-        closeSlot: closePanelSlot,
-        openSlot: vi.fn(),
-        reorderPanel: vi.fn(),
-        resizePanel: vi.fn(),
-        setOpen: vi.fn(),
-      },
-      layout,
-      narrow: false,
-      panelDefinitions: definitions,
-      panelActions: {},
-      panelTemplates: sidebarPanelTemplates(definitions),
-      primary: html`<main>Chat</main>`,
-      requestUpdate: vi.fn(),
-    }),
-    mount,
-  );
-  await mount.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
-  await mount.querySelector<LitElement>("openclaw-chat-files-panel")?.updateComplete;
-  await Promise.all(
-    [...mount.querySelectorAll<LitElement>("openclaw-chat-detail-panel")].map(
-      (panel) => panel.updateComplete,
-    ),
-  );
-  await mount.querySelector("openclaw-panel-loading-skeleton")?.updateComplete;
-}
-
-function createReviewFixture(taskFields: Partial<TaskSummary> = {}) {
-  const file = createDeferred<SessionWorkspaceGetResult | null>();
-  const list = createDeferred<SessionWorkspaceListResult | null>();
-  const sessions = createSessionCapabilityFixture({
-    getFile: vi.fn(() => file.promise),
-    listFiles: vi.fn(() => list.promise),
-  });
-  const mount = document.body.appendChild(document.createElement("div"));
-  const context = { ...createInitializationContext(), sessions };
-  const state = createPageState(
-    context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
-    mount,
-  );
-  const history = vi.fn().mockResolvedValue({
-    messages: [{ role: "assistant", content: "The selected task transcript." }],
-  });
-  state.client = createGatewayBrowserClientFixture({
-    request: (method, params) =>
-      method === "tasks.history"
-        ? history(params)
-        : method === "tasks.list"
-          ? { tasks: [] }
-          : { artifacts: [] },
-  });
-  state.connected = true;
-  state.connectionEpoch = 1;
-  state.sessionKey = "agent:main:review-intent";
-  state.sidebarLayout = { columns: [] };
-  const task = {
-    id: "review-task",
-    taskId: "review-task",
-    runtime: "subagent",
-    status: "completed",
-    title: "Inspect the completed task",
-    prompt: "Review the synthetic result",
-    terminalSummary: "Review completed",
-    sessionKey: state.sessionKey,
-    agentId: "main",
-    createdAt: 1,
-    updatedAt: 2,
-    ...taskFields,
-  } satisfies TaskSummary;
-  const backgroundTasks = {
-    ...createBackgroundTasksProps(state, { presented: false }),
-    tasks: [task],
-    taskDetails: new Map([[task.id, task]]),
-  };
-  const preview = {
-    sessionKey: state.sessionKey,
-    root: "/synthetic/workspace",
-    file: {
-      kind: "read",
-      path: "images/preview.png",
-      name: "preview.png",
-      missing: false,
-      previewKind: "image",
-      contentEncoding: "base64",
-      mimeType: "image/png",
-      content:
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV9kAAAAASUVORK5CYII=",
-    },
-  } satisfies SessionWorkspaceGetResult;
-  const rails = () =>
-    createChatPaneRails({
-      state,
-      sidebarLayout: state.sidebarLayout,
-      presentationId: "review-intent",
-      presented: true,
-      gatewaySnapshot: { ...context.gateway.snapshot, phase: "connected" },
-      setObserverVisibility: vi.fn(),
-      updateSidebarLayout: state.updateSidebarLayout,
-    });
-  onTestFinished(async () => {
-    file.resolve(null);
-    list.resolve(null);
-    await Promise.allSettled([file.promise, list.promise]);
-    resetTaskDetail(state);
-  });
-  const renderPanels = async () => {
-    const definitions = sidebarPanelDefinitions({
-      state,
-      renderDetail: (content) =>
-        renderChatDetailSlot({
-          backgroundTasks,
-          chat: threadProps("review-intent", state.sessionKey) as ChatProps,
-          content,
-          host: state,
-          layout: state.sidebarLayout,
-        }),
-      workspace: renderSessionWorkspaceRail(createSessionWorkspaceProps(state), {
-        embedded: true,
-      }),
-    } as Parameters<typeof sidebarPanelDefinitions>[0]);
-    await renderPanelFixture(mount, state.sidebarLayout, definitions, rails().closePanelSlot);
-  };
-  return { file, history, list, mount, preview, rails, renderPanels, sessions, state, task };
-}
-
 describe("chat pane embedded panels", () => {
+  it("renders and updates the workspace rail inside the Files panel", async () => {
+    const { list, mount, renderPanels, sessions, state } = createReviewFixture();
+    state.updateSidebarLayout(openSlot(state.sidebarLayout, "workspace"));
+    loadSessionWorkspace(state, getSessionWorkspace(state), true);
+    list.resolve({
+      sessionKey: state.sessionKey,
+      root: "/synthetic/workspace",
+      files: [{ kind: "read", name: "notes.txt", path: "notes.txt", missing: false }],
+      artifacts: [],
+    });
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
+    await renderPanels();
+    const rail = expectDefined(
+      mount.querySelector("openclaw-chat-files-panel .chat-workspace-rail"),
+      "Workspace rail inside Files",
+    );
+    expect(rail.querySelector('button[aria-label="notes.txt"]')).not.toBeNull();
+    getSessionWorkspace(state).browserSearch = "notes";
+    await renderPanels();
+    expect(mount.querySelector(".chat-workspace-rail")).toBe(rail);
+    expect(rail.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("notes");
+    const file = expectDefined(
+      rail.querySelector<HTMLButtonElement>('button[aria-label="notes.txt"]'),
+      "Workspace file after refresh",
+    );
+    file.click();
+    expect(sessions.getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "notes.txt", {
+      agentId: "main",
+    });
+  });
+
   it("navigates an existing file tab to an explicit line without resetting its editor or draft", async () => {
     const descriptors = ["getClientRects", "getBoundingClientRect"].map(
       (key) => [key, Object.getOwnPropertyDescriptor(Range.prototype, key)] as const,
@@ -257,6 +164,8 @@ describe("chat pane embedded panels", () => {
     });
     await file.promise;
     await renderPanels();
+    // The panel commit does not include the editor's detached module load.
+    await vi.dynamicImportSettled();
     const editorElement = await vi.waitFor(() =>
       expectDefined(mount.querySelector<HTMLElement>(".cm-editor"), "file editor"),
     );
@@ -365,109 +274,13 @@ describe("chat pane embedded panels", () => {
     );
     expect(restored.state.doc.toString()).toBe(savedText);
   });
-  describe("Review task selection lifetime", () => {
-    beforeEach(installTranscriptDomMocks);
-    afterEach(resetTranscriptTestDom);
-    it.each(["pending", "unavailable", "checkout retired", "file closed", "task closed"] as const)(
-      "keeps task ownership independent of file selection %s",
-      async (selection) => {
-        vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(10_000);
-        onTestFinished(() => {
-          vi.useRealTimers();
-        });
-        const { file, history, mount, preview, rails, renderPanels, state, task } =
-          createReviewFixture({ childSessionKey: "agent:main:subagent:review-child" });
-        rails().backgroundTasks.onOpenTaskDetail?.(task);
-        await renderPanels();
-        await renderPanels();
-        expect(mount.textContent).toContain("The selected task transcript.");
-        expect(history).toHaveBeenCalledExactlyOnceWith({ taskId: task.id, limit: 100 });
-
-        if (selection !== "task closed") {
-          openSessionWorkspaceFile(state, { path: preview.file.path });
-          await renderPanels();
-          expect(mount.querySelector('[data-panel-skeleton="files"]')).not.toBeNull();
-        }
-        if (selection === "unavailable") {
-          file.reject(new Error("Preview unavailable"));
-          await expect(file.promise).rejects.toThrow("Preview unavailable");
-        } else if (selection === "checkout retired") {
-          retireSessionWorkspaceCheckout(state);
-        } else if (selection === "file closed" || selection === "task closed") {
-          mount.querySelector<HTMLButtonElement>('button[aria-label="Close Review"]')!.click();
-        }
-        await renderPanels();
-        if (selection === "unavailable") {
-          expect(mount.querySelector('[role="alert"]')?.textContent).toContain(
-            "Preview unavailable",
-          );
-        } else if (selection === "file closed" || selection === "task closed") {
-          expect(mount.querySelector('[data-panel-slot="detail"]')).toBeNull();
-        } else if (selection === "checkout retired") {
-          expect(mount.querySelector('[data-panel-skeleton="files"]')).toBeNull();
-        }
-        vi.setSystemTime(12_000);
-        handlePageGatewayEvent(state, {
-          type: "event",
-          event: "task",
-          payload: { action: "upserted", task: { ...task, updatedAt: 3 } },
-        });
-        expect(history).toHaveBeenCalledTimes(
-          selection === "task closed" || selection === "file closed" ? 1 : 2,
-        );
-        if (selection === "task closed" || selection === "file closed") {
-          expect(mount.querySelector("[data-task-detail-panel]")).toBeNull();
-        } else {
-          expect(mount.querySelector("[data-task-detail-panel]")).not.toBeNull();
-        }
-      },
-    );
-
-    it.each(["Files", "minimized"] as const)(
-      "retains the selected Review transcript while %s is presented",
-      async (presentation) => {
-        const { history, mount, rails, renderPanels, state, task } = createReviewFixture({
-          childSessionKey: "agent:main:subagent:review-child",
-        });
-        rails().backgroundTasks.onOpenTaskDetail?.(task);
-        await renderPanels();
-        await renderPanels();
-        expect(mount.textContent).toContain("The selected task transcript.");
-
-        if (presentation === "Files") {
-          state.handleOpenSidebar({
-            kind: "attachment",
-            attachmentKind: "image",
-            title: "Attachment in Files",
-            src: "/synthetic/attachment.png",
-          });
-        } else {
-          state.updateSidebarLayout(setSidebarOpen(state.sidebarLayout, false));
-        }
-        await renderPanels();
-        expect.soft(history).toHaveBeenCalledOnce();
-        expect(isSidebarSlotVisible(state.sidebarLayout, "detail")).toBe(false);
-        if (presentation === "Files") {
-          expect(
-            mount.querySelector<HTMLImageElement>(".sidebar-attachment-preview__image")?.alt,
-          ).toBe("Attachment in Files");
-        }
-        state.updateSidebarLayout(openSlot(state.sidebarLayout, "detail"));
-        await renderPanels();
-        expect(mount.textContent).toContain("The selected task transcript.");
-        expect(history).toHaveBeenCalledExactlyOnceWith({ taskId: task.id, limit: 100 });
-      },
-    );
-  });
-
   it.each(["ready", "unavailable", "error"] as const)(
     "keeps Files pending during renewed source resolution, then shows %s",
     async (outcome) => {
       const attachmentId = crypto.randomUUID();
       const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
       const container = document.body.appendChild(document.createElement("div"));
-      const detail = document.body.appendChild(document.createElement("div"));
+      const detail = document.body.appendChild(createChatSidebarContainer());
       let sidebarContent: SidebarContent | null = null;
       const pending = createDeferred<{ url: string } | null>();
       const secondResolver = vi.fn(() => pending.promise);
@@ -483,25 +296,30 @@ describe("chat pane embedded panels", () => {
           artifactId: `artifact_${attachmentId}`,
         },
       };
-      const rerender = () =>
-        render(
-          renderAssistantAttachments(
-            [attachment],
-            {
-              connectionEpoch: 1,
-              onRequestUpdate: rerender,
-              resolveArtifactDownload: firstResolver,
+      let rerender = () => {};
+      mountSolid(
+        () => {
+          const [revision, setRevision] = createSignal(0);
+          rerender = () => setRevision((value) => value + 1);
+          return createComponent(AssistantAttachments, {
+            attachments: [attachment],
+            get options() {
+              revision();
+              return {
+                connectionEpoch: 1,
+                mediaOwner: rerender,
+                resolveArtifactDownload: firstResolver,
+              };
             },
-            (content) => {
+            onOpenSidebar: (content) => {
               sidebarContent = content;
             },
-            undefined,
-            false,
-          ),
-          container,
-        );
-      onTestFinished(() => releaseChatMediaResourceSubscriber(rerender));
-      rerender();
+            inlinePlayback: false,
+          });
+        },
+        { container },
+      );
+      onTestFinished(() => releaseChatMediaResourceOwner(rerender));
       const open = await vi.waitFor(() =>
         expectDefined(
           container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand"),
@@ -509,18 +327,24 @@ describe("chat pane embedded panels", () => {
         ),
       );
       open.click();
-      render(
-        html`<openclaw-chat-detail-panel
-          .content=${{
-            ...expectDefined<SidebarContent>(sidebarContent, "Opened attachment"),
-            sourceIdentity: undefined,
-          }}
-          .attachmentRuntime=${{ connectionEpoch: 2, resolveArtifactDownload: secondResolver }}
-        ></openclaw-chat-detail-panel>`,
-        detail,
+      const opened = expectDefined<SidebarContent>(sidebarContent, "Opened attachment");
+      if (opened.kind !== "attachment") {
+        throw new Error("Expected an attachment preview");
+      }
+      mountSolid(
+        () => {
+          const panel = document.createElement("openclaw-chat-detail-panel");
+          panel.content = { ...opened, sourceIdentity: undefined };
+          panel.attachmentRuntime = {
+            connectionEpoch: 2,
+            resolveArtifactDownload: secondResolver,
+          };
+          return panel;
+        },
+        { container: detail },
       );
       const panel = expectDefined(
-        detail.querySelector<LitElement>("openclaw-chat-detail-panel"),
+        detail.querySelector("openclaw-chat-detail-panel"),
         "Files panel",
       );
       await panel.updateComplete;
@@ -542,7 +366,7 @@ describe("chat pane embedded panels", () => {
         pending.resolve(outcome === "ready" ? { url: `${source}?mediaTicket=renewed` } : null);
       }
       if (outcome === "ready") {
-        const player = panel.querySelector<LitElement>("openclaw-chat-video-player");
+        const player = panel.querySelector("openclaw-chat-video-player");
         await player?.updateComplete;
         await vi.waitFor(() =>
           expect(video.getAttribute("src")).toBe(`${source}?mediaTicket=renewed`),
@@ -571,14 +395,25 @@ describe("chat pane embedded panels", () => {
     "reuses attachment metadata when Open shows %s content in Files",
     async (surface) => {
       installTranscriptDomMocks();
-      const { mount, state } = createReviewFixture();
+      vi.spyOn(videoPosters, "requestVideoPoster").mockResolvedValue(null);
+      const { context, mount, state } = createReviewFixture();
       const transcript = document.body.appendChild(document.createElement("div"));
-      const fetchMetadata = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ available: true, sizeBytes: 574_000 }),
+      const fetchMetadata = vi.fn(() =>
+        Promise.resolve(Response.json({ available: true, sizeBytes: 574_000 })),
+      );
+      // PDF previews fetch bytes separately; an unavailable preview must not refetch metadata.
+      const contentRequested = createDeferred();
+      const fetchContent = vi.fn<typeof fetch>(async () => {
+        contentRequested.resolve();
+        return new Response(null, { status: 503 });
       });
-      vi.stubGlobal("fetch", fetchMetadata);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>((input, init) => {
+          const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+          return url.searchParams.get("meta") === "1" ? fetchMetadata() : fetchContent(input, init);
+        }),
+      );
       const filename = surface === "history" ? "recording.mp4" : "report.pdf";
       const source = `/tmp/preview-cache-${surface}/${filename}`;
       const controller = createTestTranscript();
@@ -610,16 +445,29 @@ describe("chat pane embedded panels", () => {
         onOpenSidebar: state.handleOpenSidebar,
         sessionKey: state.sessionKey,
         currentAgentId: resolveChatAgentId(state),
-        ...resolveChatMessageAccess(state).chatProps,
+        fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
+        loadFullAssistantMessage: createSidebarFullMessageLoader(state, context.gateway),
         connectionEpoch: state.connectionEpoch,
+        mediaOwner: renderAttachment,
       } as ChatProps;
-      const renderAttachment = () => {
-        render(
-          renderChatThread({ ...chat, onRequestUpdate: renderAttachment }, controller),
-          transcript,
-        );
-        controller.hostUpdated();
-      };
+      const [current, setCurrent] = createSignal(chat);
+      const application = createSolidApplicationContextProvider(context);
+      const view = mountSolid(
+        () =>
+          createComponent(ChatThread, {
+            get props() {
+              return current();
+            },
+            transcript: controller,
+          }),
+        { container: transcript, wrapper: application.wrapper },
+      );
+      function renderAttachment() {
+        setCurrent({ ...chat });
+        flush();
+        controller.update();
+      }
+      controller.start();
       try {
         renderAttachment();
         const open = await vi.waitFor(() => {
@@ -635,59 +483,55 @@ describe("chat pane embedded panels", () => {
         if (!content || content.kind !== "attachment") {
           throw new Error("Expected an attachment preview");
         }
-        render(
-          renderChatDetailSlot({
-            backgroundTasks: createBackgroundTasksProps(state, { presented: false }),
-            chat,
-            content: content!,
-            host: state,
-            layout: state.sidebarLayout,
-          }),
-          mount,
+        mountSolid(
+          () =>
+            createComponent(ChatDetailSlot, {
+              chat,
+              content,
+              host: state,
+            }),
+          { container: mount, wrapper: application.wrapper },
         );
-        await mount.querySelector<LitElement>("openclaw-chat-detail-panel")?.updateComplete;
+        await mount.querySelector("openclaw-chat-detail-panel")?.updateComplete;
         expect(fetchMetadata).toHaveBeenCalledOnce();
-        expect(mount.textContent).toContain(filename);
         if (surface === "history") {
+          expect(mount.textContent).toContain(filename);
           expect(mount.querySelector("openclaw-chat-video-player")).not.toBeNull();
+          expect(fetchContent).not.toHaveBeenCalled();
+        } else {
+          await contentRequested.promise;
+          expect(fetchContent).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining("/__openclaw__/assistant-media?"),
+            expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
+          );
+          await new Promise<void>((resolve) => {
+            const settle = () => {
+              if (mount.querySelector(".sidebar-pdf-preview [role=alert]")) {
+                observer.disconnect();
+                resolve();
+              }
+            };
+            const observer = new MutationObserver(settle);
+            onTestFinished(() => observer.disconnect());
+            observer.observe(mount, { childList: true, subtree: true });
+            settle();
+          });
+          expect(mount.textContent).toContain("Preview unavailable");
+          expect(mount.querySelector(".sidebar-pdf-preview")?.getAttribute("aria-label")).toBe(
+            filename,
+          );
+          expect(fetchMetadata).toHaveBeenCalledOnce();
+          expect(mount.querySelector<HTMLAnchorElement>("a[download]")?.download).toBe(filename);
         }
       } finally {
-        render(nothing, transcript);
-        controller.hostDisconnected();
+        view.unmount();
+        controller.dispose();
         mount.remove();
-        releaseChatMediaResourceSubscriber(renderAttachment);
+        releaseChatMediaResourceOwner(renderAttachment);
         resetTranscriptTestDom();
       }
     },
   );
-
-  it("keeps a newer task selection visible when a pending file preview completes", async () => {
-    const { file, mount, preview, rails, renderPanels, state, task } = createReviewFixture();
-    const taskContent = { kind: "task" as const, taskId: task.id };
-    state.handleOpenSidebar(taskContent);
-    await renderPanels();
-    expect(mount.querySelector("[data-task-detail-panel] .sidebar-title")?.textContent).toBe(
-      task.title,
-    );
-
-    openSessionWorkspaceFile(state, { path: preview.file.path });
-    await renderPanels();
-    expect(mount.querySelector('[data-panel-skeleton="files"]')).not.toBeNull();
-    rails().backgroundTasks.onOpenTaskDetail?.(task);
-    await renderPanels();
-    expect
-      .soft(mount.querySelector("[data-task-detail-panel] .sidebar-title")?.textContent)
-      .toBe(task.title);
-    expect(isSidebarSlotVisible(state.sidebarLayout, "detail")).toBe(true);
-
-    file.resolve(preview);
-    await file.promise;
-    await renderPanels();
-    expect(mount.querySelector("[data-task-detail-panel] .sidebar-title")?.textContent).toBe(
-      task.title,
-    );
-    expect(isSidebarSlotVisible(state.sidebarLayout, "detail")).toBe(true);
-  });
 
   it("keeps Files closed when a pending file preview completes", async () => {
     const { file, mount, preview, renderPanels, state } = createReviewFixture();
@@ -709,7 +553,7 @@ describe("chat pane embedded panels", () => {
 
   it("opens the requested file when an unrelated directory listing completes first", async () => {
     const { file, list, mount, preview, renderPanels, state } = createReviewFixture();
-    createSessionWorkspaceProps(state).onRefresh();
+    loadSessionWorkspace(state, getSessionWorkspace(state), true);
     openSessionWorkspaceFile(state, { path: preview.file.path });
     await renderPanels();
     expect(mount.querySelector('[data-panel-skeleton="files"]')).not.toBeNull();
@@ -724,7 +568,7 @@ describe("chat pane embedded panels", () => {
       expect(createSessionWorkspaceProps(state).list?.files[0]?.name).toBe("other.txt"),
     );
     file.resolve(preview);
-    await file.promise;
+    await loadedSidebarContent(state);
     await renderPanels();
     expect(
       mount.querySelector<HTMLImageElement>(
@@ -837,10 +681,6 @@ describe("chat pane embedded panels", () => {
     expect(mount.querySelector('[data-panel-skeleton="files"]')).toBeNull();
   });
 
-  it("does not offer Discussion when no provider is available", () => {
-    expect(discussionSlots(false)).not.toContain("discussion");
-  });
-
   it("offers Discussion after the provider reports it available", () => {
     expect(discussionSlots(true)).toContain("discussion");
   });
@@ -854,7 +694,15 @@ describe("chat pane embedded panels", () => {
       deletions: 1,
       files: [{ path: "example.txt", status: "modified", additions: 1, deletions: 1 }],
     });
-    const state = {
+    const mount = document.body.appendChild(createChatSidebarContainer());
+    const state = createPageState(
+      createInitializationContext(),
+      {
+        afterCommit: () => () => {},
+      },
+      mount,
+    );
+    Object.assign(state, {
       client: { request },
       connected: true,
       connectionEpoch: 1,
@@ -863,19 +711,16 @@ describe("chat pane embedded panels", () => {
       sidebarContent: null,
       sidebarLayout: { columns: [] },
       settings: loadSettings(),
-    } as unknown as ChatPageHost;
-    const mount = document.body.appendChild(document.createElement("div"));
+    });
+    let presented = true;
+    const owner = new EventTarget();
     const renderPanels = async (layout: SidebarLayout) => {
       state.sidebarLayout = layout;
-      const definitions = sidebarPanelDefinitions({
-        state,
-        renderDetail: (content) =>
-          html`<openclaw-chat-detail-panel
-            .content=${content}
-            embedded
-          ></openclaw-chat-detail-panel>`,
-        workspace: html`<div>Files</div>`,
-      } as Parameters<typeof sidebarPanelDefinitions>[0]);
+      const definitions = sidebarPanelDefinitions(
+        sidebarPanelFixtureParams(state, {
+          panePresentation: { owner, isPresented: () => presented },
+        }),
+      );
       await renderPanelFixture(mount, layout, definitions);
     };
     const review = openSlot({ columns: [] }, "detail");
@@ -908,6 +753,37 @@ describe("chat pane embedded panels", () => {
       );
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
     }
+    openSessionWorkspacePreview(state, "transient", "Transient preview", {
+      kind: "markdown",
+      content: "Transient file preview",
+    });
+    const filesLayout = openSlot(review, "workspace");
+    await renderPanels(filesLayout);
+    const files = expectDefined(mount.querySelector("openclaw-chat-files-panel"), "Files panel");
+    const browser = files.querySelector(".chat-files-panel__page");
+    const preview = expectDefined(
+      files.querySelector("openclaw-chat-detail-panel"),
+      "File preview",
+    );
+    expect(preview.textContent).toContain("Transient file preview");
+
+    presented = false;
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    clearSessionWorkspacePreviews(state);
+    await files.updateComplete;
+    expect(preview.isConnected).toBe(false);
+    expect(files.previews).toEqual([]);
+    expect(files.activeId).toBeNull();
+    expect(mount.querySelector("openclaw-chat-files-panel")).toBe(files);
+    expect(files.querySelector(".chat-files-panel__page")).toBe(browser);
+    expect(mount.querySelector("openclaw-session-diff")).toBe(diff);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    presented = true;
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    await renderPanels(filesLayout);
+    expect(files.querySelector("openclaw-chat-detail-panel")).toBeNull();
+    expect(files.querySelector(".chat-files-panel__page")).toBe(browser);
     await renderPanels(closeSlot(review, "detail"));
     expect(mount.querySelector("openclaw-session-diff")).toBeNull();
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.diff", {
@@ -916,6 +792,17 @@ describe("chat pane embedded panels", () => {
       scope: "all",
     });
     expect(state.sidebarContent).toBeNull();
+    state.sidebarContent = { kind: "markdown", content: "Transient Review selection" };
+    await renderPanels(review);
+    const selectedReview = expectDefined(
+      mount.querySelector("openclaw-chat-detail-panel"),
+      "Selected Review content",
+    );
+    expect(selectedReview.textContent).toContain("Transient Review selection");
+    presented = false;
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    state.sidebarContent = null;
+    await waitForSolid(() => expect(selectedReview.isConnected).toBe(false));
   });
 
   it("shows why a file could not open instead of falling back to the session diff", async () => {
@@ -930,8 +817,7 @@ describe("chat pane embedded panels", () => {
     const { mount, renderPanels, state } = createReviewFixture();
     const message = 'Failed to load docs/chat.md: <img src="missing.png">';
     state.client = createGatewayBrowserClientFixture({
-      request: (method, params) =>
-        method === "tasks.list" ? { tasks: [] } : request(method, params),
+      request: (method, params) => request(method, params),
     });
     state.hello = gatewayHelloForMethods(["sessions.diff"]);
     state.sessionKey = "agent:main:review";
@@ -947,85 +833,5 @@ describe("chat pane embedded panels", () => {
     expect(notice?.querySelector("img")).toBeNull();
     expect(mount.querySelector("openclaw-session-diff")).toBeNull();
     expect(request).not.toHaveBeenCalled();
-  });
-
-  it("enumerates a structural loading variant for every side-panel tab", async () => {
-    const expected = {
-      browser: "browser",
-      companion: "chat",
-      conversation: "chat",
-      dashboard: "board",
-      desktop: "desktop",
-      detail: "review",
-      discussion: "discussion",
-      tasks: "tasks",
-      terminal: "terminal",
-      workspace: "files",
-    } as const;
-
-    const definitions = sidebarPanelDefinitions();
-    expect(definitions.map((definition) => definition.slot)).toEqual([
-      "conversation",
-      "detail",
-      "terminal",
-      "browser",
-      "workspace",
-      "companion",
-      "tasks",
-      "desktop",
-      "discussion",
-      "dashboard",
-    ]);
-    for (const definition of definitions) {
-      const mount = document.body.appendChild(document.createElement("div"));
-      render(definition.loading, mount);
-      const skeleton = mount.querySelector("openclaw-panel-loading-skeleton");
-      await skeleton?.updateComplete;
-      expect(skeleton?.getAttribute("data-panel-skeleton")).toBe(
-        expected[definition.slot as keyof typeof expected],
-      );
-    }
-  });
-
-  it("exposes task refresh in the shared side-panel header", () => {
-    const onRefreshTasks = vi.fn();
-    const params = {} as NonNullable<Parameters<typeof sidebarPanelDefinitions>[0]>;
-    params.connected = true;
-    params.onRefreshTasks = onRefreshTasks;
-    params.tasksLoading = false;
-    const tasks = sidebarPanelDefinitions(params).find((definition) => definition.slot === "tasks");
-    const mount = document.body.appendChild(document.createElement("div"));
-    render(tasks?.headerAction, mount);
-
-    const refresh = mount.querySelector<HTMLButtonElement>(
-      'button[aria-label="Refresh background tasks"]',
-    );
-    expect(refresh).not.toBeNull();
-    expect(refresh?.querySelector("svg")?.outerHTML).toContain("M21 12a9");
-    refresh?.click();
-    expect(onRefreshTasks).toHaveBeenCalledOnce();
-
-    for (const [connected, tasksLoading] of [
-      [false, false],
-      [true, true],
-    ] as const) {
-      params.connected = connected;
-      params.tasksLoading = tasksLoading;
-      const definition = sidebarPanelDefinitions(params).find(
-        (candidate) => candidate.slot === "tasks",
-      );
-      render(definition?.headerAction, mount);
-      expect(
-        mount.querySelector<HTMLButtonElement>('button[aria-label="Refresh background tasks"]')
-          ?.disabled,
-      ).toBe(true);
-      if (tasksLoading) {
-        expect(
-          mount.querySelector(
-            'button[aria-label="Refresh background tasks"] .btn__spinner[aria-hidden="true"]',
-          ),
-        ).not.toBeNull();
-      }
-    }
   });
 });

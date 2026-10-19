@@ -9,6 +9,7 @@ import type {
   PluginsInstallResult,
   PluginsUninstallResult,
 } from "../../../packages/gateway-protocol/src/schema/plugins.js";
+import { withInstallActivity } from "../../infra/install-progress.js";
 import { pluginInstallRequiresLocalHost } from "../../plugins/install-source-plan.js";
 import type { PluginRuntimeApplication } from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
@@ -19,10 +20,11 @@ import {
   setManagedPluginEnabled,
 } from "../../plugins/management-mutations.js";
 import { uninstallManagedPlugin } from "../../plugins/management-uninstall.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
   captureGatewayPluginRuntimeApplications,
   pluginLifecycleError,
-  withGatewayPluginLifecycleLease,
 } from "./plugins-lifecycle-error.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
@@ -34,7 +36,7 @@ type PluginLifecycleResult = Partial<
 
 type PluginLifecycleOptions = Required<
   Pick<Parameters<typeof installManagedPlugin>[0], "applyRuntime" | "beforePersistentApply">
-> & { signal?: AbortSignal };
+> & { signal?: AbortSignal; logger?: import("../../plugins/install-types.js").PluginInstallLogger };
 
 function lifecycleHandler<T>(
   method: string,
@@ -45,38 +47,81 @@ function lifecycleHandler<T>(
     client: Parameters<GatewayRequestHandler>[0]["client"],
   ) => Promise<PluginLifecycleResult>,
 ): GatewayRequestHandler {
-  return async ({ params, respond, context, signal, sessionMutationCommitGuard, client }) => {
+  return async ({
+    req,
+    params,
+    respond,
+    context,
+    signal,
+    sessionMutationCommitGuard,
+    client,
+    hasCurrentClientAuthority,
+  }) => {
     if (!assertValidParams(params, validate, method, respond)) {
       return;
     }
     let captured: ReturnType<typeof captureGatewayPluginRuntimeApplications> | undefined;
+    let entered = false;
     try {
       const applyRuntime = context.applyPluginLifecycleChange;
       if (!applyRuntime) {
         throw new Error("Plugin lifecycle changes require a running Gateway.");
       }
       const beforePersistentApply = () => {
+        // Ordinary reconnects retain the request; credential revocation must fence every effect.
+        if (
+          hasCurrentClientAuthority?.() === false ||
+          (client &&
+            (client.invalidated ||
+              (client.connect.role ?? "operator") !== "operator" ||
+              !client.connect.scopes?.includes(ADMIN_SCOPE)))
+        ) {
+          throw new Error("Plugin mutation authority is no longer active.");
+        }
         signal?.throwIfAborted();
         sessionMutationCommitGuard?.();
       };
-      captured = captureGatewayPluginRuntimeApplications(applyRuntime, beforePersistentApply);
+      const connId = client?.connId;
+      const logger: PluginLifecycleOptions["logger"] =
+        method === "plugins.install" && connId
+          ? {
+              activity: (event) =>
+                context.broadcastToConnIds(
+                  "plugins.install.progress",
+                  { ...event, requestId: req.id },
+                  new Set([connId]),
+                ),
+            }
+          : undefined;
+      // Runtime application owns preparation through cleanup; its receipt is not final install success.
+      captured = captureGatewayPluginRuntimeApplications(
+        logger
+          ? (change) => withInstallActivity(logger, "runtime", () => applyRuntime(change))
+          : applyRuntime,
+        beforePersistentApply,
+      );
       const lifecycle: PluginLifecycleOptions = {
+        ...(logger ? { logger } : {}),
         applyRuntime: captured.applyRuntime,
         beforePersistentApply,
         ...(signal ? { signal } : {}),
       };
+      // A request must not wait on a config reload that is draining that request.
       const { application, plugin, pluginId, pluginIds, removed, warnings } =
-        await withGatewayPluginLifecycleLease(signal, () => run(params, lifecycle, client));
+        await withPluginLifecycleLease({ signal, waitMs: 0 }, () => {
+          entered = true;
+          return run(params, lifecycle, client);
+        });
       if (!application) {
         throw new Error("Plugin lifecycle did not return a runtime application receipt.");
       }
-      const { warnings: runtimeWarnings, ...runtime } = application;
+      const { warnings: runtimeWarnings, restartRequired = false, ...runtime } = application;
       const combinedWarnings = [...new Set([...(warnings ?? []), ...(runtimeWarnings ?? [])])];
       respond(
         true,
         {
           ok: true,
-          restartRequired: false,
+          restartRequired,
           runtime,
           ...(plugin ? { plugin } : {}),
           ...(pluginId ? { pluginId } : {}),
@@ -87,7 +132,11 @@ function lifecycleHandler<T>(
         undefined,
       );
     } catch (error) {
-      respond(false, undefined, pluginLifecycleError(error, captured?.application));
+      respond(
+        false,
+        undefined,
+        pluginLifecycleError(error, { application: captured?.application, entered, signal }),
+      );
     }
   };
 }
@@ -112,7 +161,16 @@ export const pluginMutationHandlers: GatewayRequestHandlers = {
           "Local plugin artifacts require a connection from the Gateway host. Run `openclaw plugins install` on that host.",
         );
       }
-      return installManagedPlugin({ request: params, ...lifecycle });
+      return installManagedPlugin({
+        request: params,
+        ...lifecycle,
+        // The admin's install request accepts this staged surface, not new grants.
+        // The artifact owner rechecks it before commit; no second request is needed.
+        onCapabilityConsent: async (review) => {
+          lifecycle.beforePersistentApply();
+          return { reviewToken: review.reviewToken };
+        },
+      });
     },
   ),
   "plugins.uninstall": lifecycleHandler(

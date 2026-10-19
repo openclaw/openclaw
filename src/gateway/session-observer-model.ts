@@ -7,27 +7,33 @@ import {
   type SessionObserverPlanProgress,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
-import type { runIsolatedCompletion } from "../agents/isolated-completion.js";
 import {
   terminalHealthFor,
   type SessionActivityNoteState,
 } from "../agents/session-activity-notes.js";
-import type { prepareUtilityCompletionForAgent } from "../agents/utility-completion.js";
+import type {
+  runUtilityCompletion,
+  prepareUtilityCompletionForAgent,
+} from "../agents/utility-completion.js";
 import type { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/observer-digest.js";
 import {
-  loadSessionEntryReadOnly,
-  patchSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+  applySessionEntryOperation,
+  applySessionEntryTargetOperation,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 
 const HEADLINE_MAX_CHARS = 120;
@@ -37,7 +43,11 @@ const MAX_SUPERSEDED_RUNS = 256;
 const MAX_DORMANT_RUNS = 256;
 const MAX_DISABLED_RUNS = 512;
 
-export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
+export type SessionObserverRead = {
+  assertCurrent: () => void;
+  withRead: <T>(consume: (session: SessionEntry | undefined) => T) => Promise<T>;
+  persist: NonNullable<SessionObserverDeps["persistDigest"]>;
+};
 
 export function sessionObserverScopeKey(sessionKey: string, agentId: string): string {
   return parseAgentSessionKey(sessionKey)
@@ -45,13 +55,10 @@ export function sessionObserverScopeKey(sessionKey: string, agentId: string): st
     : `agent:${normalizeAgentId(agentId)}:${sessionKey}`;
 }
 type PrepareModel = typeof prepareUtilityCompletionForAgent;
-type CompleteModel = typeof runIsolatedCompletion;
+type CompleteModel = typeof runUtilityCompletion;
 type PreparedModel = Awaited<ReturnType<PrepareModel>>;
 
-export type SessionObserverLifecycle = Pick<
-  SessionObserverDigest,
-  "sessionId" | "lifecycleRevision"
->;
+type SessionObserverLifecycle = Pick<SessionObserverDigest, "sessionId" | "lifecycleRevision">;
 
 export function isSameSessionObserverLifecycle(
   left: SessionObserverLifecycle | undefined,
@@ -65,28 +72,8 @@ export function isSameSessionObserverLifecycle(
   );
 }
 
-export function resolveSessionObserverDigestForLifecycle(
-  digest: SessionObserverDigest | undefined,
-  lifecycle: SessionObserverLifecycle | undefined,
-): SessionObserverDigest | undefined {
-  if (
-    !digest ||
-    !lifecycle ||
-    (digest.sessionId !== undefined && digest.sessionId !== lifecycle.sessionId) ||
-    ((digest.sessionId !== undefined || digest.lifecycleRevision !== undefined) &&
-      digest.lifecycleRevision !== lifecycle.lifecycleRevision)
-  ) {
-    return undefined;
-  }
-  // Legacy stored digests inherit the captured owner before any asynchronous write.
-  return {
-    ...digest,
-    ...(lifecycle.sessionId ? { sessionId: lifecycle.sessionId } : {}),
-    ...(lifecycle.lifecycleRevision ? { lifecycleRevision: lifecycle.lifecycleRevision } : {}),
-  };
-}
-
 export type SessionObserverState = SessionActivityNoteState & {
+  reader?: SessionObserverRead;
   sessionKey: string;
   sessionId?: string;
   lifecycleRevision?: string;
@@ -114,6 +101,7 @@ export type SessionObserverState = SessionActivityNoteState & {
 
 export type DormantSessionObserverRun = Pick<
   SessionObserverState,
+  | "reader"
   | "sessionKey"
   | "sessionId"
   | "lifecycleRevision"
@@ -132,8 +120,18 @@ export type DormantSessionObserverRun = Pick<
 
 export type SessionObserverRevisionFloor = Pick<
   DormantSessionObserverRun,
-  "sessionId" | "lifecycleRevision" | "revision" | "previousDigest"
+  "reader" | "sessionId" | "lifecycleRevision" | "revision" | "previousDigest"
 >;
+
+export function snapshotSessionObserverRevisionFloor({
+  reader,
+  sessionId,
+  lifecycleRevision,
+  revision,
+  previousDigest,
+}: SessionObserverRevisionFloor): SessionObserverRevisionFloor {
+  return { ...(reader ? { reader } : {}), sessionId, lifecycleRevision, revision, previousDigest };
+}
 
 export function rememberSessionObserverRevisionFloor(
   floors: Map<string, SessionObserverRevisionFloor>,
@@ -160,26 +158,18 @@ export function rememberSessionObserverDormantRun(
   runs.delete(run.runId);
   runs.set(run.runId, run);
   while (runs.size > MAX_DORMANT_RUNS) {
-    const oldest = runs.keys().next().value;
-    if (oldest === undefined) {
+    const oldest = runs.entries().next();
+    if (oldest.done) {
       break;
     }
-    const evicted = runs.get(oldest);
-    runs.delete(oldest);
-    if (evicted) {
-      // Evicted dormant runs keep revision continuity through the bounded floor
-      // map so a later resume cannot restart below an already broadcast revision.
-      rememberSessionObserverRevisionFloor(
-        floors,
-        resolveSessionSubscriptionKey(evicted.sessionKey, evicted.agentId),
-        {
-          sessionId: evicted.sessionId,
-          lifecycleRevision: evicted.lifecycleRevision,
-          revision: evicted.revision,
-          previousDigest: evicted.previousDigest,
-        },
-      );
-    }
+    const [runId, evicted] = oldest.value;
+    runs.delete(runId);
+    // Retain revision continuity so a later resume cannot restart below a broadcast revision.
+    rememberSessionObserverRevisionFloor(
+      floors,
+      resolveSessionSubscriptionKey(evicted.sessionKey, evicted.agentId),
+      snapshotSessionObserverRevisionFloor(evicted),
+    );
   }
 }
 
@@ -209,6 +199,7 @@ export function createDormantSessionObserverRun(
   state: SessionObserverState,
 ): DormantSessionObserverRun {
   return {
+    reader: state.reader,
     sessionKey: state.sessionKey,
     sessionId: state.sessionId,
     lifecycleRevision: state.lifecycleRevision,
@@ -242,7 +233,9 @@ export type SessionObserverDeps = {
   prepareModel?: PrepareModel;
   completeModel?: CompleteModel;
   readSession?: (sessionKey: string, agentId: string) => SessionEntry | undefined;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
   persistDigest?: (params: {
+    reader?: SessionObserverRead;
     sessionKey: string;
     sessionId?: string;
     agentId: string;
@@ -262,8 +255,8 @@ export async function defaultPrepareModel(params: Parameters<PrepareModel>[0]) {
 }
 
 export async function defaultCompleteModel(params: Parameters<CompleteModel>[0]) {
-  const { runIsolatedCompletion } = await import("../agents/isolated-completion.js");
-  return await runIsolatedCompletion(params);
+  const { runUtilityCompletion } = await import("../agents/utility-completion.js");
+  return await runUtilityCompletion(params);
 }
 
 export const SESSION_OBSERVER_SYSTEM_PROMPT = [
@@ -275,23 +268,21 @@ export const SESSION_OBSERVER_SYSTEM_PROMPT = [
   'Return one raw JSON object only, without Markdown fences or surrounding text, for example: {"headline":"Checking the fix","assessment":"Tests are passing.","health":"on-track","planProgress":{"completed":2,"total":3}}. Omit optional fields instead of setting them to null.',
 ].join(" ");
 
-const ModelDigestSchema = z
-  .strictObject({
-    headline: z.string().min(1),
-    assessment: z.string().min(1).optional(),
-    health: z.enum(SESSION_OBSERVER_HEALTH_VALUES),
-    planProgress: z
-      .strictObject({
-        completed: z.number().int().nonnegative(),
-        total: z.number().int().nonnegative(),
-      })
-      .refine((value) => value.completed <= value.total)
-      .optional(),
-  })
-  .strict();
+const ModelDigestSchema = z.strictObject({
+  headline: z.string().min(1),
+  assessment: z.string().min(1).optional(),
+  health: z.enum(SESSION_OBSERVER_HEALTH_VALUES),
+  planProgress: z
+    .strictObject({
+      completed: z.number().int().nonnegative(),
+      total: z.number().int().nonnegative(),
+    })
+    .refine((value) => value.completed <= value.total)
+    .optional(),
+});
 
-function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
-  const normalized = redactToolPayloadText(value).replace(/\s+/gu, " ").trim();
+export function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
+  const normalized = value.replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
 
@@ -299,24 +290,18 @@ export function defaultReadSession(
   sessionKey: string,
   agentId: string,
   storePath?: string,
-): SessionEntry | undefined {
+): Promise<SessionEntry | undefined> {
   // Read-only: observation must never materialize agent state (dirs, agent DB
   // registration) for agents that are not configured.
-  return loadSessionEntryReadOnly({ sessionKey, agentId, ...(storePath ? { storePath } : {}) });
-}
-
-// sessions.list cache fence input. Both production writers (live/preamble
-// persist via createSessionObserverDigestPersister and terminal-digest
-// synthesis via synthesizeSessionObserverTerminalDigest) route through this
-// shared mutator; without its own fence a list computed mid-write caches the
-// pre-update digest indefinitely.
-let sessionObserverDigestVersion = 0;
-
-export function readSessionObserverDigestVersion(): number {
-  return sessionObserverDigestVersion;
+  return readSessionEntryReadOnlyInWorker({
+    sessionKey,
+    agentId,
+    ...(storePath ? { storePath } : {}),
+  });
 }
 
 export async function defaultPersistDigest(params: {
+  target?: Parameters<typeof applySessionEntryTargetOperation>[0];
   sessionKey: string;
   sessionId?: string;
   agentId: string;
@@ -324,51 +309,44 @@ export async function defaultPersistDigest(params: {
   digest: SessionObserverDigest;
   stillCurrent?: () => boolean;
 }): Promise<boolean | null> {
-  // No fallbackEntry is supplied, so the accessor returns null only when the
-  // row is gone (→ null) and a truthy clone on rejection — track acceptance
-  // separately since the result alone can't distinguish the three states.
-  let applied = false;
-  const result = await patchSessionEntryCore(
-    {
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      ...(params.storePath ? { storePath: params.storePath } : {}),
-    },
-    (entry) => {
-      if (params.stillCurrent?.() === false) {
-        return null;
-      }
-      if (params.sessionId !== undefined && entry.sessionId !== params.sessionId) {
-        return null;
-      }
-      const hasSessionIdentity =
-        params.sessionId !== undefined || params.digest.sessionId !== undefined;
-      if (
-        (params.digest.sessionId !== undefined && entry.sessionId !== params.digest.sessionId) ||
-        ((hasSessionIdentity || params.digest.lifecycleRevision !== undefined) &&
-          entry.lifecycleRevision !== params.digest.lifecycleRevision)
-      ) {
-        return null;
-      }
-      const previousDigest = resolveSessionObserverDigestForLifecycle(entry.observerDigest, entry);
-      if ((previousDigest?.revision ?? 0) >= params.digest.revision) {
-        return null;
-      }
-      applied = true;
-      return { observerDigest: params.digest };
-    },
-    { preserveActivity: true },
-  );
-  if (applied) {
-    sessionObserverDigestVersion += 1;
+  if (params.stillCurrent?.() === false) {
+    return false;
   }
+  // Rejected reducers return the existing row; only a commit receipt marks acceptance.
+  let applied = false;
+  const patchEntry = params.target
+    ? applySessionEntryTargetOperation.bind(undefined, params.target)
+    : applySessionEntryOperation.bind(undefined, {
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        ...(params.storePath ? { storePath: params.storePath } : {}),
+      });
+  const result = await patchEntry(
+    { kind: "observer-digest", digest: params.digest, sessionId: params.sessionId },
+    {
+      preserveActivity: true,
+      onCommitted: () => {
+        applied = true;
+        sessionChanges.emit({
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          storePath: params.storePath,
+          scope: "runtime",
+          facts: { kind: "unchanged" },
+        });
+      },
+    },
+  );
   return result === null ? null : applied;
 }
 
 export async function synthesizeSessionObserverTerminalDigest(params: {
   source: { event?: AgentEventPayload; state?: SessionObserverState };
   dormant?: DormantSessionObserverRun;
-  readSession: NonNullable<SessionObserverDeps["readSession"]>;
+  readSession: (
+    sessionKey: string,
+    agentId: string,
+  ) => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   persistDigest: NonNullable<SessionObserverDeps["persistDigest"]>;
   now: () => number;
   /** Rechecked at persist time: rollover can admit a newer run between the
@@ -391,7 +369,10 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
   if (!sessionKey || !agentId || !health) {
     return undefined;
   }
-  const session = params.readSession(sessionKey, agentId);
+  const session = await params.readSession(sessionKey, agentId);
+  if (params.stillCurrent?.() === false) {
+    return undefined;
+  }
   const lifecycle = params.source.state ?? params.dormant ?? session;
   if (
     !isSameSessionObserverLifecycle(lifecycle, session) ||
@@ -419,27 +400,18 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
       ? sanitizeSessionObserverModelText(terminalReply.text, HEADLINE_MAX_CHARS)
       : undefined;
   const persistBounded = async (candidate: SessionObserverDigest): Promise<boolean> => {
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      if (params.stillCurrent?.() === false) {
-        return false;
-      }
-      try {
-        // null means the store entry is gone (unpersistable session) — treat as
-        // a terminal false rather than a retryable failure.
-        const persisted = await params.persistDigest({
-          sessionKey,
-          sessionId,
-          agentId,
-          digest: candidate,
-          stillCurrent: params.stillCurrent,
-        });
-        return persisted === true;
-      } catch (error) {
-        lastError = error;
-      }
+    if (params.stillCurrent?.() === false) {
+      return false;
     }
-    throw lastError;
+    return (
+      (await params.persistDigest({
+        sessionKey,
+        sessionId,
+        agentId,
+        digest: candidate,
+        stillCurrent: params.stillCurrent,
+      })) === true
+    );
   };
   if (previous.health === health) {
     // The live broadcast already matched the terminal health; only the durable
@@ -487,27 +459,23 @@ export function normalizeSessionObserverModelOutput(text: string): {
   health: SessionObserverHealth;
   planProgress?: SessionObserverPlanProgress;
 } | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.trim()) as unknown;
-  } catch {
+  const trimmed = text.trim();
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed);
+  const digest = safeParseJsonWithSchema(ModelDigestSchema, fenced?.[1]?.trim() ?? trimmed);
+  if (!digest) {
     return null;
   }
-  const result = ModelDigestSchema.safeParse(parsed);
-  if (!result.success) {
-    return null;
-  }
-  const headline = sanitizeSessionObserverModelText(result.data.headline, HEADLINE_MAX_CHARS);
-  const assessment = result.data.assessment
-    ? sanitizeSessionObserverModelText(result.data.assessment, ASSESSMENT_MAX_CHARS)
+  const headline = sanitizeSessionObserverModelText(digest.headline, HEADLINE_MAX_CHARS);
+  const assessment = digest.assessment
+    ? sanitizeSessionObserverModelText(digest.assessment, ASSESSMENT_MAX_CHARS)
     : undefined;
-  if (!headline || (result.data.assessment && !assessment)) {
+  if (!headline || (digest.assessment && !assessment)) {
     return null;
   }
   return {
     headline,
     ...(assessment ? { assessment } : {}),
-    health: result.data.health,
-    ...(result.data.planProgress ? { planProgress: result.data.planProgress } : {}),
+    health: digest.health,
+    ...(digest.planProgress ? { planProgress: digest.planProgress } : {}),
   };
 }

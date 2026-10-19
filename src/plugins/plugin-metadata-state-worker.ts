@@ -1,43 +1,47 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
-import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import type { PluginMetadataStateSelector } from "./installed-plugin-index-row.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+} from "../state/openclaw-state-db-readonly.js";
 import { PluginCacheFactInvalidatedError } from "./plugin-cache.js";
+import type {
+  PluginMetadataStateKey,
+  PluginMetadataStateRow,
+  PluginMetadataStateSelector,
+} from "./plugin-metadata-state.kernel.js";
 
-/** Read raw metadata through the shared inspection actor, without creating state. */
-export async function readPluginMetadataStateRow(
-  selector: PluginMetadataStateSelector,
+async function readPluginMetadataState(
+  selection:
+    | { selector: PluginMetadataStateSelector }
+    | { stateKeys: readonly PluginMetadataStateKey[] },
   options: { path?: string; env?: NodeJS.ProcessEnv },
-  artifactPreservingReadOnly = false,
-): Promise<{ value_json: string } | undefined> {
-  const preserveArtifacts = artifactPreservingReadOnly || isArtifactPreservingStateRead();
+  artifactPreservingReadOnly: boolean,
+): Promise<PluginMetadataStateRow[]> {
   try {
-    const context = captureOpenClawStateWorkerContext(options);
-    try {
-      const { runOpenClawStateWorkerOperation } =
-        await import("../state/openclaw-state-worker-store.js");
-      context.admission.assertCurrent();
-      return await runOpenClawStateWorkerOperation(
-        context,
-        async (scope) => {
-          const row = await scope.execute({
-            type: "plugins.metadata.read",
-            input: { selector, artifactPreservingReadOnly: preserveArtifacts },
-          });
-          if (row === undefined) {
-            return undefined;
-          }
-          if (!isRecord(row) || typeof row.value_json !== "string") {
-            throw new Error("Shared-state worker returned an invalid plugin metadata row");
-          }
-          return { value_json: row.value_json };
+    const stateKeys: PluginMetadataStateKey[] =
+      "stateKeys" in selection
+        ? [...selection.stateKeys]
+        : [
+            selection.selector === "installed-index"
+              ? "plugins.installedIndex"
+              : "plugins.bundledDiscovery",
+          ];
+    const read = () =>
+      executeExistingOpenClawStateRead(
+        options,
+        {
+          type: "plugins.metadata.read",
+          input: { stateKeys },
         },
-        { existingOnly: true },
+        { snapshotPreparation: "awaited" },
       );
-    } finally {
-      context.admission.assertCurrent();
+    const result = await (artifactPreservingReadOnly
+      ? withArtifactPreservingStateReads(read)
+      : read());
+    if (result === undefined) {
+      return [];
     }
+    return result.rows;
   } catch (error) {
     if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
       throw new PluginCacheFactInvalidatedError(
@@ -47,4 +51,23 @@ export async function readPluginMetadataStateRow(
     }
     throw error;
   }
+}
+
+/** Read raw metadata through the shared reader, including retained snapshot scopes. */
+export async function readPluginMetadataStateRow(
+  selector: PluginMetadataStateSelector,
+  options: { path?: string; env?: NodeJS.ProcessEnv },
+  artifactPreservingReadOnly = false,
+): Promise<{ value_json: string } | undefined> {
+  const [row] = await readPluginMetadataState({ selector }, options, artifactPreservingReadOnly);
+  return row ? { value_json: row.value_json } : undefined;
+}
+
+/** Policy and inventory preparation share one worker request and SQLite snapshot. */
+export function readPluginMetadataStateRows(
+  stateKeys: readonly PluginMetadataStateKey[],
+  options: { path?: string; env?: NodeJS.ProcessEnv },
+  artifactPreservingReadOnly = false,
+): Promise<PluginMetadataStateRow[]> {
+  return readPluginMetadataState({ stateKeys }, options, artifactPreservingReadOnly);
 }

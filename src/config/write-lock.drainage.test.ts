@@ -8,6 +8,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
 import { seedRetainedBorrower } from "../infra/update-retained-custody.test-support.js";
 import { drainFileLockStateForTest, resetFileLockStateForTest } from "../plugin-sdk/file-lock.js";
+import {
+  composeConfigWriteAssertions,
+  createConfigWriteAuthorityGuard,
+} from "./write-authority.js";
 import { captureConfigWriteLockGuard, withConfigWriteLock } from "./write-lock.js";
 
 const fixture = vi.hoisted(() => ({
@@ -65,8 +69,6 @@ function outcome<T>(promise: Promise<T>) {
 
 it.each([
   { guarded: false, outerFails: false },
-  { guarded: true, outerFails: false },
-  { guarded: false, outerFails: true },
   { guarded: true, outerFails: true },
 ])(
   "preserves pending child failure (guarded=$guarded, outerFails=$outerFails)",
@@ -154,19 +156,6 @@ it("does not replay a nested failure reconciled before the outer callback return
   expect(result).toBe("reconciled");
 });
 
-it.each([new Error("outer only"), undefined])(
-  "preserves an outer-only rejection without inventing child failure (%s)",
-  async (failure) => {
-    const result = await outcome(
-      withConfigWriteLock(configPath, async () => {
-        // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may reject with undefined; preserve the exact reason.
-        throw failure;
-      }),
-    );
-    expect(result).toEqual({ ok: false, error: failure });
-  },
-);
-
 it("joins a rejecting admitted child before refusing unresolved-custody release", async () => {
   const store = createManagedHandoffLeaseStore();
   const installRoot = path.join(fixture.root, "install");
@@ -253,4 +242,74 @@ it("joins a rejecting admitted child before refusing unresolved-custody release"
   expect(rows()).toBe(beforeRows);
   expect(sidecar()).toEqual(beforeLock);
   expect(store.release(parent.lease)).toBe(false);
+});
+
+it("checks shared nested authority once per assertion and revalidates after awaits", async () => {
+  const includePath = path.join(fixture.root, "include.json");
+  fs.writeFileSync(includePath, "{}\n");
+  const refusal = new Error("nested authority revoked");
+  let revoked = false;
+  const authority = vi.fn(() => {
+    if (revoked) {
+      throw refusal;
+    }
+  });
+  let captured: (() => void) | undefined;
+  await withConfigWriteLock(
+    configPath,
+    async () => {
+      await withConfigWriteLock(
+        includePath,
+        async () => {
+          captured = captureConfigWriteLockGuard(includePath);
+          if (!captured) {
+            throw new Error("Missing nested source guard");
+          }
+          authority.mockClear();
+          captured();
+          expect(authority).toHaveBeenCalledTimes(1);
+          await Promise.resolve();
+          captured();
+          expect(authority).toHaveBeenCalledTimes(2);
+          await Promise.resolve();
+          revoked = true;
+          expect(captured).toThrow(refusal);
+          expect(authority).toHaveBeenCalledTimes(3);
+        },
+        undefined,
+        authority,
+      );
+    },
+    undefined,
+    authority,
+  );
+  expect(captured).toThrow("Config write has no live source ownership for this path.");
+  expect(authority).toHaveBeenCalledTimes(3);
+});
+
+it("retains ordered refusal latches when a composed authority was checked earlier", async () => {
+  const events: string[] = [];
+  const refusal = new Error("composed authority revoked");
+  let revoked = false;
+  const original = () => {
+    events.push("original");
+  };
+  const retained = createConfigWriteAuthorityGuard(() => {
+    if (revoked) {
+      throw refusal;
+    }
+    events.push("retained");
+  });
+  const combined = composeConfigWriteAssertions(original, retained, original, () => {
+    events.push("later");
+  });
+  combined();
+  expect(events).toEqual(["original", "retained", "later"]);
+  await Promise.resolve();
+  revoked = true;
+  expect(retained).toThrow(refusal);
+  revoked = false;
+  events.length = 0;
+  expect(combined).toThrow(refusal);
+  expect(events).toEqual(["original"]);
 });

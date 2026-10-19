@@ -1,6 +1,8 @@
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { createOpenAICompletionsTransportStreamFn } from "../transports/openai-completions-transport.js";
 import type { Context, Model } from "../types.js";
-import { streamOpenAICompletions } from "./openai-completions.js";
+import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "./openai-completions.js";
 
 // Live coverage for provider compat behavior that unit fakes cannot prove:
 // role selection and thinking parameters are validated by the real backends.
@@ -47,6 +49,56 @@ async function expectLiveReply(model: Model<"openai-completions">, apiKey: strin
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 (LIVE && OPENAI_KEY ? describe : describe.skip)("OpenAI completions live", () => {
+  it.each(
+    [
+      { id: "gpt-5.6-luna", effort: "none" },
+      { id: "gpt-5.4-mini", effort: undefined },
+      { id: "gpt-5.5", effort: undefined },
+    ].flatMap(({ id, effort }) =>
+      ["direct", "managed"].map((transport) => ({ id, effort, transport })),
+    ),
+  )(
+    "supports native $id tools through the $transport transport",
+    async ({ id, effort, transport }) => {
+      const model = liveModel({ id, reasoning: true });
+      const toolContext: Context = {
+        messages: [{ role: "user", content: "Call probe once.", timestamp: 0 }],
+        tools: [
+          {
+            name: "probe",
+            description: "Verify a tool call.",
+            parameters: Type.Object({}, { additionalProperties: false }),
+          },
+        ],
+      };
+      const requestedReasoning = "low" as const;
+      let sentEffort: unknown;
+      const options = {
+        apiKey: OPENAI_KEY,
+        reasoning: requestedReasoning,
+        maxTokens: 256,
+        toolChoice: "required" as const,
+        onPayload(payload: unknown) {
+          // Managed reasoning tool turns on api.openai.com reroute to Responses (#166182).
+          const body = payload as { reasoning_effort?: unknown; reasoning?: { effort?: unknown } };
+          sentEffort = transport === "direct" ? body.reasoning_effort : body.reasoning?.effort;
+        },
+      };
+      const stream = await (transport === "direct"
+        ? streamSimpleOpenAICompletions(model, toolContext, options)
+        : createOpenAICompletionsTransportStreamFn()(model, toolContext, options));
+      const result = await stream.result();
+      expect(result.errorMessage).toBeUndefined();
+      // Managed Responses keeps the requested effort; direct Completions applies the model policy.
+      expect(sentEffort).toBe(transport === "direct" ? effort : requestedReasoning);
+      expect(result.stopReason).toBe("toolUse");
+      expect(result.content.filter((block) => block.type === "toolCall")).toMatchObject([
+        { name: "probe", arguments: {} },
+      ]);
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
   it(
     "streams a completion with usage and no hidden retry stalls",
     async () => {

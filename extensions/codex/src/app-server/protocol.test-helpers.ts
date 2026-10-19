@@ -18,6 +18,6 @@ export function rawItemCompleted(item: JsonObject): CodexServerNotification {
 export function turnCompleted(turn: JsonObject): CodexServerNotification {
   return {
     method: "turn/completed",
-    params: { threadId: "thread-1", turnId: "turn-1", turn },
+    params: { threadId: "thread-1", turnId: "turn-1", turn: { items: [], ...turn } },
   };
 }

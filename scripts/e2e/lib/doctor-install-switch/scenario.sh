@@ -51,7 +51,6 @@ else
 fi
 git_cli="$git_root/openclaw.mjs"
 
-package_version="$(node -p "require(\"$npm_root/package.json\").version")"
 update_doctor_env="OPENCLAW_UPDATE_IN_PROGRESS=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART=1"
@@ -73,11 +72,11 @@ use_default_service_identity() {
     "$account_home/openclaw-wrapper-argv.log"
   export HOME="$account_home"
   export USERPROFILE="$account_home"
+  # The mounted busctl shim owns this synthetic user bus; no host socket or manager is used.
+  # Without an explicit address, transport selection falls through to --machine testuser@.
+  export XDG_RUNTIME_DIR="$account_home/.cache/openclaw-doctor-switch-runtime"
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
   unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH
-}
-
-is_legacy_package_acceptance_compat() {
-  [ "$(node scripts/e2e/lib/package-compat.mjs "$1")" = "1" ]
 }
 
 assert_entrypoint() {
@@ -134,6 +133,16 @@ service_definition_fingerprint() {
   fi
 }
 
+run_logged_command() {
+  local log_path="$1"
+  local command_timeout="$2"
+  shift 2
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" "$@" >"$log_path" 2>&1; then
+    openclaw_e2e_print_log "$log_path"
+    exit 1
+  fi
+}
+
 run_doctor_preserving_service() {
   local unit_path="$1"
   local doctor_log="$2"
@@ -141,10 +150,7 @@ run_doctor_preserving_service() {
   local doctor_cmd="$4"
   local before
   before="$(service_definition_fingerprint "$unit_path")"
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$doctor_cmd" >"$doctor_log" 2>&1; then
-    openclaw_e2e_print_log "$doctor_log"
-    exit 1
-  fi
+  run_logged_command "$doctor_log" "$command_timeout" bash -c "$doctor_cmd"
   if [ "$(service_definition_fingerprint "$unit_path")" != "$before" ]; then
     echo "Doctor changed the installed service definition during maintenance"
     openclaw_e2e_print_log "$doctor_log"
@@ -170,10 +176,7 @@ run_flow() {
   use_default_service_identity
   export USER="testuser"
 
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd" >"$install_log" 2>&1; then
-    openclaw_e2e_print_log "$install_log"
-    exit 1
-  fi
+  run_logged_command "$install_log" "$command_timeout" bash -c "$install_cmd"
   rm -f "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"
   rm -rf "$HOME/.config/fish" "$HOME/.config/powershell"
 
@@ -187,10 +190,7 @@ run_flow() {
   run_doctor_preserving_service "$unit_path" "$doctor_log" "$command_timeout" "$doctor_cmd"
   assert_entrypoint "$unit_path" "$install_expected"
 
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$switch_cmd" >"$switch_log" 2>&1; then
-    openclaw_e2e_print_log "$switch_log"
-    exit 1
-  fi
+  run_logged_command "$switch_log" "$command_timeout" bash -c "$switch_cmd"
   assert_entrypoint "$unit_path" "$switch_expected"
 }
 
@@ -253,37 +253,23 @@ run_cross_state_approval_flow() {
   exec_source_hash="$(sha256sum "$exec_source" | awk '{print $1}')"
   plugin_source_hash="$(sha256sum "$plugin_source" | awk '{print $1}')"
 
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" env \
-    OPENCLAW_STATE_DIR="$custom_state_dir" \
-    OPENCLAW_CONFIG_PATH="$custom_state_dir/openclaw.json" \
-    OPENCLAW_UPDATE_IN_PROGRESS=1 \
-    "$npm_bin" doctor --repair --yes --non-interactive >"$automated_log" 2>&1; then
-    openclaw_e2e_print_log "$automated_log"
-    exit 1
-  fi
+  local log
+  local -a update_env=(OPENCLAW_UPDATE_IN_PROGRESS=1)
+  for log in "$automated_log" "$direct_log"; do
+    run_logged_command "$log" "$command_timeout" env \
+      "${update_env[@]}" \
+      OPENCLAW_STATE_DIR="$custom_state_dir" \
+      OPENCLAW_CONFIG_PATH="$custom_state_dir/openclaw.json" \
+      "$npm_bin" doctor --repair --yes --non-interactive
 
-  test "$(sha256sum "$exec_source" | awk '{print $1}')" = "$exec_source_hash"
-  test "$(sha256sum "$plugin_source" | awk '{print $1}')" = "$plugin_source_hash"
-  test ! -e "$exec_source.migrated"
-  test ! -e "$plugin_source.migrated"
-  test ! -e "$custom_state_dir/exec-approvals.json"
-  test "$(plugin_binding_approval_count "$state_database")" = "0"
-
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" env \
-    -u OPENCLAW_UPDATE_IN_PROGRESS \
-    OPENCLAW_STATE_DIR="$custom_state_dir" \
-    OPENCLAW_CONFIG_PATH="$custom_state_dir/openclaw.json" \
-    "$npm_bin" doctor --repair --yes --non-interactive >"$direct_log" 2>&1; then
-    openclaw_e2e_print_log "$direct_log"
-    exit 1
-  fi
-
-  test "$(sha256sum "$exec_source" | awk '{print $1}')" = "$exec_source_hash"
-  test "$(sha256sum "$plugin_source" | awk '{print $1}')" = "$plugin_source_hash"
-  test ! -e "$exec_source.migrated"
-  test ! -e "$plugin_source.migrated"
-  test ! -e "$custom_state_dir/exec-approvals.json"
-  test "$(plugin_binding_approval_count "$state_database")" = "0"
+    test "$(sha256sum "$exec_source" | awk '{print $1}')" = "$exec_source_hash"
+    test "$(sha256sum "$plugin_source" | awk '{print $1}')" = "$plugin_source_hash"
+    test ! -e "$exec_source.migrated"
+    test ! -e "$plugin_source.migrated"
+    test ! -e "$custom_state_dir/exec-approvals.json"
+    test "$(plugin_binding_approval_count "$state_database")" = "0"
+    update_env=(-u OPENCLAW_UPDATE_IN_PROGRESS)
+  done
 }
 
 run_cross_state_approval_flow
@@ -301,14 +287,11 @@ run_proxy_env_flow() {
   export USER="testuser"
 
   unit_path="$HOME/.config/systemd/user/openclaw-gateway.service"
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" env \
+  run_logged_command "$install_log" "$command_timeout" env \
     HTTP_PROXY="http://proxy.local:7890" \
     HTTPS_PROXY="https://proxy.local:7890" \
     NO_PROXY="localhost,127.0.0.1" \
-    "$npm_bin" gateway install --force >"$install_log" 2>&1; then
-    openclaw_e2e_print_log "$install_log"
-    exit 1
-  fi
+    "$npm_bin" gateway install --force
   assert_no_env_key "$unit_path" "HTTP_PROXY"
   assert_no_env_key "$unit_path" "HTTPS_PROXY"
   assert_no_env_key "$unit_path" "NO_PROXY"
@@ -322,10 +305,7 @@ run_proxy_env_flow() {
   assert_env_value "$unit_path" "HTTP_PROXY" "http://stale-proxy.local:7890"
   assert_env_value "$unit_path" "HTTPS_PROXY" "https://stale-proxy.local:7890"
 
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" node "$git_cli" gateway install --force >"$reinstall_log" 2>&1; then
-    openclaw_e2e_print_log "$reinstall_log"
-    exit 1
-  fi
+  run_logged_command "$reinstall_log" "$command_timeout" node "$git_cli" gateway install --force
   assert_no_env_key "$unit_path" "HTTP_PROXY"
   assert_no_env_key "$unit_path" "HTTPS_PROXY"
 }
@@ -354,35 +334,23 @@ run_wrapper_flow() {
 
   local unit_path="$HOME/.config/systemd/user/openclaw-gateway.service"
 
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" --force >"$install_log" 2>&1; then
-    openclaw_e2e_print_log "$install_log"
-    exit 1
-  fi
+  run_logged_command "$install_log" "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" --force
   assert_exec_arg "$unit_path" 1 "$wrapper"
   assert_exec_arg "$unit_path" 2 "gateway"
   assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
 
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --force >"$reinstall_log" 2>&1; then
-    openclaw_e2e_print_log "$reinstall_log"
-    exit 1
-  fi
+  run_logged_command "$reinstall_log" "$command_timeout" "$npm_bin" gateway install --force
   assert_exec_arg "$unit_path" 1 "$wrapper"
   assert_exec_arg "$unit_path" 2 "gateway"
   assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
 
   sed -i "/^Environment=OPENCLAW_WRAPPER=/d" "$unit_path"
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" >"$env_repair_log" 2>&1; then
-    openclaw_e2e_print_log "$env_repair_log"
-    exit 1
-  fi
+  run_logged_command "$env_repair_log" "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper"
   assert_exec_arg "$unit_path" 1 "$wrapper"
   assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
 
   sed -i "s#^Environment=OPENCLAW_WRAPPER=.*#Environment=OPENCLAW_WRAPPER=/tmp/stale-openclaw-wrapper#" "$unit_path"
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" >"$env_repair_log" 2>&1; then
-    openclaw_e2e_print_log "$env_repair_log"
-    exit 1
-  fi
+  run_logged_command "$env_repair_log" "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper"
   assert_exec_arg "$unit_path" 1 "$wrapper"
   assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
 
@@ -392,20 +360,9 @@ run_wrapper_flow() {
   assert_exec_arg "$unit_path" 2 "gateway"
   assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
 
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" env OPENCLAW_WRAPPER= "$npm_bin" gateway install --force >"$clear_log" 2>&1; then
-    openclaw_e2e_print_log "$clear_log"
-    exit 1
-  fi
+  run_logged_command "$clear_log" "$command_timeout" env OPENCLAW_WRAPPER= "$npm_bin" gateway install --force
   assert_no_env_key "$unit_path" "OPENCLAW_WRAPPER"
   assert_entrypoint "$unit_path" "$npm_entry"
 }
 
-if "$npm_bin" gateway install --help 2>&1 | grep -q -- "--wrapper"; then
-  run_wrapper_flow
-elif is_legacy_package_acceptance_compat "$package_version"; then
-  # Legacy compatibility: 2026.4.25 and older did not ship gateway install --wrapper.
-  echo "Skipping wrapper persistence; package gateway install does not support --wrapper."
-else
-  echo "Package $package_version must support gateway install --wrapper." >&2
-  exit 1
-fi
+run_wrapper_flow

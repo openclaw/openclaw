@@ -1,10 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { lstat, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import fs, { lstat, mkdir, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { dirname, join, sep } from "node:path";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { buildClawProject } from "./project-build.js";
+import { clawProjectBuildEntrypoint } from "./project-runtime.test-support.js";
 import { ClawProjectError, createClawProject, validateClawProject } from "./project.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -58,16 +61,22 @@ describe("Claw projects", () => {
   it("matches the golden artifact digest under a restrictive umask", () => {
     const output = join(tempDirs.make("openclaw-claw-umask-"), "golden.tgz");
     const project = join(process.cwd(), "test", "fixtures", "claws", "project-v1");
+    const projectBuildUrl = resolveRuntimeWorkerUrl(clawProjectBuildEntrypoint);
     const script = [
       "process.umask(0o077);",
-      'const { buildClawProject } = await import("./src/claws/project-build.ts");',
+      `const { buildClawProject } = await import(${JSON.stringify(projectBuildUrl.href)});`,
       `const result = await buildClawProject(${JSON.stringify(project)}, ${JSON.stringify(output)});`,
       "process.stdout.write(result.integrity);",
     ].join("\n");
 
     const result = spawnSync(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", script],
+      [
+        ...resolveRuntimeWorkerArgv(projectBuildUrl).slice(0, -1),
+        "--input-type=module",
+        "--eval",
+        script,
+      ],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -86,6 +95,40 @@ describe("Claw projects", () => {
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(GOLDEN_ARTIFACT_INTEGRITY);
+  });
+
+  it("refuses to publish and removes staging when a completed file fails to close", async () => {
+    const outputDirectory = tempDirs.make("openclaw-claw-close-failure-");
+    const output = join(outputDirectory, "claw.tgz");
+    const closeError = Object.assign(new Error("staged file close failed"), { code: "EIO" });
+    const open = fs.open;
+    let closeAttempts = 0;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (
+        String(args[0]).startsWith(`${outputDirectory}${sep}`) &&
+        (await handle.stat()).isFile()
+      ) {
+        const close = handle.close.bind(handle);
+        vi.spyOn(handle, "close").mockImplementation(async () => {
+          await close();
+          closeAttempts += 1;
+          throw closeError;
+        });
+      }
+      return handle;
+    });
+    try {
+      await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, async () => {
+        await expect(
+          buildClawProject(join(process.cwd(), "test", "fixtures", "claws", "project-v1"), output),
+        ).rejects.toBe(closeError);
+      });
+      expect(closeAttempts).toBe(1);
+      await expect(readdir(outputDirectory)).resolves.toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("creates a minimal project that validates through the canonical reader", async () => {
@@ -189,6 +232,46 @@ describe("Claw projects", () => {
       "package/workspace/reference.md",
     ]);
     expect(entries).not.toContain("package/not-packed.txt");
+  });
+
+  it("preserves license metadata and a package-root LICENSE in the artifact", async () => {
+    const project = tempDirs.make("openclaw-claw-license-");
+    const output = join(tempDirs.make("openclaw-claw-license-output-"), "claw.tgz");
+    const unpacked = tempDirs.make("openclaw-claw-license-unpacked-");
+    await writeRichProject(project);
+    const packagePath = join(project, "package.json");
+    const packageJson = JSON.parse(await readFile(packagePath, "utf8")) as Record<string, unknown>;
+    await writeFile(packagePath, `${JSON.stringify({ ...packageJson, license: "MIT" })}\n`);
+    await writeFile(join(project, "LICENSE"), "License notice for the demo Claw.\n");
+
+    const validated = await validateClawProject(project);
+    const result = await buildClawProject(project, output);
+    await tar.x({ cwd: unpacked, file: output, strict: true });
+
+    expect(validated).toMatchObject({ ok: true });
+    if (validated.ok) {
+      expect(validated.excludedPaths).not.toContain("LICENSE");
+    }
+    expect(result.files).toContain("LICENSE");
+    expect(
+      JSON.parse(await readFile(join(unpacked, "package", "package.json"), "utf8")),
+    ).toMatchObject({ license: "MIT" });
+    expect(await readFile(join(unpacked, "package", "LICENSE"), "utf8")).toBe(
+      "License notice for the demo Claw.\n",
+    );
+  });
+
+  it("rejects an unsafe package-root LICENSE", async () => {
+    const project = tempDirs.make("openclaw-claw-license-link-");
+    const outside = tempDirs.make("openclaw-claw-license-outside-");
+    await writeRichProject(project);
+    await writeFile(join(outside, "LICENSE"), "Outside notice.\n");
+    await symlink(join(outside, "LICENSE"), join(project, "LICENSE"), "file");
+
+    await expect(validateClawProject(project)).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: "project_license_invalid" })],
+    });
   });
 
   it("preserves the canonical metadata-selected OpenClaw profile path", async () => {
@@ -376,31 +459,29 @@ describe("Claw projects", () => {
     });
   });
 
-  it.each([
-    ".git/config",
-    "node_modules/example/secret.md",
-    "workspace/.git/config",
-    "workspace/node_modules/example/secret.md",
-  ])("rejects an explicitly selected source from %s", async (sourcePath) => {
-    const project = tempDirs.make("openclaw-claw-excluded-source-");
-    const output = join(tempDirs.make("openclaw-claw-excluded-source-output-"), "claw.tgz");
-    await writeRichProject(project);
-    await mkdir(dirname(join(project, sourcePath)), { recursive: true });
-    await writeFile(join(project, sourcePath), "sensitive local state\n");
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace("workspace/reference.md", sourcePath),
-    );
+  it.each([".git/config", "workspace/node_modules/example/secret.md"])(
+    "rejects an explicitly selected source from %s",
+    async (sourcePath) => {
+      const project = tempDirs.make("openclaw-claw-excluded-source-");
+      const output = join(tempDirs.make("openclaw-claw-excluded-source-output-"), "claw.tgz");
+      await writeRichProject(project);
+      await mkdir(dirname(join(project, sourcePath)), { recursive: true });
+      await writeFile(join(project, sourcePath), "sensitive local state\n");
+      const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+      await writeFile(
+        join(project, "CLAW.md"),
+        manifest.replace("workspace/reference.md", sourcePath),
+      );
 
-    await expect(validateClawProject(project)).resolves.toMatchObject({
-      ok: false,
-      diagnostics: [expect.objectContaining({ code: "project_excluded_source" })],
-    });
-    await expect(buildClawProject(project, output)).rejects.toMatchObject({
-      code: "project_invalid",
-    } satisfies Partial<ClawProjectError>);
-  });
+      await expect(validateClawProject(project)).resolves.toMatchObject({
+        ok: false,
+        diagnostics: [expect.objectContaining({ code: "project_excluded_source" })],
+      });
+      await expect(buildClawProject(project, output)).rejects.toMatchObject({
+        code: "project_invalid",
+      } satisfies Partial<ClawProjectError>);
+    },
+  );
 
   it("rejects a custom profile selected from an excluded tree", async () => {
     const project = tempDirs.make("openclaw-claw-excluded-profile-");

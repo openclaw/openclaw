@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements cli behavior.
 import {
   createLazyCliRuntimeLoader,
   createStandardLiveTransportQaCliRegistration,
@@ -13,6 +12,7 @@ export const slackQaCliRegistration: LiveTransportQaCliRegistration =
   createStandardLiveTransportQaCliRegistration({
     channelId: "slack",
     channelLabel: "Slack",
+    agentE2e: true,
     async createAdapter(context) {
       return (await loadSlackQaAdapterRuntime()).createSlackQaTransportAdapter(context);
     },

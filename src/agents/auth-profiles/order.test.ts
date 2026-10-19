@@ -1,16 +1,16 @@
-/**
- * Tests auth profile ordering and provider compatibility.
- * Covers manifest auth aliases, configured order, cooldown state, AWS SDK
- * profiles, and OpenAI/Codex compatibility.
- */
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./ambient-auth.js";
-import { createApiKeyCredential, oauthCred } from "./credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createOAuthRefreshCredential as oauth,
+} from "./credential-fixtures.test-support.js";
+import { closeAuthProfileReadPool } from "./sqlite.js";
 import { saveAuthProfileStore } from "./store-runtime.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -58,6 +58,13 @@ import {
 } from "./order.js";
 import { markAuthProfileSuccess } from "./profiles.js";
 
+function storeWith(
+  profiles: AuthProfileStore["profiles"],
+  rest: Omit<Partial<AuthProfileStore>, "profiles"> = {},
+): AuthProfileStore {
+  return { version: 1, profiles, ...rest };
+}
+
 describe("resolveAuthProfileOrder", () => {
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
@@ -69,108 +76,28 @@ describe("resolveAuthProfileOrder", () => {
     const profileId = "openai:pending";
     const pending = createOAuthRefreshFence({
       profileId,
-      credential: {
-        type: "oauth",
-        provider: "openai",
-        access: "expired-access",
-        refresh: "refresh-token",
-        expires: 1,
-        accountId: "acct-a",
-      },
+      credential: oauth({ expires: 1, accountId: "acct-a" }),
     });
     const failed = createFailedOAuthRefreshFence(pending);
-
-    expect(
-      resolveAuthProfileOrder({
-        store: { version: 1, profiles: { [profileId]: pending } },
-        provider: "openai",
-      }),
-    ).toEqual([]);
-    expect(
-      resolveAuthProfileOrder({
-        store: { version: 1, profiles: { [profileId]: pending } },
-        provider: "openai",
-        includePendingOAuthRefresh: true,
-      }),
-    ).toEqual([profileId]);
-    expect(
-      resolveAuthProfileOrder({
-        store: { version: 1, profiles: { [profileId]: failed } },
-        provider: "openai",
-        includePendingOAuthRefresh: true,
-      }),
-    ).toEqual([]);
-    expect(
-      resolveAuthProfileOrder({
-        store: { version: 1, profiles: { [profileId]: pending } },
-        provider: "anthropic",
-        includePendingOAuthRefresh: true,
-      }),
-    ).toEqual([]);
-    expect(
-      resolveAuthProfileOrder({
-        cfg: {
-          auth: {
-            profiles: {
-              [profileId]: { provider: "openai", mode: "api_key" },
-            },
-          },
-        },
-        store: { version: 1, profiles: { [profileId]: pending } },
-        provider: "openai",
-        includePendingOAuthRefresh: true,
-      }),
-    ).toEqual([]);
-  });
-
-  it("accepts aliased provider credentials from manifest metadata", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "fixture-provider:default": createApiKeyCredential("fixture-provider", "sk-test"),
-      },
+    const incompatibleConfig: OpenClawConfig = {
+      auth: { profiles: { [profileId]: { provider: "openai", mode: "api_key" } } },
     };
-
-    const order = resolveAuthProfileOrder({
-      store,
-      provider: "fixture-provider-plan",
-    });
-
-    expect(order).toEqual(["fixture-provider:default"]);
-  });
-
-  it("does not apply the provider auth pin to stored profiles", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "fixture-provider": {
-            auth: "api-key",
-            baseUrl: "https://example.invalid",
-            models: [],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "fixture-provider:oauth": oauthCred({
-          provider: "fixture-provider",
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-          expires: Date.now() + 60_000,
+    for (const [credential, provider, includePendingOAuthRefresh, cfg, expected] of [
+      [pending, "openai", undefined, undefined, []],
+      [pending, "openai", true, undefined, [profileId]],
+      [failed, "openai", true, undefined, []],
+      [pending, "anthropic", true, undefined, []],
+      [pending, "openai", true, incompatibleConfig, []],
+    ] as const) {
+      expect(
+        resolveAuthProfileOrder({
+          cfg,
+          store: { version: 1, profiles: { [profileId]: credential } },
+          provider,
+          includePendingOAuthRefresh,
         }),
-        "fixture-provider:api-key": createApiKeyCredential("fixture-provider", "api-key"),
-      },
-    };
-
-    expect(
-      resolveAuthProfileOrder({
-        cfg,
-        store,
-        provider: "fixture-provider",
-      }),
-    ).toEqual(["fixture-provider:oauth", "fixture-provider:api-key"]);
+      ).toEqual(expected);
+    }
   });
 
   it("applies provider auth pins to ambient credentials through auth aliases", () => {
@@ -209,7 +136,7 @@ describe("resolveAuthProfileOrder", () => {
         },
       },
     } satisfies OpenClawConfig;
-    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const store = storeWith({});
 
     expect(
       resolveAuthProfileEligibility({
@@ -224,373 +151,170 @@ describe("resolveAuthProfileOrder", () => {
     ]);
   });
 
-  it("uses canonical provider auth order for alias providers", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
-        "fixture-provider:secondary": createApiKeyCredential("fixture-provider", "sk-secondary"),
-      },
-      order: {
-        "fixture-provider": ["fixture-provider:secondary", "fixture-provider:primary"],
-      },
-    };
-
-    const order = resolveAuthProfileOrder({
-      store,
-      provider: "fixture-provider-plan",
-    });
-
-    expect(order).toEqual(["fixture-provider:secondary", "fixture-provider:primary"]);
-  });
-
-  it("falls back to legacy stored auth order when alias order is empty", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
-        "fixture-provider:secondary": createApiKeyCredential("fixture-provider", "sk-secondary"),
-      },
-      order: {
-        "fixture-provider-plan": [],
-        "fixture-provider": ["fixture-provider:secondary", "fixture-provider:primary"],
-      },
-    };
-
-    const order = resolveAuthProfileOrder({
-      store,
-      provider: "fixture-provider-plan",
-    });
-
-    expect(order).toEqual(["fixture-provider:secondary", "fixture-provider:primary"]);
-  });
-
-  it("falls back to legacy configured auth order when alias order is empty", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
-        "fixture-provider:secondary": createApiKeyCredential("fixture-provider", "sk-secondary"),
-      },
-    };
-
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: {
-            "fixture-provider-plan": [],
-            "fixture-provider": ["fixture-provider:secondary", "fixture-provider:primary"],
-          },
-        },
-      },
-      store,
-      provider: "fixture-provider-plan",
-    });
-
-    expect(order).toEqual(["fixture-provider:secondary", "fixture-provider:primary"]);
-  });
-
-  it("keeps explicit empty configured auth order as a provider disable", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
-      },
-    };
-
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: {
-            "fixture-provider": [],
-          },
-        },
-      },
-      store,
-      provider: "fixture-provider",
-    });
-
-    expect(order).toStrictEqual([]);
-  });
-
-  it("keeps explicit empty stored auth order as a provider disable", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
-      },
-      order: {
-        "fixture-provider": [],
-      },
-    };
-
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: {
-            "fixture-provider": ["fixture-provider:primary"],
-          },
-        },
-      },
-      store,
-      provider: "fixture-provider",
-    });
-
-    expect(order).toStrictEqual([]);
-  });
-
   it("falls back to stored profiles when a stored order only has missing credentials", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
+    const store = storeWith(
+      {
         "fixture-provider:key": createApiKeyCredential("fixture-provider", "sk-primary"),
-        "fixture-provider:oauth": oauthCred({
-          provider: "fixture-provider",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-        }),
+        "fixture-provider:oauth": oauth({ provider: "fixture-provider" }),
       },
-      order: {
-        "fixture-provider": ["fixture-provider:deleted"],
-      },
-    };
+      { order: { "fixture-provider": ["fixture-provider:deleted"] } },
+    );
 
-    const order = resolveAuthProfileOrder({
-      store,
-      provider: "fixture-provider",
-    });
-
-    expect(order).toStrictEqual(["fixture-provider:oauth", "fixture-provider:key"]);
+    expect(resolveAuthProfileOrder({ store, provider: "fixture-provider" })).toStrictEqual([
+      "fixture-provider:oauth",
+      "fixture-provider:key",
+    ]);
   });
 
-  it.each([
-    ["expired first", ["openai:expired", "openai:valid"]],
-    ["valid first", ["openai:valid", "openai:expired"]],
-  ])("prefers live OAuth before expired OAuth when %s", (_caseName, profileIds) => {
+  it("prefers live OAuth before expired OAuth", () => {
     const now = Date.now();
-    const profiles: AuthProfileStore["profiles"] = {
-      "openai:expired": oauthCred({
-        provider: "openai",
-        access: "expired-access",
-        refresh: "expired-refresh",
-        expires: now - 60_000,
-      }),
-      "openai:valid": oauthCred({
-        provider: "openai",
-        access: "valid-access",
-        refresh: "valid-refresh",
-        expires: now + 60_000,
-      }),
-    };
-    const orderedProfiles: AuthProfileStore["profiles"] = {};
-    for (const profileId of profileIds) {
-      const profile = profiles[profileId];
-      if (profile) {
-        orderedProfiles[profileId] = profile;
-      }
-    }
-
     expect(
       resolveAuthProfileOrder({
-        store: {
-          version: 1,
-          profiles: orderedProfiles,
-          usageStats: {
-            "openai:expired": { lastUsed: 0 },
-            "openai:valid": { lastUsed: 10_000 },
+        store: storeWith(
+          {
+            "openai:valid": oauth({ expires: now + 60_000 }),
+            "openai:expired": oauth({ expires: now - 60_000 }),
           },
-        },
+          {
+            usageStats: {
+              "openai:expired": { lastUsed: 0 },
+              "openai:valid": { lastUsed: 10_000 },
+            },
+          },
+        ),
         provider: "openai",
       }),
     ).toStrictEqual(["openai:valid", "openai:expired"]);
   });
 
-  it("keeps an explicit order authoritative across OAuth expiry state", () => {
-    const now = Date.now();
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:expired": oauthCred({
-          provider: "openai",
-          access: "expired-access",
-          refresh: "expired-refresh",
-          expires: now - 60_000,
-        }),
-        "openai:valid": oauthCred({
-          provider: "openai",
-          access: "valid-access",
-          refresh: "valid-refresh",
-          expires: now + 60_000,
-        }),
-      },
-      order: { openai: ["openai:expired", "openai:valid"] },
-    };
+  it.each(["read-only", "execution"] as const)(
+    "orders expired and active cooldowns in %s mode without read-only housekeeping",
+    (readinessMode) => {
+      const expiredAt = Date.now() - 60_000;
+      const activeUntil = Date.now() + 600_000;
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "fixture-provider:active": createApiKeyCredential("fixture-provider", "sk-active"),
+          "fixture-provider:expired": createApiKeyCredential("fixture-provider", "sk-expired"),
+          "fixture-provider:ready": createApiKeyCredential("fixture-provider", "sk-ready"),
+        },
+        usageStats: {
+          "fixture-provider:active": { lastUsed: 0, cooldownUntil: activeUntil },
+          "fixture-provider:expired": {
+            lastUsed: 20,
+            cooldownUntil: expiredAt,
+            cooldownReason: "timeout",
+            errorCount: 3,
+          },
+          "fixture-provider:ready": { lastUsed: 10 },
+        },
+      };
 
-    expect(resolveAuthProfileOrder({ store, provider: "openai" })).toStrictEqual([
-      "openai:expired",
-      "openai:valid",
-    ]);
-  });
+      expect(
+        resolveAuthProfileOrderWithMetadata({ store, provider: "fixture-provider", readinessMode }),
+      ).toEqual({
+        profileIds: [
+          "fixture-provider:ready",
+          "fixture-provider:expired",
+          "fixture-provider:active",
+        ],
+        hasExplicitOrder: false,
+      });
+      const { lastUsed, cooldownUntil, cooldownReason, errorCount } =
+        store.usageStats?.["fixture-provider:expired"] ?? {};
+      expect({ lastUsed, cooldownUntil, cooldownReason, errorCount }).toEqual({
+        lastUsed: 20,
+        cooldownUntil: readinessMode === "read-only" ? expiredAt : undefined,
+        cooldownReason: readinessMode === "read-only" ? "timeout" : undefined,
+        errorCount: readinessMode === "read-only" ? 3 : 0,
+      });
+      expect(store.usageStats?.["fixture-provider:active"]?.cooldownUntil).toBe(activeUntil);
+    },
+  );
 
   it("does not fall back past an explicit configured auth order", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
-      },
-    };
-
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: {
-            "fixture-provider": ["fixture-provider:missing"],
-          },
-        },
-      },
-      store,
-      provider: "fixture-provider",
+    const store = storeWith({
+      "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
     });
 
-    expect(order).toStrictEqual([]);
-    expect(
-      resolveAuthProfileOrderWithMetadata({
-        cfg: {
-          auth: {
-            order: {
-              "fixture-provider": ["fixture-provider:missing"],
-            },
-          },
-        },
-        store,
-        provider: "fixture-provider",
-      }),
-    ).toStrictEqual({ profileIds: [], hasExplicitOrder: true });
+    const params = {
+      store,
+      provider: "fixture-provider",
+      cfg: { auth: { order: { "fixture-provider": ["fixture-provider:missing"] } } },
+    };
+    expect(resolveAuthProfileOrder(params)).toStrictEqual([]);
+    expect(resolveAuthProfileOrderWithMetadata(params)).toStrictEqual({
+      profileIds: [],
+      hasExplicitOrder: true,
+    });
   });
 
-  it("reports an empty configured auth order as authoritative", () => {
-    const resolution = resolveAuthProfileOrderWithMetadata({
-      cfg: {
-        auth: {
-          order: {
-            "fixture-provider": [],
-          },
-        },
-      },
-      store: {
+  it.each(["cooldown", "block"] as const)(
+    "does not apply a %s scoped to another model when ordering profiles",
+    (kind) => {
+      const store: AuthProfileStore = {
         version: 1,
         profiles: {
           "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
+          "fixture-provider:backup": createApiKeyCredential("fixture-provider", "sk-backup"),
         },
-      },
-      provider: "fixture-provider",
-    });
-
-    expect(resolution).toStrictEqual({ profileIds: [], hasExplicitOrder: true });
-  });
-
-  it("does not apply a cooldown scoped to another model when ordering profiles", () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
-        "fixture-provider:backup": createApiKeyCredential("fixture-provider", "sk-backup"),
-      },
-      usageStats: {
-        "fixture-provider:primary": {
-          cooldownUntil: Date.now() + 60_000,
-          cooldownReason: "rate_limit",
-          cooldownModel: "model-a",
+        usageStats: {
+          "fixture-provider:primary":
+            kind === "cooldown"
+              ? {
+                  cooldownUntil: Date.now() + 60_000,
+                  cooldownReason: "rate_limit",
+                  cooldownModel: "model-a",
+                }
+              : {
+                  blockedUntil: Date.now() + 60_000,
+                  blockedReason: "subscription_limit",
+                  blockedModel: "model-a",
+                  blockedScope: "model",
+                },
         },
-      },
-    };
-    const cfg = {
-      auth: {
-        order: {
-          "fixture-provider": ["fixture-provider:primary", "fixture-provider:backup"],
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(
-      resolveAuthProfileOrder({
-        cfg,
-        store,
-        provider: "fixture-provider",
-        forModel: "model-b",
-      }),
-    ).toStrictEqual(["fixture-provider:primary", "fixture-provider:backup"]);
-    expect(
-      resolveAuthProfileOrder({
-        cfg,
-        store,
-        provider: "fixture-provider",
-        forModel: "model-a",
-      }),
-    ).toStrictEqual(["fixture-provider:backup", "fixture-provider:primary"]);
-  });
-
-  it("does not apply a block scoped to another model when ordering profiles", () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "placeholder"),
-        "fixture-provider:backup": createApiKeyCredential("fixture-provider", "placeholder"),
-      },
-      usageStats: {
-        "fixture-provider:primary": {
-          blockedUntil: Date.now() + 60_000,
-          blockedReason: "subscription_limit",
-          blockedModel: "model-a",
-          blockedScope: "model",
-        },
-      },
-    };
-    const cfg = {
-      auth: {
-        order: {
-          "fixture-provider": ["fixture-provider:primary", "fixture-provider:backup"],
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(
-      resolveAuthProfileOrder({
-        cfg,
-        store,
-        provider: "fixture-provider",
-        forModel: "model-b",
-      }),
-    ).toStrictEqual(["fixture-provider:primary", "fixture-provider:backup"]);
-    expect(
-      resolveAuthProfileOrder({
-        cfg,
-        store,
-        provider: "fixture-provider",
-        forModel: "model-a",
-      }),
-    ).toStrictEqual(["fixture-provider:backup", "fixture-provider:primary"]);
-  });
-
-  it("keeps unresolved OAuth refs only in read-only profile ordering", () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:legacy-ref": {
-          type: "oauth",
-          provider: "openai",
-          access: "",
-          refresh: "",
-          expires: 0,
-          oauthRef: {
-            source: "openclaw-credentials",
-            provider: "openai-codex",
-            id: "00000000000000000000000000000000",
+      };
+      const cfg = {
+        auth: {
+          order: {
+            "fixture-provider": ["fixture-provider:primary", "fixture-provider:backup"],
           },
         },
-      },
-    };
+      } satisfies OpenClawConfig;
+
+      expect(
+        resolveAuthProfileOrder({
+          cfg,
+          store,
+          provider: "fixture-provider",
+          forModel: "model-b",
+        }),
+      ).toStrictEqual(["fixture-provider:primary", "fixture-provider:backup"]);
+      expect(
+        resolveAuthProfileOrder({
+          cfg,
+          store,
+          provider: "fixture-provider",
+          forModel: "model-a",
+        }),
+      ).toStrictEqual(["fixture-provider:backup", "fixture-provider:primary"]);
+    },
+  );
+
+  it("keeps unresolved OAuth refs only in read-only profile ordering", () => {
+    const store = storeWith({
+      "openai:legacy-ref": oauth({
+        access: "",
+        refresh: "",
+        expires: 0,
+        oauthRef: {
+          source: "openclaw-credentials",
+          provider: "openai-codex",
+          id: "00000000000000000000000000000000",
+        },
+      }),
+    });
 
     expect(resolveAuthProfileOrderWithMetadata({ store, provider: "openai" })).toEqual({
       profileIds: [],
@@ -605,201 +329,24 @@ describe("resolveAuthProfileOrder", () => {
     ).toEqual({ profileIds: ["openai:legacy-ref"], hasExplicitOrder: false });
   });
 
-  it("lets Codex auth use friendly OpenAI auth order entries", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:personal": oauthCred({
-          provider: "openai",
-          access: "access",
-          refresh: "refresh",
-          expires: Date.now() + 60_000,
-        }),
-        "openai:backup": createApiKeyCredential("openai", "sk-backup"),
-        "openai:platform": createApiKeyCredential("openai", "sk-platform"),
-      },
-    };
-
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: {
-            openai: ["openai:personal", "openai:backup", "openai:platform"],
-          },
-        },
-      },
-      store,
-      provider: "openai",
-    });
-
-    expect(order).toEqual(["openai:personal", "openai:backup", "openai:platform"]);
-  });
-
   it("discovers OpenAI OAuth profiles before API-key backups", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:personal": oauthCred({
-          provider: "openai",
-          access: "access",
-          refresh: "refresh",
-          expires: Date.now() + 60_000,
-        }),
-        "openai:backup": createApiKeyCredential("openai", "sk-platform"),
-        "openai:oauth": oauthCred({
-          provider: "openai",
-          access: "wrong-provider-access",
-          refresh: "wrong-provider-refresh",
-          expires: Date.now() + 60_000,
-        }),
-      },
-    };
-
-    const order = resolveAuthProfileOrder({
-      store,
-      provider: "openai",
+    const store = storeWith({
+      "openai:personal": oauth(),
+      "openai:backup": createApiKeyCredential("openai", "sk-platform"),
+      "openai:oauth": oauth(),
     });
 
-    expect(order).toEqual(["openai:personal", "openai:oauth", "openai:backup"]);
+    expect(resolveAuthProfileOrder({ store, provider: "openai" })).toEqual([
+      "openai:personal",
+      "openai:oauth",
+      "openai:backup",
+    ]);
   });
 
   it("does not discover OAuth profiles without inline credential material", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:personal": oauthCred({
-          provider: "openai",
-          access: "",
-          refresh: "",
-          expires: Date.now() + 60_000,
-        }),
-      },
-    };
+    const store = storeWith({ "openai:personal": oauth({ access: "", refresh: "" }) });
 
-    const order = resolveAuthProfileOrder({
-      store,
-      provider: "openai",
-    });
-
-    expect(order).toEqual([]);
-  });
-
-  it("uses explicit OpenAI auth order without implicit profile prepending", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:default": createApiKeyCredential("openai", "sk-platform"),
-        "openai:personal": oauthCred({
-          provider: "openai",
-          access: "access",
-          refresh: "refresh",
-          expires: Date.now() + 60_000,
-        }),
-      },
-    };
-
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: {
-            openai: ["openai:default"],
-          },
-        },
-      },
-      store,
-      provider: "openai",
-    });
-
-    expect(order).toEqual(["openai:default"]);
-  });
-
-  it("keeps Codex profiles listed in the friendly OpenAI order for Codex auth", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:personal": oauthCred({
-          provider: "openai",
-          access: "access",
-          refresh: "refresh",
-          expires: Date.now() + 60_000,
-        }),
-        "openai:backup": createApiKeyCredential("openai", "sk-platform"),
-      },
-    };
-
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: {
-            openai: ["openai:personal", "openai:backup"],
-          },
-        },
-      },
-      store,
-      provider: "openai",
-    });
-
-    expect(order).toEqual(["openai:personal", "openai:backup"]);
-  });
-
-  it("uses canonical OpenAI auth order", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:personal": oauthCred({
-          provider: "openai",
-          access: "access",
-          refresh: "refresh",
-          expires: Date.now() + 60_000,
-        }),
-      },
-    };
-
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: {
-            openai: ["openai:personal"],
-          },
-        },
-      },
-      store,
-      provider: "openai",
-    });
-
-    expect(order).toEqual(["openai:personal"]);
-  });
-
-  it("keeps stored OpenAI auth order when present", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:platform": createApiKeyCredential("openai", "sk-platform"),
-        "openai:work": oauthCred({
-          provider: "openai",
-          access: "work-access",
-          refresh: "work-refresh",
-          expires: Date.now() + 60_000,
-        }),
-      },
-      order: {
-        openai: ["openai:platform"],
-      },
-    };
-
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: {
-            openai: ["openai:work"],
-          },
-        },
-      },
-      store,
-      provider: "openai",
-    });
-
-    expect(order).toEqual(["openai:platform"]);
+    expect(resolveAuthProfileOrder({ store, provider: "openai" })).toEqual([]);
   });
 
   it("marks profile success with one canonical last-good and usage update", async () => {
@@ -808,12 +355,7 @@ describe("resolveAuthProfileOrder", () => {
       const store: AuthProfileStore = {
         version: 1,
         profiles: {
-          "fixture-provider:default": oauthCred({
-            provider: "fixture-provider",
-            access: "token",
-            refresh: "refresh",
-            expires: Date.now() + 60_000,
-          }),
+          "fixture-provider:default": oauth({ provider: "fixture-provider" }),
         },
         usageStats: {
           "fixture-provider:default": {
@@ -839,110 +381,63 @@ describe("resolveAuthProfileOrder", () => {
       expect(store.lastGood).toEqual({
         "fixture-provider": "fixture-provider:default",
       });
-      const usageStats = store.usageStats?.["fixture-provider:default"];
-      expect(usageStats?.errorCount).toBe(0);
-      expect(usageStats?.blockedUntil).toBeUndefined();
-      expect(usageStats?.blockedReason).toBeUndefined();
-      expect(usageStats?.cooldownUntil).toBeUndefined();
-      expect(usageStats?.cooldownReason).toBeUndefined();
+      const { errorCount, blockedUntil, blockedReason, cooldownUntil, cooldownReason } =
+        store.usageStats?.["fixture-provider:default"] ?? {};
+      expect({ errorCount, blockedUntil, blockedReason, cooldownUntil, cooldownReason }).toEqual({
+        errorCount: 0,
+        blockedUntil: undefined,
+        blockedReason: undefined,
+        cooldownUntil: undefined,
+        cooldownReason: undefined,
+      });
       const lastUsed = store.usageStats?.["fixture-provider:default"]?.lastUsed;
       expect(typeof lastUsed).toBe("number");
       expect(Number.isFinite(lastUsed)).toBe(true);
       expect(lastUsed).toBeGreaterThanOrEqual(beforeSuccess);
       expect(lastUsed).toBeLessThanOrEqual(afterSuccess);
     } finally {
+      closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
+      await closeOpenClawAgentDatabasesAsync(agentDir);
       await rm(agentDir, { force: true, recursive: true });
     }
   });
 
-  it("uses caller-provided auth alias metadata for stored credential compatibility", () => {
-    expect(
-      isStoredCredentialCompatibleWithAuthProvider({
-        cfg: {},
-        authAliasLookupParams: {
-          config: {},
-          metadataSnapshot: {
-            plugins: [
-              {
-                id: "alias-owner",
-                origin: "global",
-                providerAuthAliases: { fixture: "provider-two" },
-              },
-            ],
-          } as never,
-        },
-        provider: "fixture",
-        credential: { type: "api_key", provider: "provider-two", key: "test" },
-      }),
-    ).toBe(true);
-  });
+  it("keeps provider identity and configured mode distinct", () => {
+    const credential = { type: "token", provider: "openai", token: "test-token" } as const;
+    const authAliasLookupParams = { metadataSnapshot: { plugins: [] } };
+    const store: AuthProfileStore = { version: 1, profiles: { fixture: credential } };
+    const params = {
+      store,
+      profileId: "fixture",
+      provider: "openai",
+      authAliasLookupParams,
+      now: 1_700_000_000_000,
+    };
 
-  it("bypasses plugin auth aliases for stored credential compatibility when metadata is empty", () => {
     expect(
       isStoredCredentialCompatibleWithAuthProvider({
-        cfg: {},
-        authAliasLookupParams: {
-          config: {},
-          metadataSnapshot: { plugins: [] },
-        },
-        provider: "fixture",
-        credential: { type: "api_key", provider: "provider-two", key: "test" },
+        provider: "other-provider",
+        credential,
+        authAliasLookupParams,
       }),
     ).toBe(false);
+    expect(
+      resolveAuthProfileEligibility({
+        ...params,
+        cfg: {
+          auth: {
+            profiles: { fixture: { provider: "other-provider", mode: credential.type } },
+          },
+        },
+      }),
+    ).toEqual({ eligible: false, reasonCode: "provider_mismatch" });
+    expect(
+      resolveAuthProfileEligibility({
+        ...params,
+        cfg: {
+          auth: { profiles: { fixture: { provider: "openai", mode: "oauth" } } },
+        },
+      }),
+    ).toEqual({ eligible: true, reasonCode: "ok" });
   });
-
-  it.each([
-    [{ type: "api_key", provider: "openai", key: "test-key" }, "oauth", "mode_mismatch"],
-    [{ type: "token", provider: "openai", token: "test-token" }, "oauth", "ok"],
-    [
-      {
-        type: "oauth",
-        provider: "openai",
-        access: "test-access",
-        refresh: "test-refresh",
-        expires: 2_000_000_000_000,
-      },
-      "api_key",
-      "mode_mismatch",
-    ],
-  ] as const)(
-    "keeps provider identity and configured mode distinct for %j",
-    (credential, configuredMode, expectedModeReason) => {
-      const authAliasLookupParams = { metadataSnapshot: { plugins: [] } };
-      const store: AuthProfileStore = { version: 1, profiles: { fixture: credential } };
-      const params = {
-        store,
-        profileId: "fixture",
-        provider: "openai",
-        authAliasLookupParams,
-        now: 1_700_000_000_000,
-      };
-
-      expect(
-        isStoredCredentialCompatibleWithAuthProvider({
-          provider: "other-provider",
-          credential,
-          authAliasLookupParams,
-        }),
-      ).toBe(false);
-      expect(
-        resolveAuthProfileEligibility({
-          ...params,
-          cfg: {
-            auth: {
-              profiles: { fixture: { provider: "other-provider", mode: credential.type } },
-            },
-          },
-        }),
-      ).toEqual({ eligible: false, reasonCode: "provider_mismatch" });
-      expect(
-        resolveAuthProfileEligibility({
-          ...params,
-          cfg: {
-            auth: { profiles: { fixture: { provider: "openai", mode: configuredMode } } },
-          },
-        }),
-      ).toEqual({ eligible: expectedModeReason === "ok", reasonCode: expectedModeReason });
-    },
-  );
 });

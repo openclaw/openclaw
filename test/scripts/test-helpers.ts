@@ -6,6 +6,13 @@ import path from "node:path";
 import { afterEach } from "vitest";
 import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
+export function copyOxlintConfigFixture(root: string): void {
+  fs.copyFileSync(".oxlintrc.json", path.join(root, ".oxlintrc.json"));
+  // Oxlint loads configured JS plugins even when the selected files are outside their scope.
+  fs.mkdirSync(path.join(root, "tools"), { recursive: true });
+  fs.symlinkSync(path.resolve("tools/solid-lint"), path.join(root, "tools/solid-lint"), "junction");
+}
+
 export function linkPnpmBootstrapShellTools(binDir: string): void {
   // Omit package managers: absence must not depend on the host's installed tools.
   for (const name of [
@@ -39,15 +46,7 @@ const query = args.at(-1) ?? "";
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
 const print = (value) => process.stdout.write(String(value ?? "") + "\\n");
 
-if (query === ".login") print(input.login);
-else if (query === ".name // empty") print(input.name ?? "");
-else if (query === ".created_at") print(input.created_at);
-else if (query === ".type") print(input.type);
-else if (query === ".totalCommitContributions") print(input.totalCommitContributions);
-else if (query === ".totalIssueContributions") print(input.totalIssueContributions);
-else if (query === ".totalPullRequestContributions") print(input.totalPullRequestContributions);
-else if (query === ".totalPullRequestReviewContributions") print(input.totalPullRequestReviewContributions);
-else if (query.includes("{id: .profileId")) {
+if (query.includes("{id: .profileId")) {
   const profiles = input.auth?.oauth?.profiles ?? [];
   const profile = profiles.filter((item) => item.provider === "anthropic" && item.type === "oauth").sort((a, b) => (b.expiresAt ?? 0) - (a.expiresAt ?? 0))[0];
   print(profile?.profileId ?? "none");

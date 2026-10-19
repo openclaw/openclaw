@@ -1,22 +1,13 @@
-import type {
-  WorkerPortalParams,
-  WorkerSessionToolResult,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { AgentToolResult } from "../../agents/runtime/index.js";
 import { formatPortalResult } from "../../agents/tools/portal-tool.js";
-import type { GatewayPortalService } from "../portals/portal-service.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createPortalOperations, type GatewayPortalService } from "../portals/portal-service.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { serializeWorkerSessionToolResult } from "./worker-session-tool-result.js";
-import { resolveWorkerSessionToolSource } from "./worker-session-tool-topology.js";
+import type { WorkerSessionToolRequest } from "./worker-session-tool-result.js";
+import type { WorkerSessionToolSource } from "./worker-session-tool-topology.js";
 
-export type WorkerPortalToolRequest = {
-  identity: WorkerConnectionIdentity;
-  toolName: "portal";
-  request: WorkerPortalParams;
-  signal?: AbortSignal;
-};
+type WorkerPortalToolRequest = Extract<WorkerSessionToolRequest, { toolName: "portal" }>;
 
 export type WorkerPortalToolExecutorDependencies = {
   placements: WorkerSessionPlacementStore;
@@ -30,13 +21,14 @@ export type WorkerPortalToolExecutorDependencies = {
 
 /** Executes worker portals only while their exact placement and turn retain authority. */
 export function createWorkerPortalToolExecutor(params: WorkerPortalToolExecutorDependencies) {
-  return async (request: WorkerPortalToolRequest): Promise<WorkerSessionToolResult> => {
+  return async (
+    request: WorkerPortalToolRequest,
+    source: Pick<WorkerSessionToolSource, "sessionId" | "turnClaim">,
+    assertSource: () => void,
+  ): Promise<AgentToolResult<unknown>> => {
     const assertPortalAuthority = () => {
-      const current = resolveWorkerSessionToolSource({
-        identity: request.identity,
-        placements: params.placements,
-      });
-      if (!params.placements.isWorkerTurnToolAuthorized(current.turnClaim, "portal")) {
+      assertSource();
+      if (!params.placements.isWorkerTurnToolAuthorized(source.turnClaim, "portal")) {
         throw new Error("Worker session tool authority changed");
       }
       const environment = params.environments.get(request.identity.environmentId);
@@ -45,7 +37,7 @@ export function createWorkerPortalToolExecutor(params: WorkerPortalToolExecutorD
         environment.state !== "attached" ||
         environment.ownerEpoch !== request.identity.ownerEpoch ||
         environment.attachedSessionIds.length !== 1 ||
-        environment.attachedSessionIds[0] !== current.sessionId
+        environment.attachedSessionIds[0] !== source.sessionId
       ) {
         throw new Error("Worker source environment changed before portal operation");
       }
@@ -62,80 +54,44 @@ export function createWorkerPortalToolExecutor(params: WorkerPortalToolExecutorD
       throw new Error("Gateway portals are unavailable");
     }
     request.signal?.throwIfAborted();
+    const portals = createPortalOperations(
+      service,
+      {
+        environmentId: environment.environmentId,
+        ownerEpoch: environment.ownerEpoch,
+        assertCurrent: () => {
+          assertPortalAuthority();
+          request.signal?.throwIfAborted();
+        },
+        ownershipError: "Worker portal is not owned by the active environment",
+        prepareTarget: async (remotePort) => ({
+          ...(await params.portals.carrier.open({
+            environmentId: environment.environmentId,
+            ownerEpoch: environment.ownerEpoch,
+            remotePort,
+          })),
+          origin: environment.profileId,
+        }),
+      },
+      params.portals.onChanged,
+    );
     if (request.request.action === "list") {
-      const result = {
-        portals: service.listWorkerPortals(environment.environmentId, environment.ownerEpoch),
-      };
-      assertPortalAuthority();
-      return {
-        resultJson: serializeWorkerSessionToolResult(
-          formatPortalResult({ action: "list", result }),
-        ),
-      };
+      return formatPortalResult({ action: "list", result: portals.list() });
     }
     if (request.request.action === "close") {
       const id = request.request.id;
       if (!id) {
         throw new Error("portal id required");
       }
-      const ownedPortals = service.listWorkerPortals(
-        environment.environmentId,
-        environment.ownerEpoch,
-      );
-      if (!ownedPortals.some((portal) => portal.id === id)) {
-        throw new Error("Worker portal is not owned by the active environment");
-      }
-      await service.close(id, assertPortalAuthority);
-      params.portals.onChanged();
-      assertPortalAuthority();
-      return {
-        resultJson: serializeWorkerSessionToolResult(
-          formatPortalResult({ action: "close", id, result: { closed: true } }),
-        ),
-      };
+      return formatPortalResult({ action: "close", id, result: await portals.close(id) });
     }
     const remotePort = request.request.port;
     if (remotePort === undefined) {
       throw new Error("portal port required");
     }
-    const connection = await params.portals.carrier.open({
-      environmentId: environment.environmentId,
-      ownerEpoch: environment.ownerEpoch,
-      remotePort,
+    return formatPortalResult({
+      action: "open",
+      result: await portals.open({ ...request.request, port: remotePort }),
     });
-    try {
-      // Node discovery can yield; a replaced turn must never publish its former owner's portal.
-      assertPortalAuthority();
-      request.signal?.throwIfAborted();
-    } catch (error) {
-      await connection.close();
-      throw error;
-    }
-    const opened = await service.open({
-      targetPort: remotePort,
-      assertCurrent: assertPortalAuthority,
-      target: {
-        kind: "worker",
-        environmentId: environment.environmentId,
-        ownerEpoch: environment.ownerEpoch,
-        connect: connection.connect,
-        remotePort,
-      },
-      onClose: connection.close,
-      origin: environment.profileId,
-      ...(request.request.title !== undefined ? { title: request.request.title } : {}),
-      ...(request.request.description !== undefined
-        ? { description: request.request.description }
-        : {}),
-      ...(request.request.path !== undefined ? { path: request.request.path } : {}),
-    });
-    // Publication transfers ownership to the environment; later turn revocation only denies its result.
-    params.portals.onChanged();
-    assertPortalAuthority();
-    return {
-      resultJson: serializeWorkerSessionToolResult(
-        formatPortalResult({ action: "open", result: opened }),
-      ),
-    };
   };
 }

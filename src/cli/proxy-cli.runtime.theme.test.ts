@@ -1,13 +1,16 @@
 // Proxy CLI rich-theme coverage stays isolated because the theme mock must precede runtime import.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 const { getRuntimeConfigMock, runProxyValidationMock } = vi.hoisted(() => ({
   getRuntimeConfigMock: vi.fn(),
   runProxyValidationMock: vi.fn(),
 }));
 
+// mock-isolation: Theme fixtures provide config without preparing a real config owner.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
+  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfigMock(),
 }));
 
 vi.mock("../infra/net/proxy/proxy-validation.js", () => ({

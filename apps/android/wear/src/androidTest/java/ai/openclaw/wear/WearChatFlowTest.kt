@@ -5,6 +5,7 @@ import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearProtocolCodec
+import ai.openclaw.wear.shared.WearReplyText
 import ai.openclaw.wear.shared.WearRpcMethod
 import android.app.Activity
 import android.app.Instrumentation
@@ -18,6 +19,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -41,8 +43,72 @@ class WearChatFlowTest {
   }
 
   @Test
+  fun completeReplyIsReachableThroughTheRealLauncherAndWireDecoder() {
+    val full = "HEAD SENTINEL\n" + (1..85).joinToString("\n") { "Reply line $it is complete." } + "\nTRAILING SENTINEL"
+    val phone = ControlledPhone(full)
+    val app = instrumentation.targetContext.applicationContext as WearApplication
+    val clientField = WearApplication::class.java.getDeclaredField("proxyClient\$delegate").apply { isAccessible = true }
+    val repositoryField = WearApplication::class.java.getDeclaredField("gatewayRepository\$delegate").apply { isAccessible = true }
+    val previousClient = clientField.get(app)
+    val previousRepository = repositoryField.get(app)
+    clientField.set(app, lazyOf(phone.client))
+    repositoryField.set(app, lazyOf(WearGatewayRepository(phone.client)))
+    WearSettingsStore(app).writeThemeMode(WearThemeMode.Dark)
+    WearSettingsStore(app).writeAutoSpeak(false)
+    var activity: MainActivity? = null
+    try {
+      activity = instrumentation.startActivitySync(Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+      lateinit var vm: WearViewModel
+      instrumentation.runOnMainSync { vm = ViewModelProvider(activity)[WearViewModel::class.java] }
+      awaitState("history") {
+        !vm.state.value.loading &&
+          vm.state.value.messages
+            .isNotEmpty()
+      }
+      assertTrue(
+        vm.state.value.messages
+          .single()
+          .textTruncated == true,
+      )
+      assertTrue(
+        !vm.state.value.messages
+          .single()
+          .text
+          .contains("TRAILING SENTINEL"),
+      )
+      scrollToTop()
+      capture("full-01-preview")
+
+      fun reveal(text: String) {
+        repeat(100) {
+          val node = device.findObject(By.text(text))
+          if (node != null && node.visibleBounds.centerY() in 70..300) return
+          device.swipe(192, 290, 192, 100, 8)
+          SystemClock.sleep(100)
+        }
+        assertTrue("Reachable $text", false)
+      }
+      reveal("Read full reply")
+      device.findObject(By.text("Read full reply")).click()
+      assertTrue(device.wait(Until.hasObject(By.text("HEAD SENTINEL")), 10_000))
+      capture("full-02-open")
+      reveal("TRAILING SENTINEL")
+      capture("full-03-tail")
+      assertTrue(device.hasObject(By.text("TRAILING SENTINEL")))
+      device.pressBack()
+      assertTrue(device.wait(Until.hasObject(By.text("Read full reply")), 5_000))
+    } finally {
+      activity?.let { current -> instrumentation.runOnMainSync { current.finish() } }
+      instrumentation.waitForIdleSync()
+      clientField.set(app, previousClient)
+      repositoryField.set(app, previousRepository)
+    }
+  }
+
+  @Test
   fun remoteTerminalsAndCanonicalReplacements() {
-    val phone = ControlledPhone()
+    val initialConnection = CompletableDeferred<Unit>()
+    val phone = ControlledPhone(initialConnection = initialConnection)
     val app = instrumentation.targetContext.applicationContext as WearApplication
     // Reuse the existing production transport seam, without a new runtime/fixture owner.
     val clientField = WearApplication::class.java.getDeclaredField("proxyClient\$delegate")
@@ -75,6 +141,9 @@ class WearChatFlowTest {
         ) as MainActivity
       lateinit var vm: WearViewModel
       instrumentation.runOnMainSync { vm = ViewModelProvider(activity)[WearViewModel::class.java] }
+      // Register input callbacks before the phone supplies a conversation.
+      assertTrue(device.wait(Until.hasObject(By.text("Checking phone")), 10_000))
+      initialConnection.complete(Unit)
       awaitState("initial history") { !vm.state.value.loading && vm.state.value.connected }
       instrumentation.addMonitor(monitor)
       capture("00-ready")
@@ -169,14 +238,21 @@ class WearChatFlowTest {
     SystemClock.sleep(300)
   }
 
-  private class ControlledPhone {
+  private class ControlledPhone(
+    private val fullReply: String? = null,
+    private val initialConnection: CompletableDeferred<Unit>? = null,
+  ) {
     var sequence = 0L
     var sends = 0
     var runId = "not-sent"
     var lastMessage: String? = null
     val client: WearProxyClient =
-      WearProxyClient.createForTests(
-        nodeResolver = WearNodeResolver { "synthetic-phone" },
+      WearProxyClient(
+        nodeResolver =
+          WearNodeResolver {
+            initialConnection?.await()
+            "synthetic-phone"
+          },
         transport = WearMessageTransport { _, path, bytes -> respond(path, bytes) },
       )
 
@@ -189,15 +265,49 @@ class WearChatFlowTest {
       val result =
         when (request.method) {
           WearRpcMethod.ProxyStatus -> {
-            Json.parseToJsonElement("""{"connected":true,"activeAgentId":"main","activeSessionKey":"agent:main:proof","selectedModelRef":"openai/gpt-4o"}""")
+            Json.parseToJsonElement("""{"connected":true,"activeAgentId":"main","activeSessionKey":"agent:main:proof","selectedModelRef":"openai/gpt-4o","capabilities":["reply-text"]}""")
           }
 
           WearRpcMethod.SessionsList -> {
             Json.parseToJsonElement("""{"sessions":[{"key":"agent:main:proof","displayName":"Test chat","agentId":"main","modelRef":"openai/gpt-4o","hasActiveRun":false}]}""")
           }
 
+          WearRpcMethod.ReplyText -> {
+            WearReplyText.encode(
+              WearReplyText.page(
+                checkNotNull(fullReply),
+                "native-proof",
+                request.params
+                  .getValue("offset")
+                  .jsonPrimitive.content
+                  .toInt(),
+                request.params["revision"]?.jsonPrimitive?.content,
+              ),
+            )
+          }
+
           WearRpcMethod.ChatHistory -> {
-            Json.parseToJsonElement("""{"sessionKey":"agent:main:proof","messages":[],"selectedModelRef":"openai/gpt-4o"}""")
+            if (fullReply != null) {
+              buildJsonObject {
+                put("sessionKey", "agent:main:proof")
+                put(
+                  "messages",
+                  kotlinx.serialization.json.buildJsonArray {
+                    add(
+                      buildJsonObject {
+                        put("id", "row")
+                        put("entryId", "canonical")
+                        put("role", "assistant")
+                        put("content", fullReply.take(250))
+                        put("textTruncated", true)
+                      },
+                    )
+                  },
+                )
+              }
+            } else {
+              Json.parseToJsonElement("""{"sessionKey":"agent:main:proof","messages":[],"selectedModelRef":"openai/gpt-4o"}""")
+            }
           }
 
           WearRpcMethod.ChatSend -> {

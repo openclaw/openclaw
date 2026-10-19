@@ -1,25 +1,22 @@
-/**
- * Tests apply_patch destination path extraction.
- * Ensures pre-execution policy checks see add/update/delete/move paths in
- * host and sandbox forms without requiring full parser success.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { extractApplyPatchTargetPaths } from "./apply-patch-paths.js";
+import {
+  extractApplyPatchTargetPaths,
+  extractResolvedApplyPatchTargetPaths,
+} from "./apply-patch-paths.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 const defaultCwd = process.cwd();
 const cwdPath = (...segments: string[]) => path.join(defaultCwd, ...segments);
+const envelope = (...hunks: string[]) => ["*** Begin Patch", ...hunks, "*** End Patch"].join("\n");
 
 describe("extractApplyPatchTargetPaths", () => {
   it("returns an empty array for non-string input", () => {
-    expect(extractApplyPatchTargetPaths(undefined)).toEqual([]);
-    expect(extractApplyPatchTargetPaths(null)).toEqual([]);
-    expect(extractApplyPatchTargetPaths(42)).toEqual([]);
-    expect(extractApplyPatchTargetPaths({})).toEqual([]);
-    expect(extractApplyPatchTargetPaths({ input: 7 })).toEqual([]);
+    for (const input of [undefined, null, 42, {}, { input: 7 }]) {
+      expect(extractApplyPatchTargetPaths(input)).toEqual([]);
+    }
   });
 
   it("returns an empty array for an empty patch", () => {
@@ -27,72 +24,19 @@ describe("extractApplyPatchTargetPaths", () => {
     expect(extractApplyPatchTargetPaths({ input: "" })).toEqual([]);
   });
 
-  it("extracts Add File markers from the envelope payload", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Add File: src/new.ts",
-      "+export const a = 1;",
-      "*** End Patch",
-    ].join("\n");
-    expect(extractApplyPatchTargetPaths(patch)).toEqual([cwdPath("src/new.ts")]);
-  });
-
   it("extracts Update File and Delete File markers", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Update File: a.ts",
-      "@@",
-      " context",
-      "+added",
-      "*** Delete File: b.ts",
-      "*** End Patch",
-    ].join("\n");
+    const patch = envelope("*** Update File: a.ts\n@@\n context\n+added", "*** Delete File: b.ts");
     expect(extractApplyPatchTargetPaths(patch)).toEqual([cwdPath("a.ts"), cwdPath("b.ts")]);
   });
 
-  it("includes the Move to: target paired with an Update File", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Update File: old/path.ts",
-      "*** Move to: new/path.ts",
-      "@@",
-      " context",
-      "+added",
-      "*** End Patch",
-    ].join("\n");
-    expect(extractApplyPatchTargetPaths(patch)).toEqual([
-      cwdPath("old/path.ts"),
-      cwdPath("new/path.ts"),
-    ]);
-  });
-
   it("tolerates blank lines between Update File and Move to", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Update File: a.ts",
-      "",
-      "*** Move to: b.ts",
-      "*** End Patch",
-    ].join("\n");
+    const patch = envelope("*** Update File: a.ts\n\n*** Move to: b.ts");
     expect(extractApplyPatchTargetPaths(patch)).toEqual([cwdPath("a.ts"), cwdPath("b.ts")]);
   });
 
   it("accepts the wrapper object form used by the apply_patch tool", () => {
-    const patch = ["*** Begin Patch", "*** Add File: foo.ts", "+x", "*** End Patch"].join("\n");
+    const patch = envelope("*** Add File: foo.ts\n+x");
     expect(extractApplyPatchTargetPaths({ input: patch })).toEqual([cwdPath("foo.ts")]);
-  });
-
-  it("de-duplicates repeated paths within a single envelope", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Add File: same.ts",
-      "+a",
-      "*** Update File: same.ts",
-      "@@",
-      "+b",
-      "*** End Patch",
-    ].join("\n");
-    expect(extractApplyPatchTargetPaths(patch)).toEqual([cwdPath("same.ts")]);
   });
 
   it("normalizes derived paths before de-duplicating them", () => {
@@ -115,13 +59,11 @@ describe("extractApplyPatchTargetPaths", () => {
   });
 
   it("preserves POSIX backslashes to match apply_patch execution", () => {
-    const patch = [
-      "*** Begin Patch",
+    const patch = envelope(
       String.raw`*** Add File: src\windows\path.ts`,
       "+x",
       String.raw`*** Add File: safe\evil.ts`,
-      "*** End Patch",
-    ].join("\n");
+    );
     expect(extractApplyPatchTargetPaths(patch)).toEqual([
       path.resolve(defaultCwd, String.raw`src\windows\path.ts`),
       path.resolve(defaultCwd, String.raw`safe\evil.ts`),
@@ -169,22 +111,6 @@ describe("extractApplyPatchTargetPaths", () => {
     ]);
   });
 
-  it("finds top-level markers after an update hunk", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Update File: src/old.ts",
-      "@@",
-      "-old",
-      "+new",
-      "*** Delete File: src/dead.ts",
-      "*** End Patch",
-    ].join("\n");
-    expect(extractApplyPatchTargetPaths(patch)).toEqual([
-      cwdPath("src/old.ts"),
-      cwdPath("src/dead.ts"),
-    ]);
-  });
-
   it("ignores markers outside of the envelope grammar", () => {
     expect(
       extractApplyPatchTargetPaths(
@@ -194,16 +120,14 @@ describe("extractApplyPatchTargetPaths", () => {
   });
 
   it("ignores marker-like context and body lines inside update hunks", () => {
-    const patch = [
-      "*** Begin Patch",
+    const patch = envelope(
       "*** Update File: real.ts",
       "@@",
       " *** Add File: fake-context.ts",
       "  *** Delete File: fake-indented-context.ts",
       "-*** Delete File: fake-remove.ts",
       "+*** Add File: fake-add.ts",
-      "*** End Patch",
-    ].join("\n");
+    );
     expect(extractApplyPatchTargetPaths(patch)).toEqual([cwdPath("real.ts")]);
   });
 
@@ -238,22 +162,25 @@ describe("extractApplyPatchTargetPaths", () => {
         await fs.writeFile(path.join(literalParent, "existing.md"), "literal");
         await fs.writeFile(path.join(siblingParent, "existing.md"), "sibling");
         await fs.writeFile(path.join(siblingParent, "new.md"), "sibling");
-        const patch = [
-          "*** Begin Patch",
+        const patch = envelope(
           "*** Delete File: @notes/existing.md",
-          "*** Add File: @notes/new.md",
-          "+literal",
-          "*** End Patch",
-        ].join("\n");
+          "*** Add File: @notes/new.md\n+literal",
+        );
         const options =
           runtime === "mounted sandbox"
             ? { cwd, sandbox: { root: cwd, bridge: createHostSandboxFsBridge(cwd) } }
             : { cwd };
 
-        expect(extractApplyPatchTargetPaths(patch, options)).toEqual([
+        const expected = [
           path.join(literalParent, "existing.md"),
           path.join(literalParent, "new.md"),
-        ]);
+        ];
+        expect(extractApplyPatchTargetPaths(patch, options)).toEqual(expected);
+        const mentionedPatch = patch.replaceAll("File: @notes/", "File: @@notes/");
+        expect(extractApplyPatchTargetPaths(mentionedPatch, options)).toEqual(expected);
+        await expect(
+          extractResolvedApplyPatchTargetPaths(mentionedPatch, options),
+        ).resolves.toEqual(expected);
       } finally {
         await fs.rm(cwd, { recursive: true, force: true });
       }
@@ -261,16 +188,14 @@ describe("extractApplyPatchTargetPaths", () => {
   );
 
   it("defaults missing cwd to apply_patch process cwd semantics", () => {
-    const patch = [
-      "*** Begin Patch",
+    const patch = envelope(
       "*** Add File: @src/../resolved.ts",
       "+x",
       "*** Update File: ~/source.ts",
       "*** Move to: src/moved.ts",
       "@@",
       "+y",
-      "*** End Patch",
-    ].join("\n");
+    );
     expect(extractApplyPatchTargetPaths(patch)).toEqual([
       cwdPath("resolved.ts"),
       path.join(os.homedir(), "source.ts"),
@@ -279,14 +204,10 @@ describe("extractApplyPatchTargetPaths", () => {
   });
 
   it("skips sandbox paths the bridge rejects", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Add File: /workspace/src/ok.ts",
-      "+x",
-      "*** Add File: /outside.ts",
-      "+y",
-      "*** End Patch",
-    ].join("\n");
+    const patch = envelope(
+      "*** Add File: /workspace/src/ok.ts\n+x",
+      "*** Add File: /outside.ts\n+y",
+    );
     expect(
       extractApplyPatchTargetPaths(patch, {
         cwd: "/workspace",

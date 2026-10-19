@@ -1,29 +1,26 @@
-/**
- * Tests HTTP request context extraction for gateway auth and routing.
- */
 import type { IncomingMessage } from "node:http";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
-import { resolveHttpSenderIsOwner } from "./http-auth-utils.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
-  resolveOpenAiCompatibleHttpOperatorScopes,
-  resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveGatewayRequestContext,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
-import { createExpectedBroadOperatorScopes } from "./scope-expectations.test-support.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
-vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../config/sessions/session-accessor.entry.js")>();
   return {
     ...actual,
-    resolveSessionEntryAccessTarget: (params: { sessionKey: string }) => ({
-      entry: sessionEntries.get(params.sessionKey),
-    }),
+    readResolvedSessionEntryInWorker: async (params: { sessionKey: string }) =>
+      sessionEntries.get(params.sessionKey),
   };
 });
 
@@ -31,57 +28,40 @@ function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
 }
 
-const tokenAuth = { mode: "token" as const };
-const noneAuth = { mode: "none" as const };
+const sharedSecretRequestAuth = { trustDeclaredOperatorScopes: false };
+const trustedRequestAuth = { trustDeclaredOperatorScopes: true };
+const requestContext = (sessionKey: string) =>
+  resolveGatewayRequestContext({
+    req: createReq({ "x-openclaw-session-key": sessionKey }),
+    model: "openclaw",
+    sessionPrefix: "openai",
+  });
 
 beforeEach(() => sessionEntries.clear());
 
 describe("resolveGatewayRequestContext", () => {
-  it("uses normalized x-openclaw-message-channel when enabled", () => {
-    const result = resolveGatewayRequestContext({
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(clearRuntimeConfigSnapshot);
+
+  it("uses normalized x-openclaw-message-channel", async () => {
+    const result = await resolveGatewayRequestContext({
       req: createReq({ "x-openclaw-message-channel": " Custom-Channel " }),
       model: "openclaw",
       sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: true,
     });
 
     expect(result.messageChannel).toBe("custom-channel");
   });
 
-  it("uses default messageChannel when header support is disabled", () => {
-    const result = resolveGatewayRequestContext({
-      req: createReq({ "x-openclaw-message-channel": "custom-channel" }),
-      model: "openclaw",
-      sessionPrefix: "openresponses",
-      defaultMessageChannel: "webchat",
-      useMessageChannelHeader: false,
-    });
-
-    expect(result.messageChannel).toBe("webchat");
-  });
-
-  it("includes session prefix and user in generated session key", () => {
-    const result = resolveGatewayRequestContext({
+  it("includes session prefix and user in generated session key", async () => {
+    const result = await resolveGatewayRequestContext({
       req: createReq(),
       model: "openclaw",
       user: "alice",
       sessionPrefix: "openresponses",
-      defaultMessageChannel: "webchat",
     });
 
     expect(result.sessionKey).toContain("openresponses-user:alice");
-  });
-
-  it("preserves normal explicit session-key overrides", () => {
-    const result = resolveGatewayRequestContext({
-      req: createReq({ "x-openclaw-session-key": "customer-case-42" }),
-      model: "openclaw",
-      sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
-    });
-
-    expect(result.sessionKey).toBe("customer-case-42");
   });
 
   it.each([
@@ -93,32 +73,20 @@ describe("resolveGatewayRequestContext", () => {
     "agent:main:cron:daily",
     "agent:main:acp:run-1",
     "agent:main:harness:codex:supervision:native-thread",
-  ])("rejects reserved internal session-key override %s", (sessionKey) => {
-    expect(() =>
-      resolveGatewayRequestContext({
-        req: createReq({ "x-openclaw-session-key": sessionKey }),
-        model: "openclaw",
-        sessionPrefix: "openai",
-        defaultMessageChannel: "webchat",
-      }),
-    ).toThrow(/reserved internal session namespaces/u);
+  ])("rejects reserved internal session-key override %s", async (sessionKey) => {
+    await expect(requestContext(sessionKey)).rejects.toThrow(
+      /reserved internal session namespaces/u,
+    );
   });
 
-  it("preserves an existing unlocked legacy harness-prefixed override", () => {
+  it("preserves an existing unlocked legacy harness-prefixed override", async () => {
     const sessionKey = "agent:main:harness:legacy-notes";
     sessionEntries.set(sessionKey, { sessionId: "legacy-session", modelSelectionLocked: false });
 
-    const result = resolveGatewayRequestContext({
-      req: createReq({ "x-openclaw-session-key": sessionKey }),
-      model: "openclaw",
-      sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
-    });
-
-    expect(result.sessionKey).toBe(sessionKey);
+    expect((await requestContext(sessionKey)).sessionKey).toBe(sessionKey);
   });
 
-  it("rejects an existing locked harness-prefixed override", () => {
+  it("rejects an existing locked harness-prefixed override", async () => {
     const sessionKey = "agent:main:harness:codex:supervision:native-thread";
     sessionEntries.set(sessionKey, {
       sessionId: "locked-session",
@@ -126,54 +94,45 @@ describe("resolveGatewayRequestContext", () => {
       modelSelectionLocked: true,
     });
 
-    expect(() =>
-      resolveGatewayRequestContext({
-        req: createReq({ "x-openclaw-session-key": sessionKey }),
-        model: "openclaw",
-        sessionPrefix: "openai",
-        defaultMessageChannel: "webchat",
-      }),
-    ).toThrow(/reserved internal session namespaces/u);
+    await expect(requestContext(sessionKey)).rejects.toThrow(
+      /reserved internal session namespaces/u,
+    );
   });
 
-  it("does not build session state for explicit unknown agent ids", () => {
-    expect(() =>
+  it("does not build session state for explicit unknown agent ids", async () => {
+    await expect(
       resolveGatewayRequestContext({
         req: createReq({ "x-openclaw-agent-id": "missing-agent" }),
         model: "openclaw",
         sessionPrefix: "openai",
-        defaultMessageChannel: "webchat",
       }),
-    ).toThrow(/Unknown agent/);
+    ).rejects.toThrow(/Unknown agent/);
 
-    expect(() =>
+    await expect(
       resolveGatewayRequestContext({
         req: createReq(),
         model: "openclaw/missing-agent",
         sessionPrefix: "openai",
-        defaultMessageChannel: "webchat",
       }),
-    ).toThrow(/Unknown agent/);
+    ).rejects.toThrow(/Unknown agent/);
 
-    expect(() =>
+    await expect(
       resolveGatewayRequestContext({
         req: createReq({ "x-openclaw-agent-id": "!!!" }),
         model: "openclaw",
         sessionPrefix: "openai",
-        defaultMessageChannel: "webchat",
       }),
-    ).toThrow("Unknown agent '!!!'.");
+    ).rejects.toThrow("Unknown agent '!!!'.");
   });
 
-  it("rejects invalid model syntax before accepting an explicit agent header", () => {
-    expect(() =>
+  it("rejects invalid model syntax before accepting an explicit agent header", async () => {
+    await expect(
       resolveGatewayRequestContext({
         req: createReq({ "x-openclaw-agent-id": "main" }),
         model: "gpt-4o",
         sessionPrefix: "openai",
-        defaultMessageChannel: "webchat",
       }),
-    ).toThrow("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
+    ).rejects.toThrow("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
   });
 });
 
@@ -184,45 +143,22 @@ describe("resolveTrustedHttpOperatorScopes", () => {
         authorization: "Bearer secret",
         "x-openclaw-scopes": "operator.admin, operator.write",
       }),
-      tokenAuth,
+      sharedSecretRequestAuth,
     );
 
     expect(scopes).toStrictEqual([]);
   });
 
-  it("keeps declared scopes for non-bearer HTTP requests", () => {
-    const scopes = resolveTrustedHttpOperatorScopes(
-      createReq({
-        "x-openclaw-scopes": "operator.admin, operator.write",
-      }),
-      noneAuth,
-    );
-
-    expect(scopes).toEqual(["operator.admin", "operator.write"]);
-  });
-
-  it("keeps declared scopes when auth mode is not shared-secret even if auth headers are forwarded", () => {
+  it("keeps trusted identity scopes even if bearer auth headers are forwarded", () => {
     const scopes = resolveTrustedHttpOperatorScopes(
       createReq({
         authorization: "Bearer upstream-idp-token",
         "x-openclaw-scopes": "operator.admin, operator.write",
       }),
-      noneAuth,
+      trustedRequestAuth,
     );
 
     expect(scopes).toEqual(["operator.admin", "operator.write"]);
-  });
-
-  it("drops declared scopes when request auth resolved to a shared-secret method", () => {
-    const scopes = resolveTrustedHttpOperatorScopes(
-      createReq({
-        authorization: "Bearer upstream-idp-token",
-        "x-openclaw-scopes": "operator.admin, operator.write",
-      }),
-      { trustDeclaredOperatorScopes: false },
-    );
-
-    expect(scopes).toStrictEqual([]);
   });
 
   it.each<{
@@ -268,105 +204,23 @@ describe("resolveTrustedHttpOperatorScopes", () => {
           scopes: roleScopes,
         },
       };
+      const scopes = (value?: string) =>
+        resolveTrustedHttpOperatorScopes(
+          createReq(value === undefined ? {} : { "x-openclaw-scopes": value }),
+          requestAuth,
+        );
 
       expect(
-        resolveTrustedHttpOperatorScopes(
-          createReq({
-            "x-openclaw-scopes":
-              "operator.admin, operator.read, operator.write, operator.talk, operator.approvals, operator.talk.secrets",
-          }),
-          requestAuth,
+        scopes(
+          "operator.admin, operator.read, operator.write, operator.talk, operator.approvals, operator.talk.secrets",
         ),
       ).toEqual(expectedScopes);
-      expect(resolveTrustedHttpOperatorScopes(createReq(), requestAuth)).toEqual(expectedDefaults);
-      expect(
-        resolveTrustedHttpOperatorScopes(
-          createReq({ "x-openclaw-scopes": "operator.read" }),
-          requestAuth,
-        ),
-      ).toEqual(roleScopes.length ? ["operator.read"] : []);
-      expect(
-        resolveTrustedHttpOperatorScopes(createReq({ "x-openclaw-scopes": "" }), requestAuth),
-      ).toEqual([]);
+      expect(scopes()).toEqual(expectedDefaults);
+      expect(scopes("operator.read")).toEqual(roleScopes.length ? ["operator.read"] : []);
+      expect(scopes("operator.admin")).toEqual(roleScopes);
+      expect(scopes("")).toEqual([]);
     },
   );
-});
-
-describe("resolveHttpSenderIsOwner", () => {
-  it("requires operator.admin on a trusted HTTP scope-bearing request", () => {
-    expect(
-      resolveHttpSenderIsOwner(createReq({ "x-openclaw-scopes": "operator.admin" }), noneAuth),
-    ).toBe(true);
-    expect(
-      resolveHttpSenderIsOwner(createReq({ "x-openclaw-scopes": "operator.write" }), noneAuth),
-    ).toBe(false);
-  });
-
-  it("returns false for bearer requests even with operator.admin in headers", () => {
-    expect(
-      resolveHttpSenderIsOwner(
-        createReq({
-          authorization: "Bearer secret",
-          "x-openclaw-scopes": "operator.admin",
-        }),
-        tokenAuth,
-      ),
-    ).toBe(false);
-  });
-});
-
-describe("resolveOpenAiCompatibleHttpOperatorScopes", () => {
-  it("restores default operator scopes for shared-secret bearer auth", () => {
-    const scopes = resolveOpenAiCompatibleHttpOperatorScopes(
-      createReq({
-        authorization: "Bearer secret",
-        "x-openclaw-scopes": "operator.approvals",
-      }),
-      { authMethod: "token", trustDeclaredOperatorScopes: false },
-    );
-
-    expect(scopes).toEqual(createExpectedBroadOperatorScopes());
-  });
-
-  it("keeps declared scopes for trusted HTTP identity-bearing requests", () => {
-    const scopes = resolveOpenAiCompatibleHttpOperatorScopes(
-      createReq({
-        "x-openclaw-scopes": "operator.write",
-      }),
-      { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
-    );
-
-    expect(scopes).toEqual(["operator.write"]);
-  });
-});
-
-describe("resolveOpenAiCompatibleHttpSenderIsOwner", () => {
-  it("treats shared-secret bearer auth as owner on the compat surface", () => {
-    expect(
-      resolveOpenAiCompatibleHttpSenderIsOwner(
-        createReq({
-          authorization: "Bearer secret",
-          "x-openclaw-scopes": "operator.approvals",
-        }),
-        { authMethod: "token", trustDeclaredOperatorScopes: false },
-      ),
-    ).toBe(true);
-  });
-
-  it("still requires operator.admin for trusted scope-bearing requests", () => {
-    expect(
-      resolveOpenAiCompatibleHttpSenderIsOwner(
-        createReq({ "x-openclaw-scopes": "operator.write" }),
-        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
-      ),
-    ).toBe(false);
-    expect(
-      resolveOpenAiCompatibleHttpSenderIsOwner(
-        createReq({ "x-openclaw-scopes": "operator.admin" }),
-        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
-      ),
-    ).toBe(true);
-  });
 });
 
 describe("authorizeOpenAiCompatibleHttpModelOverride", () => {

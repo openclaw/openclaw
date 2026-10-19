@@ -1,4 +1,3 @@
-// Inspects plugin registry shape for diagnostics and snapshots.
 import type { PluginRegistry } from "./registry.js";
 import { hasKind } from "./slots.js";
 
@@ -10,7 +9,7 @@ export type PluginInspectShape =
   | "hybrid-capability"
   | "non-capability";
 
-export type PluginCapabilityEntry = {
+type PluginCapabilityEntry = {
   kind: PluginCapabilityKind;
   ids: string[];
 };
@@ -35,8 +34,9 @@ function buildPluginCapabilityEntries(
   report: Pick<PluginRegistry, "sessionCatalogs">,
 ) {
   return [
-    { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
+    { kind: "cli-backend" as const, ids: plugin.cliBackendIds },
     { kind: "text-inference" as const, ids: plugin.providerIds },
+    { kind: "decision" as const, ids: plugin.contracts?.decisionProviders ?? [] },
     { kind: "embedding" as const, ids: plugin.embeddingProviderIds },
     { kind: "speech" as const, ids: plugin.speechProviderIds },
     { kind: "realtime-transcription" as const, ids: plugin.realtimeTranscriptionProviderIds },
@@ -52,6 +52,7 @@ function buildPluginCapabilityEntries(
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
     { kind: "migration-provider" as const, ids: plugin.migrationProviderIds },
     { kind: "worker-provider" as const, ids: plugin.contracts?.workerProviders ?? [] },
+    { kind: "storage-provider" as const, ids: plugin.contracts?.storageProviders ?? [] },
     {
       kind: "session-catalog" as const,
       ids: report.sessionCatalogs
@@ -89,7 +90,7 @@ function derivePluginInspectShape(
     (report.typedHooks.some((entry) => entry.pluginId === plugin.id) ||
       report.hooks.some((entry) => entry.pluginId === plugin.id)) &&
     !report.tools.some((entry) => entry.pluginId === plugin.id) &&
-    !(report.gatewayMethodDescriptors ?? []).some(
+    !report.gatewayMethodDescriptors.some(
       (descriptor) => descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === plugin.id,
     );
   if (hasOnlyHooks) {

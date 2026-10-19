@@ -1,194 +1,49 @@
 import type { Profiler } from "node:inspector";
-import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
-import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import {
+  assertProfile,
+  captureDiagnosticProfile,
+  createInspectorProfileCapture,
+  createNativeCpuProfileCapture,
+  DIAGNOSTIC_PROFILE_MAX_BYTES,
+  ProfileFailure,
+  sanitizeDiagnosticProfileFrame,
+} from "./diagnostic-profile.js";
 
 const DURATION_MS = 5_000;
 const INTERVAL_MICROS = 10_000;
-const MAX_BYTES = 1024 * 1024;
 const MAX_NODES = 16_384;
 const MAX_SAMPLES = 65_536;
-const ENGINE_NAMES = new Set(["(root)", "(program)", "(idle)", "(garbage collector)"]);
-let capturing = false;
-let cleanupUncertain = false;
+const SUMMARY_STACK_DEPTH = 8;
+const MAX_SUMMARY_ROWS = 128;
 
-type FailureReason =
-  | "busy"
-  | "unsupported"
-  | "conflict"
-  | "tracing-active"
-  | "cancelled"
-  | "invalid-profile"
-  | "profile-too-large"
-  | "capture-failed"
-  | "cleanup-failed";
-
-export type DiagnosticCpuProfileOutcome =
-  | {
-      status: "complete";
-      result: {
-        requestedDurationMs: number;
-        actualDurationMs: number;
-        samplingIntervalMicros: number;
-        sampleLossCount: null;
-        redactedNodeCount: number;
-        profile: Profiler.Profile;
-      };
-    }
-  | { status: "unavailable"; reason: FailureReason; cleanupFailed: boolean };
-
-class ProfileFailure extends Error {
-  constructor(readonly reason: FailureReason) {
-    super(reason);
-  }
-}
-
-function assertProfile(valid: boolean): asserts valid {
-  if (!valid) {
-    throw new ProfileFailure("invalid-profile");
-  }
-}
-
-function hasProfilerConflict() {
-  const options = parseNodeOptionsEnvVar(process.env.NODE_OPTIONS);
-  return (
-    options === null ||
-    Boolean(process.env.NODE_V8_COVERAGE) ||
-    [...process.execArgv, ...(options ?? [])].some((option) =>
-      /^--(?:inspect|cpu-prof|heap-prof|prof|perf-|.*coverage)/.test(option.replaceAll("_", "-")),
-    )
-  );
-}
-
-function codeUrl(url: string, packageRoot: string | null): string | undefined {
-  if (/^node:[a-zA-Z0-9_./-]+$/.test(url)) {
-    return url;
-  }
-  if (!packageRoot || url.length > 2_048) {
-    return undefined;
-  }
-  let filename = url;
-  if (url.startsWith("file:")) {
-    try {
-      const parsed = new URL(url);
-      if (parsed.search || parsed.hash) {
-        return undefined;
-      }
-      filename = fileURLToPath(parsed);
-    } catch {
-      return undefined;
-    }
-  }
-  if (!path.isAbsolute(filename)) {
-    return undefined;
-  }
-  const relative = path.relative(packageRoot, filename).split(path.sep).join("/");
-  return /^(?:src|dist|node_modules)\/[a-zA-Z0-9_@./+-]+\.[cm]?js$/.test(relative) ||
-    /^src\/[a-zA-Z0-9_@./+-]+\.ts$/.test(relative)
-    ? `openclaw:${relative}`
-    : undefined;
-}
-
-function sanitizeProfile(profile: Profiler.Profile, packageRoot: string | null) {
-  assertProfile(
-    Array.isArray(profile.nodes) &&
-      profile.nodes.length > 0 &&
-      Array.isArray(profile.samples) &&
-      Array.isArray(profile.timeDeltas) &&
-      profile.samples.length === profile.timeDeltas.length &&
-      Number.isFinite(profile.startTime) &&
-      Number.isFinite(profile.endTime) &&
-      profile.endTime >= profile.startTime,
-  );
+export function sanitizeDiagnosticCpuProfile(
+  profile: Profiler.Profile,
+  packageRoot: string | null,
+  { startBlockedMs }: { startBlockedMs: number },
+) {
+  assertProfile(profile.samples !== undefined && profile.timeDeltas !== undefined);
   if (profile.nodes.length > MAX_NODES || profile.samples.length > MAX_SAMPLES) {
     throw new ProfileFailure("profile-too-large");
   }
-  const ids = new Set<number>();
-  const parents = new Map<number, number>();
   let redactedNodeCount = 0;
+  // The runtime owns graph consistency; this boundary bounds and redacts its output.
   const nodes = profile.nodes.map((node): Profiler.ProfileNode => {
-    assertProfile(Number.isSafeInteger(node.id) && node.id > 0 && !ids.has(node.id));
-    ids.add(node.id);
-    const frame = node.callFrame;
-    assertProfile(
-      Boolean(frame) &&
-        typeof frame.functionName === "string" &&
-        typeof frame.url === "string" &&
-        typeof frame.scriptId === "string" &&
-        /^\d{1,32}$/.test(frame.scriptId) &&
-        Number.isSafeInteger(frame.lineNumber) &&
-        frame.lineNumber >= -1 &&
-        Number.isSafeInteger(frame.columnNumber) &&
-        frame.columnNumber >= -1,
-    );
-    const url = codeUrl(frame.url, packageRoot);
-    const engine = frame.url === "" && ENGINE_NAMES.has(frame.functionName);
-    const safeName =
-      engine ||
-      (url !== undefined &&
-        frame.functionName.length <= 256 &&
-        /^(?:(?:(?:get|set) )?[$A-Z_a-z][$\w]*(?:\.[$A-Z_a-z][$\w]*)*)?$/.test(frame.functionName));
-    const redacted = !safeName || (!engine && !url) || node.deoptReason !== undefined;
-    redactedNodeCount += Number(redacted);
-    if (node.children !== undefined) {
-      assertProfile(Array.isArray(node.children));
-      for (const child of node.children) {
-        assertProfile(Number.isSafeInteger(child) && !parents.has(child));
-        parents.set(child, node.id);
-      }
-    }
-    assertProfile(
-      node.hitCount === undefined || (Number.isSafeInteger(node.hitCount) && node.hitCount >= 0),
-    );
-    if (node.positionTicks !== undefined) {
-      assertProfile(Array.isArray(node.positionTicks));
-      for (const tick of node.positionTicks) {
-        assertProfile(
-          Number.isSafeInteger(tick.line) &&
-            tick.line >= 0 &&
-            Number.isSafeInteger(tick.ticks) &&
-            tick.ticks >= 0,
-        );
-      }
-    }
+    const { callFrame, redacted } = sanitizeDiagnosticProfileFrame(node.callFrame, packageRoot);
+    redactedNodeCount += Number(redacted || node.deoptReason !== undefined);
     return {
       id: node.id,
-      callFrame: {
-        functionName: safeName ? frame.functionName : "[redacted]",
-        scriptId: frame.scriptId,
-        url: url ?? "",
-        lineNumber: frame.lineNumber,
-        columnNumber: frame.columnNumber,
-      },
+      callFrame,
       ...(node.children !== undefined ? { children: node.children } : {}),
       ...(node.hitCount !== undefined ? { hitCount: node.hitCount } : {}),
       ...(node.positionTicks !== undefined ? { positionTicks: node.positionTicks } : {}),
       ...(node.deoptReason !== undefined ? { deoptReason: "[redacted]" } : {}),
     };
   });
-  const roots = nodes.filter((node) => !parents.has(node.id));
-  const root = roots[0];
-  assertProfile(
-    root !== undefined && roots.length === 1 && [...parents.keys()].every((id) => ids.has(id)),
-  );
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const visited = new Set<number>();
-  const pending = [root.id];
-  while (pending.length) {
-    const id = pending.pop()!;
-    assertProfile(!visited.has(id));
-    visited.add(id);
-    pending.push(...(byId.get(id)!.children ?? []));
-  }
-  assertProfile(visited.size === nodes.length);
-  assertProfile(profile.samples.every((id) => ids.has(id)));
-  assertProfile(profile.timeDeltas.every((delta) => Number.isFinite(delta) && delta >= 0));
   const result = {
     requestedDurationMs: DURATION_MS,
     actualDurationMs: (profile.endTime - profile.startTime) / 1_000,
+    startBlockedMs,
     samplingIntervalMicros: INTERVAL_MICROS,
     sampleLossCount: null,
     redactedNodeCount,
@@ -200,122 +55,103 @@ function sanitizeProfile(profile: Profiler.Profile, packageRoot: string | null) 
       timeDeltas: profile.timeDeltas,
     },
   };
-  if (!boundedJsonUtf8Bytes(result, MAX_BYTES).complete) {
-    throw new ProfileFailure("profile-too-large");
+  if (boundedJsonUtf8Bytes(result, DIAGNOSTIC_PROFILE_MAX_BYTES).complete) {
+    return result;
   }
-  return result;
+
+  // Boot/deoptimization can produce deep stacks even at a coarse sampling interval.
+  // Count recorded samples, not hitCount: V8's deopt samples can have zero hits.
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const parents = new Map<number, number>();
+  for (const node of nodes) {
+    for (const child of node.children ?? []) {
+      parents.set(child, node.id);
+    }
+  }
+  const counts = new Map<number, number>();
+  for (const id of profile.samples) {
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  type SummaryRow = {
+    stack: Profiler.ProfileNode["callFrame"][];
+    elidedFrameCount: number;
+    sampleCount: number;
+  };
+  const groups = new Map<string, SummaryRow>();
+  for (const [id, sampleCount] of counts) {
+    const stack: SummaryRow["stack"] = [];
+    let node = byId.get(id);
+    while (node && stack.length < SUMMARY_STACK_DEPTH) {
+      stack.push(node.callFrame);
+      node = byId.get(parents.get(node.id)!);
+    }
+    let elidedFrameCount = 0;
+    // Dependency-heavy stacks still need the application caller that owns the work.
+    if (!stack.some((frame) => frame.url.startsWith("openclaw:"))) {
+      let skipped = 0;
+      while (node && !node.callFrame.url.startsWith("openclaw:")) {
+        skipped++;
+        node = byId.get(parents.get(node.id)!);
+      }
+      if (node) {
+        stack.push(node.callFrame);
+        elidedFrameCount = skipped;
+      }
+    }
+    const key = JSON.stringify({ stack, elidedFrameCount });
+    const group = groups.get(key);
+    if (group) {
+      group.sampleCount += sampleCount;
+    } else {
+      groups.set(key, { stack, elidedFrameCount, sampleCount });
+    }
+  }
+  const summaryRows: SummaryRow[] = [];
+  const summary = {
+    ...result,
+    profile: undefined,
+    truncated: true,
+    originalNodeCount: nodes.length,
+    sampleCount: profile.samples.length,
+    omittedSampleCount: profile.samples.length,
+    summary: summaryRows,
+  };
+  let bytes = Buffer.byteLength(JSON.stringify(summary));
+  for (const row of [...groups.values()].toSorted((a, b) => b.sampleCount - a.sampleCount)) {
+    const extra = Buffer.byteLength(JSON.stringify(row)) + Number(summary.summary.length > 0);
+    if (
+      summary.summary.length === MAX_SUMMARY_ROWS ||
+      bytes + extra > DIAGNOSTIC_PROFILE_MAX_BYTES
+    ) {
+      break;
+    }
+    summary.summary.push(row);
+    summary.omittedSampleCount -= row.sampleCount;
+    bytes += extra;
+  }
+  return summary;
 }
 
-/** Owns one ephemeral main-isolate capture; it never opens an inspector listener. */
-export async function captureDiagnosticCpuProfile(options: {
+/** Captures CPU samples through Node's shared native profiler or Bun's inspector. */
+export function captureDiagnosticCpuProfile(options: {
   signal: AbortSignal;
   hasAuthority: () => boolean;
-}): Promise<DiagnosticCpuProfileOutcome> {
-  const unavailable = (
-    reason: FailureReason,
-    cleanupFailed = false,
-  ): DiagnosticCpuProfileOutcome => ({
-    status: "unavailable",
-    reason,
-    cleanupFailed,
+}) {
+  return captureDiagnosticProfile({
+    ...options,
+    durationMs: DURATION_MS,
+    create: (inspector) =>
+      process.versions.bun
+        ? createInspectorProfileCapture(inspector, {
+            setup: async (session) => {
+              await session.post("Profiler.enable");
+              await session.post("Profiler.setSamplingInterval", { interval: INTERVAL_MICROS });
+            },
+            start: (session) => session.post("Profiler.start"),
+            stop: (session) => session.post("Profiler.stop"),
+            disable: (session) => session.post("Profiler.disable"),
+          })
+        : createNativeCpuProfileCapture(INTERVAL_MICROS),
+    sanitize: sanitizeDiagnosticCpuProfile,
   });
-  if (cleanupUncertain) {
-    return unavailable("cleanup-failed", true);
-  }
-  if (capturing) {
-    return unavailable("busy");
-  }
-  capturing = true;
-  let session: import("node:inspector/promises").Session | undefined;
-  let connected = false;
-  let startAttempted = false;
-  let stopAttempted = false;
-  let failure: FailureReason | undefined;
-  let cleanupFailed = false;
-  let profile: Profiler.Profile | undefined;
-  let packageRoot: string | null = null;
-  const assertActive = () => {
-    if (options.signal.aborted || !options.hasAuthority()) {
-      throw new ProfileFailure("cancelled");
-    }
-  };
-  try {
-    assertActive();
-    if (process.versions.bun) {
-      throw new ProfileFailure("unsupported");
-    }
-    const inspector = await import("node:inspector/promises").catch(() => {
-      throw new ProfileFailure("unsupported");
-    });
-    const { getEnabledCategories } = await import("node:trace_events").catch(() => {
-      throw new ProfileFailure("unsupported");
-    });
-    const assertTracingInactive = () => {
-      // V8 can stream raw ProfileChunk data to an existing trace writer before
-      // sanitization. Refuse all tracing; legacy and Perfetto match categories differently.
-      if (getEnabledCategories()) {
-        throw new ProfileFailure("tracing-active");
-      }
-    };
-    packageRoot = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
-    assertActive();
-    // Disconnect also disables precise coverage in V8. Do not disturb a known
-    // debugger/coverage owner; arbitrary third-party in-process sessions are not discoverable.
-    if (inspector.url() || hasProfilerConflict()) {
-      throw new ProfileFailure("conflict");
-    }
-    assertTracingInactive();
-    session = new inspector.Session();
-    session.connect();
-    connected = true;
-    await session.post("Profiler.enable");
-    await session.post("Profiler.setSamplingInterval", { interval: INTERVAL_MICROS });
-    assertActive();
-    assertTracingInactive();
-    startAttempted = true;
-    await session.post("Profiler.start");
-    // The event loop owns this timer. Requested duration is not a hard wall-time
-    // or V8 allocation bound when the Gateway is blocked; return native actual timing.
-    await delay(DURATION_MS, undefined, { signal: options.signal });
-    assertActive();
-    stopAttempted = true;
-    ({ profile } = await session.post("Profiler.stop"));
-  } catch (error) {
-    failure =
-      error instanceof ProfileFailure
-        ? error.reason
-        : options.signal.aborted
-          ? "cancelled"
-          : "capture-failed";
-  } finally {
-    if (session && connected) {
-      if (startAttempted && !stopAttempted) {
-        try {
-          await session.post("Profiler.stop");
-        } catch {
-          cleanupFailed = true;
-        }
-      }
-      try {
-        await session.post("Profiler.disable");
-      } catch {
-        cleanupFailed = true;
-      }
-      try {
-        session.disconnect();
-      } catch {
-        cleanupFailed = cleanupUncertain = true;
-      }
-    }
-    capturing = false;
-  }
-  if (failure || cleanupFailed) {
-    return unavailable(failure ?? "cleanup-failed", cleanupFailed);
-  }
-  try {
-    assertActive();
-    return { status: "complete", result: sanitizeProfile(profile!, packageRoot) };
-  } catch (error) {
-    return unavailable(error instanceof ProfileFailure ? error.reason : "invalid-profile");
-  }
 }

@@ -1,17 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import { buildSessionUsageDateParams, requestSessionUsage } from "./usage.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
+import { requestSessionUsage } from "./usage.ts";
 
-describe("buildSessionUsageDateParams", () => {
+describe("usage request calendar", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("uses UTC mode without local timezone parameters", () => {
-    expect(buildSessionUsageDateParams("utc")).toEqual({ mode: "utc" });
-  });
-
-  it("sends the browser IANA timezone with the current UTC offset in local mode", () => {
+  it("sends the browser IANA timezone with the current UTC offset in local mode", async () => {
     const resolvedOptions = new Intl.DateTimeFormat().resolvedOptions();
     vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockReturnValue({
       ...resolvedOptions,
@@ -19,11 +19,21 @@ describe("buildSessionUsageDateParams", () => {
     });
     vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-120);
 
-    expect(buildSessionUsageDateParams("local")).toEqual({
-      mode: "specific",
-      timeZone: "Europe/Vienna",
-      utcOffset: "UTC+2",
+    const request = createGatewayRequestMock().mockResolvedValue({ sessions: [] });
+    await requestSessionUsage(createTestGatewayClient(request), {
+      startDate: "2026-07-01",
+      endDate: "2026-07-28",
+      scope: "family",
+      timeZone: "local",
     });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.usage",
+      expect.objectContaining({
+        mode: "specific",
+        timeZone: "Europe/Vienna",
+        utcOffset: "UTC+2",
+      }),
+    );
   });
 });
 
@@ -80,6 +90,46 @@ describe("requestSessionUsage", () => {
       groupBy: "family",
       limit: 1000,
       includeContextWeight: false,
+    });
+  });
+
+  it("requests a bounded overview with server filter and page ownership", async () => {
+    const request = vi.fn().mockResolvedValue({ sessions: [] });
+    await requestSessionUsage(
+      { request } as never,
+      {
+        startDate: "2026-07-01",
+        endDate: "2026-07-28",
+        scope: "family",
+        timeZone: "utc",
+        query: "provider:openai",
+        selectedDays: ["2026-07-14"],
+        selectedHours: [12],
+        selectedSessions: ["agent:main:chosen"],
+        recentKeys: ["agent:main:chosen"],
+        offset: 50,
+        sort: "cost",
+        sortDirection: "asc",
+      },
+      { projection: "overview" },
+    );
+    expect(request).toHaveBeenCalledWith("sessions.usage", {
+      startDate: "2026-07-01",
+      endDate: "2026-07-28",
+      groupBy: "family",
+      mode: "utc",
+      agentScope: "all",
+      projection: "overview",
+      limit: 50,
+      includeContextWeight: false,
+      query: "provider:openai",
+      selectedDays: ["2026-07-14"],
+      selectedHours: [12],
+      selectedSessions: ["agent:main:chosen"],
+      recentKeys: ["agent:main:chosen"],
+      offset: 50,
+      sort: "cost",
+      sortDirection: "asc",
     });
   });
 

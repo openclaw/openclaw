@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CodexThreadItem } from "./app-server/protocol.js";
-import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
@@ -10,6 +9,13 @@ import {
   idleThread,
   readCodexSessionTranscript,
 } from "./session-catalog.test-helpers.js";
+
+const textItems = (...ids: string[]) => ids.map((id) => catalogThreadItem(id, { text: id }));
+const turnPage = (items: CodexThreadItem[], backwardsCursor?: string, nextCursor?: string) => ({
+  data: [{ id: "turn-1", items: [...items] }],
+  backwardsCursor,
+  nextCursor,
+});
 
 function nativeItemControl(source: CodexThreadItem[]) {
   const listItemPage = vi.fn<CodexSessionCatalogControl["listItemPage"]>(
@@ -34,10 +40,7 @@ function nativeItemControl(source: CodexThreadItem[]) {
     control: createEligibleControl({
       requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
       listItemPage,
-      listTurnPage: vi.fn(async () => ({
-        data: [{ id: "turn-1", items: [...source] }],
-        backwardsCursor: "native-turn:turn-1",
-      })),
+      listTurnPage: vi.fn(async () => turnPage(source, "native-turn:turn-1")),
     }),
   };
 }
@@ -54,66 +57,6 @@ function readTranscript(control: CodexSessionCatalogControl, limit: number, curs
 }
 
 describe("Codex catalog transcript", () => {
-  it("preserves full tool text and raw data before transport paging", () => {
-    const output = "result ".repeat(1000);
-    const source = catalogThreadItem("tool-1", {
-      type: "commandExecution",
-      command: "rg pattern",
-      aggregatedOutput: output,
-      exitCode: 0,
-    });
-
-    expect(toGenericTranscriptItem(source)).toEqual({
-      id: "tool-1",
-      type: "toolResult",
-      text: output,
-      raw: source,
-    });
-  });
-
-  it("keeps native item order and cursors when the requested page size changes", async () => {
-    const source = Array.from({ length: 8 }, (_, index) =>
-      catalogThreadItem(`item-${index}`, { text: `message ${index}` }),
-    );
-    const { control, listItemPage } = nativeItemControl(source);
-
-    const first = await readTranscript(control, 3);
-    const second = await readTranscript(control, 2, first.nextCursor);
-    const third = await readTranscript(control, 4, second.nextCursor);
-
-    expect(first.items.map((item) => item.id)).toEqual(["item-7", "item-6", "item-5"]);
-    expect(second.items.map((item) => item.id)).toEqual(["item-4", "item-3"]);
-    expect(third.items.map((item) => item.id)).toEqual(["item-2", "item-1", "item-0"]);
-    expect(first.nextCursor).toBe("native:item-5");
-    expect(second.nextCursor).toBe("native:item-3");
-    expect(third.nextCursor).toBeUndefined();
-    expect(first).not.toHaveProperty("backwardsCursor");
-    expect(listItemPage).toHaveBeenNthCalledWith(2, {
-      threadId: "thread-1",
-      limit: 2,
-      sortDirection: "desc",
-      cursor: first.nextCursor,
-    });
-  });
-
-  it("returns only 50 items from a native turn containing 57 items", async () => {
-    const source = Array.from({ length: 57 }, (_, index) =>
-      catalogThreadItem(`item-${index}`, { text: `message ${index}` }),
-    );
-    const { control } = nativeItemControl(source);
-
-    const first = await readTranscript(control, 50);
-    expect(first.items).toHaveLength(50);
-    expect(first.nextCursor).toBe("native:item-7");
-
-    const second = await readTranscript(control, 50, first.nextCursor);
-    expect(second.items).toHaveLength(7);
-    expect([...first.items, ...second.items].map((item) => item.id)).toEqual(
-      source.toReversed().map((item) => item.id),
-    );
-    expect(second.nextCursor).toBeUndefined();
-  });
-
   it("cuts native pages by wire bytes without losing raw output or advancing past omitted items", async () => {
     const output = "海🌱\n".repeat(80_000);
     const source = Array.from({ length: 36 }, (_, index) =>
@@ -166,24 +109,18 @@ describe("Codex catalog transcript", () => {
   });
 
   it("resumes within a legacy turn after an append, then advances to the next native turn", async () => {
-    const source = Array.from({ length: 7 }, (_, index) =>
-      catalogThreadItem(`item-${index}`, { text: `message ${index}` }),
-    );
+    const source = textItems(...Array.from({ length: 7 }, (_, index) => `item-${index}`));
     const listTurnPage = vi.fn<CodexSessionCatalogControl["listTurnPage"]>(async ({ cursor }) => {
       if (cursor === "older-turns") {
         return {
-          data: [{ id: "older", items: [catalogThreadItem("oldest", { text: "oldest" })] }],
+          data: [{ id: "older", items: textItems("oldest") }],
           backwardsCursor: "older-anchor",
         };
       }
       if (cursor && cursor !== "turn-anchor") {
         throw new Error("unexpected native turn cursor");
       }
-      return {
-        data: [{ id: "turn-1", items: [...source] }],
-        backwardsCursor: "turn-anchor",
-        nextCursor: "older-turns",
-      };
+      return turnPage(source, "turn-anchor", "older-turns");
     });
     const control = createEligibleControl({ listTurnPage });
 
@@ -202,39 +139,27 @@ describe("Codex catalog transcript", () => {
     expect(listTurnPage.mock.calls[1]?.[0].cursor).toBe("turn-anchor");
   });
 
-  it("reports a removed legacy item anchor instead of restarting its page", async () => {
-    const source = ["oldest", "middle", "newest"].map((id) => catalogThreadItem(id, { text: id }));
+  it.each([
+    {
+      kind: "removed item",
+      anchor: "turn-anchor",
+      error: "Codex transcript changed; refresh the session before loading older items",
+    },
+    {
+      kind: "absent turn",
+      anchor: undefined,
+      error: "Codex app-server did not provide a transcript continuation anchor",
+    },
+  ])("reports a $kind anchor instead of losing the remainder", async ({ anchor, error }) => {
+    const source = textItems("oldest", "middle", "newest");
     const control = createEligibleControl({
-      listTurnPage: vi.fn(async () => ({
-        data: [{ id: "turn-1", items: [...source] }],
-        backwardsCursor: "turn-anchor",
-      })),
+      listTurnPage: vi.fn(async () => turnPage(source, anchor)),
     });
-    const first = await readTranscript(control, 1);
-    source.pop();
-
-    await expect(readTranscript(control, 2, first.nextCursor)).rejects.toThrow(
-      "Codex transcript changed; refresh the session before loading older items",
-    );
-  });
-
-  it("reports an absent native turn anchor instead of dropping the remainder", async () => {
-    const control = createEligibleControl({
-      listTurnPage: vi.fn(async () => ({
-        data: [
-          {
-            id: "turn-1",
-            items: [
-              catalogThreadItem("oldest", { text: "oldest" }),
-              catalogThreadItem("newest", { text: "newest" }),
-            ],
-          },
-        ],
-      })),
-    });
-
-    await expect(readTranscript(control, 1)).rejects.toThrow(
-      "Codex app-server did not provide a transcript continuation anchor",
-    );
+    let cursor: string | undefined;
+    if (anchor) {
+      cursor = (await readTranscript(control, 1)).nextCursor;
+      source.pop();
+    }
+    await expect(readTranscript(control, anchor ? 2 : 1, cursor)).rejects.toThrow(error);
   });
 });

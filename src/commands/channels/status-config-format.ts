@@ -1,4 +1,3 @@
-// Config-only channel status formatter used when the gateway is unreachable.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -12,7 +11,6 @@ import {
   resolveChannelAccountSnapshot,
   buildReadOnlySourceChannelAccountSnapshot,
 } from "../../channels/plugins/status.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
@@ -22,14 +20,8 @@ import {
   appendModeBit,
   appendTokenSourceBits,
   buildChannelAccountLine,
-  type ChatChannel,
   NO_CONFIGURED_CHAT_CHANNELS_LINE,
 } from "./shared.js";
-
-type ChannelStatusPluginLabel = {
-  id: ChatChannel;
-  meta: { label?: string };
-};
 
 /** Render channel status lines from config snapshots without calling the gateway. */
 export async function formatConfigChannelsStatusLines(
@@ -51,21 +43,6 @@ export async function formatConfigChannelsStatusLines(
     lines.push("");
   }
 
-  const accountLines = (
-    plugin: ChannelStatusPluginLabel,
-    accounts: Array<Record<string, unknown>>,
-  ) =>
-    accounts.map((account) => {
-      const bits: string[] = [];
-      appendEnabledConfiguredLinkedBits(bits, account);
-      appendModeBit(bits, account);
-      appendTokenSourceBits(bits, account);
-      appendBaseUrlBit(bits, account);
-      return buildChannelAccountLine(plugin.id, account, bits, {
-        channelLabel: plugin.meta.label ?? plugin.id,
-      });
-    });
-
   const sourceConfig = opts?.sourceConfig ?? cfg;
   const requestedChannel = opts?.channel
     ? (normalizeChannelId(opts.channel) ?? normalizeOptionalLowercaseString(opts.channel))
@@ -82,7 +59,6 @@ export async function formatConfigChannelsStatusLines(
     if (!accountIds.length) {
       continue;
     }
-    const snapshots: ChannelAccountSnapshot[] = [];
     for (const accountId of accountIds) {
       const sourceSnapshot = await buildReadOnlySourceChannelAccountSnapshot({
         plugin,
@@ -94,17 +70,23 @@ export async function formatConfigChannelsStatusLines(
         cfg,
         accountId,
       });
-      snapshots.push(
+      const snapshot =
         sourceSnapshot &&
-          hasConfiguredUnavailableCredentialStatus(sourceSnapshot) &&
-          (!hasResolvedCredentialValue(resolvedSnapshot) ||
-            (sourceSnapshot.configured === true && resolvedSnapshot.configured === false))
+        hasConfiguredUnavailableCredentialStatus(sourceSnapshot) &&
+        (!hasResolvedCredentialValue(resolvedSnapshot) ||
+          (sourceSnapshot.configured === true && resolvedSnapshot.configured === false))
           ? sourceSnapshot
-          : resolvedSnapshot,
+          : resolvedSnapshot;
+      const bits: string[] = [];
+      appendEnabledConfiguredLinkedBits(bits, snapshot);
+      appendModeBit(bits, snapshot);
+      appendTokenSourceBits(bits, snapshot);
+      appendBaseUrlBit(bits, snapshot);
+      lines.push(
+        buildChannelAccountLine(plugin.id, snapshot, bits, {
+          channelLabel: plugin.meta.label ?? plugin.id,
+        }),
       );
-    }
-    if (snapshots.length > 0) {
-      lines.push(...accountLines(plugin, snapshots));
     }
   }
 
@@ -135,7 +117,7 @@ export async function formatConfigChannelsStatusLines(
 
   lines.push("");
   lines.push(
-    `Tip: ${formatDocsLink("/cli/status", "status --deep")} adds gateway health probes to status output (requires a reachable gateway).`,
+    `Tip: ${formatDocsLink("/cli/status", "status --deep")} adds gateway health checks to status output (requires a reachable gateway).`,
   );
   return lines;
 }

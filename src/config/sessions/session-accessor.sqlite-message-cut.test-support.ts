@@ -1,6 +1,15 @@
-import { afterEach } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterEach, beforeEach } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -17,7 +26,18 @@ export const sourceExpectedState = {
 };
 
 export function useSessionMessageCutFixtures() {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = createTempDirTracker();
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(async () => {
+    // Keep drains and resets together: consumer afterEach hooks run before this hook.
+    // A synchronous reset there would retire native handles before workers finish.
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
+    tempDirs.cleanup();
+  });
   async function createSiblingSession(params: {
     env: NodeJS.ProcessEnv;
     headline: string;

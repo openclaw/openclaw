@@ -8,11 +8,12 @@ type ManifestBackedRecord = Pick<
   "bundleFormat" | "format" | "manifestPath"
 >;
 
+/** True when the bundle format permits omitting its manifest file. */
+export function isOptionalPluginManifestFile(record: ManifestBackedRecord): boolean {
+  return record.format === "bundle" && record.bundleFormat === "claude";
+}
+
 /** True when a Claude bundle record omits its optional manifest file. */
 export function hasOptionalMissingPluginManifestFile(record: ManifestBackedRecord): boolean {
-  return (
-    record.format === "bundle" &&
-    record.bundleFormat === "claude" &&
-    !pluginCacheExistsSync(record.manifestPath)
-  );
+  return isOptionalPluginManifestFile(record) && !pluginCacheExistsSync(record.manifestPath);
 }

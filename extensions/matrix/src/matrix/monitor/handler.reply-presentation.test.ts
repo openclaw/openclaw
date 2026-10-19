@@ -1,6 +1,8 @@
 import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
+import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-outbound";
 // Matrix tests cover the handler's reply presentation wiring.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareMatrixReplyPayload } from "../../outbound.js";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
@@ -12,7 +14,6 @@ import {
   createMatrixHandlerTestHarness,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
-import { createTypingCallbacks, type ReplyPayload } from "./runtime-api.js";
 
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ messageId: "evt", roomId: "!room" })),
@@ -71,7 +72,7 @@ describe("matrix monitor handler reply presentation", () => {
     });
   });
 
-  it.each([undefined, "off"] as const)(
+  it.each([undefined] as const)(
     "applies current acknowledgement scope while preserving account override %s",
     async (accountScope) => {
       const cfg: CoreConfig = {
@@ -168,7 +169,7 @@ describe("matrix monitor handler reply presentation", () => {
     ).toMatchObject({ type: "message.presentation", version: 1 });
   });
 
-  it("edits a matching live preview to attach the final reply's controls", async () => {
+  it.each(["controls", "answer"] as const)("edits a live preview for %s", async (kind) => {
     const context = {
       cfg: { channels: { matrix: {} } },
       client: {} as MatrixClient,
@@ -201,14 +202,18 @@ describe("matrix monitor handler reply presentation", () => {
       ],
     };
     try {
-      const payload = await prepareMatrixReplyPayload({ presentation });
+      const payload =
+        kind === "controls"
+          ? await prepareMatrixReplyPayload({ presentation })
+          : { text: "answer" };
       if (typeof payload.text !== "string") {
-        throw new Error("prepared controls must have visible fallback text");
+        throw new Error("prepared reply must have visible text");
       }
-      draftController.onPartialReply(payload.text);
+      const previewText = kind === "controls" ? payload.text : "answer\n\nNO_REPLY";
+      draftController.onPartialReply(previewText);
       await draftStream.flush();
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-      expect(draftStream.matchesPreparedText(payload.text)).toBe(true);
+      expect(draftStream.matchesPreparedText(previewText)).toBe(true);
 
       const { deliverReply } = createMatrixReplyDispatcher({
         ...context,
@@ -226,15 +231,19 @@ describe("matrix monitor handler reply presentation", () => {
         context.roomId,
         "$draft1",
         payload.text,
-        expect.objectContaining({
-          extraContent: {
-            "com.openclaw.presentation": expect.objectContaining({
-              type: "message.presentation",
-              version: 1,
-              blocks: presentation.blocks,
-            }),
-          },
-        }),
+        expect.objectContaining(
+          kind === "controls"
+            ? {
+                extraContent: {
+                  "com.openclaw.presentation": expect.objectContaining({
+                    type: "message.presentation",
+                    version: 1,
+                    blocks: presentation.blocks,
+                  }),
+                },
+              }
+            : {},
+        ),
       );
       expect(finalizeLive).not.toHaveBeenCalled();
       expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();

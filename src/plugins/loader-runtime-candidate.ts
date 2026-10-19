@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { compareOpenClawReleaseVersions } from "../infra/npm-registry-spec.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { capabilityCatalogFamilies, resolvePluginCapabilityCatalog } from "./capability-catalog.js";
 import { resolveMemorySlotDecision } from "./config-state.js";
@@ -28,7 +30,6 @@ import {
 } from "./loader-records.js";
 import { resolvePluginRegistrationPlan } from "./loader-registration-plan.js";
 import {
-  applyManifestSnapshotMetadata,
   type AuthorizedDreamingSidecar,
   detailPluginStartupTrace,
   preparePluginLoadRecord,
@@ -42,7 +43,10 @@ import {
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginModuleExport } from "./module-export.js";
 import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
+import { resolveConfiguredRuntimePluginInstallCandidate } from "./official-runtime-plugins.js";
+import { openPluginRootFileSync } from "./path-safety.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { PluginInstance } from "./plugin-instance.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
@@ -101,7 +105,7 @@ export function prepareRuntimePluginConfig(
   return preparedConfig.validation;
 }
 
-export function loadRuntimePluginCandidate(params: {
+export function* loadRuntimePluginCandidate(params: {
   candidate: PluginCandidate;
   manifestRecord: PluginManifestRecord;
   context: PluginLoadCacheContext;
@@ -114,7 +118,7 @@ export function loadRuntimePluginCandidate(params: {
   logger: PluginLogger;
   state: PluginLoadLoopState;
   preparedConfig: PreparedPluginConfig;
-}): void {
+}): Generator<() => Promise<void>, void> {
   const { candidate, manifestRecord, context, state } = params;
   const cliMetadata = params.options.mode === "cli-metadata";
   const { registry } = params.registryBuilder;
@@ -131,7 +135,17 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
   const { pluginId, isDreamingSidecar, activationState, enableState, entry, record } = prepared;
-  const pluginRoot = resolveRealpathOrAbsolute(candidate.rootDir);
+  const finish = () => {
+    registry.plugins.push(record);
+    state.seenIds.set(pluginId, candidate.origin);
+  };
+  const disableMemoryPlugin = (reason: string | undefined) => {
+    record.enabled = false;
+    markPluginActivationDisabled(record, reason);
+    finish();
+  };
+  const recovery = params.options.moduleRecoveries?.get(pluginId);
+  const pluginRoot = recovery ? candidate.rootDir : resolveRealpathOrAbsolute(candidate.rootDir);
   const degradedPluginForId = findActiveDegradedPlugin(pluginId);
   const degradedPlugin =
     degradedPluginForId && degradedPluginMatchesRoot(degradedPluginForId, pluginRoot)
@@ -182,6 +196,7 @@ export function loadRuntimePluginCandidate(params: {
     });
   };
   const missingDependencyHint = resolveExternalPluginRuntimeDependencyRepairHint({
+    origin: candidate.origin,
     pluginId,
     packageName: candidate.packageName,
     packageBuild: candidate.packageManifest?.build,
@@ -198,34 +213,6 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
 
-  const preferBuiltPluginArtifacts = prefersBuiltPluginArtifacts(
-    context.artifactPreference,
-    candidate.origin,
-  );
-  const artifactParams = {
-    pluginId,
-    rootDir: pluginRoot,
-    origin: candidate.origin,
-    preferBuiltPluginArtifacts,
-    sourcePreferred: manifestRecord.sourcePreferred,
-    packageManifest: candidate.packageManifest,
-    registry,
-  };
-  const runtimeCandidateEntry = cliMetadata
-    ? { source: candidate.source, rootDir: pluginRoot }
-    : resolvePluginRuntimeArtifact({
-        ...artifactParams,
-        entryKind: "runtime",
-        source: candidate.source,
-      });
-  const runtimeSetupEntry =
-    !cliMetadata && manifestRecord.setupSource
-      ? resolvePluginRuntimeArtifact({
-          ...artifactParams,
-          entryKind: "setup",
-          source: manifestRecord.setupSource,
-        })
-      : undefined;
   const scopedSetupOnlyChannelPluginRequested =
     context.includeSetupOnlyChannelPlugins &&
     !params.validateOnly &&
@@ -250,12 +237,35 @@ export function loadRuntimePluginCandidate(params: {
   });
   if (!registrationPlan) {
     markPluginActivationDisabled(record, enableState.reason);
-    registry.plugins.push(record);
-    state.seenIds.set(pluginId, candidate.origin);
+    finish();
     return;
   }
   if (!enableState.enabled) {
     markPluginActivationDisabled(record, enableState.reason);
+  }
+
+  const runtimePackage = resolveConfiguredRuntimePluginInstallCandidate(pluginId);
+  const hostVersion = resolveCompatibilityHostVersion(context.env);
+  const minimumCompatibleVersion = runtimePackage?.minimumCompatibleVersion;
+  const packageVersion = manifestRecord.packageVersion;
+  if (
+    enableState.enabled &&
+    candidate.origin !== "bundled" &&
+    runtimePackage?.versionBoundToOpenClaw &&
+    minimumCompatibleVersion &&
+    manifestRecord.packageName === runtimePackage.npmSpec &&
+    packageVersion &&
+    (compareOpenClawReleaseVersions(packageVersion, minimumCompatibleVersion) ?? 0) < 0
+  ) {
+    // A broad pluginApi range cannot prove lazy SDK imports from an older runtime still work.
+    record.activated = false;
+    pushPluginLoadError(
+      `Official runtime plugin ${pluginId} ${packageVersion} is incompatible with OpenClaw ${hostVersion} ` +
+        `(minimum compatible plugin version is ${minimumCompatibleVersion}); it is unavailable until repaired. ` +
+        `Run \`openclaw update repair\` or \`openclaw plugins update ${pluginId}\`, then restart the Gateway. ` +
+        "For a linked plugin, update the linked source or remove its load-path override before retrying.",
+    );
+    return;
   }
 
   if (record.format === "bundle") {
@@ -268,6 +278,13 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
   const memorySlot = context.normalized.slots.memory;
+  const memoryDecisionFor = (kind: PluginRecord["kind"]) =>
+    resolveMemorySlotDecision({
+      id: record.id,
+      kind,
+      slot: memorySlot,
+      selectedId: state.selectedMemoryPluginId,
+    });
   if (
     registrationPlan.runRuntimeCapabilityPolicy &&
     candidate.origin === "bundled" &&
@@ -276,17 +293,9 @@ export function loadRuntimePluginCandidate(params: {
   ) {
     // Skip bundled memory modules already disabled by slot policy. The authorized
     // dreaming sidecar remains loadable alongside the selected memory plugin.
-    const earlyMemoryDecision = resolveMemorySlotDecision({
-      id: record.id,
-      kind: manifestRecord.kind,
-      slot: memorySlot,
-      selectedId: state.selectedMemoryPluginId,
-    });
+    const earlyMemoryDecision = memoryDecisionFor(manifestRecord.kind);
     if (!earlyMemoryDecision.enabled) {
-      record.enabled = false;
-      markPluginActivationDisabled(record, earlyMemoryDecision.reason);
-      registry.plugins.push(record);
-      state.seenIds.set(pluginId, candidate.origin);
+      disableMemoryPlugin(earlyMemoryDecision.reason);
       return;
     }
   }
@@ -295,17 +304,9 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
   if (!context.shouldLoadModules && registrationPlan.runRuntimeCapabilityPolicy) {
-    const memoryDecision = resolveMemorySlotDecision({
-      id: record.id,
-      kind: record.kind,
-      slot: memorySlot,
-      selectedId: state.selectedMemoryPluginId,
-    });
+    const memoryDecision = memoryDecisionFor(record.kind);
     if (!memoryDecision.enabled && !isDreamingSidecar) {
-      record.enabled = false;
-      markPluginActivationDisabled(record, memoryDecision.reason);
-      registry.plugins.push(record);
-      state.seenIds.set(pluginId, candidate.origin);
+      disableMemoryPlugin(memoryDecision.reason);
       return;
     }
     if (memoryDecision.selected && hasKind(record.kind, "memory")) {
@@ -314,7 +315,9 @@ export function loadRuntimePluginCandidate(params: {
       record.memorySlotSelected = true;
     }
   }
+  const beforeConfigValidation = performance.now();
   const validatedConfig = prepareRuntimePluginConfig(params);
+  const configValidationMs = performance.now() - beforeConfigValidation;
   if (!validatedConfig.ok) {
     params.logger.error(
       `[plugins] ${record.id} invalid config: ${validatedConfig.error.join(", ")}`,
@@ -323,12 +326,23 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
   if (!context.shouldLoadModules) {
-    applyManifestSnapshotMetadata(record, manifestRecord);
-    registry.plugins.push(record);
-    state.seenIds.set(pluginId, candidate.origin);
+    finish();
     return;
   }
 
+  const beforeArtifactPreparation = performance.now();
+  const artifactParams = {
+    pluginId,
+    rootDir: pluginRoot,
+    origin: candidate.origin,
+    preferBuiltPluginArtifacts: prefersBuiltPluginArtifacts(
+      context.artifactPreference,
+      candidate.origin,
+    ),
+    sourcePreferred: manifestRecord.sourcePreferred,
+    packageManifest: candidate.packageManifest,
+    registry,
+  };
   const catalogRequest = params.options.capabilityCatalog;
   if (catalogRequest && manifestRecord.capabilityCatalogSource !== undefined) {
     try {
@@ -366,23 +380,29 @@ export function loadRuntimePluginCandidate(params: {
       }
       const catalog = source.capabilityCatalog.value;
       if (Object.hasOwn(catalog, catalogRequest.family)) {
+        // Index the managed collections: native iterators would yield unbound provider objects.
         // Catalog callables belong to their shared inventory, not a per-family runtime instance.
-        for (const provider of catalog.speechProviders ?? []) {
-          params.registryBuilder.registerSpeechProvider(record, provider);
+        const speechProviders = catalog.speechProviders ?? [];
+        for (const index of speechProviders.keys()) {
+          params.registryBuilder.registerSpeechProvider(record, speechProviders[index]!);
         }
-        for (const provider of catalog.realtimeTranscriptionProviders ?? []) {
-          params.registryBuilder.registerRealtimeTranscriptionProvider(record, provider);
+        const transcriptionProviders = catalog.realtimeTranscriptionProviders ?? [];
+        for (const index of transcriptionProviders.keys()) {
+          params.registryBuilder.registerRealtimeTranscriptionProvider(
+            record,
+            transcriptionProviders[index]!,
+          );
         }
-        for (const provider of catalog.realtimeVoiceProviders ?? []) {
-          params.registryBuilder.registerRealtimeVoiceProvider(record, provider);
+        const voiceProviders = catalog.realtimeVoiceProviders ?? [];
+        for (const index of voiceProviders.keys()) {
+          params.registryBuilder.registerRealtimeVoiceProvider(record, voiceProviders[index]!);
         }
         // Descriptor coverage must never satisfy full-runtime containment checks.
         record.imported = false;
         record.capabilityCatalog = capabilityCatalogFamilies.filter((key) =>
           Object.hasOwn(catalog, key),
         );
-        registry.plugins.push(record);
-        state.seenIds.set(pluginId, candidate.origin);
+        finish();
         return;
       }
     } catch (error) {
@@ -395,25 +415,43 @@ export function loadRuntimePluginCandidate(params: {
     // Shipped register()-only plugins and families omitted by a catalog keep runtime discovery.
   }
 
+  const runtimeCandidateEntry =
+    recovery?.runtimeEntry ??
+    (cliMetadata
+      ? { source: candidate.source, rootDir: pluginRoot }
+      : resolvePluginRuntimeArtifact({
+          ...artifactParams,
+          entryKind: "runtime",
+          source: candidate.source,
+        }));
   let selectedEntry =
-    registrationPlan.loadSetupEntry && runtimeSetupEntry
-      ? runtimeSetupEntry
-      : runtimeCandidateEntry;
+    (registrationPlan.loadSetupEntry &&
+      (recovery
+        ? recovery.setupEntry
+        : manifestRecord.setupSource &&
+          resolvePluginRuntimeArtifact({
+            ...artifactParams,
+            entryKind: "setup",
+            source: manifestRecord.setupSource,
+          }))) ||
+    runtimeCandidateEntry;
   if (cliMetadata) {
     const source = resolveCliMetadataEntrySource(candidate.rootDir, candidate.source);
     // Bundled metadata must never initialize a heavy runtime entry just to render CLI help.
     if (!source && candidate.origin === "bundled") {
-      registry.plugins.push(record);
-      state.seenIds.set(pluginId, candidate.origin);
+      finish();
       return;
     }
     selectedEntry = { source: source ?? candidate.source, rootDir: pluginRoot };
   }
-  const loadEntry = resolvePluginRuntimeExecutionArtifact(selectedEntry);
+  const loadEntry = recovery ? selectedEntry : resolvePluginRuntimeExecutionArtifact(selectedEntry);
   // Preserve the artifact that actually ran; metadata does not complete runtime registration.
   const artifactSelection = bindPluginRuntimeArtifactSelection(record, {
     ...artifactParams,
-    runtimeEntry: resolvePluginRuntimeExecutionArtifact(runtimeCandidateEntry),
+    source: candidate.source,
+    runtimeEntry: recovery
+      ? runtimeCandidateEntry
+      : resolvePluginRuntimeExecutionArtifact(runtimeCandidateEntry),
     setupEntry: registrationPlan.loadSetupEntry ? loadEntry : undefined,
   });
   const moduleLoadSource = loadEntry.source;
@@ -423,32 +461,35 @@ export function loadRuntimePluginCandidate(params: {
     rootDir: candidate.rootDir,
     env: context.env,
   });
-  const opened = openRootFileSync({
-    absolutePath: moduleLoadSource,
-    rootPath: moduleRoot,
-    boundaryLabel: "plugin root",
-    rejectHardlinks,
-    skipLexicalRootCheck: true,
-  });
-  if (!opened.ok) {
-    pushPluginLoadError(
-      describeRootFileOpenFailure({
-        failure: opened,
-        subject: "plugin entry path",
-        boundaryLabel: "plugin root",
-        filePath: moduleLoadSource,
-      }),
-    );
-    return;
+  let safeSource = moduleLoadSource;
+  if (!recovery) {
+    const opened = openPluginRootFileSync({
+      filePath: moduleLoadSource,
+      rootPath: moduleRoot,
+      rejectHardlinks,
+    });
+    if (!opened.ok) {
+      pushPluginLoadError(
+        describeRootFileOpenFailure({
+          failure: opened,
+          subject: "plugin entry path",
+          boundaryLabel: "plugin root",
+          filePath: moduleLoadSource,
+        }),
+      );
+      return;
+    }
+    safeSource = opened.path;
+    fs.closeSync(opened.fd);
   }
-  const safeSource = opened.path;
-  fs.closeSync(opened.fd);
 
   let moduleLoadMs = 0;
+  let modulePreparationMs = 0;
   let beforeRegister: number | undefined;
   let failurePhase: "load" | "register" = "load";
   let failed = false;
   const beforeModuleLoad = performance.now();
+  const artifactPreparationMs = beforeModuleLoad - beforeArtifactPreparation;
   try {
     // Top-level code may execute before module evaluation throws, so record the
     // import attempt before invoking the loader.
@@ -457,13 +498,39 @@ export function loadRuntimePluginCandidate(params: {
     }
     state.pluginLoadAttemptCount++;
     params.logger.debug?.(`[plugins] loading ${record.id} from ${safeSource}`);
-    const loadPluginModule = (source: string) =>
-      params.loadPluginModule(source, {
+    if (!recovery && candidate.origin !== "bundled") {
+      // Host callers await acquisition after selection and policy checks. Synchronous
+      // CLI consumers skip this step and use the same loader's inline acquisition.
+      yield async () => {
+        const started = performance.now();
+        try {
+          await params.loadPluginModule.prepare(safeSource, {
+            record,
+            rootDir: moduleRoot,
+            registry,
+            standalone: manifestRecord.manifestPath === candidate.source,
+          });
+        } finally {
+          modulePreparationMs = performance.now() - started;
+        }
+      };
+    }
+    const loadPluginModule = (source: string) => {
+      if (recovery) {
+        let instance = getPluginInstance(record);
+        if (!instance) {
+          instance = new PluginInstance(record.id, { record, registry });
+          recovery.module.bind(instance);
+        }
+        return instance.loadModule(source);
+      }
+      return params.loadPluginModule(source, {
         record,
         rootDir: moduleRoot,
         registry,
         standalone: manifestRecord.manifestPath === candidate.source,
       });
+    };
     const mod = withProfile(
       { pluginId: record.id, source: safeSource },
       registrationPlan.mode,
@@ -517,18 +584,10 @@ export function loadRuntimePluginCandidate(params: {
       state.memorySlotMatched = true;
     }
     if (registrationPlan.runRuntimeCapabilityPolicy && !isDreamingSidecar) {
-      const memoryDecision = resolveMemorySlotDecision({
-        id: record.id,
-        kind: record.kind,
-        slot: memorySlot,
-        selectedId: state.selectedMemoryPluginId,
-      });
+      const memoryDecision = memoryDecisionFor(record.kind);
       if (!memoryDecision.enabled) {
         params.registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
-        record.enabled = false;
-        markPluginActivationDisabled(record, memoryDecision.reason);
-        registry.plugins.push(record);
-        state.seenIds.set(pluginId, candidate.origin);
+        disableMemoryPlugin(memoryDecision.reason);
         return;
       }
       if (memoryDecision.selected && hasKind(record.kind, "memory")) {
@@ -537,15 +596,14 @@ export function loadRuntimePluginCandidate(params: {
       }
     }
     if (params.validateOnly) {
-      registry.plugins.push(record);
-      state.seenIds.set(pluginId, candidate.origin);
+      finish();
       return;
     }
     if (typeof register !== "function") {
       const wrongLoaderError = formatBundledChannelWrongLoaderError(record.kind);
       if (wrongLoaderError) {
         params.logger.error(
-          `[plugins] ${record.id} ${wrongLoaderError}; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+          `[plugins] ${record.id} ${wrongLoaderError}; check that plugin is loaded via bundled channel discovery, not legacy plugin loader`,
         );
         pushPluginLoadError(wrongLoaderError);
       } else {
@@ -596,14 +654,23 @@ export function loadRuntimePluginCandidate(params: {
       // Publish completion only after the capability-enabled register pass succeeds.
       artifactSelection.runtimeRegistrationComplete = true;
     }
-    registry.plugins.push(record);
-    state.seenIds.set(pluginId, candidate.origin);
+    finish();
     if (clearMismatchedQuarantineAfterLoad) {
       // Plugin ids can intentionally shadow an installed source via load.paths.
       // Clear stale install state only after the selected override registers.
       clearActiveDegradedPlugin(pluginId);
     }
   } catch (error) {
+    let failure = error;
+    try {
+      params.options.prepareRegistrationFailureCleanup?.(registry, record);
+    } catch (cleanupError) {
+      failure = new AggregateError(
+        [error, cleanupError],
+        `${formatErrorMessage(error)}; registration cleanup preparation failed: ${formatErrorMessage(cleanupError)}`,
+        { cause: error },
+      );
+    }
     params.registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
     recordPluginError({
       logger: params.logger,
@@ -611,7 +678,7 @@ export function loadRuntimePluginCandidate(params: {
       record,
       seenIds: state.seenIds,
       phase: failurePhase,
-      error,
+      error: failure,
       logPrefix: `[plugins] ${record.id} failed during ${failurePhase} from ${record.source}: `,
       diagnosticMessagePrefix: `plugin failed during ${failurePhase}: `,
       missingDependencyHint,
@@ -625,7 +692,10 @@ export function loadRuntimePluginCandidate(params: {
     const registerMs =
       beforeRegister === undefined ? undefined : performance.now() - beforeRegister;
     detailPluginStartupTrace(params.options.startupTrace, record.id, [
+      ["configValidationMs", configValidationMs],
+      ["artifactPreparationMs", artifactPreparationMs],
       ["loadMs", moduleLoadMs || elapsed],
+      ["modulePreparationMs", modulePreparationMs],
       ["loadFailedCount", failed && failurePhase === "load" ? 1 : 0],
       ...(registerMs === undefined
         ? []

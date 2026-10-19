@@ -42,7 +42,7 @@ Backend plugin APIs and ordinary plugin loading do not require that setting.
 ## What each page covers
 
 - [Imports and module layout](/plugins/sdk-overview/imports) — which subpath to import from, the subpath catalog, and the internal barrel convention.
-- [Capability registration](/plugins/sdk-overview/capabilities) — provider registrars plus the worker-provider and embedding runtime contracts.
+- [Capability registration](/plugins/sdk-overview/capabilities) — provider registrars plus storage, worker, and embedding runtime contracts.
 - [Tools and commands](/plugins/sdk-overview/tools-and-commands) — agent tools, custom commands, node-host commands, and widget presenters.
 - [Infrastructure registration](/plugins/sdk-overview/infrastructure) — hooks, HTTP routes, Gateway methods, services, and the webhook and SQLite helpers.
 - [Host hooks](/plugins/sdk-overview/host-hooks) — session extensions, trusted tool policies, Control UI descriptors, and runtime lifecycle.
@@ -128,6 +128,10 @@ resolve here.
 - <a id="events-and-lifecycle" />[Events and lifecycle](/plugins/sdk-overview/events-and-hooks#events-and-lifecycle)
 - <a id="hook-decision-semantics" />[Hook decision semantics](/plugins/sdk-overview/events-and-hooks#hook-decision-semantics)
 - <a id="internal-module-convention" />[Internal module convention](/plugins/sdk-overview/imports#internal-module-convention)
+
+## Docked link readers
+
+See [docked link readers](/plugins/sdk-overview/host-hooks#docked-link-readers) for passive documents beside chat.
 
 ## Related
 

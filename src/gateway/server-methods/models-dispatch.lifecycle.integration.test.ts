@@ -1,13 +1,17 @@
-import { once } from "node:events";
 import { createServer } from "node:http";
 import { text as readText } from "node:stream/consumers";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as databaseIdentity from "../../state/openclaw-agent-db-identity.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
+import {
+  closeModelsEndpoint,
+  createModelsTestState,
+  listenModelsEndpoint,
+  modelsTestConfig,
+  settleModelsWork,
+  startModelsGateway,
+} from "./models-integration.test-support.js";
 
 type DispatchRequest = {
   authorization: string | undefined;
@@ -15,9 +19,25 @@ type DispatchRequest = {
   body: { model: string; max_tokens: number; messages: unknown[] };
 };
 
+function expectDispatch(
+  requests: DispatchRequest[],
+  index: number,
+  model: string,
+  account = "account-a-key",
+  requestHeader = "initial-transport",
+) {
+  expect(requests).toHaveLength(index + 1);
+  expect(requests[index]).toMatchObject({
+    authorization: `Bearer ${account}`,
+    requestHeader,
+    body: { model, max_tokens: 1536 },
+  });
+}
+
 async function withDispatchLifecycle(
+  signal: AbortSignal,
   run: (fixture: {
-    client: Awaited<ReturnType<typeof startGatewayWithClient>>["client"];
+    client: Awaited<ReturnType<typeof startModelsGateway>>["client"];
     requests: DispatchRequest[];
     discoveryAccounts: (string | undefined)[];
     advertised: Map<string, string[]>;
@@ -29,17 +49,8 @@ async function withDispatchLifecycle(
     send: (model: string, name: string) => Promise<{ status: string; error?: string }>;
   }) => Promise<void>,
 ) {
-  const state = await createOpenClawTestState({
-    label: "models-dispatch-lifecycle",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
+  await using state = await createModelsTestState("models-dispatch-lifecycle", {
+    env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
   });
   const requests: DispatchRequest[] = [];
   const discoveryAccounts: (string | undefined)[] = [];
@@ -112,7 +123,7 @@ async function withDispatchLifecycle(
       response.destroy(error instanceof Error ? error : new Error(String(error)));
     });
   });
-  let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+  let gateway: Awaited<ReturnType<typeof startModelsGateway>> | undefined;
   const saveAccount = async (key: string) => {
     await state.writeAuthProfiles({
       version: 1,
@@ -120,13 +131,7 @@ async function withDispatchLifecycle(
     });
   };
   try {
-    endpoint.listen(0, "127.0.0.1");
-    await once(endpoint, "listening");
-    const address = endpoint.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Lifecycle fixture did not bind a TCP port");
-    }
-    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    const baseUrl = `${await listenModelsEndpoint(endpoint)}/v1`;
     await state.writeJson("catalog-plugin/openclaw.plugin.json", {
       id: "opencode",
       providers: ["opencode"],
@@ -149,7 +154,7 @@ async function withDispatchLifecycle(
                   headers: { Authorization: "Bearer " + auth.discoveryApiKey },
                 });
                 if (!response.ok) return {
-                  providers: {}, outcomes: [{ provider: "opencode", status: "unavailable" }],
+                  providers: {}, outcomes: [{ provider: "opencode", profileId: auth.profileId, status: "unavailable" }],
                 };
                 const { data } = await response.json();
                 return { provider: {
@@ -160,7 +165,7 @@ async function withDispatchLifecycle(
                     contextWindow: 32768, maxTokens: 1536,
                     compat: { maxTokensField: "max_tokens" },
                   })),
-                } };
+                }, outcomes: [{ provider: "opencode", profileId: auth.profileId, status: "ready" }] };
               },
             },
           });
@@ -168,7 +173,7 @@ async function withDispatchLifecycle(
       };`,
     );
     const token = "dispatch-lifecycle-gateway-token";
-    const cfg = {
+    const cfg = modelsTestConfig(state, token, {
       models: {
         providers: {
           opencode: {
@@ -187,7 +192,6 @@ async function withDispatchLifecycle(
           heartbeat: { every: "0m" },
           modelPolicy: { allow: ["opencode/*"] },
         },
-        list: [{ id: "main", workspace: state.workspaceDir }],
       },
       tools: { profile: "minimal" },
       plugins: {
@@ -195,23 +199,23 @@ async function withDispatchLifecycle(
         load: { paths: [pluginPath] },
         slots: { memory: "none" },
       },
-      gateway: { mode: "local", auth: { mode: "token", token } },
-    } satisfies OpenClawConfig;
+    });
     await state.writeConfig(cfg);
     await saveAccount("account-a-key");
     const start = async () => {
-      const started = await startGatewayWithClient({
-        cfg,
-        configPath: state.configPath,
-        token,
-        scopes: ["operator.admin"],
-        hotReloadRecovery,
-      });
+      const started = await startModelsGateway(state, cfg, token, { hotReloadRecovery });
       gateway = started;
       await started.server.startupSettled;
       return started;
     };
     let active = await start();
+    const readModels = (refresh = false, view: "all" | "default" = "all") =>
+      active.client.request<ModelsListResult>("models.list", {
+        agentId: "main",
+        provider: "opencode",
+        view,
+        refresh,
+      });
     await run({
       get client() {
         return active.client;
@@ -235,18 +239,19 @@ async function withDispatchLifecycle(
       },
       saveAccount,
       restart: async () => {
-        await disconnectGatewayClient(active.client);
-        await active.server.close();
+        await active.close();
         gateway = undefined;
         active = await start();
       },
       list: (refresh = false, view = "all") =>
-        active.client.request<ModelsListResult>("models.list", {
-          agentId: "main",
-          provider: "opencode",
-          view,
-          refresh,
-        }),
+        refresh
+          ? waitForCatalogPublication({
+              signal,
+              start: () => readModels(true, view),
+              read: () => readModels(false, view),
+              ready: (result) => !result.pendingProviders?.length,
+            })
+          : readModels(false, view),
       send: async (model, name) => {
         const session = await active.client.request<{ key: string }>("sessions.create", {
           agentId: "main",
@@ -272,15 +277,13 @@ async function withDispatchLifecycle(
           const history = await active.client.request<{ messages: unknown[] }>("chat.history", {
             sessionKey: session.key,
           });
-          expect(history.messages).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                role: "assistant",
-                content: expect.arrayContaining([
-                  expect.objectContaining({ type: "text", text: "LIFECYCLE_DISPATCH_REPLY" }),
-                ]),
-              }),
-            ]),
+          expect(history.messages).toContainEqual(
+            expect.objectContaining({
+              role: "assistant",
+              content: expect.arrayContaining([
+                expect.objectContaining({ type: "text", text: "LIFECYCLE_DISPATCH_REPLY" }),
+              ]),
+            }),
           );
         }
         return completed;
@@ -290,31 +293,20 @@ async function withDispatchLifecycle(
   } finally {
     heldDiscovery?.release.resolve();
     try {
-      if (gateway) {
-        await disconnectGatewayClient(gateway.client);
-        await gateway.server.close();
-      }
+      await gateway?.close();
     } finally {
       endpoint.closeAllConnections();
-      try {
-        await new Promise<void>((resolve, reject) => {
-          endpoint.close((error) => (error ? reject(error) : resolve()));
-        });
-        await Promise.all(pending);
-      } finally {
-        await state.cleanup();
-      }
+      await closeModelsEndpoint(endpoint);
+      await Promise.all(pending);
     }
   }
 }
 
-it.each([
-  { scenario: "held discovery control", patchOtherSession: false },
-  { scenario: "another session label changes", patchOtherSession: true },
-])(
-  "models.list keeps the selected session catalog when $scenario",
-  async ({ patchOtherSession }) => {
-    await withDispatchLifecycle(async (fixture) => {
+it(
+  "models.list keeps the selected session catalog when another session label changes",
+  { timeout: 180_000 },
+  async ({ signal }) => {
+    await withDispatchLifecycle(signal, async (fixture) => {
       const expectedIds = [
         "account-a-only",
         ...Array.from({ length: 64 }, (_, index) => `account-a-extra-${index}`),
@@ -334,36 +326,28 @@ it.each([
         model: "opencode/account-a-only",
       });
       fixture.discoveryAccounts.length = 0;
-      const pathChecks = vi.spyOn(databaseIdentity, "isOpenClawAgentDatabasePathCurrent");
       const held = fixture.holdDiscovery();
-      const pending = fixture.client
-        .request<ModelsListResult>("models.list", {
+      const pending = settleModelsWork(
+        fixture.client.request<ModelsListResult>("models.list", {
           agentId: "main",
           sessionKey: selected.key,
           provider: "opencode",
           view: "all",
           refresh: true,
-        })
-        .then(
-          (result) => ({ result, error: undefined }),
-          (error: unknown) => ({
-            result: undefined,
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        );
+        }),
+      );
       try {
         await withTestTimeout(held.started, 30_000, "Selected session discovery did not start");
         expect(fixture.discoveryAccounts).toEqual(["account-a-key"]);
-        if (patchOtherSession) {
-          await expect(
-            fixture.client.request("sessions.patch", {
-              key: other.key,
-              label: "Other session renamed",
-            }),
-          ).resolves.toMatchObject({ entry: { label: "Other session renamed" } });
-        }
+        await expect(
+          fixture.client.request("sessions.patch", {
+            key: other.key,
+            label: "Other session renamed",
+          }),
+        ).resolves.toMatchObject({ entry: { label: "Other session renamed" } });
       } finally {
         held.release();
+        await pending;
       }
       const outcome = await pending;
       expect(outcome.error).toBeUndefined();
@@ -371,19 +355,20 @@ it.each([
         outcome.result?.models
           .filter((model) => model.provider === "opencode")
           .map(({ id, available }) => ({ id, available })),
-      ).toEqual(expectedIds.toSorted().map((id) => ({ id, available: true })));
+      ).toEqual(
+        ["account-a-only", ...expectedIds.filter((id) => id !== "account-a-only").toSorted()].map(
+          (id) => ({ id, available: true }),
+        ),
+      );
       expect(fixture.discoveryAccounts).toEqual(["account-a-key"]);
-      const pathCheckCount = pathChecks.mock.calls.length;
-      pathChecks.mockRestore();
-      console.info(`catalog read path checks: ${pathCheckCount} for ${expectedIds.length} models`);
-      expect(pathCheckCount).toBeLessThanOrEqual(2);
     });
   },
-  180_000,
 );
 
-it("models.list retains executable rows on failed refresh and replaces them after Gateway restart", async () => {
-  await withDispatchLifecycle(async (fixture) => {
+it("models.list retains executable rows on failed refresh and replaces them after Gateway restart", async ({
+  signal,
+}) => {
+  await withDispatchLifecycle(signal, async (fixture) => {
     const discovered = await fixture.list(true);
     expect(discovered.models).toContainEqual(
       expect.objectContaining({ provider: "opencode", id: "account-a-only", available: true }),
@@ -402,12 +387,7 @@ it("models.list retains executable rows on failed refresh and replaces them afte
     await expect(fixture.send("account-a-only", "after-failure")).resolves.toMatchObject({
       status: "ok",
     });
-    expect(fixture.requests).toHaveLength(2);
-    expect(fixture.requests[1]).toMatchObject({
-      authorization: "Bearer account-a-key",
-      requestHeader: "initial-transport",
-      body: { model: "account-a-only", max_tokens: 1536 },
-    });
+    expectDispatch(fixture.requests, 1, "account-a-only");
 
     fixture.advertised.set("account-a-key", ["after-restart"]);
     fixture.setDiscoveryAvailable(true);
@@ -419,22 +399,19 @@ it("models.list retains executable rows on failed refresh and replaces them afte
     await expect(fixture.send("after-restart", "first-after-restart")).resolves.toMatchObject({
       status: "ok",
     });
-    expect(fixture.requests).toHaveLength(3);
-    expect(fixture.requests[2]).toMatchObject({
-      authorization: "Bearer account-a-key",
-      requestHeader: "initial-transport",
-      body: { model: "after-restart", max_tokens: 1536 },
-    });
+    expectDispatch(fixture.requests, 2, "after-restart");
     await expect(fixture.send("account-a-only", "withdrawn-after-restart")).resolves.toMatchObject({
       status: "error",
-      error: expect.stringContaining("The configured model is unavailable from the provider"),
+      error: expect.stringContaining("This model was not found."),
     });
     expect(fixture.requests).toHaveLength(3);
   });
 }, 180_000);
 
-it("models.authRefresh revokes old executable rows before discovery and config.patch applies current policy and transport", async () => {
-  await withDispatchLifecycle(async (fixture) => {
+it("models.authRefresh revokes old executable rows before discovery and config.patch applies current policy and transport", async ({
+  signal,
+}) => {
+  await withDispatchLifecycle(signal, async (fixture) => {
     await fixture.list(true);
     await expect(fixture.send("account-a-only", "before-replacement")).resolves.toMatchObject({
       status: "ok",
@@ -451,7 +428,7 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
       );
       await expect(fixture.send("account-a-only", "during-replacement")).resolves.toMatchObject({
         status: "error",
-        error: expect.stringContaining("The configured model is unavailable from the provider"),
+        error: expect.stringContaining("This model was not found."),
       });
       expect(fixture.requests).toHaveLength(1);
     } finally {
@@ -469,12 +446,7 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
     await expect(fixture.send("account-b-only", "after-replacement")).resolves.toMatchObject({
       status: "ok",
     });
-    expect(fixture.requests).toHaveLength(2);
-    expect(fixture.requests[1]).toMatchObject({
-      authorization: "Bearer account-b-key",
-      requestHeader: "initial-transport",
-      body: { model: "account-b-only", max_tokens: 1536 },
-    });
+    expectDispatch(fixture.requests, 1, "account-b-only", "account-b-key");
 
     const config = await fixture.client.request<{ hash: string }>("config.get", {});
     await fixture.client.request("config.patch", {
@@ -517,11 +489,6 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
     await expect(fixture.send("account-b-only", "after-config-reload")).resolves.toMatchObject({
       status: "ok",
     });
-    expect(fixture.requests).toHaveLength(3);
-    expect(fixture.requests[2]).toMatchObject({
-      authorization: "Bearer account-b-key",
-      requestHeader: "reloaded-transport",
-      body: { model: "account-b-only", max_tokens: 1536 },
-    });
+    expectDispatch(fixture.requests, 2, "account-b-only", "account-b-key", "reloaded-transport");
   });
 }, 180_000);

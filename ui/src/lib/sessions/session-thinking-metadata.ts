@@ -43,16 +43,13 @@ export function preserveOmittedThinkingMetadata<T extends ThinkingMetadataCarrie
   ) {
     return incoming;
   }
-  return {
-    ...incoming,
-    ...(existing.thinkingLevels !== undefined ? { thinkingLevels: existing.thinkingLevels } : {}),
-    ...(existing.thinkingOptions !== undefined
-      ? { thinkingOptions: existing.thinkingOptions }
-      : {}),
-    ...(incoming.thinkingDefault === undefined && existing.thinkingDefault !== undefined
-      ? { thinkingDefault: existing.thinkingDefault }
-      : {}),
-  };
+  const next = { ...incoming };
+  for (const field of thinkingMetadataFields) {
+    if (incoming[field] === undefined && existing[field] !== undefined) {
+      Object.assign(next, { [field]: existing[field] });
+    }
+  }
+  return next;
 }
 
 export function stripThinkingMetadata<T extends ThinkingMetadataCarrier>(value: T): T {

@@ -1,0 +1,78 @@
+import type { Result } from "@openclaw/normalization-core/result";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
+import { deleteSessionEntryLifecycle, type SessionEntry } from "../config/sessions.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withTimeout } from "../infra/fs-safe.js";
+import { getInProcessGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
+import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../sessions/session-controller.lifecycle.js";
+import { unavailableSessionRequest } from "./session-request-error.js";
+
+/** The caller retains the reset lifecycle fence through deletion and its notifications. */
+type IncognitoResetParams = {
+  key: string;
+  agentId: string;
+  storePath: string;
+  target: { canonicalKey: string; storeKeys: string[] };
+  entry: SessionEntry;
+  commitGuard: () => void;
+  beforeDelete: () => Promise<void>;
+};
+
+export async function deleteIncognitoSessionForReset(
+  params: IncognitoResetParams,
+): Promise<Result<{ deletedSessionId?: string }, ErrorShape>> {
+  const assertCurrent = params.commitGuard;
+  const deleted = await withSessionActorStorage(
+    { ...params, sessionKey: params.target.canonicalKey },
+    {
+      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      authority: { assertCurrent, authorize() {} },
+    },
+    () => deleteIncognitoSessionForResetInScope(params),
+  );
+  return deleted ?? unavailableSessionRequest(`Session ${params.key} changed before reset. Retry.`);
+}
+
+async function deleteIncognitoSessionForResetInScope(
+  params: IncognitoResetParams,
+): Promise<Result<{ deletedSessionId?: string }, ErrorShape>> {
+  const terminalDrain =
+    getInProcessGatewayRequestContext()?.terminalSessions?.beginAgentSessionDrain({
+      kind: "agent",
+      agentSessionKey: params.target.canonicalKey,
+      agentSessionId: params.entry.sessionId,
+      agentId: params.agentId,
+    });
+  try {
+    if (terminalDrain) {
+      try {
+        await withTimeout(
+          terminalDrain.drained,
+          SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+          "agent terminal lifecycle drain",
+        );
+      } catch {
+        return unavailableSessionRequest(
+          `Session ${params.key} terminals are still active; try again in a moment.`,
+        );
+      }
+    }
+    await params.beforeDelete();
+    const deleted = await deleteSessionEntryLifecycle({
+      commitGuard: params.commitGuard,
+      agentId: params.agentId,
+      archiveTranscript: false,
+      deleteDeliveryArtifacts: true,
+      deleteTranscriptWithoutArchive: true,
+      expectedSessionId: params.entry.sessionId,
+      storePath: params.storePath,
+      target: params.target,
+    });
+    if (!deleted.deleted) {
+      return unavailableSessionRequest(`Session ${params.key} changed before reset. Retry.`);
+    }
+    return { ok: true, value: { deletedSessionId: deleted.deletedSessionId } };
+  } finally {
+    terminalDrain?.release();
+  }
+}

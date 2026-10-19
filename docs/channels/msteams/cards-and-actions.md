@@ -25,7 +25,7 @@ Private/shared-channel and non-current chat member lookups require additional ro
 and are rejected by the default permission baseline.
 
 For `member-info` and `search` in the message tool, use `channelId` to select the
-conversation. A Teams channel uses the Graph `<team-id>/<channel-id>` form:
+conversation. The Graph `<team-id>/<channel-id>` form identifies a Teams channel:
 
 ```json5
 {
@@ -38,8 +38,10 @@ conversation. A Teams channel uses the Graph `<team-id>/<channel-id>` form:
 
 `search` uses the same `channelId` filter with a `query` instead of `userId`.
 Omitting the filter uses the current conversation when its Graph route is
-available. The selected conversation must still satisfy the configured access
-policy and the action's membership requirements.
+available. For the current channel, its bare `19:...@thread.tacv2` ID and
+`conversation:19:...@thread.tacv2` form reuse that same Graph route. Use the full
+Graph form to select another channel. The selected conversation must still
+satisfy the configured access policy and the action's membership requirements.
 
 ## Native approval cards
 
@@ -61,7 +63,7 @@ Enable the existing top-level approval forwarding settings for each approval typ
 }
 ```
 
-`approvals.exec` and `approvals.plugin` are independent; enabling one does not enable the other. Native card delivery also requires a configured Teams bot and at least one approver resolved from `channels.msteams.allowFrom` or `channels.msteams.defaultTo`. Approvers must be stable AAD object IDs; display names, email addresses, group entries, and conversation IDs do not grant approval access. OpenClaw checks the clicking user's AAD object ID before resolving the request.
+`approvals.exec` and `approvals.plugin` are independent; enabling one does not enable the other. Native card delivery also requires a configured Teams bot and at least one approver resolved from the originating account's effective `allowFrom` or `defaultTo`. Approvers must be stable AAD object IDs; display names, email addresses, group entries, and conversation IDs do not grant approval access. OpenClaw checks both the originating account and the clicking user's AAD object ID before resolving the request, so a sibling bot cannot settle that account's approval.
 
 No Teams-specific approval configuration is required. The existing `/approve <id> <decision>` command remains available as a text fallback when native delivery is unavailable. For forwarding modes and supported decisions, see [Approval forwarding to chat channels](/tools/exec-approvals-advanced#approval-forwarding-to-chat-channels).
 
@@ -71,9 +73,12 @@ OpenClaw sends Teams polls as Adaptive Cards (there is no native Teams poll API)
 
 - CLI: `openclaw message poll --channel msteams --target conversation:<id> --poll-question "..." --poll-option "..." --poll-option "..."`.
 - Votes are recorded by the gateway in OpenClaw plugin-state SQLite under `state/openclaw.sqlite`.
-- Existing `msteams-polls.json` files are imported by `openclaw doctor --fix`, not by the running plugin.
+- For existing `msteams-polls.json` files, run `openclaw doctor --fix` on 2026.9.5 before upgrading to latest. See [Upgrading very old versions](/install/updating#upgrading-very-old-versions).
 - The gateway must stay online to record votes.
 - Polls do not auto-post result summaries, and there is no poll-results CLI.
+
+Revoking a scheduled job's message permission stops a poll that has not yet been submitted.
+A poll already submitted to Teams retains its accepted ID and normal vote tracking while the run finishes.
 
 ## Presentation cards
 

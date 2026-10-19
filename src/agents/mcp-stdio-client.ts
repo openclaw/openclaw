@@ -1,13 +1,13 @@
-import { Protocol, type RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
-  McpError,
-  ResultSchema,
+  Protocol,
+  ProtocolError,
+  type BaseContext,
+  type RequestOptions,
+  type Transport,
   type JSONRPCMessage,
-  type Notification,
-  type Request,
-  type Result,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/client";
+import { ResultSchema } from "@modelcontextprotocol/core";
+import type { ProcessCleanupResult } from "../process/supervisor/types.js";
 import { connectMcpClient, disposeMcpClient } from "./mcp-client-lifecycle.js";
 import { isMcpRequestTimeoutError } from "./mcp-error.js";
 import { McpStdioFrameDecoder, McpStdioFrameError } from "./mcp-stdio-frame-decoder.js";
@@ -36,6 +36,7 @@ export type McpStdioClientParams = {
 
 export type McpStdioClient = {
   isAvailable(): boolean;
+  readonly cleanupResult?: ProcessCleanupResult;
   request(
     method: string,
     params: Record<string, unknown>,
@@ -58,7 +59,10 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
   let inFlight = 0;
   let stderr = Buffer.alloc(0);
 
-  class StdioProtocol extends Protocol<Request, Notification, Result> {
+  class StdioProtocol extends Protocol<BaseContext> {
+    protected buildContext(ctx: BaseContext): BaseContext {
+      return ctx;
+    }
     override async connect(transport: Transport, options?: RequestOptions): Promise<void> {
       const signal = options?.signal;
       const onAbort = () =>
@@ -94,12 +98,6 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
       if (method !== "ping") {
         throw new Error(`MCP stdio request handler is not supported: ${method}`);
       }
-    }
-    protected assertTaskCapability(): never {
-      throw new Error("MCP task helpers are not exposed by this client");
-    }
-    protected assertTaskHandlerCapability(): never {
-      throw new Error("MCP task helpers are not exposed by this client");
     }
   }
 
@@ -143,7 +141,8 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
     stderr: "pipe",
     decoder: new McpStdioFrameDecoder(params.maxFrameBytes),
   });
-  const protocol = new StdioProtocol();
+  // This strict proxy speaks legacy MCP; the low-level Protocol defaults to that era.
+  const protocol = new StdioProtocol({ supportedProtocolVersions: [params.protocolVersion] });
   const onStderr = (chunk: Buffer) => {
     stderr = Buffer.concat([stderr, chunk]).subarray(-MAX_STDERR_BYTES);
   };
@@ -180,7 +179,6 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
       return;
     }
     failure = error;
-    available = false;
     // Retirement flushes SDK requests immediately while disposal retains process ownership.
     void transport.terminate().catch(() => undefined);
     beginShutdown();
@@ -215,8 +213,9 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
       if (isMcpRequestTimeoutError(error)) {
         fail(errors.unavailable(`${method} timed out after ${timeoutMs}ms`));
       }
-      if (!failure && error instanceof McpError) {
-        throw errors.protocol(`request failed: ${error.message}`, error);
+      if (!failure && error instanceof ProtocolError) {
+        // V2 leaves the numeric code out of message; strict-proxy callers retain that diagnostic.
+        throw errors.protocol(`request failed: MCP error ${error.code}: ${error.message}`, error);
       }
       throw failure ?? error;
     } finally {
@@ -227,13 +226,15 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
 
   return {
     isAvailable: () => available && !failure && !stopped,
+    get cleanupResult() {
+      return transport.cleanupResult;
+    },
     async request(method, requestParams, options) {
       await startup;
       return request(method, requestParams, options);
     },
     async stop() {
       stopped = true;
-      available = false;
       failure ??= errors.unavailable("proxy is stopping");
       void transport.retire().catch(() => undefined);
       beginShutdown();

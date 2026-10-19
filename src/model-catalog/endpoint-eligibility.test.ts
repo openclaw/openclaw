@@ -122,15 +122,19 @@ describe("provider endpoint catalog eligibility", () => {
       }).rows.map((row) => row.id),
     ).toEqual(["adapter-model"]);
   });
-  it.each(["https://NATIVE.example/v1/", "native.example/v1?ignored=1#fragment"])(
-    "normalizes endpoint-only declarations %s",
-    (baseUrl) => {
+  it.each([
+    { endpointClass: "openai-public", baseUrl: "https://NATIVE.example/v1/" },
+    { endpointClass: "openai-public", baseUrl: "native.example/v1?ignored=1#fragment" },
+    { endpointClass: "future-endpoint", baseUrl: "https://NATIVE.example/v1/?ignored=1#fragment" },
+  ])(
+    "normalizes endpoint-only declarations for $endpointClass at $baseUrl",
+    ({ endpointClass, baseUrl }) => {
       expect(
         isProviderCatalogSourceAllowed({
           provider: "fixture",
           config: providerConfig("https://native.example/v1"),
           plugin: {
-            providerEndpoints: [{ endpointClass: "openai-public", baseUrls: [baseUrl] }],
+            providerEndpoints: [{ endpointClass, baseUrls: [baseUrl] }],
           },
         }),
       ).toBe(true);

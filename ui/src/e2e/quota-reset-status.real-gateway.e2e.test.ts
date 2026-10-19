@@ -8,9 +8,11 @@ import { describe, expect, inject, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { AuthHealthSummary } from "../../../src/agents/auth-health.js";
 import type { ProfileUsageStats } from "../../../src/agents/auth-profiles/types.js";
+import { waitForControlUiDocument } from "../../../src/commands/control-ui-handoff.js";
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../../src/state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../../src/state/openclaw-state-db.paths.js";
+import { quotaRequestMode } from "../../../test/e2e/qa-lab/runtime/quota-reset-diagnostics.mjs";
 import {
   ACCOUNT_ID,
   MARKER,
@@ -97,18 +99,39 @@ async function captureFinalStatus(
   observations.push({ action: "models-status", ...cli });
   expect(cli.code, cli.stderr).toBe(0);
   const status: ModelsStatus = JSON.parse(cli.stdout);
+  observations.push({
+    action: "models-profile-status",
+    profile: status.auth.oauth.profiles.find((entry) => entry.profileId === fixture.profileId),
+  });
   expect
     .soft(status.auth.unusableProfiles)
     .not.toContainEqual(expect.objectContaining({ profileId: fixture.profileId }));
+  // Refreshed fixture credentials stay valid for two days, outside the CLI
+  // 24-hour expiry warning; original-credential expiry scenarios remain separate.
   expect
     .soft(status.auth.oauth.profiles)
     .toContainEqual(
       expect.objectContaining({ profileId: fixture.profileId, type: "oauth", status: "ok" }),
     );
+  expect
+    .soft(
+      status.auth.oauth.profiles.find((profile) => profile.profileId === fixture.profileId)
+        ?.remainingMs,
+    )
+    .toBeGreaterThan(0);
 
+  // Gateway readiness does not join its background UI build; dashboard --json intentionally
+  // fails immediately while assets are preparing. Wait only at the browser-proof boundary.
+  const document = await waitForControlUiDocument({
+    url: `http://127.0.0.1:${fixture.gateway.port}/`,
+    timeoutMs: 60_000,
+  });
+  expect(document.ready, JSON.stringify(document)).toBe(true);
   const dashboard = await fixture.gateway.cli(["dashboard", "--json"]);
-  expect(dashboard.code, dashboard.stderr).toBe(0);
-  const { browserUrl }: { browserUrl: string } = JSON.parse(dashboard.stdout);
+  const { browserUrl, reason }: { browserUrl: string; reason?: string } = JSON.parse(
+    dashboard.stdout,
+  );
+  expect(dashboard.code, reason ?? dashboard.stderr).toBe(0);
   const url = new URL("settings/model-providers", browserUrl);
   url.hash = new URL(browserUrl).hash;
   const browser = await chromium.launch({
@@ -150,7 +173,7 @@ async function captureFinalStatus(
     );
     await page.addInitScript(() => {
       localStorage.setItem(
-        "openclaw:control-ui:community-invite",
+        "openclaw:control-ui:community-invite:v2",
         JSON.stringify({ dismissedAtMs: 1770000000000 }),
       );
     });
@@ -195,11 +218,19 @@ async function captureFinalStatus(
         );
         return isRecord(observation) ? observation.frame : undefined;
       };
+      const snapshot = observations.findLast(
+        (entry) =>
+          isRecord(entry) &&
+          entry.action === "browser-event" &&
+          isRecord(entry.frame) &&
+          entry.frame.event === "models.snapshot",
+      );
       await captureControlUiE2eFailureDiagnostics(page, {
         error: error instanceof Error ? error : new Error("Quota final-status failure"),
         label: "quota-final-status",
         modelResponses: {
           list: latestResponse("models.list"),
+          snapshot: isRecord(snapshot) ? snapshot.frame : undefined,
           authStatus: latestResponse("models.authStatus"),
         },
       });
@@ -303,13 +334,42 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
 
           // Observe the next turn before CLI or browser reads can affect runtime preparation.
           const beforeRecovery = provider.requests.length;
+          let beforeRecoveryReply: ReturnType<typeof stats>;
+          if (catalogHold) {
+            provider.observeNextSuccess(
+              () => {
+                beforeRecoveryReply = stats();
+                observations.push({
+                  action: "recovery-response-started",
+                  state: beforeRecoveryReply,
+                });
+              },
+              { model: "gpt-5.5", path: "/v1/responses" },
+            );
+            const auxiliary = await provider.fetch("/v1/responses", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                authorization: `Bearer ${fixture.access}`,
+                "chatgpt-account-id": ACCOUNT_ID,
+              },
+              body: JSON.stringify({ model: "gpt-5.6-luna", input: [] }),
+            });
+            expect(auxiliary.status, evidence()).toBe(200);
+            await auxiliary.text();
+            expect(beforeRecoveryReply, evidence()).toBeUndefined();
+          }
           const nextTurn = await turn();
           const inference = provider.requests
             .slice(beforeRecovery)
             .filter((request) => request.path.endsWith("/responses"));
           const primaryInference = inference.filter(({ body }) => {
             const request: unknown = JSON.parse(body ?? "{}");
-            return isRecord(request) && request.model === "gpt-5.5";
+            return (
+              isRecord(request) &&
+              request.model === "gpt-5.5" &&
+              quotaRequestMode(body) === "inference"
+            );
           });
           observations.push({ action: "next-ordinary-turn", result: nextTurn, state: stats() });
           expect.soft(nextTurn, evidence()).toEqual({ status: "ok", output: [MARKER] });
@@ -324,26 +384,47 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
           expect(gateway.child).toBe(gatewayProcess);
           expect(gatewayProcess?.exitCode).toBeNull();
           if (catalogHold) {
-            catalogHold.release();
-            const refreshed = await catalogRefresh;
-            observations.push({ action: "held-catalog-refresh", result: refreshed });
-            expect(refreshed, evidence()).toMatchObject({ ok: true });
+            expect(beforeRecoveryReply, evidence()).toBeDefined();
+            expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
+            // A cleared persisted block precedes publication of the replacement catalog owner.
+            // Keep the old response held until a prepared-only read observes that replacement.
             let published: ModelsListResult | undefined;
             await expect
               .poll(async () => {
                 published = await client.request<ModelsListResult>("models.list", {
                   agentId: "main",
                   view: "configured",
+                  preparedOnly: true,
                 });
-                return published.pendingProviders?.includes("openai") ?? false;
+                return {
+                  pending: published.pendingProviders?.includes("openai") ?? false,
+                  available: published.models.some(
+                    (model) =>
+                      model.provider === "openai" && model.id === "gpt-5.5" && model.available,
+                  ),
+                };
               })
-              .toBe(false);
+              .toEqual({ pending: false, available: true });
             observations.push({ action: "catalog-published-after-recovery", result: published });
             expect
               .soft(published?.models, evidence())
               .toContainEqual(
                 expect.objectContaining({ provider: "openai", id: "gpt-5.5", available: true }),
               );
+            catalogHold.release();
+            const refreshed = await catalogRefresh;
+            observations.push({ action: "held-catalog-refresh", result: refreshed });
+            // Recovery changes availability, so the held generation must not publish stale facts.
+            expect(refreshed, evidence()).toMatchObject({
+              ok: false,
+              error: {
+                name: "GatewayClientRequestError",
+                code: "UNAVAILABLE",
+                retryable: true,
+                retryAfterMs: 0,
+                message: expect.stringContaining("catalog generation was superseded"),
+              },
+            });
             expect(provider.heldCatalogResponses[0]?.releaseReason, evidence()).toBe("explicit");
           }
           await captureFinalStatus(fixture, artifactDir, observations);
@@ -356,6 +437,14 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             JSON.stringify(observations, null, 2),
           );
           await fs.writeFile(path.join(artifactDir, "gateway-evidence.json"), evidence());
+          const finalStatus = observations.findLast(
+            (entry) => isRecord(entry) && entry.action === "models-profile-status",
+          );
+          const profile = isRecord(finalStatus) ? finalStatus.profile : undefined;
+          await fs.writeFile(
+            path.join(artifactDir, "quota.public.json"),
+            JSON.stringify(await fixture.publicDiagnostics(profile), null, 2),
+          );
         }
       },
     );

@@ -1,10 +1,10 @@
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
-// Imessage plugin module implements channel behavior.
+import type { ChannelGatewayContextV2 } from "openclaw/plugin-sdk/channel-contract";
 import {
   createAccountStatusSink,
   resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import {
   listEnabledIMessageAccounts,
   resolveIMessageAccount,
@@ -16,7 +16,6 @@ import { IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js"
 import { probeIMessage } from "./probe.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
 import { sendMessageIMessage } from "./send.js";
-import { imessageSetupWizard } from "./setup-surface.js";
 
 type IMessageSendFn = typeof sendMessageIMessage;
 
@@ -34,6 +33,8 @@ export async function sendIMessageOutbound(params: {
   replyToId?: string;
   conversationReadOrigin?: "delegated" | "direct-operator";
   onDeliveryResult?: NonNullable<Parameters<IMessageSendFn>[2]["onDeliveryResult"]>;
+  assertDirectAdapterHandoff?: () => void;
+  onPlatformSendDispatch?: () => Promise<void>;
 }) {
   const send =
     resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage", {
@@ -51,9 +52,11 @@ export async function sendIMessageOutbound(params: {
     ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
     ...(params.audioAsVoice ? { audioAsVoice: true } : {}),
     maxBytes,
-    accountId: params.accountId ?? undefined,
-    replyToId: params.replyToId ?? undefined,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
     conversationReadOrigin: params.conversationReadOrigin,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
     ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
   });
   const meta = {
@@ -79,9 +82,7 @@ export async function probeIMessageAccount(params?: {
 }
 
 export async function startIMessageGatewayAccount(
-  ctx: Parameters<
-    NonNullable<NonNullable<ChannelPlugin<ResolvedIMessageAccount>["gateway"]>["startAccount"]>
-  >[0],
+  ctx: ChannelGatewayContextV2<ResolvedIMessageAccount>,
 ) {
   const account = ctx.account;
   const cliPath = account.config.cliPath?.trim() || "imsg";
@@ -111,12 +112,7 @@ export async function startIMessageGatewayAccount(
     ctx.log?.info?.(
       `[${account.accountId}] skipping watcher: duplicate iMessage source; using account "${ownerAccountId}"`,
     );
-    if (ctx.abortSignal.aborted) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
-    });
+    await waitForAbortSignal(ctx.abortSignal);
     return;
   }
   const statusSink = createAccountStatusSink({
@@ -128,6 +124,7 @@ export async function startIMessageGatewayAccount(
     `[${account.accountId}] starting provider (${cliPath}${dbPath ? ` db=${dbPath}` : ""})`,
   );
   return await monitorIMessageProvider({
+    scheduler: ctx.scheduler,
     accountId: account.accountId,
     config: ctx.cfg,
     runtime: ctx.runtime,
@@ -136,5 +133,3 @@ export async function startIMessageGatewayAccount(
     statusSink,
   });
 }
-
-export { imessageSetupWizard };

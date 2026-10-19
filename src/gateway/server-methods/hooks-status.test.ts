@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createCoreGatewayMethodDescriptors } from "../methods/core-descriptors.js";
+import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { hooksStatusHandlers } from "./hooks-status.js";
@@ -93,7 +93,7 @@ describe("hooks.status", () => {
       agents: {
         ownership: "explicit",
         defaults: { workspace: workspaceDir },
-        list: [{ id: "ops" }, { id: "research", workspace: workspaceDir }],
+        entries: { ops: {}, research: { workspace: workspaceDir } },
       },
     };
 

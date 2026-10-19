@@ -1,16 +1,28 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionBranch } from "../../api/types.ts";
 import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
-import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatReplyTarget,
+  HumanMention,
+} from "../../lib/chat/chat-types.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
-import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatPendingInputView } from "./chat-pending-inputs.types.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { ChatRunError, LocalTerminalReconcile } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
-import type { ProviderPolicyNotice, RunOutputUsage } from "./tool-stream-contract.ts";
+import type {
+  ChatReasoning,
+  ToolStreamState,
+  ProviderPolicyNotice,
+  RunOutputUsage,
+} from "./tool-stream-contract.ts";
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
@@ -21,9 +33,11 @@ export type ChatHistorySessions = Pick<SessionCapability, "captureReconcile">;
 export type ChatHistoryHost = ChatState & { sessions: ChatHistorySessions };
 
 export type ChatState = StreamCausalBoundaryState & {
+  uploadConfig?: ApplicationConfigCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;
   chatSubmissions?: ApplicationChatSubmissions;
+  hasPendingInitialTurn?: (sessionKey: string) => boolean;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
   /** Config changes retire preview tickets even when session permissions stay inherited. */
@@ -34,7 +48,9 @@ export type ChatState = StreamCausalBoundaryState & {
   chatLoading: boolean;
   chatHistoryPagination: ChatHistoryPagination;
   chatMessages: unknown[];
+  chatPendingInputs?: ChatPendingInputView;
   chatMessagesBySession?: ChatMessageCache;
+  chatHistoryCursor?: ChatHistoryCursor;
   /** Active leaf of the history snapshot currently rendered by this pane. */
   chatDisplayedLeafEntryId?: string | null;
   chatThinkingLevel: string | null;
@@ -58,13 +74,15 @@ export type ChatState = StreamCausalBoundaryState & {
   providerPolicyNotice?: ProviderPolicyNotice | null;
   /** Producer-cumulative text; visible tails derive from the segment baseline. */
   chatStream: string | null;
+  /** Identified assistant item at the tail of the current cumulative stream. */
   chatStreamStartedAt: number | null;
+  chatReasoning?: ChatReasoning | null;
   chatRunStartup?: ChatRunStartupState | null;
   lastError: string | null;
   chatError?: string | null;
   chatRunError?: ChatRunError | null;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
-  chatReplyTarget?: unknown;
+  chatReplyTarget?: ChatReplyTarget | null;
   agentsError?: string | null;
   resetChatInputHistoryNavigation?: () => void;
   assistantAgentId?: string | null;
@@ -81,7 +99,8 @@ export type ChatState = StreamCausalBoundaryState & {
   chatBranches?: SessionBranch[];
   chatBranchesSessionKey?: string | null;
   chatBranchesConnectionEpoch?: number | null;
-  requestUpdate?: () => void;
   /** Reports transcript loading edges; see CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT. */
   transcriptLoadingChanged?: () => void;
-};
+  /** Reports transient read recovery to the shell connection indicator. */
+  historyRecoveryChanged?: () => void;
+} & ToolStreamState;

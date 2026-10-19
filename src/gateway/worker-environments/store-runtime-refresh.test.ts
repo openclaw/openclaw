@@ -1,131 +1,54 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type {
-  WorkerDesktopEndpoint,
-  WorkerProfile,
-  WorkerSshEndpoint,
-} from "../../plugins/types.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { WorkerDesktopEndpoint } from "../../plugins/types.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { hashWorkerCredential } from "./credential.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createEnvironmentStoreFixture } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 
-type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake & {
-  installKind?: "bundle" | "local";
-};
-type WorkerEnvironmentProfileSnapshot = WorkerProfile;
-type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
-
-const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
-const SSH_ENDPOINT: WorkerEnvironmentSshEndpoint = {
-  host: "worker.example.test",
-  port: 2222,
-  fallbackPorts: [22, 2200],
-  user: "openclaw",
-  hostKey: HOST_KEY,
-  keyRef: {
-    source: "file",
-    provider: "worker-keys",
-    id: "/static-development-key",
-  },
-};
 const DESKTOP: WorkerDesktopEndpoint = {
   protocol: "rfb",
   port: 5900,
-  passwordFilePath: "/var/lib/crabbox/vnc.password",
+  passwordFilePath: "/vnc.password",
   apps: [
-    {
-      id: "browser",
-      executablePath: "/usr/local/bin/openclaw-worker-browser",
-      cdpPort: 9222,
-    },
-    { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },
+    { id: "browser", executablePath: "/browser", cdpPort: 9222 },
+    { id: "terminal", executablePath: "/terminal" },
   ],
 };
-const BOOTSTRAP_RECEIPT: WorkerEnvironmentBootstrapReceipt = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.7.1",
-  protocolFeatures: ["workspace-sync-v1", "model-proxy-v1"],
-};
-const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
 
 describe("worker environment runtime refresh", () => {
+  const environmentId = "worker-refresh";
+  const sessionId = REQUEST.sessionId;
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerEnvironmentStore;
   let nowMs: number;
+  const {
+    bootstrapReceipt: BOOTSTRAP_RECEIPT,
+    createIntent,
+    seedBootstrapping,
+    readyPatch,
+    attachedPatch,
+  } = createEnvironmentStoreFixture({
+    getStore: () => store,
+    getDatabase: () => database,
+    now: () => nowMs,
+  });
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-env-"));
+    root = tempDirs.make("openclaw-worker-env-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
-    store = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
   });
-
-  afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  function createIntent(
-    environmentId = "worker-1",
-    profileSnapshot: WorkerEnvironmentProfileSnapshot = {
-      settings: { region: "test" },
-      lifetime: { idleMinutes: 10 },
-    },
-  ) {
-    return store.createIntent({
-      environmentId,
-      providerId: "fake-provider",
-      profileId: "test-profile",
-      profileSnapshot,
-      provisionOperationId: `provision:${environmentId}`,
-    });
-  }
-
-  function seedBootstrapping(environmentId: string, leaseId: string) {
-    createIntent(environmentId);
-    store.transition({ environmentId, from: "requested", to: "provisioning" });
-    return store.transition({
-      environmentId,
-      from: "provisioning",
-      to: "bootstrapping",
-      patch: { leaseId, sshEndpoint: SSH_ENDPOINT },
-    });
-  }
-
-  function readyPatch(receipt = BOOTSTRAP_RECEIPT) {
-    return {
-      bootstrapReceipt: receipt,
-      credential: {
-        credentialHash: hashWorkerCredential(CREDENTIAL),
-        sessionId: null,
-        rpcSetVersion: 1,
-        expiresAtMs: nowMs + 10_000,
-      },
-    };
-  }
-
-  function attachedPatch(sessionId: string, suffix: string) {
-    return {
-      attachedSessionIds: [sessionId],
-      credential: {
-        credentialHash: hashWorkerCredential([CREDENTIAL, suffix].join("-")),
-        sessionId,
-        rpcSetVersion: 1,
-        expiresAtMs: nowMs + 10_000,
-      },
-    };
-  }
 
   const replacement = {
     ...BOOTSTRAP_RECEIPT,
@@ -134,47 +57,47 @@ describe("worker environment runtime refresh", () => {
     protocolFeatures: BOOTSTRAP_RECEIPT.protocolFeatures.toSorted(),
   };
 
-  function seedRefresh(state: "ready" | "idle" | "attached", transport: "node" | "ssh" = "node") {
-    const environmentId = "worker-refresh";
+  const snapshot = (placements: ReturnType<typeof createWorkerSessionPlacementStore>) => [
+    store.get(environmentId),
+    placements.get(sessionId),
+  ];
+
+  async function seedRefresh(state: "idle" | "attached", transport: "node" | "ssh" = "node") {
     if (transport === "ssh") {
-      seedBootstrapping(environmentId, "lease-refresh");
-      store.transition({
-        environmentId,
-        from: "bootstrapping",
-        to: "ready",
-        patch: readyPatch(),
-      });
+      await seedBootstrapping(environmentId, "lease-refresh");
     } else {
-      createIntent(environmentId);
-      store.transition({ environmentId, from: "requested", to: "provisioning" });
-      store.transition({
-        environmentId,
-        from: "provisioning",
-        to: "ready",
-        patch: {
-          ...readyPatch(),
-          leaseId: "lease-refresh",
-          nodeDeviceId: "node-refresh",
-          desktop: DESKTOP,
-        },
-      });
+      await createIntent(environmentId);
+      await store.transition({ environmentId, from: "requested", to: "provisioning" });
     }
-    if (state !== "ready") {
-      store.transition({
-        environmentId,
-        from: "ready",
-        to: state,
-        ...(state === "attached" ? { patch: attachedPatch(REQUEST.sessionId, "refresh") } : {}),
-      });
-    }
+    await store.transition({
+      environmentId,
+      from: transport === "ssh" ? "bootstrapping" : "provisioning",
+      to: "ready",
+      patch: {
+        ...readyPatch(),
+        ...(transport === "node"
+          ? { leaseId: "lease-refresh", nodeDeviceId: "node-refresh", desktop: DESKTOP }
+          : {}),
+      },
+    });
+    await store.transition({
+      environmentId,
+      from: "ready",
+      to: state,
+      ...(state === "attached" ? { patch: attachedPatch(sessionId, "refresh") } : {}),
+    });
     let environment = store.get(environmentId)!;
     const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
     const placement =
       state === "attached"
-        ? seedActivePlacement(placements, { environmentId, ownerEpoch: environment.ownerEpoch })
+        ? await seedActivePlacement(placements, {
+            environmentId,
+            ownerEpoch: environment.ownerEpoch,
+          })
         : undefined;
     environment = store.get(environmentId)!;
-    store.revokeEnvironmentCredential(environmentId);
+    await store.revokeEnvironmentCredential(environmentId);
+    const owner = { environmentId, ownerEpoch: environment.ownerEpoch };
     const input = {
       environmentId,
       expectedOwnerEpoch: environment.ownerEpoch,
@@ -186,39 +109,40 @@ describe("worker environment runtime refresh", () => {
         ? { expectedState: state, expectedPlacementGeneration: placement!.generation }
         : { expectedState: state }),
     };
-    return { environment, placements, placement, input };
+    const unchanged = () => expect(snapshot(placements)).toEqual([environment, placement]);
+    return { environment, placements, placement, input, owner, unchanged };
   }
 
   it.each([
-    ["ready", "node"],
     ["idle", "node"],
     ["attached", "node"],
     ["attached", "ssh"],
   ] as const)(
     "refreshes %s %s runtime without replacing its machine or workspace",
-    (state, transport) => {
-      const { environment, placements, placement, input } = seedRefresh(state, transport);
+    async (state, transport) => {
+      const { environment, placements, placement, input } = await seedRefresh(state, transport);
       nowMs += 1_000;
-      expect(store.refreshBootstrapReceipt(input)).toEqual({
+      expect(await store.refreshBootstrapReceipt(input)).toEqual({
         ...environment,
         bootstrapReceipt: replacement,
         updatedAtMs: nowMs,
       });
-      expect(store.getCredential(environment.environmentId)).toBeUndefined();
+      expect(store.getCredential(environmentId)).toBeUndefined();
       if (placement) {
-        expect(placements.get(placement.sessionId)).toEqual({
+        expect(placements.get(sessionId)).toEqual({
           ...placement,
           workerBundleHash: replacement.bundleHash,
           updatedAtMs: nowMs,
         });
       }
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-      store = createWorkerEnvironmentStore({ database, now: () => nowMs });
-      expect(store.get(environment.environmentId)?.bootstrapReceipt).toEqual(replacement);
+      store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
+      expect(store.get(environmentId)?.bootstrapReceipt).toEqual(replacement);
       if (placement) {
         expect(
-          createWorkerSessionPlacementStore({ database }).get(placement.sessionId),
+          await createWorkerSessionPlacementStore({ database }).getAsync(sessionId),
         ).toMatchObject({
           workerBundleHash: replacement.bundleHash,
           activeOwnerEpoch: placement.activeOwnerEpoch,
@@ -228,132 +152,109 @@ describe("worker environment runtime refresh", () => {
     },
   );
 
-  it("rejects stale refresh identity and renewed credentials without changing either receipt", () => {
-    const { environment, placements, placement, input } = seedRefresh("attached");
+  it("rejects stale refresh identity and renewed credentials without changing either receipt", async () => {
+    const { environment, placement, input, unchanged } = await seedRefresh("attached");
     const staleInputs = [
-      { ...input, expectedOwnerEpoch: input.expectedOwnerEpoch + 1 },
-      { ...input, expectedNodeDeviceId: "node-replaced" },
+      { expectedOwnerEpoch: input.expectedOwnerEpoch + 1 },
+      { expectedNodeDeviceId: "node-replaced" },
+      { expectedBootstrapReceipt: { ...BOOTSTRAP_RECEIPT, openclawVersion: "2026.6.1" } },
+      { expectedBootstrapReceipt: { ...BOOTSTRAP_RECEIPT, protocolFeatures: [] } },
       {
-        ...input,
-        expectedBootstrapReceipt: { ...BOOTSTRAP_RECEIPT, openclawVersion: "2026.6.1" },
-      },
-      { ...input, expectedBootstrapReceipt: { ...BOOTSTRAP_RECEIPT, protocolFeatures: [] } },
-      {
-        ...input,
         expectedState: "attached" as const,
         expectedPlacementGeneration: placement!.generation + 1,
       },
       {
-        ...input,
         assertCurrent: () => {
           throw new Error("Worker turn acquired live authority");
         },
       },
     ];
     for (const stale of staleInputs) {
-      expect(() => store.refreshBootstrapReceipt(stale)).toThrow();
-      expect(store.get(environment.environmentId)).toEqual(environment);
-      expect(placements.get(placement!.sessionId)).toEqual(placement);
+      await expect(store.refreshBootstrapReceipt({ ...input, ...stale })).rejects.toThrow();
+      unchanged();
     }
-    store.renewCredential({
-      ...attachedPatch(REQUEST.sessionId, "renewed").credential,
-      environmentId: environment.environmentId,
+    await store.renewCredential({
+      ...attachedPatch(sessionId, "renewed").credential,
+      environmentId,
       expectedOwnerEpoch: environment.ownerEpoch,
     });
-    expect(() => store.refreshBootstrapReceipt(input)).toThrow("previous credential to be revoked");
-    expect(store.get(environment.environmentId)).toEqual(environment);
-    expect(placements.get(placement!.sessionId)).toEqual(placement);
+    await expect(store.refreshBootstrapReceipt(input)).rejects.toThrow(
+      "previous credential to be revoked",
+    );
+    unchanged();
   });
 
-  it("rolls back the placement receipt when the environment write fails", () => {
-    const { environment, placements, placement, input } = seedRefresh("attached");
-    database.db.exec(`CREATE TEMP TRIGGER reject_runtime_receipt
+  it("rolls back the placement receipt when the environment write fails", async () => {
+    const { input, unchanged } = await seedRefresh("attached");
+    database.db.exec(`CREATE TRIGGER reject_runtime_receipt
       BEFORE UPDATE OF bootstrap_bundle_hash ON worker_environments
       BEGIN SELECT RAISE(ABORT, 'runtime receipt write failed'); END`);
-    expect(() => store.refreshBootstrapReceipt(input)).toThrow("runtime receipt write failed");
-    expect(store.get(environment.environmentId)).toEqual(environment);
-    expect(placements.get(placement!.sessionId)).toEqual(placement);
+    await expect(store.refreshBootstrapReceipt(input)).rejects.toThrow(
+      "runtime receipt write failed",
+    );
+    unchanged();
     database.db.exec("DROP TRIGGER reject_runtime_receipt");
-    expect(store.refreshBootstrapReceipt(input).bootstrapReceipt).toEqual(replacement);
+    expect((await store.refreshBootstrapReceipt(input)).bootstrapReceipt).toEqual(replacement);
   });
 
   it.each(["draining", "moving", "destroying"] as const)(
     "does not refresh an owner that is %s",
-    (operation) => {
-      const { environment, placements, placement, input } = seedRefresh("attached");
+    async (operation) => {
+      const { owner, placements, placement, input } = await seedRefresh("attached");
       if (operation === "destroying") {
-        store.requestDestroy({ environmentId: environment.environmentId, state: "attached" });
+        await store.requestDestroy({ environmentId, state: "attached" });
       } else if (operation === "moving") {
-        placements.beginPlacementMove({
-          sessionId: placement!.sessionId,
-          source: {
-            generation: placement!.generation,
-            environmentId: environment.environmentId,
-            ownerEpoch: environment.ownerEpoch,
-          },
+        await placements.beginPlacementMove({
+          sessionId,
+          source: { ...owner, generation: placement!.generation },
           target: { kind: "gateway" },
         });
       } else {
-        placements.startDrain({
-          sessionId: placement!.sessionId,
-          environmentId: environment.environmentId,
-          ownerEpoch: environment.ownerEpoch,
+        await placements.startDrain({
+          ...owner,
+          sessionId,
           expectedGeneration: placement!.generation,
         });
       }
-      const beforeEnvironment = store.get(environment.environmentId);
-      const beforePlacement = placements.get(placement!.sessionId);
-      expect(() => store.refreshBootstrapReceipt(input)).toThrow();
-      expect(store.get(environment.environmentId)).toEqual(beforeEnvironment);
-      expect(placements.get(placement!.sessionId)).toEqual(beforePlacement);
+      const before = snapshot(placements);
+      await expect(store.refreshBootstrapReceipt(input)).rejects.toThrow();
+      expect(snapshot(placements)).toEqual(before);
     },
   );
 
-  it("preserves a recovery-only claim and its pending workspace result", () => {
-    const { environment, placements, placement, input } = seedRefresh("attached");
-    const claim = placements.claimTurn({
+  it("hands off the pending result while preserving its recovery-only claim", async () => {
+    const { owner, placements, input } = await seedRefresh("attached");
+    const claim = await placements.claimTurn({
       ...REQUEST,
       claimId: "interrupted-claim",
       runId: "interrupted-run",
-      owner: {
-        kind: "worker",
-        environmentId: environment.environmentId,
-        ownerEpoch: environment.ownerEpoch,
-      },
+      owner: { ...owner, kind: "worker" },
     });
-    placements.markWorkspaceResultPending(claim);
-    const pending = placements.listPendingWorkspaceResults();
-    const beforePlacement = placements.get(placement!.sessionId);
-    const binding = {
-      sessionId: REQUEST.sessionId,
-      environmentId: environment.environmentId,
-      ownerEpoch: environment.ownerEpoch,
-    };
+    await placements.markWorkspaceResultPending(claim);
+    const pending = await placements.listPendingWorkspaceResultsAsync();
+    const beforePlacement = placements.get(sessionId);
+    const binding = { ...owner, sessionId };
     const liveGate = createWorkerSessionPlacementGate(placements);
-    expect(() =>
-      store.refreshBootstrapReceipt({
-        ...input,
-        assertCurrent: () => {
-          liveGate.assertWorkerRuntimeRefresh(binding);
-        },
-      }),
-    ).toThrow("current turn");
+    await expect(liveGate.prepareWorkerRuntimeRefresh(binding)).rejects.toThrow("current turn");
     const recoveryGate = createWorkerSessionPlacementGate(placements, {
-      rejectExistingWorkerClaims: true,
+      recoveryPlacements: await placements.listAsync(),
     });
-    store.refreshBootstrapReceipt({
-      ...input,
-      assertCurrent: () => {
-        recoveryGate.assertWorkerRuntimeRefresh(binding);
-      },
-    });
-    expect(placements.get(placement!.sessionId)).toEqual({
+    const refresh = await recoveryGate.prepareWorkerRuntimeRefresh(binding);
+    try {
+      await store.refreshBootstrapReceipt({ ...input, assertCurrent: refresh.assertCurrent });
+    } finally {
+      refresh.release();
+    }
+    expect(placements.get(sessionId)).toEqual({
       ...beforePlacement,
       workerBundleHash: replacement.bundleHash,
     });
-    expect(placements.listPendingWorkspaceResults()).toEqual(pending);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
+      { ...pending[0], recoveryRequestedAtMs: nowMs },
+    ]);
+    await placements.prepareWorkspaceResultClaim(claim);
     expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
     expect(recoveryGate.validateWorkerTurn(claim)).toBe(false);
-    expect(store.getCredential(environment.environmentId)).toBeUndefined();
+    expect(store.getCredential(environmentId)).toBeUndefined();
   });
 });

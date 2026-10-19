@@ -1,21 +1,44 @@
-// Log tail helpers read recent log lines with optional parsing and redaction.
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { isMissingPathError } from "../infra/errno.js";
-import { readFileWindowFully } from "../infra/file-read.js";
 import { clamp } from "../utils.js";
-import { isRollingLogFilePath, isSameRollingLogFileFamily } from "./log-file-path.js";
-import "./logger.js";
-import { getResolvedLoggerFileTarget } from "./logger-settings-internal.js";
+import { isSameRollingLogFileFamily } from "./log-file-path.js";
+import { getResolvedLoggerFileTarget } from "./logger.js";
 import { parseLogLine, type ParsedLogLine } from "./parse-log-line.js";
-import { redactSensitiveLines, resolveRedactOptions } from "./redact.js";
+import type { ResolvedRedactPattern } from "./redact-pattern-runtime.js";
+import { redactSensitiveLines, resolveLogTailRedactOptions } from "./redact.js";
 
-// Tail reader for the active log file, with cursor reset and line redaction.
 const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
+
+type RedactionAnchor = {
+  file: string;
+  dev: number;
+  ino: number;
+  offset: number;
+  states: ReadonlyMap<ResolvedRedactPattern, boolean>;
+};
+
+// Logs append and rotate by file. An in-place rewrite retaining this inode and
+// size >= offset can reuse stale state; accepting that keeps polling window-sized.
+let redactionAnchor: RedactionAnchor | undefined;
+
+function invalidateRedactionAnchor(file: string, stat: Stats | null): void {
+  if (
+    redactionAnchor?.file === file &&
+    (!stat ||
+      stat.dev !== redactionAnchor.dev ||
+      stat.ino !== redactionAnchor.ino ||
+      stat.size < redactionAnchor.offset)
+  ) {
+    redactionAnchor = undefined;
+  }
+}
 
 function missingPathToNull(error: unknown): null {
   if (!isMissingPathError(error)) {
@@ -24,7 +47,6 @@ function missingPathToNull(error: unknown): null {
   return null;
 }
 
-/** Payload returned to log-tail callers with cursor and truncation metadata. */
 export type LogTailPayload = {
   file: string;
   cursor: number;
@@ -40,20 +62,20 @@ type ParsedLogTailPayload = Omit<LogTailPayload, "lines"> & {
   lines: ParsedLogLine[];
 };
 
+type ResolvedLogFile = { file: string; stat: Stats | null };
+
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
-async function resolveLogFile(file: string, options?: { rolling?: boolean }): Promise<string> {
+async function resolveLogFile(file: string, rolling: boolean): Promise<ResolvedLogFile> {
   const stat = await fs.stat(file).catch(missingPathToNull);
-  if (stat) {
-    return file;
-  }
-  if (!(options?.rolling ?? isRollingLogFilePath(file))) {
-    return file;
+  const source = { file, stat };
+  if (stat || !rolling) {
+    return source;
   }
 
   const dir = path.dirname(file);
   const entries = await fs.readdir(dir, { withFileTypes: true }).catch(missingPathToNull);
   if (!entries) {
-    return file;
+    return source;
   }
 
   const candidates = await Promise.all(
@@ -62,29 +84,35 @@ async function resolveLogFile(file: string, options?: { rolling?: boolean }): Pr
       .map(async (entry) => {
         const fullPath = path.join(dir, entry.name);
         const fileStat = await fs.stat(fullPath).catch(missingPathToNull);
-        return fileStat ? { path: fullPath, mtimeMs: fileStat.mtimeMs } : null;
+        return fileStat ? { file: fullPath, stat: fileStat } : null;
       }),
   );
   const sorted = candidates
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-    .toSorted((a, b) => b.mtimeMs - a.mtimeMs);
-  return sorted[0]?.path ?? file;
+    .toSorted((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+  return sorted[0] ?? source;
 }
 
-async function readLogSlice(params: {
-  file: string;
-  cursor?: number;
-  limit: number;
-  maxBytes: number;
-  filter?: (line: string) => boolean;
-  redaction: ReturnType<typeof resolveRedactOptions>;
-}): Promise<Omit<LogTailPayload, "file">> {
-  const size = (await fs.stat(params.file).catch(missingPathToNull))?.size ?? 0;
-  const maxBytes = clamp(params.maxBytes, 1, MAX_BYTES);
-  const limit = clamp(params.limit, 1, MAX_LIMIT);
+export async function readConfiguredLogTail(
+  params?: { cursor?: number; limit?: number; maxBytes?: number },
+  filter?: (line: string) => boolean,
+): Promise<LogTailPayload> {
+  const target = getResolvedLoggerFileTarget();
+  const { file, stat } = await resolveLogFile(target.file, target.rolling);
+  invalidateRedactionAnchor(file, stat);
+  const requestedCursor = params?.cursor;
+  const requestedLimit = params?.limit ?? DEFAULT_LIMIT;
+  const requestedMaxBytes = params?.maxBytes ?? DEFAULT_MAX_BYTES;
+  const redaction = resolveLogTailRedactOptions();
+  if (stat && !stat.isFile()) {
+    throw new Error(`Log path is not a regular file: ${file}`);
+  }
+  const size = stat?.size ?? 0;
+  const maxBytes = clamp(requestedMaxBytes, 1, MAX_BYTES);
+  const limit = clamp(requestedLimit, 1, MAX_LIMIT);
   let cursor =
-    typeof params.cursor === "number" && Number.isFinite(params.cursor)
-      ? Math.max(0, Math.floor(params.cursor))
+    typeof requestedCursor === "number" && Number.isFinite(requestedCursor)
+      ? Math.max(0, Math.floor(requestedCursor))
       : undefined;
   let reset = false;
   let skippedBytes: number | undefined;
@@ -116,6 +144,7 @@ async function readLogSlice(params: {
 
   if (size === 0 || size <= start) {
     return {
+      file,
       cursor: size,
       size,
       lines: [],
@@ -125,10 +154,11 @@ async function readLogSlice(params: {
     };
   }
 
-  const handle = await fs.open(params.file, "r").catch(missingPathToNull);
+  const handle = await fs.open(file, "r").catch(missingPathToNull);
   if (!handle) {
     // Rotation can remove the path after stat; retain the existing missing-file contract.
     return {
+      file,
       cursor: 0,
       size: 0,
       lines: [],
@@ -156,7 +186,7 @@ async function readLogSlice(params: {
       lines.shift();
       lineOffset = buffer.subarray(0, bytesRead).indexOf(0x0a) + 1;
     }
-    let selected = lines.map((line) => params.filter?.(line) ?? true);
+    let selected = lines.map((line) => filter?.(line) ?? true);
     let selectedCount = selected.filter(Boolean).length;
     if (selectedCount > limit) {
       truncated = true;
@@ -176,13 +206,33 @@ async function readLogSlice(params: {
       selected = selected.slice(firstSelected);
     }
 
-    const contexts = params.redaction.patterns.map((pattern) =>
+    const contexts = redaction.patterns.map((pattern) =>
       pattern instanceof RegExp ? undefined : pattern.createContext?.(),
     );
     let pending = contexts.filter((context) => context !== undefined);
-    let contextEnd = start + lineOffset;
-    if (selectedCount > 0 && contextEnd > 0 && pending.length > 0) {
-      const prefixBuffer = Buffer.alloc(Math.min(contextEnd, DEFAULT_MAX_BYTES));
+    // Validate the opened inode too: rotation can replace the path after stat.
+    const contextStat = pending.length > 0 ? await handle.stat() : undefined;
+    if (contextStat) {
+      invalidateRedactionAnchor(file, contextStat);
+    }
+    const contextStart = start + lineOffset;
+    const cachedAnchor = redactionAnchor;
+    const anchor =
+      cachedAnchor?.file === file &&
+      cachedAnchor.offset <= contextStart &&
+      contexts.every(
+        (context, index) => !context || cachedAnchor.states.has(redaction.patterns[index]!),
+      )
+        ? cachedAnchor
+        : undefined;
+    // Byte zero is the default anchor. A cold file may still require one full scan.
+    const floor = anchor?.offset ?? 0;
+    let contextEnd = contextStart;
+    const lastNewline = buffer.subarray(0, bytesRead).lastIndexOf(0x0a);
+    cursor = start + lastNewline + 1;
+    const completeWindow = lastNewline >= 0 && cursor >= contextStart;
+    if (completeWindow && contextEnd > floor && pending.length > 0) {
+      const prefixBuffer = Buffer.alloc(Math.min(contextEnd - floor, DEFAULT_MAX_BYTES));
       let blockBytes = Math.min(4096, prefixBuffer.length);
       let cached: { offset: number; length: number } | undefined;
       const readPrefix = async (offset: number, byteCount: number): Promise<Buffer> => {
@@ -203,19 +253,19 @@ async function readLogSlice(params: {
         cached = { offset, length: byteCount };
         return chunk;
       };
-      while (contextEnd > 0 && pending.length > 0) {
-        let search = Math.max(0, contextEnd - blockBytes);
+      while (contextEnd > floor && pending.length > 0) {
+        let search = Math.max(floor, contextEnd - blockBytes);
         let chunk = await readPrefix(search, contextEnd - search);
         let newline = chunk.indexOf(0x0a);
-        let blockStart = search === 0 ? 0 : search + newline + 1;
+        let blockStart = search === floor ? floor : search + newline + 1;
         // Locate a whole-line boundary without retaining an arbitrarily long line.
-        while (search > 0 && (newline < 0 || blockStart === contextEnd)) {
+        while (search > floor && (newline < 0 || blockStart === contextEnd)) {
           const end = search;
           blockBytes = Math.min(prefixBuffer.length, blockBytes * 2);
-          search = Math.max(0, end - blockBytes);
+          search = Math.max(floor, end - blockBytes);
           chunk = await readPrefix(search, end - search);
           newline = chunk.lastIndexOf(0x0a);
-          blockStart = search === 0 && newline < 0 ? 0 : search + newline + 1;
+          blockStart = search === floor && newline < 0 ? floor : search + newline + 1;
         }
         const blocks = pending.map((context) => ({ context, block: context.prepend() }));
         const decoder = new StringDecoder("utf8");
@@ -237,12 +287,29 @@ async function readLogSlice(params: {
       }
     }
 
-    // Advance only through complete records actually read, not the earlier stat size:
-    // concurrent truncation can shorten the read, and later appends must remain visible.
-    const lastNewline = buffer.subarray(0, bytesRead).lastIndexOf(0x0a);
-    cursor = start + lastNewline + 1;
+    if (completeWindow && contextStat) {
+      const windowText = buffer.toString("utf8", lineOffset, cursor - start);
+      const states = new Map<ResolvedRedactPattern, boolean>();
+      for (const [index, context] of contexts.entries()) {
+        if (context) {
+          const pattern = redaction.patterns[index]!;
+          context.resolve(anchor?.states.get(pattern) ?? false);
+          states.set(pattern, context.advance(windowText));
+        }
+      }
+      // Publish only complete records actually read: a partial line or concurrent
+      // truncation must not move the next poll past bytes whose state is unknown.
+      redactionAnchor = {
+        file,
+        dev: contextStat.dev,
+        ino: contextStat.ino,
+        offset: cursor,
+        states,
+      };
+    }
 
     return {
+      file,
       cursor,
       size,
       lines:
@@ -251,8 +318,8 @@ async function readLogSlice(params: {
           : redactSensitiveLines(
               lines,
               {
-                ...params.redaction,
-                patterns: params.redaction.patterns.map(
+                ...redaction,
+                patterns: redaction.patterns.map(
                   (pattern, index) => contexts[index]?.pattern ?? pattern,
                 ),
               },
@@ -265,27 +332,6 @@ async function readLogSlice(params: {
   } finally {
     await handle.close();
   }
-}
-
-/** Reads and redacts the configured log tail with bounded bytes and line count. */
-export async function readConfiguredLogTail(
-  params?: { cursor?: number; limit?: number; maxBytes?: number },
-  filter?: (line: string) => boolean,
-): Promise<LogTailPayload> {
-  const target = getResolvedLoggerFileTarget();
-  const file = await resolveLogFile(target.file, { rolling: target.rolling });
-  const result = await readLogSlice({
-    file,
-    cursor: params?.cursor,
-    limit: params?.limit ?? DEFAULT_LIMIT,
-    maxBytes: params?.maxBytes ?? DEFAULT_MAX_BYTES,
-    filter,
-    redaction: resolveRedactOptions(),
-  });
-  return {
-    file,
-    ...result,
-  };
 }
 
 /** Reads the canonical configured tail and parses its already-redacted lines. */

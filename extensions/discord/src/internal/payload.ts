@@ -1,4 +1,3 @@
-// Discord plugin module implements payload behavior.
 import {
   ComponentType,
   MessageFlags,

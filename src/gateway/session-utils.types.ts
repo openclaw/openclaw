@@ -1,5 +1,3 @@
-// Shared Gateway session projection types.
-// Keeps server methods and Control UI payloads aligned.
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionPlacement,
@@ -8,13 +6,10 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionsPatchResult as ProtocolSessionsPatchResult } from "../../packages/gateway-protocol/src/sessions-patch-result.js";
 import type { StickyModelSelectionTarget } from "../agents/sticky-model-selection.js";
-import type {
-  SessionCompactionCheckpoint,
-  SessionEntry,
-  SessionGoal,
-  SessionOrigin,
-} from "../config/sessions/types.js";
+import type { SessionPreviewItem } from "../config/sessions/session-history-read.types.js";
+import type { SessionEntry, SessionGoal, SessionOrigin } from "../config/sessions/types.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
 import type { FastModeSource } from "../shared/fast-mode.js";
 import type {
@@ -31,6 +26,7 @@ import type { PreparedGatewayModelCatalog } from "./server-model-catalog.types.j
 // Shared Gateway session response contracts. Server methods, UI adapters, and
 // tests import these types so list/patch/preview payloads evolve together.
 export type GatewaySessionsDefaults = {
+  communication?: Required<NonNullable<SessionEntry["communication"]>>;
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
@@ -46,11 +42,6 @@ export type GatewaySessionsDefaults = {
 
 type SubagentRunState = "active" | "interrupted" | "historical";
 
-type SessionCompactionCheckpointPreview = Pick<
-  SessionCompactionCheckpoint,
-  "checkpointId" | "createdAt" | "reason"
->;
-
 export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "worktree"> & {
   worktree?: SessionEntry["worktree"];
   category?: string;
@@ -61,7 +52,6 @@ export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "w
   updatedAt: number | null;
   archivedBy?: SessionEntry["archivedBy"];
   agentStatus?: SessionEntry["agentStatus"];
-  activitySummary?: import("../../packages/gateway-protocol/src/schema/sessions-activity-summary.js").SessionActivitySummary;
   observerDigest?: Pick<
     SessionObserverDigest,
     "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
@@ -84,6 +74,8 @@ export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "w
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;
+  /** Configured agent or global reasoning default inherited when reasoningLevel is unset. */
+  reasoningDefault?: "on" | "off" | "stream";
   elevatedLevel?: string;
   sendPolicy?: "allow" | "deny";
   goal?: SessionGoal;
@@ -108,8 +100,6 @@ export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "w
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
-  compactionCheckpointCount?: number;
-  latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   pluginExtensions?: PluginSessionExtensionProjection[];
 };
 
@@ -125,10 +115,10 @@ void sessionRowSchemaDriftGuard;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
-export type SessionPreviewItem = {
-  role: "user" | "assistant" | "tool" | "system" | "other";
-  text: string;
-};
+export type {
+  SessionTitleFields,
+  SessionPreviewItem,
+} from "../config/sessions/session-history-read.types.js";
 
 export type SessionsPreviewEntry = {
   key: string;
@@ -151,15 +141,5 @@ export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults,
 export type SessionListModelCatalog = ReadonlyMap<string, PreparedGatewayModelCatalog | undefined>;
 
 export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
-  entry: SessionEntry;
-  resolved?: {
-    modelProvider?: string;
-    model?: string;
-    agentRuntime?: GatewayAgentRuntime;
-    runtimeSelectionLocked?: boolean;
-    contextWindow?: string;
-    contextWindows?: GatewayContextWindowOption[];
-    thinkingLevel?: string;
-    thinkingLevels?: GatewayThinkingLevelOption[];
-  };
+  resolved?: NonNullable<ProtocolSessionsPatchResult["resolved"]>;
 };

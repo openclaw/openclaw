@@ -1,11 +1,10 @@
-// Qa Lab tests cover bus server plugin behavior.
 import { Agent, createServer, request } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { QaBusPollResult } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeQaHttpServer, startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
-import type { QaBusPollResult } from "./runtime-api.js";
 
 async function listenOnLoopback(server: ReturnType<typeof createServer>): Promise<number> {
   await new Promise<void>((resolve, reject) => {
@@ -39,25 +38,17 @@ async function requestOnce(params: { port: number; agent: Agent }): Promise<void
   });
 }
 
-async function pollQaBus(params: {
+async function pollQaBus({
+  baseUrl,
+  ...body
+}: {
   baseUrl: string;
   accountId: string;
   cursor: number;
   acknowledgedCursor?: number;
   timeoutMs: number;
 }): Promise<QaBusPollResult> {
-  const response = await fetch(`${params.baseUrl}/v1/poll`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      accountId: params.accountId,
-      cursor: params.cursor,
-      acknowledgedCursor: params.acknowledgedCursor,
-      timeoutMs: params.timeoutMs,
-    }),
-  });
+  const response = await postQaBusJson(baseUrl, "/v1/poll", body);
   if (!response.ok) {
     throw new Error(`qa-bus request failed: ${response.status}`);
   }
@@ -104,6 +95,31 @@ describe("closeQaHttpServer", () => {
 
 describe("qa-bus server", () => {
   const stops: Array<() => Promise<void>> = [];
+  async function fixture(state = createQaBusState()) {
+    const bus = await startQaBusServer({ state });
+    stops.push(() => bus.stop());
+    return {
+      ...bus,
+      state,
+      post: (route: string, body: unknown) => postQaBusJson(bus.baseUrl, route, body),
+      raw: (route: string, body: string) => postQaBusRawJson(bus.baseUrl, route, body),
+      poll: (cursor = 0, acknowledgedCursor?: number) =>
+        pollQaBus({
+          baseUrl: bus.baseUrl,
+          accountId: "acct-a",
+          timeoutMs: 0,
+          cursor,
+          acknowledgedCursor,
+        }),
+      inbound: (text: string, id = "target") =>
+        state.addInboundMessage({
+          accountId: "acct-a",
+          conversation: { id, kind: "direct" },
+          senderId: "acct-a-user",
+          text,
+        }),
+    };
+  }
 
   beforeEach(() => {
     vi.useRealTimers();
@@ -119,8 +135,7 @@ describe("qa-bus server", () => {
     state.getSnapshot = () => {
       throw requestError;
     };
-    const bus = await startQaBusServer({ state });
-    stops.push(async () => await bus.stop());
+    const bus = await fixture(state);
 
     const response = await fetch(`${bus.baseUrl}/v1/state`, {
       signal: AbortSignal.timeout(1_000),
@@ -130,12 +145,10 @@ describe("qa-bus server", () => {
   });
 
   it("normalizes direct-message aliases at HTTP ingress without accepting unknown kinds", async () => {
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-    stops.push(bus["stop"]);
+    const { state, post } = await fixture();
 
     for (const kind of ["direct", "dm"]) {
-      const response = await postQaBusJson(bus.baseUrl, "/v1/inbound/message", {
+      const response = await post("/v1/inbound/message", {
         conversation: { id: "alice", kind },
         senderId: "alice",
         text: `hello from ${kind}`,
@@ -147,7 +160,7 @@ describe("qa-bus server", () => {
       });
     }
 
-    const rejected = await postQaBusJson(bus.baseUrl, "/v1/inbound/message", {
+    const rejected = await post("/v1/inbound/message", {
       conversation: { id: "alice", kind: "private" },
       senderId: "alice",
       text: "must not be accepted",
@@ -200,49 +213,46 @@ describe("qa-bus server", () => {
         pollWaitersSettled += 1;
       }
     };
-    const activePoll = fetch(`${bus.baseUrl}/v1/poll`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ accountId: "active", cursor: 1, timeoutMs: 30_000 }),
+    const activePoll = postQaBusJson(bus.baseUrl, "/v1/poll", {
+      accountId: "active",
+      cursor: 1,
+      timeoutMs: 30_000,
     }).catch(() => undefined);
     await vi.waitFor(() => expect(pollWaitersStarted).toBe(1));
-    const body = JSON.stringify({ accountId: "late-body", cursor: 0, timeoutMs: 30_000 });
-    const slowPoll = request({
-      host: "127.0.0.1",
-      port: bus.port,
-      path: "/v1/poll",
-      method: "POST",
-      headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+    function pausedPost(route: string, input: unknown) {
+      const body = JSON.stringify(input);
+      const req = request({
+        host: "127.0.0.1",
+        port: bus.port,
+        path: route,
+        method: "POST",
+        headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+      });
+      req.on("response", (response) => response.resume());
+      req.on("error", () => undefined);
+      req.write(body.slice(0, 1));
+      return () => {
+        req.end(body.slice(1));
+      };
+    }
+    const finishPoll = pausedPost("/v1/poll", {
+      accountId: "late-body",
+      cursor: 0,
+      timeoutMs: 30_000,
     });
-    slowPoll.on("response", (response) => response.resume());
-    slowPoll.on("error", () => undefined);
-    slowPoll.write(body.slice(0, 1));
-    const inboundBody = JSON.stringify({
+    const finishInbound = pausedPost("/v1/inbound/message", {
       conversation: { id: "late-room", kind: "direct" },
       senderId: "late-sender",
       text: "must not survive shutdown",
     });
-    const slowInbound = request({
-      host: "127.0.0.1",
-      port: bus.port,
-      path: "/v1/inbound/message",
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "content-length": Buffer.byteLength(inboundBody),
-      },
-    });
-    slowInbound.on("response", (response) => response.resume());
-    slowInbound.on("error", () => undefined);
-    slowInbound.write(inboundBody.slice(0, 1));
     await sleep(10);
 
     stopped = true;
     const startedAt = Date.now();
     const stopping = bus.stop();
     setTimeout(() => {
-      slowPoll.end(body.slice(1));
-      slowInbound.end(inboundBody.slice(1));
+      finishPoll();
+      finishInbound();
     }, 50);
     await stopping;
     await activePoll;
@@ -254,65 +264,24 @@ describe("qa-bus server", () => {
   });
 
   it("resumes an account after its last acknowledged cursor when the client restarts", async () => {
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-    stops.push(bus["stop"]);
-
-    const consumed = state.addInboundMessage({
-      accountId: "acct-a",
-      conversation: { id: "first", kind: "direct" },
-      senderId: "acct-a-user",
-      text: "consumed before restart",
-    });
-    const firstPoll = await pollQaBus({
-      baseUrl: bus.baseUrl,
-      accountId: "acct-a",
-      cursor: 0,
-      timeoutMs: 0,
-    });
+    const { state, poll, inbound } = await fixture();
+    const consumed = inbound("consumed before restart", "first");
+    const firstPoll = await poll();
     expect(firstPoll.events.map((event) => event.cursor)).toEqual([1]);
 
-    await pollQaBus({
-      baseUrl: bus.baseUrl,
-      accountId: "acct-a",
-      cursor: firstPoll.cursor,
-      acknowledgedCursor: 0,
-      timeoutMs: 0,
-    });
+    await poll(firstPoll.cursor, 0);
     expect(state.getAcknowledgedPollCursor("acct-a")).toBe(0);
-    const unacknowledgedRestart = await pollQaBus({
-      baseUrl: bus.baseUrl,
-      accountId: "acct-a",
-      cursor: 0,
-      timeoutMs: 0,
-    });
+    const unacknowledgedRestart = await poll();
     expect(
       unacknowledgedRestart.events.flatMap((event) =>
         "message" in event ? [event.message.id] : [],
       ),
     ).toEqual([consumed.id]);
 
-    await pollQaBus({
-      baseUrl: bus.baseUrl,
-      accountId: "acct-a",
-      cursor: firstPoll.cursor,
-      acknowledgedCursor: firstPoll.cursor,
-      timeoutMs: 0,
-    });
+    await poll(firstPoll.cursor, firstPoll.cursor);
     expect(state.getAcknowledgedPollCursor("acct-a")).toBe(firstPoll.cursor);
-    const queuedDuringRestart = state.addInboundMessage({
-      accountId: "acct-a",
-      conversation: { id: "second", kind: "direct" },
-      senderId: "acct-a-user",
-      text: "queued during restart",
-    });
-
-    const restartedPoll = await pollQaBus({
-      baseUrl: bus.baseUrl,
-      accountId: "acct-a",
-      cursor: 0,
-      timeoutMs: 0,
-    });
+    const queuedDuringRestart = inbound("queued during restart", "second");
+    const restartedPoll = await poll();
     const restartedMessageIds = restartedPoll.events.flatMap((event) =>
       "message" in event ? [event.message.id] : [],
     );
@@ -320,64 +289,35 @@ describe("qa-bus server", () => {
     expect(restartedMessageIds).not.toContain(consumed.id);
 
     state.reset();
-    const queuedAfterReset = state.addInboundMessage({
-      accountId: "acct-a",
-      conversation: { id: "third", kind: "direct" },
-      senderId: "acct-a-user",
-      text: "queued after bus reset",
-    });
-    const resetPoll = await pollQaBus({
-      baseUrl: bus.baseUrl,
-      accountId: "acct-a",
-      cursor: 0,
-      timeoutMs: 0,
-    });
+    const queuedAfterReset = inbound("queued after bus reset", "third");
+    const resetPoll = await poll();
     expect(
       resetPoll.events.flatMap((event) => ("message" in event ? [event.message.id] : [])),
     ).toEqual([queuedAfterReset.id]);
   });
 
   it("paginates a burst without advancing past events omitted by the poll limit", async () => {
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-    stops.push(bus["stop"]);
+    const { poll, inbound } = await fixture();
 
     for (let index = 1; index <= 101; index += 1) {
-      state.addInboundMessage({
-        accountId: "acct-a",
-        conversation: { id: "burst", kind: "direct" },
-        senderId: "acct-a-user",
-        text: `burst event ${index}`,
-      });
+      inbound(`burst event ${index}`, "burst");
     }
 
-    const firstPage = await pollQaBus({
-      baseUrl: bus.baseUrl,
-      accountId: "acct-a",
-      cursor: 0,
-      timeoutMs: 0,
-    });
+    const firstPage = await poll();
     expect(firstPage.events).toHaveLength(100);
     expect(firstPage.cursor).toBe(100);
 
-    const secondPage = await pollQaBus({
-      baseUrl: bus.baseUrl,
-      accountId: "acct-a",
-      cursor: firstPage.cursor,
-      timeoutMs: 0,
-    });
+    const secondPage = await poll(firstPage.cursor);
     expect(secondPage.events).toHaveLength(1);
     expect(secondPage.events[0]?.cursor).toBe(101);
     expect(secondPage.cursor).toBe(101);
   });
 
   it("rejects malformed poll numeric fields before long-polling", async () => {
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-    stops.push(bus["stop"]);
+    const { post } = await fixture();
 
     const startedAt = Date.now();
-    const response = await postQaBusJson(bus.baseUrl, "/v1/poll", {
+    const response = await post("/v1/poll", {
       accountId: "acct-a",
       cursor: "999",
       timeoutMs: 500,
@@ -391,11 +331,9 @@ describe("qa-bus server", () => {
   });
 
   it("rejects acknowledgements beyond the fetched cursor", async () => {
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-    stops.push(bus["stop"]);
+    const { post } = await fixture();
 
-    const response = await postQaBusJson(bus.baseUrl, "/v1/poll", {
+    const response = await post("/v1/poll", {
       accountId: "acct-a",
       cursor: 1,
       acknowledgedCursor: 2,
@@ -427,9 +365,7 @@ describe("qa-bus server", () => {
   it.each(["inbound", "outbound"] as const)(
     "accepts a generated-media payload larger than 1 MiB on the %s message route",
     async (direction) => {
-      const state = createQaBusState();
-      const bus = await startQaBusServer({ state });
-      stops.push(bus["stop"]);
+      const { state, post } = await fixture();
 
       const generatedImage = Buffer.alloc(1_600_000, 0x71);
       const attachment = {
@@ -439,7 +375,7 @@ describe("qa-bus server", () => {
         fileName: "qa-lighthouse.png",
         contentBase64: generatedImage.toString("base64"),
       };
-      const response = await postQaBusJson(bus.baseUrl, `/v1/${direction}/message`, {
+      const response = await post(`/v1/${direction}/message`, {
         accountId: "acct-a",
         text: "QA lighthouse",
         attachments: [attachment],
@@ -461,16 +397,18 @@ describe("qa-bus server", () => {
       expect(snapshot.events).toHaveLength(1);
       const storedAttachment = snapshot.messages[0]?.attachments?.[0];
       expect(storedAttachment).toEqual(attachment);
-      expect(Buffer.from(storedAttachment?.contentBase64 ?? "", "base64")).toEqual(generatedImage);
+      const storedImage = Buffer.from(storedAttachment?.contentBase64 ?? "", "base64");
+      expect(storedImage.byteLength).toBe(generatedImage.byteLength);
+      expect(
+        storedImage.equals(generatedImage),
+        "stored attachment bytes match the generated image",
+      ).toBe(true);
     },
   );
 
   it("returns a controlled error when a v1 POST body contains malformed JSON", async () => {
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-    stops.push(bus["stop"]);
-
-    const response = await postQaBusRawJson(bus.baseUrl, "/v1/reset", "{");
+    const { raw } = await fixture();
+    const response = await raw("/v1/reset", "{");
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -479,18 +417,10 @@ describe("qa-bus server", () => {
   });
 
   it("keeps oversized numeric poll and search fields bounded", async () => {
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-    stops.push(bus["stop"]);
+    const { post, raw, inbound } = await fixture();
+    const message = inbound("bounded numeric fields");
 
-    const message = state.addInboundMessage({
-      accountId: "acct-a",
-      conversation: { id: "target", kind: "direct" },
-      senderId: "acct-a-user",
-      text: "bounded numeric fields",
-    });
-
-    const pollResponse = await postQaBusJson(bus.baseUrl, "/v1/poll", {
+    const pollResponse = await post("/v1/poll", {
       accountId: "acct-a",
       cursor: 0,
       limit: 10_000,
@@ -501,7 +431,7 @@ describe("qa-bus server", () => {
       events: [{ message: { id: message.id } }],
     });
 
-    const searchResponse = await postQaBusJson(bus.baseUrl, "/v1/actions/search", {
+    const searchResponse = await post("/v1/actions/search", {
       accountId: "acct-a",
       limit: 10_000,
       query: "bounded",
@@ -511,8 +441,7 @@ describe("qa-bus server", () => {
       messages: [{ id: message.id }],
     });
 
-    const extremeSearchResponse = await postQaBusRawJson(
-      bus.baseUrl,
+    const extremeSearchResponse = await raw(
       "/v1/actions/search",
       `{"accountId":"acct-a","limit":1e309,"query":"bounded"}`,
     );

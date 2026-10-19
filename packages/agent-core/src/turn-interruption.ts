@@ -51,21 +51,17 @@ export function isTurnHandoffAbort(signal: AbortSignal | undefined): boolean {
   );
 }
 
-export function createInterruptedTurnMessage(): AgentMessage {
-  return {
+export async function appendInterruptedTurnMessage(
+  messages: AgentMessage[],
+  emit: (event: AgentEvent) => Promise<void> | void,
+): Promise<void> {
+  const interruption: AgentMessage = {
     role: "custom",
     customType: "openclaw:turn-aborted",
     content: INTERRUPTED_TURN_GUIDANCE,
     display: false,
     timestamp: Date.now(),
   };
-}
-
-export async function appendInterruptedTurnMessage(
-  messages: AgentMessage[],
-  emit: (event: AgentEvent) => Promise<void> | void,
-): Promise<void> {
-  const interruption = createInterruptedTurnMessage();
   messages.push(interruption);
   await emit({ type: "message_start", message: interruption });
   await emit({ type: "message_end", message: interruption });

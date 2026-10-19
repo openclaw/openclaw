@@ -37,29 +37,40 @@ print_plugins_stderr_log() {
 run_plugins_openclaw_logged() {
   local label="$1"
   shift
-  run_plugins_command_logged "$label" openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@"
+  run_plugins_command_output command "$label" "" openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@"
 }
 
 run_plugins_fixture_logged() {
   local label="$1"
   shift
-  run_plugins_command_logged "$label" openclaw_e2e_fixture_plugin_command openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" -- "$@"
+  run_plugins_command_output command "$label" "" openclaw_e2e_fixture_plugin_command openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" -- "$@"
 }
 
-run_plugins_command_logged() {
-  local label="$1"
+run_plugins_openclaw_capture() {
+  local output_file="$1"
   shift
-  local output_file
-  output_file="$(mktemp "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-stdout.XXXXXX")" || return $?
+  run_plugins_command_output capture "${output_file##*/}" "$output_file" openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@"
+}
+
+run_plugins_command_output() {
+  local mode="$1"
+  local label="$2"
+  local output_file="$3"
+  shift 3
+  if [[ "$mode" == "command" ]]; then
+    output_file="$(mktemp "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-stdout.XXXXXX")" || return $?
+  fi
   local error_file
   error_file="$(mktemp "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-stderr.XXXXXX")" || {
     local create_status=$?
-    rm -f "$output_file"
+    if [[ "$mode" == "command" ]]; then
+      rm -f "$output_file"
+    fi
     return "$create_status"
   }
   local status=0
   if "$@" >"$output_file" 2>"$error_file"; then
-    if docker_e2e_lifecycle_trace_enabled; then
+    if [[ "$mode" == "capture" ]] || docker_e2e_lifecycle_trace_enabled; then
       print_plugins_stderr_log "$error_file" || status=$?
     fi
   else
@@ -68,39 +79,18 @@ run_plugins_command_logged() {
       printf 'Plugin sweep stderr redaction failed: %s\n' "$label" >&2
     fi
     if [[ "$status" -eq 124 ]]; then
-      printf 'Plugin sweep command timed out after %s: %s\n' \
-        "$OPENCLAW_PLUGINS_CLI_TIMEOUT" "$label" >&2
+      printf 'Plugin sweep %s timed out after %s: %s\n' \
+        "$mode" "$OPENCLAW_PLUGINS_CLI_TIMEOUT" "$label" >&2
     else
-      printf 'Plugin sweep command failed with status %s: %s\n' \
-        "$status" "$label" >&2
+      printf 'Plugin sweep %s failed with status %s: %s\n' \
+        "$mode" "$status" "$label" >&2
     fi
   fi
-  rm -f "$error_file" "$output_file"
-  return "$status"
-}
-
-run_plugins_openclaw_capture() {
-  local output_file="$1"
-  shift
-  local error_file
-  error_file="$(mktemp "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-stderr.XXXXXX")" || return $?
-  local status=0
-  if openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file" 2>"$error_file"; then
-    print_plugins_stderr_log "$error_file" || status=$?
+  if [[ "$mode" == "command" ]]; then
+    rm -f "$error_file" "$output_file"
   else
-    status=$?
-    if ! print_plugins_stderr_log "$error_file"; then
-      printf 'Plugin sweep stderr redaction failed: %s\n' "${output_file##*/}" >&2
-    fi
-    if [[ "$status" -eq 124 ]]; then
-      printf 'Plugin sweep capture timed out after %s: %s\n' \
-        "$OPENCLAW_PLUGINS_CLI_TIMEOUT" "${output_file##*/}" >&2
-    else
-      printf 'Plugin sweep capture failed with status %s: %s\n' \
-        "$status" "${output_file##*/}" >&2
-    fi
+    rm -f "$error_file"
   fi
-  rm -f "$error_file"
   return "$status"
 }
 
@@ -129,16 +119,13 @@ fi
 trap cleanup_openclaw_plugins_sweep EXIT
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
-PACKAGE_VERSION="$(node -p 'require("./package.json").version')"
-OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(node scripts/e2e/lib/package-compat.mjs "$PACKAGE_VERSION")"
-export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 BUNDLED_PLUGIN_ROOT_DIR="extensions"
 OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
 
 demo_plugin_id="demo-plugin"
 demo_plugin_root="$OPENCLAW_PLUGIN_HOME/$demo_plugin_id"
-write_demo_fixture_plugin "$demo_plugin_root"
-record_fixture_plugin_trust "$demo_plugin_id" "$demo_plugin_root" 1
+node scripts/e2e/lib/fixture.mjs plugin-demo "$demo_plugin_root"
+node scripts/e2e/lib/plugins/assertions.mjs record-fixture-plugin-trust "$demo_plugin_id" "$demo_plugin_root" 1
 
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins.json" plugins list --json
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-inspect.json" plugins inspect demo-plugin --runtime --json
@@ -147,7 +134,7 @@ node scripts/e2e/lib/plugins/assertions.mjs demo-plugin
 
 echo "Testing tgz install flow..."
 pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-pack.XXXXXX")"
-pack_fixture_plugin "$pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-tgz.tgz" demo-plugin-tgz 0.0.1 demo.tgz "Demo Plugin TGZ"
+pack_fixture_archive plugin "$pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-tgz.tgz" demo-plugin-tgz 0.0.1 demo.tgz "Demo Plugin TGZ"
 
 run_plugins_fixture_logged install-tgz plugins install "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-tgz.tgz" --force
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins2.json" plugins list --json
@@ -161,7 +148,7 @@ node scripts/e2e/lib/plugins/assertions.mjs plugin-tgz-removed
 
 echo "Testing install from local folder (plugins.load.paths)..."
 dir_plugin="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-dir.XXXXXX")"
-write_fixture_plugin "$dir_plugin" demo-plugin-dir 0.0.1 demo.dir "Demo Plugin DIR"
+node scripts/e2e/lib/fixture.mjs plugin "$dir_plugin" demo-plugin-dir 0.0.1 demo.dir "Demo Plugin DIR"
 
 run_plugins_fixture_logged install-dir plugins install "$dir_plugin" --force
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins3.json" plugins list --json
@@ -178,7 +165,7 @@ node scripts/e2e/lib/plugins/assertions.mjs plugin-dir-removed
 
 echo "Testing install from local folder with preinstalled dependencies..."
 dir_deps_plugin="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-dir-deps.XXXXXX")"
-write_fixture_plugin_with_vendored_dependency "$dir_deps_plugin" demo-plugin-dir-deps 0.0.1 demo.dir.deps "Demo Plugin DIR Deps"
+node scripts/e2e/lib/fixture.mjs plugin-vendored-dep "$dir_deps_plugin" demo-plugin-dir-deps 0.0.1 demo.dir.deps "Demo Plugin DIR Deps"
 
 run_plugins_fixture_logged install-dir-deps plugins install "$dir_deps_plugin" --force
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-dir-deps.json" plugins list --json
@@ -192,7 +179,7 @@ node scripts/e2e/lib/plugins/assertions.mjs plugin-dir-deps-removed
 
 echo "Testing install from npm spec (file:)..."
 file_pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-filepack.XXXXXX")"
-write_fixture_plugin "$file_pack_dir/package" demo-plugin-file 0.0.1 demo.file "Demo Plugin FILE"
+node scripts/e2e/lib/fixture.mjs plugin "$file_pack_dir/package" demo-plugin-file 0.0.1 demo.file "Demo Plugin FILE"
 
 run_plugins_fixture_logged install-file plugins install "file:$file_pack_dir/package" --force
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins4.json" plugins list --json
@@ -209,8 +196,8 @@ npm_pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-npm-pack.XX
 npm_dep_pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-npm-dep-pack.XXXXXX")"
 invalid_npm_pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-invalid-metadata-pack.XXXXXX")"
 npm_registry_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-npm-registry.XXXXXX")"
-pack_fixture_plugin_with_cli_registry_dependency "$npm_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-npm.tgz" demo-plugin-npm 0.0.1 demo.npm "Demo Plugin NPM" demo-npm "demo-plugin-npm:pong"
-pack_fake_is_number_package "$npm_dep_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/is-number-7.0.0.tgz"
+pack_fixture_archive plugin-cli-registry-dep "$npm_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-npm.tgz" demo-plugin-npm 0.0.1 demo.npm "Demo Plugin NPM" demo-npm "demo-plugin-npm:pong"
+pack_fixture_archive fake-is-number-package "$npm_dep_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/is-number-7.0.0.tgz"
 pack_fixture_plugin_with_invalid_extension_entry "$invalid_npm_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-invalid-metadata.tgz" demo-plugin-invalid-metadata 0.0.1 demo.invalid.metadata "Demo Plugin Invalid Metadata"
 start_npm_fixture_registry "@openclaw/demo-plugin-npm" "0.0.1" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-npm.tgz" "$npm_registry_dir" "is-number" "7.0.0" "$OPENCLAW_PLUGINS_TMP_DIR/is-number-7.0.0.tgz" "@openclaw/demo-plugin-invalid-metadata" "0.0.1" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-invalid-metadata.tgz"
 
@@ -255,7 +242,7 @@ echo "Testing install from git repo and plugin CLI execution..."
 git_fixture_root="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-git.XXXXXX")"
 git_repo="$git_fixture_root/repo"
 git_repo_url="file://$git_repo"
-write_fixture_plugin_with_cli "$git_repo" demo-plugin-git 0.0.1 demo.git "Demo Plugin Git" demo-git "demo-plugin-git:pong"
+node scripts/e2e/lib/fixture.mjs plugin-cli "$git_repo" demo-plugin-git 0.0.1 demo.git "Demo Plugin Git" demo-git "demo-plugin-git:pong"
 git -C "$git_repo" init -q
 git -C "$git_repo" config user.email "docker-e2e@openclaw.local"
 git -C "$git_repo" config user.name "OpenClaw Docker E2E"
@@ -278,7 +265,7 @@ echo "Testing git plugin update from moving ref..."
 git_update_fixture_root="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-git-update.XXXXXX")"
 git_update_repo="$git_update_fixture_root/repo"
 git_update_repo_url="file://$git_update_repo"
-write_fixture_plugin_with_cli "$git_update_repo" demo-plugin-git-update 0.0.1 demo.git.update.v1 "Demo Plugin Git Update" demo-git-update "demo-plugin-git-update:pong-v1"
+node scripts/e2e/lib/fixture.mjs plugin-cli "$git_update_repo" demo-plugin-git-update 0.0.1 demo.git.update.v1 "Demo Plugin Git Update" demo-git-update "demo-plugin-git-update:pong-v1"
 git -C "$git_update_repo" init -q
 git -C "$git_update_repo" config user.email "docker-e2e@openclaw.local"
 git -C "$git_update_repo" config user.name "OpenClaw Docker E2E"
@@ -288,7 +275,7 @@ git -C "$git_update_repo" commit -qm "test fixture v1"
 git_update_ref_v1="$(git -C "$git_update_repo" rev-parse HEAD)"
 
 run_plugins_fixture_logged install-git-update plugins install "git:$git_update_repo_url@main" --force
-write_fixture_plugin_with_cli "$git_update_repo" demo-plugin-git-update 0.0.2 demo.git.update.v2 "Demo Plugin Git Update" demo-git-update "demo-plugin-git-update:pong-v2"
+node scripts/e2e/lib/fixture.mjs plugin-cli "$git_update_repo" demo-plugin-git-update 0.0.2 demo.git.update.v2 "Demo Plugin Git Update" demo-git-update "demo-plugin-git-update:pong-v2"
 git -C "$git_update_repo" add -A
 git -C "$git_update_repo" commit -qm "test fixture v2"
 
@@ -302,8 +289,8 @@ node scripts/e2e/lib/plugins/assertions.mjs plugin-git-updated "$git_update_ref_
 echo "Testing Claude bundle enable and inspect flow..."
 bundle_plugin_id="claude-bundle-e2e"
 bundle_root="$OPENCLAW_PLUGIN_HOME/$bundle_plugin_id"
-write_claude_bundle_fixture "$bundle_root"
-record_fixture_plugin_trust "$bundle_plugin_id" "$bundle_root" 0
+node scripts/e2e/lib/fixture.mjs claude-bundle "$bundle_root"
+node scripts/e2e/lib/plugins/assertions.mjs record-fixture-plugin-trust "$bundle_plugin_id" "$bundle_root" 0
 
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-bundle-disabled.json" plugins list --json
 node scripts/e2e/lib/plugins/assertions.mjs bundle-disabled
@@ -314,7 +301,7 @@ node scripts/e2e/lib/plugins/assertions.mjs bundle-inspect
 
 echo "Testing plugin install visible after explicit restart..."
 slash_install_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-slash-install.XXXXXX")"
-write_fixture_plugin "$slash_install_dir" slash-install-plugin 0.0.1 demo.slash.install "Slash Install Plugin"
+node scripts/e2e/lib/fixture.mjs plugin "$slash_install_dir" slash-install-plugin 0.0.1 demo.slash.install "Slash Install Plugin"
 
 run_plugins_fixture_logged install-slash-plugin plugins install "$slash_install_dir" --force
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugin-command-install-show.json" plugins inspect slash-install-plugin --runtime --json

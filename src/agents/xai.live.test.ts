@@ -21,6 +21,7 @@ const XAI_LIVE_COMPLETION_CASES = [
   { modelId: "grok-4.3", completionReasoning: undefined },
   { modelId: "grok-4.5", completionReasoning: undefined },
   { modelId: "grok-4.6", completionReasoning: "xhigh" },
+  { modelId: "grok-4.7", completionReasoning: "xhigh" },
 ] as const;
 
 const describeLive = LIVE && XAI_KEY ? describe : describe.skip;
@@ -53,10 +54,11 @@ function getToolFunction(tool: Record<string, unknown>): Record<string, unknown>
 function resolveLiveXaiModel(modelId: XaiLiveModelId) {
   const isGrok45 = modelId === "grok-4.5";
   const isGrok46 = modelId === "grok-4.6";
-  const isFrontier = isGrok45 || isGrok46;
+  const isGrok47 = modelId === "grok-4.7";
+  const isFrontier = isGrok45 || isGrok46 || isGrok47;
   return {
     id: modelId,
-    name: isGrok46 ? "Grok 4.6" : isGrok45 ? "Grok 4.5" : "Grok 4.3",
+    name: isGrok47 ? "Grok 4.7" : isGrok46 ? "Grok 4.6" : isGrok45 ? "Grok 4.5" : "Grok 4.3",
     api: "openai-responses",
     provider: "xai",
     baseUrl: "https://api.x.ai/v1",
@@ -73,7 +75,7 @@ function resolveLiveXaiModel(modelId: XaiLiveModelId) {
       low: "low",
       medium: "medium",
       high: "high",
-      xhigh: isGrok46 ? "xhigh" : "high",
+      xhigh: isGrok47 || isGrok46 ? "xhigh" : "high",
     },
   } satisfies Model<"openai-responses">;
 }

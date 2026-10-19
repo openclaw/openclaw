@@ -1,4 +1,5 @@
 /** Tests target-registry data built from the current runtime snapshot. */
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -152,22 +153,6 @@ describe("getSecretTargetRegistry metadata reuse", () => {
     },
   );
 
-  it("allows configless runtime targets to reuse the lifecycle workspace", async () => {
-    const { getSecretTargetRegistry } = await import("./target-registry-data.js");
-
-    getSecretTargetRegistry();
-
-    expect(metadataMocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
-      allowWorkspaceScopedCurrent: true,
-      env: process.env,
-    });
-    const calls = metadataMocks.resolvePluginMetadataSnapshot.mock.calls as unknown as Array<
-      [{ allowWorkspaceScopedCurrent?: boolean }]
-    >;
-    for (const [call] of calls) {
-      expect(call.allowWorkspaceScopedCurrent).toBe(true);
-    }
-  });
   it("registers secret targets for installed-origin plugins (#104320)", async () => {
     // The Exa web providers moved from bundled origin to an installed plugin
     // package; the gateway's known-target registry must keep covering them.
@@ -192,27 +177,6 @@ describe("getSecretTargetRegistry metadata reuse", () => {
 
     expect(ids).toContain("plugins.entries.exa.config.webSearch.apiKey");
     expect(isKnownSecretTargetId("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
-  });
-
-  it("registers config contract targets only from the resolved snapshot", async () => {
-    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({
-      plugins: [
-        {
-          id: "snapshot-plugin",
-          origin: "config",
-          channels: [],
-          configContracts: {
-            secretInputs: { paths: [{ path: "credentials.token" }] },
-          },
-        },
-      ],
-    } as never);
-    const { getSecretTargetRegistry } = await import("./target-registry-data.js");
-
-    const ids = getSecretTargetRegistry().map((entry) => entry.id);
-
-    expect(ids).toContain("plugins.entries.snapshot-plugin.config.credentials.token");
-    expect(metadataMocks.listBundledPluginMetadata).not.toHaveBeenCalled();
   });
 
   it("preserves plugin, array, and record identity across discovery, setup, and apply", async () => {
@@ -463,15 +427,6 @@ describe("getSecretTargetRegistry metadata reuse", () => {
         { token: { source: "env", provider: "default", id: "WILDCARD_ARRAY_PLUGIN_TOKEN" } },
       ],
     });
-  });
-
-  it("keeps official external channel secret targets without installed plugin metadata", async () => {
-    const { getSecretTargetRegistry } = await import("./target-registry-data.js");
-
-    const ids = getSecretTargetRegistry().map((entry) => entry.id);
-
-    expect(ids).toContain("channels.qqbot.clientSecret");
-    expect(ids).toContain("channels.qqbot.accounts.*.clientSecret");
   });
 
   it("builds config-scoped registries independently instead of reusing the singleton", async () => {

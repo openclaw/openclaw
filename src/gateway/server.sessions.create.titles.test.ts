@@ -1,18 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
-import { waitForFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import {
-  interruptSessionWorkAdmissions,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-} from "../sessions/session-lifecycle-admission.js";
+import { interruptSessionControllerEffects } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   controlUiClient,
   initializeRepository,
@@ -36,25 +34,28 @@ vi.mock("../plugins/session-discussion-registry.js", () => ({
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   titleMocks.generate.mockReset();
   titleMocks.open.mockReset();
   titleMocks.lookup.mockReset();
   dispatchInboundMessageMock.mockReset();
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
 });
 
-test.each(["keep", "delete"] as const)(
+test.for(["keep", "delete"] as const)(
   "names a remote session without blocking placement or deletion (%s)",
-  async (outcome) => {
+  async (outcome, { signal }) => {
     const naming = createDeferredCore<string>();
-    titleMocks.generate.mockReturnValue(naming.promise);
+    const namingStarted = createDeferredCore();
+    titleMocks.generate.mockImplementation(() => {
+      namingStarted.resolve();
+      return naming.promise;
+    });
     const { storePath } = await createSessionStoreDir();
     const context = {
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set(["title-listener"]),
-      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
     };
     let key: string | undefined;
     try {
@@ -70,14 +71,15 @@ test.each(["keep", "delete"] as const)(
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       expect(created.payload?.runStarted).toBe(false);
       key = created.payload!.key;
-      await vi.waitFor(() => expect(titleMocks.generate).toHaveBeenCalledOnce());
+      await racePromiseWithAbortSignal(namingStarted.promise, signal);
+      expect(titleMocks.generate).toHaveBeenCalledOnce();
       expect(
         loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.displayName,
       ).toBeUndefined();
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       // Cloud dispatch uses this drain before provisioning; optional naming cannot hold it.
       expect(
-        await interruptSessionWorkAdmissions({
+        await interruptSessionControllerEffects({
           scope: storePath,
           identities: [key],
           timeoutMs: 100,
@@ -132,7 +134,7 @@ test.each(["adopted", "incognito"] as const)(
       client,
     );
     expect(result.ok, JSON.stringify(result.error)).toBe(true);
-    await settleWorkspaceRuns({ chatAbortControllers: new Map() }, storePath, key);
+    await settleWorkspaceRuns({}, storePath, key);
     expect(titleMocks.generate).not.toHaveBeenCalled();
     expect(
       loadSessionEntry({ agentId: "main", sessionKey: result.payload!.key, storePath })
@@ -159,7 +161,6 @@ test("successful naming survives setup failure and is shared with discussion ope
   );
   const context = {
     broadcast: vi.fn(),
-    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
     dedupe: new Map(),
   };
   dispatchInboundMessageMock.mockResolvedValue({
@@ -185,6 +186,7 @@ test("successful naming survives setup failure and is shared with discussion ope
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.runStarted).toBe(true);
     key = created.payload!.key;
+    await settleWorkspaceRuns(context, storePath, key);
     await vi.waitFor(() => expect(titleMocks.generate).toHaveBeenCalledOnce());
     const discussion = directSessionReq(
       "session.discussion.open",
@@ -196,7 +198,6 @@ test("successful naming survives setup failure and is shared with discussion ope
     expect(titleMocks.generate).toHaveBeenCalledOnce();
     naming.resolve("Workspace repair plan");
     expect((await discussion).ok).toBe(true);
-    await waitForFile(starts, SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
     await settleWorkspaceRuns(context, storePath, key);
     expect(context.broadcast).toHaveBeenCalledWith(
       "chat",
@@ -207,6 +208,7 @@ test("successful naming survives setup failure and is shared with discussion ope
       }),
       expect.anything(),
     );
+    expect(await fs.readFile(starts, "utf8")).toBe("started\n");
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.displayName).toBe(
       "Workspace repair plan",
@@ -227,7 +229,7 @@ test("successful naming survives setup failure and is shared with discussion ope
     await settleWorkspaceRuns(context, storePath, key);
     expect(await fs.readFile(starts, "utf8")).toBe("started\n");
     expect(titleMocks.generate).toHaveBeenCalledOnce();
-    expect(managedWorktrees.findLiveByOwner("session", key)?.branch).toContain(
+    expect((await managedWorktrees.findLiveByOwner("session", key))?.branch).toContain(
       "workspace-repair-plan",
     );
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
@@ -240,7 +242,142 @@ test("successful naming survives setup failure and is shared with discussion ope
   } finally {
     naming.resolve("Workspace repair plan");
     await settleWorkspaceRuns(context, storePath, key, true);
-    const owned = key ? managedWorktrees.findLiveByOwner("session", key) : undefined;
+    const owned = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
+    if (owned) {
+      await managedWorktrees.remove({
+        id: owned.id,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
+    }
+  }
+});
+
+test.each(["generator error", "delayed title"])(
+  "sessions.create preserves background title recovery after %s",
+  async (failure) => {
+    const root = tempDirs.make("openclaw-session-worktree-recovery-");
+    testState.agentConfig = { workspace: await initializeRepository(root, "workspace") };
+    const { storePath } = await createSessionStoreDir();
+    const key = "agent:main:dashboard:worktree-title-fallback";
+    const target = { sessionKey: key, storePath };
+    const title = createDeferredCore<string>();
+    const titleStarted = createDeferredCore();
+    const dispatchStarted = createDeferredCore();
+    const dispatchFinished = createDeferredCore();
+    const preparationFailed = createDeferredCore<Error>();
+    const context = {
+      broadcast: vi.fn<GatewayRequestContext["broadcast"]>((event, payload) => {
+        if (event === "chat" && isRecord(payload) && payload.state === "error") {
+          preparationFailed.resolve(
+            new Error(
+              typeof payload.errorMessage === "string"
+                ? payload.errorMessage
+                : "Session failed before dispatch",
+            ),
+          );
+        }
+      }),
+    };
+    const waitForPreparation = async (started: Promise<void>) => {
+      const error = await Promise.race([started, preparationFailed.promise]);
+      if (error) {
+        throw error;
+      }
+    };
+    const delayed = failure === "delayed title";
+    titleMocks.generate.mockImplementation(() => {
+      titleStarted.resolve();
+      return delayed ? title.promise : Promise.reject(new Error("boom"));
+    });
+    dispatchInboundMessageMock.mockImplementationOnce(async () => {
+      dispatchStarted.resolve();
+      await dispatchFinished.promise;
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    try {
+      const created = await directSessionReq<{ runStarted: boolean }>(
+        "sessions.create",
+        {
+          agentId: "main",
+          key,
+          worktree: true,
+          message: "Investigate the raw fallback title",
+        },
+        { client: { connect: { scopes: ["operator.admin"] } } as never, context },
+      );
+
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(created.payload?.runStarted).toBe(true);
+      await waitForPreparation(dispatchStarted.promise);
+      await waitForPreparation(titleStarted.promise);
+      const branch = loadSessionEntry(target)?.worktree?.branch;
+      expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+$/);
+      expect(titleMocks.generate).toHaveBeenCalledOnce();
+      dispatchFinished.resolve();
+      await settleWorkspaceRuns(context, storePath, key);
+      if (delayed) {
+        expect(loadSessionEntry(target)?.displayName).toBeUndefined();
+        title.resolve("Late investigation title");
+        await vi.waitFor(
+          () => expect(loadSessionEntry(target)?.displayName).toBe("Late investigation title"),
+          { interval: 1 },
+        );
+        expect(loadSessionEntry(target)?.worktree?.branch).toBe(branch);
+      } else {
+        await vi.waitFor(() =>
+          expect(loadSessionEntry(target)?.displayName).toMatch(/^[a-z]+-[a-z]+$/),
+        );
+      }
+      expect(loadSessionEntry(target)?.worktree?.branch).toBe(branch);
+      expect(titleMocks.generate).toHaveBeenCalledTimes(delayed ? 1 : 2);
+    } finally {
+      title.resolve("Fixture cleanup");
+      dispatchFinished.resolve();
+      await settleWorkspaceRuns(context, storePath, key, true);
+      const owned = await managedWorktrees.findLiveByOwner("session", key);
+      if (owned) {
+        await managedWorktrees.remove({
+          id: owned.id,
+          reason: "test-cleanup",
+          allowSnapshotLoss: true,
+        });
+      }
+      testState.agentConfig = undefined;
+    }
+  },
+);
+
+test("creates a two-word worktree name before an initial turn can generate its title", async () => {
+  const root = tempDirs.make("openclaw-session-worktree-naming-");
+  const workspace = await initializeRepository(root, "workspace");
+  testState.agentConfig = { workspace };
+  const { storePath } = await createSessionStoreDir();
+  const context = {
+    dedupe: new Map(),
+  };
+  titleMocks.generate.mockResolvedValue("Canvas video and device presence");
+  let key: string | undefined;
+  try {
+    const created = await directSessionReq<{ key: string }>(
+      "sessions.create",
+      {
+        agentId: "main",
+        worktree: true,
+        titleSource: "Can you use the canvas feature to show a video on my screen?",
+      },
+      { ...controlUiClient, context },
+    );
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    key = created.payload!.key;
+    await settleWorkspaceRuns(context, storePath, key);
+    const branch = (await managedWorktrees.findLiveByOwner("session", key))?.branch;
+    expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+$/);
+    const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    expect(entry?.worktree?.branch).toBe(branch);
+  } finally {
+    await settleWorkspaceRuns(context, storePath, key, true);
+    const owned = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
     if (owned) {
       await managedWorktrees.remove({
         id: owned.id,
@@ -282,5 +419,5 @@ test("sessions.create rejects another plugin's session before naming or worktree
   expect(result.error?.message).toContain("did not create it");
   expect(titleMocks.generate).not.toHaveBeenCalled();
   expect(loadSessionEntry(scope)).toEqual(entry);
-  expect(managedWorktrees.findLiveByOwner("session", sessionKey)).toBeUndefined();
+  expect(await managedWorktrees.findLiveByOwner("session", sessionKey)).toBeUndefined();
 });

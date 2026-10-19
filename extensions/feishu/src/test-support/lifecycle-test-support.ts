@@ -1,15 +1,38 @@
 // Feishu plugin module implements lifecycle test support behavior.
 import { randomUUID } from "node:crypto";
+import { EventDispatcher } from "@larksuiteoapi/node-sdk";
 import {
   createPluginRuntimeMock,
   createTestInboundDebounceFlush,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, vi, type Mock } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
+import { getFeishuLifecycleTestMocks } from "../lifecycle.test-support.js";
+import { createFeishuTestIngressQueue } from "../monitor.test-mocks.js";
 import { getFeishuRuntime, setFeishuRuntime } from "../runtime.js";
 import type { ResolvedFeishuAccount } from "../types.js";
 
 const FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS = 10_000;
+const activeMonitors = new Set<{ controller: AbortController; completion: Promise<void> }>();
+
+export async function stopFeishuLifecycleMonitors(): Promise<void> {
+  const monitors = [...activeMonitors];
+  for (const monitor of monitors) {
+    monitor.controller.abort();
+  }
+  const results = await Promise.allSettled(monitors.map((monitor) => monitor.completion));
+  results.push(...(await Promise.allSettled([closeOpenClawStateDatabaseAsync()])));
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Feishu lifecycle test cleanup failed");
+  }
+  activeMonitors.clear();
+}
 type InboundDebounceFlush = ReturnType<
   Parameters<PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]>[0]["onFlush"]
 >;
@@ -71,7 +94,6 @@ export function restoreFeishuLifecycleStateDir(originalStateDir: string | undefi
 const FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE = {
   kind: "prefetched",
   botOpenId: "ou_bot_1",
-  botName: "Bot",
 } as const;
 
 export function createFeishuLifecycleReplyDispatcher(): FeishuLifecycleReplyDispatcher {
@@ -87,6 +109,7 @@ function createImmediateInboundDebounce() {
   return {
     resolveInboundDebounceMs: vi.fn(() => 0),
     createInboundDebouncer: <T>(params: InboundDebouncerParams<T>) => ({
+      shouldBuffer: () => false,
       enqueue: async (item: T) => {
         try {
           await params.onFlush?.([item], createTestInboundDebounceFlush).completion;
@@ -106,26 +129,17 @@ function installFeishuLifecycleRuntime(params: {
   dispatchReplyFromConfig: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
   withReplyDispatcher: PluginRuntime["channel"]["reply"]["withReplyDispatcher"];
   resolveStorePath: PluginRuntime["channel"]["session"]["resolveStorePath"];
-  hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
-  shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
-  resolveCommandAuthorizedFromAuthorizers?: PluginRuntime["channel"]["commands"]["resolveCommandAuthorizedFromAuthorizers"];
-  readAllowFromStore?: PluginRuntime["channel"]["pairing"]["readAllowFromStore"];
-  upsertPairingRequest?: PluginRuntime["channel"]["pairing"]["upsertPairingRequest"];
-  buildPairingReply?: PluginRuntime["channel"]["pairing"]["buildPairingReply"];
-  detectMime?: PluginRuntime["media"]["detectMime"];
 }): PluginRuntime {
   const runtime = createPluginRuntimeMock({
+    state: {
+      openChannelIngressQueue: createFeishuTestIngressQueue,
+    },
     channel: {
       debounce: createImmediateInboundDebounce(),
-      text: {
-        hasControlCommand: params.hasControlCommand ?? vi.fn(() => false),
-      },
       routing: {
         resolveAgentRoute: params.resolveAgentRoute,
       },
       reply: {
-        resolveEnvelopeFormatOptions: vi.fn(() => ({})),
-        formatAgentEnvelope: vi.fn((value: { body: string }) => value.body),
         dispatchReplyWithBufferedBlockDispatcher: async ({
           cfg,
           ctx,
@@ -165,22 +179,14 @@ function installFeishuLifecycleRuntime(params: {
         withReplyDispatcher: params.withReplyDispatcher,
       },
       commands: {
-        shouldComputeCommandAuthorized: params.shouldComputeCommandAuthorized ?? vi.fn(() => false),
-        resolveCommandAuthorizedFromAuthorizers:
-          params.resolveCommandAuthorizedFromAuthorizers ?? vi.fn(() => false),
+        shouldComputeCommandAuthorized: vi.fn(() => false),
       },
       session: {
-        readSessionUpdatedAt: vi.fn(),
         resolveStorePath: params.resolveStorePath,
       },
       pairing: {
-        readAllowFromStore: params.readAllowFromStore ?? vi.fn().mockResolvedValue([]),
-        upsertPairingRequest: params.upsertPairingRequest ?? vi.fn(),
-        buildPairingReply: params.buildPairingReply ?? vi.fn(),
+        upsertPairingRequest: vi.fn(),
       },
-    },
-    media: {
-      detectMime: params.detectMime ?? vi.fn(async () => "text/plain"),
     },
   }) as unknown as PluginRuntime;
   setFeishuRuntime(runtime);
@@ -457,7 +463,6 @@ export async function setupFeishuLifecycleHandler(params: {
     mockReturnValue: (value: unknown) => unknown;
     mockReturnValueOnce: (value: unknown) => unknown;
   };
-  onRegister: (registered: Record<string, (data: unknown) => Promise<void>>) => void;
   runtime: RuntimeEnv;
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
@@ -465,26 +470,39 @@ export async function setupFeishuLifecycleHandler(params: {
   missingHandlerMessage: string;
   once?: boolean;
 }): Promise<(data: unknown) => Promise<void>> {
-  const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
-    params.onRegister(registered);
-  });
+  const dispatcher = new EventDispatcher({});
+  const register = vi.spyOn(dispatcher, "register");
   if (params.once) {
-    params.createEventDispatcherMock.mockReturnValueOnce({ register });
+    params.createEventDispatcherMock.mockReturnValueOnce(dispatcher);
   } else {
-    params.createEventDispatcherMock.mockReturnValue({ register });
+    params.createEventDispatcherMock.mockReturnValue(dispatcher);
   }
   getFeishuRuntime().config.current = vi.fn(
     () => params.cfg,
   ) as unknown as PluginRuntime["config"]["current"];
 
   const monitorSingleAccount = await loadMonitorSingleAccount();
-  await monitorSingleAccount({
+  const started = createDeferred<void>();
+  const controller = new AbortController();
+  getFeishuLifecycleTestMocks().monitorWebSocketMock.mockImplementationOnce(async () => {
+    started.resolve();
+    if (!controller.signal.aborted) {
+      await new Promise<void>((resolve) => {
+        controller.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    }
+  });
+  const completion = monitorSingleAccount({
     cfg: params.cfg,
     account: params.account,
     runtime: params.runtime,
     botOpenIdSource: FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE,
     fireAndForget: false,
+    abortSignal: controller.signal,
   });
+  activeMonitors.add({ controller, completion });
+  void completion.catch(started.reject);
+  await started.promise;
 
   const handlers: Record<string, (data: unknown) => Promise<void>> = {};
   for (const [key, value] of Object.entries(register.mock.calls.at(0)?.[0] ?? {})) {

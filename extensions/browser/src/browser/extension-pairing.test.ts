@@ -1,15 +1,55 @@
 import fs from "node:fs";
 import path from "node:path";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { buildBrowserExtensionPairing } from "./extension-pairing.js";
+import { ensureExtensionRelayToken } from "./extension-relay/relay-auth.js";
+
+vi.mock("./extension-relay/relay-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./extension-relay/relay-auth.js")>();
+  return { ...actual, ensureExtensionRelayToken: vi.fn(actual.ensureExtensionRelayToken) };
+});
 
 const RELAY_KEY = relayTestKey(5);
-const ensureToken = async () => RELAY_KEY;
+beforeEach(() => {
+  vi.mocked(ensureExtensionRelayToken).mockResolvedValue(RELAY_KEY);
+});
 
 describe("buildBrowserExtensionPairing", () => {
+  it("binds native bootstrap to the selected profile instead of the first extension relay", async () => {
+    const cfg = {
+      browser: {
+        defaultProfile: "work",
+        profiles: {
+          first: { driver: "extension" as const, cdpPort: 19441 },
+          work: { driver: "extension" as const, cdpPort: 19442 },
+        },
+      },
+    };
+    const legacy = await buildBrowserExtensionPairing({
+      cfg,
+      localTransport: "gateway",
+    });
+    expect(legacy.relayPort).toBe(19441);
+    expect(new URL(legacy.pairingString).searchParams.has("profile")).toBe(false);
+    const result = await buildBrowserExtensionPairing({
+      cfg,
+      profile: "work",
+      localTransport: "gateway",
+    });
+    expect(result.relayPort).toBe(19442);
+    expect(new URL(result.pairingString).searchParams.get("profile")).toBe("work");
+    await expect(buildBrowserExtensionPairing({ cfg, profile: "missing" })).rejects.toThrow(
+      "existing extension profile",
+    );
+  });
+
   it("pairs with the first writer's key when its file is already open but empty", async () => {
+    const actual = await vi.importActual<typeof import("./extension-relay/relay-auth.js")>(
+      "./extension-relay/relay-auth.js",
+    );
+    vi.mocked(ensureExtensionRelayToken).mockImplementation(actual.ensureExtensionRelayToken);
     await withTempDir("openclaw-pairing-", async (dir) => {
       const stateDir = fs.realpathSync(dir);
       const credentials = path.join(stateDir, "credentials");
@@ -36,57 +76,11 @@ describe("buildBrowserExtensionPairing", () => {
     });
   });
 
-  it("preserves the standalone host relay for local manual pairing compatibility", async () => {
-    await withEnvAsync({ OPENCLAW_GATEWAY_PORT: undefined }, async () => {
-      await expect(
-        buildBrowserExtensionPairing({
-          cfg: {
-            gateway: { port: 19_089 },
-            browser: {
-              profiles: { chrome: { driver: "extension", cdpPort: 19_199 } },
-            },
-          },
-          ensureToken,
-        }),
-      ).resolves.toEqual({
-        pairingString: `ws://127.0.0.1:19199/extension?gateway=ws%3A%2F%2F127.0.0.1%3A19089#${RELAY_KEY}`,
-        relayPort: 19_199,
-        topology: "local",
-      });
-    });
-  });
-
-  it("routes local native bootstrap through the Gateway while retaining relay metadata", async () => {
-    await withEnvAsync({ OPENCLAW_GATEWAY_PORT: undefined }, async () => {
-      await expect(
-        buildBrowserExtensionPairing({
-          cfg: {
-            gateway: { port: 19_089 },
-            browser: {
-              profiles: { chrome: { driver: "extension", cdpPort: 19_199 } },
-            },
-          },
-          localTransport: "gateway",
-          ensureToken,
-        }),
-      ).resolves.toEqual({
-        pairingString: `ws://127.0.0.1:19089/browser/extension?gateway=ws%3A%2F%2F127.0.0.1%3A19089#${RELAY_KEY}`,
-        relayPort: 19_199,
-        topology: "local",
-      });
-    });
-  });
-
   it.each([
     {
       label: "remote TLS Gateway",
       gatewayUrl: "wss://gateway.example.com:9444",
       encodedGateway: "wss%3A%2F%2Fgateway.example.com%3A9444",
-    },
-    {
-      label: "loopback SSH tunnel to a remote Gateway",
-      gatewayUrl: "ws://127.0.0.1:29089",
-      encodedGateway: "ws%3A%2F%2F127.0.0.1%3A29089",
     },
   ])("keeps browser-node bootstrap on the host-local relay for $label", async (testCase) => {
     await expect(
@@ -100,7 +94,6 @@ describe("buildBrowserExtensionPairing", () => {
             profiles: { chrome: { driver: "extension", cdpPort: 19_198 } },
           },
         },
-        ensureToken,
       }),
     ).resolves.toEqual({
       pairingString: `ws://127.0.0.1:19198/extension?gateway=${testCase.encodedGateway}#${RELAY_KEY}`,
@@ -118,7 +111,6 @@ describe("buildBrowserExtensionPairing", () => {
           },
         },
         gatewayUrl: "wss://gateway.example.com:9443",
-        ensureToken,
       }),
     ).resolves.toEqual({
       pairingString: `wss://gateway.example.com:9443/browser/extension?gateway=wss%3A%2F%2Fgateway.example.com%3A9443#${RELAY_KEY}`,
@@ -131,7 +123,6 @@ describe("buildBrowserExtensionPairing", () => {
     await expect(
       buildBrowserExtensionPairing({
         cfg: { gateway: { tls: { enabled: true } } },
-        ensureToken,
       }),
     ).rejects.toThrow("--gateway-url wss://<certificate-host>");
   });

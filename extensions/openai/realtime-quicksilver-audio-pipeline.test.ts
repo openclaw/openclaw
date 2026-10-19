@@ -8,7 +8,7 @@ import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-b
 import {
   OpenAIQuicksilverAudioPeer,
   type OpenAIQuicksilverAudioPeerContract,
-} from "./realtime-quicksilver-peer.runtime.js";
+} from "./realtime-quicksilver-media.runtime.js";
 import { createCallResponse, FakeSocket } from "./realtime-quicksilver.test-helpers.js";
 
 const MAX_PENDING_RELAY_FRAMES = 250;

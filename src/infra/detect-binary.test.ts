@@ -1,7 +1,9 @@
-// Covers host binary detection command selection.
+// Covers host binary discovery without spawning a resolver.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
@@ -18,30 +20,76 @@ afterEach(() => {
   runCommandWithTimeoutMock.mockReset();
 });
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("detectBinary", () => {
-  it("uses the trusted Windows where.exe when probing PATH", async () => {
-    const accessSync = fs.accessSync.bind(fs);
-    vi.spyOn(fs, "accessSync").mockImplementation((filePath, mode) => {
-      if (String(filePath).toLowerCase() === "c:\\windows\\system32\\reg.exe") {
-        throw new Error("registry lookup disabled for test");
+  it.skipIf(process.platform === "win32")(
+    "matches which for executable, non-executable, directory, and missing fixtures without spawning",
+    async () => {
+      const root = tempDirs.make("openclaw-binary-path-");
+      fs.writeFileSync(path.join(root, "lane-n1-executable"), "", { mode: 0o755 });
+      fs.writeFileSync(path.join(root, "lane-n1-not-executable"), "", { mode: 0o644 });
+      fs.mkdirSync(path.join(root, "lane-n1-directory"));
+      vi.stubEnv("PATH", `${root}${path.delimiter}/usr/bin${path.delimiter}/bin`);
+      for (const name of [
+        "lane-n1-executable",
+        "lane-n1-not-executable",
+        "lane-n1-directory",
+        "lane-n1-missing",
+      ]) {
+        let expected = false;
+        try {
+          expected =
+            execFileSync("/usr/bin/which", [name], {
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "ignore"],
+            }).trim().length > 0;
+        } catch {
+          // which signals missing or non-executable candidates with a nonzero exit.
+        }
+        runCommandWithTimeoutMock.mockResolvedValue({
+          code: expected ? 0 : 1,
+          stdout: expected ? path.join(root, name) : "",
+        });
+        await expect(detectBinary(name)).resolves.toBe(expected);
       }
-      return accessSync(filePath, mode);
-    });
-    vi.stubEnv("SystemRoot", "D:\\Windows");
-    runCommandWithTimeoutMock.mockResolvedValue({
-      code: 0,
-      stdout: "D:\\Tools\\openclaw.exe\n",
-    });
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    },
+  );
 
-    await withMockedWindowsPlatform(async () => {
-      await expect(detectBinary("openclaw")).resolves.toBe(true);
-    });
+  it.each(["openclaw", "openclaw.cmd", "openclaw.custom"])(
+    "finds Windows PATH executable %s without spawning where.exe",
+    async (name) => {
+      const root = tempDirs.make("openclaw-binary-win-path-");
+      const file = path.join(root, name === "openclaw" ? "openclaw.cmd" : name);
+      fs.writeFileSync(file, "");
+      vi.stubEnv("PATH", root);
+      vi.stubEnv("PATHEXT", ".EXE;.CMD");
+      runCommandWithTimeoutMock.mockResolvedValue({ code: 0, stdout: file });
+      await withMockedWindowsPlatform(async () => {
+        await expect(detectBinary(name)).resolves.toBe(true);
+      });
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    },
+  );
 
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      [path.win32.join("D:\\Windows", "System32", "where.exe"), "openclaw"],
-      { timeoutMs: 2000 },
-    );
-  });
+  it.skipIf(process.platform === "win32")(
+    "observes PATH installs and removals without stale discovery results",
+    async () => {
+      const root = tempDirs.make("openclaw-binary-refresh-");
+      const file = path.join(root, "lane-n1-installed");
+      vi.stubEnv("PATH", root);
+      runCommandWithTimeoutMock.mockResolvedValue({ code: 1, stdout: "" });
+      await expect(detectBinary("lane-n1-installed")).resolves.toBe(false);
+      fs.writeFileSync(file, "", { mode: 0o755 });
+      runCommandWithTimeoutMock.mockResolvedValue({ code: 0, stdout: file });
+      await expect(detectBinary("lane-n1-installed")).resolves.toBe(true);
+      fs.unlinkSync(file);
+      runCommandWithTimeoutMock.mockResolvedValue({ code: 1, stdout: "" });
+      await expect(detectBinary("lane-n1-installed")).resolves.toBe(false);
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("detectBinary explicit paths", () => {
@@ -108,6 +156,37 @@ describe("detectBinary explicit paths", () => {
 });
 
 describe.skipIf(process.platform === "win32")("detectBinary POSIX path traversal", () => {
+  it.each(["actual", "decoy"])(
+    "matches which when a PATH symlink/.. targets an %s executable",
+    async (location) => {
+      const root = tempDirs.make("openclaw-detect-path-traversal-");
+      const configured = path.join(root, "configured");
+      const actual = path.join(root, "actual");
+      fs.mkdirSync(configured);
+      fs.mkdirSync(path.join(actual, "bin"), { recursive: true });
+      fs.symlinkSync(path.join(actual, "bin"), path.join(configured, "alias"));
+      fs.writeFileSync(
+        path.join(location === "actual" ? actual : configured, "lane-n1-traversal"),
+        "",
+        { mode: 0o755 },
+      );
+      vi.stubEnv("PATH", `${configured}/alias/..`);
+      let expected = false;
+      try {
+        expected =
+          execFileSync("/usr/bin/which", ["lane-n1-traversal"], {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+          }).trim().length > 0;
+      } catch {
+        // A lexical decoy must not satisfy lookup through the symlink's real parent.
+      }
+
+      await expect(detectBinary("lane-n1-traversal")).resolves.toBe(expected);
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["/", "//", "/.", "/../tool"])(
     "does not erase an invalid executable suffix: %s",
     async (suffix) => {

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements reply failure behavior.
 const VISIBLE_REPLY_LEAK_PATTERNS = [
   /\bchecking thread context\b/i,
   /\bthread context thin\b/i,

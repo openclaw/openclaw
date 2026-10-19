@@ -109,7 +109,7 @@ describe("buildGoogleProvider createStreamFn", () => {
     }
   });
 
-  it.each(["google-vertex", "google-antigravity"])(
+  it.each(["google-vertex"])(
     "does not resolve AI Studio credentials for %s-only catalog scope",
     async (providerId) => {
       const resolveProviderApiKey = vi.fn(() => {

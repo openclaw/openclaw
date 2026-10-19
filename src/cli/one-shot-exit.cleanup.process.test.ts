@@ -7,13 +7,13 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 
 it.concurrent.for([
-  { mode: "automatic", exitCode: 0, disposed: true },
-  { mode: "requested", exitCode: 7, disposed: false },
-  { mode: "deferred", exitCode: 7, disposed: false },
-  { mode: "failure", exitCode: 9, disposed: false },
-  { mode: "worker", exitCode: 0, disposed: true },
+  { mode: "complete", exitCode: 0, disposed: true },
+  { mode: "requested", exitCode: 7, disposed: true },
+  { mode: "deferred", exitCode: 7, disposed: true },
+  { mode: "failure", exitCode: 9, disposed: true },
+  { mode: "runtime", exitCode: 7, disposed: true },
 ])(
-  "preserves native cleanup and the $mode exit policy",
+  "joins native cleanup and preserves the $mode outcome",
   async ({ mode, exitCode, disposed }, { expect, signal, onTestFinished }) => {
     const fixture = createFixtureLifetime();
     onTestFinished(() => fixture.cleanup());
@@ -51,15 +51,16 @@ it.concurrent.for([
           defaultRuntime.writeJson({ mode, outcome: "recorded" });
           if (mode === "requested") requestExitAfterOneShotOutput(defaultRuntime, 7);
           if (mode === "deferred") throw new ExitError(7);
+          if (mode === "runtime") defaultRuntime.exit(7);
           if (mode === "failure") throw new Error("synthetic command failure");
         } finally {
           await runCliDisposer("native-write", async () => {
             // The referenced timer is the actual cleanup, beyond its reporting grace.
-            await delay(6_000);
+            await delay(150);
             database.exec("INSERT INTO observations VALUES (99)");
             database.close();
             disposals++;
-          });
+          }, undefined, 100);
           returnedBeforeCleanup = database.isOpen && disposals === 0;
         }
       },
@@ -68,10 +69,6 @@ it.concurrent.for([
         reportedErrors++;
         process.exitCode = 9;
       },
-      env: { NODE_USE_SYSTEM_CA: "1", ...(mode === "worker" ? { VITEST: "1" } : {}) },
-      execArgv: [],
-      platform: "darwin",
-      markers: mode === "worker" ? { tinypoolState: {} } : {},
     });
     finalizationReturnedBeforeCleanup = database.isOpen;
   `;
@@ -110,13 +107,13 @@ it.concurrent.for([
       expect(child?.signalCode).toBeNull();
       expect(result.status).toBe(exitCode);
       expect(JSON.parse(result.stdout)).toEqual({ mode, outcome: "recorded" });
-      expect(result.stderr).toContain("CLI cleanup timed out: native-write after 5000ms");
+      expect(result.stderr).toContain("CLI cleanup timed out: native-write after 100ms");
       expect(JSON.parse(fs.readFileSync(exitPath, "utf8"))).toEqual({
         code: exitCode,
         disposals: disposed ? 1 : 0,
         nativeOpen: !disposed,
         returnedBeforeCleanup: true,
-        finalizationReturnedBeforeCleanup: mode !== "automatic",
+        finalizationReturnedBeforeCleanup: false,
         reportedErrors: mode === "failure" ? 1 : 0,
       });
       const database = new DatabaseSync(databasePath, { readOnly: true });

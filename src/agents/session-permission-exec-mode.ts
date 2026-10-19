@@ -2,9 +2,12 @@ import {
   type ExecAsk,
   type ExecMode,
   type ExecSecurity,
+  type ExecTarget,
   resolveExecPolicyForMode,
 } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
+import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
 const EXEC_MODE_BY_PERMISSION_MODE = {
@@ -21,6 +24,31 @@ export const SESSION_PERMISSION_BY_EXEC_MODE = {
   auto: "workspace",
   full: "full",
 } as const satisfies Record<ExecMode, PreparedSessionPermissionPolicy["mode"]>;
+
+/** A retained mode is a ceiling; unset mode keeps config and host approval policy. */
+export function intersectSessionPermissionModes(
+  retained: PreparedSessionPermissionPolicy["mode"] | undefined,
+  current: PreparedSessionPermissionPolicy["mode"] | undefined,
+): PreparedSessionPermissionPolicy["mode"] | undefined {
+  if (retained === current) {
+    return retained;
+  }
+  if (retained === "read-only" || current === "read-only") {
+    return "read-only";
+  }
+  if (retained === "full") {
+    return current;
+  }
+  if (current === "full") {
+    return retained;
+  }
+  if (retained === undefined || current === undefined) {
+    throw new Error(
+      "The session changed between default and explicit permissions; start a new turn under the current policy.",
+    );
+  }
+  return retained === "guarded" || current === "guarded" ? "guarded" : "workspace";
+}
 
 export function resolveSessionPermissionCoreToolPolicy(
   policy: Pick<PreparedSessionPermissionPolicy, "mode">,
@@ -57,4 +85,28 @@ export function resolveSessionPermissionExecPolicy(
   const ask = maxAsk(base.ask, maxAsk(override.ask, overrides?.ask ?? "off"));
   // Retaining a changed mode would make downstream normalization erase the tightening.
   return { mode: security === base.security && ask === base.ask ? mode : undefined, security, ask };
+}
+
+/** Pure final projection shared by local tool construction and worker dispatch. */
+export function projectEffectiveExecPolicy(params: {
+  base: { host?: ExecTarget; mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk };
+  overrides?: { host?: ExecTarget; mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk };
+  permissionPolicy?: Pick<PreparedSessionPermissionPolicy, "mode">;
+  scheduledExecTarget?: ScheduledToolPolicyContext["execTarget"];
+}) {
+  const policy = params.permissionPolicy
+    ? resolveSessionPermissionExecPolicy(params.permissionPolicy, params.overrides)
+    : applyExecPolicyLayer(params.base, params.overrides);
+  const target = params.scheduledExecTarget;
+  const host = params.overrides?.host ?? params.base.host;
+  return {
+    host: host === undefined || host === "auto" ? (target?.host ?? host) : host,
+    mode: target?.ask ? undefined : policy.mode,
+    security: policy.security,
+    ask: target?.ask ?? policy.ask,
+    bypassHostApprovalFloors:
+      target?.ask !== "always" &&
+      params.permissionPolicy?.mode === "full" &&
+      policy.security === "full",
+  };
 }

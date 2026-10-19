@@ -1,4 +1,3 @@
-// Discord plugin module implements modal fields behavior.
 import type { APIRole, APIUser } from "discord-api-types/v10";
 import { Role, User, type StructureClient } from "./structures.js";
 
@@ -27,22 +26,20 @@ export function extractModalFields(components: unknown[]): Record<string, string
   return out;
 }
 
-function flattenModalComponents(components: unknown[]): unknown[] {
-  const out: unknown[] = [];
+function* flattenModalComponents(components: unknown[]): Generator {
   for (const entry of components) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
     const component = entry as { component?: unknown; components?: unknown[] };
     if (component.component && typeof component.component === "object") {
-      out.push(component.component);
+      yield component.component;
     }
     if (Array.isArray(component.components)) {
-      out.push(...flattenModalComponents(component.components));
+      yield* flattenModalComponents(component.components);
     }
-    out.push(entry);
+    yield entry;
   }
-  return out;
 }
 
 export class ModalFields {

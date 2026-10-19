@@ -18,33 +18,6 @@ afterEach(async () => {
   bridge.available = false;
 });
 
-describe("promoteToPopoverTopLayer", () => {
-  it("shows the element as a manual popover when the API is available", () => {
-    const element = document.createElement("div");
-    const showPopover = vi.fn();
-    element.showPopover = showPopover;
-    promoteToPopoverTopLayer(element);
-    expect(element.getAttribute("popover")).toBe("manual");
-    expect(showPopover).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to in-flow rendering when the API is unavailable", () => {
-    // jsdom elements have no showPopover.
-    const element = document.createElement("div");
-    promoteToPopoverTopLayer(element);
-    expect(element.hasAttribute("popover")).toBe(false);
-  });
-
-  it("falls back to in-flow rendering when showPopover throws", () => {
-    const element = document.createElement("div");
-    element.showPopover = vi.fn(() => {
-      throw new Error("top layer unavailable");
-    });
-    promoteToPopoverTopLayer(element);
-    expect(element.hasAttribute("popover")).toBe(false);
-  });
-});
-
 describe("openclaw-menu-surface", () => {
   it("promotes itself to the top layer on every connect", () => {
     const surface = document.createElement("openclaw-menu-surface");
@@ -60,19 +33,34 @@ describe("openclaw-menu-surface", () => {
     document.body.append(surface);
     expect(showPopover).toHaveBeenCalledTimes(2);
   });
-
-  it("keeps children rendered in-flow when the popover API is unavailable", () => {
-    const surface = document.createElement("openclaw-menu-surface");
-    const menu = document.createElement("div");
-    menu.className = "menu";
-    surface.append(menu);
-    document.body.append(surface);
-    expect(surface.hasAttribute("popover")).toBe(false);
-    expect(surface.querySelector(".menu")).toBe(menu);
-  });
 });
 
 describe("native overlay occlusion for menus", () => {
+  it("follows the live positioned children of a zero-sized menu host", async () => {
+    bridge.available = true;
+    const changes = vi.fn();
+    unsubscribe = subscribeNativeOverlayOcclusion(changes, () => new DOMRect(0, 0, 100, 100));
+    const surface = document.createElement("openclaw-menu-surface");
+    surface.showPopover = vi.fn();
+    surface.getBoundingClientRect = () => new DOMRect(0, 0, 0, 0);
+    const menu = document.createElement("section");
+    menu.getBoundingClientRect = () => new DOMRect(20, 20, 50, 50);
+    surface.append(menu);
+    document.body.append(surface);
+    await new Promise(requestAnimationFrame);
+    expect(changes.mock.calls).toEqual([[false], [true]]);
+
+    const replacement = document.createElement("section");
+    replacement.getBoundingClientRect = () => new DOMRect(200, 20, 50, 50);
+    surface.replaceChildren(replacement);
+    await new Promise(requestAnimationFrame);
+    expect(changes.mock.calls).toEqual([[false], [true], [false]]);
+
+    replacement.getBoundingClientRect = () => new DOMRect(20, 20, 50, 50);
+    await new Promise(requestAnimationFrame);
+    expect(changes.mock.calls).toEqual([[false], [true], [false], [true]]);
+  });
+
   it("keeps overlapping surfaces occluded until their close or removal, including shadow roots", async () => {
     bridge.available = true;
     const changes = vi.fn();
@@ -86,10 +74,10 @@ describe("native overlay occlusion for menus", () => {
     second.getBoundingClientRect = () => new DOMRect(20, 20, 100, 100);
     root.append(first, second);
     first.showPopover = vi.fn();
-    promoteToPopoverTopLayer(first);
-    promoteToPopoverTopLayer(first);
-    // Fallback surfaces must also occlude: native webviews cover in-page menus.
-    promoteToPopoverTopLayer(second);
+    promoteToPopoverTopLayer(first, () => [first]);
+    promoteToPopoverTopLayer(first, () => [first]);
+    // Native webviews also cover top-layer menus.
+    promoteToPopoverTopLayer(second, () => [second]);
     await new Promise(requestAnimationFrame);
     expect(changes.mock.calls).toEqual([[false], [true]]);
 
@@ -101,7 +89,7 @@ describe("native overlay occlusion for menus", () => {
     await Promise.resolve();
     expect(changes.mock.calls).toEqual([[false], [true], [false]]);
 
-    promoteToPopoverTopLayer(first);
+    promoteToPopoverTopLayer(first, () => [first]);
     await new Promise(requestAnimationFrame);
     host.remove();
     await Promise.resolve();

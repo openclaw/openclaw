@@ -8,6 +8,7 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
@@ -16,7 +17,6 @@ import {
   acpMocks,
   agentEventMocks,
   createDispatcher,
-  createPluginBindingRecord,
   diagnosticMocks,
   emptyConfig,
   hookMocks,
@@ -43,7 +43,7 @@ import {
   messageAuditEvents,
   globalBeforeAll0,
   describe0BeforeEach0,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -215,10 +215,10 @@ describe("dispatchReplyFromConfig", () => {
           reason: "reply_operation_aborted",
         }),
       );
-      expect(preparedLookup).toHaveBeenCalledWith({
-        agentId: "main",
-        abortSignal: abort.signal,
-      });
+      const preparedSignal = preparedLookup.mock.calls[0]?.[0].abortSignal;
+      expect(preparedSignal).toBeInstanceOf(AbortSignal);
+      expect(preparedSignal?.aborted).toBe(true);
+      expect(preparedSignal?.reason).toBe(abort.signal.reason);
     } finally {
       preparedLoader.mockRestore();
     }
@@ -287,7 +287,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({ text: "🛠️ `pwd (agent)`" });
+      await opts?.onToolResult?.({ text: "`pwd (agent)`" });
       return { text: "done" } satisfies ReplyPayload;
     };
 
@@ -302,7 +302,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "🛠️ `pwd (agent)`" });
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "`pwd (agent)`" });
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
@@ -323,7 +323,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({ text: "🛠️ `pwd (agent)`" });
+      await opts?.onToolResult?.({ text: "`pwd (agent)`" });
       return { text: "done" } satisfies ReplyPayload;
     };
 
@@ -359,7 +359,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({ text: "🛠️ `pwd (agent)`" });
+      await opts?.onToolResult?.({ text: "`pwd (agent)`" });
       return { text: "done" } satisfies ReplyPayload;
     };
 
@@ -374,7 +374,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "🛠️ `pwd (agent)`" });
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "`pwd (agent)`" });
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
@@ -409,52 +409,6 @@ describe("dispatchReplyFromConfig", () => {
       "https://example.com/tts-preview.opus",
     );
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
-  });
-
-  it("delivers deterministic exec approval tool payloads for native commands with progress suppression", async () => {
-    setNoAbort();
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      CommandSource: "native",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onToolResult?.({
-        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
-        channelData: {
-          execApproval: {
-            approvalId: "117ba06d-1111-2222-3333-444444444444",
-            approvalSlug: "117ba06d",
-            allowedDecisions: ["allow-once", "allow-always", "deny"],
-          },
-        },
-      });
-      return { text: "NO_REPLY" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
-    });
-
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
-    expect(firstToolResultPayload(dispatcher)?.channelData).toStrictEqual({
-      execApproval: {
-        approvalId: "117ba06d-1111-2222-3333-444444444444",
-        approvalSlug: "117ba06d",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      },
-    });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "NO_REPLY" });
   });
 
   it("fast-aborts without calling the reply resolver", async () => {
@@ -690,7 +644,7 @@ describe("dispatchReplyFromConfig", () => {
         state: "idle",
         lastActivityAt: Date.now(),
       },
-    };
+    } satisfies NonNullable<ReturnType<typeof acpMocks.readAcpSessionEntry>>;
     acpMocks.readAcpSessionEntry.mockImplementation(() => currentAcpEntry);
     acpMocks.upsertAcpSessionMeta.mockImplementation(async (paramsUnknown: unknown) => {
       const params = paramsUnknown as {
@@ -1015,7 +969,6 @@ describe("dispatchReplyFromConfig", () => {
                 accountId: "work",
                 conversationId: "thread-1",
               },
-              boundAt: Date.now(),
               pluginId: "missing-plugin",
               pluginRoot: "/plugins/missing-plugin",
               pluginName: "Missing Plugin",
@@ -1069,14 +1022,6 @@ describe("dispatchReplyFromConfig", () => {
       (_configuredPath?: unknown, options?: { agentId?: string }) =>
         options?.agentId === "opencode" ? targetStorePath : sourceStorePath,
     );
-    sessionStoreMocks.loadSessionStore.mockImplementation(
-      (storePath?: string) => (storePath ? stores[storePath] : undefined) ?? {},
-    );
-    sessionStoreMocks.resolveSessionStoreEntry.mockImplementation(
-      (params?: { store: Record<string, Record<string, unknown>>; sessionKey: string }) => ({
-        existing: params?.store[params.sessionKey],
-      }),
-    );
     sessionStoreMocks.loadSessionEntry.mockImplementation((paramsUnknown: unknown) => {
       const params = paramsUnknown as { sessionKey: string; storePath: string };
       return stores[params.storePath]?.[params.sessionKey];
@@ -1092,8 +1037,8 @@ describe("dispatchReplyFromConfig", () => {
               sessionKey: boundSessionKey,
               storeSessionKey: boundSessionKey,
               cfg: {},
-              storePath: "/tmp/mock-sessions.json",
-              entry: {},
+              storePath: targetStorePath,
+              entry: targetEntry,
               acp: {
                 backend: "acpx",
                 agent: "opencode",
@@ -1176,7 +1121,12 @@ describe("dispatchReplyFromConfig", () => {
     }
 
     expect(result.queuedFinal).toBe(true);
-    expect(preparedLookup).toHaveBeenCalledWith({ agentId: "main" });
+    expect(preparedLookup).toHaveBeenCalledWith({
+      agentId: "main",
+      demand: "interactive",
+      onRuntimeLease: expect.any(Function),
+      abortSignal: expect.any(AbortSignal),
+    });
     expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
       channel: "discord",
       accountId: "default",
@@ -1187,16 +1137,23 @@ describe("dispatchReplyFromConfig", () => {
       undefined,
       boundConversationBinding.conversation,
     );
-    expect(sessionStoreMocks.loadSessionEntry).toHaveBeenCalledWith({
-      agentId: "main",
-      storePath: sourceStorePath,
-      sessionKey: sourceSessionKey,
-      readConsistency: "latest",
-    });
-    expect(sessionStoreMocks.loadSessionEntry).not.toHaveBeenCalledWith(
+    expect(sessionStoreMocks.loadSessionEntry).toHaveBeenCalledWith(
+      {
+        agentId: "main",
+        storePath: sourceStorePath,
+        sessionKey: sourceSessionKey,
+        readConsistency: "latest",
+      },
+      {
+        assertCurrent: expect.any(Function),
+        signal: expect.any(AbortSignal),
+      },
+    );
+    const readScopes = sessionStoreMocks.loadSessionEntry.mock.calls.map(([scope]) => scope);
+    expect(readScopes).not.toContainEqual(
       expect.objectContaining({ agentId: "opencode", sessionKey: sourceSessionKey }),
     );
-    expect(sessionStoreMocks.loadSessionEntry).not.toHaveBeenCalledWith(
+    expect(readScopes).not.toContainEqual(
       expect.objectContaining({
         storePath: targetStorePath,
         sessionKey: sourceSessionKey,

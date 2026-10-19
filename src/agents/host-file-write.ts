@@ -2,12 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errors.js";
 import { overwriteFileHandle } from "../infra/file-descriptor.js";
-import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "./agent-tool-source-execution-guard.js";
 import { expandOsHomePrefix } from "./sessions/tools/path-utils.js";
-
-function resolveHostPath(filePath: string): string {
-  return path.resolve(expandOsHomePrefix(filePath));
-}
 
 async function openHostFileForUpdate(resolved: string) {
   try {
@@ -28,18 +27,24 @@ export async function writeHostFile(
   abortSignal?: AbortSignal,
 ) {
   const assertCurrent = captureAgentToolSourceExecutionGuard(abortSignal);
-  const resolved = resolveHostPath(absolutePath);
-  assertCurrent();
-  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  const resolved = path.resolve(expandOsHomePrefix(absolutePath));
+  await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+    assertCurrent();
+    await fs.mkdir(path.dirname(resolved), { recursive: true });
+  });
   const handle = await openHostFileForUpdate(resolved);
   if (!handle) {
-    assertCurrent();
-    await fs.writeFile(resolved, content, "utf-8");
+    await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+      assertCurrent();
+      await fs.writeFile(resolved, content, "utf-8");
+    });
     return;
   }
   try {
-    await overwriteFileHandle(handle, Buffer.from(content, "utf-8"), {
-      beforeWrite: assertCurrent,
+    await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+      await overwriteFileHandle(handle, Buffer.from(content, "utf-8"), {
+        beforeWrite: assertCurrent,
+      });
     });
   } finally {
     await handle.close().catch(() => undefined);

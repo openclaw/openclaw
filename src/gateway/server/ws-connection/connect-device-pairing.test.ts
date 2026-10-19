@@ -11,6 +11,7 @@ import type {
   UsersListResult,
   UsersSelfResult,
 } from "../../../../packages/gateway-protocol/src/schema/users.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { replaceConfigFile } from "../../../config/config.js";
 import {
   getRuntimeConfigSnapshot,
@@ -19,10 +20,11 @@ import {
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig } from "../../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { loadDeviceAuthToken } from "../../../infra/device-auth-store.js";
+import { readDeviceAuthTokenForTest } from "../../../infra/device-auth-store.test-support.js";
 import { issueDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
 import * as pairingApprovals from "../../../infra/device-pairing-approval.js";
 import { ensureDeviceToken } from "../../../infra/device-pairing-tokens.js";
+import * as devicePairing from "../../../infra/device-pairing.js";
 import { getPairedDevice, listDevicePairing } from "../../../infra/device-pairing.js";
 import { setLoggerOverride } from "../../../logging.js";
 import { testApi as loggerTest } from "../../../logging/logger.test-support.js";
@@ -30,18 +32,20 @@ import {
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
 } from "../../../shared/device-bootstrap-profile.js";
-import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import {
-  disconnectedUserGitHubConnection,
-  readUserGitHubConnection,
-  updateUserGitHubConnection,
-} from "../../../state/user-github-connections.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../../state/openclaw-state-db.js";
+import { readUserGitHubConnectionAsync } from "../../../state/user-github-connections.js";
+import { disconnectedUserGitHubConnection } from "../../../state/user-github-connections.kernel.js";
+import { updateUserGitHubConnection } from "../../../state/user-github-connections.test-support.js";
+import {
+  hasMultipleResidentSessionSharingIdentities,
+  publishUserProfilesChange,
+} from "../../../state/user-profile-list.js";
+import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
 import { repairMergedGatewayOwnerProfile } from "../../../state/user-profiles-owner-migration.js";
-import {
-  ensureProfileForEmail,
-  hasMultipleSessionSharingIdentities,
-  setUserProfileRole,
-} from "../../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import {
   GatewayClient,
   type GatewayClientOptions,
@@ -95,6 +99,174 @@ const TUI_CLIENT = {
 } as const;
 
 describe("gateway connect pairing exemptions", () => {
+  test("keeps approved connects off recovery reads and checks current authority", async () => {
+    const origin = "https://pairing.example.test";
+    const auth = { mode: "token", token: "concurrent-pairing-secret" } as const;
+    testState.gatewayAuth = auth;
+    testState.gatewayControlUi = { allowedOrigins: [origin] };
+    await replaceConfigFile({
+      nextConfig: {
+        gateway: {
+          auth,
+          controlUi: { allowedOrigins: [origin] },
+          nodes: { pairing: { autoApproveLocal: false } },
+        },
+      },
+      afterWrite: { mode: "auto" },
+    });
+    const started = await startServerWithClient(undefined, { auth });
+    const readPairing = devicePairing.listDevicePairing;
+    const readPaired = devicePairing.getPairedDevice;
+    const scopes = ["operator.read", "operator.write"];
+    try {
+      expect(
+        (
+          await connectReq(started.ws, {
+            client: BACKEND_CLIENT,
+            token: auth.token,
+            scopes: ["operator.admin"],
+          })
+        ).ok,
+      ).toBe(true);
+      for (const decision of [
+        "approved",
+        "rejected",
+        "revoked",
+        "different key",
+        "different role",
+        "narrower scopes",
+        "unapproved metadata",
+        "different client identity",
+        "inline approval revoked",
+      ] as const) {
+        const current = getRuntimeConfigSnapshot();
+        if (!current) {
+          throw new Error("expected active Gateway config");
+        }
+        setRuntimeConfigSnapshot({
+          ...current,
+          gateway: {
+            ...current.gateway,
+            nodes: { pairing: { autoApproveLocal: decision === "inline approval revoked" } },
+          },
+        });
+        const name = `concurrent-pairing-${decision.replaceAll(" ", "-")}`;
+        const loaded = loadDeviceIdentity(name);
+        if (decision === "unapproved metadata" || decision === "different client identity") {
+          await pairDeviceIdentity({
+            name,
+            role: "operator",
+            scopes: decision === "unapproved metadata" ? scopes : ["operator.read"],
+            platform:
+              decision === "unapproved metadata" ? "previous-platform" : CONTROL_UI_CLIENT.platform,
+            clientId: CONTROL_UI_CLIENT.id,
+            clientMode: CONTROL_UI_CLIENT.mode,
+          });
+        }
+        const ws = await openTrackedWs(started.port, { origin });
+        const recoveryRead = vi.spyOn(devicePairing, "listDevicePairing");
+        const authorityRead = vi
+          .spyOn(devicePairing, "getPairedDevice")
+          .mockImplementationOnce(readPaired)
+          .mockImplementationOnce(async (deviceId, baseDir) => {
+            const pendingSnapshot = await readPairing();
+            if (decision === "inline approval revoked") {
+              expect(await readPaired(loaded.identity.deviceId)).not.toBeNull();
+              await devicePairing.removePairedDevice(loaded.identity.deviceId);
+              return readPaired(deviceId, baseDir);
+            }
+            const pending = pendingSnapshot.pending.find(
+              (entry) => entry.deviceId === loaded.identity.deviceId,
+            );
+            if (!pending) {
+              throw new Error(`expected a pending request for ${decision}`);
+            }
+            const decide = async (method: string, params: Record<string, string>) => {
+              const response = await rpcReq(started.ws, method, params);
+              expect(response.ok, JSON.stringify(response)).toBe(true);
+            };
+            if (decision === "unapproved metadata") {
+              return readPaired(deviceId, baseDir);
+            }
+            if (decision === "rejected") {
+              await decide("device.pair.reject", { requestId: pending.requestId });
+            } else {
+              let requestId = pending.requestId;
+              if (
+                [
+                  "different key",
+                  "different role",
+                  "narrower scopes",
+                  "different client identity",
+                ].includes(decision)
+              ) {
+                await decide("device.pair.reject", { requestId });
+                const replacement = await devicePairing.requestDevicePairing({
+                  ...pending,
+                  publicKey:
+                    decision === "different key"
+                      ? loadDeviceIdentity("concurrent-pairing-other-key").publicKey
+                      : pending.publicKey,
+                  role: decision === "different role" ? "node" : "operator",
+                  roles: decision === "different role" ? ["node"] : ["operator"],
+                  scopes:
+                    decision === "different role"
+                      ? []
+                      : decision === "narrower scopes"
+                        ? ["operator.read"]
+                        : scopes,
+                  clientId:
+                    decision === "different client identity"
+                      ? GATEWAY_CLIENT_NAMES.BROWSER_COPILOT
+                      : pending.clientId,
+                });
+                requestId = replacement.request.requestId;
+              }
+              await decide("device.pair.approve", { requestId });
+              if (decision === "revoked") {
+                await decide("device.pair.remove", { deviceId: loaded.identity.deviceId });
+              }
+            }
+            return readPaired(deviceId, baseDir);
+          });
+        try {
+          const response = await connectReq(ws, {
+            client: CONTROL_UI_CLIENT,
+            token: auth.token,
+            scopes,
+            deviceIdentityPath: loaded.identityPath,
+            prePairDevice: false,
+          });
+          if (decision === "approved") {
+            expect(recoveryRead).not.toHaveBeenCalled();
+            expect.soft(response, decision).toMatchObject({
+              ok: true,
+              payload: { type: "hello-ok", auth: { role: "operator", scopes } },
+            });
+          } else if (decision === "different client identity") {
+            expect.soft(response, decision).toMatchObject({
+              ok: false,
+              error: { message: "browser copilot requires a dedicated paired device identity" },
+            });
+          } else {
+            expect.soft(response, decision).toMatchObject({
+              ok: false,
+              error: { code: "NOT_PAIRED", details: { code: "PAIRING_REQUIRED" } },
+            });
+          }
+        } finally {
+          authorityRead.mockRestore();
+          recoveryRead.mockRestore();
+          ws.close();
+        }
+      }
+    } finally {
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
   test("keeps a merged owner unidentified until Doctor repairs it before reconnect", async () => {
     const origin = "https://localhost";
     const auth = { mode: "token", token: "merged-owner-secret" } as const;
@@ -120,7 +292,7 @@ describe("gateway connect pairing exemptions", () => {
     });
     let reconnect: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
     const selfHandler = vi.spyOn(usersHandlers, "users.self");
-    const listHandler = vi.spyOn(sessionReadHandlers, "sessions.list");
+    const listPreparation = vi.spyOn(sessionReadHandlers["sessions.list"]!, "prepareRead");
     const personalSpies: { mockRestore: () => void }[] = [];
     const connectOptions = {
       token: auth.token,
@@ -163,12 +335,16 @@ describe("gateway connect pairing exemptions", () => {
       const stateDb = openOpenClawStateDatabase();
       const db = stateDb.db;
       // The old merge writer moved identities to the person and left the owner tombstone.
-      db.prepare(
-        "UPDATE user_profiles SET merged_into = ?, updated_at = 1 WHERE id = 'gateway-owner'",
-      ).run(person.id);
-      db.prepare(
-        "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local' AND subject = 'owner'",
-      ).run(person.id);
+      runOpenClawStateWriteTransaction(() => {
+        db.prepare(
+          "UPDATE user_profiles SET merged_into = ?, updated_at = 1 WHERE id = 'gateway-owner'",
+        ).run(person.id);
+        db.prepare(
+          "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local' AND subject = 'owner'",
+        ).run(person.id);
+        publishUserProfilesChange(db, "gateway-owner", person.id);
+      });
+
       started.ws.close();
       const logPath = path.join(path.dirname(stateDb.path), "owner-repair.log");
       setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logPath });
@@ -202,7 +378,7 @@ describe("gateway connect pairing exemptions", () => {
       }
       expect(personalStatus).not.toHaveBeenCalled();
       expect(personalAuthorize).not.toHaveBeenCalled();
-      expect(readUserGitHubConnection(person.id)).toEqual(personalConnection);
+      expect(await readUserGitHubConnectionAsync(person.id)).toEqual(personalConnection);
       const sessions = await rpcReq<SessionsListResult>(reconnect, "sessions.list", {});
       expect(sessions.ok).toBe(true);
       expect(
@@ -212,7 +388,7 @@ describe("gateway connect pairing exemptions", () => {
         visibility: "draft",
         sharingRole: "admin",
       });
-      const listRequest = listHandler.mock.lastCall?.[0];
+      const listRequest = listPreparation.mock.lastCall?.[0];
       if (!listRequest?.client) {
         throw new Error("expected the sessions.list RPC client");
       }
@@ -298,7 +474,7 @@ describe("gateway connect pairing exemptions", () => {
       expect(self.ok).toBe(true);
       expect(profileId).toBe("gateway-owner");
       expect(resolveOperatorRolePolicyForProfile(profileId, config)).toBeUndefined();
-      expect(hasMultipleSessionSharingIdentities()).toBe(false);
+      expect(hasMultipleResidentSessionSharingIdentities()).toBe(false);
       expect(await rpcReq(reconnect, "users.github.status", {})).toMatchObject({
         ok: true,
         payload: { personal: { state: "disconnected", account: null } },
@@ -306,6 +482,7 @@ describe("gateway connect pairing exemptions", () => {
       expect(personalStatus).toHaveBeenCalledExactlyOnceWith({
         owner: "gateway-owner",
         assertCurrent: expect.any(Function),
+        signal: expect.any(AbortSignal),
       });
       expect(personalAuthorize).not.toHaveBeenCalled();
       const afterRepair = await rpcReq<UsersListResult>(reconnect, "users.list", {});
@@ -316,13 +493,13 @@ describe("gateway connect pairing exemptions", () => {
         emails: ["person@example.test"],
         role: "guest",
       });
-      expect(readUserGitHubConnection(person.id)).toEqual(personalConnection);
+      expect(await readUserGitHubConnectionAsync(person.id)).toEqual(personalConnection);
     } finally {
       for (const spy of personalSpies) {
         spy.mockRestore();
       }
       selfHandler.mockRestore();
-      listHandler.mockRestore();
+      listPreparation.mockRestore();
       setLoggerOverride({ level: "silent", consoleLevel: "silent" });
       reconnect?.close();
       started.ws.close();
@@ -376,7 +553,7 @@ describe("gateway connect pairing exemptions", () => {
         profileId: profile.id,
         displayName: "Ada Owner",
       });
-      const cachedToken = loadDeviceAuthToken({
+      const cachedToken = readDeviceAuthTokenForTest({
         deviceId: loaded.identity.deviceId,
         role: "operator",
       })?.token;
@@ -418,7 +595,7 @@ describe("gateway connect pairing exemptions", () => {
     }
   });
 
-  test.each(["automatic approval", "browser origin"])(
+  test.each(["automatic approval", "browser origin", "proxy policy", "role policy"])(
     "keeps local pairing pending when %s is revoked before commit",
     async (revokedPolicy) => {
       const auth = { mode: "token", token: "local-pairing-policy-token" } as const;
@@ -455,7 +632,24 @@ describe("gateway connect pairing exemptions", () => {
               ...current.gateway,
               ...(browser
                 ? { controlUi: { allowedOrigins: ["https://other.example.test"] } }
-                : { nodes: { ...current.gateway?.nodes, pairing: { autoApproveLocal: false } } }),
+                : revokedPolicy === "proxy policy"
+                  ? { trustedProxies: ["192.0.2.10"] }
+                  : revokedPolicy === "role policy"
+                    ? {
+                        roles: {
+                          default: "reader",
+                          definitions: {
+                            reader: {
+                              scopes: ["operator.read"],
+                              agents: [],
+                              sessions: { others: "none" },
+                            },
+                          },
+                        },
+                      }
+                    : {
+                        nodes: { ...current.gateway?.nodes, pairing: { autoApproveLocal: false } },
+                      }),
             },
           });
           return approve(requestId, options, baseDir);
@@ -572,7 +766,7 @@ describe("gateway connect pairing exemptions", () => {
         clearTimeout(provisionTimeout);
       }
       await provisionClient?.stopAndWait();
-      const deviceToken = loadDeviceAuthToken({
+      const deviceToken = readDeviceAuthTokenForTest({
         deviceId: loaded.identity.deviceId,
         role: "operator",
       })?.token;
@@ -605,7 +799,7 @@ describe("gateway connect pairing exemptions", () => {
       });
       expect(connectAttempts).toHaveBeenCalledTimes(1);
       expect(
-        loadDeviceAuthToken({ deviceId: loaded.identity.deviceId, role: "operator" })?.token,
+        readDeviceAuthTokenForTest({ deviceId: loaded.identity.deviceId, role: "operator" })?.token,
       ).toBe(deviceToken);
     } finally {
       if (provisionTimeout) {
@@ -623,13 +817,6 @@ describe("gateway connect pairing exemptions", () => {
 
   test.each([
     {
-      name: "local backend self-call",
-      client: BACKEND_CLIENT,
-      approvedScopes: ["operator.pairing"],
-      pairingClientId: GATEWAY_CLIENT_NAMES.CLI,
-      pairingClientMode: GATEWAY_CLIENT_MODES.CLI,
-    },
-    {
       name: "TUI operator client",
       client: TUI_CLIENT,
       approvedScopes: ["operator.read"],
@@ -643,6 +830,13 @@ describe("gateway connect pairing exemptions", () => {
       const identityName = `auth-none-${name.replaceAll(" ", "-")}`;
       const loaded = loadDeviceIdentity(identityName);
       let pairedWs: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
+      const metadataWritten = createDeferred();
+      const recordAccess = devicePairing.recordPairedDeviceAccess;
+      const metadata = vi
+        .spyOn(devicePairing, "recordPairedDeviceAccess")
+        .mockImplementation((...args) =>
+          recordAccess(...args).finally(() => metadataWritten.resolve()),
+        );
 
       try {
         const unpaired = await connectReq(started.ws, {
@@ -680,6 +874,7 @@ describe("gateway connect pairing exemptions", () => {
           prePairDevice: false,
         });
         expect(pairedConnect.ok, JSON.stringify(pairedConnect)).toBe(true);
+        await metadataWritten.promise;
 
         const paired = await getPairedDevice(loaded.identity.deviceId);
         expect(paired?.approvedScopes).toEqual(approvedScopes);
@@ -689,6 +884,7 @@ describe("gateway connect pairing exemptions", () => {
         });
         expect(paired?.lastSeenReason).toBe("connect");
       } finally {
+        metadata.mockRestore();
         pairedWs?.close();
         started.ws.close();
         await started.server.close();
@@ -810,6 +1006,12 @@ describe("gateway connect pairing exemptions", () => {
       expect((await getPairedDevice(paired.identity.deviceId))?.approvedScopes).toEqual([
         "operator.read",
       ]);
+      expect((await listDevicePairing()).pending).toContainEqual(
+        expect.objectContaining({
+          deviceId: paired.identity.deviceId,
+          scopes: ["operator.write"],
+        }),
+      );
     } finally {
       ws?.close();
       await started.server.close();

@@ -1,9 +1,20 @@
-import { render } from "lit";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { NewSessionModelControlView } from "./model-control-view.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
+
+const views = new WeakMap<
+  NewSessionModelControl,
+  {
+    container: HTMLElement;
+    update: (props: Parameters<typeof NewSessionModelControlView>[0]) => void;
+  }
+>();
 
 export function contextWith(
   models: ModelCatalogEntry[],
@@ -15,15 +26,38 @@ export function contextWith(
   const request = vi.fn().mockResolvedValue({ models });
   const navigate = vi.fn();
   const listeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
-  const emitCatalogChanged = () => {
-    invalidateChatMetadataStore(context.gateway.snapshot.client!);
+  const emitCatalogChanged = (
+    event: "config.changed" | "chat.metadata.changed" = "chat.metadata.changed",
+    payload: unknown = {},
+  ) => {
+    invalidateChatMetadataStore(
+      context.gateway.snapshot.client!,
+      undefined,
+      undefined,
+      modelCatalogEventInvalidation({ event, payload }) ?? "preserve",
+    );
     for (const listener of listeners) {
-      listener({ type: "event", event: "chat.metadata.changed", payload: {} });
+      listener({ type: "event", event, payload });
     }
   };
+  const ownerListeners = {
+    gateway: new Set<() => void>(),
+    agents: new Set<() => void>(),
+    sessions: new Set<() => void>(),
+    config: new Set<() => void>(),
+  };
+  const subscribe = (owner: keyof typeof ownerListeners) => (listener: () => void) => {
+    ownerListeners[owner].add(listener);
+    return () => ownerListeners[owner].delete(listener);
+  };
+  const publish = (owner: keyof typeof ownerListeners) =>
+    ownerListeners[owner].forEach((listener) => listener());
   const context = {
     navigate,
+    agents: { subscribe: subscribe("agents") },
+    config: { subscribe: subscribe("config"), current: {} },
     gateway: {
+      subscribe: subscribe("gateway"),
       subscribeEvents: (listener: Parameters<ApplicationGateway["subscribeEvents"]>[0]) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -35,6 +69,7 @@ export function contextWith(
       },
     },
     sessions: {
+      subscribe: subscribe("sessions"),
       state: {
         result: {
           defaults: {
@@ -52,7 +87,7 @@ export function contextWith(
       },
     },
   } as unknown as ApplicationContext;
-  return { context, navigate, request, emitCatalogChanged };
+  return { context, navigate, request, emitCatalogChanged, publish, ownerListeners };
 }
 
 export function renderControl(
@@ -65,15 +100,33 @@ export function renderControl(
     thinkingDefault: "medium",
   },
 ) {
-  const container = document.createElement("div");
-  render(
-    control.render({
+  const props: Parameters<typeof NewSessionModelControlView>[0] = {
+    control,
+    options: {
       ...(agent ? { agent } : {}),
       agentId,
       context,
       sending: false,
-    }),
-    container,
-  );
+    },
+  };
+  let view = views.get(control);
+  if (view) {
+    view.update(props);
+    return view.container;
+  }
+  const container = document.body.appendChild(document.createElement("div"));
+  view = mountSolid(NewSessionModelControlView, props, container);
+  views.set(control, view);
+  onTestFinished(() => {
+    views.delete(control);
+    container.remove();
+  });
+  for (const picker of container.querySelectorAll<HTMLDetailsElement>(
+    ".chat-controls__model-picker, .chat-controls__effort-picker",
+  )) {
+    picker.open = true;
+    picker.dispatchEvent(new Event("toggle"));
+    flush();
+  }
   return container;
 }

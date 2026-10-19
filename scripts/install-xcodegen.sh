@@ -19,11 +19,12 @@ extract_dir="$temp_dir/extract"
 
 # Bound individual transfers and the retry window. curl resets --max-time for
 # each retry, while a started retry can outlive --retry-max-time.
-curl --fail --location --silent --show-error \
+curl --fail --location --no-progress-meter --show-error \
   --connect-timeout 10 --max-time 120 \
   --retry 3 --retry-max-time 120 \
   --output "$archive" \
-  "https://github.com/yonaskolb/XcodeGen/releases/download/$xcodegen_version/xcodegen.zip"
+  "https://github.com/yonaskolb/XcodeGen/releases/download/$xcodegen_version/xcodegen.zip" \
+  2> >(sed 's/^Warning: /::warning::/' >&2)
 if [[ "$(shasum -a 256 "$archive" | awk '{print $1}')" != "$xcodegen_checksum" ]]; then
   echo "xcodegen archive checksum mismatch" >&2
   exit 1

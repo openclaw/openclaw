@@ -13,12 +13,17 @@ import {
 } from "../../../../infra/outbound/session-binding-service.js";
 import type { SessionBindingCapabilities } from "../../../../infra/outbound/session-binding.types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../../infra/tmp-openclaw-dir.js";
-import type { OpenKeyedStoreOptions } from "../../../../plugin-sdk/plugin-state-runtime.js";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateActionAuthority,
+} from "../../../../plugin-sdk/plugin-state-runtime.js";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "../../../../plugin-sdk/plugin-state-test-runtime.js";
+import { createPluginRuntimeMock } from "../../../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { setActivePluginRegistry } from "../../../../plugins/runtime.js";
+import type { PluginRuntime } from "../../../../plugins/runtime/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../../../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../../test-utils/channel-plugins.js";
@@ -136,11 +141,13 @@ async function createContractMatrixThreadBindingManager() {
     await getContractApi<MatrixContractApi>("matrix");
   setMatrixRuntime({
     state: {
-      openKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateKeyedStoreForTests("matrix", options),
+      openKeyedStoreV2: (
+        options: OpenAsyncKeyedStoreOptions,
+        authority: PluginStateActionAuthority = { assertCurrent() {} },
+      ) => createPluginStateKeyedStoreV2ForTests("matrix", options, authority),
       resolveStateDir: () => matrixSessionBindingStateDir,
     },
-  } as never);
+  });
   const manager = await createMatrixThreadBindingManager({
     accountId: matrixSessionBindingAuth.accountId,
     auth: matrixSessionBindingAuth,
@@ -291,6 +298,9 @@ async function prepareMatrixSessionBindingContract() {
 async function prepareTelegramSessionBindingContract() {
   await stopTelegramSessionBindingManager();
   const { telegramPlugin } = await getTelegramContractApi();
+  const { setTelegramRuntime } = await loadBundledPluginFacade<{
+    setTelegramRuntime: (runtime: PluginRuntime) => void;
+  }>({ pluginId: "telegram", artifactBasename: "runtime-setter-api.js" });
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -299,6 +309,16 @@ async function prepareTelegramSessionBindingContract() {
         source: "test",
       },
     ]),
+  );
+  setTelegramRuntime(
+    createPluginRuntimeMock({
+      state: {
+        openKeyedStoreV2: <T>(
+          options: OpenAsyncKeyedStoreOptions,
+          authority: PluginStateActionAuthority = { assertCurrent() {} },
+        ) => createPluginStateKeyedStoreV2ForTests<T>("telegram", options, authority),
+      },
+    }),
   );
 }
 

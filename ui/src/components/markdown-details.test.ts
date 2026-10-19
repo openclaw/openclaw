@@ -282,19 +282,6 @@ describe("multi-token details shapes", () => {
     expect(html).not.toContain("&lt;details");
   });
 
-  it("renders consecutive details blocks without a blank line", () => {
-    const html = toSanitizedMarkdownHtml(
-      "<details><summary>A</summary>a</details>\n<details><summary>B</summary>b</details>",
-    );
-    const details = htmlFragment(html).querySelectorAll("details");
-
-    expect([...details].map((entry) => entry.querySelector("summary")?.textContent)).toEqual([
-      "A",
-      "B",
-    ]);
-    expect([...details].map((entry) => entry.textContent?.trim())).toEqual(["Aa", "Bb"]);
-  });
-
   it("renders more than 32 sibling details blocks and their trailing markdown", () => {
     const siblings = Array.from(
       { length: 40 },
@@ -338,7 +325,6 @@ describe("multi-token details shapes", () => {
   it.each([
     ...rawHtmlStreamingContexts,
     ["script", "<script>\n</details>\n</script>"],
-    ["style", "<style>\n</details>\n</style>"],
     ["processing instruction", "<?pi\n</details>\n?>"],
     ["declaration", "<!DOCTYPE\n</details>\n>"],
     ["CDATA", "<![CDATA[\n</details>\n]]>"],

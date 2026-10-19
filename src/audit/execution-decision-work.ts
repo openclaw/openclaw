@@ -1,14 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Private, bounded decision work projected by the canonical audit writer. */
-import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
-import { validateDecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
+import { validateDecisionReceiptV1 } from "../../packages/gateway-protocol/src/audit-run-validators.js";
+import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   openOpenClawStateDatabase,
+  type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { pseudonymizeExecutionIdentityRef } from "./audit-identity.js";
-import { recordExecutionDecisionFact } from "./execution-decision-facts.js";
+import { recordExecutionDecisionFactInDatabase } from "./execution-decision-facts.js";
+import type { ExecutionDecisionWork } from "./execution-decision-work.types.js";
 import {
   parseExecutionIdentityAdmissionToken,
   type ExecutionIdentityAdmissionToken,
@@ -17,32 +19,7 @@ import {
 const EXECUTION_DECISION_WORK_MAX_BYTES = 16 * 1024;
 const EXECUTION_DECISION_RAW_REF_MAX_LENGTH = 4_096;
 
-type ExecutionDecisionReceiptFacts = Omit<
-  DecisionReceiptV1,
-  "contextId" | "executionId" | "runId" | "action"
-> & {
-  action: Omit<DecisionReceiptV1["action"], "resourceRef" | "targetRef">;
-};
-
-type ExecutionDecisionResourceRef = {
-  namespace: "credential-profile";
-  value: string;
-};
-
-type ExecutionDecisionTargetRef = {
-  namespace: "model-route" | "session";
-  value: string;
-};
-
-export type ExecutionDecisionWork = {
-  workVersion: 1;
-  token: ExecutionIdentityAdmissionToken;
-  receipt: ExecutionDecisionReceiptFacts;
-  refs?: {
-    resource?: ExecutionDecisionResourceRef;
-    target?: ExecutionDecisionTargetRef;
-  };
-};
+type ExecutionDecisionReceiptFacts = ExecutionDecisionWork["receipt"];
 
 type ExecutionDecisionWorkSink = (work: ExecutionDecisionWork) => boolean;
 
@@ -90,11 +67,13 @@ function parseRawRef<TNamespace extends string>(params: {
 function buildReceipt(params: {
   token: ExecutionIdentityAdmissionToken;
   receipt: ExecutionDecisionReceiptFacts;
+  representedSubject?: DecisionReceiptV1["representedSubject"];
   resourceRef?: string;
   targetRef?: string;
 }): DecisionReceiptV1 {
   return {
     ...params.receipt,
+    ...(params.representedSubject ? { representedSubject: params.representedSubject } : {}),
     contextId: params.token.contextId,
     executionId: params.token.executionId,
     runId: params.token.runId,
@@ -133,10 +112,34 @@ export function parseExecutionDecisionWork(value: unknown): ExecutionDecisionWor
   const token = parseExecutionIdentityAdmissionToken(value.token);
   let refs: ExecutionDecisionWork["refs"];
   if (value.refs !== undefined) {
-    if (!isClosedPayloadRecord(value.refs) || !hasOnlyKeys(value.refs, ["resource", "target"])) {
+    if (
+      !isClosedPayloadRecord(value.refs) ||
+      !hasOnlyKeys(value.refs, ["resource", "target", "representedSubject"])
+    ) {
       throw new Error("execution decision work violates its bounded ref contract");
     }
+    const subject = value.refs.representedSubject;
+    let representedSubject: NonNullable<ExecutionDecisionWork["refs"]>["representedSubject"];
+    if (subject !== undefined) {
+      if (
+        !isClosedPayloadRecord(subject) ||
+        !hasOnlyKeys(subject, ["state", "kind", "rawPrincipalRef"]) ||
+        subject.state !== "present" ||
+        subject.kind !== "person" ||
+        typeof subject.rawPrincipalRef !== "string" ||
+        subject.rawPrincipalRef.length < 1 ||
+        subject.rawPrincipalRef.length > EXECUTION_DECISION_RAW_REF_MAX_LENGTH
+      ) {
+        throw new Error("execution decision work violates its represented subject contract");
+      }
+      representedSubject = {
+        state: "present",
+        kind: "person",
+        rawPrincipalRef: subject.rawPrincipalRef,
+      };
+    }
     refs = {
+      ...(representedSubject ? { representedSubject } : {}),
       ...(value.refs.resource !== undefined
         ? {
             resource: parseRawRef({
@@ -179,9 +182,9 @@ export function parseExecutionDecisionWork(value: unknown): ExecutionDecisionWor
 }
 
 /** Project raw private refs at the audit owner, then persist only the bounded receipt. */
-export function processExecutionDecisionWork(
+export function processExecutionDecisionWorkInDatabase(
   value: unknown,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
 ): "inserted" | "existing" {
   const work = parseExecutionDecisionWork(value);
   const db = openOpenClawStateDatabase(options).db;
@@ -201,8 +204,34 @@ export function processExecutionDecisionWork(
         value: work.refs.target.value,
       })
     : undefined;
+  const representedSubject = work.refs?.representedSubject;
+  const domainRef = representedSubject
+    ? pseudonymizeExecutionIdentityRef({
+        db,
+        kind: "domain",
+        scope: "gateway-cell",
+        value: "gateway-cell",
+      })
+    : undefined;
   const receipt = buildReceipt({
     token: work.token,
+    ...(representedSubject && domainRef
+      ? {
+          representedSubject: {
+            state: "present",
+            principal: {
+              kind: "person",
+              domainRef,
+              principalRef: pseudonymizeExecutionIdentityRef({
+                db,
+                kind: "principal",
+                scope: `${domainRef}:person`,
+                value: representedSubject.rawPrincipalRef,
+              }),
+            },
+          },
+        }
+      : {}),
     receipt: work.receipt,
     ...(resourceRef ? { resourceRef } : {}),
     ...(targetRef ? { targetRef } : {}),
@@ -210,7 +239,7 @@ export function processExecutionDecisionWork(
   if (!validateDecisionReceiptV1(receipt)) {
     throw new Error("execution decision work projection violates DecisionReceiptV1");
   }
-  return recordExecutionDecisionFact(receipt, options);
+  return recordExecutionDecisionFactInDatabase(receipt, options);
 }
 
 /** Install the current process writer sink; callers never create a second writer. */

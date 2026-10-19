@@ -5,6 +5,7 @@ import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
 } from "../../../auto-reply/reply-payload.js";
+import { buildEmbeddedRunPayloads } from "./payloads.js";
 import {
   createPendingToolMediaCarry,
   mergeAttemptToolMediaPayloads,
@@ -399,7 +400,6 @@ describe("pending tool media carry", () => {
   });
 
   it("keeps media-only assistant provenance on the surviving normalized payload", async () => {
-    const { buildEmbeddedRunPayloads } = await import("./payloads.js");
     const { normalizeReplyPayloadOutcome } =
       await import("../../../auto-reply/reply/normalize-reply.js");
     const carry = createPendingToolMediaCarry();
@@ -489,7 +489,6 @@ describe("pending tool media carry", () => {
       };
       carry.capture(voice);
       carry.capture({ toolMediaUrls: ["https://example.test/image.png"] });
-      voice.toolMediaUrls.push("/tmp/later.opus");
       const params = {
         payloads: [
           { text: selectImage ? "Selected ![image](https://example.test/image.png)" : "Done" },

@@ -273,17 +273,17 @@ final class DashboardEmbedCompatibility {
     }
 
     func didReceiveStatusRequest() {
-        guard let documentID else { return }
+        guard self.documentID != nil else { return }
         self.receivedStatus = true
         if let loadedWebView {
-            self.probeEmbedMarker(documentID: documentID, in: loadedWebView)
+            self.probeEmbedMarker(in: loadedWebView)
         }
     }
 
     func didFinishLoading(documentID: UUID, in webView: WKWebView) {
         guard self.documentID == documentID else { return }
         self.loadedWebView = webView
-        self.probeEmbedMarker(documentID: documentID, in: webView)
+        self.probeEmbedMarker(in: webView)
         self.deadlineTask?.cancel()
         self.deadlineTask = Task { [weak self, weak webView] in
             do {
@@ -291,11 +291,11 @@ final class DashboardEmbedCompatibility {
             } catch {
                 return
             }
-            guard !Task.isCancelled, let self, self.documentID == documentID else { return }
+            guard !Task.isCancelled, let self else { return }
             // A stalled web process must not prevent the native upgrade guidance from appearing.
             self.deadlineReached = true
             if let webView {
-                self.probeEmbedMarker(documentID: documentID, in: webView)
+                self.probeEmbedMarker(in: webView)
             }
         }
     }
@@ -309,13 +309,13 @@ final class DashboardEmbedCompatibility {
         self.deadlineReached = false
     }
 
-    private func probeEmbedMarker(documentID: UUID, in webView: WKWebView) {
+    private func probeEmbedMarker(in webView: WKWebView) {
         self.markerTask?.cancel()
         self.markerTask = Task { [weak self, weak webView] in
             guard let webView else { return }
             let marker = try? await webView.evaluateJavaScript(
                 "document.querySelector('.openclaw-native-embed') !== null")
-            guard !Task.isCancelled, let self, self.documentID == documentID else { return }
+            guard !Task.isCancelled, let self else { return }
             self.hasEmbedMarker = marker as? Bool == true
         }
     }
@@ -476,10 +476,6 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         case .reject:
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
-    }
-
-    func allowsNavigation(to candidateURL: URL?, isMainFrame: Bool?) -> Bool {
-        self.navigationDecision(to: candidateURL, isMainFrame: isMainFrame) == .allow
     }
 
     func navigationDecision(

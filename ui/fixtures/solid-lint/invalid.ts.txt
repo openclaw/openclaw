@@ -1,0 +1,10 @@
+import { createEffect, onMount } from "solid-js";
+
+export function invalidLifecycle(read: () => string) {
+  createEffect(() => {
+    document.title = read();
+  });
+  onMount(() => {
+    document.title = "legacy";
+  });
+}

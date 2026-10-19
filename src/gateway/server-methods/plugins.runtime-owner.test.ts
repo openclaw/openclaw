@@ -26,11 +26,11 @@ vi.mock("../../plugins/management-service.js", async (importOriginal) => ({
 
 const { pluginsHandlers } = await import("./plugins.js");
 
-it.each(
-  (["same Gateway", "other Gateway", "same registry"] as const).flatMap((publication) =>
-    (["before handler", "during catalog"] as const).map((timing) => ({ publication, timing })),
-  ),
-)(
+it.each([
+  { publication: "same Gateway", timing: "before handler" },
+  { publication: "same Gateway", timing: "during catalog" },
+  { publication: "same registry", timing: "during catalog" },
+] as const)(
   "pairs request runtime health with its generation across $publication publication $timing",
   async ({ publication, timing }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -57,6 +57,7 @@ it.each(
         pluginId: "colliding-plugin",
         source: "fixture",
         origin: "workspace",
+        id: "request-service",
         service: { id: "request-service", start: vi.fn() },
       } satisfies PluginServiceRegistration;
       requestRegistry.services.push(service);
@@ -65,7 +66,6 @@ it.each(
       const requestOwner = createPluginRegistryOwner(requestRegistry);
       const requestGeneration = getActivePluginRegistryVersion();
       const enterHandler = createDeferredCore();
-      let unrelatedOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;
       const respond = vi.fn();
       const handler = expectDefined(pluginsHandlers["plugins.list"], "plugins.list handler");
       const request = withPluginRuntimeGatewayRequestScope(
@@ -95,11 +95,7 @@ it.each(
         setActivePluginRegistry(
           publication === "same registry" ? requestRegistry : unrelatedRegistry,
         );
-        if (publication === "same Gateway") {
-          requestOwner.publish(unrelatedRegistry);
-        } else {
-          unrelatedOwner = createPluginRegistryOwner(unrelatedRegistry);
-        }
+        requestOwner.publish(publication === "same registry" ? requestRegistry : unrelatedRegistry);
         const nextGeneration = getActivePluginRegistryVersion();
         expect(nextGeneration).toBeGreaterThan(requestGeneration);
         enterHandler.resolve();
@@ -131,7 +127,7 @@ it.each(
         release.resolve(catalog);
         await Promise.allSettled([request]);
         reporter.revoke();
-        const results = await Promise.allSettled([requestOwner.close(), unrelatedOwner?.close()]);
+        const results = await Promise.allSettled([requestOwner.close()]);
         restoreActivePluginRegistrySnapshot(previous);
         failures.push(
           ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),

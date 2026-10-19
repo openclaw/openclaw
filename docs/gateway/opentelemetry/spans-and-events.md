@@ -16,7 +16,7 @@ read_when:
   - Preserve a supplied upstream request parent; they do not introduce a long-lived RPC parent span or change downstream trace propagation
 
 - `openclaw.model.usage`
-  - `openclaw.channel`, `openclaw.provider`, `openclaw.model`
+  - `openclaw.channel`, `openclaw.provider`, `openclaw.model`, optional `openclaw.agent` (the agent that owns the run when known)
   - Optional host-derived `openclaw.plugin` only for trusted plugin runtime completions
   - `openclaw.tokens.*` (input/output/cache_read/cache_write/total)
   - `gen_ai.system` by default, or `gen_ai.provider.name` when the latest GenAI semantic conventions are opted in
@@ -26,22 +26,25 @@ Plugin attribution is span-only. It does not add a plugin dimension to shared
 OpenTelemetry metrics or change Prometheus metric labels.
 
 - `openclaw.run`
-  - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.errorCategory`
+  - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.errorCategory`, optional `openclaw.agent`
 - `openclaw.model.call`
   - `gen_ai.system` by default, or `gen_ai.provider.name` when the latest GenAI semantic conventions are opted in
-  - `gen_ai.request.model`, `gen_ai.operation.name`, `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, `openclaw.model_call.observation_unit` (`request` or `turn`)
+  - `gen_ai.request.model`, `gen_ai.operation.name`, `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, `openclaw.model_call.observation_unit` (`request` or `turn`), optional `openclaw.agent`
   - `openclaw.errorCategory`, `error.type`, and optional `openclaw.failureKind` on errors
   - `openclaw.model_call.request_bytes`, `openclaw.model_call.response_bytes`, `openclaw.model_call.time_to_first_byte_ms`
   - `openclaw.model_call.prompt.input_messages_count`, `openclaw.model_call.prompt.input_messages_chars`, `openclaw.model_call.prompt.system_prompt_chars`, `openclaw.model_call.prompt.tool_definitions_count`, `openclaw.model_call.prompt.tool_definitions_chars`, `openclaw.model_call.prompt.total_chars` (safe component sizes only, no prompt text)
   - `openclaw.model_call.usage.*` and `gen_ai.usage.*` when the result carries usage for that request or aggregate turn
   - Span event `openclaw.provider.request` with attribute `openclaw.upstreamRequestIdHash` (bounded, hash-based) when the upstream provider result exposes a request id; raw ids are never exported
+  - Codex turn span event `openclaw.model.response.observed` with `openclaw.upstreamRequestIdHash`, `openclaw.model_response.timestamp_source = receipt`, `openclaw.model_response.usage_source = native-normalized`, `openclaw.model_response.usage_scope = response`, and known `openclaw.model_call.usage.*` / `gen_ai.usage.*` fields. It records an untimed native response observation and does not increment usage metrics.
   - With `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, request spans use the latest GenAI inference span name `{gen_ai.operation.name} {gen_ai.request.model}`. Turn spans use `invoke_agent` because OpenClaw does not claim a native agent name from the opaque CLI boundary. Both use `CLIENT` span kind instead of `openclaw.model.call`.
 - `openclaw.harness.run`
-  - `openclaw.harness.id`, `openclaw.harness.plugin`, `openclaw.outcome`, `openclaw.provider`, `openclaw.model`, `openclaw.channel`
+  - `openclaw.harness.id`, `openclaw.harness.plugin`, `openclaw.outcome`, `openclaw.provider`, `openclaw.model`, `openclaw.channel`, optional `openclaw.agent`
   - On completion: `openclaw.harness.result_classification`, `openclaw.harness.yield_detected`, `openclaw.harness.items.started`, `openclaw.harness.items.completed`, `openclaw.harness.items.active`
   - On error: `openclaw.harness.phase`, `openclaw.errorCategory`, optional `openclaw.harness.cleanup_failed`
+  - Span event `openclaw.agent.commentary` for completed preambles from supported harnesses, including the built-in runtime, Codex, and Claude CLI. Attributes include `openclaw.commentary.sequence`, `openclaw.commentary.text_length`, and `openclaw.commentary.content_truncated`. The existing `diagnostics.otel.captureContent` setting controls bounded, redacted output-message content.
+  - With `captureContent: true`: bounded, redacted `input.value` on start and `output.value` (the runtime's final message text) on completion. For the Claude CLI backend, `input.value` is the exact composed prompt the CLI received, after history reseeding, plugin input text transforms, and prompt context; the Codex harness records the turn prompt OpenClaw handed it. The Gemini CLI backend publishes captured content on `openclaw.message.processed` (inbound message and the model's final response); it does not record its composed CLI prompt on these run-level spans.
 - `openclaw.tool.execution`
-  - `gen_ai.tool.name`, `gen_ai.operation.name` (`execute_tool`), `openclaw.toolName`, `openclaw.tool.source`, optional `gen_ai.tool.call.id`, `openclaw.tool.owner`, `openclaw.tool.params.*`
+  - `gen_ai.tool.name`, `gen_ai.operation.name` (`execute_tool`), `openclaw.toolName`, `openclaw.tool.source`, optional `gen_ai.tool.call.id`, `openclaw.tool.owner`, `openclaw.tool.params.*`, optional `openclaw.agent`
   - Optional `openclaw.errorCategory`/`openclaw.errorCode` on errors, `openclaw.deniedReason` and `openclaw.outcome=blocked` when denied by policy or sandbox
 - `openclaw.exec`
   - `openclaw.exec.target`, `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`, `openclaw.exec.command_length`, `openclaw.exec.exit_code`, `openclaw.exec.exit_signal`, `openclaw.exec.timed_out`
@@ -50,7 +53,9 @@ OpenTelemetry metrics or change Prometheus metric labels.
 - `openclaw.webhook.error`
   - `openclaw.channel`, `openclaw.webhook`, `openclaw.error`
 - `openclaw.message.processed`
-  - `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`
+  - `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`, optional `openclaw.agent` (the agent that initially ingested the prompt)
+  - Isolated cron agent turns use this span as the parent of their harness spans, keeping model calls, tools, and usage on the same trace through completion or failure.
+  - With `captureContent: true`: bounded, redacted `input.value` (inbound message text) and `output.value` (the model's own response text; hook replies and host notices are never captured)
 - `openclaw.message.delivery`
   - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`, `openclaw.errorCategory`, `openclaw.delivery.result_count`
 - `openclaw.session.stuck`
@@ -58,13 +63,44 @@ OpenTelemetry metrics or change Prometheus metric labels.
 - `openclaw.context.assembled`
   - `openclaw.prompt.size`, `openclaw.history.size`, `openclaw.context.tokens`, `openclaw.errorCategory` (no prompt, history, response, or session-key content)
 - `openclaw.tool.loop`
-  - `openclaw.toolName`, `openclaw.loop.level`, `openclaw.loop.action`, `openclaw.loop.detector`, `openclaw.loop.count`, optional `openclaw.loop.paired_tool` (no loop messages, params, or tool output)
+  - `openclaw.toolName`, `openclaw.loop.level`, `openclaw.loop.action`, `openclaw.loop.detector`, `openclaw.loop.count`, optional `openclaw.loop.paired_tool`, optional `openclaw.agent` (no loop messages, params, or tool output)
 - `openclaw.memory.pressure`
   - `openclaw.memory.level`, `openclaw.memory.reason`, `openclaw.memory.rss_bytes`, `openclaw.memory.heap_used_bytes`, `openclaw.memory.heap_total_bytes`, `openclaw.memory.external_bytes`, `openclaw.memory.array_buffers_bytes`, optional `openclaw.memory.threshold_bytes`/`openclaw.memory.rss_growth_bytes`/`openclaw.memory.window_ms`
 
 When content capture is explicitly enabled, model and tool spans can also
 include bounded, redacted `openclaw.content.*` attributes for the specific
 content classes you opted into.
+
+`openclaw.message.processed` and `openclaw.harness.run` spans follow the same
+existing `captureContent` setting. When it is `true`, `input.value` and
+`output.value` carry the inbound message or turn prompt and the model's final
+response text, bounded to 128 KiB (131072 UTF-16
+code units) per field and redacted through the same sensitive-text filter as
+other exported content. `output.value` records what the LLM actually responded
+with — the model's own final response, before delivery filtering — so sentinel
+replies such as `NO_REPLY` appear verbatim; this is LLM-observability data, not
+a delivery record. Only the text of the model's last message counts. Text the
+model passed to the `message` tool is an argument to a tool call, not its final
+message, so tool-only turns record the model's closing message (usually
+`NO_REPLY`) or nothing; the sent text is on the child `openclaw.model.call`
+output messages and, for the built-in runtime, the `openclaw.tool.execution`
+span (`gen_ai.tool.call.arguments`). CLI backends do not export tool arguments,
+so their message-tool text is not captured on any span. Earlier narration in
+the turn ("Checking now…") is never reported as the final response: a message
+that ended in a tool call is not final, and CLI turns record only the final
+message, never the cumulative reply text. Text the
+model did not write is never captured, even when it was delivered to the chat:
+plugin hook replies (`before_dispatch`, `before_agent_reply`), no-visible-reply
+fallbacks, continuation statuses, failure texts, and Gateway restart notices.
+Turns where no model produced text carry no `output.value`.
+The captured content is routed as private listener-only payload data to
+trusted diagnostics exporters only; it never appears on public event
+payloads.
+
+**Upgrade note:** if you already run with `diagnostics.otel.captureContent:
+true`, these message and run span attributes are new — your existing setting
+now also exports this prompt and reply content with no further configuration
+change. Nothing new is exported while `captureContent` is unset or `false`.
 
 ## Diagnostic event catalog
 
@@ -78,6 +114,16 @@ the diagnostics-otel plugin does not export them as standalone OTLP signals.
 Event kinds and `run.execution_phase.phase` values are additive. TypeScript
 consumers should keep default branches instead of assuming either union is
 permanently exhaustive.
+
+Events with no interested subscriber or tracing exporter are discarded before
+payload enrichment and queuing; they are not buffered for future subscribers.
+
+`agent.commentary` records completed preambles, not text deltas. It carries the
+original agent-event sequence and timestamp and attaches to the active harness
+span. Recent duplicate completions are suppressed per attempt. Like other
+queued diagnostics, commentary may be dropped under queue pressure; the session
+transcript remains the durable conversation record. At debug level, the
+`diagnostic` logger also records completion metadata without commentary text.
 
 **Model usage**
 
@@ -191,7 +237,9 @@ for usage methods and request options.
   `durationMs`, `outcome`, optional `resultClassification`, `yieldDetected`,
   and `itemLifecycle` counts. Errors add `phase`
   (`prepare`/`start`/`send`/`resolve`/`cleanup`), `errorCategory`, and
-  optional `cleanupFailed`.
+  optional `cleanupFailed`. With `captureContent: true`, started and completed
+  events also carry bounded, redacted turn prompt and final assistant text
+  as private listener-only data exported on spans, never on public payloads.
 
 **Exec**
 

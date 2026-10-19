@@ -1,5 +1,7 @@
 // Mattermost tests cover monitor auth plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMattermostRuntime } from "../runtime.js";
 
 const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
 const resolveAllowlistMatchSimple = vi.hoisted(() => vi.fn());
@@ -27,6 +29,7 @@ describe("mattermost monitor auth", () => {
   });
 
   beforeEach(() => {
+    setMattermostRuntime(createPluginRuntimeMock());
     isDangerousNameMatchingEnabled.mockReset();
     resolveAllowlistMatchSimple.mockReset();
   });

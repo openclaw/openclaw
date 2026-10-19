@@ -19,8 +19,6 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
     const root = document.documentElement;
     root.dataset.themeMode = nextMode;
     root.dataset.themeResolved = nextMode;
-    root.classList.toggle("wa-light", nextMode === "light");
-    root.classList.toggle("wa-dark", nextMode === "dark");
     root.style.colorScheme = nextMode;
   }, mode);
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
@@ -69,7 +67,7 @@ suite.define(() => {
       await groups.waitFor({ state: "visible" });
 
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await openSessionMenuSubmenu(page, "Move to group");
       await page.getByRole("menuitem", { name: "Move back to Groups" }).waitFor({
         state: "visible",

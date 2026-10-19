@@ -4,6 +4,7 @@ import { openAIRealtimeHost } from "./realtime-host.js";
 import type { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import type { OpenAIQuicksilverAudioPeerCallbacks } from "./realtime-quicksilver-peer.runtime.js";
+import { fakeQuicksilverSocketFactories } from "./realtime-quicksilver-socket.test-support.js";
 import {
   createCallResponse,
   emitSideband,
@@ -47,7 +48,7 @@ describe("GPT-Live gateway telephony audio", () => {
             };
           },
           fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_audio")),
-          webSocketFactory: () => {
+          ...fakeQuicksilverSocketFactories(() => {
             socket = new FakeSocket();
             const send = socket.send.bind(socket);
             socket.send = (payload) => {
@@ -62,7 +63,7 @@ describe("GPT-Live gateway telephony audio", () => {
               }
             };
             return socket;
-          },
+          }),
         },
         openAIRealtimeHost,
       );

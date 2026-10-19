@@ -1,16 +1,12 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  controlUiSessionUrl,
-  installMockGateway,
-  startControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { CHAT_RUN_ACTIVITY_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI favicon status",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
 });
 
 async function expectStatusColor(page: Page, token: string) {
@@ -74,14 +70,20 @@ suite.define(() => {
         await expect
           .poll(() => faviconLinks(page))
           .toEqual([
-            { href: "/favicon.svg", type: "image/svg+xml" },
-            { href: "/favicon-32.png", type: "image/png" },
+            { href: expect.stringMatching(/^\/favicon\.svg(?:\?v=.+)?$/), type: "image/svg+xml" },
+            { href: expect.stringMatching(/^\/favicon-32\.png(?:\?v=.+)?$/), type: "image/png" },
           ]);
         const original = await faviconLinks(page);
         await composer.fill("Prepare the draft report.");
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const send = await gateway.waitForRequest("chat.send");
         const runId = requireString(requireRecord(send.params).idempotencyKey, "chat run id");
+        await expectStatusColor(page, "--info");
+        await page.screenshot({ path: `${suite.artifactDir}/working.png` });
+        await page.evaluate(() => {
+          document.documentElement.style.setProperty("--info", "rgb(10, 100, 200)");
+        });
+        await expectStatusColor(page, "--info");
         await gateway.emitGatewayEvent("chat", {
           state: "delta",
           runId,
@@ -91,7 +93,26 @@ suite.define(() => {
             content: [{ type: "text", text: "Preparing the draft report." }],
           },
         });
-        await expectStatusColor(page, "--info");
+        await expect.poll(() => faviconLinks(page)).toEqual(original);
+        const activity = await page.evaluateHandle((eventName) => {
+          const observation = { changes: 0 };
+          document.addEventListener(eventName, () => observation.changes++);
+          return observation;
+        }, CHAT_RUN_ACTIVITY_CHANGED_EVENT);
+        await gateway.emitGatewayEvent("chat", {
+          state: "delta",
+          runId,
+          sessionKey,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Preparing the draft report. Checking the details." }],
+          },
+        });
+        await page
+          .getByText("Preparing the draft report. Checking the details.", { exact: true })
+          .waitFor();
+        expect(await activity.evaluate((observation) => observation.changes)).toBe(0);
+        await expect.poll(() => faviconLinks(page)).toEqual(original);
         await gateway.emitGatewayEvent("exec.approval.requested", {
           id: "favicon-approval",
           createdAtMs: Date.now(),
@@ -103,7 +124,8 @@ suite.define(() => {
           id: "favicon-approval",
           decision: "deny",
         });
-        await expectStatusColor(page, "--info");
+        await expect.poll(() => faviconLinks(page)).toEqual(original);
+        await page.getByRole("button", { name: "Stop generating" }).waitFor();
         await setVisibility(page, "hidden");
         await gateway.emitChatFinal({ runId, sessionKey, text: "Draft report complete." });
         await expectStatusColor(page, "--ok");

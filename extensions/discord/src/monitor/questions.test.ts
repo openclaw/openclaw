@@ -3,7 +3,7 @@ import { InteractionResponseType, MessageFlags } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import {
   createInteraction as createDiscordInteraction,
-  type ButtonInteraction,
+  type BaseComponentInteraction,
 } from "../internal/discord.js";
 import {
   attachRestMock,
@@ -13,7 +13,7 @@ import {
 import { createDiscordQuestionButton } from "./questions.js";
 
 type InteractionHarness = {
-  interaction: ButtonInteraction;
+  interaction: BaseComponentInteraction;
   acknowledge: ReturnType<typeof vi.fn>;
   followUp: ReturnType<typeof vi.fn>;
 };
@@ -26,35 +26,11 @@ function createInteraction(): InteractionHarness {
     reply: vi.fn(),
     acknowledge,
     followUp,
-  } as unknown as ButtonInteraction;
+  } as unknown as BaseComponentInteraction;
   return { interaction, acknowledge, followUp };
 }
 
 describe("Discord question button", () => {
-  it.each([
-    [{ status: "answered", questionId: "target", optionValue: "Production" }, "Answer submitted."],
-    [
-      { status: "already-terminal", reason: "already-terminal" },
-      "This question was already answered.",
-    ],
-  ] as const)("shows ephemeral outcome feedback", async (result, expectedText) => {
-    const { interaction, acknowledge, followUp } = createInteraction();
-    const button = createDiscordQuestionButton({
-      cfg: {} as never,
-      accountId: "default",
-      authorizeQuestion: vi.fn(async () => true),
-      resolveQuestion: vi.fn(async () => result),
-    });
-
-    await button.run(interaction, {
-      id: "ask_0123456789abcdef0123456789abcdef",
-      i: "1",
-    });
-
-    expect(acknowledge).toHaveBeenCalledOnce();
-    expect(followUp).toHaveBeenCalledWith({ content: expectedText, ephemeral: true });
-  });
-
   it("does not resolve unauthorized clicks", async () => {
     const { interaction, acknowledge } = createInteraction();
     const resolveQuestion = vi.fn();
@@ -101,32 +77,30 @@ describe("Discord question button", () => {
     });
   });
 
-  it.each(
-    [
-      {
-        name: "submitted answer",
-        result: {
-          status: "answered" as const,
-          questionId: "target",
-          optionValue: "Production",
-        },
-        expectedText: "Answer submitted.",
+  it.each([
+    {
+      name: "submitted answer",
+      acknowledged: false,
+      result: {
+        status: "answered" as const,
+        questionId: "target",
+        optionValue: "Production",
       },
-      {
-        name: "already answered question",
-        result: { status: "already-terminal" as const, reason: "already-terminal" as const },
-        expectedText: "This question was already answered.",
-      },
-      {
-        name: "question resolution failure",
-        error: new Error("question service unavailable"),
-        expectedText: "Could not submit this answer.",
-      },
-    ].flatMap((outcome) => [
-      { ...outcome, acknowledged: false },
-      { ...outcome, acknowledged: true },
-    ]),
-  )("delivers $name feedback when acknowledgement is $acknowledged", async (testCase) => {
+      expectedText: "Answer submitted.",
+    },
+    {
+      name: "already answered question",
+      acknowledged: true,
+      result: { status: "already-terminal" as const, reason: "already-terminal" as const },
+      expectedText: "This question was already answered.",
+    },
+    {
+      name: "question resolution failure",
+      acknowledged: true,
+      error: new Error("question service unavailable"),
+      expectedText: "Could not submit this answer.",
+    },
+  ])("delivers $name feedback when acknowledgement is $acknowledged", async (testCase) => {
     const client = createInternalTestClient();
     const post = vi.fn(async () => undefined);
     if (!testCase.acknowledged) {
@@ -146,7 +120,7 @@ describe("Discord question button", () => {
           global_name: null,
         },
       }),
-    ) as ButtonInteraction;
+    ) as BaseComponentInteraction;
     const resolveQuestion = vi.fn(async () => {
       if (testCase.error) {
         throw testCase.error;

@@ -16,15 +16,22 @@ type CatalogSchedule = {
   closed: AbortController;
 };
 type ExecutionScope = {
-  schedule: CatalogSchedule;
-  exclusive: boolean;
   active: boolean;
-  parent?: ExecutionScope;
+  settlement?: Promise<void>;
 };
 
 // Refs survive client-tool append and are shared by every cell in an admitted run.
 const schedules = new WeakMap<ToolSearchCatalogRef, CatalogSchedule>();
 const executionScope = new AsyncLocalStorage<ExecutionScope>();
+
+/** Observer cancellation must not release a slot still owned by implementation work. */
+export function retainToolSearchImplementation<T>(implementation: Promise<T>): Promise<T> {
+  const scope = executionScope.getStore();
+  if (scope?.active) {
+    scope.settlement = Promise.allSettled([scope.settlement, implementation]).then(() => undefined);
+  }
+  return implementation;
+}
 
 function createSchedule(owner: ToolSearchCatalogRef): CatalogSchedule {
   const closed = new AbortController();
@@ -73,19 +80,7 @@ export async function runScheduledToolSearchCall<T>(params: {
     throw new ToolInputError("Tool Search catalog is unavailable for this run.");
   }
   const schedule = schedules.get(owner) ?? createSchedule(owner);
-  const mode = params.entry.tool.executionMode;
-  const exclusive = mode === "sequential";
-  const parent = executionScope.getStore();
-  let ancestor = parent;
-  while (ancestor && (!ancestor.active || ancestor.schedule !== schedule)) {
-    ancestor = ancestor.parent;
-  }
-  if (
-    ancestor &&
-    (ancestor.exclusive || exclusive || schedule.queue.some((entry) => entry.exclusive))
-  ) {
-    throw new ToolInputError("Reentrant tool call would wait on its own catalog execution.");
-  }
+  const exclusive = params.entry.tool.executionMode === "sequential";
   const admission: Admission = { ready: createDeferredCore(), exclusive, started: false };
   // Admit before schema compilation or hooks can reorder callers. Only the
   // contiguous parallel prefix may pass a queued exclusive invocation.
@@ -99,13 +94,17 @@ export async function runScheduledToolSearchCall<T>(params: {
     signals.push(params.signal);
   }
   const signal = AbortSignal.any(signals);
-  const scope: ExecutionScope = { schedule, exclusive, active: false, parent };
+  const scope: ExecutionScope = { active: false };
   try {
     // Queued cancellation must settle even if a predecessor ignores abort.
     await racePromiseWithAbortSignal(admission.ready.promise, signal);
     signal.throwIfAborted();
     const current = owner.current?.entries.find((entry) => entry.id === params.entry.id);
-    if (!current || current.tool !== params.entry.tool || current.tool.executionMode !== mode) {
+    if (
+      !current ||
+      current.tool !== params.entry.tool ||
+      (current.tool.executionMode === "sequential") !== exclusive
+    ) {
       throw new ToolInputError("Queued tool changed or is no longer available in this run.");
     }
     scope.active = true;
@@ -113,20 +112,31 @@ export async function runScheduledToolSearchCall<T>(params: {
     // finalization own release, not an observer that stops waiting early.
     return await executionScope.run(scope, () => params.execute(current, signal));
   } finally {
-    scope.active = false;
-    if (admission.started) {
-      schedule.active -= 1;
-      if (exclusive) {
-        schedule.exclusive = false;
+    const release = () => {
+      scope.active = false;
+      if (admission.started) {
+        schedule.active -= 1;
+        if (exclusive) {
+          schedule.exclusive = false;
+        }
+      } else {
+        schedule.queue.splice(schedule.queue.indexOf(admission), 1);
       }
-    } else {
-      schedule.queue.splice(schedule.queue.indexOf(admission), 1);
-    }
-    drainSchedule(schedule);
-    if (schedule.active === 0 && schedule.queue.length === 0) {
-      if (schedules.get(owner) === schedule) {
+      drainSchedule(schedule);
+      if (
+        schedule.active === 0 &&
+        schedule.queue.length === 0 &&
+        schedules.get(owner) === schedule
+      ) {
         schedules.delete(owner);
       }
+    };
+    // Return cancellation promptly, but keep FIFO exclusion until the producer
+    // settles. A late completion only releases its own catalog generation.
+    if (scope.settlement) {
+      void scope.settlement.then(release);
+    } else {
+      release();
     }
   }
 }

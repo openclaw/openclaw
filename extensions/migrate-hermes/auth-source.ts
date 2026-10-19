@@ -1,9 +1,8 @@
-// Hermes-native auth discovery and reauthentication planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import { parseDateStringTimestampMs as readTimestamp } from "openclaw/plugin-sdk/number-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readText } from "./helpers.js";
+import { readJsonObject } from "./helpers.js";
 import type { HermesSource } from "./source.js";
 
 const HERMES_OPENAI_CODEX_SOURCE_PROVIDER_ID = "openai-codex";
@@ -33,84 +32,51 @@ const HERMES_REAUTH_SOURCE_PROVIDERS = new Set<string>(
   HERMES_REAUTH_PROVIDER_MAPPINGS.map((entry) => entry.sourceProvider),
 );
 
-function readHermesProviderCandidate(
-  auth: Record<string, unknown>,
-  sourcePath: string,
-): HermesCodexAuthCandidate | undefined {
+export async function readHermesCodexAuthCandidates(
+  authPath: string | undefined,
+): Promise<HermesCodexAuthCandidate[]> {
+  if (!authPath) {
+    return [];
+  }
+  const auth = await readJsonObject(authPath);
   const providers = isRecord(auth.providers) ? auth.providers : {};
   const provider = isRecord(providers[HERMES_OPENAI_CODEX_SOURCE_PROVIDER_ID])
     ? providers[HERMES_OPENAI_CODEX_SOURCE_PROVIDER_ID]
     : undefined;
-  const tokens = isRecord(provider?.tokens) ? provider.tokens : undefined;
-  const access = normalizeOptionalString(tokens?.access_token);
-  const refresh = normalizeOptionalString(tokens?.refresh_token);
-  if (!access || !refresh) {
-    return undefined;
-  }
-  return {
-    access,
-    refresh,
-    sourceKind: "hermes-auth-json",
-    sourceSlot: "provider",
-    sourceLabel: "Hermes active OpenAI Codex provider",
-    sourcePath,
-    updatedAt: readTimestamp(provider?.last_refresh),
-  };
-}
-
-function readHermesPoolCandidates(
-  auth: Record<string, unknown>,
-  sourcePath: string,
-): HermesCodexAuthCandidate[] {
   const pool = isRecord(auth.credential_pool) ? auth.credential_pool : {};
   const entries = Array.isArray(pool[HERMES_OPENAI_CODEX_SOURCE_PROVIDER_ID])
     ? pool[HERMES_OPENAI_CODEX_SOURCE_PROVIDER_ID]
     : [];
-  return entries.flatMap((entry) => {
-    if (!isRecord(entry)) {
-      return [];
+  const candidates: HermesCodexAuthCandidate[] = [];
+  for (const [sourceSlot, raw] of [
+    ["provider", provider?.tokens],
+    ...entries.map((entry) => ["pool", entry] as const),
+  ] as const) {
+    if (!isRecord(raw)) {
+      continue;
     }
-    const access = normalizeOptionalString(entry.access_token);
-    const refresh = normalizeOptionalString(entry.refresh_token);
+    const access = normalizeOptionalString(raw.access_token);
+    const refresh = normalizeOptionalString(raw.refresh_token);
     if (!access || !refresh) {
-      return [];
+      continue;
     }
-    return [
-      {
-        access,
-        refresh,
-        sourceKind: "hermes-auth-json" as const,
-        sourceSlot: "pool" as const,
-        sourceLabel: normalizeOptionalString(entry.label) ?? "Hermes OpenAI Codex credential pool",
-        sourcePath,
-        updatedAt: readTimestamp(entry.last_refresh) ?? readTimestamp(entry.last_status_at),
-      },
-    ];
-  });
-}
-
-export async function readHermesCodexAuthCandidates(
-  authPath: string | undefined,
-): Promise<HermesCodexAuthCandidate[]> {
-  const raw = await readText(authPath);
-  if (!raw || !authPath) {
-    return [];
+    candidates.push({
+      access,
+      refresh,
+      sourceKind: "hermes-auth-json",
+      sourceSlot,
+      sourceLabel:
+        sourceSlot === "provider"
+          ? "Hermes active OpenAI Codex provider"
+          : (normalizeOptionalString(raw.label) ?? "Hermes OpenAI Codex credential pool"),
+      sourcePath: authPath,
+      updatedAt:
+        sourceSlot === "provider"
+          ? readTimestamp(provider?.last_refresh)
+          : (readTimestamp(raw.last_refresh) ?? readTimestamp(raw.last_status_at)),
+    });
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  if (!isRecord(parsed)) {
-    return [];
-  }
-  const candidates = [
-    readHermesProviderCandidate(parsed, authPath),
-    ...readHermesPoolCandidates(parsed, authPath),
-  ]
-    .filter((candidate): candidate is HermesCodexAuthCandidate => candidate !== undefined)
-    .toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+  candidates.sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
   candidates.forEach((candidate, index) => {
     candidate.sourceCredentialIndex = index;
   });
@@ -118,36 +84,24 @@ export async function readHermesCodexAuthCandidates(
 }
 
 async function readHermesOAuthProviderIds(authPath: string | undefined): Promise<Set<string>> {
-  const raw = await readText(authPath);
-  if (!raw) {
-    return new Set();
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (!isRecord(parsed)) {
-      return new Set();
-    }
-    const providers = isRecord(parsed.providers)
-      ? Object.keys(parsed.providers).filter((provider) =>
-          HERMES_REAUTH_SOURCE_PROVIDERS.has(provider),
+  const parsed = await readJsonObject(authPath);
+  const providers = isRecord(parsed.providers)
+    ? Object.keys(parsed.providers).filter((provider) =>
+        HERMES_REAUTH_SOURCE_PROVIDERS.has(provider),
+      )
+    : [];
+  const pool = isRecord(parsed.credential_pool)
+    ? Object.entries(parsed.credential_pool).flatMap(([provider, entries]) =>
+        Array.isArray(entries) &&
+        entries.some(
+          (entry) =>
+            isRecord(entry) && normalizeOptionalString(entry.auth_type)?.toLowerCase() === "oauth",
         )
-      : [];
-    const pool = isRecord(parsed.credential_pool)
-      ? Object.entries(parsed.credential_pool).flatMap(([provider, entries]) =>
-          Array.isArray(entries) &&
-          entries.some(
-            (entry) =>
-              isRecord(entry) &&
-              normalizeOptionalString(entry.auth_type)?.toLowerCase() === "oauth",
-          )
-            ? [provider]
-            : [],
-        )
-      : [];
-    return new Set([...providers, ...pool]);
-  } catch {
-    return new Set();
-  }
+          ? [provider]
+          : [],
+      )
+    : [];
+  return new Set([...providers, ...pool]);
 }
 
 export async function buildReauthenticationItems(source: HermesSource): Promise<MigrationItem[]> {

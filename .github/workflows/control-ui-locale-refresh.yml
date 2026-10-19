@@ -15,6 +15,12 @@ on:
       - scripts/control-ui-i18n-verify.ts
       - scripts/lib/control-ui-i18n-catalog.ts
       - scripts/lib/control-ui-i18n-catalog-values.ts
+      - scripts/lib/control-ui-plugin-i18n-catalog.ts
+      - extensions/active-memory/control-ui.presentation.json
+      - extensions/memory-wiki/control-ui.presentation.json
+      - extensions/*/package.json
+      - extensions/**/i18n/locales/en.ts
+      - extensions/**/i18n/locales/translated.json
       - ui/src/i18n/lib/config-hint-translation.ts
       - ui/src/lib/fnv1a.ts
       - src/config/schema*.ts
@@ -37,7 +43,7 @@ on:
   workflow_dispatch:
     inputs:
       full_refresh:
-        description: Retranslate every source string, including existing translations.
+        description: Retranslate core source strings and missing plugin copy; preserve authored plugin translations.
         required: false
         default: false
         type: boolean
@@ -204,11 +210,15 @@ jobs:
           mkdir -p "${artifact_dir}"
           locale_memory="ui/src/i18n/.i18n/${LOCALE}.tm.jsonl"
           locale_metadata="ui/src/i18n/.i18n/${LOCALE}.meta.json"
-          git add -A -- "${locale_memory}" "${locale_metadata}"
-          git diff --cached --binary --full-index -- "${locale_memory}" "${locale_metadata}" ':(exclude)ui/src/i18n/.i18n/catalog-fallbacks.json' > "${artifact_dir}/${LOCALE}.patch"
+          paths=("${locale_memory}" "${locale_metadata}"
+            ":(glob)extensions/*/**/i18n/.i18n/${LOCALE}.tm.jsonl"
+            ":(glob)extensions/*/**/i18n/.i18n/${LOCALE}.meta.json")
+          # Workers must not patch shared translated.json or immutable build manifests.
+          git ls-files --cached --others --exclude-standard -z -- "${paths[@]}" | xargs -0 -r git add -A --
+          git diff --cached --binary --full-index -- "${paths[@]}" > "${artifact_dir}/${LOCALE}.patch"
 
       - name: Upload locale artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: control-ui-locale-${{ matrix.locale }}
           path: ${{ runner.temp }}/control-ui-locale-${{ matrix.locale }}/${{ matrix.locale }}.patch
@@ -234,7 +244,7 @@ jobs:
           submodules: false
 
       - name: Download locale artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: control-ui-locale-*
           path: ${{ runner.temp }}/control-ui-locale-artifacts
@@ -277,6 +287,9 @@ jobs:
             ui/src/i18n/.i18n/*.tm.jsonl
             ui/src/i18n/.i18n/*.meta.json
             ui/src/i18n/.i18n/catalog-fallbacks.json
+            extensions/**/i18n/.i18n/*
+            extensions/**/i18n/locales/translated.json
+            extensions/*/openclaw.plugin.json
           invalidation-paths: |
             ui/src/i18n/locales/*.ts
             ui/src/i18n/locales/en.ts
@@ -290,6 +303,24 @@ jobs:
             scripts/control-ui-i18n-verify.ts
             scripts/lib/control-ui-i18n-catalog.ts
             scripts/lib/control-ui-i18n-catalog-values.ts
+            scripts/lib/control-ui-plugin-i18n-catalog.ts
+            extensions/active-memory/control-ui.presentation.json
+            extensions/memory-wiki/control-ui.presentation.json
+            extensions/*/package.json
+            extensions/*/openclaw.plugin.json
+            extensions/**/*.ts
+            extensions/**/*.css
+            extensions/**/i18n/locales/translated.json
+            scripts/build-plugin-control-ui.mts
+            src/cli/plugins-control-ui-build.ts
+            src/cli/plugins-build-bundle.ts
+            src/plugins/sdk-alias*.ts
+            src/plugin-sdk/**
+            packages/**
+            package.json
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            patches/**
             ui/src/i18n/lib/config-hint-translation.ts
             ui/src/lib/fnv1a.ts
             src/config/schema*.ts

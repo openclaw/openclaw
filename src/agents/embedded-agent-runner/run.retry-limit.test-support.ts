@@ -22,6 +22,8 @@ describe("runEmbeddedAgent retry-limit metadata", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.retry-limit" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     useOpenAIPlatformAuthFixture();
   });
 
@@ -55,8 +57,14 @@ describe("runEmbeddedAgent retry-limit metadata", () => {
         },
       } as never;
     });
-    mockedRunEmbeddedAttempt.mockResolvedValue(
+    const accepted = {
+      runId: "collector-before-retry",
+      childSessionKey: "agent:main:subagent:collector",
+      expectsCompletionMessage: false,
+    };
+    mockedRunEmbeddedAttempt.mockImplementation(async () =>
       makeAttemptResult({
+        acceptedSessionSpawns: physicalAttempt === 1 ? [accepted] : [],
         preflightRecovery: {
           route: "truncate_tool_results_only",
           source: "mid-turn",
@@ -75,6 +83,7 @@ describe("runEmbeddedAgent retry-limit metadata", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(32);
     expect(result.meta.error?.kind).toBe("retry_limit");
+    expect(result.acceptedSessionSpawns).toEqual([accepted]);
     expect(result.meta.agentMeta).toMatchObject({
       provider: "openai",
       model: "gpt-5.6-luna",

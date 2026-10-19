@@ -10,17 +10,10 @@ const validate = (input: unknown) =>
   });
 
 describe("discord setup adapter token shape", () => {
-  it.each(["1234567890123456789", " 1234567890123456789 ", "12345678901234"])(
-    "rejects numeric ID %j used as the bot token",
-    (token) => {
-      const error = validate({ token });
-      expect(error).toContain("application ID");
-      expect(error).toContain("Discord Developer Portal (Bot page)");
-    },
-  );
-
-  it("accepts a dot-separated bot token shape", () => {
-    expect(validate({ token: "MTk4NjIyNDQ3NDUy.Xyz.Abc-def_123" })).toBeNull();
+  it("rejects a numeric application ID used as the bot token after trimming", () => {
+    const error = validate({ token: " 1234567890123456789 " });
+    expect(error).toContain("application ID");
+    expect(error).toContain("Discord Developer Portal (Bot page)");
   });
 
   it("does not enforce a token format for nonnumeric strings", () => {

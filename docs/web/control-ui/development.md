@@ -21,9 +21,45 @@ The Gateway serves static files from `dist/control-ui`:
 pnpm ui:build
 ```
 
-For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache keeps at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Configured `gateway.controlUi.root` builds do not use this cache.
+Full package builds include matching bundled native plugin assets, including
+Workboard, in the UI distribution. These assets can load from the UI origin when
+the Gateway uses another origin or authenticated HTTP. The running plugin must
+match the packaged version and browser build; custom plugins and source overrides
+retain the Gateway asset route. A standalone UI build without packaged plugin
+artifacts also retains that route.
 
-Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker keeps its network-first policy for public assets, allowing the browser's HTTP cache to satisfy matching versioned requests.
+The build's performance report keeps the initial-entry JavaScript budget separate
+from the complete chat and new-session boot totals. Those route totals include
+the entry assets and the route's measured immediate dynamic imports, counting
+each asset once even when both preload lists reference it. Moving an existing
+boot import into the first request wave therefore remains visible in the byte
+accounting. Initial-entry JavaScript is capped at 339,000 B gzip with one startup
+CSS request. Complete boot JavaScript is capped at 1,550,000 B gzip for chat and
+1,130,000 B gzip for New Session, including the initial-entry assets.
+JSON5 remains in its own lazy chunk so snapshot validation cannot pull the raw
+configuration parser into chat boot. Syntax highlighting and its language grammars
+load on the first code block; code stays escaped and copyable while they load or
+if the optional chunk fails. MarkdownIt owns rendered HTML, while the separate
+CommonMark source parser preserves exact code and reasoning offsets. Every HTML
+render still passes through its sanitizer. `--base-dist` on
+`scripts/check-control-ui-performance.mts` compares route bytes and requests when
+both builds contain route preload templates. Older builds report that comparison
+as unavailable, so use a cold-load network capture to compare their complete boot
+cost.
+
+JavaScript is limited to 9 initial-entry requests, 29 complete chat boot requests,
+and 24 complete New Session boot requests. Each cap leaves two requests above the
+measured build to catch facade regressions caused by top-level await disabling
+chunk optimization. `pnpm ui:check-performance` enforces the route byte and request
+limits locally and in CI; `pnpm ui:build` reports them without rejecting the build.
+Worker scripts and other URL assets remain available in the offline cache without
+being modulepreloaded into the document.
+
+After a Gateway update, already-open tabs reload the current build when they encounter a missing old asset. Reloading is automatic when no unsaved-work guard blocks it; otherwise, save or discard the protected work and use the **Reload** banner. The Gateway and service worker keep only the current build's assets.
+
+Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker caches matching current-build public URLs for offline reuse.
+
+The Gateway shares prepared bundled asset bytes across browsers, including Brotli and gzip variants. Cold file admission and reads run in a worker so simultaneous page loads do not block chat delivery. Custom roots continue to read current files on each request.
 
 Non-index static assets use `Last-Modified` for conditional `GET` and `HEAD` requests. `If-None-Match` takes precedence over `If-Modified-Since`: `*` matches an existing asset, while other values receive the normal `200` response because static assets do not emit ETags. Date-only revalidation still returns `304` for unchanged assets. If no available content encoding is acceptable, the Gateway returns `406` before evaluating either condition.
 
@@ -100,6 +136,80 @@ browser extensions, or an already-controlling service worker. Browser-level
 navigation outside the app is outside its control. Production connection settings
 and `pnpm ui:dev` behavior are unchanged; use that command when you intentionally
 need a real Gateway or external integration.
+
+## Chat input ownership
+
+`ChatOutboxGatewayOwner` owns queued-input admission, updates, removal, and the
+matching pane projections. Single-row changes and reordering share one durable
+compare-and-set operation; queue callers do not publish separate storage and
+display updates. Command completion uses the composer recovery owner to retain
+or release draft attachments. Delivery waits for the full settings-update chain,
+then continues admission synchronously so another picker update cannot enter
+between settlement and transport.
+
+## Chat render scheduling
+
+Streaming deltas and session-roster notifications must not trigger unrelated
+renders. The shell processes session deletion and document-title updates directly,
+without rendering for roster publications. The pane runtime owns session
+observations and synchronizes their state immediately. The chat state owner
+coalesces eligible background invalidations in an animation frame. Solid
+projections and the pane render lifecycle publish presentation and run
+post-commit work after DOM bindings. Hidden documents bypass frame scheduling;
+retained hidden panes park presentation until shown. Retiring the render-lifecycle
+scope cancels queued background work.
+
+The `chat-stream-runtime-budgets.e2e.test.ts` suite protects streaming with
+structural update counts; chat-page unit tests cover intervening roster publications.
+
+Session descriptors share connection-scoped reads. Full row changes invalidate
+them; unchanged ancestor references reuse the settled read. Swarm progress follows
+the collector's parent summary, not a child provider's terminal status. Child rows
+already update their own presentation, while changed collector summaries and
+membership still refresh the parent details.
+
+Shell callbacks retain their identity across renders so a background session update
+does not redraw navigation twice. The outbox subscription still invalidates draft
+and attention badges when their underlying facts change. Session-link decoration
+preserves unchanged attributes instead of rewriting them on each roster update.
+
+Transcript enhancement inspects inserted or changed Markdown blocks; settled code
+blocks and tables do not need another scan when neighboring prose streams. Resize
+observers own geometry changes. The command palette likewise retains its measured
+input layout while navigating results, and remeasures edits, width changes, and
+reconnected fields. Status clocks pause in hidden tabs and render only when their
+displayed value or properties change.
+
+The first connected, presented transcript commit renders two neighboring rows beyond each
+viewport edge. The next animation frame restores the six-row scrolling buffer;
+pending navigation, focus, or anchor reconciliation uses that full buffer immediately,
+including neighboring controls such as folded-work headers. Focused and anchored
+rows remain retained independently. Link-preview discovery
+waits for browser idle time, then follows transcript mutations instead of rescanning
+unchanged content on every pane update. Hiding or retiring the pane cancels pending
+discovery.
+
+Streaming Markdown retains normalized input, split progress, and rendered prefixes
+in one bounded cache. Completed independent blocks render once; replacements,
+locale or display-option changes, and document-wide Markdown dependencies invalidate
+that reuse. Lists, reference definitions, containers, raw HTML, and colliding file labels
+retain their whole-block or whole-prefix semantics and the existing parse limits.
+
+Composer edits publish transcript resize notifications only when the viewport
+height or corrected scroll offset changes. Draft growth, shrinkage, and end
+anchoring still synchronize immediately. The position rail observes column width
+and conversation-region height instead of measuring the gutter on every streamed
+render; virtualizer and sidebar geometry changes retain their explicit sync path.
+Rail labels are shared across mounted markers, so offscreen history does not add
+translation work on each stream update.
+
+Sidebar narration releases its session interests while hidden. Acquires and releases
+share bounded exponential retry backoff with full jitter and server delay hints.
+Failed releases retain their original handles, including late hidden acquisitions;
+returning interests cancel queued releases and reacquire before retiring those handles.
+The shared connection coordinator renews observers after uncertain unsubscribe timeouts
+and preserves other viewers' leases and approval delivery. DOM detachment pauses timers
+without dropping retained handles; connection closure retires them and cancels retries.
 
 ## Talk live smoke test
 

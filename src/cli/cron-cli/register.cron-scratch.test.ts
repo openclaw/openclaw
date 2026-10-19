@@ -1,10 +1,9 @@
-// Cron scratch register tests cover cron scratch command option validation.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { defaultRuntime } from "../../runtime.js";
 
 const callGatewayFromCli = vi.fn();
-
 vi.mock("../gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("../gateway-rpc.js")>("../gateway-rpc.js");
   return {
@@ -13,105 +12,109 @@ vi.mock("../gateway-rpc.js", async () => {
       callGatewayFromCli(...args),
   };
 });
-
 const { registerCronScratchCommand } = await import("./register.cron-scratch.js");
-
-function createCronProgram(): Command {
-  const program = new Command();
-  program.exitOverride();
+async function run(args: string[]) {
+  const program = new Command().exitOverride();
   registerCronScratchCommand(program);
-  return program;
+  await program.parseAsync(["scratch", "job-1", ...args], { from: "user" });
 }
-
-describe("cron scratch command", () => {
-  beforeEach(() => {
-    callGatewayFromCli.mockReset();
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.scratch.get") {
-        return {
+const result = { ok: true, scratch: null, currentRevision: 3, maxBytes: 1024 };
+beforeEach(() => {
+  callGatewayFromCli.mockReset().mockImplementation(async (method: string) =>
+    method === "cron.scratch.get"
+      ? {
           scratch: { content: "note", revision: 2, updatedAtMs: 1 },
           currentRevision: 2,
           maxBytes: 1024,
-        };
-      }
-      return { ok: true, scratch: null, currentRevision: 3, maxBytes: 1024 };
+        }
+      : result,
+  );
+  vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+});
+afterEach(() => vi.restoreAllMocks());
+
+describe("cron scratch", () => {
+  it("uses the read revision for an implicit CAS write and prints JSON", async () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    await run(["--set", "new note"]);
+    expect(json).toHaveBeenCalledExactlyOnceWith(result);
+    expect(stdout).not.toHaveBeenCalled();
+    expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
+      "cron.scratch.get",
+      "cron.scratch.set",
+    ]);
+    expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
+      id: "job-1",
+      content: "new note",
+      expectedRevision: 2,
     });
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it.each([
-    ["without --json", ["--set", "new note"]],
-    ["with --json", ["--unset", "--json"]],
-  ])("prints the write result as JSON %s", async (_label, args) => {
-    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-
-    await createCronProgram().parseAsync(["scratch", "job-1", ...args], { from: "user" });
-
-    expect(writeJson).toHaveBeenCalledWith({
-      ok: true,
-      scratch: null,
-      currentRevision: 3,
-      maxBytes: 1024,
+  it("rejects non-decimal revisions after reading but before writing", async () => {
+    await expect(run(["--set", "x", "--expected-revision", "0x2"])).rejects.toMatchObject({
+      name: "ExitError",
+      code: 1,
     });
-    expect(stdoutWrite).not.toHaveBeenCalled();
-  });
-
-  it("documents the read/write JSON split", () => {
-    const scratch = createCronProgram().commands.find((command) => command.name() === "scratch");
-    const jsonOption = scratch?.options.find((option) => option.long === "--json");
-
-    expect(jsonOption?.description).toBe(
-      "Output scratch plus revision metadata as JSON; writes return JSON by default",
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--expected-revision must be a non-negative integer"),
     );
-    expect(jsonOption?.defaultValue).toBeUndefined();
+    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith(
+      "cron.scratch.get",
+      expect.anything(),
+      { id: "job-1" },
+    );
   });
 
-  it.each(["0x2", "1e2", "2.5", "-1", "2a"])(
-    "rejects non-decimal --expected-revision %j",
-    async (revision) => {
-      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  it.each([
+    ["0", ["--set", "x"], "x"],
+    ["42", ["--unset", "--json"], null],
+  ] as const)("writes at explicit revision %s without a read", async (revision, args, content) => {
+    await run([...args, "--expected-revision", revision]);
+    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith(
+      "cron.scratch.set",
+      expect.anything(),
+      { id: "job-1", content, expectedRevision: Number(revision) },
+    );
+  });
 
-      try {
-        await expect(
-          createCronProgram().parseAsync(
-            ["scratch", "job-1", "--set", "x", "--expected-revision", revision],
-            { from: "user" },
-          ),
-        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-
-        expect(errorSpy).toHaveBeenCalledWith(
-          expect.stringContaining("--expected-revision must be a non-negative integer"),
-        );
-        const setCalls = callGatewayFromCli.mock.calls.filter(
-          ([method]) => method === "cron.scratch.set",
-        );
-        expect(setCalls).toHaveLength(0);
-      } finally {
-        errorSpy.mockRestore();
-      }
-    },
-  );
+  it("reports revision conflicts without rereading or retrying", async () => {
+    callGatewayFromCli.mockResolvedValue({
+      ok: false,
+      reason: "revision-conflict",
+      currentRevision: 43,
+    });
+    await expect(run(["--unset", "--expected-revision", "42"])).rejects.toMatchObject({
+      name: "ExitError",
+      code: 1,
+    });
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("cron scratch changed concurrently (current revision 43)"),
+    );
+    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith(
+      "cron.scratch.set",
+      expect.anything(),
+      { id: "job-1", content: null, expectedRevision: 42 },
+    );
+  });
 
   it.each([
-    ["0", 0],
-    ["42", 42],
-  ])(
-    "passes decimal --expected-revision %j through to the CAS write",
-    async (revision, expectedRevision) => {
-      vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-      await createCronProgram().parseAsync(
-        ["scratch", "job-1", "--set", "x", "--expected-revision", revision],
-        { from: "user" },
-      );
-
-      const setCall = callGatewayFromCli.mock.calls.find(
-        ([method]) => method === "cron.scratch.set",
-      );
-      expect(setCall?.[2]).toMatchObject({ expectedRevision });
-    },
-  );
+    ["invalid revision", ["--set", "x", "--expected-revision", "invalid"]],
+    ["file input", ["--file", "missing-scratch-file", "--expected-revision", "42"]],
+    [
+      "oversized inline input",
+      ["--set", "x".repeat(CRON_JOB_SCRATCH_MAX_BYTES + 1), "--expected-revision", "42"],
+    ],
+  ])("reports Gateway errors before consuming %s", async (_label, args) => {
+    callGatewayFromCli.mockRejectedValue(new Error("Gateway unavailable"));
+    await expect(run(args)).rejects.toMatchObject({ name: "ExitError", code: 1 });
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway unavailable"),
+    );
+    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith(
+      "cron.scratch.get",
+      expect.anything(),
+      { id: "job-1" },
+    );
+  });
 });

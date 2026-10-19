@@ -5,8 +5,9 @@
  * host, and node browser integrations that need HTTP access to browser control.
  */
 import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { isIPv6, type AddressInfo } from "node:net";
 import express from "express";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
@@ -20,7 +21,6 @@ import {
   installBrowserCommonMiddleware,
 } from "./server-middleware.js";
 
-/** Running bridge server details returned to callers that manage its lifecycle. */
 export type BrowserBridge = {
   server: Server;
   port: number;
@@ -80,7 +80,6 @@ function buildNoVncBootstrapHtml(params: ResolvedNoVncObserver): string {
 </html>`;
 }
 
-/** Start an authenticated loopback browser bridge and register browser routes. */
 export async function startBrowserBridgeServer(params: {
   resolved: ResolvedBrowserConfig;
   host?: string;
@@ -158,7 +157,7 @@ export async function startBrowserBridgeServer(params: {
 
   setBridgeAuthForPort(resolvedPort, { token: authToken, password: authPassword });
 
-  const baseUrl = `http://${host}:${resolvedPort}`;
+  const baseUrl = `http://${isIPv6(host) ? `[${host}]` : host}:${resolvedPort}`;
   return { server, port: resolvedPort, baseUrl, state };
 }
 
@@ -187,7 +186,6 @@ async function stopBrowserBridgeServerOnce(server: Server): Promise<void> {
   }
   const runtimeClose = stopBrowserBridgeRuntime({
     current: state,
-    getState: () => bridgeStates.get(server) ?? null,
     // Retain the exact state until ingress and resource cleanup both succeed.
     clearState: () => {},
     onWarn: () => {},
@@ -202,25 +200,17 @@ async function stopBrowserBridgeServerOnce(server: Server): Promise<void> {
   bridgeStates.delete(server);
 }
 
-/** Stop a browser bridge server and clear its ephemeral port auth. */
 export function stopBrowserBridgeServer(server: Server): Promise<void> {
   const current = bridgeStopPromises.get(server);
   if (current) {
     return current;
   }
-  let resolveStop!: () => void;
-  let rejectStop!: (reason: unknown) => void;
-  const stopping = new Promise<void>((resolve, reject) => {
-    resolveStop = resolve;
-    rejectStop = reject;
-  });
+  const { promise: stopping, resolve, reject } = createDeferred<void>();
   bridgeStopPromises.set(server, stopping);
-  void stopBrowserBridgeServerOnce(server).then(resolveStop, rejectStop);
+  void stopBrowserBridgeServerOnce(server).then(resolve, reject);
   void stopping
     .finally(() => {
-      if (bridgeStopPromises.get(server) === stopping) {
-        bridgeStopPromises.delete(server);
-      }
+      bridgeStopPromises.delete(server);
     })
     .catch(() => {});
   return stopping;

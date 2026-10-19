@@ -19,6 +19,7 @@ import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-schedule.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -29,10 +30,16 @@ type HeartbeatCadenceMigrationResult = {
   warnings: string[];
 };
 
-function createDoctorCronService(storePath: string, cfg: OpenClawConfig): CronService {
+async function withDoctorCronService<T>(
+  storePath: string,
+  cfg: OpenClawConfig,
+  run: (cron: CronService) => Promise<T>,
+): Promise<T> {
+  const scheduler = new GatewayScheduler();
   const noop = () => {};
   const log = { debug: noop, info: noop, warn: noop, error: noop };
-  return new CronService({
+  const cron = new CronService({
+    scheduler,
     storePath,
     cronEnabled: false,
     cronConfig: cfg.cron,
@@ -45,6 +52,12 @@ function createDoctorCronService(storePath: string, cfg: OpenClawConfig): CronSe
       error: "doctor does not execute automations",
     }),
   });
+  try {
+    return await run(cron);
+  } finally {
+    cron.stop();
+    await scheduler.stop();
+  }
 }
 
 async function loadHeartbeatMonitorPlanReadOnly(
@@ -65,7 +78,8 @@ function describePlannedChange(change: HeartbeatMonitorChange): string {
   const cadence =
     schedule.kind === "every" ? formatDurationCompact(schedule.everyMs) : schedule.kind;
   const action = change.kind === "create" ? "Create" : "Update";
-  return `${action} heartbeat monitor for agent "${change.agentId}" at ${cadence}.`;
+  const state = change.input.enabled ? `at ${cadence}` : "as disabled";
+  return `${action} heartbeat monitor for agent "${change.agentId}" ${state}.`;
 }
 
 function noteWarnings(warnings: readonly string[], storePath: string): void {
@@ -75,22 +89,6 @@ function noteWarnings(warnings: readonly string[], storePath: string): void {
   note(`${warnings.join("\n")}\nCron store: ${shortenHomePath(storePath)}`, "Doctor warnings");
 }
 
-function cadenceFinding(params: {
-  storePath: string;
-  change: HeartbeatMonitorChange;
-}): HealthFinding {
-  return {
-    checkId: HEARTBEAT_CADENCE_MIGRATION_CHECK_ID,
-    severity: "warning",
-    message: describePlannedChange(params.change),
-    path: params.storePath,
-    target: params.change.agentId,
-    requirement: `heartbeat-monitor-${params.change.kind}`,
-    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to materialize heartbeat cadence in cron.`,
-  };
-}
-
-/** Reports heartbeat monitor rows that do not yet match cadence config. */
 export async function collectHeartbeatCadenceMigrationFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -98,7 +96,15 @@ export async function collectHeartbeatCadenceMigrationFindings(
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   try {
     const plan = await loadHeartbeatMonitorPlanReadOnly(cfg, storePath, env);
-    return plan.changes.map((change) => cadenceFinding({ storePath, change }));
+    return plan.changes.map((change) => ({
+      checkId: HEARTBEAT_CADENCE_MIGRATION_CHECK_ID,
+      severity: "warning",
+      message: describePlannedChange(change),
+      path: storePath,
+      target: change.agentId,
+      requirement: `heartbeat-monitor-${change.kind}`,
+      fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to materialize heartbeat cadence in cron.`,
+    }));
   } catch (error) {
     return [
       {
@@ -113,26 +119,25 @@ export async function collectHeartbeatCadenceMigrationFindings(
   }
 }
 
-/** Creates or updates the stable monitor rows used by heartbeat execution. */
 export async function ensureHeartbeatMonitorJobs(
   cfg: OpenClawConfig,
   storePath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<Map<string, CronJob>> {
-  const cron = createDoctorCronService(storePath, cfg);
-  const jobs = await cron.list({ includeDisabled: true });
-  const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env });
-  const { specs } = resolveHeartbeatMonitorPlan(cfg, jobs, { schedulerSeed });
-  const monitors = new Map<string, CronJob>();
-  for (const spec of specs) {
-    const result = await cron.add(spec.input, heartbeatMonitorAddOptions(spec.agentId));
-    const job = "job" in result ? result.job : result;
-    monitors.set(spec.agentId, job);
-  }
-  return monitors;
+  return await withDoctorCronService(storePath, cfg, async (cron) => {
+    const jobs = await cron.list({ includeDisabled: true });
+    const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env });
+    const { specs } = resolveHeartbeatMonitorPlan(cfg, jobs, { schedulerSeed });
+    const monitors = new Map<string, CronJob>();
+    for (const spec of specs) {
+      const result = await cron.add(spec.input, heartbeatMonitorAddOptions(spec.agentId));
+      const job = "job" in result ? result.job : result;
+      monitors.set(spec.agentId, job);
+    }
+    return monitors;
+  });
 }
 
-/** Previews or applies config-to-cron heartbeat cadence materialization. */
 export async function maybeMigrateHeartbeatCadenceToCron(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;
@@ -158,21 +163,22 @@ export async function maybeMigrateHeartbeatCadenceToCron(params: {
     return { changes, warnings };
   }
 
-  const cron = createDoctorCronService(storePath, params.cfg);
-  const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env });
-  const result = await applyHeartbeatMonitorJobs({
-    cron,
-    cfg: params.cfg,
-    schedulerSeed,
+  await withDoctorCronService(storePath, params.cfg, async (cron) => {
+    const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env });
+    const result = await applyHeartbeatMonitorJobs({
+      cron,
+      cfg: params.cfg,
+      schedulerSeed,
+    });
+    changes.push(...result.applied.map(describePlannedChange));
+    for (const failure of result.failures) {
+      warnings.push(
+        failure.change
+          ? `Heartbeat monitor for agent "${failure.change.agentId}" was not migrated: ${errorMessage(failure.error)}`
+          : `Could not inspect heartbeat monitor jobs: ${errorMessage(failure.error)}`,
+      );
+    }
   });
-  changes.push(...result.applied.map(describePlannedChange));
-  for (const failure of result.failures) {
-    warnings.push(
-      failure.change
-        ? `Heartbeat monitor for agent "${failure.change.agentId}" was not migrated: ${errorMessage(failure.error)}`
-        : `Could not inspect heartbeat monitor jobs: ${errorMessage(failure.error)}`,
-    );
-  }
 
   if (changes.length > 0) {
     note(changes.join("\n"), "Doctor changes");

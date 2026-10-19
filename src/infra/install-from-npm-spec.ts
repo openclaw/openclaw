@@ -1,4 +1,3 @@
-// Installs validated registry npm specs through archive install helpers.
 import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,
@@ -12,15 +11,9 @@ import {
 import {
   formatPrereleaseResolutionError,
   isPrereleaseResolutionAllowed,
-  parseRegistryNpmSpec,
-  validateRegistryNpmSpec,
+  parseRegistryNpmSpecResult,
 } from "./npm-registry-spec.js";
 
-/**
- * Final caller-facing result after a packed npm spec install.
- * Failed pack/validation results and installer failures keep their original
- * shapes; successful installs gain the npm resolution metadata.
- */
 type NpmSpecArchiveFinalInstallResult<TResult extends { ok: boolean }> =
   | { ok: false; error: string }
   | Exclude<TResult, { ok: true }>
@@ -35,17 +28,13 @@ function isSuccessfulInstallResult<TResult extends { ok: boolean }>(
   return result.ok;
 }
 
-/**
- * Validates a registry npm spec, downloads its archive, and delegates final installation.
- * The caller supplies archive-specific params without `archivePath`; this helper injects
- * the downloaded archive path and normalizes the npm archive flow result.
- */
 export async function installFromValidatedNpmSpecArchive<
   TResult extends { ok: boolean },
   TArchiveInstallParams extends { archivePath: string },
 >(params: {
   spec: string;
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   tempDirPrefix: string;
   expectedIntegrity?: string;
   onIntegrityDrift?: (payload: NpmIntegrityDriftPayload) => boolean | Promise<boolean>;
@@ -54,23 +43,16 @@ export async function installFromValidatedNpmSpecArchive<
   archiveInstallParams: Omit<TArchiveInstallParams, "archivePath">;
 }): Promise<NpmSpecArchiveFinalInstallResult<TResult>> {
   const spec = params.spec.trim();
-  const specError = validateRegistryNpmSpec(spec);
-  if (specError) {
-    // Reject unsupported specs before any network or archive extraction work starts.
-    return { ok: false, error: specError };
+  const parsedSpec = parseRegistryNpmSpecResult(spec);
+  if (!parsedSpec.ok) {
+    return parsedSpec;
   }
-  const flowResult = await withInstallWorkspace(params.tempDirPrefix, async (tmpDir) => {
-    const parsedSpec = parseRegistryNpmSpec(spec);
-    if (!parsedSpec) {
-      return {
-        ok: false as const,
-        error: "unsupported npm spec",
-      };
-    }
+  return await withInstallWorkspace(params.tempDirPrefix, async (tmpDir) => {
     // Check prerelease policy against the version the registry actually resolved.
     const packedResult = await packNpmSpecToArchive({
       spec,
       timeoutMs: params.timeoutMs,
+      workTimeoutMs: params.workTimeoutMs,
       cwd: tmpDir,
     });
     if (!packedResult.ok) {
@@ -84,14 +66,14 @@ export async function installFromValidatedNpmSpecArchive<
     if (
       npmResolution.version &&
       !isPrereleaseResolutionAllowed({
-        spec: parsedSpec,
+        spec: parsedSpec.parsed,
         resolvedVersion: npmResolution.version,
       })
     ) {
       return {
         ok: false as const,
         error: formatPrereleaseResolutionError({
-          spec: parsedSpec,
+          spec: parsedSpec.parsed,
           resolvedVersion: npmResolution.version,
         }),
       };
@@ -119,26 +101,14 @@ export async function installFromValidatedNpmSpecArchive<
       // SAFETY: The caller supplies every non-path field; this owner supplies the archive path.
     } as TArchiveInstallParams);
 
+    if (!isSuccessfulInstallResult(installResult)) {
+      // SAFETY: The success guard excludes the ok:true variant from the caller result union.
+      return installResult as Exclude<TResult, { ok: true }>;
+    }
     return {
-      ok: true as const,
-      installResult,
+      ...installResult,
       npmResolution,
-      integrityDrift: driftResult.integrityDrift,
+      ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     };
   });
-
-  // Preserve callback results and transaction symbols only after workspace cleanup settles.
-  if (!flowResult.ok) {
-    return flowResult;
-  }
-  const installResult = flowResult.installResult;
-  if (!isSuccessfulInstallResult(installResult)) {
-    // SAFETY: The success guard excludes the ok:true variant from the caller result union.
-    return installResult as Exclude<TResult, { ok: true }>;
-  }
-  return {
-    ...installResult,
-    npmResolution: flowResult.npmResolution,
-    ...(flowResult.integrityDrift ? { integrityDrift: flowResult.integrityDrift } : {}),
-  };
 }

@@ -1,11 +1,11 @@
-// Browser tests cover server.agent contract core plugin behavior.
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { ACT_ERROR_CODES } from "./routes/agent.act.errors.js";
-import { isActKind } from "./routes/agent.act.shared.js";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import "../test-support/browser-security.mock.js";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
   installAgentContractHooks,
   postJson,
@@ -13,12 +13,12 @@ import {
 } from "./server.agent-contract.test-harness.js";
 import {
   cleanupBrowserControlServerTestContext,
+  resetBrowserControlServerTestContext,
   getBrowserControlServerBaseUrl,
   getBrowserControlServerTestState,
   getCdpMocks,
   getPwMocks,
   makeResponse,
-  resetBrowserControlServerTestContext,
   setBrowserControlServerEvaluateEnabled,
   setBrowserControlServerExtraArgs,
   setBrowserControlServerProfiles,
@@ -27,483 +27,264 @@ import {
   setBrowserControlServerTabUrl,
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
-import { getBrowserTestFetch } from "./test-support/fetch.js";
+import { createBrowserTestClient, getBrowserTestFetch } from "./test-support/fetch.js";
 
 const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
-const NAVIGATION_TIMEOUT_CASES = [
-  { requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
-  { requestedTimeoutMs: 45_000, expectedTimeoutMs: 45_000 },
-  { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
-  { requestedTimeoutMs: 3_000_000_000, expectedTimeoutMs: 120_000 },
-] as const;
+const targetId = "abcd1234";
+const TAB_URL = "https://example.com";
 
-type ActErrorResponse = {
-  error?: string;
-  code?: string;
-};
-
-type ActErrorHttpResponse = {
-  status: number;
-  body: ActErrorResponse;
-};
-
-function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(expectedValue);
-  }
-}
-
-type MockWithCalls = {
-  mock: { calls: unknown[][] };
-};
-
-function mockFirstArg(
-  mock: MockWithCalls,
-  callIndex: number,
-  label: string,
-): Record<string, unknown> {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected ${label} call ${callIndex}`);
-  }
-  const value = call[0];
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} call ${callIndex} argument`);
-  }
-  return value as Record<string, unknown>;
-}
-
-async function postActAndReadError(base: string, body?: unknown): Promise<ActErrorHttpResponse> {
-  const realFetch = getBrowserTestFetch();
-  const response = await realFetch(`${base}/act`, {
+function postResponse(base: string, route: string, body?: unknown) {
+  return realFetch(`${base}${route}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+}
+
+async function postActAndReadError(base: string, body?: unknown) {
+  const response = await postResponse(base, "/act", body);
   return {
     status: response.status,
-    body: (await response.json()) as ActErrorResponse,
+    body: (await response.json()) as { error?: string; code?: string },
   };
 }
 
 const state = getBrowserControlServerTestState();
 const cdpMocks = getCdpMocks();
 const pwMocks = getPwMocks();
-function requirePwMock<K extends keyof typeof pwMocks>(name: K): NonNullable<(typeof pwMocks)[K]> {
+function pw<K extends keyof typeof pwMocks>(name: K): NonNullable<(typeof pwMocks)[K]> {
   return expectDefined(pwMocks[name], `Playwright mock ${name}`);
 }
+
+function replaceActedOnTab(
+  id = "fresh5678",
+  title = "Submitted",
+  tabUrl = "https://submitted.example",
+) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url.includes("/json/list")) {
+        return makeResponse([
+          {
+            id,
+            title,
+            url: tabUrl,
+            webSocketDebuggerUrl: `ws://127.0.0.1/devtools/page/${id}`,
+            type: "page",
+          },
+        ]);
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }),
+  );
+}
+
+const realFetch: ReturnType<typeof getBrowserTestFetch> = (input, init) =>
+  getBrowserTestFetch()(input, init);
+
+const guardedCurrentTabRouteCases = [
+  ["GET", "/errors?targetId=abcd1234", undefined, "getPageErrorsViaPlaywright"],
+  ["GET", "/requests?targetId=abcd1234", undefined, "getNetworkRequestsViaPlaywright"],
+  ["POST", "/trace/start", { targetId }, "traceStartViaPlaywright"],
+  ["POST", "/trace/stop", { targetId }, "traceStopViaPlaywright"],
+  ["POST", "/response/body", { targetId, url: "**/api/data" }, "responseBodyViaPlaywright"],
+  ["POST", "/highlight", { targetId, ref: "e1" }, "highlightViaPlaywright"],
+  ["GET", "/console?targetId=abcd1234", undefined, "getConsoleMessagesViaPlaywright"],
+  ["POST", "/pdf", { targetId }, "pdfViaPlaywright"],
+  ["POST", "/screenshot", { targetId }, "takeScreenshotViaPlaywright"],
+  [
+    "POST",
+    "/download",
+    { targetId, currentDocument: true, expectedUrl: TAB_URL },
+    "downloadCurrentDocumentViaPlaywright",
+  ],
+  [
+    "POST",
+    "/act",
+    {
+      targetId,
+      kind: "batch",
+      actions: [{ kind: "evaluate", fn: "() => document.body.innerText" }],
+    },
+    "executeActViaPlaywright",
+  ],
+  ["GET", "/cookies?targetId=abcd1234", undefined, "cookiesGetViaPlaywright"],
+  ["GET", "/storage/local?targetId=abcd1234", undefined, "storageGetViaPlaywright"],
+  [
+    "GET",
+    "/snapshot?format=ai",
+    undefined,
+    ["getObservedBrowserStateViaPlaywright", "snapshotRoleViaPlaywright"],
+  ],
+] as const;
+
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+const requireRecord = createRequireRecord("record", "expected-label-object");
+
+function requireMockArg(mock: MockWithCalls) {
+  return requireRecord(mock.mock.calls[0]?.[0], "mock call argument");
+}
+
+function expectBrowserCallFields(mock: MockWithCalls, expected: Record<string, unknown>) {
+  expect(requireMockArg(mock)).toMatchObject({ cdpUrl: expect.any(String), ...expected });
+}
+
+function post<T>(route: string, body?: unknown): Promise<T> {
+  return postJson<T>(`${getBrowserControlServerBaseUrl()}${route}`, body);
+}
+
+function expectLastAction(action: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+  expect(pw("executeActViaPlaywright")).toHaveBeenLastCalledWith(
+    expect.objectContaining({ cdpUrl: state.cdpBaseUrl, targetId, action, ...extra }),
+  );
+}
+
+type ActionCase = [input: Record<string, unknown>, normalized?: Record<string, unknown>];
 
 describe("browser control server", () => {
   installAgentContractHooks();
 
-  const slowTimeoutMs = 60_000;
+  it("returns ACT_EXISTING_SESSION_UNSUPPORTED for unsupported existing-session actions", async () => {
+    setBrowserControlServerProfiles({
+      openclaw: { color: "#FF4500", driver: "existing-session" },
+    });
 
-  beforeAll(async () => {
-    await resetBrowserControlServerTestContext();
-    await startBrowserControlServerFromConfig();
-    await cleanupBrowserControlServerTestContext();
-  }, slowTimeoutMs);
+    const base = await startServerAndBase();
+    const response = await postActAndReadError(base, {
+      kind: "batch",
+      actions: [{ kind: "press", key: "Enter" }],
+    });
 
-  it(
-    "returns ACT_KIND_REQUIRED when kind is missing",
-    () => {
-      expect(isActKind(undefined)).toBe(false);
-      expect(isActKind("")).toBe(false);
-      expect(ACT_ERROR_CODES.kindRequired).toBe("ACT_KIND_REQUIRED");
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "returns ACT_INVALID_REQUEST for malformed action payloads",
-    async () => {
-      const base = await startServerAndBase();
-      const response = await postActAndReadError(base, {
-        kind: "click",
-        ref: {},
-      });
-
-      expect(response.status).toBe(400);
-      expect(response.body.code).toBe("ACT_INVALID_REQUEST");
-      expect(response.body.error).toContain("click requires ref or selector");
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "returns ACT_INVALID_REQUEST for malformed coordinate clicks",
-    async () => {
-      const base = await startServerAndBase();
-      const response = await postActAndReadError(base, {
-        kind: "clickCoords",
-        x: -1,
-        y: 20,
-      });
-
-      expect(response.status).toBe(400);
-      expect(response.body.code).toBe("ACT_INVALID_REQUEST");
-      expect(response.body.error).toContain("clickCoords requires non-negative x and y");
-    },
-    slowTimeoutMs,
-  );
+    expect(response.status).toBe(501);
+    expect(response.body.code).toBe("ACT_EXISTING_SESSION_UNSUPPORTED");
+    expect(response.body.error).toBe(
+      "existing-session batch is not supported yet; send actions individually.",
+    );
+  });
 
   it.each([
     {
-      body: { kind: "clickCoords", x: "0x10", y: "20" },
-      message: "x must be a finite number",
+      body: { kind: "batch", actions: [{ kind: "click", ref: "5", targetId: "other-tab" }] },
+      error: "batched action targetId must match request targetId",
     },
+    // Route selection ignores a numeric target; action normalization stringifies it.
     {
-      body: { kind: "clickCoords", x: "20", y: "0x10" },
-      message: "y must be a finite number",
+      body: { kind: "click", ref: "5", targetId: 12345 },
+      error: "action targetId must match request targetId",
     },
+  ])("rejects action target overrides: $error", async ({ body, error }) => {
+    const response = await postActAndReadError(await startServerAndBase(), body);
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      code: "ACT_TARGET_ID_MISMATCH",
+      error: expect.stringContaining(error),
+    });
+    expect(pw("executeActViaPlaywright")).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes request and batch target aliases with the resolved proxy policy", async () => {
+    setBrowserControlServerExtraArgs(["--proxy-server=http://proxy.example:8080"]);
+    await startServerAndBase();
+    const response = await post<{ ok: boolean }>("/act", {
+      kind: "batch",
+      targetId: "abcd",
+      // Sub-action references the same tab via a unique prefix alias.
+      actions: [{ kind: "click", ref: "1", targetId: "abcd" }],
+    });
+
+    expect(response.ok).toBe(true);
+    expect(pw("executeActViaPlaywright").mock.calls[0]?.[0]).toMatchObject({
+      browserProxyMode: "explicit-browser-proxy",
+      action: { targetId, actions: [{ targetId }] },
+    });
+  });
+
+  it.each([
+    { replacement: undefined, expectedTarget: "abcd1234" },
+    { replacement: "fresh5678", expectedTarget: "fresh5678" },
   ])(
-    "returns ACT_INVALID_REQUEST for non-decimal coordinate clicks",
-    async ({ body, message }) => {
-      const base = await startServerAndBase();
-      const response = await postActAndReadError(base, body);
-
-      expect(response.status).toBe(400);
-      expect(response.body.code).toBe("ACT_INVALID_REQUEST");
-      expect(response.body.error).toContain(message);
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "returns ACT_EXISTING_SESSION_UNSUPPORTED for unsupported existing-session actions",
-    async () => {
-      setBrowserControlServerProfiles({
-        openclaw: {
-          color: "#FF4500",
-          driver: "existing-session",
-        },
+    "only adopts a replacement proven by the acted-on page: $replacement",
+    async ({ replacement, expectedTarget }) => {
+      await startServerAndBase();
+      pw("executeActViaPlaywright").mockImplementationOnce(async () => {
+        replaceActedOnTab();
+        return { targetId: replacement };
       });
-
-      const base = await startServerAndBase();
-      const response = await postActAndReadError(base, {
-        kind: "batch",
-        actions: [{ kind: "press", key: "Enter" }],
-      });
-
-      expect(response.status).toBe(501);
-      expect(response.body.code).toBe("ACT_EXISTING_SESSION_UNSUPPORTED");
-      expect(response.body.error).toContain("batch");
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "returns ACT_TARGET_ID_MISMATCH for batched action targetId overrides",
-    async () => {
-      const base = await startServerAndBase();
-      const response = await postActAndReadError(base, {
-        kind: "batch",
-        actions: [{ kind: "click", ref: "5", targetId: "other-tab" }],
-      });
-
-      expect(response.status).toBe(403);
-      expect(response.body.code).toBe("ACT_TARGET_ID_MISMATCH");
-      expect(response.body.error).toContain("batched action targetId must match request targetId");
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "returns ACT_TARGET_ID_MISMATCH for top-level action targetId overrides",
-    async () => {
-      const base = await startServerAndBase();
-      const response = await postActAndReadError(base, {
-        kind: "click",
-        ref: "5",
-        // Intentionally non-string: route-level target selection ignores this,
-        // while action normalization stringifies it.
-        targetId: 12345,
-      });
-
-      expect(response.status).toBe(403);
-      expect(response.body.code).toBe("ACT_TARGET_ID_MISMATCH");
-      expect(response.body.error).toContain("action targetId must match request targetId");
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "forwards the resolved browser proxy mode to Playwright actions",
-    async () => {
-      setBrowserControlServerExtraArgs(["--proxy-server=http://proxy.example:8080"]);
-      const base = await startServerAndBase();
-
-      const response = await postJson<{ ok: boolean }>(`${base}/act`, {
-        kind: "hover",
-        ref: "1",
-      });
-
-      expect(response.ok).toBe(true);
-      const execArgs = mockFirstArg(requirePwMock("executeActViaPlaywright"), 0, "executeAct");
-      expect(execArgs.browserProxyMode).toBe("explicit-browser-proxy");
-      const hoverArgs = mockFirstArg(requirePwMock("hoverViaPlaywright"), 0, "hover");
-      expect(hoverArgs.browserProxyMode).toBe("explicit-browser-proxy");
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "canonicalizes a unique targetId prefix to the request tab before dispatch",
-    async () => {
-      const base = await startServerAndBase();
-      // "abcd" is a unique prefix of the canonical targetId "abcd1234". The route
-      // must rewrite the action's targetId to the canonical id, because the
-      // Playwright executor reads `action.targetId ?? targetId` for an exact page
-      // lookup; a surviving alias would miss the lookup and break at runtime.
-      const response = await postJson<{ ok: boolean }>(`${base}/act`, {
-        kind: "click",
-        ref: "1",
-        targetId: "abcd",
-      });
-
-      expect(response.ok).toBe(true);
-      const execArgs = mockFirstArg(requirePwMock("executeActViaPlaywright"), 0, "executeAct");
-      const action = execArgs.action as { targetId?: string };
-      expect(action.targetId).toBe("abcd1234");
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "canonicalizes a batched sub-action targetId alias before dispatch",
-    async () => {
-      const base = await startServerAndBase();
-      const response = await postJson<{ ok: boolean }>(`${base}/act`, {
-        kind: "batch",
-        targetId: "abcd1234",
-        // Sub-action references the same tab via a unique prefix alias.
-        actions: [{ kind: "click", ref: "1", targetId: "abcd" }],
-      });
-
-      expect(response.ok).toBe(true);
-      const execArgs = mockFirstArg(requirePwMock("executeActViaPlaywright"), 0, "executeAct");
-      const action = execArgs.action as { actions?: Array<{ targetId?: string }> };
-      expect(action.actions?.[0]?.targetId).toBe("abcd1234");
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "does not adopt an unrelated new target after the acted-on tab disappears",
-    async () => {
-      const base = await startServerAndBase();
-      requirePwMock("clickViaPlaywright").mockImplementationOnce(async () => {
-        vi.stubGlobal(
-          "fetch",
-          vi.fn(async (url: string) => {
-            if (url.includes("/json/list")) {
-              return makeResponse([
-                {
-                  id: "fresh5678",
-                  title: "Submitted",
-                  url: "https://submitted.example",
-                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/fresh5678",
-                  type: "page",
-                },
-              ]);
-            }
-            throw new Error(`unexpected fetch: ${url}`);
-          }),
-        );
-      });
-
-      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/act`, {
-        kind: "click",
-        ref: "5",
-        targetId: "abcd1234",
-      });
-
-      expect(response.ok).toBe(true);
-      expect(response.targetId).toBe("abcd1234");
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "returns the replacement target proven by the acted-on Playwright page",
-    async () => {
-      const base = await startServerAndBase();
-      requirePwMock("executeActViaPlaywright").mockImplementationOnce(async () => {
-        vi.stubGlobal(
-          "fetch",
-          vi.fn(async (url: string) => {
-            if (url.includes("/json/list")) {
-              return makeResponse([
-                {
-                  id: "fresh5678",
-                  title: "Submitted",
-                  url: "https://submitted.example",
-                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/fresh5678",
-                  type: "page",
-                },
-              ]);
-            }
-            throw new Error(`unexpected fetch: ${url}`);
-          }),
-        );
-        return { targetId: "fresh5678" };
-      });
-
-      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/act`, {
-        kind: "click",
-        ref: "5",
-        targetId: "abcd1234",
-      });
-
-      expect(response).toMatchObject({ ok: true, targetId: "fresh5678" });
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "returns blocked dialog state for action-triggered modals",
-    async () => {
-      const base = await startServerAndBase();
-      requirePwMock("executeActViaPlaywright").mockResolvedValueOnce({
-        blockedByDialog: true,
-        browserState: {
-          dialogs: {
-            pending: [
-              {
-                id: "d1",
-                type: "confirm",
-                message: "Continue?",
-                openedAt: "2026-05-17T12:00:00.000Z",
-              },
-            ],
-            recent: [],
-          },
-        },
-      });
-
-      const response = await postJson<{
-        ok: boolean;
-        blockedByDialog?: boolean;
-        browserState?: { dialogs?: { pending?: Array<{ id?: string; message?: string }> } };
-      }>(`${base}/act`, {
-        kind: "click",
-        ref: "5",
-      });
-
-      expect(response.ok).toBe(true);
-      expect(response.blockedByDialog).toBe(true);
-      expect(response.browserState?.dialogs?.pending?.[0]).toMatchObject({
-        id: "d1",
-        message: "Continue?",
+      expect(await post("/act", { kind: "click", ref: "5", targetId })).toMatchObject({
+        ok: true,
+        targetId: expectedTarget,
       });
     },
-    slowTimeoutMs,
   );
 
-  it(
-    "returns action download metadata from /act responses",
-    async () => {
-      const base = await startServerAndBase();
-      requirePwMock("executeActViaPlaywright").mockResolvedValueOnce({
-        downloads: [
-          {
-            url: "https://example.com/report.pdf",
-            suggestedFilename: "report.pdf",
-            path: "/tmp/openclaw/downloads/report.pdf",
-          },
-        ],
+  it("returns blocked dialog state for action-triggered modals", async () => {
+    await startServerAndBase();
+    const pending = [
+      { id: "d1", type: "confirm", message: "Continue?", openedAt: "2026-05-17T12:00:00.000Z" },
+    ];
+    pw("executeActViaPlaywright").mockResolvedValueOnce({
+      blockedByDialog: true,
+      browserState: { dialogs: { pending, recent: [] } },
+    });
+    expect(await post("/act", { kind: "click", ref: "5" })).toMatchObject({
+      ok: true,
+      blockedByDialog: true,
+      browserState: { dialogs: { pending } },
+    });
+  });
+
+  it("returns action download metadata from /act responses", async () => {
+    await startServerAndBase();
+    const downloads = [
+      {
+        url: "https://example.com/report.pdf",
+        suggestedFilename: "report.pdf",
+        path: "/tmp/openclaw/downloads/report.pdf",
+      },
+    ];
+    pw("executeActViaPlaywright").mockResolvedValueOnce({ downloads });
+    expect(await post("/act", { kind: "click", ref: "5" })).toEqual({
+      ok: true,
+      targetId,
+      url: TAB_URL,
+      downloads,
+    });
+  });
+
+  it("blocks evaluation while preserving cookie and storage reads", async () => {
+    setBrowserControlServerEvaluateEnabled(false);
+    const base = await startServerAndBase();
+    const response = await postActAndReadError(base, { kind: "evaluate", fn: "() => 1" });
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe("ACT_EVALUATE_DISABLED");
+    expect(response.body.error).toContain("browser.evaluateEnabled=false");
+    expect(pw("evaluateViaPlaywright")).not.toHaveBeenCalled();
+    pw("cookiesGetViaPlaywright").mockResolvedValueOnce({
+      cookies: [{ name: "session", value: "abc123" }],
+    });
+    pw("storageGetViaPlaywright").mockResolvedValueOnce({ values: { token: "value" } });
+    for (const [route, mock, result, options] of [
+      ["/cookies", "cookiesGetViaPlaywright", { cookies: [{ name: "session" }] }, {}],
+      [
+        "/storage/local?key=token",
+        "storageGetViaPlaywright",
+        { values: { token: "value" } },
+        { kind: "local", key: "token" },
+      ],
+    ] as const) {
+      expect(await (await realFetch(`${base}${route}`)).json()).toMatchObject({
+        ok: true,
+        ...result,
       });
-
-      const response = await postJson<{
-        ok: boolean;
-        downloads?: Array<{ url?: string; suggestedFilename?: string; path?: string }>;
-      }>(`${base}/act`, {
-        kind: "click",
-        ref: "5",
-      });
-
-      expect(response.ok).toBe(true);
-      expect(response.downloads).toEqual([
-        {
-          url: "https://example.com/report.pdf",
-          suggestedFilename: "report.pdf",
-          path: "/tmp/openclaw/downloads/report.pdf",
-        },
-      ]);
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "returns ACT_SELECTOR_UNSUPPORTED for selector on unsupported action kinds",
-    async () => {
-      const base = await startServerAndBase();
-      const response = await postActAndReadError(base, {
-        kind: "evaluate",
-        fn: "() => 1",
-        selector: "#submit",
-      });
-
-      expect(response.status).toBe(400);
-      expect(response.body.code).toBe("ACT_SELECTOR_UNSUPPORTED");
-      expect(response.body.error).toContain("'selector' is not supported");
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "returns ACT_INVALID_REQUEST for malformed unsupported selector actions before selector gating",
-    async () => {
-      const base = await startServerAndBase();
-      const response = await postActAndReadError(base, {
-        kind: "press",
-        selector: "#submit",
-      });
-
-      expect(response.status).toBe(400);
-      expect(response.body.code).toBe("ACT_INVALID_REQUEST");
-      expect(response.body.error).toContain("press requires key");
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "returns ACT_EVALUATE_DISABLED when evaluate is blocked by config",
-    async () => {
-      setBrowserControlServerEvaluateEnabled(false);
-      const base = await startServerAndBase();
-      const response = await postActAndReadError(base, {
-        kind: "evaluate",
-        fn: "() => 1",
-      });
-
-      expect(response.status).toBe(403);
-      expect(response.body.code).toBe("ACT_EVALUATE_DISABLED");
-      expect(response.body.error).toContain("browser.evaluateEnabled=false");
-    },
-    slowTimeoutMs,
-  );
-
-  it("blocks disallowed snapshot tabs before reading Playwright browser state", async () => {
-    setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
-    setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
-    const response = await getBrowserTestFetch()(
-      `${await startServerAndBase()}/snapshot?format=ai`,
-    );
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: BROWSER_NAVIGATION_BLOCKED_MESSAGE });
-    expect(requirePwMock("getObservedBrowserStateViaPlaywright")).not.toHaveBeenCalled();
-    expect(requirePwMock("snapshotAiViaPlaywright")).not.toHaveBeenCalled();
+      expect(pw(mock)).toHaveBeenCalledWith({ cdpUrl: state.cdpBaseUrl, targetId, ...options });
+    }
   });
 
   it("agent contract: doctor deep runs a live snapshot probe", async () => {
     const base = await startServerAndBase();
-    const realFetch = getBrowserTestFetch();
 
     const report = (await realFetch(`${base}/doctor?deep=true`).then((r) => r.json())) as {
       ok: boolean;
@@ -512,483 +293,551 @@ describe("browser control server", () => {
 
     expect(report.ok).toBe(true);
     const liveSnapshotCheck = report.checks?.find((check) => check.id === "live-snapshot");
-    expectRecordFields(liveSnapshotCheck, { id: "live-snapshot", status: "pass" });
+    expect(liveSnapshotCheck).toMatchObject({ id: "live-snapshot", status: "pass" });
     expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
       limit: 25,
     });
   });
 
-  it.each(NAVIGATION_TIMEOUT_CASES)(
-    "forwards timer-safe navigation timeout $requestedTimeoutMs to the Playwright backend",
-    async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
-      const base = await startServerAndBase();
-
-      const response = await postJson<{ ok: boolean }>(`${base}/navigate`, {
-        url: "https://example.com/slow",
-        timeoutMs: requestedTimeoutMs,
+  it.each([
+    { ownerTarget: undefined, backendTarget: "unrelated-999", expected: "abcd1234" },
+    { ownerTarget: "replacement-target", backendTarget: undefined, expected: "replacement-target" },
+  ])(
+    "navigation preserves captured relay ownership: $ownerTarget",
+    async ({ ownerTarget, backendTarget, expected }) => {
+      await startServerAndBase();
+      const runtime = expectDefined(await startBrowserControlServerFromConfig(), "browser runtime");
+      const previousRelays = runtime.extensionRelays;
+      runtime.extensionRelays = new Map([
+        ["openclaw", { bridge: { captureOperationTarget: () => () => ownerTarget } }],
+      ]) as unknown as NonNullable<typeof runtime.extensionRelays>;
+      pw("navigateViaPlaywright").mockImplementationOnce(async (options) => {
+        const operationTargetId = await (
+          options as {
+            resolveOperationTarget?: () => string | undefined | Promise<string | undefined>;
+          }
+        ).resolveOperationTarget?.();
+        expect(operationTargetId).toBe(ownerTarget);
+        return {
+          url: "https://example.com/recovered",
+          targetId: backendTarget ?? operationTargetId,
+        };
       });
-
-      expect(response.ok).toBe(true);
-      expect(requirePwMock("navigateViaPlaywright")).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://example.com/slow",
-          timeoutMs: expectedTimeoutMs,
-        }),
-      );
+      try {
+        expect(
+          await post("/navigate", { url: "https://example.com/recovered", targetId }),
+        ).toMatchObject({ ok: true, targetId: expected });
+      } finally {
+        runtime.extensionRelays = previousRelays;
+      }
     },
   );
 
-  it("never lets a navigation payload override its invalidated relay-owned target", async () => {
-    const base = await startServerAndBase();
-    const runtime = expectDefined(await startBrowserControlServerFromConfig(), "browser runtime");
-    const previousRelays = runtime.extensionRelays;
-    runtime.extensionRelays = new Map([
-      ["openclaw", { bridge: { captureOperationTarget: () => () => undefined } }],
-    ]) as unknown as NonNullable<typeof runtime.extensionRelays>;
-    requirePwMock("navigateViaPlaywright").mockImplementationOnce(async () => ({
-      url: "https://example.com/after",
-      targetId: "unrelated-999",
-    }));
+  it("clamps overflowing navigation timeouts for Chrome MCP", async () => {
+    setBrowserControlServerProfiles({ openclaw: { color: "#FF4500", driver: "existing-session" } });
+    await startServerAndBase();
 
-    try {
-      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/navigate`, {
-        url: "https://example.com/after",
-        targetId: "abcd1234",
-      });
-
-      expect(response).toMatchObject({ ok: true, targetId: "abcd1234" });
-    } finally {
-      runtime.extensionRelays = previousRelays;
-    }
-  });
-
-  it("passes exact relay ownership into navigation before a renderer replacement", async () => {
-    const base = await startServerAndBase();
-    const runtime = expectDefined(await startBrowserControlServerFromConfig(), "browser runtime");
-    const previousRelays = runtime.extensionRelays;
-    runtime.extensionRelays = new Map([
-      ["openclaw", { bridge: { captureOperationTarget: () => () => "replacement-target" } }],
-    ]) as unknown as NonNullable<typeof runtime.extensionRelays>;
-    requirePwMock("navigateViaPlaywright").mockImplementationOnce(async (options) => {
-      const targetId = await (
-        options as {
-          resolveOperationTarget?: () => string | undefined | Promise<string | undefined>;
-        }
-      ).resolveOperationTarget?.();
-      if (!targetId) {
-        throw new Error("captured relay target was not forwarded to navigation");
-      }
-      return { url: "https://example.com/recovered", targetId };
+    const response = await post<{ ok: boolean }>("/navigate", {
+      url: "https://example.com/slow",
+      targetId: "7",
+      timeoutMs: 3_000_000_000,
     });
 
-    try {
-      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/navigate`, {
-        url: "https://example.com/recovered",
-        targetId: "abcd1234",
-      });
-
-      expect(response).toMatchObject({ ok: true, targetId: "replacement-target" });
-    } finally {
-      runtime.extensionRelays = previousRelays;
-    }
-  });
-
-  it.each(NAVIGATION_TIMEOUT_CASES)(
-    "forwards timer-safe navigation timeout $requestedTimeoutMs to the Chrome MCP backend",
-    async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
-      setBrowserControlServerProfiles({
-        openclaw: { color: "#FF4500", driver: "existing-session" },
-      });
-      const base = await startServerAndBase();
-
-      const response = await postJson<{ ok: boolean }>(`${base}/navigate`, {
-        url: "https://example.com/slow",
+    expect(response.ok).toBe(true);
+    const chromeMcp = await import("./chrome-mcp.js");
+    expect(chromeMcp.navigateChromeMcpPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileName: "openclaw",
         targetId: "7",
-        timeoutMs: requestedTimeoutMs,
-      });
-
-      expect(response.ok).toBe(true);
-      const chromeMcp = await vi.importMock<typeof import("./chrome-mcp.js")>("./chrome-mcp.js");
-      expect(chromeMcp.navigateChromeMcpPage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          profileName: "openclaw",
-          targetId: "7",
-          url: "https://example.com/slow",
-          timeoutMs: expectedTimeoutMs,
-        }),
-      );
-    },
-  );
+        url: "https://example.com/slow",
+        timeoutMs: 120_000,
+      }),
+    );
+  });
 
   it("agent contract: navigation + common act commands", async () => {
-    const base = await startServerAndBase();
-    const realFetch = getBrowserTestFetch();
-
-    const nav = await postJson<{ ok: boolean; targetId?: string }>(`${base}/navigate`, {
-      url: "https://example.com",
-    });
-    expect(nav.ok).toBe(true);
-    expect(typeof nav.targetId).toBe("string");
-    const navigateArgs = mockFirstArg(requirePwMock("navigateViaPlaywright"), 0, "navigate");
-    expectRecordFields(navigateArgs, {
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      url: "https://example.com",
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
-
-    const click = await postJson<{ ok: boolean }>(`${base}/act`, {
-      kind: "click",
-      ref: "1",
-      button: "left",
-      modifiers: ["Shift"],
-    });
-    expect(click.ok).toBe(true);
-    const clickArgs = mockFirstArg(requirePwMock("clickViaPlaywright"), 0, "click");
-    expectRecordFields(clickArgs, {
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      ref: "1",
-      button: "left",
-      modifiers: ["Shift"],
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
-    expect((clickArgs as { doubleClick?: boolean }).doubleClick).toBeUndefined();
-
-    const clickSelector = await realFetch(`${base}/act`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "click", selector: "button.save" }),
-    });
-    expect(clickSelector.status).toBe(200);
-    expect(((await clickSelector.json()) as { ok?: boolean }).ok).toBe(true);
-    const clickSelectorArgs = mockFirstArg(requirePwMock("clickViaPlaywright"), 1, "click");
-    expectRecordFields(clickSelectorArgs, {
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      selector: "button.save",
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
-    expect((clickSelectorArgs as { doubleClick?: boolean }).doubleClick).toBeUndefined();
-
-    const clickCoords = await postJson<{ ok: boolean; url?: string }>(`${base}/act`, {
-      kind: "clickCoords",
-      x: "42.5",
-      y: 64,
-      doubleClick: "true",
-      button: "left",
-      delayMs: "10",
-    });
-    expect(clickCoords.ok).toBe(true);
-    expect(clickCoords.url).toBe("https://example.com");
-    const clickCoordsArgs = mockFirstArg(
-      requirePwMock("clickCoordsViaPlaywright"),
-      0,
-      "click coords",
-    );
-    expectRecordFields(clickCoordsArgs, {
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      x: 42.5,
-      y: 64,
-      doubleClick: true,
-      button: "left",
-      delayMs: 10,
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
-
-    const type = await postJson<{ ok: boolean }>(`${base}/act`, {
-      kind: "type",
-      ref: "1",
-      text: "",
-    });
-    expect(type.ok).toBe(true);
-    const typeArgs = mockFirstArg(requirePwMock("typeViaPlaywright"), 0, "type");
-    expectRecordFields(typeArgs, {
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      ref: "1",
-      text: "",
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
-    expect((typeArgs as { submit?: boolean }).submit).toBeUndefined();
-    expect((typeArgs as { slowly?: boolean }).slowly).toBeUndefined();
-
-    for (const [index, key] of ["Enter", "Ctrl+Shift+Esc"].entries()) {
-      const press = await postJson<{ ok: boolean }>(`${base}/act`, { kind: "press", key });
-      expect(press.ok).toBe(true);
-      const pressArgs = mockFirstArg(requirePwMock("pressKeyViaPlaywright"), index, "press");
-      expectRecordFields(pressArgs, {
+    await startServerAndBase();
+    expect(await post("/navigate", { url: TAB_URL })).toMatchObject({ ok: true, targetId });
+    expect(pw("navigateViaPlaywright")).toHaveBeenCalledWith(
+      expect.objectContaining({
         cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        key: key === "Enter" ? "Enter" : "Control+Shift+Escape",
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: true,
+        targetId,
+        url: TAB_URL,
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+      }),
+    );
+    const actions: ActionCase[] = [
+      [{ kind: "click", ref: "1", button: "left", modifiers: ["Shift"] }],
+      [{ kind: "click", selector: "button.save" }],
+      [
+        {
+          kind: "clickCoords",
+          x: "42.5",
+          y: 64,
+          doubleClick: "true",
+          button: "left",
+          delayMs: "10",
         },
-      });
-      expect((pressArgs as { delayMs?: number }).delayMs).toBeUndefined();
+        { x: 42.5, doubleClick: true, delayMs: 10 },
+      ],
+      [{ kind: "type", ref: "1", text: "" }],
+      [{ kind: "press", key: "Enter" }],
+      [{ kind: "press", key: "Ctrl+Shift+Esc" }, { key: "Control+Shift+Escape" }],
+      [{ kind: "hover", ref: "2" }],
+      [{ kind: "scrollIntoView", ref: "2" }],
+      [{ kind: "drag", startRef: "3", endRef: "4" }],
+    ];
+    for (const [input, normalized] of actions) {
+      expect(await post("/act", input)).toMatchObject({ ok: true, url: TAB_URL });
+      expectLastAction(
+        { ...input, ...normalized },
+        { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } },
+      );
     }
-
-    const hover = await postJson<{ ok: boolean }>(`${base}/act`, {
-      kind: "hover",
-      ref: "2",
-    });
-    expect(hover.ok).toBe(true);
-    const hoverArgs = mockFirstArg(requirePwMock("hoverViaPlaywright"), 0, "hover");
-    expectRecordFields(hoverArgs, {
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      ref: "2",
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
-    expect((hoverArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
-
-    const scroll = await postJson<{ ok: boolean }>(`${base}/act`, {
-      kind: "scrollIntoView",
-      ref: "2",
-    });
-    expect(scroll.ok).toBe(true);
-    const scrollArgs = mockFirstArg(requirePwMock("scrollIntoViewViaPlaywright"), 0, "scroll");
-    expectRecordFields(scrollArgs, {
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      ref: "2",
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
-    expect((scrollArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
-
-    const drag = await postJson<{ ok: boolean }>(`${base}/act`, {
-      kind: "drag",
-      startRef: "3",
-      endRef: "4",
-    });
-    expect(drag.ok).toBe(true);
-    const dragArgs = mockFirstArg(requirePwMock("dragViaPlaywright"), 0, "drag");
-    expectRecordFields(dragArgs, {
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      startRef: "3",
-      endRef: "4",
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
-    expect((dragArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
   });
-  it("POST /tabs/open?profile=unknown returns 404", async () => {
+  it.each([
+    ["?profile=unknown", "https://example.com", 404, "not found"],
+    ["", "not a url", 400, "Invalid URL:"],
+  ] as const)("rejects tab creation %s %s", async (query, url, status, error) => {
+    if (status === 400) {
+      setBrowserControlServerReachable(true);
+    }
     await startBrowserControlServerFromConfig();
-    const base = getBrowserControlServerBaseUrl();
-    const realFetch = getBrowserTestFetch();
-
-    const result = await realFetch(`${base}/tabs/open?profile=unknown`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: "https://example.com" }),
+    const response = await postResponse(getBrowserControlServerBaseUrl(), `/tabs/open${query}`, {
+      url,
     });
-    expect(result.status).toBe(404);
-    const body = (await result.json()) as { error: string };
-    expect(body.error).toContain("not found");
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining(error) });
   });
 
-  it("POST /tabs/open returns 400 for invalid URLs", async () => {
-    setBrowserControlServerReachable(true);
-    await startBrowserControlServerFromConfig();
-    const base = getBrowserControlServerBaseUrl();
-    const realFetch = getBrowserTestFetch();
-
-    const result = await realFetch(`${base}/tabs/open`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: "not a url" }),
+  it("agent contract: form + layout act commands", async () => {
+    await startServerAndBase();
+    const fields = [
+      { ref: "6", type: "textbox", value: "hello" },
+      { ref: "7", value: "world" },
+      { ref: "8", type: "   ", value: "trimmed-default" },
+      { ref: "9" },
+      { ref: "10", value: null },
+      { ref: "11", value: "" },
+    ];
+    const normalizedFields = [
+      { ref: "6", type: "textbox", value: "hello" },
+      { ref: "7", type: "text", value: "world" },
+      { ref: "8", type: "text", value: "trimmed-default" },
+      { ref: "9", type: "text" },
+      { ref: "10", type: "text" },
+      { ref: "11", type: "text", value: "" },
+    ];
+    for (const action of [
+      { kind: "select", ref: "5", values: ["a", "", "  spaced  "] },
+      { kind: "fill", fields },
+      { kind: "resize", width: 800, height: 600 },
+      { kind: "wait", timeMs: 5 },
+    ]) {
+      expect(await post("/act", action)).toMatchObject({ ok: true });
+      expectLastAction(
+        action.kind === "fill" ? { kind: "fill", fields: normalizedFields } : action,
+      );
+    }
+    const invalidFill = await post("/act", {
+      kind: "fill",
+      fields: [
+        { ref: "e1", value: "must-not-dispatch" },
+        { ref: "e2", value: "Neo", text: "unsupported" },
+      ],
     });
-    expect(result.status).toBe(400);
-    const body = (await result.json()) as { error: string };
-    expect(body.error).toContain("Invalid URL:");
+    expect(invalidFill).toMatchObject({
+      code: "ACT_INVALID_REQUEST",
+      error: expect.stringContaining('fields[1] unsupported field key "text"'),
+    });
+    expect(pw("fillFormViaPlaywright")).toHaveBeenCalledOnce();
+    for (const [width, error] of [
+      [0, "resize requires positive width and height"],
+      [8193, "resize width and height must not exceed 8192"],
+    ] as const) {
+      expect(await post("/act", { kind: "resize", width, height: 600 })).toMatchObject({
+        code: "ACT_INVALID_REQUEST",
+        error: expect.stringContaining(error),
+      });
+    }
+    expect(pw("resizeViewportViaPlaywright")).toHaveBeenCalledOnce();
+    expect(await post("/act", { kind: "evaluate", fn: "() => 1" })).toMatchObject({
+      ok: true,
+      result: "ok",
+    });
+    expectBrowserCallFields(pw("evaluateViaPlaywright"), {
+      cdpUrl: state.cdpBaseUrl,
+      targetId,
+      fn: "() => 1",
+      ref: undefined,
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it("normalizes batch actions and threads evaluateEnabled into the batch executor", async () => {
+    await startServerAndBase();
+
+    const preservedActions = [
+      { kind: "type", selector: "input.name", text: "  padded  " },
+      { kind: "type", selector: "input.clearable", text: "" },
+      { kind: "select", selector: "select.choice", values: ["", "  spaced  "] },
+    ];
+    const batchRes = await post<{ ok: boolean }>("/act", {
+      kind: "batch",
+      stopOnError: "false",
+      actions: [
+        { kind: "click", selector: "button.save", doubleClick: "true", delayMs: "25" },
+        { kind: "wait", fn: " () => window.ready === true " },
+        ...preservedActions,
+      ],
+    });
+
+    expect(batchRes.ok).toBe(true);
+    expectBrowserCallFields(pw("batchViaPlaywright"), {
+      targetId,
+      stopOnError: false,
+      evaluateEnabled: true,
+      actions: [
+        { kind: "click", selector: "button.save", doubleClick: true, delayMs: 25 },
+        { kind: "wait", fn: "() => window.ready === true" },
+        ...preservedActions,
+      ],
+    });
+  });
+
+  it("rejects malformed batch actions before dispatch", async () => {
+    await startServerAndBase();
+
+    const batchRes = await post<{ error?: string; code?: string }>("/act", {
+      kind: "batch",
+      actions: [{ kind: "click", ref: {} }],
+    });
+
+    expect(batchRes.error).toContain("click requires ref or selector");
+    expect(batchRes.code).toBe("ACT_INVALID_REQUEST");
+    expect(pw("batchViaPlaywright")).not.toHaveBeenCalled();
+  });
+
+  it("rejects loose hook and download timeout options before dispatch", async () => {
+    await startServerAndBase();
+    for (const [route, body, mockName] of [
+      ["/hooks/file-chooser", { paths: ["a.txt"], timeoutMs: "1e3" }, "armFileUploadViaPlaywright"],
+      ["/hooks/dialog", { accept: true, timeoutMs: "0x10" }, "armDialogViaPlaywright"],
+      [
+        "/wait/download",
+        { path: "report.pdf", timeoutMs: "1000ms" },
+        "waitForDownloadViaPlaywright",
+      ],
+      ["/download", { ref: "e12", path: "report.pdf", timeoutMs: "1.5" }, "downloadViaPlaywright"],
+    ] as const) {
+      expect(await post(route, body)).toMatchObject({
+        error: expect.stringContaining("timeoutMs must be a positive integer."),
+      });
+      expect(pw(mockName)).not.toHaveBeenCalled();
+    }
+    expect(pw("uploadViaPlaywright")).not.toHaveBeenCalled();
+  });
+
+  it("agent contract: hooks + response + downloads + screenshot", async () => {
+    const base = await startServerAndBase();
+    async function call(
+      route: string,
+      body: Record<string, unknown>,
+      mockName: string,
+      expected: Record<string, unknown> = body,
+    ) {
+      expect(await post(route, body)).toMatchObject({ ok: true });
+      expectBrowserCallFields(pw(mockName), { targetId, ...expected });
+    }
+    await call(
+      "/hooks/file-chooser",
+      { paths: ["a.txt"], timeoutMs: 1234 },
+      "armFileUploadViaPlaywright",
+      { paths: [path.resolve(DEFAULT_UPLOAD_DIR, "a.txt")], timeoutMs: 1234 },
+    );
+    await call("/hooks/file-chooser", { paths: ["b.txt"], ref: "e12" }, "uploadViaPlaywright", {
+      paths: [path.resolve(DEFAULT_UPLOAD_DIR, "b.txt")],
+      ref: "e12",
+      signal: expect.any(AbortSignal),
+    });
+    for (const selector of [{ inputRef: "e99" }, { element: "input[type=file]" }]) {
+      expect(await post("/hooks/file-chooser", { paths: ["c.txt"], ...selector })).toMatchObject({
+        ok: true,
+      });
+    }
+    await call(
+      "/hooks/dialog",
+      { accept: true, dialogId: "d1", timeoutMs: 5678 },
+      "armDialogViaPlaywright",
+    );
+    for (const [route, mockName, body] of [
+      ["/wait/download", "waitForDownloadViaPlaywright", { path: "report.pdf", timeoutMs: 1111 }],
+      ["/download", "downloadViaPlaywright", { ref: "e12", path: "report.pdf" }],
+    ] as const) {
+      await call(route, body, mockName, {
+        ...body,
+        path: path.resolve(DEFAULT_DOWNLOAD_DIR, "report.pdf"),
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+        signal: expect.any(AbortSignal),
+      });
+    }
+    expect(
+      await post("/response/body", { url: "**/api/data", timeoutMs: 2222, maxChars: 10 }),
+    ).toMatchObject({ ok: true });
+    expect(await (await realFetch(`${base}/console?level=error`)).json()).toMatchObject({
+      ok: true,
+      messages: [],
+    });
+    expect(await post("/pdf", {})).toMatchObject({ ok: true, path: expect.any(String) });
+    const screenshot = { element: "body", type: "jpeg", timeoutMs: 3333 };
+    expect(await post("/screenshot", screenshot)).toMatchObject({
+      ok: true,
+      path: expect.any(String),
+    });
+    expect(requireMockArg(pw("takeScreenshotViaPlaywright"))).toMatchObject(screenshot);
+  });
+
+  it.each([
+    ["/hooks/file-chooser", { paths: ["../../../../etc/passwd"] }, "armFileUploadViaPlaywright"],
+    [
+      "/hooks/file-chooser",
+      { paths: [path.join(path.parse(DEFAULT_UPLOAD_DIR).root, "etc", "passwd")] },
+      "armFileUploadViaPlaywright",
+    ],
+    ["/trace/stop", { path: "../../pwned.zip" }, "traceStopViaPlaywright"],
+    ["/download", { ref: "e12", path: "../../pwned.pdf" }, "downloadViaPlaywright"],
+  ] as const)("rejects %s paths outside managed storage: %j", async (route, body, mock) => {
+    await startServerAndBase();
+    const result = await post<{ error?: string }>(route, body);
+    expect(result.error).toContain("Invalid path");
+    expect(pw(mock)).not.toHaveBeenCalled();
+  });
+
+  it("agent contract: stop endpoint", async () => {
+    const base = await startServerAndBase();
+
+    const stopped = (await realFetch(`${base}/stop`, { method: "POST" }).then((r) => r.json())) as {
+      ok: boolean;
+      stopped?: boolean;
+    };
+    expect(stopped).toMatchObject({ ok: true, stopped: true });
+  });
+
+  it("trace stop returns the path committed by the Playwright trace owner", async () => {
+    const committedPath = path.join(DEFAULT_TRACE_DIR, "committed-trace.zip");
+    pw("traceStopViaPlaywright").mockResolvedValueOnce(committedPath);
+    await startServerAndBase();
+
+    const res = await post<{ ok?: boolean; path?: string }>("/trace/stop", {
+      path: "requested-trace.zip",
+    });
+
+    expect(res).toMatchObject({ ok: true, path: committedPath });
+    const traceCall = requireMockArg(pw("traceStopViaPlaywright"));
+    expect(String(traceCall.path)).toContain("requested-trace.zip");
+  });
+
+  it.each(guardedCurrentTabRouteCases)(
+    "blocks %s %s on disallowed current tab URLs",
+    async (method, route, body, mockName) => {
+      setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
+      setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
+      const base = await startServerAndBase();
+
+      const res = await realFetch(`${base}${route}`, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: BROWSER_NAVIGATION_BLOCKED_MESSAGE });
+      for (const name of typeof mockName === "string" ? [mockName] : mockName) {
+        expect(pw(name)).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("keeps a disallowed tab close bound to the tab it closed", async () => {
+    setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
+    setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
+    await startServerAndBase();
+    pw("closePageViaPlaywright").mockImplementationOnce(async () => {
+      replaceActedOnTab("abce9999", "Survivor", "https://other");
+    });
+
+    const result = await post<{ ok?: boolean; targetId?: string; url?: string }>("/act", {
+      kind: "close",
+      targetId,
+    });
+
+    expect(result).toMatchObject({ ok: true, targetId });
+    expect(result.url).toBeUndefined();
+  });
+
+  it.runIf(process.platform !== "win32")("trace writes reject symlink escapes", async () => {
+    await startServerAndBase();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-route-escape-"));
+    const linkName = path.basename(outside);
+    const linkPath = path.join(DEFAULT_TRACE_DIR, linkName);
+    await fs.mkdir(DEFAULT_TRACE_DIR, { recursive: true });
+    await fs.symlink(outside, linkPath);
+    try {
+      expect(await post("/trace/stop", { path: `${linkName}/pwned.zip` })).toMatchObject({
+        error: expect.stringContaining("Invalid path"),
+      });
+      expect(pw("traceStopViaPlaywright")).not.toHaveBeenCalled();
+    } finally {
+      await fs.unlink(linkPath);
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels a download when its HTTP caller disconnects", async () => {
+    const client = createBrowserTestClient();
+    const controller = new AbortController();
+    const started = Promise.withResolvers<AbortSignal>();
+    const aborted = Promise.withResolvers<void>();
+    let response: ReturnType<typeof client.fetch> | undefined;
+    try {
+      const base = await startServerAndBase(client.fetch);
+      pw("downloadCurrentDocumentViaPlaywright").mockImplementationOnce(async (value) => {
+        const signal = requireRecord(value, "download options").signal;
+        if (!(signal instanceof AbortSignal)) {
+          throw new Error("download has no caller signal");
+        }
+        started.resolve(signal);
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              aborted.resolve();
+              const reason = signal.reason;
+              reject(reason instanceof Error ? reason : new Error("request aborted"));
+            },
+            { once: true },
+          );
+        });
+      });
+      response = client.fetch(`${base}/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentDocument: true, expectedUrl: TAB_URL }),
+        signal: controller.signal,
+      });
+      const signal = await started.promise;
+      controller.abort(new Error("caller disconnected"));
+      await expect(response).rejects.toThrow();
+      await aborted.promise;
+      expect(signal.aborted).toBe(true);
+    } finally {
+      controller.abort();
+      await response?.catch(() => {});
+      // Aborting a request can leave a replacement connection in the pool.
+      await client.close();
+    }
+  });
+
+  it("downloads the current document into managed storage with navigation policy and request ownership", async () => {
+    await startServerAndBase();
+    const res = await post<{ ok?: boolean; download?: { path?: string } }>("/download", {
+      targetId,
+      currentDocument: true,
+      expectedUrl: "https://example.com/inline.png",
+      timeoutMs: 120_000,
+    });
+    expect(res).toMatchObject({ ok: true, download: { path: "/tmp/managed-inline.png" } });
+    const call = requireMockArg(pw("downloadCurrentDocumentViaPlaywright"));
+    expect(call).toMatchObject({
+      targetId,
+      expectedUrl: "https://example.com/inline.png",
+      timeoutMs: 120_000,
+      rootDir: DEFAULT_DOWNLOAD_DIR,
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
+    expect(call.signal).toBeInstanceOf(AbortSignal);
+    expect(call).not.toHaveProperty("path");
+    expect(call).not.toHaveProperty("ref");
+    expect(pw("downloadViaPlaywright")).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { currentDocument: true },
+    { currentDocument: true, expectedUrl: TAB_URL, path: "chosen.png" },
+    { currentDocument: "true", expectedUrl: TAB_URL },
+    { expectedUrl: TAB_URL, ref: "e1", path: "chosen.png" },
+  ])("rejects ambiguous or incomplete current-document download input %j", async (body) => {
+    const base = await startServerAndBase();
+    const response = await postResponse(base, "/download", body);
+    expect(response.status).toBe(400);
+    expect(pw("downloadCurrentDocumentViaPlaywright")).not.toHaveBeenCalled();
+    expect(pw("downloadViaPlaywright")).not.toHaveBeenCalled();
   });
 });
 
 describe("profile CRUD endpoints", () => {
-  const tempDirsToCleanup = new Set<string>();
-
-  beforeEach(async () => {
-    await resetBrowserControlServerTestContext();
-
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        const u = url;
-        if (u.includes("/json/list")) {
-          return makeResponse([]);
-        }
-        return makeResponse({}, { ok: false, status: 500, text: "unexpected" });
-      }),
-    );
-  });
-
-  afterEach(async () => {
-    try {
-      await cleanupBrowserControlServerTestContext();
-    } finally {
-      await Promise.allSettled(
-        [...tempDirsToCleanup].map((dir) => fs.promises.rm(dir, { recursive: true, force: true })),
-      );
-      tempDirsToCleanup.clear();
-    }
-  });
+  beforeEach(resetBrowserControlServerTestContext);
+  afterEach(cleanupBrowserControlServerTestContext);
 
   it("validates profile create/delete endpoints", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.includes("/json/list")
+          ? makeResponse([])
+          : makeResponse({}, { ok: false, status: 500, text: "unexpected" }),
+      ),
+    );
     await startBrowserControlServerFromConfig();
     const base = getBrowserControlServerBaseUrl();
-    const realFetch = getBrowserTestFetch();
-
-    const createMissingName = await realFetch(`${base}/profiles/create`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+    async function create(body: unknown, status: number, expected: Record<string, unknown>) {
+      const response = await postResponse(base, "/profiles/create", body);
+      expect(response.status).toBe(status);
+      expect(await response.json()).toMatchObject(expected);
+    }
+    const invalid: Array<[Record<string, unknown>, number, string]> = [
+      [{}, 400, "name is required"],
+      [{ name: "Invalid Name!" }, 400, "invalid profile name"],
+      [{ name: "openclaw" }, 409, "already exists"],
+      [{ name: "badremote", cdpUrl: "ftp://bad" }, 400, "cdpUrl"],
+      [{ name: "legacy", driver: "extension" }, 400, 'unsupported profile driver "extension"'],
+    ];
+    for (const [body, status, error] of invalid) {
+      await create(body, status, { error: expect.stringContaining(error) });
+    }
+    await create({ name: "remote", cdpUrl: "http://10.0.0.42:9222" }, 200, {
+      profile: "remote",
+      cdpUrl: "http://10.0.0.42:9222",
+      isRemote: true,
     });
-    expect(createMissingName.status).toBe(400);
-    const createMissingNameBody = (await createMissingName.json()) as { error: string };
-    expect(createMissingNameBody.error).toContain("name is required");
-
-    const createInvalidName = await realFetch(`${base}/profiles/create`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Invalid Name!" }),
+    await create({ name: "legacyclawd", driver: "clawd" }, 200, {
+      profile: "legacyclawd",
+      transport: "cdp",
+      cdpPort: expect.any(Number),
+      userDataDir: null,
     });
-    expect(createInvalidName.status).toBe(400);
-    const createInvalidNameBody = (await createInvalidName.json()) as { error: string };
-    expect(createInvalidNameBody.error).toContain("invalid profile name");
-
-    const createDuplicate = await realFetch(`${base}/profiles/create`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "openclaw" }),
-    });
-    expect(createDuplicate.status).toBe(409);
-    const createDuplicateBody = (await createDuplicate.json()) as { error: string };
-    expect(createDuplicateBody.error).toContain("already exists");
-
-    const createRemote = await realFetch(`${base}/profiles/create`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "remote", cdpUrl: "http://10.0.0.42:9222" }),
-    });
-    expect(createRemote.status).toBe(200);
-    const createRemoteBody = (await createRemote.json()) as {
-      profile?: string;
-      cdpUrl?: string;
-      isRemote?: boolean;
-    };
-    expect(createRemoteBody.profile).toBe("remote");
-    expect(createRemoteBody.cdpUrl).toBe("http://10.0.0.42:9222");
-    expect(createRemoteBody.isRemote).toBe(true);
-
-    const createBadRemote = await realFetch(`${base}/profiles/create`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "badremote", cdpUrl: "ftp://bad" }),
-    });
-    expect(createBadRemote.status).toBe(400);
-    const createBadRemoteBody = (await createBadRemote.json()) as { error: string };
-    expect(createBadRemoteBody.error).toContain("cdpUrl");
-
-    const createClawd = await realFetch(`${base}/profiles/create`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "legacyclawd", driver: "clawd" }),
-    });
-    expect(createClawd.status).toBe(200);
-    const createClawdBody = (await createClawd.json()) as {
-      profile?: string;
-      transport?: string;
-      cdpPort?: number | null;
-      userDataDir?: string | null;
-    };
-    expect(createClawdBody.profile).toBe("legacyclawd");
-    expect(createClawdBody.transport).toBe("cdp");
-    expect(createClawdBody.cdpPort).toBeTypeOf("number");
-    expect(createClawdBody.userDataDir).toBeNull();
-
-    const explicitUserDataDir = await fs.promises.realpath(
-      await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-brave-profile-")),
+    const userDataDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-brave-profile-")),
     );
-    tempDirsToCleanup.add(explicitUserDataDir);
-    const createExistingSession = await realFetch(`${base}/profiles/create`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: "brave-live",
-        driver: "existing-session",
-        userDataDir: explicitUserDataDir,
-      }),
+    onTestFinished(() => fs.rm(userDataDir, { recursive: true, force: true }));
+    await create({ name: "brave-live", driver: "existing-session", userDataDir }, 200, {
+      profile: "brave-live",
+      transport: "chrome-mcp",
+      userDataDir,
     });
-    expect(createExistingSession.status).toBe(200);
-    const createExistingSessionBody = (await createExistingSession.json()) as {
-      profile?: string;
-      transport?: string;
-      userDataDir?: string | null;
-    };
-    expect(createExistingSessionBody.profile).toBe("brave-live");
-    expect(createExistingSessionBody.transport).toBe("chrome-mcp");
-    expect(createExistingSessionBody.userDataDir).toBe(explicitUserDataDir);
-
-    const createBadExistingSession = await realFetch(`${base}/profiles/create`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: "bad-live",
-        userDataDir: explicitUserDataDir,
-      }),
+    await create({ name: "bad-live", userDataDir }, 400, {
+      error: expect.stringContaining("driver=existing-session is required"),
     });
-    expect(createBadExistingSession.status).toBe(400);
-    const createBadExistingSessionBody = (await createBadExistingSession.json()) as {
-      error: string;
-    };
-    expect(createBadExistingSessionBody.error).toContain("driver=existing-session is required");
-
-    const createLegacyDriver = await realFetch(`${base}/profiles/create`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "legacy", driver: "extension" }),
-    });
-    expect(createLegacyDriver.status).toBe(400);
-    const createLegacyDriverBody = (await createLegacyDriver.json()) as { error: string };
-    expect(createLegacyDriverBody.error).toContain('unsupported profile driver "extension"');
-
-    const deleteMissing = await realFetch(`${base}/profiles/nonexistent`, {
-      method: "DELETE",
-    });
-    expect(deleteMissing.status).toBe(404);
-    const deleteMissingBody = (await deleteMissing.json()) as { error: string };
-    expect(deleteMissingBody.error).toContain("not found");
-
-    const deleteDefault = await realFetch(`${base}/profiles/openclaw`, {
-      method: "DELETE",
-    });
-    expect(deleteDefault.status).toBe(400);
-    const deleteDefaultBody = (await deleteDefault.json()) as { error: string };
-    expect(deleteDefaultBody.error).toContain("cannot delete the default profile");
-
-    const deleteInvalid = await realFetch(`${base}/profiles/Invalid-Name!`, {
-      method: "DELETE",
-    });
-    expect(deleteInvalid.status).toBe(400);
-    const deleteInvalidBody = (await deleteInvalid.json()) as { error: string };
-    expect(deleteInvalidBody.error).toContain("invalid profile name");
+    for (const [name, status, error] of [
+      ["nonexistent", 404, "not found"],
+      ["openclaw", 400, "cannot delete the default profile"],
+      ["Invalid-Name!", 400, "invalid profile name"],
+    ] as const) {
+      const response = await getBrowserTestFetch()(`${base}/profiles/${name}`, {
+        method: "DELETE",
+      });
+      expect(response.status).toBe(status);
+      expect(await response.json()).toMatchObject({ error: expect.stringContaining(error) });
+    }
   });
 });

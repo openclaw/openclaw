@@ -113,41 +113,47 @@ export function substituteSecretEgressBody(
 export function createSecretEgressBodyTransform(params: {
   onSubstitution: () => void;
   resolveSentinel: (sentinel: string) => string | undefined;
+  isActive?: () => boolean;
 }): Transform {
   let pending: Buffer = Buffer.alloc(0);
+  const scan = (
+    stream: Transform,
+    chunk: Buffer | string | undefined,
+    callback: TransformCallback,
+  ) => {
+    try {
+      let buffer = pending;
+      if (chunk !== undefined) {
+        const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        buffer = pending.length > 0 ? Buffer.concat([pending, input]) : input;
+      }
+      pending = processPendingBuffer({
+        buffer,
+        flush: chunk === undefined,
+        onSubstitution: params.onSubstitution,
+        resolveSentinel: params.resolveSentinel,
+        push: (output) => {
+          if (params.isActive && !params.isActive()) {
+            throw new SecretEgressSubstitutionError("unresolved-sentinel");
+          }
+          stream.push(output);
+        },
+      });
+      callback();
+    } catch (error) {
+      callback(error as Error);
+    }
+  };
   return new Transform({
     transform(chunk: Buffer | string, _encoding: BufferEncoding, callback: TransformCallback) {
-      try {
-        const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        pending = processPendingBuffer({
-          buffer: pending.length > 0 ? Buffer.concat([pending, input]) : input,
-          flush: false,
-          onSubstitution: params.onSubstitution,
-          resolveSentinel: params.resolveSentinel,
-          push: (output) => this.push(output),
-        });
-        callback();
-      } catch (error) {
-        callback(error as Error);
-      }
+      scan(this, chunk, callback);
     },
     destroy(error, callback) {
       pending = Buffer.alloc(0);
       callback(error);
     },
     flush(callback: TransformCallback) {
-      try {
-        pending = processPendingBuffer({
-          buffer: pending,
-          flush: true,
-          onSubstitution: params.onSubstitution,
-          resolveSentinel: params.resolveSentinel,
-          push: (output) => this.push(output),
-        });
-        callback();
-      } catch (error) {
-        callback(error as Error);
-      }
+      scan(this, undefined, callback);
     },
   });
 }

@@ -1,9 +1,9 @@
 import { type Static, Type } from "typebox";
+import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
 import {
   ComputerActParamsSchema,
   ComputerUseCapabilityDescriptorSchema,
   ScreenSnapshotParamsSchema,
-  compileComputerUseValidator,
 } from "../plugins/computer-use-contract.js";
 
 const ExecutionOwnerSchema = Type.Required(Type.Pick(ScreenSnapshotParamsSchema, ["executionId"]));
@@ -47,7 +47,7 @@ const NodeWorkerComputerInputSchema = Type.Union([
 
 export type NodeWorkerComputerInput = Static<typeof NodeWorkerComputerInputSchema>;
 
-const validateInput = compileComputerUseValidator(NodeWorkerComputerInputSchema);
+const validateInput = lazyCompile(NodeWorkerComputerInputSchema);
 
 /** Private carrier for the existing registered Computer Use provider, never arbitrary node commands. */
 export function parseNodeWorkerComputerInput(raw?: string | null): NodeWorkerComputerInput {

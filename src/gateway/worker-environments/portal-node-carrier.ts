@@ -19,7 +19,6 @@ type ActiveNodePortal = {
   binding: WorkerNodeCarrierBinding;
   controller: AbortController;
   streams: Set<ActiveNodePortalStream>;
-  closed: boolean;
 };
 
 type ActiveNodePortalStream = {
@@ -32,7 +31,7 @@ type ActiveNodePortalStream = {
 };
 
 const UNSUPPORTED_NODE_PORTAL_MESSAGE =
-  "Portals require a current cloud-worker node with portal stream support; move the session back to the gateway with sessions.move";
+  "Portals require a connected cloud-worker node with portal-stream support; reconnect or update the worker node, then retry";
 
 /** Opens one ticketed node connection per request while its durable portal owner remains current. */
 export function createWorkerNodePortalCarrier(options: {
@@ -86,18 +85,24 @@ export function createWorkerNodePortalCarrier(options: {
   };
 
   const closePortal = async (portal: ActiveNodePortal): Promise<void> => {
-    if (portal.closed) {
+    if (portal.controller.signal.aborted) {
       return;
     }
-    portal.closed = true;
     portal.controller.abort(new Error("Worker environment node portal owner stopped"));
     activePortals.delete(portal);
     await Promise.all([...portal.streams].map(stopStream));
   };
 
-  const connectPortal = async (portal: ActiveNodePortal, remotePort: number): Promise<Duplex> => {
+  const connectPortal = async (
+    portal: ActiveNodePortal,
+    remotePort: number,
+    // The transport's final dispatch predicate is synchronous; callers use resident authority.
+    assertCurrent?: () => void,
+    touch?: () => Promise<void>,
+  ): Promise<Duplex> => {
     const capturedRuntime = runtime;
-    if (!capturedRuntime || portal.closed || portal.controller.signal.aborted) {
+    const signal = portal.controller.signal;
+    if (!capturedRuntime || signal.aborted) {
       throw new Error(UNSUPPORTED_NODE_PORTAL_MESSAGE);
     }
     const active: ActiveNodePortalStream = {
@@ -108,7 +113,9 @@ export function createWorkerNodePortalCarrier(options: {
     // Publish the connection before node discovery yields so owner teardown can fence it.
     portal.streams.add(active);
     try {
+      assertCurrent?.();
       const node = await findCurrentNode(portal.binding, capturedRuntime, active.controller.signal);
+      assertCurrent?.();
       active.ticket = capturedRuntime.streamBroker.mintPortal({
         nodeId: node.nodeId,
         connId: node.connId,
@@ -124,8 +131,14 @@ export function createWorkerNodePortalCarrier(options: {
         },
         timeoutMs: 0,
         signal: active.controller.signal,
-        isDispatchAuthorized: () =>
-          !portal.closed && bindingIsCurrent(portal.binding, capturedRuntime, node),
+        isDispatchAuthorized: () => {
+          try {
+            assertCurrent?.();
+            return !signal.aborted && bindingIsCurrent(portal.binding, capturedRuntime, node);
+          } catch {
+            return false;
+          }
+        },
       });
       // The invocation lives for the splice; finishing before attachment is a dial failure.
       const invocationFinished = active.invocation.then((result) => {
@@ -137,7 +150,10 @@ export function createWorkerNodePortalCarrier(options: {
       void invocationFinished.catch(() => undefined);
       const attached = await Promise.race([active.ticket.attached, invocationFinished]);
       active.stream = attached.stream;
-      if (portal.closed || !bindingIsCurrent(portal.binding, capturedRuntime, node)) {
+      assertCurrent?.();
+      await touch?.();
+      assertCurrent?.();
+      if (signal.aborted || !bindingIsCurrent(portal.binding, capturedRuntime, node)) {
         throw new Error("Worker environment node portal owner changed before attachment");
       }
       active.stream.once("close", () => retireStream(active));
@@ -181,7 +197,10 @@ export function createWorkerNodePortalCarrier(options: {
       environmentId: string;
       ownerEpoch: number;
       remotePort: number;
-    }): Promise<{ connect: () => Promise<Duplex>; close: () => Promise<void> }> {
+    }): Promise<{
+      connect: (assertCurrent?: () => void, touch?: () => Promise<void>) => Promise<Duplex>;
+      close: () => Promise<void>;
+    }> {
       const binding = snapshotWorkerNodeCarrierBinding(
         options.store.get(request.environmentId),
         UNSUPPORTED_NODE_PORTAL_MESSAGE,
@@ -195,13 +214,14 @@ export function createWorkerNodePortalCarrier(options: {
         binding,
         controller: new AbortController(),
         streams: new Set(),
-        closed: false,
       };
       activePortals.add(portal);
       try {
         await findCurrentNode(binding, capturedRuntime, portal.controller.signal);
         return {
-          connect: () => connectPortal(portal, request.remotePort),
+          // Per-connection resource guards survive the operation that published the URL.
+          connect: (assertCurrent, touch) =>
+            connectPortal(portal, request.remotePort, assertCurrent, touch),
           close: () => closePortal(portal),
         };
       } catch (error) {

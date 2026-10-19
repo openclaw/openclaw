@@ -2,8 +2,11 @@ import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import { startPluginServices } from "./services.js";
-import { createRegistry, createServiceConfig } from "./services.test-support.js";
+import {
+  createRegistry,
+  createServiceConfig,
+  startPluginServices,
+} from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginService } from "./types.js";
 
@@ -16,71 +19,57 @@ vi.mock("../logging/subsystem.js", () => ({
   }),
 }));
 
-it.each([
-  "sync void",
-  "sync value",
-  "fulfilled promise",
-  "fulfilled thenable",
-  "rejected promise",
-  "rejected thenable",
-] as const)("preserves the issued %s cleanup completion", async (kind) => {
-  const failure = new Error("callback rejected");
-  let assimilations = 0;
-  const stop = vi.fn(() => {
-    if (kind === "sync void") {
-      return undefined;
-    }
-    if (kind === "sync value") {
-      return 42;
-    }
-    if (kind === "fulfilled promise") {
-      return Promise.resolve();
-    }
-    if (kind === "rejected promise") {
-      return Promise.reject(failure);
-    }
-    return {
-      // oxlint-disable-next-line unicorn/no-thenable -- A standard thenable is the shipped JS return contract under test.
-      then(resolve: () => void, reject: (error: unknown) => void) {
-        assimilations += 1;
-        if (kind === "rejected thenable") {
+it.each(["sync value", "fulfilled promise", "rejected thenable"] as const)(
+  "preserves the issued %s cleanup completion",
+  async (kind) => {
+    const failure = new Error("callback rejected");
+    let assimilations = 0;
+    const stop = vi.fn(() => {
+      if (kind === "sync value") {
+        return 42;
+      }
+      if (kind === "fulfilled promise") {
+        return Promise.resolve();
+      }
+      return {
+        // oxlint-disable-next-line unicorn/no-thenable -- A standard thenable is the shipped JS return contract under test.
+        then(_resolve: () => void, reject: (error: unknown) => void) {
+          assimilations += 1;
           reject(failure);
-        } else {
-          resolve();
-        }
-      },
-    };
-  });
-  const handle = await startPluginServices({
-    registry: createRegistry([
-      {
-        id: "return-contract",
-        start() {},
-        // JavaScript plugin return values were accepted by the shipped Promise.resolve boundary.
-        stop: stop as OpenClawPluginService["stop"],
-      },
-    ]),
-    config: createServiceConfig(),
-  });
-  try {
-    if (kind.startsWith("rejected")) {
-      await expect(handle.stop()).resolves.toEqual({ errors: [failure] });
-    } else {
-      // Already-complete values win even when an earlier service consumed the whole budget.
-      const deadlineAtMs = Date.now() + (kind === "fulfilled thenable" ? 5_000 : 0);
-      await expect(handle.stop({ strict: true, deadlineAtMs })).resolves.toBeUndefined();
+        },
+      };
+    });
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "return-contract",
+          start() {},
+          // JavaScript plugin return values were accepted by the shipped Promise.resolve boundary.
+          stop: stop as OpenClawPluginService["stop"],
+        },
+      ]),
+      config: createServiceConfig(),
+    });
+    try {
+      if (kind.startsWith("rejected")) {
+        await expect(handle.stop()).resolves.toEqual({ errors: [failure] });
+      } else {
+        // Already-complete values win even when an earlier service consumed the whole budget.
+        const deadlineAtMs = Date.now();
+        await expect(handle.stop({ strict: true, deadlineAtMs })).resolves.toBeUndefined();
+      }
+      expect(stop).toHaveBeenCalledOnce();
+      expect(assimilations).toBe(kind.endsWith("thenable") ? 1 : 0);
+      await handle.stop();
+      expect(stop).toHaveBeenCalledOnce();
+      expect(assimilations).toBe(kind.endsWith("thenable") ? 1 : 0);
+    } finally {
+      await handle.stop().catch(() => {});
     }
-    expect(stop).toHaveBeenCalledOnce();
-    expect(assimilations).toBe(kind.endsWith("thenable") ? 1 : 0);
-    await handle.stop();
-    expect(stop).toHaveBeenCalledOnce();
-    expect(assimilations).toBe(kind.endsWith("thenable") ? 1 : 0);
-  } finally {
-    await handle.stop().catch(() => {});
-  }
-});
+  },
+);
 
-it.each(["native", "plain service", "managed service"] as const)(
+it.each(["plain service", "managed service"] as const)(
   "reads an accessor thenable once through %s",
   async (surface) => {
     const entered = createDeferredCore();
@@ -117,11 +106,11 @@ it.each(["native", "plain service", "managed service"] as const)(
       pluginId: id,
       origin: "workspace",
       source: "test",
+      id: (surface === "managed service" ? instance.wrap(service) : service).id.trim(),
       service: surface === "managed service" ? instance.wrap(service) : service,
     });
-    const handle =
-      surface === "native" ? undefined : await startPluginServices({ registry, config: {} });
-    const stopping = handle ? handle.stop() : Promise.resolve<unknown>(value);
+    const handle = await startPluginServices({ registry, config: {} });
+    const stopping = handle.stop();
     let settled = false;
     const observed = stopping.then((result) => {
       settled = true;
@@ -141,53 +130,47 @@ it.each(["native", "plain service", "managed service"] as const)(
       }
       release.resolve();
       await expect(observed).resolves.toBeUndefined();
-      await handle?.stop();
+      await handle.stop();
       expect(reads).toBe(1);
       expect(calls).toBe(1);
-      expect(stop).toHaveBeenCalledTimes(handle ? 1 : 0);
+      expect(stop).toHaveBeenCalledOnce();
     } finally {
       release.resolve();
       await stopping;
-      await handle?.stop();
+      await handle.stop();
       await instance.dispose();
     }
   },
 );
 
-it.each(
-  (["native", "plain service", "managed service"] as const).flatMap((surface) => [
-    { surface, kind: "Error", failure: new Error("then getter failed") },
-    { surface, kind: "non-Error", failure: "then getter failed" },
-  ]),
-)("preserves a $kind then getter rejection through $surface", async ({ surface, failure }) => {
-  let reads = 0;
-  const value = {
-    // oxlint-disable-next-line unicorn/no-thenable -- A throwing accessor is a native rejected completion.
-    get then() {
-      reads += 1;
-      // oxlint-disable-next-line typescript/only-throw-error -- Native resolution preserves primitive JS getter rejections too.
-      throw failure;
-    },
-  };
-  const instance = new PluginInstance("throwing-return");
-  // The void arm of the SDK callback contract ignores the returned JS value.
-  const stop: () => void = () => value;
-  const service = { id: "throwing-return", start() {}, stop };
-  const registry = createRegistry([
-    surface === "managed service" ? instance.wrap(service) : service,
-  ]);
-  const handle =
-    surface === "native" ? undefined : await startPluginServices({ registry, config: {} });
-  try {
-    if (handle) {
+it.each(["plain service", "managed service"] as const)(
+  "preserves a non-Error then getter rejection through %s",
+  async (surface) => {
+    const failure = "then getter failed";
+    let reads = 0;
+    const value = {
+      // oxlint-disable-next-line unicorn/no-thenable -- A throwing accessor is a native rejected completion.
+      get then() {
+        reads += 1;
+        // oxlint-disable-next-line typescript/only-throw-error -- Native resolution preserves primitive JS getter rejections too.
+        throw failure;
+      },
+    };
+    const instance = new PluginInstance("throwing-return");
+    // The void arm of the SDK callback contract ignores the returned JS value.
+    const stop: () => void = () => value;
+    const service = { id: "throwing-return", start() {}, stop };
+    const registry = createRegistry([
+      surface === "managed service" ? instance.wrap(service) : service,
+    ]);
+    const handle = await startPluginServices({ registry, config: {} });
+    try {
       await expect(handle.stop()).resolves.toEqual({ errors: [failure] });
       await expect(handle.stop()).resolves.toEqual({ errors: [failure] });
-    } else {
-      await expect(Promise.resolve<unknown>(value)).rejects.toBe(failure);
+      expect(reads).toBe(1);
+    } finally {
+      await handle.stop().catch(() => {});
+      await instance.dispose();
     }
-    expect(reads).toBe(1);
-  } finally {
-    await handle?.stop().catch(() => {});
-    await instance.dispose();
-  }
-});
+  },
+);

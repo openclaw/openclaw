@@ -62,7 +62,7 @@ live catalog.
 | ------------------------ | ------------------------------------------------------------------------------ | ----------------------------------------------------- |
 | Chat / model provider    | `deepseek-ai/DeepSeek-V4-Flash` (live catalog adds more chat models)           | `agents.defaults.model`                               |
 | Image generation/editing | `black-forest-labs/FLUX-1-schnell` (live catalog adds more `image-gen` models) | `image_generate`, `agents.defaults.mediaModels.image` |
-| Media understanding      | `moonshotai/Kimi-K2.5` for images                                              | inbound image understanding                           |
+| Media understanding      | `moonshotai/Kimi-K2.6` for images                                              | inbound image understanding                           |
 | Speech-to-text           | `openai/whisper-large-v3-turbo`                                                | inbound audio transcription                           |
 | Text-to-speech           | `hexgrad/Kokoro-82M`                                                           | `tts.provider: "deepinfra"`                           |
 | Video generation         | `Pixverse/Pixverse-T2V` (live catalog adds more `video-gen` models)            | `video_generate`, `agents.defaults.mediaModels.video` |
@@ -85,13 +85,21 @@ Any model on [deepinfra.com](https://deepinfra.com/) works with the
 deepinfra/deepseek-ai/DeepSeek-V4-Flash
 deepinfra/deepseek-ai/DeepSeek-V4-Pro
 deepinfra/zai-org/GLM-5.2
-deepinfra/stepfun-ai/Step-3.7-Flash
-deepinfra/moonshotai/Kimi-K2.7-Code
 deepinfra/moonshotai/Kimi-K2.6
 deepinfra/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B
 deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
 ...and many more
 ```
+
+## Prompt caching
+
+For the native `https://api.deepinfra.com/v1/openai` endpoint, OpenClaw sends a
+stable `prompt_cache_key` for related requests to improve automatic prefix cache
+reuse. An explicit request cache key takes precedence over the session ID.
+Setting `cacheRetention: "none"` suppresses this routing hint; it does not disable
+DeepInfra's automatic cache. Custom endpoints retain their configured behavior.
+OpenClaw does not enable paid cache retention automatically. See
+[DeepInfra prompt caching](https://docs.deepinfra.com/chat/prompt-caching).
 
 ## Price estimates
 
@@ -130,8 +138,8 @@ so failed or empty acquisitions reach the shared publication owner unchanged.
 Hosted publication uses the same native parser. It preserves metadata without
 cost for unsupported or absent schedules, retains declared zero prices, and
 leaves the previous hosted catalog intact if the native feed fails validation.
-The existing [hosted catalog refresh and Gateway restart lifecycle](/concepts/models#hosted-catalog-updates)
-is unchanged.
+These updates follow the shared
+[hosted catalog publication lifecycle](/concepts/models#hosted-catalog-updates).
 
 ## Notes
 

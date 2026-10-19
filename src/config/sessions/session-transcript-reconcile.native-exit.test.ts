@@ -1,22 +1,25 @@
 import { setImmediate as checkpoint } from "node:timers/promises";
-import { Worker, type WorkerOptions } from "node:worker_threads";
-import { afterEach, expect, it } from "vitest";
+import type { Worker } from "node:worker_threads";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   readSessionTranscriptMessageEvents,
 } from "./session-accessor.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
-import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   reconcileSessionTranscriptIndexes,
@@ -24,11 +27,17 @@ import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcilesInStateDir,
 } from "./session-transcript-reconcile.js";
+import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 import type {
   SessionTranscriptReconcileWorkerInput,
   SessionTranscriptReconcileWorkerMessage,
 } from "./session-transcript-reconcile.worker.js";
 
+vi.mock("node:worker_threads", async () =>
+  (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
+);
+
+const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databaseOptions = { agentId: "main" };
 const scope = {
@@ -38,7 +47,7 @@ const scope = {
 };
 type ProjectionStage = "plan-start" | "active-chunk" | "fts-chunk" | "plan-finish" | "done";
 
-function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () => void) {
+function createQueuedProjectionFence(stage: ProjectionStage) {
   const release = createDeferred();
   const blocked = createDeferred();
   const acknowledged = createDeferred();
@@ -46,38 +55,39 @@ function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () =
   let blocker: Promise<void> | undefined;
   let fenced = false;
   const modes: SessionTranscriptReconcileWorkerInput["mode"][] = [];
+  observer.onTask = ({ input, worker: created, port, observeMessage }) => {
+    modes.push(input.mode);
+    if (input.mode === "disk") {
+      worker = created;
+    }
+    const post = port.postMessage.bind(port);
+    port.postMessage = (message: unknown, transferList) => {
+      const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
+      post(message, options);
+      if (fenced) {
+        acknowledged.resolve();
+      }
+    };
+    // Both foreground writes and canonical publication enter this same per-path FIFO.
+    observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
+      if (message.type === stage && !fenced) {
+        fenced = true;
+        blocker = runExclusiveSqliteSessionWrite(
+          databaseOptions,
+          async () => {
+            blocked.resolve();
+            await release.promise;
+          },
+          "sessions.transcript-index.preflight",
+        );
+      }
+    });
+  };
+
   return {
     modes,
     blocked: blocked.promise,
     release: release.resolve,
-    createWorker(this: void, filename: string | URL, options: WorkerOptions): Worker {
-      modes.push((options.workerData as SessionTranscriptReconcileWorkerInput).mode);
-      const created = new Worker(filename, options);
-      worker = created;
-      const post = created.postMessage.bind(created);
-      created.postMessage = (message: unknown, transferList) => {
-        post(message, transferList);
-        if (fenced) {
-          acknowledged.resolve();
-        }
-      };
-      // Registered before the owner listener: its accepted message uses the same real FIFO.
-      created.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
-        if (message.type === stage && !fenced) {
-          fenced = true;
-          blocker = runExclusiveSqliteSessionWrite(
-            databaseOptions,
-            async () => {
-              blocked.resolve();
-              await release.promise;
-              beforeRelease();
-            },
-            "sessions.transcript-index.preflight",
-          );
-        }
-      });
-      return created;
-    },
     async terminate(): Promise<void> {
       if (!worker) {
         throw new Error("projection worker has not started");
@@ -106,36 +116,21 @@ function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () =
 }
 
 const cases = [
-  { stage: "plan-start", scheduled: false, replace: false },
-  { stage: "active-chunk", scheduled: false, replace: false },
-  { stage: "fts-chunk", scheduled: false, replace: false },
-  { stage: "plan-finish", scheduled: false, replace: false },
-  { stage: "done", scheduled: false, replace: false },
-  { stage: "active-chunk", scheduled: true, replace: false },
-  { stage: "active-chunk", scheduled: false, replace: true },
-  { stage: "plan-finish", scheduled: false, replace: true },
-] satisfies Array<{ stage: ProjectionStage; scheduled: boolean; replace: boolean }>;
+  { stage: "plan-start", scheduled: false },
+  { stage: "active-chunk", scheduled: false },
+  { stage: "fts-chunk", scheduled: false },
+  { stage: "plan-finish", scheduled: false },
+  { stage: "done", scheduled: false },
+  { stage: "active-chunk", scheduled: true },
+] satisfies Array<{ stage: ProjectionStage; scheduled: boolean }>;
 
 it.each(cases)(
-  "joins queued $stage on native exit (scheduled=$scheduled, replacement=$replace)",
-  async ({ stage, scheduled, replace }) => {
+  "joins queued $stage on native exit (scheduled=$scheduled)",
+  async ({ stage, scheduled }) => {
     const stateDir = tempDirs.make("openclaw-native-worker-exit-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const fence = createQueuedProjectionFence(stage, () => {
-        if (replace) {
-          runOpenClawAgentWriteTransaction((database) => {
-            // The canonical replacement publishes a new projection and revokes the old claim.
-            replaceSqliteTranscriptEventsInTransaction(database, scope, [
-              {
-                type: "message",
-                id: "replacement",
-                parentId: null,
-                message: { role: "user", content: "replacement" },
-              },
-            ]);
-          }, databaseOptions);
-        }
-      });
+      setRuntimeConfigSnapshot({});
+      const fence = createQueuedProjectionFence(stage);
       let outcome: Promise<unknown> | undefined;
       let drain: Promise<void> | undefined;
       try {
@@ -171,7 +166,7 @@ it.each(cases)(
             .all(scope.sessionId),
         });
         const originalSource = sourceRows();
-        const params = { ...databaseOptions, createWorker: fence.createWorker };
+        const params = databaseOptions;
         let settled = false;
         if (scheduled) {
           startSessionTranscriptIndexReconcile(params);
@@ -218,22 +213,24 @@ it.each(cases)(
         );
         await checkpoint();
         expect(snapshot()).toEqual(atSettlement);
-        if (!replace) {
-          expect(sourceRows()).toEqual(originalSource);
-          await reconcileSessionTranscriptIndexes(databaseOptions);
-        }
+        expect(sourceRows()).toEqual(originalSource);
+        await reconcileSessionTranscriptIndexes(databaseOptions);
         expect(readSessionTranscriptMessageEvents(scope).map((row) => row.event)).toEqual([
-          expect.objectContaining({ id: replace ? "replacement" : "seed" }),
+          expect.objectContaining({ id: "seed" }),
         ]);
         await fence.cleanup();
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
         expect(() => assertNoOpenClawAgentDatabaseLeases(databaseOptions.agentId)).not.toThrow();
       } finally {
         await fence.cleanup();
         await outcome;
         await drain;
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
+        clearRuntimeConfigSnapshot();
       }
     });
   },

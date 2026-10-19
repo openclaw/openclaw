@@ -90,6 +90,22 @@ describe("Git source acquisition", () => {
       });
       expect(failed).toEqual({ ok: false, error: "failed to resolve ref missing in fixture" });
       await expect(fs.access(repoDir)).rejects.toMatchObject({ code: "ENOENT" });
+
+      const unsafeRef = "https://fixture-user:fixture-password@example.invalid/missing\u001b[31m";
+      const checkoutFailure = await acquireGitSource({
+        url: pathToFileURL(sourceDir).href,
+        label: "fixture",
+        repoDir: path.join(root, "unsafe-ref"),
+        ref: unsafeRef,
+        refMode: "detached",
+      });
+      expect(checkoutFailure.ok).toBe(false);
+      if (!checkoutFailure.ok) {
+        expect(checkoutFailure.error).toContain("failed to checkout https://***:***@");
+        expect(checkoutFailure.error).not.toContain("fixture-user");
+        expect(checkoutFailure.error).not.toContain("fixture-password");
+        expect(checkoutFailure.error).not.toContain("\u001b");
+      }
       expect(await fs.readFile(path.join(sourceDir, "payload.txt"), "utf8")).toBe("main");
     });
   });

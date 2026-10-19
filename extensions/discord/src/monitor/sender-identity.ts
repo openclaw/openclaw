@@ -1,4 +1,3 @@
-// Discord plugin module implements sender identity behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { User } from "../internal/discord.js";
 import type { PluralKitMessageInfo } from "../pluralkit.js";
@@ -29,8 +28,7 @@ type DiscordMemberLike = {
 };
 
 export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): string | null {
-  const candidate = message.webhookId ?? message.webhook_id;
-  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+  return normalizeOptionalString(message.webhookId ?? message.webhook_id) ?? null;
 }
 
 export function resolveDiscordSenderIdentity(params: {
@@ -74,7 +72,7 @@ export function resolveDiscordSenderIdentity(params: {
       : (senderDisplay ?? senderTag ?? params.author.id);
   return {
     id: params.author.id,
-    name: params.author.username ?? undefined,
+    name: params.author.username,
     tag: senderTag,
     label: senderLabel,
     isPluralKit: false,

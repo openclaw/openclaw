@@ -40,17 +40,16 @@ export default {
         },
         async execute(args) {
           mode = typeof args.query === "string" ? args.query : new URL(args.url).pathname.slice(1);
-          if (!["success", "failure", "throw"].includes(mode)) {
+          if (mode !== "failure") {
             throw new Error("Unsupported synthetic web output mode");
           }
           invoked = true;
           event("execute");
-          if (mode === "throw") throw new Error("Synthetic provider throw");
-          event("return", { payloadBytes: Buffer.byteLength(payload), ok: mode === "success" });
+          event("return", { payloadBytes: Buffer.byteLength(payload), ok: false });
           return {
-            ok: mode === "success",
-            statusCode: mode === "success" ? 200 : 503,
-            ...(mode === "failure" ? { error: { message: "Synthetic failure" } } : {}),
+            ok: false,
+            statusCode: 503,
+            error: { message: "Synthetic failure" },
             text: payload,
           };
         },

@@ -4,9 +4,11 @@ import type {
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   loadSystemsInventory,
   projectSystemsInventory,
@@ -45,6 +47,7 @@ const inventory: SystemsInventory = {
     { nodeId: "managed-cloud-node", connected: true },
   ],
   gatewaySystemInfo: systemInfo,
+  gatewaySampledAtMs: 1,
   errors: {},
 };
 const timing = { generation: 1, createdAtMs: 1, updatedAtMs: 2, stateChangedAtMs: 2 };
@@ -96,15 +99,6 @@ describe("Systems inventory projection", () => {
     ]);
   });
 
-  it("keeps headless, offline and same-named targets without resurrecting managed node rows", () => {
-    const rows = projectSystemsInventory(inventory, []);
-    expect(rows.map((row) => row.environment.id)).toEqual(environments.map((entry) => entry.id));
-    expect(rows[0]?.gatewaySystemInfo).toBe(systemInfo);
-    expect(rows[2]?.node?.hostStats).toEqual(hostStats);
-    expect(rows[2]?.node?.connected).toBe(false);
-    expect(rows[3]?.node).toBeUndefined();
-  });
-
   it("uses placement before exec bindings and keeps offline runner identity", () => {
     const placed = session("placed", {
       execNode: "headless",
@@ -146,18 +140,17 @@ describe("Systems inventory projection", () => {
     expect(rows[4]?.sessions).toEqual([{ kind: "retained-placement", session: reclaimed }]);
     expect(rows[3]?.sessions).toEqual([{ kind: "placement", session: moved }]);
   });
-
-  it("does not fabricate rows for a removed target or resolve exec aliases by display name", () => {
-    const rows = projectSystemsInventory(inventory, [
-      session("removed", { placement: { ...active, environmentId: "worker:removed" } }),
-      session("alias", { execNode: "Same name" }),
-    ]);
-    expect(rows).toHaveLength(environments.length);
-    expect(rows.flatMap((row) => row.sessions)).toEqual([]);
-  });
 });
 
 describe("Systems inventory loading", () => {
+  function gateway(client: GatewayBrowserClient) {
+    return createApplicationGateway({
+      client,
+      phase: "connected",
+      hello: gatewayHelloForMethods(["system.info"]),
+    } as ApplicationGatewaySnapshot).gateway;
+  }
+
   it("loads the existing read contracts and does not create a second session inventory", async () => {
     const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
     const request = vi
@@ -167,14 +160,16 @@ describe("Systems inventory loading", () => {
       .mockResolvedValueOnce(systemInfo);
     const controller = new AbortController();
     expect(
-      await loadSystemsInventory(client, { isCurrent: () => true, signal: controller.signal }),
-    ).toEqual(inventory);
+      await loadSystemsInventory(gateway(client), {
+        signal: controller.signal,
+      }),
+    ).toEqual({ ...inventory, gatewaySampledAtMs: expect.any(Number) });
     expect(
       request.mock.calls.map(([method, params, options]) => [method, params, options?.signal]),
     ).toEqual([
-      ["environments.list", {}, controller.signal],
+      ["environments.list", { includeDesktopSetup: true }, controller.signal],
       ["node.list", {}, controller.signal],
-      ["system.info", {}, controller.signal],
+      ["system.info", {}, expect.any(AbortSignal)],
     ]);
   });
 
@@ -184,7 +179,7 @@ describe("Systems inventory loading", () => {
       .mockResolvedValueOnce({ environments })
       .mockRejectedValueOnce(new Error("Node inventory denied"))
       .mockRejectedValueOnce(new Error("System info unavailable"));
-    const result = await loadSystemsInventory(client, { isCurrent: () => true });
+    const result = await loadSystemsInventory(gateway(client), {});
     expect(result).toMatchObject({ environments, nodes: [], gatewaySystemInfo: null });
     expect(result?.errors.nodes).toContain("Node inventory denied");
     expect(result?.errors.systemInfo).toContain("System info unavailable");
@@ -197,35 +192,6 @@ describe("Systems inventory loading", () => {
       .mockRejectedValueOnce(failure)
       .mockResolvedValueOnce({ nodes: inventory.nodes })
       .mockResolvedValueOnce(systemInfo);
-    await expect(loadSystemsInventory(client, { isCurrent: () => true })).rejects.toBe(failure);
-  });
-
-  it.each(["replacement", "abort"] as const)("discards a late result after %s", async (change) => {
-    const delayed = createDeferred<{ environments: EnvironmentSummary[] }>();
-    const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
-    vi.spyOn(client, "request")
-      .mockReturnValueOnce(delayed.promise)
-      .mockResolvedValueOnce({ nodes: inventory.nodes })
-      .mockResolvedValueOnce(systemInfo);
-    let current = true;
-    const controller = new AbortController();
-    const result = loadSystemsInventory(client, {
-      isCurrent: () => current,
-      signal: controller.signal,
-    });
-    if (change === "replacement") {
-      current = false;
-    } else {
-      controller.abort();
-    }
-    delayed.resolve({ environments });
-    await expect(result).resolves.toBeUndefined();
-  });
-
-  it("does not dispatch an already invalidated load", async () => {
-    const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
-    const request = vi.spyOn(client, "request");
-    await expect(loadSystemsInventory(client, { isCurrent: () => false })).resolves.toBeUndefined();
-    expect(request).not.toHaveBeenCalled();
+    await expect(loadSystemsInventory(gateway(client), {})).rejects.toBe(failure);
   });
 });

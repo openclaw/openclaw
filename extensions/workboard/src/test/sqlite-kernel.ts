@@ -1,6 +1,12 @@
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
+import { readSqliteDatabaseWriteTokenForPath } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { WorkboardKeyedStore } from "../persistence-types.js";
-import { createWorkboardSqliteKernel } from "../sqlite-store-kernel.js";
-import type { createWorkboardSqliteStores } from "../sqlite-store.js";
+import { workboardSqliteBackendEntrypoint } from "../sqlite-backend-entrypoint.test-support.js";
+import {
+  createWorkboardSqliteKernel,
+  createWorkboardSqliteStores,
+  workboardTestDatabaseInput,
+} from "./database-config.js";
 
 // Native statement counts and error ordering stay with the synchronous worker kernel.
 function asyncKeyedStore<T>(store: {
@@ -17,15 +23,23 @@ function asyncKeyedStore<T>(store: {
   };
 }
 
-export function createKernelStores(dbPath: string): ReturnType<typeof createWorkboardSqliteStores> {
+export function createKernelStores(
+  dbPath: string,
+): Omit<ReturnType<typeof createWorkboardSqliteStores>, "runWithWriteAuthority"> {
+  if (workboardTestDatabaseInput()) {
+    return createWorkboardSqliteStores({
+      dbPath,
+      workerModuleUrl: resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint),
+    });
+  }
   const kernel = createWorkboardSqliteKernel(dbPath);
   return {
-    ready: Promise.resolve(kernel.dataVersion()),
-    dataVersion: async () => kernel.dataVersion(),
+    ready: Promise.resolve(),
+    readWriteToken: () => readSqliteDatabaseWriteTokenForPath(dbPath),
     close: async () => kernel.close(),
     cards: {
       ...asyncKeyedStore(kernel.cards),
-      entries: async (boardId) => kernel.cards.entries(boardId),
+      entries: async (scope) => kernel.cards.entries(scope),
       registerIfAbsent: async (...args) => kernel.cards.registerIfAbsent(...args),
       registerIfUpdatedAt: async (...args) => kernel.cards.registerIfUpdatedAt(...args),
       claimIfOwnerAvailable: async (...args) => kernel.cards.claimIfOwnerAvailable(...args),
@@ -36,6 +50,13 @@ export function createKernelStores(dbPath: string): ReturnType<typeof createWork
       hasCards: async (boardId) => kernel.cards.hasCards(boardId),
     },
     boards: asyncKeyedStore(kernel.boards),
+    sessionsBoard: {
+      get: async (boardId) => kernel.sessionsBoard.get(boardId),
+      update: async (boardId, patch) => kernel.sessionsBoard.update(boardId, patch),
+      listPlacements: async (boardId) => kernel.sessionsBoard.listPlacements(boardId),
+      repairPlacements: async () => kernel.sessionsBoard.repairPlacements(),
+      writePlacement: async (...args) => kernel.sessionsBoard.writePlacement(...args),
+    },
     subscriptions: asyncKeyedStore(kernel.subscriptions),
     attachments: asyncKeyedStore(kernel.attachments),
   };

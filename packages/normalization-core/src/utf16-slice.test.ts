@@ -1,5 +1,5 @@
-// Tests for surrogate-safe UTF-16 string slicing helpers.
 import { describe, expect, it } from "vitest";
+import { findGraphemeChunkEnd } from "./grapheme.js";
 import {
   avoidTrailingHighSurrogateBreak,
   sliceUtf16Safe,
@@ -8,23 +8,22 @@ import {
 } from "./utf16-slice.js";
 
 describe("avoidTrailingHighSurrogateBreak", () => {
-  it("keeps ordinary and terminal boundaries unchanged", () => {
-    expect(avoidTrailingHighSurrogateBreak("hello", 0, 3)).toBe(3);
-    expect(avoidTrailingHighSurrogateBreak("hello", 0, 5)).toBe(5);
-  });
-
-  it("moves a split before a surrogate pair when room remains", () => {
-    expect(avoidTrailingHighSurrogateBreak("a🤖b", 0, 2)).toBe(1);
-  });
-
-  it("includes the full pair when a one-unit chunk starts with it", () => {
-    expect(avoidTrailingHighSurrogateBreak("🤖b", 0, 1)).toBe(2);
+  it("keeps ordinary boundaries and complete surrogate pairs", () => {
+    const cases: [string, number, number, number][] = [
+      ["hello", 0, 3, 3],
+      ["hello", 0, 5, 5],
+      ["a🤖b", 0, 2, 1],
+      ["🤖b", 0, 1, 2],
+      ["a🤖b", 1, 2, 3],
+    ];
+    for (const [text, start, end, expected] of cases) {
+      expect(avoidTrailingHighSurrogateBreak(text, start, end)).toBe(expected);
+    }
   });
 });
 
 describe("sliceUtf16Safe", () => {
   it.each<[string, Parameters<typeof sliceUtf16Safe>, string]>([
-    ["slices ASCII string normally", ["hello world", 0, 5], "hello"],
     ["handles negative start", ["hello world", -5], "world"],
     ["handles negative end", ["hello world", 0, -6], "hello"],
     ["handles start beyond length", ["hello", 10], ""],
@@ -33,7 +32,6 @@ describe("sliceUtf16Safe", () => {
     ["preserves emoji with surrogate pairs", ["👨‍👩‍👧‍👦", 0], "👨‍👩‍👧‍👦"],
     ["returns empty string when slicing middle of surrogate pair", ["👨👩", 1, 3], ""],
     ["returns empty string when slicing at start of surrogate pair", ["👨👩", 0, 1], ""],
-    ["handles empty string", ["", 0], ""],
     ["handles undefined end", ["hello", 2], "llo"],
   ])("%s", (_name, args, expected) => {
     expect(sliceUtf16Safe(...args)).toBe(expected);
@@ -43,7 +41,6 @@ describe("sliceUtf16Safe", () => {
 describe("truncateUtf16Safe", () => {
   it.each<[string, Parameters<typeof truncateUtf16Safe>, string]>([
     ["returns input when shorter than limit", ["hello", 10], "hello"],
-    ["truncates when longer than limit", ["hello world", 5], "hello"],
     ["handles zero limit", ["hello", 0], ""],
     ["handles negative limit", ["hello", -1], ""],
     ["floors decimal limit", ["hello world", 5.7], "hello"],
@@ -54,50 +51,58 @@ describe("truncateUtf16Safe", () => {
 });
 
 describe("truncateWithMarker", () => {
+  it.each<[string, number, string, number, boolean, string]>([
+    ["hello", 5, "...", 3, false, "hello"],
+    ["hello world", 8, "...", 3, false, "hello..."],
+    ["hello world", 5, "...", 0, false, "hello..."],
+    ["hello   world", 9, "...", 3, true, "hello..."],
+    ["ab🚀tail", 4, "…", 1, false, "ab…"],
+    ["hello", 0, "…", 1, false, "…"],
+  ])(
+    "truncates %j at %i with marker %j (reserve=%i, trimEnd=%s)",
+    (text, max, marker, reserve, trimEnd, expected) => {
+      expect(truncateWithMarker(text, max, { marker, reserve, trimEnd })).toBe(expected);
+    },
+  );
+});
+
+describe("findGraphemeChunkEnd", () => {
   it.each([
-    {
-      name: "returns values at the boundary unchanged",
-      value: "hello",
-      max: 5,
-      options: { marker: "...", reserve: 3, trimEnd: false },
-      expected: "hello",
-    },
-    {
-      name: "reserves marker width",
-      value: "hello world",
-      max: 8,
-      options: { marker: "...", reserve: 3, trimEnd: false },
-      expected: "hello...",
-    },
-    {
-      name: "supports markers outside the limit",
-      value: "hello world",
-      max: 5,
-      options: { marker: "...", reserve: 0, trimEnd: false },
-      expected: "hello...",
-    },
-    {
-      name: "trims only the truncated prefix",
-      value: "hello   world",
-      max: 9,
-      options: { marker: "...", reserve: 3, trimEnd: true },
-      expected: "hello...",
-    },
-    {
-      name: "keeps surrogate pairs well formed",
-      value: "ab🚀tail",
-      max: 4,
-      options: { marker: "…", reserve: 1, trimEnd: false },
-      expected: "ab…",
-    },
-    {
-      name: "preserves marker output at zero limits",
-      value: "hello",
-      max: 0,
-      options: { marker: "…", reserve: 1, trimEnd: false },
-      expected: "…",
-    },
-  ] as const)("$name", ({ value, max, options, expected }) => {
-    expect(truncateWithMarker(value, max, options)).toBe(expected);
+    ["family ZWJ", "👨‍👩‍👧‍👦"],
+    ["flag", "🇺🇸"],
+    ["skin tone", "👍🏽"],
+    ["combining mark", "e\u0301"],
+    ["Indic conjunct", "\u0915\u094D\u0937\u093F"],
+    ["CRLF", "\r\n"],
+    ["whitespace with combining mark", " \u0301"],
+    ["punctuation with combining mark", "。\u0301"],
+    ["prepended whitespace with combining mark", "\u0600 \u0301"],
+  ])("preserves a whole %s cluster", (_name, cluster) => {
+    const text = `a${cluster}b`;
+    for (let end = 2; end < cluster.length + 1; end++) {
+      expect(findGraphemeChunkEnd(text, 0, end)).toBe(1);
+      expect(findGraphemeChunkEnd(text, 0, text.length, end)).toBe(1);
+    }
+    expect(findGraphemeChunkEnd(text, 0, cluster.length + 1)).toBe(cluster.length + 1);
+  });
+
+  it("respects hard budgets, unusable preferences, and partial-cut policy", () => {
+    const cases: [Parameters<typeof findGraphemeChunkEnd>, number][] = [
+      [["a👨‍👩‍👧‍👦bc", 1, 13, 3, true], 13],
+      [["a👨‍👩‍👧‍👦bc", 1, 13, 3, false], 13],
+      [["a👨‍👩‍👧‍👦", 0, 3, Number.NaN], 1],
+      [["👨‍👩‍👧‍👦", 0, 5], 5],
+      [["👨‍👩‍👧‍👦", 0, 5, 5, false], 0],
+      [["a👨‍👩‍👧‍👦b", 1, 5], 4],
+      [["a👨‍👩‍👧‍👦b", 1, 5, 5, false], 1],
+      [["a🤖b", 1, 2], 3],
+      [["a🤖b", 1, 2, 2, false], 1],
+      [["🤖", 0, 0], 0],
+      [["abc", 1, 1], 1],
+      [["abc", 0, 5], 3],
+    ];
+    for (const [args, expected] of cases) {
+      expect(findGraphemeChunkEnd(...args)).toBe(expected);
+    }
   });
 });

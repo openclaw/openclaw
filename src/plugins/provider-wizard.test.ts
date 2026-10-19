@@ -57,21 +57,43 @@ describe("manifest auth choice dispatch", () => {
     ).toEqual({ provider, method: provider.auth[1], wizard: provider.auth[1]?.wizard });
   });
 
-  it("preserves explicit provider-method targets over a conflicting manifest choice", () => {
-    const choice = buildProviderPluginMethodChoice(provider.id, "api-key");
-    expect(
-      resolveProviderPluginChoiceCore({
-        providers: [{ ...provider, id: "other-provider", pluginId: "other-plugin" }, provider],
+  it.each([manifestChoice.choiceId, buildProviderPluginMethodChoice(provider.id, "api-key-cn")])(
+    "keeps manifest-owned utility selection on the resolved setup method: %s",
+    (choice) => {
+      const resolved = resolveProviderPluginChoiceCore({
+        providers: [provider],
         choice,
-        manifestChoice: {
-          ...manifestChoice,
-          pluginId: "other-plugin",
-          providerId: "other-provider",
-          choiceId: choice,
-        },
-      }),
-    ).toEqual({ provider, method: provider.auth[0] });
-  });
+        manifestChoice: { ...manifestChoice, modelTarget: "utility" },
+      });
+      expect(resolved?.wizard).toMatchObject({
+        modelTarget: "utility",
+        modelSelection: { allowKeepCurrent: false },
+      });
+    },
+  );
+
+  it.each([
+    { pluginId: "other-plugin", providerId: "other-provider", methodId: "api-key-cn" },
+    { pluginId: "other-plugin", providerId: "moonshot", methodId: "api-key" },
+    { pluginId: "moonshot", providerId: "moonshot", methodId: "api-key-cn" },
+  ])(
+    "preserves explicit provider-method targets over a conflicting manifest choice: %j",
+    (identity) => {
+      const choice = buildProviderPluginMethodChoice(provider.id, "api-key");
+      expect(
+        resolveProviderPluginChoiceCore({
+          providers: [{ ...provider, id: "other-provider", pluginId: "other-plugin" }, provider],
+          choice,
+          manifestChoice: {
+            ...manifestChoice,
+            ...identity,
+            choiceId: choice,
+            modelTarget: "utility",
+          },
+        }),
+      ).toEqual({ provider, method: provider.auth[0] });
+    },
+  );
 
   it.each([
     { pluginId: "other-plugin" },
@@ -93,6 +115,22 @@ describe("manifest auth choice dispatch", () => {
         manifestChoice: { ...manifestChoice, ...override },
       }),
     ).toBeNull();
+  });
+
+  it("preserves exact manifest choice dispatch when a provider has the same bare ID", () => {
+    const other = { ...provider, id: "other-provider", pluginId: "other-plugin" };
+    expect(
+      resolveProviderPluginChoiceCore({
+        providers: [provider, other],
+        choice: provider.id,
+        manifestChoice: {
+          ...manifestChoice,
+          pluginId: other.pluginId,
+          providerId: other.id,
+          choiceId: provider.id,
+        },
+      }),
+    ).toEqual({ provider: other, method: other.auth[1], wizard: other.auth[1]?.wizard });
   });
 });
 

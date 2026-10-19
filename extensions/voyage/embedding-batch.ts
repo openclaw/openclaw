@@ -1,4 +1,3 @@
-// Voyage plugin module implements embedding batch behavior.
 import {
   buildBatchHeaders,
   buildEmbeddingBatchGroupOptions,
@@ -12,6 +11,7 @@ import {
   type EmbeddingBatchExecutionParams,
   type EmbeddingBatchStatus,
   type ProviderBatchOutputLine,
+  type RemoteEmbeddingClient,
   uploadBatchJsonlFile,
   waitForEmbeddingBatch,
   withRemoteHttpResponse,
@@ -25,7 +25,6 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { VoyageEmbeddingClient } from "./embedding-provider.js";
 
 /**
  * Voyage Batch API Input Line format.
@@ -38,10 +37,6 @@ type VoyageBatchRequest = {
   };
 };
 
-type VoyageBatchStatus = EmbeddingBatchStatus;
-type VoyageBatchOutputLine = ProviderBatchOutputLine;
-
-const VOYAGE_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
 const VOYAGE_BATCH_COMPLETION_WINDOW = "12h";
 const VOYAGE_BATCH_MAX_REQUESTS = 50000;
 // Successful status/error-file responses are untrusted external bodies. Cap
@@ -49,14 +44,15 @@ const VOYAGE_BATCH_MAX_REQUESTS = 50000;
 const VOYAGE_BATCH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 function buildVoyageBatchRequest<T>(params: {
-  client: VoyageEmbeddingClient;
+  client: RemoteEmbeddingClient;
   path: string;
   signal?: AbortSignal;
-  onResponse: (res: Response) => Promise<T>;
+  onResponse: (res: Response, requestHeaders?: HeadersInit) => Promise<T>;
 }) {
   return {
     url: resolveEmbeddingEndpointUrl(params.client.baseUrl, params.path),
     ssrfPolicy: params.client.ssrfPolicy,
+    resolveRequestHeaders: params.client.resolveRequestHeaders,
     signal: params.signal,
     init: {
       headers: buildBatchHeaders(params.client, { json: true }),
@@ -66,24 +62,24 @@ function buildVoyageBatchRequest<T>(params: {
 }
 
 async function submitVoyageBatch(params: {
-  client: VoyageEmbeddingClient;
+  client: RemoteEmbeddingClient;
   requests: VoyageBatchRequest[];
   agentId: string;
-}): Promise<VoyageBatchStatus> {
+}): Promise<EmbeddingBatchStatus> {
   const inputFileId = await uploadBatchJsonlFile({
     client: params.client,
     requests: params.requests,
     errorPrefix: "voyage batch file upload failed",
   });
 
-  // 2. Create batch job using Voyage Batches API
-  return await postJsonWithRetry<VoyageBatchStatus>({
+  return await postJsonWithRetry<EmbeddingBatchStatus>({
     url: resolveEmbeddingEndpointUrl(params.client.baseUrl, "batches"),
     headers: buildBatchHeaders(params.client, { json: true }),
     ssrfPolicy: params.client.ssrfPolicy,
+    resolveRequestHeaders: params.client.resolveRequestHeaders,
     body: {
       input_file_id: inputFileId,
-      endpoint: VOYAGE_BATCH_ENDPOINT,
+      endpoint: EMBEDDING_BATCH_ENDPOINT,
       completion_window: VOYAGE_BATCH_COMPLETION_WINDOW,
       request_params: {
         model: params.client.model,
@@ -99,18 +95,18 @@ async function submitVoyageBatch(params: {
 }
 
 async function fetchVoyageBatchStatus(params: {
-  client: VoyageEmbeddingClient;
+  client: RemoteEmbeddingClient;
   batchId: string;
   signal?: AbortSignal;
-}): Promise<VoyageBatchStatus> {
+}): Promise<EmbeddingBatchStatus> {
   return await withRemoteHttpResponse(
     buildVoyageBatchRequest({
       client: params.client,
       path: `batches/${params.batchId}`,
       signal: params.signal,
-      onResponse: async (res) => {
-        await assertOkOrThrowProviderError(res, "voyage.batch-status");
-        return await readProviderJsonResponse<VoyageBatchStatus>(res, "voyage-batch-status", {
+      onResponse: async (res, requestHeaders) => {
+        await assertOkOrThrowProviderError(res, "voyage.batch-status", { requestHeaders });
+        return await readProviderJsonResponse<EmbeddingBatchStatus>(res, "voyage-batch-status", {
           maxBytes: VOYAGE_BATCH_RESPONSE_MAX_BYTES,
         });
       },
@@ -119,7 +115,7 @@ async function fetchVoyageBatchStatus(params: {
 }
 
 async function readVoyageBatchError(params: {
-  client: VoyageEmbeddingClient;
+  client: RemoteEmbeddingClient;
   errorFileId: string;
 }): Promise<string | undefined> {
   try {
@@ -127,8 +123,10 @@ async function readVoyageBatchError(params: {
       buildVoyageBatchRequest({
         client: params.client,
         path: `files/${params.errorFileId}/content`,
-        onResponse: async (res) => {
-          await assertOkOrThrowProviderError(res, "voyage.batch-error-file-content");
+        onResponse: async (res, requestHeaders) => {
+          await assertOkOrThrowProviderError(res, "voyage.batch-error-file-content", {
+            requestHeaders,
+          });
           const bytes = await readResponseWithLimit(res, VOYAGE_BATCH_RESPONSE_MAX_BYTES, {
             onOverflow: ({ maxBytes: maxBytesLocal }) =>
               new Error(`voyage batch error file content exceeds ${maxBytesLocal} bytes`),
@@ -138,7 +136,7 @@ async function readVoyageBatchError(params: {
             return undefined;
           }
           const lines = normalizeStringEntries(text.split("\n")).map(
-            (line) => JSON.parse(line) as VoyageBatchOutputLine,
+            (line) => JSON.parse(line) as ProviderBatchOutputLine,
           );
           return formatBatchErrorDetail(extractBatchErrorMessage(lines));
         },
@@ -151,7 +149,7 @@ async function readVoyageBatchError(params: {
 
 export async function runVoyageEmbeddingBatches(
   params: {
-    client: VoyageEmbeddingClient;
+    client: RemoteEmbeddingClient;
     agentId: string;
     requests: VoyageBatchRequest[];
   } & EmbeddingBatchExecutionParams,
@@ -170,8 +168,10 @@ export async function runVoyageEmbeddingBatches(
         buildVoyageBatchRequest({
           client: params.client,
           path: `files/${fileId}/content`,
-          onResponse: async (response) => {
-            await assertOkOrThrowProviderError(response, "voyage.batch-file-content");
+          onResponse: async (response, requestHeaders) => {
+            await assertOkOrThrowProviderError(response, "voyage.batch-file-content", {
+              requestHeaders,
+            });
             await read(response);
           },
         }),

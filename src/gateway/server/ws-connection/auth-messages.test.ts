@@ -10,6 +10,20 @@ import { truncateCloseReason } from "../close-reason.js";
 import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
 
 describe("formatGatewayAuthFailureMessage", () => {
+  it.each(["token_redacted_config", "password_redacted_config"])(
+    "names redaction corruption and its remedy for %s within the close limit",
+    (reason) => {
+      const message = formatGatewayAuthFailureMessage({
+        authMode: "token",
+        authProvided: "token",
+        reason,
+      });
+      expect(message).toContain("redaction sentinel");
+      expect(message).toContain("openclaw doctor --fix");
+      expect(truncateCloseReason(message)).toBe(message);
+    },
+  );
+
   it.each(["bootstrap_token_invalid", undefined])(
     "warns that a rejected setup code may already be used for reason %s",
     (reason) => {

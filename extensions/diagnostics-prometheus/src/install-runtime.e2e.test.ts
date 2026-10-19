@@ -7,12 +7,18 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
+import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
 import { stopChildProcess } from "openclaw/plugin-sdk/test-env";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { packagingEntrypoints } from "./install-runtime-entrypoints.test-support.mts";
 
 const execFileAsync = promisify(execFile);
 const packageName = "@openclaw/diagnostics-prometheus";
@@ -88,9 +94,9 @@ function isolatedEnv(params: {
   return env;
 }
 
-async function runCli(args: string[], env: NodeJS.ProcessEnv, build = false): Promise<string> {
-  const entry = build ? "scripts/run-node.mjs" : "openclaw.mjs";
-  const result = await execFileAsync(process.execPath, [entry, ...args], {
+async function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<string> {
+  // E2E setup owns shared dist; a child rebuild can delete running siblings' chunks.
+  const result = await execFileAsync(process.execPath, ["openclaw.mjs", ...args], {
     cwd: repoRoot,
     env,
     maxBuffer: 4 * 1024 * 1024,
@@ -115,15 +121,22 @@ async function packPlugin(
       return topLevel !== "dist" && topLevel !== "node_modules";
     },
   });
-  await execFileAsync(process.execPath, ["scripts/lib/plugin-npm-runtime-build.mjs", stagingDir], {
-    cwd: repoRoot,
-    maxBuffer: 2 * 1024 * 1024,
-    timeout: 60_000,
-  });
   await execFileAsync(
     process.execPath,
     [
-      "scripts/lib/plugin-npm-package-manifest.mjs",
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(packagingEntrypoints.runtimeBuild)),
+      stagingDir,
+    ],
+    {
+      cwd: repoRoot,
+      maxBuffer: 2 * 1024 * 1024,
+      timeout: 60_000,
+    },
+  );
+  await execFileAsync(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(packagingEntrypoints.packageManifest)),
       "--run",
       stagingDir,
       "--",
@@ -171,32 +184,11 @@ async function readPluginVersion(): Promise<string> {
   return manifest.version.trim();
 }
 
-async function waitForFile(
-  filePath: string,
-  child: ChildProcess,
-  timeoutMs: number,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error("local npm registry exited before publishing its port");
-    }
-    try {
-      if ((await fs.stat(filePath)).size > 0) {
-        return;
-      }
-    } catch {
-      // The registry writes the port file only after the listener is ready.
-    }
-    await delay(50);
-  }
-  throw new Error("timed out waiting for local npm registry");
-}
-
 async function startRegistry(params: {
   root: string;
   tarballPath: string;
   version: string;
+  signal: AbortSignal;
 }): Promise<string> {
   const portFile = path.join(params.root, "registry-port");
   const logPath = path.join(params.root, "registry.log");
@@ -217,13 +209,24 @@ async function startRegistry(params: {
         home: params.root,
         stateDir: path.join(params.root, "unused-state"),
       }),
-      stdio: ["ignore", logHandle.fd, logHandle.fd],
+      stdio: ["ignore", logHandle.fd, logHandle.fd, "ipc"],
     },
   );
   children.push(child);
+  const listening = once(child, "message", { signal: params.signal });
+  const closed = once(child, "close", { signal: params.signal });
+  const ready = withinTest(
+    awaitGateBeforeSettlement(
+      listening,
+      closed,
+      "local npm registry exited before publishing its port",
+    ),
+    params.signal,
+  );
+  void ready.catch(() => {});
   await logHandle.close();
-  await waitForFile(portFile, child, 10_000);
-  const port = (await fs.readFile(portFile, "utf8")).trim();
+  const [port] = await ready;
+  expect(port).toEqual(expect.any(Number));
   return `http://127.0.0.1:${port}`;
 }
 
@@ -279,6 +282,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
           diagnostics: { enabled: true },
           gateway: {
             mode: "local",
+            controlUi: { enabled: false },
             bind: "loopback",
             port: gatewayPort,
             trustedProxies: ["127.0.0.1"],
@@ -319,6 +323,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
       root,
       tarballPath: packedPlugin.tarballPath,
       version: pluginVersion,
+      signal,
     });
     const env = isolatedEnv({
       configPath,
@@ -330,7 +335,6 @@ describe("diagnostics-prometheus managed install runtime", () => {
     await runCli(
       ["plugins", "install", `npm:${packageName}@${pluginVersion}`, "--accept-capabilities"],
       env,
-      true,
     );
     const inspect = JSON.parse(
       await runCli(["plugins", "inspect", pluginId, "--runtime", "--json"], env),
@@ -415,9 +419,10 @@ describe("diagnostics-prometheus managed install runtime", () => {
       authenticated.headers.get("content-length"),
     );
     expect(await restrictedHead.text()).toBe("");
-    const scrapeEventLoopMetrics = async () => {
+    const scrapeEventLoopMetrics = async (scrapeSignal = signal) => {
       const response = await fetch(url, {
         headers: { authorization: `Bearer ${gatewayPassword}` },
+        signal: scrapeSignal,
       });
       expect(response.status).toBe(200);
       const lines = (await response.text())
@@ -437,41 +442,51 @@ describe("diagnostics-prometheus managed install runtime", () => {
         observed: value("openclaw_gateway_event_loop_observed_seconds_total"),
       };
     };
-    const readCompletedWindow = async () => {
-      // Healthy monitor windows complete after one second; readiness owns this read.
-      await delay(1_100);
-      const response = await fetch(`http://127.0.0.1:${gatewayPort}/readyz`, {
-        headers: { authorization: `Bearer ${gatewayPassword}` },
-      });
-      expect(response.status).toBe(200);
-      const readiness = (await response.json()) as {
-        ready: boolean;
-        eventLoop?: { intervalMs: number; delayMaxMs: number };
-      };
-      expect(readiness.ready).toBe(true);
-      expect(readiness.eventLoop?.intervalMs).toBeGreaterThanOrEqual(1_000);
-      expect(readiness.eventLoop?.delayMaxMs).toBeGreaterThanOrEqual(0);
-      return readiness.eventLoop!;
+    const waitForExportedWindow = async (afterCount: number) => {
+      const controller = new AbortController();
+      const waitSignal = AbortSignal.any([signal, controller.signal]);
+      const pending = (async () => {
+        for (;;) {
+          const current = await scrapeEventLoopMetrics(waitSignal);
+          if (current.count > afterCount) {
+            return current;
+          }
+          await delay(100, undefined, { signal: waitSignal });
+        }
+      })();
+      try {
+        return await withinTest(
+          awaitGateBeforeSettlement(
+            pending,
+            gatewayClosed,
+            "Gateway exited before exporting another event-loop window",
+          ),
+          signal,
+        );
+      } finally {
+        // A settlement race does not cancel its work. Stop the request/timer and
+        // settle the loop before Gateway and temporary-state cleanup can begin.
+        controller.abort();
+        await pending.catch(() => {});
+      }
     };
 
-    await readCompletedWindow();
-    await expect.poll(async () => (await scrapeEventLoopMetrics()).count).toBeGreaterThan(0);
-    const firstWindow = await scrapeEventLoopMetrics();
+    // Readiness retains a sampler snapshot; diagnostics reach the exporter asynchronously.
+    // Exact per-window arithmetic belongs to the controlled producer in service.event-loop.test.
+    const firstWindow = await waitForExportedWindow(0);
+    expect(firstWindow.count).toBeGreaterThan(0);
+    expect(Number.isFinite(firstWindow.sum)).toBe(true);
+    expect(firstWindow.sum).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(firstWindow.observed)).toBe(true);
     expect(firstWindow.observed).toBeGreaterThan(0);
-    const nextWindow = await readCompletedWindow();
-    await expect
-      .poll(async () => (await scrapeEventLoopMetrics()).count)
-      .toBeGreaterThan(firstWindow.count);
-    const retainedWindows = await scrapeEventLoopMetrics();
-    // Prometheus renders 12 significant digits; tolerate only serialization rounding.
-    expect(retainedWindows.observed).toBeGreaterThanOrEqual(
-      firstWindow.observed + nextWindow.intervalMs / 1_000 - 1e-9,
-    );
-    expect(retainedWindows.sum).toBeGreaterThanOrEqual(
-      firstWindow.sum + nextWindow.delayMaxMs / 1_000 - 1e-9,
-    );
+    const retainedWindows = await waitForExportedWindow(firstWindow.count);
+    expect(retainedWindows.count).toBeGreaterThan(firstWindow.count);
+    expect(Number.isFinite(retainedWindows.sum)).toBe(true);
+    expect(retainedWindows.sum).toBeGreaterThanOrEqual(firstWindow.sum);
+    expect(Number.isFinite(retainedWindows.observed)).toBe(true);
+    expect(retainedWindows.observed).toBeGreaterThan(firstWindow.observed);
     expect(retainedWindows.lines.join("\n")).not.toMatch(/\{(?!le=)/u);
-    // Background health readers may complete windows between full-Gateway scrapes.
+    // Background sampling may publish windows between full-Gateway scrapes.
     let previous = retainedWindows;
     for (let scrape = 0; scrape < 2; scrape++) {
       const current = await scrapeEventLoopMetrics();

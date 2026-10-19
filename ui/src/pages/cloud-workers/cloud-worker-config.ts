@@ -23,7 +23,6 @@ export type CloudWorkerProfileDraft = {
 
 export type ConfiguredCloudWorkerProfile = CloudWorkerProfileDraft & {
   providerId: string;
-  install: "bundle" | "npm";
 };
 
 export type CloudWorkerDraftError =
@@ -41,8 +40,6 @@ export type CloudWorkerDraftError =
   | "setupEnvRequiresSetup"
   | "readyWorkers"
   | "suspendAfter";
-
-type CloudWorkerProfileStatus = "advertised" | "restart-required" | "loading";
 
 const PROFILE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 // Matches Crabbox's Go-duration grammar and requires at least one non-zero digit.
@@ -78,7 +75,6 @@ export function readCloudWorkerProfiles(
         {
           id,
           providerId: normalizeOptionalString(raw.provider) ?? "",
-          install: raw.install === "npm" ? "npm" : "bundle",
           backend: stringSetting(settings, "provider"),
           target: stringSetting(settings, "target"),
           machineClass: stringSetting(settings, "class"),
@@ -272,15 +268,4 @@ export function buildCloudWorkerDeletePatch(
     },
     replacePaths: collectBaseArrayPaths(profiles[profileId], `cloudWorkers.profiles.${profileId}`),
   };
-}
-
-export function cloudWorkerProfileStatus(
-  profileId: string,
-  advertisedIds: ReadonlySet<string> | ReadonlyMap<string, unknown>,
-  catalogLoaded: boolean,
-): CloudWorkerProfileStatus {
-  if (!catalogLoaded) {
-    return "loading";
-  }
-  return advertisedIds.has(profileId) ? "advertised" : "restart-required";
 }

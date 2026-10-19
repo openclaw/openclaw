@@ -1,4 +1,4 @@
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId, ChannelStatusIssue } from "../../channels/plugins/types.public.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";

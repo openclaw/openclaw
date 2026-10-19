@@ -1,0 +1,303 @@
+import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+// @vitest-environment node
+import type { GatewaySessionRow } from "../../api/types.ts";
+import {
+  captureChatOutboxAdmission,
+  readStoredOutboxStore,
+  storageTargetForGateway,
+} from "../../lib/chat/outbox-store.ts";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
+import { findChatSendPayload, makeChatHost, requestCalls } from "./chat-host.test-support.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import { handleSendChat } from "./chat-send-submit.ts";
+import { listStoredChatOutboxes } from "./composer-persistence.ts";
+import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
+
+const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
+const accessError = "Your operator role requires a sandboxed session.";
+const sendStarted = { "chat.send": { status: "started" } };
+const sessions = (...rows: GatewaySessionRow[]) => ({
+  ...createSessionsListResult(),
+  sessions: rows,
+});
+const sessionRow = (sendDisabledReason: string | null = null): GatewaySessionRow => ({
+  key: "agent:main",
+  kind: "direct",
+  sendDisabledReason,
+});
+function attachmentHost(overrides: NonNullable<Parameters<typeof makeChatHost>[0]>) {
+  const attachment = createStagedAttachment("held-att");
+  const host = makeChatHost({
+    chatAttachments: [attachment],
+    ...overrides,
+    requestHandlers: overrides.requestHandlers ?? sendStarted,
+  });
+  return { host, attachment };
+}
+
+useChatSendBrowserFixture();
+
+it.each([
+  { hold: "access", connected: true, message: "keep this later draft" },
+  { hold: "access", connected: false, message: "keep this later draft" },
+  { hold: "recovery", connected: true, message: "later turn" },
+  { hold: "recovery", connected: true, message: "" },
+  { hold: "session", connected: true, message: "keep this draft" },
+])(
+  "retains the composer behind $hold (connected: $connected, text: $message)",
+  async ({ hold, connected, message }) => {
+    const earlierError = hold === "access" ? "Earlier request failed" : undefined;
+    const replyTarget =
+      hold === "session"
+        ? { messageId: "reply-1", sourceMessageId: "source-1", text: "original message" }
+        : null;
+    const { host, attachment } = attachmentHost({
+      connected,
+      sessionKey: hold === "session" ? "" : "agent:main",
+      chatMessage: message,
+      chatReplyTarget: replyTarget,
+      lastError: earlierError ?? null,
+      chatError: earlierError,
+      sessionsResult: sessions(sessionRow(hold === "access" ? accessError : null)),
+    });
+    const readiness =
+      hold === "recovery"
+        ? vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false)
+        : undefined;
+    await handleSendChat(host);
+    expect(host).toMatchObject({ chatMessage: message, chatQueue: [] });
+    expect(host.chatAttachments).toEqual([attachment]);
+    expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+    expect(host.chatReplyTarget).toEqual(replyTarget);
+    expect(host.request).not.toHaveBeenCalled();
+    const error =
+      hold === "session"
+        ? "The active session is unavailable; refresh and try again."
+        : earlierError;
+    expect(host).toMatchObject({ chatError: error, lastError: error ?? null });
+    if (hold === "recovery") {
+      readiness!.mockReturnValue(true);
+      await handleSendChat(host);
+      expect(findChatSendPayload(host)).toMatchObject({
+        message,
+        attachments: [{ fileName: "brief.pdf" }],
+      });
+    }
+  },
+);
+
+it.each([true, false])(
+  "queues later text and attachments behind an initial turn (connected: %s)",
+  async (connected) => {
+    let pending = true;
+    const { host } = attachmentHost({
+      connected,
+      chatMessage: "keep this later draft",
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: { key: "agent:main", status: "done", hasActiveRun: false },
+        },
+        ...sendStarted,
+      },
+      hasPendingInitialTurn: () => pending,
+      chatFollowUpMode: connected ? "steer" : "interrupt",
+    });
+    await handleSendChat(host);
+    expect(host).toMatchObject({ chatMessage: "", chatAttachments: [] });
+    expect(host.chatQueue).toMatchObject([{ text: "keep this later draft", sendAttempts: 0 }]);
+    expect(host.chatQueue[0]).not.toHaveProperty("queueMode");
+    const queuedId = host.chatQueue[0]!.sendRunId;
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
+      timeoutMs: 30_000,
+    });
+    host.chatMessage = "next unfinished draft";
+    host.connected = true;
+    pending = false;
+    await resumeStoredChatOutboxes(host);
+    expect(findChatSendPayload(host)).toMatchObject({
+      message: "keep this later draft",
+      idempotencyKey: queuedId,
+      attachments: [{ fileName: "brief.pdf" }],
+    });
+    expect(host.chatMessage).toBe("next unfinished draft");
+  },
+);
+
+it.each(["initial-turn", "recovery-scope", "send-access"])(
+  "rechecks %s after settings settle without sending an admitted later turn",
+  async (hold) => {
+    const settingsPatch = createDeferred<boolean>();
+    let pending = false;
+    const admitted = createDeferred();
+    const row = {
+      ...sessionRow(),
+      sessionId: "pending-settings-test",
+      updatedAt: 1,
+    };
+    const { host, attachment } = attachmentHost({
+      chatMessage: "later turn",
+      pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+      hasPendingInitialTurn: () => pending,
+      ...(hold === "send-access" ? { sessionsResult: sessions(row) } : {}),
+    });
+    const send = handleSendChat(host, undefined, { onOutboxAdmitted: () => admitted.resolve() });
+    await admitted.promise;
+    const original = host.chatQueue[0]!;
+    const readiness = vi.spyOn(host.client!, "recoveryScopeReady", "get");
+    if (hold === "initial-turn") {
+      pending = true;
+    } else if (hold === "recovery-scope") {
+      readiness.mockReturnValue(false);
+    } else {
+      host.sessions.captureReconcile()({ ...row, updatedAt: 2, sendDisabledReason: accessError });
+      expect(host.sessions.projectRows([row])[0]?.sendDisabledReason).toBe(accessError);
+    }
+    host.chatMessage = "newer draft";
+    settingsPatch.resolve(true);
+    await send;
+    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+    const sendState = hold === "recovery-scope" ? "failed" : "waiting-idle";
+    const target = storageTargetForGateway(
+      host.settings?.gatewayUrl,
+      original.attachmentPayload?.recoveryScope,
+    );
+    const stored = readStoredOutboxStore(sessionStorage, target);
+    const retained = Object.values(stored.sessions).flatMap((session) => session.queue ?? []);
+    const expectedRow = { id: original.id, text: "later turn", sendAttempts: 0, sendState };
+    const { sendRunId, attachmentPayload } = original;
+    expect(retained).toMatchObject([{ ...expectedRow, sendRunId, attachmentPayload }]);
+    if (hold === "send-access") {
+      expect(listStoredChatOutboxes(host)[0]?.queue).toMatchObject(retained);
+    }
+    if (hold === "recovery-scope") {
+      expect(retained[0]?.sendError).toBe(
+        "Chat settings update was interrupted. Review and retry when ready.",
+      );
+      expect(host.chatQueue).toEqual([]);
+      readiness.mockReturnValue(true);
+      chatOutboxOwner(host).syncHost(host);
+    }
+    expect(host.chatQueue).toMatchObject([expectedRow]);
+    expect(host.chatMessage).toBe("newer draft");
+    expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+  },
+);
+
+it.each([true, false])(
+  "uses the background global session's send access (blocked: %s)",
+  async (blocked) => {
+    const writer = {
+      key: "global",
+      agentId: "writer",
+      kind: "global" as const,
+      sendDisabledReason: blocked ? "Writer global session is read-only." : null,
+    };
+    const host = makeChatHost({
+      sessionKey: "global",
+      assistantAgentId: "main",
+      sessionsResultAgentId: "main",
+      sessionsResult: sessions(
+        {
+          ...writer,
+          agentId: "main",
+          sendDisabledReason: blocked ? null : "Main global session is read-only.",
+        },
+        writer,
+      ),
+      requestHandlers: {
+        "chat.history": { messages: [], sessionInfo: writer },
+        "chat.send": { status: "started", runId: "writer-run" },
+      },
+    });
+    const queued = {
+      id: "background-writer-input",
+      text: "Send to the writer global session",
+      createdAt: 1,
+      sessionKey: "global",
+      agentId: "writer",
+      sendRunId: "writer-run",
+      sendAttempts: 0,
+      sendState: "waiting-idle" as const,
+    };
+    const admission = captureChatOutboxAdmission(host, "global", "writer");
+    expect(chatOutboxOwner(host).admit(host, admission, queued)).toBe("admitted");
+    await resumeStoredChatOutboxes(host);
+    if (blocked) {
+      expect(host.request).not.toHaveBeenCalled();
+      expect(listStoredChatOutboxes(host)[0]?.queue).toMatchObject([queued]);
+    } else {
+      expect(findChatSendPayload(host)).toMatchObject({
+        sessionKey: "global",
+        agentId: "writer",
+        message: queued.text,
+      });
+    }
+  },
+);
+
+it.each(["scope missing", "scope revoked", "equivalent alias", "run started", "confirmed"])(
+  "sends reset through its FIFO owner when %s",
+  async (outcome) => {
+    const confirmation = createDeferred<boolean>();
+    const confirming = createDeferred();
+    const host = makeChatHost({
+      chatMessage: "/reset now",
+      sessionKey: "main",
+      hello: {
+        ...gatewayHelloForMethods(
+          ["chat.send"],
+          outcome === "scope missing" ? ["operator.read"] : ["operator.admin"],
+        ),
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+            scope: "per-sender",
+          },
+        },
+      },
+      requestHandlers: sendStarted,
+      confirmConversationReset: () => {
+        confirming.resolve();
+        return confirmation.promise;
+      },
+    });
+    const sending = handleSendChat(host);
+    if (outcome !== "scope missing") {
+      await confirming.promise;
+      if (outcome === "scope revoked") {
+        host.hello = {
+          ...host.hello!,
+          auth: { role: "operator", scopes: ["operator.write"] },
+        };
+      } else if (outcome === "equivalent alias") {
+        host.sessionKey = "agent:main:main";
+      } else if (outcome === "run started") {
+        host.chatRunId = "run-started-during-confirmation";
+      }
+      confirmation.resolve(true);
+    }
+    await sending;
+
+    if (outcome === "equivalent alias" || outcome === "confirmed") {
+      expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
+      expect(findChatSendPayload(host)).toMatchObject({ message: "/reset now" });
+    } else {
+      expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+      expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
+        localCommandName: "reset",
+        sendState: outcome === "run started" ? "waiting-idle" : "failed",
+      });
+      if (outcome !== "run started") {
+        expect(host.lastError).toContain("operator.admin");
+      }
+    }
+  },
+);

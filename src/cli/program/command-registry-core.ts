@@ -1,11 +1,5 @@
-// Core command registry that lazily imports command groups based on parsed argv.
 import type { Command } from "commander";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
-import { shouldRegisterPrimaryCommandOnly } from "../command-registration-policy.js";
-import {
-  buildCommandGroupEntries,
-  type CommandGroupDescriptorSpec,
-} from "./command-group-descriptors.js";
 import type { ProgramContext } from "./context.js";
 import {
   getCoreCliCommandDescriptors,
@@ -18,7 +12,10 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 
-const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>[] = [
+const coreEntrySpecs: readonly (readonly [
+  commandNames: readonly string[],
+  register: (program: Command, ctx: ProgramContext) => Promise<void> | void,
+])[] = [
   [
     ["setup", "crestodian"],
     async (program) => (await import("./register.setup.js")).registerSetupCommand(program),
@@ -46,13 +43,17 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>
     async (program) => (await import("./register.migrate.js")).registerMigrateCommand(program),
   ],
   [
+    ["storage"],
+    async (program) => (await import("./register.storage.js")).registerStorageCommand(program),
+  ],
+  [
     ["audit"],
     async (program) => (await import("./register.audit.js")).registerAuditCommand(program),
   ],
   [
     ["doctor", "triage", "dashboard", "reset", "uninstall"],
-    async (program) =>
-      (await import("./register.maintenance.js")).registerMaintenanceCommands(program),
+    async (program, ctx) =>
+      (await import("./register.maintenance.js")).registerMaintenanceCommands(program, ctx),
   ],
   [
     ["message"],
@@ -76,7 +77,7 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>
     async (program) => (await import("./register.agent.js")).registerAgentsCommands(program),
   ],
   [
-    ["status", "health", "sessions", "tasks"],
+    ["status", "health", "sessions"],
     async (program) =>
       (await import("./register.status-health-sessions.js")).registerStatusHealthSessionsCommands(
         program,
@@ -85,13 +86,14 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>
 ];
 
 function resolveCoreCommandGroups(ctx: ProgramContext): CommandGroupEntry[] {
+  // Core registration order differs from descriptor order (audit precedes maintenance).
   const descriptors = getCoreCliCommandDescriptors();
-  const visibleCommandNames = new Set(descriptors.map((descriptor) => descriptor.name));
-  const visibleEntrySpecs = coreEntrySpecs.filter(([commandNames]) =>
-    commandNames.every((name) => visibleCommandNames.has(name)),
-  );
-  // Descriptor metadata and import specs stay separate so help can stay cheap.
-  return buildCommandGroupEntries(descriptors, visibleEntrySpecs, ctx);
+  return coreEntrySpecs.flatMap(([names, register]) => {
+    const placeholders = descriptors.filter((descriptor) => names.includes(descriptor.name));
+    return placeholders.length === names.length
+      ? [{ names, placeholders, register: (program: Command) => register(program, ctx) }]
+      : [];
+  });
 }
 
 export function getCoreCliCompletionGroups(ctx: ProgramContext): CommandGroupEntry[] {
@@ -118,6 +120,6 @@ export function registerCoreCliCommands(program: Command, ctx: ProgramContext, a
   registerCommandGroups(program, resolveCoreCommandGroups(ctx), {
     eager: false,
     primary,
-    registerPrimaryOnly: Boolean(primary && shouldRegisterPrimaryCommandOnly(argv)),
+    registerPrimaryOnly: true,
   });
 }

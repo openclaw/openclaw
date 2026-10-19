@@ -7,7 +7,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
-import type { MediaFact } from "../media/media-facts.js";
+import type { LegacyMediaContextKey, MediaFact } from "../media/media-facts.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
@@ -57,6 +57,8 @@ export type ChannelStructuredContextEntry = {
 export type SessionTranscriptContext = {
   chatWindow?: boolean;
   historyLimit: number;
+  /** A platform-selected recent window keeps its configured bound and does not merge transcript rows. */
+  historyKind?: "pending" | "recent";
   beforeTimestampMs?: number;
   minTimestampMs?: number;
   senderLabels?: { assistant: string; user: string };
@@ -283,7 +285,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   Prompt?: string;
   MaxChars?: number;
   ChatType?: string;
-  /** Trusted channel-configured policy for this admitted conversation turn. */
+  /** @deprecated Channel-configured snapshot for the original external request. Use the channel policy resolver; retained until a later stable release after an announced deprecation window and explicit maintainer approval. No removal date is set. */
   ConversationToolPolicy?: GroupToolPolicyConfig;
   /** Human label for envelope headers (conversation label, not sender). */
   ConversationLabel?: string;
@@ -311,7 +313,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
   /** Internal wake cause, independent of transport, transcript provenance, and execution authority. */
-  InternalTurnSource?: "heartbeat" | "cron" | "exec";
+  InternalTurnSource?: "heartbeat" | "cron" | "exec" | "event" | "progress-card-refresh";
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
@@ -392,7 +394,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
-  /** Channel-owned local conversation image reference; never rendered into prompt text. */
+  /** Channel-owned local image reference; empty clears a prior avatar. Never rendered into prompts. */
   ConversationAvatar?: string;
   /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
   ChannelContext?: PluginHookChannelContext;
@@ -461,20 +463,8 @@ export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
   CommandTurn?: CommandTurnContext;
 };
 
-type RuntimeMediaContextKey =
-  | "MediaPath"
-  | "MediaUrl"
-  | "MediaType"
-  | "MediaDir"
-  | "MediaPaths"
-  | "MediaUrls"
-  | "MediaTypes"
-  | "MediaWorkspaceDir"
-  | "MediaTranscribedIndexes"
-  | "MediaStaged";
-
 /** Internal inbound context; legacy media fields exist only on the shipped SDK adapter. */
-export type RuntimeMsgContext = Omit<MsgContext, RuntimeMediaContextKey>;
+export type RuntimeMsgContext = Omit<MsgContext, LegacyMediaContextKey>;
 
 export type FinalizedRuntimeMsgContext = Omit<
   RuntimeMsgContext,
@@ -482,7 +472,7 @@ export type FinalizedRuntimeMsgContext = Omit<
 > &
   CanonicalInboundText & {
     CommandAuthorized: boolean;
-    CommandTurn?: CommandTurnContext;
+    CommandTurn: CommandTurnContext;
   };
 
 type NonTemplateContextKey = "ConversationAvatar";
@@ -514,39 +504,26 @@ export type TemplateContext = Omit<RuntimeMsgContext, NonTemplateContextKey> & {
 export type FinalizedTemplateContext = Omit<TemplateContext, keyof CanonicalInboundText> &
   CanonicalInboundText;
 
+function formatTemplateScalar(value: unknown): string | undefined {
+  return typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+    ? String(value)
+    : undefined;
+}
+
 function formatTemplateValue(value: unknown): string {
-  if (value == null) {
-    return "";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
+  if (Array.isArray(value)) {
+    return value
+      .map(formatTemplateScalar)
+      .filter((entry) => entry !== undefined)
+      .join(",");
   }
   if (typeof value === "symbol" || typeof value === "function") {
     return value.toString();
   }
-  if (Array.isArray(value)) {
-    return value
-      .flatMap((entry) => {
-        if (entry == null) {
-          return [];
-        }
-        if (typeof entry === "string") {
-          return [entry];
-        }
-        if (typeof entry === "number" || typeof entry === "boolean" || typeof entry === "bigint") {
-          return [String(entry)];
-        }
-        return [];
-      })
-      .join(",");
-  }
-  if (typeof value === "object") {
-    return "";
-  }
-  return "";
+  return formatTemplateScalar(value) ?? "";
 }
 
 // Simple {{Placeholder}} interpolation using inbound message context.

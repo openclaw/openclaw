@@ -160,7 +160,7 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
   <Accordion title="Adjustable reasoning">
     `mistral/mistral-small-latest`, `mistral/mistral-small-2603`, and `mistral/mistral-medium-3-5` support [adjustable reasoning](https://docs.mistral.ai/studio-api/conversations/reasoning) on the Chat Completions API via `reasoning_effort` (`none` minimizes extra thinking in the output; `high` surfaces full thinking traces before the final answer).
 
-    OpenClaw maps the session **thinking** level to Mistral's API:
+    Thinking defaults to **off**. OpenClaw accepts these session thinking levels and maps them to Mistral's API:
 
     | OpenClaw thinking level                                              | Mistral `reasoning_effort` |
     | ----------------------------------------------------------------------- | --------------------------- |

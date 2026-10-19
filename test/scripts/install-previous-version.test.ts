@@ -58,6 +58,7 @@ exit ${fixtureStop}
       HOME: root,
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       NPM_CONFIG_PREFIX: path.join(root, "npm-global"),
+      NPM_CONFIG_GLOBALCONFIG: path.join(root, "global.npmrc"),
       FIXTURE_CALLS: callsFile,
       FIXTURE_TARGET: options.target,
       FIXTURE_VERSIONS: JSON.stringify(options.versions),

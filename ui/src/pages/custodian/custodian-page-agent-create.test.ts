@@ -1,17 +1,13 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  ApplicationContext,
-  ApplicationGateway,
-  ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import * as uuid from "../../lib/uuid.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { createContext as createCustodianContext } from "./custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
-import "./custodian-page.ts";
+import "./custodian-page.tsx";
 
 type TestCustodianPage = HTMLElement & {
   onboarding: boolean;
@@ -20,66 +16,33 @@ type TestCustodianPage = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-function createContext(request: ReturnType<typeof vi.fn>) {
-  const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
-    client,
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: {
-      type: "hello-ok",
-      protocol: 1,
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      features: { methods: ["openclaw.chat"] },
-    },
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+function createContext(request: Parameters<typeof createCustodianContext>[0]) {
   const calls: string[] = [];
   const setSessionKey = vi.fn((sessionKey: string) => calls.push(`session:${sessionKey}`));
   const setAgent = vi.fn((agentId: string | null) => calls.push(`agent:${agentId}`));
-  const gateway = {
-    snapshot,
-    connection: {
-      gatewayUrl: "ws://gateway.test/control",
-      token: "",
-      bootstrapToken: "",
-      password: "",
-    },
-    setSessionKey,
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  } as unknown as ApplicationGateway;
   const refreshList = vi.fn().mockResolvedValue({
     defaultId: "main",
     mainKey: "main",
     scope: "global",
     agents: [{ id: "main" }, { id: "researcher" }],
   });
-  const context = {
-    gateway,
-    agents: {
-      state: {
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "global",
-          agents: [
-            { id: "main", model: { primary: "openai/gpt-5.5" } },
-            { id: "researcher", model: { primary: "openai/gpt-5.5" } },
-          ],
-        },
-      },
-      refreshList,
-      subscribe: () => () => undefined,
+  const harness = createCustodianContext(request, ["openclaw.chat"], {
+    agentsList: {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [
+        { id: "main", model: { primary: "openai/gpt-5.5" } },
+        { id: "researcher", model: { primary: "openai/gpt-5.5" } },
+      ],
     },
-    agentSelection: { state: { selectedId: "main" }, set: setAgent },
-    basePath: "",
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext;
+  });
+  const context = {
+    ...harness.context,
+    gateway: { ...harness.context.gateway, setSessionKey },
+    agents: { ...harness.context.agents, refreshList },
+    agentSelection: { ...harness.context.agentSelection, set: setAgent },
+  } satisfies ApplicationContext;
   return { calls, context, refreshList, setAgent, setSessionKey };
 }
 
@@ -118,7 +81,7 @@ describe("custodian new-agent flow", () => {
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "new-agent" });
   });
 
-  it("does not misreport limited access as an outdated Gateway", async () => {
+  it("explains the missing capability and scope before sending an agent creation request", async () => {
     const request = vi.fn();
     const { context } = createContext(request);
     context.gateway.snapshot.hello = {
@@ -130,7 +93,12 @@ describe("custodian new-agent flow", () => {
     await Promise.resolve();
 
     expect(request).not.toHaveBeenCalled();
-    expect(page.querySelector('[role="alert"]')).toBeNull();
+    const error = page.querySelector('[role="alert"]')?.textContent;
+    expect(error).toContain("openclaw.chat");
+    expect(error).toContain("operator.admin");
+    expect(error).toContain("Pair");
+    expect(error).toContain("reconnect");
+    expect(error).not.toContain("Update the Gateway");
   });
 
   it("refreshes the roster and opens the created agent hatch session", async () => {

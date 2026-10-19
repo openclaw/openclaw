@@ -1,5 +1,13 @@
-// Verifies runtime config snapshots preserve normalized public settings.
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  applyConfigEnvVars,
+  collectConfigRuntimeEnvOwnership,
+  initializePublishedConfigRuntimeEnv,
+  prepareConfigRuntimeEnv,
+} from "./config-env-vars.js";
 import {
   cloneConfigWithResolutionFacts,
   createConfigResolutionFacts,
@@ -8,28 +16,35 @@ import {
   setConfigResolutionFacts,
 } from "./resolution-facts.js";
 import {
+  clearRuntimeConfigSnapshot,
   createRuntimeConfigReader,
+  loadPinnedRuntimeConfigAsync,
+  registerRuntimeConfigSnapshotPreparer,
+  type RuntimeConfigSnapshotPreparationContext,
+  setAppliedRuntimeConfigSnapshot,
   finalizeRuntimeSnapshotWrite,
-  getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
   hasManagedRuntimeConfigWriteOwner,
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
+  getRuntimeConfigAppliedHash,
   preflightManagedRuntimeConfigWrite,
   loadPinnedRuntimeConfig,
-  notifyRuntimeConfigWriteListeners,
-  registerRuntimeConfigWriteListener,
   registerManagedRuntimeConfigWriteOwner,
   resetConfigRuntimeState,
   resolveRuntimeConfigCacheKey,
+  resolveRuntimeModelConfigCacheKey,
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot,
-  setRuntimeConfigAppliedHash,
   setRuntimeConfigSourceSnapshotIfCurrent,
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
 import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
+import {
+  captureRuntimeConfig,
+  projectConfigOntoRuntimeSourceSnapshot,
+} from "./runtime-source-projection.js";
 import type { OpenClawConfig } from "./types.js";
 
 function resetRuntimeConfigState(): void {
@@ -37,11 +52,15 @@ function resetRuntimeConfigState(): void {
   resetConfigRuntimeState();
 }
 
-describe("runtime snapshot state", () => {
-  afterEach(() => {
-    resetRuntimeConfigState();
-  });
+const unregister: Array<() => void> = [];
 
+afterEach(() => {
+  unregister.splice(0).forEach((release) => release());
+  resetRuntimeConfigState();
+  vi.unstubAllEnvs();
+});
+
+describe("runtime snapshot state", () => {
   it("pins the first successful load in memory until the snapshot is cleared", () => {
     let freshPort = 18789;
     let loadCount = 0;
@@ -60,14 +79,6 @@ describe("runtime snapshot state", () => {
     resetRuntimeConfigState();
     expect(loadPinnedRuntimeConfig(loadFresh).gateway?.port).toBe(19001);
     expect(loadCount).toBe(2);
-  });
-
-  it("returns the source snapshot when runtime snapshot is active", () => {
-    const sourceConfig = createProviderConfigFixture();
-    const runtimeConfig = createProviderConfigFixture("sk-runtime-resolved");
-
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
   });
 
   it("publishes and replaces same-byte resolution facts with the source snapshot", () => {
@@ -102,103 +113,127 @@ describe("runtime snapshot state", () => {
     expect(getAuthoredConfigSecretRef(getRuntimeConfigSnapshot(), "gateway.auth.token")).toBeNull();
   });
 
-  it("tracks snapshot metadata and cache keys across runtime refreshes", () => {
-    const firstConfig: OpenClawConfig = { gateway: { port: 18789 } };
-    const secondConfig: OpenClawConfig = { gateway: { port: 19001 } };
+  it("keeps model projections across display writes but invalidates authored values and resolution changes", () => {
+    const initial: OpenClawConfig = {
+      agents: { entries: { main: {} }, defaults: { model: "test/first" } },
+    };
+    setRuntimeConfigSnapshot(initial, initial);
+    const modelKey = resolveRuntimeModelConfigCacheKey(initial);
+    const configKey = resolveRuntimeConfigCacheKey(initial);
+    const display: OpenClawConfig = {
+      ...initial,
+      ui: { seamColor: "#123456", prefs: { chatShowToolCalls: false } },
+      meta: { lastTouchedVersion: "2026.10.11" },
+    };
+    setRuntimeConfigSnapshot(display, display);
+    expect(resolveRuntimeConfigCacheKey(display)).not.toBe(configKey);
+    expect(resolveRuntimeModelConfigCacheKey(display)).toBe(modelKey);
 
-    setRuntimeConfigSnapshot(firstConfig);
-    const firstMetadata = getRuntimeConfigSnapshotMetadata();
-    expect(firstMetadata?.revision).toBe(1);
-    expect(resolveRuntimeConfigCacheKey(firstConfig)).toBe(
-      `runtime:${firstMetadata?.revision}:${firstMetadata?.fingerprint}`,
-    );
+    const source = {
+      ...display,
+      agents: { ...display.agents, defaults: { model: "test/second" } },
+    };
+    expect(
+      setRuntimeConfigSourceSnapshotIfCurrent({
+        expectedRevision: getRuntimeConfigSnapshotMetadata()!.revision,
+        sourceConfig: source,
+      }),
+    ).toBe(true);
+    const sourceKey = resolveRuntimeModelConfigCacheKey(getRuntimeConfigSnapshot()!);
+    expect(sourceKey).not.toBe(modelKey);
+    expect(getRuntimeConfigSourceSnapshot()).toBe(source);
 
-    setRuntimeConfigSnapshot(secondConfig);
-    const secondMetadata = getRuntimeConfigSnapshotMetadata();
-    expect(secondMetadata?.revision).toBe(2);
-    expect(secondMetadata?.fingerprint).not.toBe(firstMetadata?.fingerprint);
-    expect(resolveRuntimeConfigCacheKey(secondConfig)).toBe(
-      `runtime:${secondMetadata?.revision}:${secondMetadata?.fingerprint}`,
-    );
+    const resolved = { ...display };
+    setConfigResolutionFacts(resolved, new Set());
+    setRuntimeConfigSnapshot(resolved, display);
+    expect(resolveRuntimeModelConfigCacheKey(resolved)).not.toBe(modelKey);
+    setRuntimeConfigSnapshot(source, source);
+    expect(resolveRuntimeModelConfigCacheKey(source)).not.toBe(modelKey);
   });
 
-  it("tracks the applied source revision independently from runtime fingerprints", () => {
-    expect(getRuntimeConfigAppliedHash()).toBeNull();
-
-    setRuntimeConfigAppliedHash("disk-hash-1");
-    setRuntimeConfigSnapshot({ gateway: { port: 18789 } });
-    expect(getRuntimeConfigAppliedHash()).toBe("disk-hash-1");
-
-    resetConfigRuntimeState();
-    expect(getRuntimeConfigAppliedHash()).toBeNull();
-  });
-
-  it("hashes resolved source content independently from root-file revision metadata", () => {
-    const first = hashRuntimeConfigValue({ logging: { level: "info" } });
-    const second = hashRuntimeConfigValue({ logging: { level: "debug" } });
-
-    expect(first).not.toBe(second);
-    expect(hashRuntimeConfigValue({ logging: { level: "info" } })).toBe(first);
-  });
-
-  it.each([false, true])(
-    "selects and retains only matching runtime sources (resolution facts: %s)",
-    (withFacts) => {
-      const sourceConfig = createProviderConfigFixture();
-      if (withFacts) {
-        setConfigResolutionFacts(sourceConfig, createConfigResolutionFacts([]));
-      }
-      const runtimeConfig = createProviderConfigFixture("sk-runtime-resolved");
-      const scopedResolvedConfig: OpenClawConfig = {
-        ...runtimeConfig,
-        tools: {
-          updatePlan: true,
-        },
-      };
-
-      const readUnbound = createRuntimeConfigReader(scopedResolvedConfig);
-
-      expect(
-        selectApplicableRuntimeConfig({
-          inputConfig: cloneConfigWithResolutionFacts(sourceConfig),
-          runtimeConfig,
-          runtimeSourceConfig: sourceConfig,
-        }),
-      ).toBe(runtimeConfig);
-      expect(
-        selectApplicableRuntimeConfig({
-          inputConfig: scopedResolvedConfig,
-          runtimeConfig,
-          runtimeSourceConfig: sourceConfig,
-        }),
-      ).toBe(scopedResolvedConfig);
-      const foreignConfig = cloneConfigWithResolutionFacts(sourceConfig);
-      setConfigResolutionFacts(
-        foreignConfig,
-        createConfigResolutionFacts(
-          [],
-          new Map([["models.providers.openai.apiKey", "OTHER_PROVIDER_KEY"]]),
+  it("hashes one captured immutable fleet only once", () => {
+    const source = {
+      agents: {
+        entries: Object.fromEntries(
+          Array.from({ length: 200 }, (_, index) => [`agent-${index}`, { name: `${index}` }]),
         ),
-      );
-      expect(
-        selectApplicableRuntimeConfig({
-          inputConfig: foreignConfig,
-          runtimeConfig,
-          runtimeSourceConfig: sourceConfig,
-        }),
-      ).toBe(foreignConfig);
-      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-      const readRuntime = createRuntimeConfigReader(cloneConfigWithResolutionFacts(sourceConfig));
-      const readScoped = createRuntimeConfigReader(scopedResolvedConfig);
-      const readForeign = createRuntimeConfigReader(foreignConfig);
-      const nextConfig = { ...runtimeConfig, messages: { ackReactionScope: "all" as const } };
-      setRuntimeConfigSnapshot(nextConfig, nextConfig);
-      expect(readRuntime()).toBe(nextConfig);
-      expect(readScoped()).toBe(scopedResolvedConfig);
-      expect(readForeign()).toBe(foreignConfig);
-      expect(readUnbound()).toBe(scopedResolvedConfig);
-    },
-  );
+      },
+    };
+    const keys = vi.spyOn(Object, "keys");
+    try {
+      const config = captureRuntimeConfig(source);
+      const first = hashRuntimeConfigValue(config);
+      for (let index = 0; index < 200; index += 1) {
+        expect(hashRuntimeConfigValue(config)).toBe(first);
+      }
+      expect(keys.mock.calls.filter(([value]) => value === config.agents?.entries)).toHaveLength(1);
+    } finally {
+      keys.mockRestore();
+    }
+  });
+
+  it("rehashes mutable descendants of a shallow-frozen config", () => {
+    const config = Object.freeze({ gateway: { port: 18789 } });
+    const before = hashRuntimeConfigValue(config);
+    config.gateway.port = 19001;
+    expect(hashRuntimeConfigValue(config)).not.toBe(before);
+    expect(hashRuntimeConfigValue(config)).toBe(
+      hashRuntimeConfigValue({ gateway: { port: 19001 } }),
+    );
+  });
+
+  it("selects and retains only matching runtime sources", () => {
+    const sourceConfig = createProviderConfigFixture();
+    const runtimeConfig = createProviderConfigFixture("sk-runtime-resolved");
+    const scopedResolvedConfig: OpenClawConfig = {
+      ...runtimeConfig,
+      tools: {
+        updatePlan: true,
+      },
+    };
+
+    const readUnbound = createRuntimeConfigReader(scopedResolvedConfig);
+
+    expect(
+      selectApplicableRuntimeConfig({
+        inputConfig: cloneConfigWithResolutionFacts(sourceConfig),
+        runtimeConfig,
+        runtimeSourceConfig: sourceConfig,
+      }),
+    ).toBe(runtimeConfig);
+    expect(
+      selectApplicableRuntimeConfig({
+        inputConfig: scopedResolvedConfig,
+        runtimeConfig,
+        runtimeSourceConfig: sourceConfig,
+      }),
+    ).toBe(scopedResolvedConfig);
+    const foreignConfig = cloneConfigWithResolutionFacts(sourceConfig);
+    setConfigResolutionFacts(
+      foreignConfig,
+      createConfigResolutionFacts(
+        [],
+        new Map([["models.providers.openai.apiKey", "OTHER_PROVIDER_KEY"]]),
+      ),
+    );
+    expect(
+      selectApplicableRuntimeConfig({
+        inputConfig: foreignConfig,
+        runtimeConfig,
+        runtimeSourceConfig: sourceConfig,
+      }),
+    ).toBe(foreignConfig);
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    const readRuntime = createRuntimeConfigReader(cloneConfigWithResolutionFacts(sourceConfig));
+    const readScoped = createRuntimeConfigReader(scopedResolvedConfig);
+    const readForeign = createRuntimeConfigReader(foreignConfig);
+    const nextConfig = { ...runtimeConfig, messages: { ackReactionScope: "all" as const } };
+    setRuntimeConfigSnapshot(nextConfig, nextConfig);
+    expect(readRuntime()).toBe(nextConfig);
+    expect(readScoped()).toBe(scopedResolvedConfig);
+    expect(readForeign()).toBe(foreignConfig);
+    expect(readUnbound()).toBe(scopedResolvedConfig);
+  });
 
   it("does not replace explicit config with a pinned snapshot without a source contract", () => {
     const sourceConfig = createProviderConfigFixture();
@@ -270,18 +305,10 @@ describe("runtime snapshot state", () => {
     },
   );
 
-  it("clears runtime source snapshot when runtime snapshot is cleared", () => {
-    setRuntimeConfigSnapshot({ gateway: { port: 18789 } }, { gateway: { port: 18789 } });
-    resetRuntimeConfigState();
-    expect(getRuntimeConfigSnapshot()).toBeNull();
-    expect(getRuntimeConfigSourceSnapshot()).toBeNull();
-    expect(getRuntimeConfigSnapshotMetadata()).toBeNull();
-  });
-
   it("refreshes both snapshots from disk after a write when source + runtime snapshots exist", async () => {
     const notifyCommittedWrite = vi.fn();
-    const loadFreshConfig = vi.fn<() => OpenClawConfig>(() => ({
-      gateway: { auth: { mode: "token" } },
+    const loadFreshConfig = vi.fn<() => Promise<{ config: OpenClawConfig }>>(async () => ({
+      config: { gateway: { auth: { mode: "token" } } },
     }));
     const nextSourceConfig: OpenClawConfig = {
       gateway: { auth: { mode: "token" } },
@@ -292,9 +319,8 @@ describe("runtime snapshot state", () => {
 
     await finalizeRuntimeSnapshotWrite({
       nextSourceConfig,
-      hadRuntimeSnapshot: true,
       hadBothSnapshots: true,
-      loadFreshConfig,
+      freshConfig: loadFreshConfig,
       notifyCommittedWrite,
       formatRefreshError: (error) => String(error),
       createRefreshError: (detail, cause) => new Error(detail, { cause }),
@@ -308,15 +334,14 @@ describe("runtime snapshot state", () => {
 
   it("refreshes a plain runtime snapshot after writes without restoring a source snapshot", async () => {
     const notifyCommittedWrite = vi.fn();
-    const loadFreshConfig = vi.fn(() => ({ gateway: { port: 19002 } }));
+    const loadFreshConfig = vi.fn(async () => ({ config: { gateway: { port: 19002 } } }));
 
     setRuntimeConfigSnapshot({ gateway: { port: 18789 } });
 
     await finalizeRuntimeSnapshotWrite({
       nextSourceConfig: { gateway: { port: 19002 } },
-      hadRuntimeSnapshot: true,
       hadBothSnapshots: false,
-      loadFreshConfig,
+      freshConfig: loadFreshConfig,
       notifyCommittedWrite,
       formatRefreshError: (error) => String(error),
       createRefreshError: (detail, cause) => new Error(detail, { cause }),
@@ -330,8 +355,8 @@ describe("runtime snapshot state", () => {
 
   it("keeps the last-known-good runtime snapshot active while specialized refresh is pending", async () => {
     const notifyCommittedWrite = vi.fn();
-    const loadFreshConfig = vi.fn<() => OpenClawConfig>(() => ({
-      gateway: { auth: { mode: "token" } },
+    const loadFreshConfig = vi.fn<() => Promise<{ config: OpenClawConfig }>>(async () => ({
+      config: { gateway: { auth: { mode: "token" } } },
     }));
     let releaseRefresh: (() => void) | undefined;
     const refreshPending = new Promise<boolean>((resolve) => {
@@ -346,7 +371,11 @@ describe("runtime snapshot state", () => {
       refresh: async ({ sourceConfig }) => {
         expect(sourceConfig.gateway?.auth).toEqual({ mode: "token" });
         expect(getRuntimeConfigSnapshot()?.gateway?.auth).toBeUndefined();
-        return await refreshPending;
+        const handled = await refreshPending;
+        if (handled) {
+          setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
+        }
+        return handled;
       },
     });
 
@@ -355,9 +384,8 @@ describe("runtime snapshot state", () => {
         gateway: { auth: { mode: "token" } },
         ...createProviderConfigFixture(),
       },
-      hadRuntimeSnapshot: true,
       hadBothSnapshots: true,
-      loadFreshConfig,
+      freshConfig: loadFreshConfig,
       notifyCommittedWrite,
       formatRefreshError: (error) => String(error),
       createRefreshError: (detail, cause) => new Error(detail, { cause }),
@@ -374,38 +402,7 @@ describe("runtime snapshot state", () => {
     await writePromise;
 
     expect(notifyCommittedWrite).toHaveBeenCalledTimes(1);
-  });
-
-  it("notifies registered write listeners with committed runtime snapshots", () => {
-    const seen: Array<{ configPath: string; runtimeConfig: OpenClawConfig }> = [];
-    const unsubscribe = registerRuntimeConfigWriteListener((event) => {
-      seen.push({
-        configPath: event.configPath,
-        runtimeConfig: event.runtimeConfig,
-      });
-    });
-
-    try {
-      notifyRuntimeConfigWriteListeners({
-        configPath: "/tmp/openclaw.json",
-        sourceConfig: { gateway: { port: 18789 } },
-        runtimeConfig: { gateway: { port: 19003 } },
-        persistedHash: "abc123",
-        revision: 1,
-        fingerprint: "runtime-fingerprint",
-        sourceFingerprint: "source-fingerprint",
-        writtenAtMs: 1,
-      });
-    } finally {
-      unsubscribe();
-    }
-
-    expect(seen).toEqual([
-      {
-        configPath: "/tmp/openclaw.json",
-        runtimeConfig: { gateway: { port: 19003 } },
-      },
-    ]);
+    expect(getRuntimeConfigSnapshot()?.gateway?.auth).toEqual({ mode: "token" });
   });
 
   it("scopes managed write ownership by path and reference count", () => {
@@ -453,14 +450,13 @@ describe("runtime snapshot state", () => {
     setRuntimeConfigSnapshot(activeConfig);
     const notifyCommittedWrite = vi.fn();
     const refresh = vi.fn(async () => true);
-    const loadFreshConfig = vi.fn(() => ({ gateway: { port: 19001 } }));
+    const loadFreshConfig = vi.fn(async () => ({ config: { gateway: { port: 19001 } } }));
     setRuntimeConfigSnapshotRefreshHandler({ refresh });
 
     await finalizeRuntimeSnapshotWrite({
       nextSourceConfig: { gateway: { port: 19001 } },
-      hadRuntimeSnapshot: true,
       hadBothSnapshots: false,
-      loadFreshConfig,
+      freshConfig: loadFreshConfig,
       notifyCommittedWrite,
       deferRuntimeActivation: true,
       formatRefreshError: (error) => String(error),
@@ -471,5 +467,455 @@ describe("runtime snapshot state", () => {
     expect(refresh).not.toHaveBeenCalled();
     expect(loadFreshConfig).not.toHaveBeenCalled();
     expect(notifyCommittedWrite).toHaveBeenCalledOnce();
+  });
+});
+
+function gatedPreparer() {
+  const started = createDeferredCore();
+  const deferred = createDeferredCore<() => void>();
+  const syncPrepare = vi.fn();
+  const prepareAsync = vi.fn(
+    (_config: OpenClawConfig, _context: RuntimeConfigSnapshotPreparationContext) => {
+      started.resolve();
+      return deferred.promise;
+    },
+  );
+  const release = registerRuntimeConfigSnapshotPreparer(syncPrepare, { prepareAsync });
+  unregister.push(release);
+  return { started: started.promise, deferred, syncPrepare, prepareAsync };
+}
+
+describe("prepared runtime snapshots", () => {
+  it("publishes applied config and its source only after asynchronous preparation", async () => {
+    const { started, deferred } = gatedPreparer();
+    const config: OpenClawConfig = { gateway: { port: 19001 } };
+    const source: OpenClawConfig = { gateway: { port: 19002 } };
+    const facts = createConfigResolutionFacts([]);
+    setConfigResolutionFacts(source, facts);
+    const pending = setAppliedRuntimeConfigSnapshot(config, source);
+    await started;
+    expect(getRuntimeConfigSnapshot()).toBeNull();
+    expect(getRuntimeConfigAppliedHash()).toBeNull();
+    deferred.resolve(() => {});
+    await pending;
+    expect(getRuntimeConfigSnapshot()).toBe(config);
+    expect(getRuntimeConfigSourceSnapshot()).toBe(source);
+    expect(getConfigResolutionFacts(config)).toBe(facts);
+    expect(getRuntimeConfigAppliedHash()).toBe(hashRuntimeConfigValue(source));
+  });
+
+  it("keeps registration and setters synchronous when an async companion is available", () => {
+    const active: OpenClawConfig = { gateway: { port: 18789 } };
+    setRuntimeConfigSnapshot(active);
+    const prepare = vi.fn();
+    const prepareAsync = vi.fn(async () => () => {});
+    unregister.push(registerRuntimeConfigSnapshotPreparer(prepare, { prepareAsync }));
+    expect(prepare).toHaveBeenCalledExactlyOnceWith(active);
+    const next: OpenClawConfig = { gateway: { port: 19001 } };
+    expect(setRuntimeConfigSnapshot(next)).toBeUndefined();
+    expect(prepare).toHaveBeenLastCalledWith(next);
+    expect(getRuntimeConfigSnapshot()).toBe(next);
+    expect(prepareAsync).not.toHaveBeenCalled();
+  });
+
+  it("prepares registrations added during a cold load before publishing and reusing its config", async () => {
+    const changes = vi.fn(() => getRuntimeConfigSnapshot());
+    unregister.push(sessionChanges.subscribe(changes));
+    const candidate: OpenClawConfig = { gateway: { port: 19001 } };
+    const facts = createConfigResolutionFacts([]);
+    setConfigResolutionFacts(candidate, facts);
+    const loadGate = createDeferredCore<{ config: OpenClawConfig }>();
+    const pending = loadPinnedRuntimeConfigAsync(() => loadGate.promise);
+    const { started, deferred, syncPrepare, prepareAsync } = gatedPreparer();
+    const contribute = vi.fn(() => {
+      expect(getRuntimeConfigSnapshot()).toBeNull();
+      expect(getConfigResolutionFacts(candidate)).toBe(facts);
+    });
+    const legacyPrepare = vi.fn();
+    unregister.push(registerRuntimeConfigSnapshotPreparer(legacyPrepare));
+    loadGate.resolve({ config: candidate });
+    await started;
+    expect(getRuntimeConfigSnapshot()).toBeNull();
+    expect(getRuntimeConfigSnapshotMetadata()).toBeNull();
+    expect(contribute).not.toHaveBeenCalled();
+    expect(legacyPrepare).not.toHaveBeenCalled();
+    deferred.resolve(contribute);
+    expect(await pending).toBe(candidate);
+    expect(getRuntimeConfigSnapshot()).toBe(candidate);
+    expect(getRuntimeConfigSourceSnapshot()).toBeNull();
+    expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(1);
+    expect(syncPrepare).not.toHaveBeenCalled();
+    expect(prepareAsync).toHaveBeenCalledExactlyOnceWith(candidate, { env: undefined });
+    expect(legacyPrepare).toHaveBeenCalledExactlyOnceWith(candidate);
+    expect(contribute).toHaveBeenCalledOnce();
+    expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
+    expect(changes).toHaveReturnedWith(candidate);
+    const load = vi.fn(async () => ({ config: {} }));
+    expect(await loadPinnedRuntimeConfigAsync(load)).toBe(candidate);
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  const modelConfig = (model = "unit-test/model"): OpenClawConfig => ({
+    agents: {
+      defaults: { model },
+      entries: { main: { identity: { name: "Zilla" } } },
+    },
+  });
+
+  const tokenConfig = (): OpenClawConfig => ({
+    gateway: { port: 18789, auth: { token: "unit-test-token" } },
+  });
+  const withTokenFacts = (config: OpenClawConfig, unresolvedPaths: string[]): OpenClawConfig => {
+    setConfigResolutionFacts(
+      config,
+      createConfigResolutionFacts(
+        unresolvedPaths.map((configPath) => ({ varName: "UNIT_TEST_TOKEN", configPath })),
+      ),
+    );
+    return config;
+  };
+
+  it.each([
+    {
+      name: "withholds an equal reload, then invalidates a changed model",
+      initial: () => modelConfig(),
+      next: () => modelConfig(),
+      followup: () => modelConfig("unit-test/other"),
+      emits: false,
+    },
+    {
+      name: "withholds a distinct object with equal values and equal fresh provenance",
+      next: () => withTokenFacts(tokenConfig(), ["gateway.auth.token"]),
+      emits: false,
+    },
+    {
+      name: "invalidates the published object republished without an edit",
+      next: (published: OpenClawConfig) => published,
+      emits: true,
+    },
+    {
+      name: "invalidates equal bytes whose resolution provenance changed",
+      next: () => withTokenFacts(tokenConfig(), []),
+      emits: true,
+    },
+    {
+      name: "invalidates equal bytes that lost their resolution provenance",
+      next: () => tokenConfig(),
+      emits: true,
+    },
+    {
+      name: "invalidates a distinct object matching values edited in place on the published one",
+      next: (published: OpenClawConfig) => {
+        published.gateway = { ...published.gateway, port: 19001 };
+        return withTokenFacts({ gateway: { ...tokenConfig().gateway, port: 19001 } }, [
+          "gateway.auth.token",
+        ]);
+      },
+      emits: true,
+    },
+    {
+      name: "invalidates a distinct object matching provenance changed in place on the published one",
+      next: (published: OpenClawConfig) => {
+        setConfigResolutionFacts(published, createConfigResolutionFacts([]));
+        return withTokenFacts(tokenConfig(), []);
+      },
+      emits: true,
+    },
+    {
+      name: "publishes original values after the live snapshot was edited in place",
+      next: (published: OpenClawConfig) => {
+        published.gateway = { ...published.gateway, port: 19001 };
+        return withTokenFacts(tokenConfig(), ["gateway.auth.token"]);
+      },
+      emits: true,
+    },
+    {
+      name: "publishes original provenance after the live snapshot was edited in place",
+      next: (published: OpenClawConfig) => {
+        setConfigResolutionFacts(published, createConfigResolutionFacts([]));
+        return withTokenFacts(tokenConfig(), ["gateway.auth.token"]);
+      },
+      emits: true,
+    },
+  ])("$name", ({ initial, next, followup, emits }) => {
+    const changes = vi.fn();
+    unregister.push(sessionChanges.subscribe(changes));
+    const published = initial?.() ?? withTokenFacts(tokenConfig(), ["gateway.auth.token"]);
+    setRuntimeConfigSnapshot(published);
+    const metadata = getRuntimeConfigSnapshotMetadata();
+    expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
+    changes.mockClear();
+
+    const nextConfig = next(published);
+    setRuntimeConfigSnapshot(nextConfig);
+    // a same-value publication is a full no-op; revision is internal and keys caches
+    expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(emits ? 2 : 1);
+    expect(changes).toHaveBeenCalledTimes(emits ? 1 : 0);
+    if (emits) {
+      expect(getRuntimeConfigSnapshot()).toBe(nextConfig);
+      expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
+    } else {
+      expect(getRuntimeConfigSnapshot()).toBe(published);
+      expect(getRuntimeConfigSnapshotMetadata()).toBe(metadata);
+    }
+    if (followup) {
+      setRuntimeConfigSnapshot(followup());
+      expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(emits ? 3 : 2);
+      expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
+    }
+  });
+
+  it("withholds a source-only republish only when runtime values and provenance are unchanged", () => {
+    const changes = vi.fn();
+    unregister.push(sessionChanges.subscribe(changes));
+    const runtime: OpenClawConfig = { gateway: { port: 18789 } };
+    const source = (version: string, unresolvedPaths: string[] = []): OpenClawConfig =>
+      withTokenFacts(
+        { gateway: { port: 18789 }, meta: { lastTouchedVersion: version } },
+        unresolvedPaths,
+      );
+    const advance = (sourceConfig: OpenClawConfig, changed = true) => {
+      const previousSource = getRuntimeConfigSourceSnapshot();
+      const previousMetadata = getRuntimeConfigSnapshotMetadata();
+      changes.mockClear();
+      expect(
+        setRuntimeConfigSourceSnapshotIfCurrent({
+          expectedRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? 0,
+          sourceConfig,
+        }),
+      ).toBe(true);
+      expect(getRuntimeConfigSourceSnapshot()).toBe(changed ? sourceConfig : previousSource);
+      if (!changed) {
+        expect(getRuntimeConfigSnapshot()).toBe(runtime);
+        expect(getRuntimeConfigSnapshotMetadata()).toBe(previousMetadata);
+      }
+      return changes.mock.calls.length;
+    };
+    setRuntimeConfigSnapshot(runtime, source("1"));
+
+    // A value-identical config.apply only restamps the source's meta, so no row can change.
+    expect(advance(source("2"), false)).toBe(0);
+    // Changed provenance is copied onto the published object in place, so rows refresh.
+    expect(advance(source("3", ["gateway.port"]))).toBe(1);
+    // So does an in-place edit of the published object made since its last publication.
+    runtime.gateway = { port: 19001 };
+    expect(advance(source("4", ["gateway.port"]))).toBe(1);
+    // And provenance changed in place, even when the newer source carries the same facts.
+    setConfigResolutionFacts(runtime, createConfigResolutionFacts([]));
+    expect(advance(source("5"))).toBe(1);
+    expect(getRuntimeConfigSnapshot()).toBe(runtime);
+  });
+
+  it("retains caller authority across asynchronous preparation", async () => {
+    const { started, deferred } = gatedPreparer();
+    let current = true;
+    const contribute = vi.fn();
+    const pending = loadPinnedRuntimeConfigAsync(
+      async () => ({ config: { gateway: { port: 19001 } } }),
+      {
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("caller superseded");
+          }
+        },
+      },
+    );
+    await started;
+    current = false;
+    const rejected = expect(pending).rejects.toThrow("caller superseded");
+    deferred.resolve(contribute);
+    await rejected;
+    expect(contribute).not.toHaveBeenCalled();
+    expect(getRuntimeConfigSnapshot()).toBeNull();
+  });
+
+  it("joins rejected preparation companions before failing the cold load", async () => {
+    const { started, deferred, syncPrepare } = gatedPreparer();
+    const remaining = createDeferredCore<() => void>();
+    const contribute = vi.fn();
+    unregister.push(
+      registerRuntimeConfigSnapshotPreparer(() => {}, {
+        prepareAsync: () => remaining.promise,
+      }),
+    );
+    const pending = loadPinnedRuntimeConfigAsync(async () => ({
+      config: { gateway: { port: 19001 } },
+    }));
+    const completed = vi.fn();
+    const observed = pending.then(completed, completed);
+    await started;
+    deferred.reject(new Error("preparation failed"));
+    await setImmediate();
+    expect(completed).not.toHaveBeenCalled();
+    remaining.resolve(contribute);
+    await expect(pending).rejects.toThrow("preparation failed");
+    await observed;
+    expect(completed).toHaveBeenCalledOnce();
+    expect(contribute).not.toHaveBeenCalled();
+    expect(syncPrepare).not.toHaveBeenCalled();
+    expect(getRuntimeConfigSnapshot()).toBeNull();
+    expect(getRuntimeConfigSnapshotMetadata()).toBeNull();
+  });
+});
+
+describe("async cold runtime pin", () => {
+  it("reuses a newer publication that completes during a cold load", async () => {
+    const gate = createDeferredCore<{ config: OpenClawConfig }>();
+    const pending = loadPinnedRuntimeConfigAsync(() => gate.promise);
+    const current: OpenClawConfig = { gateway: { port: 20001 } };
+    setRuntimeConfigSnapshot(current);
+    gate.resolve({ config: { gateway: { port: 19001 } } });
+    expect(await pending).toBe(current);
+    expect(getRuntimeConfigSnapshot()).toBe(current);
+  });
+
+  it("rechecks caller authority after preparation contributions", async () => {
+    let admitted = true;
+    const rollback = Object.assign(vi.fn(), { commit: vi.fn() });
+    unregister.push(
+      registerRuntimeConfigSnapshotPreparer(() => {}, {
+        prepareAsync: async () => () => {
+          admitted = false;
+        },
+      }),
+    );
+    await expect(
+      loadPinnedRuntimeConfigAsync(
+        async () => ({
+          config: { gateway: { port: 19001 } },
+          runtimeEnv: { env: {}, publish: () => rollback },
+        }),
+        {
+          assertCurrent: () => {
+            if (!admitted) {
+              throw new Error("caller superseded during contribution");
+            }
+          },
+        },
+      ),
+    ).rejects.toThrow("caller superseded during contribution");
+    expect(getRuntimeConfigSnapshot()).toBeNull();
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(rollback.commit).not.toHaveBeenCalled();
+  });
+});
+
+describe("captured async runtime reads", () => {
+  it.each(["source", "reset", "captured source"])(
+    "keeps the selected runtime/source pair after %s changes before continuation",
+    async (change) => {
+      const runtime: OpenClawConfig = { gateway: { port: 19001 } };
+      const firstSource: OpenClawConfig = { gateway: { port: 19002 } };
+      const nextSource: OpenClawConfig = { gateway: { port: 19003 } };
+      setRuntimeConfigSnapshot(runtime, firstSource);
+      const selected = change === "captured source" ? captureRuntimeConfig(runtime) : runtime;
+      setRuntimeConfigSnapshot(selected, firstSource);
+      vi.stubEnv("CONFIG_CAPTURE_TEST", "original");
+      const pending = loadPinnedRuntimeConfigAsync(async () => ({ config: {} }), { capture: true });
+      if (change === "reset") {
+        resetConfigRuntimeState();
+      } else {
+        setRuntimeConfigSnapshot(selected, nextSource);
+      }
+      vi.stubEnv("CONFIG_CAPTURE_TEST", "replacement");
+      const captured = await pending;
+      expect(captured.config).toEqual(runtime);
+      expect(projectConfigOntoRuntimeSourceSnapshot(captured.config)).toEqual(firstSource);
+      expect(captured.env.CONFIG_CAPTURE_TEST).toBe("original");
+      if (change === "captured source") {
+        const next = await loadPinnedRuntimeConfigAsync(async () => ({ config: {} }), {
+          capture: true,
+        });
+        expect(projectConfigOntoRuntimeSourceSnapshot(next.config)).toEqual(nextSource);
+      }
+    },
+  );
+
+  it("captures a cold publication before queued source replacement", async () => {
+    const runtime: OpenClawConfig = { gateway: { port: 19001 } };
+    const release = sessionChanges.subscribe(() => {
+      release();
+      queueMicrotask(() => setRuntimeConfigSnapshot(runtime, { gateway: { port: 19002 } }));
+    });
+    try {
+      const captured = await loadPinnedRuntimeConfigAsync(async () => ({ config: runtime }), {
+        capture: true,
+      });
+      expect(getRuntimeConfigSourceSnapshot()).toEqual({ gateway: { port: 19002 } });
+      expect(projectConfigOntoRuntimeSourceSnapshot(captured.config)).toEqual(runtime);
+    } finally {
+      release();
+    }
+  });
+});
+
+describe("config environment across in-process restart", () => {
+  it.each([{ operation: "replacement", nextValue: "second" }])(
+    "applies config-owned value $operation after restart",
+    async ({ nextValue }) => {
+      vi.stubEnv("OPENCLAW_TEST_RESTART_VALUE", undefined);
+      vi.stubEnv("OPENCLAW_TEST_RESTART_AMBIENT", "ambient");
+      const initial = {
+        env: {
+          vars: {
+            OPENCLAW_TEST_RESTART_VALUE: "first",
+            OPENCLAW_TEST_RESTART_AMBIENT: "config-default",
+          },
+        },
+      };
+      const beforeStartup = { ...process.env };
+      applyConfigEnvVars(initial);
+      initializePublishedConfigRuntimeEnv(initial, {
+        ownedEnv: collectConfigRuntimeEnvOwnership(initial, beforeStartup, process.env),
+      });
+      await setAppliedRuntimeConfigSnapshot(initial, initial);
+
+      clearRuntimeConfigSnapshot();
+      // Server shutdown and the run loop both clear snapshots before the next boot.
+      clearRuntimeConfigSnapshot();
+      const beforeRestartedStartup = { ...process.env };
+      applyConfigEnvVars(initial);
+      initializePublishedConfigRuntimeEnv(initial, {
+        ownedEnv: collectConfigRuntimeEnvOwnership(initial, beforeRestartedStartup, process.env),
+        preserveExistingOwnership: true,
+      });
+      const next = {
+        env: {
+          vars: {
+            ...(nextValue ? { OPENCLAW_TEST_RESTART_VALUE: nextValue } : {}),
+            OPENCLAW_TEST_RESTART_AMBIENT: "changed-config-default",
+          },
+        },
+      };
+      const publication = prepareConfigRuntimeEnv({
+        previousConfig: initial,
+        nextConfig: next,
+      }).publish();
+      publication.commit();
+
+      expect(process.env.OPENCLAW_TEST_RESTART_VALUE).toBe(nextValue);
+      expect(process.env.OPENCLAW_TEST_RESTART_AMBIENT).toBe("ambient");
+    },
+  );
+
+  it("fences a late rollback while retaining the published environment for restart", () => {
+    vi.stubEnv("OPENCLAW_TEST_RESTART_VALUE", "first");
+    const initial = { env: { vars: { OPENCLAW_TEST_RESTART_VALUE: "first" } } };
+    const next = { env: { vars: { OPENCLAW_TEST_RESTART_VALUE: "second" } } };
+    initializePublishedConfigRuntimeEnv(initial, {
+      ownedEnv: { OPENCLAW_TEST_RESTART_VALUE: "first" },
+    });
+    const rollback = prepareConfigRuntimeEnv({
+      previousConfig: initial,
+      nextConfig: next,
+    }).publish();
+
+    clearRuntimeConfigSnapshot();
+    rollback();
+
+    expect(process.env.OPENCLAW_TEST_RESTART_VALUE).toBe("second");
+    const publication = prepareConfigRuntimeEnv({ previousConfig: next, nextConfig: {} }).publish();
+    publication.commit();
+    expect(process.env.OPENCLAW_TEST_RESTART_VALUE).toBeUndefined();
   });
 });

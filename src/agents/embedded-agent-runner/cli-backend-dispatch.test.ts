@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
@@ -9,6 +13,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { loadCliSessionHistoryMessages } from "../cli-runner/session-history.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
@@ -25,10 +30,12 @@ const resolveCliRuntimeExecutionProvider = vi.hoisted(() => vi.fn());
 const runCliAgent = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntime = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntimeForSessionKey = vi.hoisted(() => vi.fn());
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "cli-dispatch-history-");
 
+// mock-isolation: Dispatch eligibility uses fixture auth modes without host credential discovery.
 vi.mock("../model-auth.js", () => ({
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: ensureAuthProfileStore,
   resolveAuthProfileOrder,
   resolveModelAuthMode,
 }));
@@ -94,6 +101,16 @@ function cliRunResult(meta: Partial<EmbeddedAgentRunResult["meta"]> = {}): Embed
   } as EmbeddedAgentRunResult;
 }
 
+const runDispatch = (overrides: Partial<CliDispatchParams> = {}) =>
+  runEmbeddedAgentViaCliBackendIfEligible(baseRunParams(overrides));
+const profiles = {
+  "anthropic:claude-cli": { type: "oauth", provider: "claude-cli" },
+  "anthropic:api": { type: "api_key", provider: "anthropic" },
+};
+function emitTool(runId: string, data: Record<string, unknown>) {
+  emitAgentEvent({ runId, stream: "tool", data });
+}
+
 beforeEach(() => {
   ensureAuthProfileStore.mockReset();
   resolveAuthProfileOrder.mockReset();
@@ -106,8 +123,6 @@ beforeEach(() => {
   ensureAuthProfileStore.mockReturnValue({ profiles: {} });
   resolveAuthProfileOrder.mockReturnValue([]);
   resolveModelAuthMode.mockReturnValue("oauth");
-  // Default registry: the claude-cli backend declares the capability, a
-  // gemini backend does not.
   resolveRuntimeCliBackends.mockReturnValue([
     { id: "claude-cli", subscriptionAuthDispatch: true },
     { id: "google-gemini-cli" },
@@ -124,38 +139,8 @@ beforeEach(() => {
 });
 
 describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
-  // The recall timeout default consumes this decision directly; these cases
-  // pin that API-key and missing-backend setups stay ineligible so callers
-  // budgeting on it keep the passthrough default.
-  it("resolves the provider for subscription (oauth) credentials", () => {
-    expect(resolveEmbeddedCliBackendDispatchEligibility({ provider: "claude-cli" })).toEqual({
-      provider: "claude-cli",
-    });
-  });
-
-  it("returns undefined for API-key credentials", () => {
-    resolveModelAuthMode.mockReturnValue("api-key");
-    expect(
-      resolveEmbeddedCliBackendDispatchEligibility({ provider: "claude-cli" }),
-    ).toBeUndefined();
-  });
-
-  it("returns undefined without a registered claude-cli backend", () => {
-    resolveRuntimeCliBackends.mockReturnValue([]);
-    expect(
-      resolveEmbeddedCliBackendDispatchEligibility({ provider: "claude-cli" }),
-    ).toBeUndefined();
-  });
-
   it("honors an explicitly pinned API-key profile over subscription-first order", () => {
-    // A pinned profile is the credential the run executes on; order must not
-    // override it in either direction.
-    ensureAuthProfileStore.mockReturnValue({
-      profiles: {
-        "anthropic:claude-cli": { type: "oauth", provider: "claude-cli" },
-        "anthropic:api": { type: "api_key", provider: "anthropic" },
-      },
-    });
+    ensureAuthProfileStore.mockReturnValue({ profiles });
     resolveAuthProfileOrder.mockReturnValue(["anthropic:claude-cli", "anthropic:api"]);
     expect(
       resolveEmbeddedCliBackendDispatchEligibility({
@@ -167,12 +152,7 @@ describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
   });
 
   it("honors an explicitly pinned OAuth profile over API-key-first order", () => {
-    ensureAuthProfileStore.mockReturnValue({
-      profiles: {
-        "anthropic:api": { type: "api_key", provider: "anthropic" },
-        "anthropic:claude-cli": { type: "oauth", provider: "claude-cli" },
-      },
-    });
+    ensureAuthProfileStore.mockReturnValue({ profiles });
     resolveAuthProfileOrder.mockReturnValue(["anthropic:api", "anthropic:claude-cli"]);
     expect(
       resolveEmbeddedCliBackendDispatchEligibility({
@@ -193,26 +173,6 @@ describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
         authProfileId: "anthropic:missing",
       }),
     ).toBeUndefined();
-  });
-
-  it("returns undefined when the backend does not declare the capability", () => {
-    // The provider plugin owns the subscription-billing claim; a registered
-    // backend without it (e.g. gemini) keeps the passthrough.
-    expect(
-      resolveEmbeddedCliBackendDispatchEligibility({ provider: "google-gemini-cli" }),
-    ).toBeUndefined();
-    expect(resolveModelAuthMode).not.toHaveBeenCalled();
-  });
-
-  it("resolves canonical refs through the configured runtime", () => {
-    resolveCliRuntimeExecutionProvider.mockReturnValue("claude-cli");
-    expect(
-      resolveEmbeddedCliBackendDispatchEligibility({
-        provider: "anthropic",
-        model: "claude-opus-4-8",
-        agentId: "main",
-      }),
-    ).toEqual({ provider: "claude-cli" });
   });
 
   it("forwards the pinned auth profile into runtime resolution", () => {
@@ -237,18 +197,15 @@ describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
 });
 
 describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
-  const runGate = (overrides: Partial<CliDispatchParams> = {}) =>
-    runEmbeddedAgentViaCliBackendIfEligible(baseRunParams(overrides));
-
   it("returns undefined without the opt-in", async () => {
-    expect(await runGate({ cliBackendDispatch: undefined })).toBeUndefined();
+    expect(await runDispatch({ cliBackendDispatch: undefined })).toBeUndefined();
     expect(resolveModelAuthMode).not.toHaveBeenCalled();
     expect(runCliAgent).not.toHaveBeenCalled();
   });
 
   it("keeps message-tool-only source replies on the embedded delivery owner", async () => {
     expect(
-      await runGate({
+      await runDispatch({
         sourceReplyDeliveryMode: "message_tool_only",
         toolsAllow: ["message"],
         messageChannel: "telegram",
@@ -259,7 +216,9 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
   });
 
   it("dispatches claude-cli runs with subscription (oauth) credentials", async () => {
-    expect(await runGate({ agentDir: "/agents/main", workspaceDir: "/workspace" })).toBeDefined();
+    expect(
+      await runDispatch({ agentDir: "/agents/main", workspaceDir: "/workspace" }),
+    ).toBeDefined();
     expect(ensureAuthProfileStore).toHaveBeenCalledWith("/agents/main", expect.anything());
     expect(resolveModelAuthMode).toHaveBeenCalledWith(
       "claude-cli",
@@ -272,7 +231,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
 
   it("dispatches when no credential mode resolves for the passthrough", async () => {
     resolveModelAuthMode.mockReturnValue(undefined);
-    expect(await runGate()).toBeDefined();
+    expect(await runDispatch()).toBeDefined();
     expect(runCliAgent).toHaveBeenCalledTimes(1);
   });
 
@@ -280,7 +239,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
     ensureAuthProfileStore.mockImplementation(() => {
       throw new Error("store unreadable");
     });
-    expect(await runGate()).toBeDefined();
+    expect(await runDispatch()).toBeDefined();
     expect(runCliAgent).toHaveBeenCalledTimes(1);
   });
 
@@ -288,7 +247,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
     "keeps the passthrough when the auth mode is %s",
     async (mode) => {
       resolveModelAuthMode.mockReturnValue(mode);
-      expect(await runGate()).toBeUndefined();
+      expect(await runDispatch()).toBeUndefined();
       expect(runCliAgent).not.toHaveBeenCalled();
     },
   );
@@ -304,7 +263,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
     });
     resolveAuthProfileOrder.mockReturnValue(["anthropic:claude-cli", "anthropic:api"]);
     resolveModelAuthMode.mockReturnValue("mixed");
-    expect(await runGate()).toBeDefined();
+    expect(await runDispatch()).toBeDefined();
     expect(resolveModelAuthMode).not.toHaveBeenCalled();
   });
 
@@ -316,52 +275,69 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
       },
     });
     resolveAuthProfileOrder.mockReturnValue(["anthropic:api", "anthropic:claude-cli"]);
-    expect(await runGate()).toBeUndefined();
+    expect(await runDispatch()).toBeUndefined();
     expect(runCliAgent).not.toHaveBeenCalled();
   });
 
-  it("dispatches canonical anthropic refs whose configured runtime is claude-cli", async () => {
-    resolveCliRuntimeExecutionProvider.mockReturnValue("claude-cli");
-    expect(
-      await runGate({ provider: "anthropic", model: "claude-opus-4-8", agentId: "main" }),
-    ).toBeDefined();
-    expect(resolveCliRuntimeExecutionProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "anthropic",
-        agentId: "main",
-        modelId: "claude-opus-4-8",
-      }),
-    );
-    // The dispatch runs on the resolved execution provider, not the canonical ref.
-    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({ provider: "claude-cli" });
-  });
+  it.each([undefined, "raw", "resolved"] as const)(
+    "dispatches canonical refs through claude-cli with %s logical route resolution",
+    async (requestedRouteResolution) => {
+      resolveCliRuntimeExecutionProvider.mockReturnValue("claude-cli");
+      expect(
+        await runDispatch({
+          provider: "anthropic",
+          model: "claude-opus-4-8",
+          agentId: "main",
+          requestedRouteResolution,
+        }),
+      ).toBeDefined();
+      expect(resolveCliRuntimeExecutionProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "anthropic",
+          agentId: "main",
+          modelId: "claude-opus-4-8",
+        }),
+      );
+      const dispatched = runCliAgent.mock.calls[0]?.[0];
+      expect(dispatched).toMatchObject({ provider: "claude-cli" });
+      expect(dispatched.requesterModel).toEqual(
+        requestedRouteResolution === "resolved"
+          ? { provider: "anthropic", model: "claude-opus-4-8" }
+          : undefined,
+      );
+    },
+  );
 
   it("keeps the passthrough for canonical refs without a claude-cli runtime", async () => {
     resolveCliRuntimeExecutionProvider.mockReturnValue(undefined);
-    expect(await runGate({ provider: "anthropic", model: "claude-opus-4-8" })).toBeUndefined();
+    expect(await runDispatch({ provider: "anthropic", model: "claude-opus-4-8" })).toBeUndefined();
     resolveCliRuntimeExecutionProvider.mockReturnValue("google-gemini-cli");
-    expect(await runGate({ provider: "google", model: "gemini-3.1-pro-preview" })).toBeUndefined();
+    expect(
+      await runDispatch({ provider: "google", model: "gemini-3.1-pro-preview" }),
+    ).toBeUndefined();
     expect(runCliAgent).not.toHaveBeenCalled();
   });
 
   it("keeps the passthrough for other CLI runtimes until verified", async () => {
-    expect(await runGate({ provider: "google-gemini-cli" })).toBeUndefined();
+    expect(await runDispatch({ provider: "google-gemini-cli" })).toBeUndefined();
     expect(resolveModelAuthMode).not.toHaveBeenCalled();
   });
 
   it("keeps the passthrough without a caller-owned session file", async () => {
-    expect(await runGate({ sessionFile: undefined })).toBeUndefined();
+    expect(await runDispatch({ sessionFile: undefined })).toBeUndefined();
   });
 
   it("keeps the passthrough when no claude-cli backend is registered", async () => {
     resolveRuntimeCliBackends.mockReturnValue([]);
-    expect(await runGate()).toBeUndefined();
+    expect(await runDispatch()).toBeUndefined();
   });
 });
 
 describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
   it("reads and mirrors the dispatched turn in the selected custom SQLite store", async () => {
-    const dir = tempDirs.make("cli-dispatch-history-");
+    setRuntimeConfigSnapshot({});
+    onTestFinished(clearRuntimeConfigSnapshot);
+    const dir = tempDirs.make();
     const sessionTarget = {
       agentId: "main",
       sessionId: "recall-session",
@@ -391,9 +367,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       return cliRunResult();
     });
 
-    await runEmbeddedAgentViaCliBackendIfEligible(
-      baseRunParams({ sessionTarget, workspaceDir: dir }),
-    );
+    await runDispatch({ sessionTarget, workspaceDir: dir });
 
     expect(loadTranscriptEventsSync(sessionTarget)).toEqual(
       expect.arrayContaining([
@@ -458,50 +432,71 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(cliParams).not.toHaveProperty("toolsAllow");
   });
 
-  it.each(["group", "channel"] as const)(
-    "forwards authoritative %s type through embedded-to-CLI dispatch for opaque keys",
-    async (chatType) => {
-      await runEmbeddedAgentViaCliBackendIfEligible(
-        baseRunParams({
-          sessionKey: "agent:main:opaque:binding",
-          chatType,
-        }),
-      );
-
-      expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+  it("forwards authoritative group type through embedded-to-CLI dispatch for opaque keys", async () => {
+    const chatType = "group";
+    await runEmbeddedAgentViaCliBackendIfEligible(
+      baseRunParams({
         sessionKey: "agent:main:opaque:binding",
         chatType,
-      });
-    },
-  );
+      }),
+    );
+
+    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: "agent:main:opaque:binding",
+      chatType,
+    });
+  });
 
   // Fail-closed tool policy: only a non-empty named allowlist is expressible
   // on the CLI surface. Every other embedded tool state keeps the passthrough
   // so no closed state silently widens.
   it.each([
-    ["a wildcard allowlist", { toolsAllow: ["*"] }],
     ["a mixed wildcard allowlist", { toolsAllow: ["memory_search", "*"] }],
     ["a deny-all allowlist", { toolsAllow: [] }],
     ["no allowlist", { toolsAllow: undefined }],
     ["disableTools", { disableTools: true }],
     ["a raw model run", { modelRun: true }],
   ] as const)("refuses dispatch for %s", async (_label, overrides) => {
-    expect(
-      await runEmbeddedAgentViaCliBackendIfEligible(
-        baseRunParams(overrides as Partial<CliDispatchParams>),
-      ),
-    ).toBeUndefined();
+    expect(await runDispatch(overrides as Partial<CliDispatchParams>)).toBeUndefined();
     expect(runCliAgent).not.toHaveBeenCalled();
   });
 
-  it("invokes onExecutionStarted once at the dispatch boundary", async () => {
+  it("settles execution-start work before dispatching the CLI run", async () => {
     runCliAgent.mockResolvedValue(cliRunResult());
-    const onExecutionStarted = vi.fn();
-    await runEmbeddedAgentViaCliBackendIfEligible(
-      baseRunParams({ onExecutionStarted, lifecycleGeneration: "gen-1" }),
-    );
-    expect(onExecutionStarted).toHaveBeenCalledTimes(1);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const onExecutionStarted = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const operation = runDispatch({ onExecutionStarted, lifecycleGeneration: "gen-1" });
+    try {
+      await entered.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(runCliAgent).not.toHaveBeenCalled();
+      expect(transcriptRecorder.finalize).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await operation;
+    }
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(onExecutionStarted).toHaveBeenCalledOnce();
     expect(onExecutionStarted).toHaveBeenCalledWith({ lifecycleGeneration: "gen-1" });
+  });
+
+  it("finalizes the transcript when execution-start work rejects", async () => {
+    const failure = new Error("execution-start persistence failed");
+    await expect(
+      runDispatch({
+        onExecutionStarted: () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+    expect(runCliAgent).not.toHaveBeenCalled();
+    expect(transcriptRecorder.finalize).toHaveBeenCalledOnce();
   });
 
   it("retains the prepared vision capability with ordered prompt images and media", async () => {
@@ -557,33 +552,21 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       },
     });
     runCliAgent.mockImplementation(async (cliParams: { runId: string }) => {
-      emitAgentEvent({
-        runId: cliParams.runId,
-        stream: "tool",
-        data: {
-          phase: "result",
-          name: "mcp__openclaw__memory_search",
-          result: { content: [] },
-          isError: false,
-          resultContentSource: "network",
-        },
+      emitTool(cliParams.runId, {
+        phase: "result",
+        name: "mcp__openclaw__memory_search",
+        result: { content: [] },
+        isError: false,
+        resultContentSource: "network",
       });
       // Soft tool failures must surface as isError like the native path.
-      emitAgentEvent({
-        runId: cliParams.runId,
-        stream: "tool",
-        data: {
-          phase: "result",
-          name: "mcp__openclaw__memory_get",
-          result: { details: { status: "error" } },
-          isError: false,
-        },
+      emitTool(cliParams.runId, {
+        phase: "result",
+        name: "mcp__openclaw__memory_get",
+        result: { details: { status: "error" } },
+        isError: false,
       });
-      emitAgentEvent({
-        runId: "other-run",
-        stream: "tool",
-        data: { phase: "result", name: "mcp__openclaw__memory_get", isError: true },
-      });
+      emitTool("other-run", { phase: "result", name: "mcp__openclaw__memory_get", isError: true });
       return cliRunResult();
     });
 
@@ -595,26 +578,22 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     ]);
 
     // The bridge must not outlive the run.
-    emitAgentEvent({
-      runId: params.runId,
-      stream: "tool",
-      data: { phase: "result", name: "mcp__openclaw__memory_search", isError: false },
+    emitTool(params.runId, {
+      phase: "result",
+      name: "mcp__openclaw__memory_search",
+      isError: false,
     });
     expect(observed).toHaveLength(2);
   });
 
-  it.each([true, undefined])(
-    "delegates MCP lifetime policy %s to the CLI settlement owner",
-    async (cleanupBundleMcpOnRunEnd) => {
-      runCliAgent.mockResolvedValue(cliRunResult());
-      await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ cleanupBundleMcpOnRunEnd }));
-      expect(runCliAgent.mock.calls[0]?.[0]?.cleanupBundleMcpOnRunEnd).toBe(
-        cleanupBundleMcpOnRunEnd,
-      );
-      expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
-      expect(retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
-    },
-  );
+  it("delegates MCP lifetime policy to the CLI settlement owner", async () => {
+    const cleanupBundleMcpOnRunEnd = true;
+    runCliAgent.mockResolvedValue(cliRunResult());
+    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ cleanupBundleMcpOnRunEnd }));
+    expect(runCliAgent.mock.calls[0]?.[0]?.cleanupBundleMcpOnRunEnd).toBe(cleanupBundleMcpOnRunEnd);
+    expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
+    expect(retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
+  });
 
   it("mirrors the run into the transcript recorder", async () => {
     runCliAgent.mockImplementation(async (cliParams: { runId: string }) => {
@@ -623,32 +602,24 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
         stream: "assistant",
         data: { text: "partial answer" },
       });
-      emitAgentEvent({
-        runId: cliParams.runId,
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "mcp__openclaw__memory_search",
-          toolCallId: "call-1",
-          args: { query: "wings" },
-        },
+      emitTool(cliParams.runId, {
+        phase: "start",
+        name: "mcp__openclaw__memory_search",
+        toolCallId: "call-1",
+        args: { query: "wings" },
       });
-      emitAgentEvent({
-        runId: cliParams.runId,
-        stream: "tool",
-        data: {
-          phase: "result",
-          name: "mcp__openclaw__memory_search",
-          toolCallId: "call-1",
-          result: { content: [] },
-          isError: false,
-          resultContentSource: "network",
-        },
+      emitTool(cliParams.runId, {
+        phase: "result",
+        name: "mcp__openclaw__memory_search",
+        toolCallId: "call-1",
+        result: { content: [] },
+        isError: false,
+        resultContentSource: "network",
       });
       return cliRunResult();
     });
 
-    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ toolsAllow: ["memory_search"] }));
+    await runDispatch({ toolsAllow: ["memory_search"] });
 
     expect(createCliDispatchTranscriptRecorder).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -684,17 +655,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       expect(transcriptRecorder.flushAssistantSnapshot).toHaveBeenCalledTimes(1);
       throw new Error("aborted");
     });
-    await expect(
-      runEmbeddedAgentViaCliBackendIfEligible(
-        baseRunParams({ abortSignal: abortController.signal }),
-      ),
-    ).rejects.toThrow("aborted");
-    expect(transcriptRecorder.finalize).toHaveBeenCalledWith(undefined);
-  });
-
-  it("finalizes the transcript when the CLI run fails", async () => {
-    runCliAgent.mockRejectedValue(new Error("boom"));
-    await expect(runEmbeddedAgentViaCliBackendIfEligible(baseRunParams())).rejects.toThrow("boom");
+    await expect(runDispatch({ abortSignal: abortController.signal })).rejects.toThrow("aborted");
     expect(transcriptRecorder.finalize).toHaveBeenCalledWith(undefined);
   });
 
@@ -707,7 +668,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
         },
       } as Partial<EmbeddedAgentRunResult["meta"]>),
     );
-    const result = await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams());
+    const result = await runDispatch();
     expect(result?.meta.agentMeta?.cliSessionBinding).toBeUndefined();
   });
 });
@@ -716,7 +677,7 @@ describe("detached CLI transcript ownership", () => {
   it.each([false, true])(
     "does not mirror a detached turn into durable metadata (existing: %s)",
     async (existing) => {
-      const root = tempDirs.make("openclaw-detached-cli-");
+      const root = tempDirs.make();
       const storePath = path.join(root, "final", "openclaw-agent.sqlite");
       const params = baseRunParams({
         agentId: "main",

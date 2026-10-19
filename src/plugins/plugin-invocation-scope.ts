@@ -1,4 +1,5 @@
 import { createDeferredCore } from "../shared/deferred.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import {
   getPluginInstance,
   getPluginValueInstance,
@@ -9,21 +10,69 @@ import {
 import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import type { PluginRegistry } from "./registry-types.js";
 
+/** Host teardown may cross exact plugin owners after ordinary admission closes. */
+export async function runPluginCleanupScope<T>(values: readonly object[], run: () => Promise<T>) {
+  const instances = new Set(
+    values.map(getPluginValueInstance).filter((instance) => instance !== undefined),
+  );
+  const parent = pluginInvocationContext.getStore();
+  let closed = false;
+  const assertOpen = () => {
+    if (closed) {
+      throw new Error("Plugin cleanup scope is closed");
+    }
+  };
+  const bindings = new Map(
+    [...instances].map((instance) => [
+      instance,
+      {
+        run: <R>(operation: () => R) => {
+          assertOpen();
+          return instance.runCleanup(operation);
+        },
+        wrap: <R>(value: R) => {
+          assertOpen();
+          return instance.wrap(value);
+        },
+      },
+    ]),
+  );
+  try {
+    return await pluginInvocationContext.run(
+      {
+        lookup: (instance) => {
+          const binding = bindings.get(instance);
+          if (binding) {
+            assertOpen();
+          }
+          return binding ?? parent?.lookup(instance);
+        },
+      },
+      run,
+    );
+  } finally {
+    closed = true;
+  }
+}
+
 /** Finite execution custody for one host-selected registry and its exact instances. */
 export class PluginInvocationScope {
   private readonly bindings = new Map<PluginInstanceHandle, PluginInvocationBinding>();
   private readonly consumers = new Map<PluginInstanceHandle, PluginInstanceConsumer>();
   private closed = false;
+  private readonly consumerKind: "work" | "custody";
 
   constructor(
     readonly registry: PluginRegistry,
     instances: Iterable<PluginInstanceHandle>,
-    options: { retained?: boolean; parent?: PluginInvocationScope } = {},
+    options: { retained?: boolean; parent?: PluginInvocationScope; kind?: "work" | "custody" } = {},
   ) {
+    this.consumerKind = options.kind ?? "work";
     try {
       for (const instance of new Set(instances)) {
         if (options.retained) {
-          const acquire = () => instance.retainConsumer((run) => this.run(run), registry);
+          const acquire = () =>
+            instance.retainConsumer((run) => this.run(run), registry, this.consumerKind);
           const parent = options.parent?.consumer(instance);
           const consumer = parent ? parent.run(acquire) : acquire();
           this.consumers.set(instance, consumer);
@@ -52,6 +101,12 @@ export class PluginInvocationScope {
     }
   }
 
+  get holdsPendingReplacement(): boolean {
+    return (
+      !this.closed && [...this.consumers.keys()].some((instance) => instance.replacementPending)
+    );
+  }
+
   lookup(instance: PluginInstanceHandle): PluginInvocationBinding | undefined {
     const binding = this.bindings.get(instance);
     if (binding) {
@@ -76,15 +131,29 @@ export class PluginInvocationScope {
   /** Transfer custody before revoking callbacks captured by ordinary engine operations. */
   beginCleanup(): { scope: PluginInvocationScope; release: () => Promise<void> } {
     this.assertOpen();
-    const cleanup = new PluginInvocationScope(this.registry, this.bindings.keys(), {
-      retained: this.consumers.size > 0,
-      parent: this,
-    });
+    const cleanup = new PluginInvocationScope(this.registry, this.bindings.keys());
     const finished = createDeferredCore();
     // Retirement may already await these exact consumers. Revoke their callbacks
     // now, but keep their physical completion until the cleanup owner drains.
     const closed = Promise.all(
-      [...this.consumers.values()].map((consumer) => consumer.close(() => finished.promise)),
+      [...this.consumers].map(([instance, consumer]) =>
+        consumer.close(() => {
+          const teardown = pluginInstanceInvocation.getStore();
+          if (!teardown) {
+            throw new Error("Plugin consumer cleanup has no invocation");
+          }
+          // Transfer only the teardown token, never the closed operation scope or caller authority.
+          const run = <T>(operation: () => T): T =>
+            cleanup.run(() =>
+              pluginInstanceInvocation.run(teardown, () => instance.runCleanup(operation)),
+            );
+          cleanup.bindings.set(instance, {
+            run,
+            wrap: instance.createRegistryView(this.registry, run),
+          });
+          return finished.promise;
+        }),
+      ),
     );
     void closed.catch(() => {});
     this.closed = true;
@@ -114,13 +183,21 @@ export function collectRegistryInvocationInstances(
   registry: PluginRegistry,
 ): Set<PluginInstanceHandle> {
   const instances = new Set<PluginInstanceHandle>();
-  for (const record of registry.plugins) {
+  const records = [
+    // Rollback preserves failed records for diagnostics, not executable custody.
+    ...registry.plugins.filter((record) => record.status === "loaded"),
+    ...registry.decisionProviders.map(({ host }) => host.record),
+    ...registry.channels.flatMap(({ borrowedRuntimeRecord }) => borrowedRuntimeRecord ?? []),
+  ];
+  for (const record of records) {
     const instance = getPluginInstance(record);
     if (instance) {
       instances.add(instance);
     }
   }
   const values = [
+    ...registry.tools.map(({ factory }) => factory),
+    ...registry.channels.map(({ plugin }) => plugin),
     ...[...registry.contextEngines.values()].map(({ factory }) => factory),
     ...registry.widgetPresenters.map(({ presenter }) => presenter),
     ...registry.memoryCorpusSupplements.map(({ supplement }) => supplement),

@@ -12,7 +12,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { formatForLog } from "../ws-log.js";
-import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
+import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
 import type { ModelAuthOrderSetResult } from "./models-auth-status.types.js";
 import { respondUnavailableOnThrow } from "./response.js";
@@ -36,7 +36,7 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       const scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
-        respond(false, undefined, modelAuthAgentScopeError(scope));
+        respond(false, undefined, scope.error);
         return;
       }
       const preparedSnapshot = await readPreparedCatalog(context, scope.agentId);
@@ -85,16 +85,9 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const invalidProfile = profileIds?.find((profileId) => {
-        const credential = preparedSnapshot.authStore.profiles[profileId];
-        return (
-          !credential ||
-          resolveProviderIdForAuth(credential.provider, {
-            ...authAliasLookupParams,
-            storedCredential: true,
-          }) !== authProvider
-        );
-      });
+      const invalidProfile = profileIds?.find(
+        (profileId) => !availableProfileIds.includes(profileId),
+      );
       if (invalidProfile) {
         rejectInvalidOrder(`profileId ${invalidProfile} is unavailable for provider ${provider}`);
         return;
@@ -122,7 +115,7 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
       // The store already started auth publication. Await that owner so immediate status
       // is current, but do not report a committed write as failed if publication rejects.
       try {
-        await refreshModelAuthStateAfterMutation(context.getRuntimeConfig, "update", scope.agentId);
+        await refreshModelAuthStateAfterMutation(context.getRuntimeConfig, scope.agentId);
       } catch (err) {
         log.warn(`auth profile order saved but runtime publication failed: ${formatForLog(err)}`);
         result.warning =

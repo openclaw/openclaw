@@ -1,4 +1,3 @@
-// Matrix plugin module implements create client behavior.
 import fs from "node:fs";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
@@ -15,15 +14,19 @@ import {
   resolveMatrixStoragePaths,
   writeStorageMeta,
 } from "./storage.js";
+import type { MatrixStoragePaths } from "./types.js";
 
 const loadMatrixCreateClientRuntimeDeps = createLazyRuntimeModule(() =>
-  Promise.all([import("../sdk.js"), import("./logging.js")]).then(([sdkModule, loggingModule]) => ({
-    MatrixClient: sdkModule.MatrixClient,
-    ensureMatrixSdkLoggingConfigured: loggingModule.ensureMatrixSdkLoggingConfigured,
-  })),
+  Promise.all([import("../sdk.js"), import("./logging.js"), import("./file-sync-store.js")]).then(
+    ([sdkModule, loggingModule, syncStoreModule]) => ({
+      MatrixClient: sdkModule.MatrixClient,
+      SqliteBackedMatrixSyncStore: syncStoreModule.SqliteBackedMatrixSyncStore,
+      ensureMatrixSdkLoggingConfigured: loggingModule.ensureMatrixSdkLoggingConfigured,
+    }),
+  ),
 );
 
-export async function createMatrixClient(params: {
+type MatrixClientCreationParams = {
   homeserver: string;
   userId?: string;
   accessToken: string;
@@ -38,10 +41,17 @@ export async function createMatrixClient(params: {
   allowPrivateNetwork?: boolean;
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
-}): Promise<MatrixClient> {
-  const { MatrixClient, ensureMatrixSdkLoggingConfigured } =
-    await loadMatrixCreateClientRuntimeDeps();
-  ensureMatrixSdkLoggingConfigured();
+};
+
+export type PreparedMatrixClientStorage = {
+  homeserver: string;
+  matrixClientUserId: string | undefined;
+  storagePaths: MatrixStoragePaths | null;
+};
+
+export async function prepareMatrixClientStorage(
+  params: MatrixClientCreationParams,
+): Promise<PreparedMatrixClientStorage> {
   const homeserver = await resolveValidatedMatrixHomeserverUrl(params.homeserver, {
     dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork,
   });
@@ -49,7 +59,7 @@ export async function createMatrixClient(params: {
   const userId = matrixClientUserId ?? "unknown";
   const persistStorage = params.persistStorage !== false;
   const storagePaths = persistStorage
-    ? resolveMatrixStoragePaths({
+    ? await resolveMatrixStoragePaths({
         homeserver,
         userId,
         accessToken: params.accessToken,
@@ -59,13 +69,24 @@ export async function createMatrixClient(params: {
       })
     : null;
 
+  return { homeserver, matrixClientUserId, storagePaths };
+}
+
+export async function createMatrixClient(
+  params: MatrixClientCreationParams,
+  preparedStorage?: PreparedMatrixClientStorage,
+): Promise<MatrixClient> {
+  const { homeserver, matrixClientUserId, storagePaths } =
+    preparedStorage ?? (await prepareMatrixClientStorage(params));
+  const userId = matrixClientUserId ?? "unknown";
+  const { MatrixClient, SqliteBackedMatrixSyncStore, ensureMatrixSdkLoggingConfigured } =
+    await loadMatrixCreateClientRuntimeDeps();
+  ensureMatrixSdkLoggingConfigured();
+
   if (storagePaths) {
-    await maybeMigrateLegacyStorage({
-      storagePaths,
-      env: process.env,
-    });
+    await maybeMigrateLegacyStorage({ storagePaths });
     fs.mkdirSync(storagePaths.rootDir, { recursive: true });
-    writeStorageMeta({
+    await writeStorageMeta({
       storagePaths,
       homeserver,
       userId,
@@ -78,6 +99,10 @@ export async function createMatrixClient(params: {
     ? `openclaw-matrix-${storagePaths.accountKey}-${storagePaths.tokenHash}`
     : undefined;
 
+  const syncStore = storagePaths
+    ? await SqliteBackedMatrixSyncStore.create(storagePaths.rootDir)
+    : undefined;
+
   return new MatrixClient(homeserver, params.accessToken, {
     userId: matrixClientUserId,
     password: params.password,
@@ -85,7 +110,7 @@ export async function createMatrixClient(params: {
     encryption: params.encryption,
     localTimeoutMs: params.localTimeoutMs,
     initialSyncLimit: params.initialSyncLimit,
-    storageRootDir: storagePaths?.rootDir,
+    syncStore,
     recoveryKeyPath: storagePaths?.recoveryKeyPath,
     idbSnapshotPath: storagePaths?.idbSnapshotPath,
     cryptoDatabasePrefix,

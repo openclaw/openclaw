@@ -1,18 +1,24 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, onTestFinished } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
+import { applyEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { projectAgentToolDefinition } from "../prepared-tool-surface.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
+import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   createToolSearchTools,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-  TOOL_SEARCH_RAW_TOOL_NAME,
+  buildToolSchemaDirectoryPrompt,
 } from "../tool-search.js";
-import { testing } from "../tool-search.test-support.js";
+import { prepareAgentToolSurfacePresentation } from "../tool-surface-plan.js";
 import { createAgentsWaitTool } from "../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../tools/sessions-spawn-tool.js";
 import { createAgentHarnessToolSurfaceRuntimeCore as createAgentHarnessToolSurfaceRuntimeBase } from "./tool-surface-bridge.js";
@@ -22,7 +28,7 @@ function createAgentHarnessToolSurfaceRuntime(
 ): ReturnType<typeof createAgentHarnessToolSurfaceRuntimeBase> {
   return createAgentHarnessToolSurfaceRuntimeBase({
     ...params,
-    config: migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig,
+    config: createCanonicalAgentConfigFixture(params.config).config,
   });
 }
 
@@ -38,18 +44,220 @@ function createRuntime(config: OpenClawConfig) {
   });
 }
 
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
 describe("createAgentHarnessToolSurfaceRuntime", () => {
   it.each([
-    { name: "automatic replies", delivery: {}, directMessage: false },
-    { name: "forced message replies", delivery: { forceMessageTool: true }, directMessage: true },
+    {
+      mode: "automatic Code Mode",
+      codeMode: "auto",
+      preferred: true,
+      search: false,
+      expected: ["exec", "wait", "fixture_direct"],
+    },
+    {
+      mode: "direct tools",
+      codeMode: false,
+      preferred: false,
+      search: false,
+      expected: ["fixture_read", "fixture_direct"],
+    },
+    {
+      mode: "Tool Search",
+      codeMode: false,
+      preferred: false,
+      search: true,
+      expected: ["tool_search", "tool_describe", "dispatch_action", "fixture_direct"],
+    },
+  ] as const)(
+    "preserves the local $mode projection after transporting prepared facts",
+    async ({ codeMode, preferred, search, expected }) => {
+      const config: OpenClawConfig = {
+        tools: { codeMode, toolSearch: search },
+      };
+      const model = { compat: { codeMode: preferred ? "preferred" : "capable" } };
+      const presentation = prepareAgentToolSurfacePresentation({
+        config,
+        model,
+        modelProvider: "test",
+        modelId: "model",
+        toolsEnabled: true,
+        isRawModelRun: false,
+        forceDirectMessageTool: false,
+      });
+      const local = createAgentHarnessToolSurfaceRuntimeBase({
+        config,
+        model,
+        modelProvider: "test",
+        modelId: "model",
+        modelToolsEnabled: true,
+      });
+      const worker = createAgentHarnessToolSurfaceRuntimeBase({
+        presentation: structuredClone(presentation),
+        modelToolsEnabled: true,
+      });
+      const buildTools = () => {
+        const read = createStubTool("fixture_read");
+        read.execute = async () => ({
+          content: [],
+          details: { marker: "prepared catalog result" },
+        });
+        setPluginToolMeta(read, { pluginId: "fixture", optional: true, replaySafe: true });
+        return [read, { ...createStubTool("fixture_direct"), catalogMode: "direct-only" as const }];
+      };
+      try {
+        const localSurface = local.compactTools(buildTools());
+        const workerSurface = worker.compactTools(buildTools(), {
+          prepared: { preserveToolNames: [] },
+        });
+        expect(workerSurface.tools.map((tool) => tool.name)).toEqual(expected);
+        expect(workerSurface.tools.map(projectAgentToolDefinition)).toEqual(
+          localSurface.tools.map(projectAgentToolDefinition),
+        );
+        if (presentation.codeMode.enabled || search) {
+          expect(worker.toolSearchCatalogRef?.current?.entries.map((entry) => entry.id)).toEqual([
+            "openclaw:fixture:fixture_read",
+          ]);
+          expect(workerSurface.promptToolPolicy.apply().callableToolNames).toContain(
+            "fixture_read",
+          );
+        }
+        if (search) {
+          const call = expectDefined(
+            workerSurface.tools.find((tool) => tool.name === "dispatch_action"),
+            "prepared catalog call control",
+          );
+          const result = await call.execute("prepared-call", { id: "fixture_read", args: {} });
+          expect(JSON.stringify(result)).toContain("prepared catalog result");
+        }
+      } finally {
+        local.cleanup();
+        worker.cleanup();
+      }
+    },
+  );
+
+  it.each(["directory"] as const)(
+    "returns the canonical %s directory only after applying prompt policy",
+    (mode) => {
+      const runtime = createAgentHarnessToolSurfaceRuntime({
+        config: {
+          agents: { defaults: { experimental: { localModelLean: false } } },
+          tools: { codeMode: false, toolSearch: { enabled: true, mode } },
+        },
+        model: { contextWindow: 8_000 },
+        modelToolsEnabled: true,
+        executeTool: async () => ({ content: [], details: {} }),
+      });
+      try {
+        const surface = runtime.compactTools([
+          ...createToolSearchTools({
+            config: runtime.config,
+            catalogRef: runtime.toolSearchCatalogRef,
+          }),
+          ...tools(["fixture_allowed", "fixture_denied"]),
+        ]);
+        const full = surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
+        expect(full).toContain("fixture_denied");
+        expect(surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt).toBe(full);
+        const restricted = surface.promptToolPolicy.apply({ toolsAllow: ["fixture_allowed"] });
+        expect(restricted.toolSchemaDirectoryPrompt).toBe(
+          buildToolSchemaDirectoryPrompt(
+            { config: runtime.config, catalogRef: runtime.toolSearchCatalogRef },
+            { contextTokenBudget: 8_000 },
+          ),
+        );
+        expect(restricted.toolSchemaDirectoryPrompt).toContain("fixture_allowed");
+        expect(restricted.toolSchemaDirectoryPrompt).not.toContain("fixture_denied");
+        expect(
+          expectDefined(restricted.toolSchemaDirectoryPrompt, "restricted directory").length,
+        ).toBeLessThanOrEqual(800);
+        expect(
+          surface.promptToolPolicy.apply({ toolsAllow: [] }).toolSchemaDirectoryPrompt,
+        ).toBeUndefined();
+        expect(surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt).toBe(full);
+      } finally {
+        runtime.cleanup();
+      }
+    },
+  );
+
+  it.each([false])("uses structured calls when deferred dispatch support is %s", (supported) => {
+    const config: OpenClawConfig = { tools: { toolSearch: { mode: "directory" } } };
+    const runtime = createAgentHarnessToolSurfaceRuntime({
+      config,
+      supportsDeferredToolCalls: supported,
+      modelToolsEnabled: true,
+      executeTool: async () => ({ content: [], details: {} }),
+    });
+    try {
+      const surface = runtime.compactTools([
+        ...createToolSearchTools({
+          config: runtime.config,
+          catalogRef: runtime.toolSearchCatalogRef,
+        }),
+        ...tools(["fixture_hidden"]),
+      ]);
+      const guidance = surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
+      expect(runtime.plan.toolSearchConfig.mode).toBe(supported ? "directory" : "tools");
+      expect(guidance?.includes("Call a unique deferred tool name directly")).toBe(supported);
+      expect(guidance?.includes("Deferred names are not directly callable")).toBe(!supported);
+      expect(config.tools?.toolSearch).toEqual({ mode: "directory" });
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
+  it.each(["code"] as const)("keeps overlapping allowlists callable through the %s surface", () => {
+    const toolsAllow = attachToolAllowlistIntersection([], [["web_*"], ["*_search"]]);
+    const runtime = createAgentHarnessToolSurfaceRuntime({
+      config: {
+        agents: { defaults: { experimental: { localModelLean: false } } },
+        tools: { codeMode: true, toolSearch: false },
+      },
+      executeTool: async () => ({ content: [], details: {} }),
+      modelToolsEnabled: true,
+      toolsAllow,
+      runtimeToolAllowlist: toolsAllow,
+    });
+    try {
+      const allowedTools = applyEmbeddedAttemptToolsAllow(
+        [
+          ...createToolSearchTools({
+            config: runtime.config,
+            catalogRef: runtime.toolSearchCatalogRef,
+            executeTool: runtime.toolSearchCatalogExecutor,
+          }),
+          ...tools(["web_search", "web_fetch", "memory_search"]),
+        ],
+        runtime.runtimeToolAllowlist,
+      );
+      const surface = runtime.compactTools(allowedTools);
+      const projection = surface.promptToolPolicy.apply();
+      const callableNames = projection.callableToolNames;
+      expect(callableNames).toContain("web_search");
+      expect(callableNames).not.toContain("web_fetch");
+      expect(callableNames).not.toContain("memory_search");
+      expect(projection.toolSchemaDirectoryPrompt).toContain("- web_search ");
+      expect(projection.toolSchemaDirectoryPrompt).not.toContain("- web_fetch ");
+      expect(projection.toolSchemaDirectoryPrompt).not.toContain("- memory_search ");
+      expect(runtime.codeModeControlsEnabled).toBe(true);
+      expect(runtime.toolSearchControlsEnabled).toBe(false);
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
+  it.each([
     {
       name: "message-tool-only replies",
       delivery: { sourceReplyDeliveryMode: "message_tool_only" as const },
-      directMessage: true,
     },
   ])(
     "keeps browser callable through automatic Tool Search for $name with lean disabled",
-    async ({ delivery, directMessage }) => {
+    async ({ delivery }) => {
       let calls = 0;
       const browser = {
         ...createStubTool("browser"),
@@ -82,13 +290,13 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         expect(surface.tools.map((tool) => tool.name)).toEqual([
           "tool_search",
           "tool_describe",
-          "tool_call",
+          "dispatch_action",
           "read",
-          ...(directMessage ? ["message"] : []),
+          "message",
         ]);
         expect(surface.promptToolPolicy.apply().callableToolNames).toContain("browser");
         const call = expectDefined(
-          surface.tools.find((tool) => tool.name === "tool_call"),
+          surface.tools.find((tool) => tool.name === "dispatch_action"),
           "catalog call control",
         );
         expect(
@@ -104,6 +312,8 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   it.each(["quarantine", "prompt-policy"] as const)(
     "narrows collector capabilities after harness %s",
     async (restriction) => {
+      const runtime = createRuntime({ tools: { toolSearch: false } });
+      setRuntimeConfigSnapshot(expectDefined(runtime.config, "collector runtime config"));
       const spawn = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
       const reader = createAgentsWaitTool({ agentSessionKey: "agent:main:main" });
       finalizeAgentToolAvailability([spawn, reader]);
@@ -111,7 +321,6 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       if (restriction === "quarantine") {
         reader.parameters = { type: "array", items: { type: "string" } };
       }
-      const runtime = createRuntime({ tools: { toolSearch: false } });
       try {
         const compacted = runtime.compactTools([spawn, reader]);
         const surface = compacted.promptToolPolicy.apply({ toolsAllow: ["sessions_spawn"] });
@@ -185,25 +394,6 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     });
   });
 
-  it("keeps a single-tool allowlist on the code-mode projection", () => {
-    const rawTools = tools(["skill_workshop"]);
-    const runtime = createAgentHarnessToolSurfaceRuntime({
-      config: { tools: { codeMode: true, toolSearch: true } },
-      executeTool: async () => ({ content: [], details: {} }),
-      modelToolsEnabled: true,
-      toolsAllow: ["skill_workshop"],
-    });
-
-    try {
-      expect(runtime.codeModeControlsEnabled).toBe(true);
-      expect(runtime.toolSearchControlsEnabled).toBe(false);
-      expect(runtime.compactTools(rawTools).tools.map((tool) => tool.name)).toContain("exec");
-      expect(runtime.compactTools(rawTools).tools.map((tool) => tool.name)).toContain("wait");
-    } finally {
-      runtime.cleanup();
-    }
-  });
-
   it("filters raw SDK tools but does not refilter prepared constructor output", () => {
     const config: OpenClawConfig = {
       agents: { defaults: { experimental: { localModelLean: true } } },
@@ -224,125 +414,79 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     runtime.cleanup();
   });
 
-  it("keeps exec direct in lean structured Tool Search mode", () => {
-    const config: OpenClawConfig = {
-      agents: { defaults: { experimental: { localModelLean: true } } },
-    };
-    const runtime = createRuntime(config);
-
-    expect(
-      runtime
-        .compactTools(
-          tools([
-            TOOL_SEARCH_RAW_TOOL_NAME,
-            TOOL_DESCRIBE_RAW_TOOL_NAME,
-            TOOL_CALL_RAW_TOOL_NAME,
-            "exec",
-            "read",
-          ]),
-        )
-        .tools.map((tool) => tool.name),
-    ).toEqual([
-      TOOL_SEARCH_RAW_TOOL_NAME,
-      TOOL_DESCRIBE_RAW_TOOL_NAME,
-      TOOL_CALL_RAW_TOOL_NAME,
-      "exec",
-      "read",
-    ]);
-    runtime.cleanup();
-  });
-
-  it("keeps directory tool schemas stable across unrelated user prompts", () => {
-    const config: OpenClawConfig = {
-      tools: { toolSearch: { enabled: true, mode: "directory" } },
-    };
-    const availableTools = tools([
-      TOOL_SEARCH_RAW_TOOL_NAME,
-      TOOL_DESCRIBE_RAW_TOOL_NAME,
-      TOOL_CALL_RAW_TOOL_NAME,
-      "read",
-      "web_search",
-      "memory_search",
-      "message",
-    ]);
-    const createPromptRuntime = (prompt: string) =>
-      createAgentHarnessToolSurfaceRuntime({
+  it.each(
+    [true, false].flatMap((lean) => ["agentId", "sessionKey"].map((scope) => ({ lean, scope }))),
+  )(
+    "preserves lean=$lean directory presentation across worker projection via $scope",
+    ({ lean, scope }) => {
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: { experimental: { localModelLean: !lean } },
+          entries: { main: {}, scoped: { experimental: { localModelLean: lean } } },
+        },
+        tools: { codeMode: false, toolSearch: { mode: "tools" } },
+      };
+      const selection =
+        scope === "agentId" ? { agentId: "scoped" } : { sessionKey: "agent:scoped:main" };
+      const runtime = createAgentHarnessToolSurfaceRuntime({
         config,
-        executeTool: async () => ({ content: [], details: {} }),
+        ...selection,
         modelToolsEnabled: true,
-        prompt,
       });
-    const first = createPromptRuntime("search today's latest news");
-    const second = createPromptRuntime("remember what we decided yesterday");
-
-    try {
-      const expected = [
-        TOOL_SEARCH_RAW_TOOL_NAME,
-        TOOL_DESCRIBE_RAW_TOOL_NAME,
-        TOOL_CALL_RAW_TOOL_NAME,
-        "read",
-      ];
-      expect(first.compactTools(availableTools).tools.map((tool) => tool.name)).toEqual(expected);
-      expect(second.compactTools(availableTools).tools.map((tool) => tool.name)).toEqual(expected);
-    } finally {
-      first.cleanup();
-      second.cleanup();
-    }
-  });
-
-  it("keeps policy-required message delivery directly visible in structured mode", () => {
-    const runtime = createAgentHarnessToolSurfaceRuntime({
-      config: { tools: { toolSearch: { enabled: true, mode: "tools" } } },
-      executeTool: async () => ({ content: [], details: {} }),
-      sourceReplyDeliveryMode: "message_tool_only",
-      modelToolsEnabled: true,
-    });
-
-    try {
-      expect(
-        runtime
-          .compactTools(
-            tools([
-              TOOL_SEARCH_RAW_TOOL_NAME,
-              TOOL_DESCRIBE_RAW_TOOL_NAME,
-              TOOL_CALL_RAW_TOOL_NAME,
-              "web_search",
-              "message",
-            ]),
-          )
-          .tools.map((tool) => tool.name),
-      ).toEqual([
-        TOOL_SEARCH_RAW_TOOL_NAME,
-        TOOL_DESCRIBE_RAW_TOOL_NAME,
-        TOOL_CALL_RAW_TOOL_NAME,
-        "message",
-      ]);
-    } finally {
-      runtime.cleanup();
-    }
-  });
+      const worker = createAgentHarnessToolSurfaceRuntimeBase({
+        presentation: structuredClone(
+          prepareAgentToolSurfacePresentation({
+            config,
+            ...selection,
+            toolsEnabled: true,
+            isRawModelRun: false,
+            forceDirectMessageTool: false,
+          }),
+        ),
+        modelToolsEnabled: true,
+      });
+      try {
+        const lookup = Object.assign(createStubTool("fixture_lookup"), {
+          description: "Search the local archive.",
+        });
+        const surface = runtime.compactTools([lookup, createStubTool("browser")]);
+        const prompt = surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
+        expect(prompt).toContain("- fixture_lookup (core)");
+        expect(prompt?.includes("Search the local archive.")).toBe(!lean);
+        expect(prompt?.includes("- browser (core)")).toBe(!lean);
+        const projected = worker.compactTools([lookup], {
+          prepared: { preserveToolNames: [] },
+        });
+        const directory = projected.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
+        expect(directory?.split("\n").filter((line) => line.startsWith("- "))).toEqual([
+          lean ? "- fixture_lookup (core)" : "- fixture_lookup (core): Search the local archive.",
+        ]);
+      } finally {
+        worker.cleanup();
+        runtime.cleanup();
+      }
+    },
+  );
 
   it("atomically filters and restores direct tools plus the hidden catalog", () => {
-    onTestFinished(() => testing.setToolSearchCodeModeSupportedForTest(undefined));
-    testing.setToolSearchCodeModeSupportedForTest(true);
     const runtime = createRuntime({ tools: { toolSearch: true } });
     const compacted = runtime.compactTools(
-      tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "read", "hidden_alpha", "hidden_beta"]),
+      tools([TOOL_CALL_RAW_TOOL_NAME, "read", "hidden_alpha", "hidden_beta"]),
     );
 
     try {
       const alpha = compacted.promptToolPolicy.apply({ toolsAllow: ["hidden_alpha"] });
-      expect(alpha.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
-      expect(alpha.callableToolNames).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "hidden_alpha"]);
+      expect(alpha.tools.map((tool) => tool.name)).toEqual([TOOL_CALL_RAW_TOOL_NAME]);
+      expect(alpha.callableToolNames).toEqual([TOOL_CALL_RAW_TOOL_NAME, "hidden_alpha"]);
 
       const beta = compacted.promptToolPolicy.apply({ toolsAllow: ["hidden_beta"] });
-      expect(beta.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
-      expect(beta.callableToolNames).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "hidden_beta"]);
+      expect(beta.tools.map((tool) => tool.name)).toEqual([TOOL_CALL_RAW_TOOL_NAME]);
+      expect(beta.callableToolNames).toEqual([TOOL_CALL_RAW_TOOL_NAME, "hidden_beta"]);
 
       const restored = compacted.promptToolPolicy.apply();
       expect(restored.tools).toEqual(compacted.tools);
       expect(restored.callableToolNames).toEqual([
-        TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+        TOOL_CALL_RAW_TOOL_NAME,
         "read",
         "hidden_alpha",
         "hidden_beta",
@@ -352,32 +496,8 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     }
   });
 
-  it("derives callable inventory after runtime schema projection", () => {
-    onTestFinished(() => testing.setToolSearchCodeModeSupportedForTest(undefined));
-    testing.setToolSearchCodeModeSupportedForTest(true);
-    const runtime = createRuntime({ tools: { toolSearch: true } });
-    const invalid = {
-      ...createStubTool("invalid_hidden"),
-      parameters: { type: "array", items: { type: "number" } },
-    };
-    const compacted = runtime.compactTools([
-      ...tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "valid_hidden"]),
-      invalid,
-    ]);
-
-    try {
-      expect(compacted.promptToolPolicy.apply().callableToolNames).toEqual([
-        TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-        "valid_hidden",
-      ]);
-    } finally {
-      runtime.cleanup();
-    }
-  });
-
   it.each([
     { name: "message-only delivery", sourceReplyDeliveryMode: "message_tool_only" as const },
-    { name: "forced message delivery", forceMessageTool: true },
   ])("keeps $name directly visible in Code Mode", (delivery) => {
     const runtime = createAgentHarnessToolSurfaceRuntime({
       config: { tools: { codeMode: true } },
@@ -392,102 +512,6 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       ).toEqual(["exec", "wait", "message"]);
     } finally {
       runtime.cleanup();
-    }
-  });
-
-  it("keeps policy-required message delivery directly visible in directory mode", () => {
-    const runtime = createAgentHarnessToolSurfaceRuntime({
-      config: { tools: { toolSearch: { enabled: true, mode: "directory" } } },
-      executeTool: async () => ({ content: [], details: {} }),
-      forceMessageTool: true,
-      modelToolsEnabled: true,
-      prompt: "search today's latest news",
-    });
-
-    try {
-      expect(
-        runtime
-          .compactTools(
-            tools([
-              TOOL_SEARCH_RAW_TOOL_NAME,
-              TOOL_DESCRIBE_RAW_TOOL_NAME,
-              TOOL_CALL_RAW_TOOL_NAME,
-              "web_search",
-              "message",
-            ]),
-          )
-          .tools.map((tool) => tool.name),
-      ).toEqual([
-        TOOL_SEARCH_RAW_TOOL_NAME,
-        TOOL_DESCRIBE_RAW_TOOL_NAME,
-        TOOL_CALL_RAW_TOOL_NAME,
-        "message",
-      ]);
-    } finally {
-      runtime.cleanup();
-    }
-  });
-
-  it.each([
-    {
-      name: "auto engages a catalog-preferred model",
-      codeMode: "auto",
-      codeModeTier: "preferred",
-      engaged: true,
-    },
-    {
-      name: "auto falls back to tool search for an unflagged model",
-      codeMode: "auto",
-      codeModeTier: undefined,
-      engaged: false,
-    },
-    {
-      name: "true engages an unflagged model",
-      codeMode: true,
-      codeModeTier: undefined,
-      engaged: true,
-    },
-    {
-      name: "false never engages a preferred model",
-      codeMode: false,
-      codeModeTier: "preferred",
-      engaged: false,
-    },
-  ] as const)("$name", ({ codeMode, codeModeTier, engaged }) => {
-    const runtime = createAgentHarnessToolSurfaceRuntime({
-      config: { tools: { codeMode, toolSearch: true } },
-      executeTool: async () => ({ content: [], details: {} }),
-      model: codeModeTier ? { compat: { codeMode: codeModeTier } } : { compat: {} },
-      modelToolsEnabled: true,
-    });
-
-    try {
-      expect(runtime.codeModeControlsEnabled).toBe(engaged);
-      // Code mode and tool search stay mutually exclusive for one run.
-      expect(runtime.toolSearchControlsEnabled).toBe(!engaged);
-    } finally {
-      runtime.cleanup();
-    }
-  });
-
-  it("preserves explicit code-mode compaction for lean runs", () => {
-    testing.setToolSearchCodeModeSupportedForTest(true);
-    try {
-      const config: OpenClawConfig = {
-        agents: { defaults: { experimental: { localModelLean: true } } },
-        tools: { toolSearch: { mode: "code" } },
-      };
-      const runtime = createRuntime(config);
-
-      // Compaction still applies to non-core tools; core coding tools stay visible.
-      expect(
-        runtime
-          .compactTools(tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "read"]))
-          .tools.map((tool) => tool.name),
-      ).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "read"]);
-      runtime.cleanup();
-    } finally {
-      testing.setToolSearchCodeModeSupportedForTest(undefined);
     }
   });
 });

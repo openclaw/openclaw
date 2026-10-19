@@ -42,11 +42,11 @@ describe("Browser panel downloads", () => {
         static override revokeObjectURL = revokeObjectURL;
       },
     );
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
-      function (this: HTMLAnchorElement) {
-        downloads.push({ href: this.href, filename: this.download });
-      },
-    );
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      downloads.push({ href: this.href, filename: this.download });
+    });
   });
 
   it("saves the Browser-prepared bytes and filename through authenticated same-origin media", async () => {
@@ -141,12 +141,16 @@ describe("Browser panel downloads", () => {
     async (change) => {
       const panel = makePanel();
       const body = createDeferred<Blob>();
+      const mediaRequests = () =>
+        fetchFile.mock.calls.filter(
+          ([url]) => url === "/__openclaw__/assistant-media?source=%2Fmanaged%2Fvideo.mp4",
+        );
       fetchFile.mockResolvedValue({ ...response(), blob: () => body.promise });
       const saving = panel.download.save();
-      await vi.waitFor(() => expect(fetchFile).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(mediaRequests()).toHaveLength(1));
       expect(panel.download.pending).toBe(true);
       await panel.download.save();
-      expect(fetchFile).toHaveBeenCalledTimes(1);
+      expect(mediaRequests()).toHaveLength(1);
       if (change === "tab switch") {
         panel.activeTargetId = "other-tab";
       }

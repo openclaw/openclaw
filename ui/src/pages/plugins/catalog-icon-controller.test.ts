@@ -9,7 +9,7 @@ vi.mock("./icon-loader.ts", () => ({
   fetchCatalogIconBlobUrl: (...args: unknown[]) => fetchIcon(...args),
 }));
 
-const { PluginIconController } = await import("./plugin-icon-controller.ts");
+const { PluginIconOwner } = await import("./plugin-icon-owner.ts");
 
 const entry = {
   id: "ch_dGVzdA",
@@ -32,7 +32,7 @@ function createController(
   onUrlsChange: (urls: Record<string, string>) => void,
   onLoadingChange?: () => void,
 ) {
-  return new PluginIconController({
+  return new PluginIconOwner({
     kind: "catalog",
     getFetchContext: () => ({ gatewayUrl: "ws://localhost", resourceBasePath: "", auth: {} }),
     isConnected: () => true,
@@ -54,7 +54,9 @@ describe("catalog icon lifecycle", () => {
     const published: Array<Record<string, string>> = [];
     const controller = createController((urls) => published.push(urls));
 
-    controller.syncCatalog([entry]);
+    controller.syncCatalog([entry], [], new Set());
+    expect(fetchIcon).not.toHaveBeenCalled();
+    controller.syncCatalog([entry], [], new Set([entry.id]));
     expect(controller.isLoading(entry.catalog.imageUrl)).toBe(true);
     await vi.waitFor(() =>
       expect(published.at(-1)).toEqual({
@@ -63,6 +65,10 @@ describe("catalog icon lifecycle", () => {
     );
 
     expect(controller.isLoading(entry.catalog.imageUrl)).toBe(false);
+    controller.syncCatalog([entry], [], new Set());
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    controller.syncCatalog([entry], [], new Set([entry.id]));
+    expect(fetchIcon).toHaveBeenCalledOnce();
     controller.syncCatalog([]);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:test-icon");
     expect(published.at(-1)).toEqual({});

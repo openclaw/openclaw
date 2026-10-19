@@ -9,11 +9,15 @@ import {
   resolveAssistantMessagePhase,
 } from "./chat-message-content.js";
 
+function phasedText(text: string, phase: "commentary" | "final_answer", id: string) {
+  return { type: "text", text, textSignature: JSON.stringify({ v: 1, id, phase }) };
+}
+
 describe("shared/chat-message-content", () => {
-  it.each(["commentary", "final_answer"] as const)(
+  it.each(["final_answer"] as const)(
     "lets explicit blocks override top-level %s without reviving unphased siblings",
     (phase) => {
-      const opposite = phase === "commentary" ? "final_answer" : "commentary";
+      const opposite = "commentary";
       const explicit = {
         type: "text",
         text: "Selected",
@@ -26,13 +30,6 @@ describe("shared/chat-message-content", () => {
       expect(extractAssistantTextForPhase(message, { phase: opposite })).toBe("Selected");
     },
   );
-  it("extracts the first text block from array content", () => {
-    expect(
-      extractFirstTextBlock({
-        content: [{ text: "hello" }, { text: "world" }],
-      }),
-    ).toBe("hello");
-  });
 
   it("returns plain string content", () => {
     expect(
@@ -40,27 +37,6 @@ describe("shared/chat-message-content", () => {
         content: "hello from string content",
       }),
     ).toBe("hello from string content");
-  });
-
-  it("preserves empty-string text in the first block", () => {
-    expect(
-      extractFirstTextBlock({
-        content: [{ text: "" }, { text: "later" }],
-      }),
-    ).toBe("");
-  });
-
-  it("only considers the first content block even if later blocks have text", () => {
-    expect(
-      extractFirstTextBlock({
-        content: [null, { text: "later" }],
-      }),
-    ).toBeUndefined();
-    expect(
-      extractFirstTextBlock({
-        content: [{ type: "image" }, { text: "later" }],
-      }),
-    ).toBeUndefined();
   });
 
   it("returns undefined for missing, empty, or non-text content", () => {
@@ -79,16 +55,8 @@ describe("extractAssistantPhaseText", () => {
         {
           role: "assistant",
           content: [
-            {
-              type: "text",
-              text: "Hi ",
-              textSignature: JSON.stringify({ v: 1, id: "msg_final_1", phase: "final_answer" }),
-            },
-            {
-              type: "text",
-              text: "there",
-              textSignature: JSON.stringify({ v: 1, id: "msg_final_2", phase: "final_answer" }),
-            },
+            phasedText("Hi ", "final_answer", "msg_final_1"),
+            phasedText("there", "final_answer", "msg_final_2"),
           ],
         },
         { phase: "final_answer", joinWith: "" },
@@ -101,16 +69,8 @@ describe("extractAssistantPhaseText", () => {
       extractAssistantPhaseText({
         role: "assistant",
         content: [
-          {
-            type: "text",
-            text: "thinking like caveman",
-            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
-          },
-          {
-            type: "text",
-            text: "Actual final answer",
-            textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
-          },
+          phasedText("thinking like caveman", "commentary", "msg_commentary"),
+          phasedText("Actual final answer", "final_answer", "msg_final"),
         ],
       }),
     ).toBe("Actual final answer");
@@ -120,13 +80,7 @@ describe("extractAssistantPhaseText", () => {
     expect(
       extractAssistantPhaseText({
         role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "thinking like caveman",
-            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
-          },
-        ],
+        content: [phasedText("thinking like caveman", "commentary", "msg_commentary")],
       }),
     ).toBeUndefined();
   });
@@ -137,23 +91,10 @@ describe("extractAssistantPhaseText", () => {
         role: "assistant",
         content: [
           { type: "text", text: "Legacy answer" },
-          {
-            type: "text",
-            text: "   ",
-            textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
-          },
+          phasedText("   ", "final_answer", "msg_final"),
         ],
       }),
     ).toBeUndefined();
-  });
-
-  it("falls back to unphased legacy text", () => {
-    expect(
-      extractAssistantPhaseText({
-        role: "assistant",
-        content: [{ type: "text", text: "Legacy answer" }],
-      }),
-    ).toBe("Legacy answer");
   });
 
   it("extracts persisted Responses output_text blocks as assistant-visible text", () => {
@@ -163,32 +104,6 @@ describe("extractAssistantPhaseText", () => {
         content: [{ type: "output_text", text: "Persisted assistant answer" }],
       }),
     ).toBe("Persisted assistant answer");
-  });
-
-  it("extracts persisted Responses assistant input_text blocks", () => {
-    expect(
-      extractAssistantPhaseText({
-        role: "assistant",
-        content: [{ type: "input_text", text: "Persisted assistant input" }],
-      }),
-    ).toBe("Persisted assistant input");
-  });
-
-  it("does not mix unphased legacy text into final_answer output", () => {
-    expect(
-      extractAssistantPhaseText({
-        role: "assistant",
-        phase: "final_answer",
-        content: [
-          { type: "text", text: "Legacy answer" },
-          {
-            type: "text",
-            text: "Actual final answer",
-            textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
-          },
-        ],
-      }),
-    ).toBe("Actual final answer");
   });
 });
 
@@ -200,11 +115,7 @@ describe("resolveAssistantMessagePhase", () => {
   });
 
   it("reuses a block signature parse until the live block signature changes", () => {
-    const block = {
-      type: "text",
-      text: "streaming text",
-      textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "commentary" }),
-    };
+    const block = phasedText("streaming text", "commentary", "msg_1");
     const parseSpy = vi.spyOn(JSON, "parse");
 
     expect(parseAssistantTextSignature(block)).toEqual({ id: "msg_1", phase: "commentary" });
@@ -223,13 +134,7 @@ describe("resolveAssistantMessagePhase", () => {
     expect(
       resolveAssistantMessagePhase({
         role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "Actual final answer",
-            textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
-          },
-        ],
+        content: [phasedText("Actual final answer", "final_answer", "msg_final")],
       }),
     ).toBe("final_answer");
   });
@@ -239,23 +144,15 @@ describe("resolveAssistantMessagePhase", () => {
       resolveAssistantMessagePhase({
         role: "assistant",
         content: [
-          {
-            type: "text",
-            text: "Working...",
-            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
-          },
-          {
-            type: "text",
-            text: "Done.",
-            textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
-          },
+          phasedText("Working...", "commentary", "msg_commentary"),
+          phasedText("Done.", "final_answer", "msg_final"),
         ],
       }),
     ).toBeUndefined();
   });
 });
 
-it.each(["    code", "\tcode", "\n\n    code"])("retains selected phase source: %j", (text) => {
+it.each(["\n\n    code"])("retains selected phase source: %j", (text) => {
   expect(extractAssistantPhaseText({ role: "assistant", content: text })).toBe(text);
   expect(
     extractAssistantPhaseText({

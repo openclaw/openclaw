@@ -2,13 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { resetConfigRuntimeState } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import type { WizardSelectParams } from "./prompts.js";
+import { t } from "./i18n/index.js";
+import { WizardCancelledError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: () => ({ plugins: [], diagnostics: [] }),
@@ -42,7 +43,6 @@ vi.mock("./setup.gateway-config.js", () => ({
         bind: "loopback",
         authMode: "token",
         gatewayToken: "fixture-token",
-        tailscaleMode: "off",
       },
     };
   },
@@ -82,87 +82,101 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("classic setup matched config bases", () => {
-  it.each(
-    ["retained-roster", "rebased-roster", "new-roster", "fresh-config"].flatMap((state) =>
-      [false, true].map((telemetry) => ({ state, telemetry })),
-    ),
-  )(
-    "preserves consent and pending edits for $state (telemetry: $telemetry)",
-    async ({ state, telemetry }) => {
-      await withTempHome(async (home) => {
-        const stateDir = path.join(home, ".openclaw");
-        const configPath = path.join(stateDir, "openclaw.json");
-        const workspace = path.join(home, "workspace");
-        vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-        vi.stubEnv("CLASSIC_RESPONSE_PREFIX", "prefix-before");
-        await fs.mkdir(stateDir, { recursive: true });
-        if (state !== "fresh-config") {
-          const config: OpenClawConfig = {
-            agents: {
-              defaults: { workspace },
-              ...(state === "retained-roster"
-                ? { entries: { main: { workspace } } }
-                : state === "rebased-roster"
-                  ? { entries: { main: {} } }
-                  : {}),
-            },
-            gateway: { mode: "local", port: 18789 },
-            messages: { responsePrefix: "${CLASSIC_RESPONSE_PREFIX}" },
-            plugins: { enabled: false },
-          };
-          await fs.writeFile(configPath, JSON.stringify(config));
+it.each([true, false])("preserves rebased provenance with consent %s", async (acceptRisk) => {
+  await withTempHome(async (home) => {
+    const stateDir = path.join(home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspace = path.join(home, "workspace");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("CLASSIC_RESPONSE_PREFIX", "prefix-before");
+    await fs.mkdir(stateDir, { recursive: true });
+    const config: OpenClawConfig = {
+      agents: { defaults: { workspace }, entries: { main: {} } },
+      gateway: { mode: "local", port: 18789 },
+      messages: { responsePrefix: "${CLASSIC_RESPONSE_PREFIX}" },
+      memory: { search: { enabled: false, query: { maxResults: 7 } } },
+      plugins: { enabled: false },
+    };
+    await fs.writeFile(configPath, JSON.stringify(config));
+    resetConfigRuntimeState();
+    const securityConfirm = vi.fn<WizardPrompter["confirm"]>(async () => acceptRisk);
+    const memoryConfirm = vi.fn<WizardPrompter["confirm"]>(async () => false);
+    const confirm: WizardPrompter["confirm"] = async (params) => {
+      if (params.message === t("wizard.security.confirm")) {
+        return securityConfirm(params);
+      }
+      if (params.message === "Set up memory embeddings?") {
+        return memoryConfirm(params);
+      }
+      throw new Error(`Unexpected confirmation: ${params.message}`);
+    };
+    const prompter = createWizardPrompter({
+      confirm,
+      select: async <T>(params: WizardSelectParams<T>): Promise<T> => {
+        const choice = params.options.find((option) => option.value === false);
+        if (!choice) {
+          throw new Error(`Unexpected selection: ${params.message}`);
         }
-        resetConfigRuntimeState();
-        const confirm = vi.fn(async () => true);
-        const prompter = createWizardPrompter({
-          confirm,
-          select: async <T>(params: WizardSelectParams<T>): Promise<T> => {
-            const choice = params.options.find((option) => option.value === telemetry);
-            if (!choice) {
-              throw new Error(`Unexpected selection: ${params.message}`);
-            }
-            return choice.value;
-          },
-        });
-        await runSetupWizard(
-          {
-            flow: "quickstart",
-            mode: "local",
-            authChoice: "skip",
-            agentName: "main",
-            workspace,
-            gatewayPort: 19001,
-            installDaemon: false,
-            skipChannels: true,
-            skipSearch: true,
-            skipSkills: true,
-            skipHealth: true,
-            skipHooks: true,
-            skipUi: true,
-          },
-          runtime,
-          prompter,
-        );
+        return choice.value;
+      },
+    });
+    const setup = runSetupWizard(
+      {
+        flow: "quickstart",
+        mode: "local",
+        authChoice: "skip",
+        agentName: "main",
+        workspace,
+        gatewayPort: 19001,
+        installDaemon: false,
+        skipChannels: true,
+        skipSearch: true,
+        skipSkills: true,
+        skipHealth: true,
+        skipHooks: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+    if (!acceptRisk) {
+      await expect(setup).rejects.toBeInstanceOf(WizardCancelledError);
+      expect(securityConfirm).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: t("wizard.security.confirm"),
+          initialValue: true,
+          layout: "vertical",
+        }),
+      );
+      expect(memoryConfirm).not.toHaveBeenCalled();
+      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(config);
+      return;
+    }
+    await setup;
 
-        const saved = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-        expect.soft(saved.wizard?.securityAcknowledgedAt).toEqual(expect.any(String));
-        expect
-          .soft(saved.telemetry)
-          .toEqual({ enabled: telemetry, consentedAt: expect.any(String) });
-        expect.soft(saved.gateway?.port).toBe(19001);
-        expect.soft(saved.agents?.defaults?.workspace).toBe(workspace);
-        expect.soft(saved.agents?.entries).toHaveProperty("main");
-        if (state !== "fresh-config") {
-          expect.soft(saved.messages?.responsePrefix).toBe("${CLASSIC_RESPONSE_PREFIX}");
-        } else {
-          expect.soft(saved.messages?.responsePrefix).toBeUndefined();
-        }
-        expect.soft(saved.agents?.defaults).not.toHaveProperty("maxConcurrent");
-        expect.soft(saved.agents?.defaults).not.toHaveProperty("compaction");
-        expect(confirm).toHaveBeenCalledOnce();
-      });
-    },
-  );
+    const saved = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+    expect.soft(saved.wizard?.securityAcknowledgedAt).toEqual(expect.any(String));
+    expect.soft(saved.telemetry).toEqual({ enabled: false, consentedAt: expect.any(String) });
+    expect.soft(saved.gateway?.port).toBe(19001);
+    expect.soft(saved.agents?.defaults?.workspace).toBe(workspace);
+    expect.soft(saved.agents?.entries).toHaveProperty("main");
+    expect.soft(saved.messages?.responsePrefix).toBe("${CLASSIC_RESPONSE_PREFIX}");
+    expect.soft(saved.memory).toEqual(config.memory);
+    expect.soft(saved.agents?.defaults).not.toHaveProperty("maxConcurrent");
+    expect.soft(saved.agents?.defaults).not.toHaveProperty("compaction");
+    expect(securityConfirm).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: t("wizard.security.confirm"),
+        initialValue: true,
+        layout: "vertical",
+      }),
+    );
+    expect(memoryConfirm).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: "Set up memory embeddings?",
+        initialValue: false,
+      }),
+    );
+  });
 });

@@ -2,8 +2,8 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI usage session filter Unicode",
@@ -84,6 +84,7 @@ function usageResponse(sessionKey?: string) {
       byProvider: [],
       byAgent: [{ agentId: "main", totals: usageTotals }],
       byChannel: [],
+      costDaily: [{ date: day, ...usageTotals }],
       daily: [
         {
           date: day,
@@ -95,15 +96,6 @@ function usageResponse(sessionKey?: string) {
         },
       ],
     },
-  };
-}
-
-function costResponse() {
-  return {
-    updatedAt: Date.now(),
-    days: 1,
-    daily: [{ date: currentDay(), ...usageTotals }],
-    totals: usageTotals,
   };
 }
 
@@ -145,7 +137,8 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "sessions.usage": usageResponse(scenario.key),
-            "usage.cost": costResponse(),
+            "sessions.usage.timeseries": { points: [] },
+            "sessions.usage.logs": { logs: [] },
             "usage.status": { updatedAt: Date.now(), providers: [] },
           },
         });
@@ -171,15 +164,23 @@ suite.define(() => {
         await expect.poll(() => label.textContent(), { timeout: 10_000 }).toContain(scenario.key);
         await expect.poll(() => chip.getAttribute("title")).toBe(scenario.key);
 
-        const previousRequests = (await gateway.getRequests("sessions.usage")).length;
+        const overviewScope = { projection: "overview" };
+        const previousRequests = (await gateway.getRequests("sessions.usage", overviewScope))
+          .length;
         await gateway.setMethodResponse("sessions.usage", usageResponse());
         await page
-          .locator("openclaw-usage-page")
+          .locator("openclaw-usage-page .usage-header")
           .getByRole("button", { name: "Refresh", exact: true })
           .click();
-        await expect
-          .poll(() => gateway.getRequests("sessions.usage"), { timeout: 10_000 })
-          .toHaveLength(previousRequests + 1);
+        const refreshRequest = await gateway.waitForRequest("sessions.usage", {
+          match: overviewScope,
+          after: previousRequests,
+        });
+        expect(refreshRequest.params).toMatchObject({
+          projection: "overview",
+          selectedSessions: [scenario.key],
+        });
+        await expect.poll(() => row.count()).toBe(0);
 
         await captureProof(page, scenario.screenshot);
         await expect.poll(() => chip.getAttribute("title")).toBe(scenario.key);

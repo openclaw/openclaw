@@ -1,54 +1,37 @@
-// Feishu plugin module implements channel behavior.
 import {
-  assertFeishuChatMember as assertFeishuChatMemberImpl,
-  buildFeishuDirectChatMembers as buildFeishuDirectChatMembersImpl,
-  getChatInfo as getChatInfoImpl,
-  getChatMembers as getChatMembersImpl,
-  getFeishuMemberInfo as getFeishuMemberInfoImpl,
+  assertFeishuChatMember,
+  buildFeishuDirectChatMembers,
+  getChatInfo,
+  getChatMembers,
+  getFeishuMemberInfo,
 } from "./chat.js";
-import {
-  listFeishuDirectoryGroupsLive as listFeishuDirectoryGroupsLiveImpl,
-  listFeishuDirectoryPeersLive as listFeishuDirectoryPeersLiveImpl,
-} from "./directory.js";
-import { sendStickerFeishu as sendStickerFeishuImpl } from "./media.js";
-import { feishuOutbound as feishuOutboundImpl } from "./outbound.js";
-import {
-  createPinFeishu as createPinFeishuImpl,
-  listPinsFeishu as listPinsFeishuImpl,
-  removePinFeishu as removePinFeishuImpl,
-} from "./pins.js";
-import { probeFeishu as probeFeishuImpl } from "./probe.js";
-import {
-  addReactionFeishu as addReactionFeishuImpl,
-  listReactionsFeishu as listReactionsFeishuImpl,
-  removeReactionFeishu as removeReactionFeishuImpl,
-} from "./reactions.js";
-import {
-  editMessageFeishu as editMessageFeishuImpl,
-  getMessageFeishu as getMessageFeishuImpl,
-  sendCardFeishu as sendCardFeishuImpl,
-  sendMessageFeishu as sendMessageFeishuImpl,
-} from "./send.js";
+import { listFeishuDirectoryGroupsLive, listFeishuDirectoryPeersLive } from "./directory.js";
+import { sendStickerFeishu } from "./media.js";
+import { feishuOutbound } from "./outbound.js";
+import { createPinFeishu, listPinsFeishu, removePinFeishu } from "./pins.js";
+import { probeFeishu } from "./probe.js";
+import { addReactionFeishu, listReactionsFeishu, removeReactionFeishu } from "./reactions.js";
+import { editMessageFeishu, getMessageFeishu, sendCardFeishu, sendMessageFeishu } from "./send.js";
 
 export const feishuChannelRuntime = {
-  assertFeishuChatMember: assertFeishuChatMemberImpl,
-  buildFeishuDirectChatMembers: buildFeishuDirectChatMembersImpl,
-  listFeishuDirectoryGroupsLive: listFeishuDirectoryGroupsLiveImpl,
-  listFeishuDirectoryPeersLive: listFeishuDirectoryPeersLiveImpl,
-  feishuOutbound: { ...feishuOutboundImpl },
-  createPinFeishu: createPinFeishuImpl,
-  listPinsFeishu: listPinsFeishuImpl,
-  removePinFeishu: removePinFeishuImpl,
-  probeFeishu: probeFeishuImpl,
-  addReactionFeishu: addReactionFeishuImpl,
-  listReactionsFeishu: listReactionsFeishuImpl,
-  removeReactionFeishu: removeReactionFeishuImpl,
-  getChatInfo: getChatInfoImpl,
-  getChatMembers: getChatMembersImpl,
-  getFeishuMemberInfo: getFeishuMemberInfoImpl,
-  editMessageFeishu: editMessageFeishuImpl,
-  getMessageFeishu: getMessageFeishuImpl,
-  sendCardFeishu: sendCardFeishuImpl,
-  sendMessageFeishu: sendMessageFeishuImpl,
-  sendStickerFeishu: sendStickerFeishuImpl,
+  assertFeishuChatMember,
+  buildFeishuDirectChatMembers,
+  listFeishuDirectoryGroupsLive,
+  listFeishuDirectoryPeersLive,
+  feishuOutbound: { ...feishuOutbound },
+  createPinFeishu,
+  listPinsFeishu,
+  removePinFeishu,
+  probeFeishu,
+  addReactionFeishu,
+  listReactionsFeishu,
+  removeReactionFeishu,
+  getChatInfo,
+  getChatMembers,
+  getFeishuMemberInfo,
+  editMessageFeishu,
+  getMessageFeishu,
+  sendCardFeishu,
+  sendMessageFeishu,
+  sendStickerFeishu,
 };

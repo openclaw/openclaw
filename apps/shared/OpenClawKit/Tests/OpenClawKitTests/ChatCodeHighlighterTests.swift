@@ -97,8 +97,8 @@ struct ChatCodeHighlighterTests {
         }
     }
 
-    @Test func `unknown language passes through unstyled`() {
-        let attributed = ChatCodeHighlighter.attributedCode("SELECT *", languageId: "sql")
+    @Test @MainActor func `unknown language passes through unstyled`() {
+        let attributed = ChatCodeHighlightCache.highlighted(code: "SELECT *", languageId: "sql")
         #expect(String(attributed.characters) == "SELECT *")
         #expect(ChatCodeHighlighter.language(for: "sql") == nil)
     }

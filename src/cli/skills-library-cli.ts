@@ -1,9 +1,18 @@
+import { createHash } from "node:crypto";
+import * as fs from "node:fs/promises";
+import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { Option, type Command } from "commander";
-import type {
-  SkillsLibraryActivateResult,
-  SkillsLibraryListResult,
-  SkillsLibraryReadResult,
-  SkillsLibraryReceipt,
+import {
+  SKILL_LIBRARY_MAX_BUNDLE_BYTES,
+  SKILL_LIBRARY_MAX_FILE_BYTES,
+  SKILL_LIBRARY_MAX_FILES,
+  type SkillLibraryFile,
+  type SkillsLibraryActivateResult,
+  type SkillsLibraryListResult,
+  type SkillsLibraryReadResult,
+  type SkillsLibraryReceipt,
+  type SkillsLibraryUploadResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { defaultRuntime } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
@@ -15,7 +24,6 @@ import {
 } from "./gateway-rpc.js";
 import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
-import { readLibraryInput, uploadLibraryZip } from "./skills-library-input.js";
 
 type LibraryOptions = GatewayRpcOpts & {
   slug?: string;
@@ -31,9 +39,7 @@ type LibraryOptions = GatewayRpcOpts & {
 function rpcOptions(command: Command): GatewayRpcOpts {
   const opts = command.opts<GatewayRpcOpts>();
   const value = <K extends keyof GatewayRpcOpts>(name: K): GatewayRpcOpts[K] =>
-    command.getOptionValueSource(name) !== "default" && opts[name] !== undefined
-      ? opts[name]
-      : (inheritOptionFromParent<GatewayRpcOpts[K]>(command, name) ?? opts[name]);
+    inheritOptionFromParent<GatewayRpcOpts[K]>(command, name) ?? opts[name];
   return {
     url: value("url"),
     port: value("port"),
@@ -47,6 +53,14 @@ function rpcOptions(command: Command): GatewayRpcOpts {
 
 function receiptText(receipt: SkillsLibraryReceipt): string {
   return `${receipt.state}: ${receipt.entry.slug} (${receipt.target}, owner ${receipt.entry.ownerLabel})\nSkill ID: ${receipt.entry.skillId}\nRevision: ${receipt.entry.revision}\n${receipt.nextAction}\n`;
+}
+
+async function saveLocalLibrarySkill(input: string, slug: string, rpc: GatewayRpcOpts) {
+  return callGatewayFromCliWithTransport<SkillsLibraryReceipt>("skills.library.save", rpc, {
+    slug,
+    expectedRevision: null,
+    ...(await readLibraryInput(input)),
+  });
 }
 
 export function registerSkillsLibraryCli(skills: Command): void {
@@ -171,16 +185,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
     .argument("<path>", "Local SKILL.md or skill directory")
     .requiredOption("--slug <slug>", "Library name (lowercase letters, digits, hyphens)")
     .action((input: string, opts: LibraryOptions & { slug: string }, command: Command) =>
-      execute(
-        command,
-        async (rpc) =>
-          callGatewayFromCliWithTransport<SkillsLibraryReceipt>("skills.library.save", rpc, {
-            slug: opts.slug,
-            expectedRevision: null,
-            ...(await readLibraryInput(input)),
-          }),
-        receiptText,
-      ),
+      execute(command, (rpc) => saveLocalLibrarySkill(input, opts.slug, rpc), receiptText),
     );
 
   leaf(
@@ -253,14 +258,54 @@ export function registerSkillsLibraryCli(skills: Command): void {
               },
             );
           }
-          if (source.toLowerCase().endsWith(".zip")) {
-            return uploadLibraryZip(source, opts.slug, rpc);
+          if (source.toLowerCase().endsWith(".zip") && !(await fs.lstat(source)).isDirectory()) {
+            const { buffer: bytes } = await readRegularFile({
+              filePath: source,
+              maxBytes: SKILL_LIBRARY_MAX_BUNDLE_BYTES,
+            });
+            if (bytes.length === 0) {
+              throw new Error("ZIP import requires a regular file between 1 byte and 8 MiB.");
+            }
+            const call = (params: unknown) =>
+              callGatewayFromCliWithTransport<SkillsLibraryUploadResult>(
+                "skills.library.upload",
+                rpc,
+                params,
+              );
+            const begin = await call({
+              action: "begin",
+              slug: opts.slug,
+              sizeBytes: bytes.length,
+              sha256: createHash("sha256").update(bytes).digest("hex"),
+            });
+            if (!("uploadId" in begin)) {
+              throw new Error("Gateway did not open the upload. Retry the import.");
+            }
+            let offset = begin.offset;
+            while (offset < bytes.length) {
+              const end = Math.min(offset + begin.maxChunkBytes, bytes.length);
+              const chunk = await call({
+                action: "chunk",
+                uploadId: begin.uploadId,
+                offset,
+                data: bytes.subarray(offset, end).toString("base64"),
+              });
+              if (!("offset" in chunk) || chunk.offset !== end) {
+                throw new Error(
+                  "Upload acknowledgement did not match the chunk. Retry the import.",
+                );
+              }
+              offset = chunk.offset;
+            }
+            const result = await call({ action: "commit", uploadId: begin.uploadId });
+            if (!("state" in result)) {
+              throw new Error(
+                "Gateway did not confirm publication. List your library before retrying.",
+              );
+            }
+            return result;
           }
-          return callGatewayFromCliWithTransport<SkillsLibraryReceipt>("skills.library.save", rpc, {
-            slug: opts.slug,
-            expectedRevision: null,
-            ...(await readLibraryInput(source)),
-          });
+          return saveLocalLibrarySkill(source, opts.slug, rpc);
         },
         receiptText,
       ),
@@ -334,4 +379,59 @@ export function registerSkillsLibraryCli(skills: Command): void {
     );
   }
   applyParentDefaultHelpAction(library);
+}
+
+async function readLibraryInput(input: string): Promise<{
+  content: string;
+  files?: SkillLibraryFile[];
+}> {
+  const root = path.resolve(input);
+  const info = await fs.lstat(root);
+  let total = 0;
+  let count = 0;
+  const files: SkillLibraryFile[] = [];
+  let content: string | undefined;
+  const read = async (file: string, relative: string) => {
+    count += 1;
+    if (count > SKILL_LIBRARY_MAX_FILES) {
+      throw new Error("Skill bundle exceeds the 1 MiB/file, 8 MiB/bundle, or 256-file limit.");
+    }
+    const { buffer: bytes, stat } = await readRegularFile({
+      filePath: file,
+      maxBytes: Math.min(SKILL_LIBRARY_MAX_FILE_BYTES, SKILL_LIBRARY_MAX_BUNDLE_BYTES - total),
+    });
+    total += bytes.length;
+    if (relative === "SKILL.md") {
+      content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+      return;
+    }
+    // Base64 round-trips every supporting file, including binary assets and CRLF text.
+    files.push({
+      path: relative,
+      content: bytes.toString("base64"),
+      encoding: "base64",
+      executable: (stat.mode & 0o111) !== 0,
+    });
+  };
+  const walk = async (directory: string, prefix = "") => {
+    for (const entry of (await fs.readdir(directory, { withFileTypes: true })).toSorted((a, b) =>
+      a.name.localeCompare(b.name),
+    )) {
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        await walk(path.join(directory, entry.name), relative);
+      } else {
+        await read(path.join(directory, entry.name), relative);
+      }
+    }
+  };
+  if (info.isDirectory()) {
+    await walk(root);
+  } else {
+    await read(root, "SKILL.md");
+  }
+  if (content === undefined) {
+    throw new Error("The bundle must contain SKILL.md at its root.");
+  }
+  return { content, ...(info.isDirectory() ? { files } : {}) };
 }

@@ -6,10 +6,8 @@ import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import { runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
-import {
-  registerClonedProjectRegistry,
-  registerProjectRegistry,
-} from "../projects/project-registry.js";
+import { registerProjectRegistry } from "../projects/project-registry.js";
+import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const execFileAsync = promisify(execFile);

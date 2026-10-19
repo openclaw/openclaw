@@ -1,11 +1,14 @@
 import path from "node:path";
 import type { Browser, Page } from "playwright";
 import { expect } from "vitest";
+import type { CronJob } from "../api/types.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 type SidebarAttentionScopeFlowOptions = {
   artifactDir: string;
@@ -45,8 +48,6 @@ async function setDarkTheme(page: Page) {
     const root = document.documentElement;
     root.dataset.themeMode = "dark";
     root.dataset.themeResolved = "dark";
-    root.classList.remove("wa-light");
-    root.classList.add("wa-dark");
     root.style.colorScheme = "dark";
   });
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
@@ -63,7 +64,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
   });
   const page = await context.newPage();
   const proofVideo = page.video();
-  const failedJob = (id: string, name: string, agentId: string) => ({
+  const failedJob = (id: string, name: string, agentId: string): CronJob => ({
     id,
     agentId,
     name,
@@ -88,6 +89,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     nextOffset: null,
   });
   const gateway = await installMockGateway(page, {
+    presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
     methodResponses: {
       "agents.list": {
         defaultId: "main",
@@ -100,6 +102,21 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       },
       "cron.list": {
         cases: [
+          {
+            match: { compact: true, agentId: "main" },
+            response: { ...cronResponse([mainJob]), jobs: [compactCronJobFixture(mainJob)] },
+          },
+          {
+            match: { compact: true, agentId: "writer" },
+            response: { ...cronResponse([writerJob]), jobs: [compactCronJobFixture(writerJob)] },
+          },
+          {
+            match: { compact: true },
+            response: {
+              ...cronResponse([mainJob, writerJob]),
+              jobs: [mainJob, writerJob].map(compactCronJobFixture),
+            },
+          },
           { match: { agentId: "main" }, response: cronResponse([mainJob]) },
           { match: { agentId: "writer" }, response: cronResponse([writerJob]) },
           { response: cronResponse([mainJob, writerJob]) },
@@ -185,9 +202,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
 
     await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-    await sidebar
-      .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="agent:writer"]')
-      .click();
+    await sidebar.locator('.sidebar-agent-menu [data-value="agent:writer"]').click();
     await waitForCronScope("writer");
     // The agent's cron refresh can precede the Chat route commit that closes Inbox.
     await waitForControlUiRoute(page, { pathname: "/chat/writer", routeId: "chat" });
@@ -198,12 +213,13 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await captureProof(params, page, "09-desktop-inbox-writer-agent.png");
     await sidebar.locator(".sidebar-issues-button").click();
 
-    await sidebar.getByRole("link", { name: "Automations", exact: true }).click();
+    const pages = await openSidebarPages(page);
+    await pages.getByRole("link", { name: "Automations", exact: true }).click();
     await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
     const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
     await pageScope.locator(".agent-select__trigger").click();
     await pageScope
-      .locator("wa-dropdown-item[data-agent-option]")
+      .locator(".agent-select__option[data-agent-option]")
       .filter({ hasText: "All agents" })
       .click();
     await waitForCronScope(null);
@@ -240,7 +256,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       const previousCount = await cronScopeRequestCount(agentId);
       await pageScope.locator(".agent-select__trigger").click();
       await pageScope
-        .locator("wa-dropdown-item[data-agent-option]")
+        .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: label })
         .click();
       await expect.poll(() => cronScopeRequestCount(agentId)).toBeGreaterThan(previousCount);
@@ -259,6 +275,24 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     );
     await gateway.setMethodResponse("cron.list", {
       cases: [
+        {
+          match: { compact: true, agentId: "main" },
+          response: { ...cronResponse([mainJob]), jobs: [compactCronJobFixture(mainJob)] },
+        },
+        {
+          match: { compact: true, agentId: "writer" },
+          response: {
+            ...cronResponse([writerJobNext]),
+            jobs: [compactCronJobFixture(writerJobNext)],
+          },
+        },
+        {
+          match: { compact: true },
+          response: {
+            ...cronResponse([mainJob, writerJobNext]),
+            jobs: [mainJob, writerJobNext].map(compactCronJobFixture),
+          },
+        },
         { match: { agentId: "main" }, response: cronResponse([mainJob]) },
         { match: { agentId: "writer" }, response: cronResponse([writerJobNext]) },
         { response: cronResponse([mainJob, writerJobNext]) },
@@ -271,7 +305,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await gateway.emitGatewayEvent("update.available", {
       schedule: {
         autoEnabled: false,
-        channel: "dev",
+        channel: "beta",
         install: { kind: "git", git: { status: "behind", commitsBehind: 246 } },
         target: {
           kind: "git",
@@ -281,7 +315,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
         },
       },
       updateAvailable: {
-        channel: "dev",
+        channel: "beta",
         commitsBehind: 246,
         currentSha: "1111111111111111111111111111111111111111",
         currentVersion: "2026.8.1",

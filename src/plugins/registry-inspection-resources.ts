@@ -1,5 +1,5 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { getPluginInstance } from "./plugin-instance-scope.js";
+import { getPluginInstance, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 import {
   collectRegistryInvocationInstances,
   PluginInvocationScope,
@@ -11,6 +11,10 @@ import {
   type RegistrationCleanup,
 } from "./registry-registration-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
+import {
+  hasRetainedPluginRuntimeCloseError,
+  PluginRuntimeCloseCompletedError,
+} from "./runtime-close-error.js";
 
 // Registrars and loaders can come from different source/built module copies.
 const inspections = resolveGlobalSingleton(
@@ -24,7 +28,10 @@ export function getPluginRegistryInspectionResources(registry: PluginRegistry) {
 
 function throwDisposalFailures(failures: Error[]): void {
   if (failures.length > 0) {
-    throw new AggregateError(failures, "Plugin inspection resources could not all be disposed");
+    const Failure = failures.some(hasRetainedPluginRuntimeCloseError)
+      ? AggregateError
+      : PluginRuntimeCloseCompletedError;
+    throw new Failure(failures, "Plugin inspection resources could not all be disposed");
   }
 }
 
@@ -115,7 +122,10 @@ export class PluginRegistryInspectionResources {
       physical = donorSource.retain();
       this.#dependencies.add(donorSource);
     }
-    this.#adoptedInvocations = new PluginInvocationScope(registry, borrowed, { retained: true });
+    this.#adoptedInvocations = new PluginInvocationScope(registry, borrowed, {
+      retained: true,
+      kind: "custody",
+    });
   }
 
   wrapAdoptedValue<T>(value: T): T {
@@ -123,11 +133,14 @@ export class PluginRegistryInspectionResources {
   }
 
   /** Logical use owns its execution consumers separately from this inspection's physical claims. */
-  createInvocationScope(registry: PluginRegistry): PluginInvocationScope {
+  createInvocationScope(
+    registry: PluginRegistry,
+    instances: Iterable<PluginInstanceHandle> = collectRegistryInvocationInstances(registry),
+  ): PluginInvocationScope {
     if (this.#release) {
       throw new Error("Plugin inspection resources have been released");
     }
-    return new PluginInvocationScope(registry, collectRegistryInvocationInstances(registry), {
+    return new PluginInvocationScope(registry, instances, {
       retained: true,
       parent: this.#adoptedInvocations,
     });

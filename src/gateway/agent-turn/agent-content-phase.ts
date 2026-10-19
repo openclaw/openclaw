@@ -1,7 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
+import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
@@ -12,8 +13,6 @@ import {
   loadVoiceWakeRoutingConfig,
   resolveVoiceWakeRouteByTrigger,
 } from "../../infra/voicewake-routing.js";
-import type { MediaFact } from "../../media/media-facts.js";
-import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { classifySessionKeyShape, isAcpSessionKey } from "../../routing/session-key.js";
 import {
   annotateInterSessionPromptText,
@@ -29,19 +28,17 @@ import {
   MediaOffloadError,
   logAttachmentFailure,
   parseMessageWithAttachments,
+  stripImageMediaMarkers,
   type ChatAttachment,
-  type ChatImageContent,
-  type OffloadedRef,
 } from "../chat-attachments.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
-import {
-  loadSessionEntry,
-  resolveGatewayModelSupportsImages,
-  resolveSessionModelRef,
-} from "../session-utils.js";
+import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import { resolveGatewayModelSupportsImages, resolveSessionModelRef } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
+import { AgentRequestReservationEndedError } from "./agent-dedupe.js";
 import type { AgentTurnContext } from "./types.js";
 
 type ExplicitRecipientSession = Awaited<
@@ -49,22 +46,6 @@ type ExplicitRecipientSession = Awaited<
     typeof import("../../infra/outbound/agent-delivery.js").resolveAgentExplicitRecipientSession
   >
 >;
-
-type AgentContentPhaseResult = {
-  agentId?: string;
-  requestedSessionKey?: string;
-  effectiveTranscriptInputText: string;
-  message: string;
-  images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
-  media: MediaFact[];
-  offloadedRefs: OffloadedRef[];
-  replyTo: string;
-  recipientChannel?: string;
-  recipientAccountId?: string;
-  recipientThreadId?: string | number;
-  to: string;
-};
 
 export async function prepareAgentContentPhase(params: {
   request: AgentRunRequest;
@@ -84,26 +65,32 @@ export async function prepareAgentContentPhase(params: {
   modelOverride?: string;
   explicitRecipientSession?: ExplicitRecipientSession;
   knownAgents: string[];
-}): Promise<AgentContentPhaseResult | undefined> {
-  const transcriptInputText = (params.request.message ?? "").trim();
-  let message = params.isRawModelRun
-    ? transcriptInputText
-    : annotateInterSessionPromptText(transcriptInputText, params.inputProvenance);
-  let images: AgentContentPhaseResult["images"] = [];
-  let imageOrder: PromptImageOrderEntry[] = [];
-  let media: MediaFact[] = [];
-  let offloadedRefs: OffloadedRef[] = [];
-  let supportsInlineImages: boolean | undefined;
+  assertAdmissionCurrent?: () => void;
+  onTargetResolved?: (target: {
+    sessionKey?: string;
+    agentId?: string;
+  }) => boolean | void | Promise<boolean | void>;
+}) {
+  const transcriptInputText = params.request.message.trim();
+  let content: Awaited<ReturnType<typeof parseMessageWithAttachments>> = {
+    message: params.isRawModelRun
+      ? transcriptInputText
+      : annotateInterSessionPromptText(transcriptInputText, params.inputProvenance),
+    images: [],
+    imageOrder: [],
+    media: [],
+    offloadedRefs: [],
+  };
+  let needsImageUnderstanding = false;
   let agentId = params.agentId;
   let requestedSessionKey = params.requestedSessionKey;
 
   const isKnownGatewayChannel = (value: string): boolean =>
     isGatewayMessageChannel(value) || isInternalNonDeliveryChannel(value);
-  const channelHints = normalizeStringEntries(
-    [params.request.channel, params.request.replyChannel].filter(
-      (value): value is string => typeof value === "string",
-    ),
-  );
+  const channelHints = normalizeTrimmedStringList([
+    params.request.channel,
+    params.request.replyChannel,
+  ]);
   for (const rawChannel of channelHints) {
     const normalized = normalizeMessageChannel(rawChannel);
     if (normalized && normalized !== "last" && !isKnownGatewayChannel(normalized)) {
@@ -117,47 +104,6 @@ export async function prepareAgentContentPhase(params: {
       );
       return undefined;
     }
-  }
-
-  if (params.normalizedAttachments.length > 0) {
-    let baseProvider: string | undefined;
-    let baseModel: string | undefined;
-    let catalogAgentId = agentId;
-    let requestedAcpMeta: ReturnType<typeof readAcpSessionMeta>;
-    if (params.requestedSessionKeyRaw) {
-      const {
-        cfg,
-        entry,
-        canonicalKey,
-        agentId: sessionAgentId,
-      } = loadSessionEntry(params.requestedSessionKeyRaw, {
-        ...(agentId ? { agentId } : {}),
-        clone: false,
-        projection: "list",
-      });
-      catalogAgentId = sessionAgentId;
-      const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
-      baseProvider = modelRef.provider;
-      baseModel = modelRef.model;
-      requestedAcpMeta = readAcpSessionMeta({
-        cfg,
-        agentId: sessionAgentId,
-        sessionKey: canonicalKey,
-      });
-    }
-    const isConfirmedAcpSession =
-      params.request.acpTurnSource === "manual_spawn" &&
-      isAcpSessionKey(params.requestedSessionKeyRaw) &&
-      requestedAcpMeta != null;
-    supportsInlineImages = isConfirmedAcpSession
-      ? true
-      : await resolveGatewayModelSupportsImages({
-          loadGatewayModelCatalog: params.context.loadGatewayModelCatalog,
-          loadGatewayModelCatalogSnapshot: params.context.loadGatewayModelCatalogSnapshot,
-          agentId: catalogAgentId,
-          provider: params.providerOverride || baseProvider,
-          model: params.modelOverride || baseModel,
-        });
   }
 
   const voiceWakeTrigger = normalizeOptionalString(params.request.voiceWakeTrigger) ?? "";
@@ -177,10 +123,11 @@ export async function prepareAgentContentPhase(params: {
   const explicitVoiceWakeSessionTarget =
     canAutoRouteVoiceWake && params.requestedSessionKeyRaw
       ? (() => {
-          const { cfg, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw!, {
+          const cfg = params.cfg;
+          const { canonicalKey } = resolveSessionStoreIdentity({
+            cfg,
+            sessionKey: params.requestedSessionKeyRaw!,
             ...(agentId ? { agentId } : {}),
-            clone: false,
-            projection: "list",
           });
           const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey, agentId);
           const compatibilityOwner = tryResolveSessionCompatibilityOwnerAgentId(cfg, canonicalKey);
@@ -207,10 +154,10 @@ export async function prepareAgentContentPhase(params: {
         }
       } else if ("sessionKey" in route) {
         if (classifySessionKeyShape(route.sessionKey) !== "malformed_agent") {
-          const canonicalKey = loadSessionEntry(route.sessionKey, {
-            clone: false,
-            projection: "list",
-          }).canonicalKey;
+          const { canonicalKey } = resolveSessionStoreIdentity({
+            cfg: params.cfg,
+            sessionKey: route.sessionKey,
+          });
           const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
           if (params.knownAgents.includes(routedAgentId)) {
             requestedSessionKey = canonicalKey;
@@ -231,28 +178,88 @@ export async function prepareAgentContentPhase(params: {
     }
   }
 
+  params.assertAdmissionCurrent?.();
+  if ((await params.onTargetResolved?.({ sessionKey: requestedSessionKey, agentId })) === false) {
+    return undefined;
+  }
   if (params.normalizedAttachments.length > 0) {
+    let session: Awaited<ReturnType<typeof readAcpSessionEntryAsync>> = null;
+    let catalogAgentId = agentId;
+    const attachmentSessionKey = requestedSessionKey ?? params.requestedSessionKeyRaw;
+    if (attachmentSessionKey) {
+      const target = resolveSessionStoreIdentity({
+        cfg: params.cfg,
+        sessionKey: attachmentSessionKey,
+        agentId,
+      });
+      session = await readAcpSessionEntryAsync({
+        cfg: params.cfg,
+        agentId: target.agentId,
+        sessionKey: target.canonicalKey,
+        assertCurrent: params.assertAdmissionCurrent,
+      });
+      params.assertAdmissionCurrent?.();
+      catalogAgentId = target.agentId;
+    }
+    const baseModel = resolveSessionModelRef(
+      session?.cfg ?? params.cfg,
+      session?.entry,
+      catalogAgentId,
+    );
+    const model = params.modelOverride
+      ? (resolvePersistedOverrideModelRef({
+          defaultProvider: params.providerOverride ?? baseModel.provider,
+          overrideProvider: params.providerOverride,
+          overrideModel: params.modelOverride,
+        }) ?? baseModel)
+      : { provider: params.providerOverride ?? baseModel.provider, model: baseModel.model };
+    const isConfirmedAcpSession =
+      params.request.acpTurnSource === "manual_spawn" &&
+      params.requestedSessionKeyRaw !== undefined &&
+      isAcpSessionKey(params.requestedSessionKeyRaw) &&
+      session?.acp != null;
+    const supportsImages =
+      isConfirmedAcpSession ||
+      (await resolveGatewayModelSupportsImages({
+        loadGatewayModelCatalog: params.context.loadGatewayModelCatalog,
+        loadGatewayModelCatalogSnapshot: params.context.loadGatewayModelCatalogSnapshot,
+        agentId: catalogAgentId,
+        ...model,
+      }));
+    needsImageUnderstanding = !supportsImages;
+    params.assertAdmissionCurrent?.();
     try {
-      const parsed = await parseMessageWithAttachments(message, params.normalizedAttachments, {
+      content = await parseMessageWithAttachments(content.message, params.normalizedAttachments, {
         maxBytes: resolveChatAttachmentMaxBytes(params.cfg),
         log: params.context.logGateway,
-        supportsInlineImages,
+        supportsImages,
         acceptNonImage: false,
+        assertCurrent: params.assertAdmissionCurrent,
       });
-      message = parsed.message.trim();
-      images = parsed.images;
-      imageOrder = parsed.imageOrder;
-      media = parsed.media;
-      offloadedRefs = parsed.offloadedRefs;
+      content.message = (
+        needsImageUnderstanding
+          ? stripImageMediaMarkers(content.message, content.offloadedRefs)
+          : content.message
+      ).trim();
     } catch (err) {
+      // A retired request owns its terminal response even when media parsing
+      // fails while the captured input is being cancelled.
+      params.assertAdmissionCurrent?.();
+      if (err instanceof AgentRequestReservationEndedError) {
+        throw err;
+      }
       logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", err);
       params.respond(
         false,
         undefined,
-        errorShape(
-          err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-          String(err),
-        ),
+        err instanceof SessionMutationAuthorizationChangedError
+          ? err.error
+          : errorShape(
+              err instanceof MediaOffloadError
+                ? ErrorCodes.UNAVAILABLE
+                : ErrorCodes.INVALID_REQUEST,
+              String(err),
+            ),
       );
       return undefined;
     }
@@ -261,12 +268,9 @@ export async function prepareAgentContentPhase(params: {
   return {
     agentId,
     requestedSessionKey,
+    needsImageUnderstanding,
     effectiveTranscriptInputText: transcriptInputText,
-    message,
-    images,
-    imageOrder,
-    media,
-    offloadedRefs,
+    ...content,
     replyTo,
     recipientChannel,
     recipientAccountId,

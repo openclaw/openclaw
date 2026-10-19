@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { platform } from "node:os";
 import { isMainThread, threadId } from "node:worker_threads";
+import { hasErrnoCode } from "../infra/errno.js";
+import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "../infra/file-lock.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { claimTestPortBlock } from "./port-claim-lock.js";
 
 type PortProbe = { free: boolean; error?: NodeJS.ErrnoException };
 type PortRange = { start: number; end: number };
@@ -55,7 +58,7 @@ function getPortPool(): PortPool {
   });
 }
 
-async function probePort(port: number): Promise<PortProbe> {
+export async function probeTestPort(port: number): Promise<PortProbe> {
   if (!Number.isFinite(port) || port <= 0 || port > 65535) {
     return { free: false };
   }
@@ -69,20 +72,39 @@ async function probePort(port: number): Promise<PortProbe> {
 }
 
 export async function isPortFree(port: number): Promise<boolean> {
-  return (await probePort(port)).free;
+  return (await probeTestPort(port)).free;
 }
 
 async function isPortBlockFree(start: number, offsets: number[]): Promise<boolean> {
   if (offsets.some((offset) => httpBlockedPorts.has(start + offset))) {
     return false;
   }
-  const probes = await Promise.all(offsets.map((offset) => probePort(start + offset)));
-  for (const probe of probes) {
-    if (probe.error?.code === "EPERM" || probe.error?.code === "EACCES") {
-      throw probe.error;
+  // Probes bind real sockets too. Share the fixture's claim before probing so a
+  // contender cannot occupy a port during its owner's socket handoff.
+  let claim;
+  try {
+    claim = await claimTestPortBlock(start, offsets);
+  } catch (error) {
+    if (hasErrnoCode(error, FILE_LOCK_TIMEOUT_ERROR_CODE)) {
+      return false;
     }
+    throw error;
   }
-  return probes.every((probe) => probe.free);
+  try {
+    const probes = await Promise.all(offsets.map((offset) => probeTestPort(start + offset)));
+    for (const probe of probes) {
+      // Windows can deny individual candidates; port-zero allocation still surfaces global failures.
+      if (
+        probe.error?.code === "EPERM" ||
+        (probe.error?.code === "EACCES" && platform() !== "win32")
+      ) {
+        throw probe.error;
+      }
+    }
+    return probes.every((probe) => probe.free);
+  } finally {
+    await claim.release();
+  }
 }
 
 export async function getFreePort(host = "127.0.0.1"): Promise<number> {

@@ -150,7 +150,7 @@ Notes:
 
 - `api.runtime.mediaUnderstanding.*` is the preferred shared surface for
   image/audio/video understanding.
-- `extractStructuredWithModel(...)` is the plugin-facing seam for bounded
+- `extractStructuredWithModel(...)` is the plugin-facing interface for bounded
   provider-owned image-first extraction. Include at least one image input;
   text inputs are supplemental context. Product plugins own their routes and
   schemas while OpenClaw owns the provider/runtime boundary.
@@ -176,7 +176,7 @@ Notes:
 - `toolsAlsoAllow` accepts exact, uniquely owned tool names registered by the calling plugin. Core and ambiguous names are rejected. It is additive to the normal profile, but operator allowlists and denies remain authoritative.
 - OpenClaw only honors those override fields for trusted callers.
 - For plugin-owned fallback runs, operators must opt in with `plugins.entries.<id>.subagent.allowModelOverride: true`.
-- Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets, or `"*"` to allow any target explicitly.
+- Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific normalized `provider/model` targets, or `"*"` to allow any target explicitly.
 - Untrusted plugin subagent runs still work, but override requests are rejected instead of silently falling back.
 - Plugin-created subagent sessions are tagged with the creating plugin id. Fallback `api.runtime.subagent.deleteSession(...)` may delete those owned sessions only; arbitrary session deletion still requires an admin-scoped Gateway request.
 

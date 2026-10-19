@@ -1,32 +1,27 @@
-/**
- * Prepares the attempt-local tool catalog, schema projection, and diagnostics.
- */
-import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   isCodeModeDiagnosticEnabled,
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
 import {
-  copyAgentToolAvailability,
   finalizeAgentToolAvailability,
-  markAgentToolExecutionUnavailable,
+  gateAgentToolExecution,
 } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
-import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
-import {
-  CODE_MODE_EXEC_TOOL_NAME,
-  CODE_MODE_WAIT_TOOL_NAME,
-  createCodeModeTools,
-} from "../../code-mode.js";
-import { filterLocalModelLeanTools } from "../../local-model-lean.js";
+import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../../code-mode.js";
 import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
-import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
+import {
+  buildEmptyExplicitToolAllowlistError,
+  collectExplicitToolAllowlistSources,
+} from "../../tool-allowlist-guard.js";
 import {
   createToolExecutionMatcher,
-  TOOL_EXECUTION_GATED_MESSAGE,
+  formatToolExecutionGatedMessage,
 } from "../../tool-policy-shared.js";
-import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
-import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
+import {
+  withRuntimeToolSchemaQuarantine,
+  type RuntimeToolSchemaQuarantineRecorder,
+} from "../../tool-schema-quarantine.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
@@ -34,12 +29,10 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
-import { applyAgentToolSurfaceCatalog } from "../../tool-surface-plan.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
-import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { buildToolSearchRunPlan } from "./attempt-tool-search-run-plan.js";
 import { wrapEmbeddedAttemptToolWithActivity } from "./tool-activity-heartbeat.js";
@@ -48,16 +41,15 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type PreparedToolBase = Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
 type PreparedBundleTools = Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
 
-export function prepareEmbeddedAttemptToolCatalog(input: {
+export async function prepareEmbeddedAttemptToolCatalog(input: {
   attempt: EmbeddedRunAttemptParams;
   setup: EmbeddedAttemptSetup;
   preparedToolBase: PreparedToolBase;
   bundleTools: Pick<PreparedBundleTools, "clientTools" | "uncompactedEffectiveTools">;
-  runTrace: DiagnosticTraceContext;
   abortSignal: AbortSignal;
   executeCodeModeTool: ToolSearchCatalogToolExecutor;
 }) {
-  const buildCatalog = () => {
+  const buildCatalog = (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) => {
     const { attempt, preparedToolBase } = input;
     const {
       codeModeControlsEnabledForRun,
@@ -66,91 +58,39 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       runtimeCapabilityProfile,
       toolSearchConfig,
       toolSearchControlsEnabledForRun,
-      toolSearchRuntimeConfig,
       toolsEnabled,
     } = preparedToolBase;
     const { clientTools, uncompactedEffectiveTools } = input.bundleTools;
     const abortSignal = preparedToolBase.toolAbortSignal ?? input.abortSignal;
     // Detached skill review keeps every foreground schema for prompt-cache reuse
     // but executes only the allowed tools. Wrap before catalog compaction so a
-    // tool hidden behind tool_call/exec is gated too; the catalog controls stay
+    // tool hidden behind dispatch_action/exec is gated too; the catalog controls stay
     // callable because they only dispatch into the gated tools.
     let effectiveTools = attempt.toolExecutionAllow
       ? gateToolExecution(uncompactedEffectiveTools, attempt.toolExecutionAllow)
       : uncompactedEffectiveTools;
-    const catalogToolHookContext = {
-      agentId: input.setup.sessionAgentId,
-      config: attempt.config,
-      cwd: input.setup.effectiveCwd,
-      sessionKey: input.setup.sandboxSessionKey,
-      sessionId: attempt.sessionId,
-      runId: attempt.runId,
-      approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
-      channelId: attempt.currentChannelId,
-      trace: input.runTrace,
-      loopDetection: resolveToolLoopDetectionConfig({
-        cfg: attempt.config,
-        agentId: input.setup.sessionAgentId,
-      }),
-      onToolOutcome: attempt.onToolOutcome,
-      allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
-    };
-    const codeModeTools = codeModeControlsEnabledForRun
-      ? createCodeModeTools({
-          config: attempt.config,
-          runtimeConfig: attempt.config,
-          modelContextWindowTokens: attempt.contextTokenBudget ?? attempt.model.contextWindow,
-          agentId: input.setup.sessionAgentId,
-          sessionKey: input.setup.sandboxSessionKey,
-          sessionId: attempt.sessionId,
-          runId: attempt.runId,
-          catalogRef: preparedToolBase.toolSearchCatalogRef,
-          abortSignal,
-          forceRestartSafeTools: attempt.forceRestartSafeTools,
-          toolExecutionAllow: attempt.toolExecutionAllow,
-          executeTool: input.executeCodeModeTool,
-          codeModeSkills,
-        })
-      : [];
-    const toolSearch = applyAgentToolSurfaceCatalog({
-      // `codeModeTools` is empty unless code-mode controls are on, so this stays
-      // exactly `effectiveTools` for the tool-search branches.
-      tools: [...codeModeTools, ...effectiveTools],
-      config: attempt.config,
-      toolSearchRuntimeConfig,
-      codeModeControlsEnabled: codeModeControlsEnabledForRun,
-      toolSearchConfig,
-      forceDirectMessageTool: preparedToolBase.forceDirectMessageTool,
-      sessionId: attempt.sessionId,
-      sessionKey: input.setup.sandboxSessionKey,
-      agentId: input.setup.sessionAgentId,
-      runId: attempt.runId,
-      catalogRef: preparedToolBase.toolSearchCatalogRef,
-      toolHookContext: catalogToolHookContext,
-      toolExecutionAllow: attempt.toolExecutionAllow,
-      codeModeSkills,
+    const catalogToolHookContext = preparedToolBase.toolHookContext;
+    const compacted = preparedToolBase.toolSurfaceRuntime.compactTools(effectiveTools, {
+      hookContext: catalogToolHookContext,
+      prepared: {
+        abortSignal,
+        forceRestartSafeTools: attempt.forceRestartSafeTools,
+        toolExecutionAllow: attempt.toolExecutionAllow,
+        executeTool: input.executeCodeModeTool,
+        codeModeSkills,
+        preserveToolNames: localModelLeanPreserveToolNames,
+      },
     });
-    const projectedToolSearchTools = filterLocalModelLeanTools({
-      tools: toolSearch.tools,
-      config: attempt.config,
-      agentId: input.setup.sessionAgentId,
-      preserveToolNames: localModelLeanPreserveToolNames,
-    });
-    const toolSearchSchemaProjection = filterRuntimeCompatibleTools(projectedToolSearchTools);
-    logRuntimeToolSchemaQuarantine({
-      diagnostics: toolSearchSchemaProjection.diagnostics,
-      tools: projectedToolSearchTools,
+    const toolSearch = compacted.catalog;
+    recordQuarantine({
+      diagnostics: compacted.diagnostics,
+      tools: compacted.projectedTools,
       runId: attempt.runId,
       agentId: input.setup.sessionAgentId,
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
     });
-    if (!toolSearch.catalogRegistered) {
-      finalizeAgentToolAvailability(toolSearchSchemaProjection.tools, {
-        toolExecutionAllow: attempt.toolExecutionAllow,
-      });
-    }
-    effectiveTools = toolSearchSchemaProjection.tools.map((tool) =>
+    effectiveTools = compacted.tools.map((tool) =>
       wrapEmbeddedAttemptToolWithActivity(
         wrapToolWithAbortSignal(tool, abortSignal),
         attempt.runId,
@@ -165,22 +105,41 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       });
     }
     if (toolSearch.compacted && !toolSearch.catalogReused) {
-      log.info(
-        codeModeControlsEnabledForRun
-          ? `code-mode: cataloged ${toolSearch.catalogToolCount} tools behind exec/wait`
-          : toolSearchConfig.mode === "directory"
-            ? `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact directory surface`
-            : `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact prompt surface`,
-      );
+      emitTrustedDiagnosticEvent({
+        type: "tool.catalog",
+        source: "builtin",
+        mode: codeModeControlsEnabledForRun ? "code-mode" : "tool-search",
+        toolCount: toolSearch.catalogToolCount,
+      });
     }
     const deferredDirectoryToolsCallable =
       toolSearchControlsEnabledForRun &&
       toolSearchConfig.mode === "directory" &&
       toolSearch.catalogRegistered;
-    const explicitToolAllowlistSources = collectAttemptExplicitToolAllowlistSources({
-      capabilityProfile: runtimeCapabilityProfile,
-      toolsAllow: attempt.toolsAllow,
-    });
+    // Use the same resolved policy that constructed and filtered the run's tools.
+    const {
+      agentId,
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
+      groupPolicy,
+      sandboxPolicy,
+      subagentPolicy,
+      inheritedToolPolicy,
+    } = runtimeCapabilityProfile.policy;
+    const agentToolLabel = agentId ? `agents.${agentId}.tools` : "agent tools";
+    const explicitToolAllowlistSources = collectExplicitToolAllowlistSources([
+      { label: "tools.allow", allow: globalPolicy?.allow },
+      { label: "tools.byProvider.allow", allow: globalProviderPolicy?.allow },
+      { label: `${agentToolLabel}.allow`, allow: agentPolicy?.allow },
+      { label: `${agentToolLabel}.byProvider.allow`, allow: agentProviderPolicy?.allow },
+      { label: "group tools.allow", allow: groupPolicy?.allow },
+      { label: "sandbox tools.allow", allow: sandboxPolicy?.allow },
+      { label: "subagent tools.allow", allow: subagentPolicy?.allow },
+      { label: "inherited tools.allow", allow: inheritedToolPolicy?.allow },
+      { label: "runtime toolsAllow", allow: attempt.toolsAllow, enforceWhenToolsDisabled: true },
+    ]);
     const toolSearchRunPlan = buildToolSearchRunPlan({
       visibleTools: effectiveTools,
       uncompactedTools: uncompactedEffectiveTools,
@@ -234,7 +193,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       toolSearchRunPlan,
     };
   };
-  const current = buildCatalog();
+  const current = await withRuntimeToolSchemaQuarantine(buildCatalog);
   const promptPlanKeys = [
     "visibleAllowedToolNames",
     "liveAllowedToolNames",
@@ -262,15 +221,10 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         }
       }
     },
-    refreshTools: () => {
-      const next = buildCatalog();
+    refreshTools: (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) => {
+      const next = buildCatalog(recordQuarantine);
       current.effectiveTools.splice(0, current.effectiveTools.length, ...next.effectiveTools);
-      for (const key of [
-        "visibleAllowedToolNames",
-        "liveAllowedToolNames",
-        "capabilityToolNames",
-        "replayAllowedToolNames",
-      ] as const) {
+      for (const key of [...promptPlanKeys, "replayAllowedToolNames"] as const) {
         const target = current.toolSearchRunPlan[key];
         // Earlier tool calls remain valid history, even after their live authority is revoked.
         if (key !== "replayAllowedToolNames") {
@@ -298,17 +252,6 @@ function gateToolExecution(
   return tools.map((tool) =>
     executionAllowed(tool.name) || TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)
       ? tool
-      : markAgentToolExecutionUnavailable(
-          copyAgentToolAvailability(tool, {
-            ...tool,
-            // Preparation can perform work too; a denied call must not enter the source path.
-            prepareArguments: undefined,
-            prepareBeforeToolCallParams: undefined,
-            finalizeBeforeToolCallParams: undefined,
-            execute: async () => {
-              throw new Error(TOOL_EXECUTION_GATED_MESSAGE);
-            },
-          }),
-        ),
+      : gateAgentToolExecution(tool, formatToolExecutionGatedMessage(tool.name, allowNames)),
   );
 }

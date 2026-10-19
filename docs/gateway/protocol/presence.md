@@ -12,19 +12,89 @@ How the Gateway reports which nodes are connected, and which server-pushed event
 
 ## Presence
 
-- `system-presence` returns entries keyed by device identity, including
-  `deviceId`, `roles`, and `scopes`, so UIs can show one row per device even
-  when it connects as both operator and node.
+- `system-presence` returns one row per live operator connection, including
+  `deviceId`, `roles`, and `scopes`. Separate tabs keep their own watched-session
+  facts. Reconnecting removes offline rows for the same identity: device ID,
+  then client instance ID, then connection ID. When the last connection closes,
+  at most one offline row for that identity remains until the five-minute TTL.
+  Node connections retain device-keyed rows. UIs can group rows by device or person.
 - `node.list` includes optional `lastSeenAtMs` and `lastSeenReason`. Connected
   nodes report current connection time with reason `connect`; paired nodes can
   also report durable background presence via a trusted node event.
 
+### Opt-in presence deltas
+
+Operator clients can advertise `presence-deltas` in connect `caps`. The Control
+UI does so; native clients retain the existing `presence` event payload
+`{ presence: [...] }` and the ordinary `system-presence` array response.
+
+For opted-in readers, the same `presence` event carries one of two payloads:
+
+```json
+{
+  "reset": true,
+  "version": 12,
+  "presence": [{ "connectionId": "connection-a", "ts": 1000 }],
+  "keys": ["entry:connection-a"]
+}
+```
+
+```json
+{
+  "base": 12,
+  "version": 13,
+  "upsert": [{ "key": "entry:connection-a", "set": { "ts": 2000 }, "unset": ["watchedSessions"] }],
+  "remove": [],
+  "order": ["entry:connection-a"]
+}
+```
+
+Keys are opaque, stable identities assigned by the presence owner, independent
+of display names and recipient visibility. A reset replaces the complete roster;
+`keys` parallels `presence`. For an existing row, an upsert's `set` contains only
+changed top-level fields and `unset` names removed fields. Nested objects and arrays
+are replaced as fields, not merged. A new row uses `{ key, presence }` with its
+complete contents. A field patch requires an existing row; otherwise recover with
+a snapshot. Apply removals and upserts, then select rows in the complete `order` array.
+This preserves the full snapshot's ordering even when only one row changes.
+All rows are projected for that recipient before comparison, including watched
+session visibility changes.
+
+Heartbeat and activity timestamps are included in patches, so freshness remains
+identical to a full snapshot without retransmitting each connection's metadata.
+
+`version` uses `stateVersion.presence`. Apply a delta only when `base` matches
+the last accepted version. On mismatch, request `system-presence` with
+`{ "snapshot": true }`; an opted-in client receives the reset shape above.
+Ordinary calls still return the existing array. The Control UI reconciles these
+updates in its Gateway store so downstream consumers receive full rosters.
+
+The hello snapshot remains `snapshot.presence` with `snapshot.stateVersion.presence`.
+This implementation sends a reset on the first post-hello presence event instead
+of assuming the hello roster is a recorded delivery baseline. Reconnects start
+the same way. A reset is also sent when there is no baseline, after a recovery
+RPC, or when encoding a delta would not save bytes.
+
+Presence remains best effort with `dropIfSlow`. Each connection retains only
+references to its last sent projected rows and their version. A dropped frame
+invalidates that baseline, so the next presence event is a reset. The baseline
+advances only after the socket accepts a frame; send failures and disconnects
+clear it. Ordered WebSocket delivery makes successfully sent deltas composable;
+this is not a peer acknowledgment or a durable delivery guarantee.
+
 Native macOS nodes can also send authenticated `node.presence.activity` events
-with bounded input idle time. The Gateway derives activity timestamps on its
-own clock, exposes the freshest connected Mac through `node.list` and
-`node.describe`, and broadcasts `node.presence` updates to read-scoped clients.
-The app sends `{ "action": "clear" }` when the user disables activity sharing;
-the Gateway clears timestamps only for that exact authenticated node connection.
+with bounded input idle time and an optional `source`: `app` for interaction
+with OpenClaw or `system` for system-wide physical activity. App-local reports
+do not require Accessibility; system-wide reports do. An omitted source retains
+the legacy system-wide permission requirement. The Gateway derives activity
+timestamps on its own clock, exposes the freshest connected Mac through
+`node.list` and `node.describe`, and broadcasts `node.presence` updates to
+read-scoped clients.
+
+The app sends `{ "action": "clear" }` when system-wide detection is disabled,
+then reports any observed app-local activity. When Accessibility is lost, it
+falls back to app-local activity or clears the sample if none has been observed.
+The Gateway clears timestamps only for that exact authenticated node connection.
 Gateways that predate this acknowledged action return it as unhandled, so the Mac
 node reconnects once and lets disconnect cleanup remove the old connection state.
 See [Active computer presence](/nodes/presence) for selection, privacy, model
@@ -55,9 +125,11 @@ encoding in `payloadJSON`):
 1-, 5-, and 15-minute averages, each finite and between 0 and 100000. Windows
 has no load average; hosts omit the field when all three readings are zero.
 Memory and disk values are non-negative integer bytes, with free or available
-bytes no greater than their total. Disk fields appear together only when the
-host can read capacity for the volume containing its home directory, independent
-of the worker's current directory.
+bytes no greater than their total. On macOS, `memoryFreeBytes` includes
+reclaimable host memory, so idle file cache is not reported as used; other
+platforms retain host-wide free-memory readings. Disk fields appear together only
+when the host can read capacity for the volume containing its home directory,
+independent of the worker's current directory.
 
 The Gateway accepts updates only from the current node connection and stamps
 `updatedAtMs` with its own receipt time; nodes never send a timestamp. Successful
@@ -120,10 +192,12 @@ sessions do not passively receive session content
   `operator.admin` by default; explicit entries such as
   `plugin.approval.requested` / `plugin.approval.resolved` use
   `operator.approvals` instead.
-- Status/transport events (`heartbeat`, `presence`, `tick`, connect/disconnect
-  lifecycle) stay unrestricted so transport health is observable to every
+- Presence events require operator read access (`operator.read`, also satisfied
+  by `operator.write` or `operator.admin`). Watched-session references are filtered
+  for each recipient, including in hello snapshots and `system-presence` replies.
+- Transport events such as `heartbeat` and `tick` remain available to every
   authenticated session.
-- Unknown broadcast event families are scope-gated by default (fail-closed)
+- Unknown broadcast event families are blocked unless the caller has the required scope
   unless a registered handler explicitly relaxes them.
 
 Each client connection keeps its own per-client sequence number, so broadcasts

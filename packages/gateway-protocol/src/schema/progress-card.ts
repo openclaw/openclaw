@@ -1,16 +1,20 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { PROGRESS_CARD_MAX_STEPS } from "../progress-card-limits.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
-export const PROGRESS_CARD_MAX_UTF8_BYTES = 8192;
-export const PROGRESS_CARD_MAX_STEPS = 50;
-export const PROGRESS_CARD_MAX_STEP_UTF8_BYTES = 512;
+export {
+  PROGRESS_CARD_MAX_UTF8_BYTES,
+  PROGRESS_CARD_MAX_STEPS,
+  PROGRESS_CARD_MAX_STEP_UTF8_BYTES,
+} from "../progress-card-limits.js";
 
-export const ProgressCardStepStatusSchema = Type.Union([
-  Type.Literal("pending"),
-  Type.Literal("in_progress"),
-  Type.Literal("completed"),
+export const ProgressCardStepStatusSchema = stringLiteralUnion([
+  "pending",
+  "in_progress",
+  "completed",
 ]);
 export type ProgressCardStepStatus = Static<typeof ProgressCardStepStatusSchema>;
 
@@ -51,6 +55,20 @@ export type ProgressCardPutParams = Static<typeof ProgressCardPutParamsSchema>;
 
 export const ProgressCardPutResultSchema = ProgressCardGetResultSchema;
 export type ProgressCardPutResult = Static<typeof ProgressCardPutResultSchema>;
+
+export const ProgressCardRefreshParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  idempotencyKey: NonEmptyString,
+});
+export type ProgressCardRefreshParams = Static<typeof ProgressCardRefreshParamsSchema>;
+
+export const ProgressCardRefreshResultSchema = closedObject({
+  runId: NonEmptyString,
+  status: Type.Literal("accepted"),
+  revision: Type.Integer({ minimum: 1 }),
+});
+export type ProgressCardRefreshResult = Static<typeof ProgressCardRefreshResultSchema>;
 
 export const ProgressCardChangedEventSchema = closedObject({
   sessionKey: NonEmptyString,

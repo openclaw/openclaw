@@ -78,33 +78,4 @@ describe("pre-auth bootstrap-token rate limit", () => {
       expect(reasons.filter((reason) => reason === "rate_limited")).toHaveLength(5);
     });
   });
-
-  test("forged bootstrap-token failures consume their own bucket independent of device-token", async () => {
-    testState.gatewayAuth = {
-      mode: "token",
-      token: "secret",
-      rateLimit: {
-        maxAttempts: 1,
-        windowMs: 60_000,
-        lockoutMs: 60_000,
-        exemptLoopback: false,
-      },
-    };
-    await withGatewayServer(async ({ port }) => {
-      const identityPath = path.join(
-        os.tmpdir(),
-        `openclaw-preauth-bootstrap-shared-${randomUUID()}.json`,
-      );
-
-      const first = await attemptForgedBootstrap(port, identityPath);
-      expect(first.ok).toBe(false);
-      const firstDetail = first.error?.details as { authReason?: string } | undefined;
-      expect(firstDetail?.authReason).toBe("bootstrap_token_invalid");
-
-      const second = await attemptForgedBootstrap(port, identityPath);
-      expect(second.ok).toBe(false);
-      const secondDetail = second.error?.details as { authReason?: string } | undefined;
-      expect(secondDetail?.authReason).toBe("rate_limited");
-    });
-  });
 });

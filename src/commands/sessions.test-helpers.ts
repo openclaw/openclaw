@@ -4,12 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import { drainSessionDiskBudgetWorkers } from "../config/sessions/disk-budget-runtime.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 
@@ -27,9 +28,11 @@ const sessionsConfigState = vi.hoisted<{ loadConfig: () => Record<string, unknow
 
 const defaultSessionsConfigLoader = sessionsConfigState.loadConfig;
 
+// mock-isolation: Session CLI fixtures select their own stores instead of the host session config.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => sessionsConfigState.loadConfig(),
   loadConfig: () => sessionsConfigState.loadConfig(),
+  captureRuntimeConfigAsyncReader: () => async () => sessionsConfigState.loadConfig(),
 }));
 
 export function mockSessionsConfig() {
@@ -88,7 +91,9 @@ export async function writeStore(
   for (const [sessionKey, entry] of Object.entries(data)) {
     await replaceSessionEntry({ agentId, sessionKey, storePath }, entry);
   }
-  closeOpenClawAgentDatabaseByPath(databasePath);
+  // Disk-budget scans inspect suffixed database owners; join them before handing off the fixture.
+  await drainSessionDiskBudgetWorkers();
+  await closeOpenClawAgentDatabaseByPathAsync(databasePath);
   return databasePath;
 }
 
@@ -121,6 +126,9 @@ export async function runSessionsJson<T>(
       runtime,
     );
   } finally {
+    await closeOpenClawAgentDatabaseByPathAsync(
+      resolveSqliteTargetFromSessionStorePath(store).path,
+    );
     cleanupStore(store);
   }
   return JSON.parse(logs[0] ?? "{}") as T;

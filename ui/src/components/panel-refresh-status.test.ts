@@ -1,15 +1,16 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { describe, expect, it } from "vitest";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   beginPanelRefresh,
   completePanelRefresh,
   createPanelRefreshStatus,
   failPanelRefresh,
-  renderPanelRefreshStatus,
 } from "./panel-refresh-status.ts";
+import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 
 const connected: ApplicationGatewaySnapshot = {
   phase: "connected",
@@ -35,9 +36,10 @@ describe("panel refresh failures", () => {
       });
       const status = failPanelRefresh(completePanelRefresh(), error, connected);
       const container = document.createElement("div");
-      render(
-        renderPanelRefreshStatus({ status, errorMessage: "Could not load details" }),
-        container,
+      mountSolid(
+        () =>
+          createComponent(PanelRefreshStatus, { status, errorMessage: "Could not load details" }),
+        { container },
       );
       expect(container.textContent).toBe("");
       expect(status).toMatchObject({
@@ -63,7 +65,7 @@ describe("panel refresh failures", () => {
       ...state,
     });
     const container = document.createElement("div");
-    render(renderPanelRefreshStatus({ status }), container);
+    mountSolid(() => createComponent(PanelRefreshStatus, { status }), { container });
     expect(container.textContent).toBe("");
     expect(status).toMatchObject({ error: null, stale: true, awaitingGateway: true });
   });
@@ -98,7 +100,7 @@ describe("panel refresh failures", () => {
         ...state,
       });
       const container = document.createElement("div");
-      render(renderPanelRefreshStatus({ status }), container);
+      mountSolid(() => createComponent(PanelRefreshStatus, { status }), { container });
       expect(container.querySelector('[role="alert"]')?.textContent).toContain(message);
       expect(container.textContent).toContain("Showing stale data");
       expect(container.querySelector("button")).toBeNull();
@@ -121,9 +123,10 @@ describe("panel refresh failures", () => {
 
   it("shows a stale-only warning without an alert or a button", () => {
     const container = document.createElement("div");
-    render(
-      renderPanelRefreshStatus({ status: { ...completePanelRefresh(), stale: true } }),
-      container,
+    mountSolid(
+      () =>
+        createComponent(PanelRefreshStatus, { status: { ...completePanelRefresh(), stale: true } }),
+      { container },
     );
     expect(container.querySelector('[role="status"]')?.textContent).toContain("Showing stale data");
     expect(container.querySelector('[role="alert"], button')).toBeNull();

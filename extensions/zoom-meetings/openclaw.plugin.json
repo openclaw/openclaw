@@ -48,6 +48,26 @@
     "realtime.agentId": { "label": "Realtime Consult Agent", "advanced": true },
     "realtime.toolPolicy": { "label": "Realtime Tool Policy", "advanced": true }
   },
+  "configGroups": [
+    {
+      "id": "meeting-defaults",
+      "title": "Meeting defaults",
+      "order": 10,
+      "properties": ["enabled", "defaultMode"]
+    },
+    {
+      "id": "browser-transport",
+      "title": "Browser transport",
+      "order": 20,
+      "properties": ["chrome", "chromeNode"]
+    },
+    {
+      "id": "realtime-voice",
+      "title": "Realtime voice",
+      "order": 30,
+      "properties": ["realtime"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

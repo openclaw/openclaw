@@ -1,5 +1,4 @@
 import {
-  cloneLayout,
   clampWidth,
   clampHeight,
   sidebarDock,
@@ -12,7 +11,6 @@ import type {
   SidebarColumn,
   SidebarDock,
   SidebarLayout,
-  SidebarPanel,
   SidebarSlotId,
 } from "./sidebar-layout-types.ts";
 
@@ -31,7 +29,7 @@ export {
   sidebarActivePanel,
   isSidebarSlotVisible,
   fitSidebarLayout,
-  isSidebarRegionCollapsed,
+  initializeBrowserSidebarWidth,
   SIDEBAR_MIN_WIDTH_PX,
   SIDEBAR_MIN_HEIGHT_PX,
   SIDEBAR_NARROW_BREAKPOINT_PX,
@@ -49,6 +47,7 @@ function createSidebarColumn(): SidebarColumn {
     activePanelId: "",
     height: SIDEBAR_DEFAULT_HEIGHT_PX,
     width: SIDEBAR_DEFAULT_WIDTH_PX,
+    browserWidthPending: true,
   };
 }
 
@@ -80,7 +79,7 @@ export function openDashboardPresentation(
 }
 
 function nextPanelId(layout: SidebarLayout, slot: SidebarSlotId): string {
-  const used = new Set(layout.columns.flatMap((column) => column.panels.map((panel) => panel.id)));
+  const used = new Set(layout.columns[0]?.panels.map((panel) => panel.id));
   if (!used.has(slot)) {
     return slot;
   }
@@ -91,27 +90,24 @@ function nextPanelId(layout: SidebarLayout, slot: SidebarSlotId): string {
   return `${slot}-${suffix}`;
 }
 
-function removePanel(layout: SidebarLayout, panelId: string): SidebarPanel | null {
-  for (const column of layout.columns) {
-    const panelIndex = column.panels.findIndex((panel) => panel.id === panelId);
-    if (panelIndex < 0) {
-      continue;
-    }
-    const sideIndex = column.panels
-      .filter((entry) => entry.id !== layout.mainPanelId)
-      .findIndex((entry) => entry.id === panelId);
-    const panel = column.panels.splice(panelIndex, 1)[0]!;
-    if (column.activePanelId === panelId) {
-      const sidePanels = column.panels.filter((entry) => entry.id !== layout.mainPanelId);
-      column.activePanelId = sidePanels[Math.min(sideIndex, sidePanels.length - 1)]?.id ?? "";
-    }
-    return panel;
+function removePanel(layout: SidebarLayout, panelId: string): void {
+  const column = layout.columns[0];
+  const panelIndex = column?.panels.findIndex((panel) => panel.id === panelId) ?? -1;
+  if (!column || panelIndex < 0) {
+    return;
   }
-  return null;
+  const sideIndex = column.panels
+    .filter((entry) => entry.id !== layout.mainPanelId)
+    .findIndex((entry) => entry.id === panelId);
+  column.panels.splice(panelIndex, 1);
+  if (column.activePanelId === panelId) {
+    const sidePanels = column.panels.filter((entry) => entry.id !== layout.mainPanelId);
+    column.activePanelId = sidePanels[Math.min(sideIndex, sidePanels.length - 1)]?.id ?? "";
+  }
 }
 
 export function ensureSidebarConversation(layout: SidebarLayout): SidebarLayout {
-  const next = cloneLayout(layout);
+  const next = structuredClone(layout);
   const column = (next.columns[0] ??= createSidebarColumn());
   let conversation = column.panels.find((panel) => panel.slot === "conversation");
   if (!conversation) {
@@ -128,7 +124,7 @@ export function ensureSidebarConversation(layout: SidebarLayout): SidebarLayout 
 export function promoteSidebarPanel(layout: SidebarLayout, panelId: string): SidebarLayout {
   const target = layout.columns[0]?.panels.find((panel) => panel.id === panelId);
   if (!target || sidebarMainPanel(layout)?.id === panelId) {
-    return cloneLayout(layout);
+    return structuredClone(layout);
   }
   const next = ensureSidebarConversation(layout);
   const previousMainId = next.mainPanelId!;
@@ -140,43 +136,39 @@ export function promoteSidebarPanel(layout: SidebarLayout, panelId: string): Sid
   return next;
 }
 
-export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {
-  const next = cloneLayout(layout);
+function selectPanel(layout: SidebarLayout, column: SidebarColumn, panelId: string): void {
+  column.activePanelId = panelId;
+  layout.open = true;
+  if (layout.expanded) {
+    layout.expanded = false;
+    delete layout.expandedSide;
+  }
+}
+
+export function openSlot(
+  layout: SidebarLayout,
+  slot: SidebarSlotId,
+  options?: { activate?: boolean },
+): SidebarLayout {
+  const next = structuredClone(layout);
   if ((sidebarMainPanel(next)?.slot ?? "conversation") === slot) {
     return next.expandedSide ? setSidebarExpanded(next, false) : next;
   }
-  const existing = next.columns
-    .flatMap((column) => column.panels)
-    .find((panel) => panel.slot === slot);
-  if (existing) {
-    next.open = true;
-    if (next.expanded) {
-      next.expanded = false;
-      delete next.expandedSide;
-    }
-    const column = next.columns.find((entry) => entry.panels.includes(existing));
-    if (column) {
-      column.activePanelId = existing.id;
-    }
-    return next;
-  }
-  const panel: SidebarPanel = { id: nextPanelId(next, slot), slot };
   const column = (next.columns[0] ??= createSidebarColumn());
-  column.panels.push(panel);
-  column.activePanelId = panel.id;
-  next.open = true;
-  if (next.expanded) {
-    next.expanded = false;
-    delete next.expandedSide;
+  let panel = column.panels.find((entry) => entry.slot === slot);
+  if (!panel) {
+    panel = { id: nextPanelId(next, slot), slot };
+    column.panels.push(panel);
+  }
+  if (options?.activate !== false) {
+    selectPanel(next, column, panel.id);
   }
   return next;
 }
 
 export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {
-  let next = cloneLayout(layout);
-  const panel = next.columns
-    .flatMap((column) => column.panels)
-    .find((entry) => entry.slot === slot);
+  let next = structuredClone(layout);
+  const panel = next.columns[0]?.panels.find((entry) => entry.slot === slot);
   if (panel) {
     if (next.expandedSide && panel.id === sidebarActivePanel(next)?.id) {
       next = setSidebarExpanded(next, false);
@@ -207,15 +199,10 @@ export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLa
 }
 
 export function activatePanel(layout: SidebarLayout, panelId: string): SidebarLayout {
-  const next = cloneLayout(layout);
-  const column = next.columns.find((entry) => entry.panels.some((panel) => panel.id === panelId));
-  if (column && panelId !== next.mainPanelId) {
-    column.activePanelId = panelId;
-    next.open = true;
-    if (next.expanded) {
-      next.expanded = false;
-      delete next.expandedSide;
-    }
+  const next = structuredClone(layout);
+  const column = next.columns[0];
+  if (column?.panels.some((panel) => panel.id === panelId) && panelId !== next.mainPanelId) {
+    selectPanel(next, column, panelId);
   }
   return next;
 }
@@ -226,7 +213,7 @@ export function reorderPanel(
   targetPanelId: string,
   placement: "before" | "after",
 ): SidebarLayout {
-  const next = cloneLayout(layout);
+  const next = structuredClone(layout);
   const panels = next.columns[0]?.panels;
   if (!panels || panelId === targetPanelId) {
     return next;
@@ -243,16 +230,12 @@ export function reorderPanel(
 }
 
 export function setSidebarOpen(layout: SidebarLayout, open: boolean): SidebarLayout {
-  const next = cloneLayout(layout);
+  const next = structuredClone(layout);
   if (open) {
     next.columns[0] ??= createSidebarColumn();
-    if (next.expanded) {
-      next.expanded = false;
-      delete next.expandedSide;
-    }
   }
   next.open = open;
-  if (!open && next.expandedSide) {
+  if (open ? next.expanded : next.expandedSide) {
     next.expanded = false;
     delete next.expandedSide;
   }
@@ -261,7 +244,7 @@ export function setSidebarOpen(layout: SidebarLayout, open: boolean): SidebarLay
 
 export function setSidebarExpanded(layout: SidebarLayout, expanded: boolean): SidebarLayout {
   // Restore split must reveal the side even when focus began with that panel closed.
-  const next = cloneLayout(layout);
+  const next = structuredClone(layout);
   delete next.expandedSide;
   return { ...next, expanded, ...(expanded ? { open: true } : {}) };
 }
@@ -269,7 +252,7 @@ export function setSidebarExpanded(layout: SidebarLayout, expanded: boolean): Si
 /** Focus in place: restoring must not leave the main and side views swapped. */
 export function toggleSidebarPanelExpanded(layout: SidebarLayout, panelId: string): SidebarLayout {
   if (!sidebarSidePanels(layout).some((panel) => panel.id === panelId)) {
-    return cloneLayout(layout);
+    return structuredClone(layout);
   }
   if (layout.expanded && layout.expandedSide && sidebarActivePanel(layout)?.id === panelId) {
     return setSidebarExpanded(layout, false);
@@ -280,8 +263,35 @@ export function toggleSidebarPanelExpanded(layout: SidebarLayout, panelId: strin
   return next;
 }
 
+const narrowPresentations = new WeakMap<SidebarLayout, SidebarLayout>();
+
+/**
+ * How a narrow pane shows a layout. It can only stack its side panel under the
+ * main view, which leaves a list-and-detail panel too little room, so an open
+ * Subagents or Processes panel is shown focused in place. Mobile chrome uses
+ * this presentation for every panel. The saved layout is unchanged, so a wider
+ * pane shows the original split again.
+ */
+export function presentNarrowSidebarLayout(
+  layout: SidebarLayout,
+  options?: { allPanels: boolean },
+): SidebarLayout {
+  const slot =
+    layout.open === true && !layout.expanded ? sidebarActivePanel(layout)?.slot : undefined;
+  // Phone layouts show the selected side view, including Chat beside a page.
+  if (!slot || (!options?.allPanels && slot !== "subagents" && slot !== "processes")) {
+    return layout;
+  }
+  let presented = narrowPresentations.get(layout);
+  if (!presented) {
+    presented = { ...layout, expanded: true, expandedSide: true };
+    narrowPresentations.set(layout, presented);
+  }
+  return presented;
+}
+
 export function setSidebarDock(layout: SidebarLayout, dock: SidebarDock): SidebarLayout {
-  return { ...cloneLayout(layout), dock };
+  return { ...structuredClone(layout), dock };
 }
 
 export function resizeSidebarPanel(
@@ -289,13 +299,14 @@ export function resizeSidebarPanel(
   columnId: string,
   size: number,
 ): SidebarLayout {
-  const next = cloneLayout(layout);
+  const next = structuredClone(layout);
   const column = next.columns.find((entry) => entry.id === columnId);
   if (column && Number.isFinite(size)) {
     if (sidebarDock(next) === "bottom") {
       column.height = clampHeight(size);
     } else {
       column.width = clampWidth(size);
+      delete column.browserWidthPending;
     }
   }
   return next;

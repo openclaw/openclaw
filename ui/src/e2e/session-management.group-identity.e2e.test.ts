@@ -88,7 +88,7 @@ suite.define(() => {
           await page.locator(".chat-header-session-menu__trigger").click();
         } else {
           await row.hover();
-          await row.getByRole("button", { name: "Open session menu" }).click();
+          await row.click({ button: "right" });
         }
         await openSessionMenuSubmenu(page, batch ? "Move 2 to group" : "Move to group");
         await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
@@ -181,9 +181,9 @@ suite.define(() => {
             )
             .count(),
         ).toBe(0);
-        if (surface !== "header") {
-          await page.getByRole("button", { name: "Cancel", exact: true }).click();
-        }
+        expect(await input.inputValue()).toBe(group);
+        expect(await input.isEnabled()).toBe(true);
+        await page.getByRole("button", { name: "Cancel", exact: true }).click();
         await input.waitFor({ state: "detached" });
         await capture("unchanged", page.locator(".shell"), [row]);
       } finally {

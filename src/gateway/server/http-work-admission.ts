@@ -4,6 +4,7 @@ import type { Duplex } from "node:stream";
 import { waitForHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
+import { getGatewayInstallationReplacement } from "../stale-install.js";
 
 type GatewayBoundaryHandler = () => Promise<boolean> | boolean;
 
@@ -60,9 +61,13 @@ export function rejectGatewayUpgradeServiceUnavailable(
   socket: Pick<Duplex, "end" | "destroy">,
   body: string,
 ): void {
+  const replacement = getGatewayInstallationReplacement();
   rejectWebSocketUpgrade(socket, {
     status: 503,
-    body: { contentType: "text/plain; charset=utf-8", text: body },
+    body: {
+      contentType: "text/plain; charset=utf-8",
+      text: replacement ? `${body}. ${replacement.message}` : body,
+    },
   });
 }
 

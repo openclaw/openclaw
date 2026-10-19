@@ -7,6 +7,7 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { waitForSolid } from "../solid-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 
 export function setEffectiveOwner(
@@ -120,14 +121,16 @@ export function registerSessionOwnershipAvatarTests() {
     expect(adaChip?.getAttribute("title")).toBe("Created by Ada");
     const adaImage = adaChip?.querySelector("img");
     adaImage?.dispatchEvent(new Event("error"));
-    expect(adaChip?.querySelector(".viewer-avatar")?.classList.contains("is-fallback")).toBe(true);
+    await waitForSolid(() =>
+      expect(adaChip?.querySelector(".viewer-avatar")?.classList.contains("is-fallback")).toBe(
+        true,
+      ),
+    );
 
     const carolChip = sidebar.querySelector(
       '[data-session-key="agent:main:carol"] .session-owner-chip',
     );
-    expect(carolChip?.querySelector("img")?.getAttribute("src")).toBe(
-      "/api/users/profile-carol/avatar",
-    );
+    expect(carolChip?.querySelector("img")).toBeNull();
     expect(carolChip?.textContent?.trim()).toBe("C");
   });
 
@@ -151,6 +154,7 @@ export function registerSessionOwnershipAvatarTests() {
       result.owners = [
         { type, id: "profile-lobster", label },
         { type: "human", id: "profile-ada", label: "Ada" },
+        { type: "human", id: "profile-bob", label: "Bob" },
       ];
 
       const { sidebar } = await mountSidebar(gateway, harness.sessions);

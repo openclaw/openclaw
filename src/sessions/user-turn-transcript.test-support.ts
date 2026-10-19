@@ -1,31 +1,10 @@
-import "./user-turn-transcript.js";
 import fs from "node:fs";
 import path from "node:path";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import type {
-  PersistUserTurnTranscriptParams,
-  UserTurnTranscriptPersistResult,
-  UserTurnTranscriptTarget,
-} from "./user-turn-transcript.types.js";
+import type { UserTurnTranscriptTarget } from "./user-turn-transcript.types.js";
 
-type UserTurnTranscriptTestApi = {
-  persistUserTurnTranscript(
-    params: PersistUserTurnTranscriptParams,
-  ): Promise<UserTurnTranscriptPersistResult | undefined>;
-};
-
-function getTestApi(): UserTurnTranscriptTestApi {
-  return (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.userTurnTranscriptTestApi")
-  ] as UserTurnTranscriptTestApi;
-}
-
-export async function persistUserTurnTranscript(
-  params: PersistUserTurnTranscriptParams,
-): Promise<UserTurnTranscriptPersistResult | undefined> {
-  return await getTestApi().persistUserTurnTranscript(params);
-}
+export { persistUserTurnTranscript } from "./user-turn-transcript.persistence.js";
 
 export function createSqliteTranscriptTarget(params: {
   dir: string;

@@ -1,4 +1,3 @@
-// Slack plugin module implements interactive dispatch behavior.
 import {
   createChannelInteractiveDispatcher,
   type PluginConversationBinding,
@@ -7,8 +6,9 @@ import {
   type PluginInteractiveRegistration,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ModalInputSummary } from "./monitor/events/modal-input-summary.js";
+import type { SlackMessageEvent } from "./types.js";
 
-type SlackInteractiveHandlerResult = {
+export type SlackInteractiveHandlerResult = {
   handled?: boolean;
   systemEvent?: {
     summary?: string;
@@ -99,7 +99,7 @@ export async function dispatchSlackPluginInteractiveHandler(params: {
   data: string;
   interactionId: string;
   teamId?: string;
-  channelType?: "im" | "mpim" | "channel" | "group";
+  channelType?: NonNullable<SlackMessageEvent["channel_type"]>;
   ctx: Parameters<typeof dispatchSlackInteractive>[0]["ctx"];
   respond: SlackInteractiveHandlerContext["respond"];
   onMatched?: () => Promise<void> | void;

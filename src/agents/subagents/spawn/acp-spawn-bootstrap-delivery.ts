@@ -76,8 +76,8 @@ export function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     params.binding?.conversation.accountId === requesterAccountId &&
     requesterConversationRef?.conversationId &&
     params.binding?.conversation.conversationId === requesterConversationRef.conversationId &&
-    (params.binding?.conversation.parentConversationId ?? undefined) ===
-      (requesterConversationRef.parentConversationId ?? undefined),
+    params.binding?.conversation.parentConversationId ===
+      requesterConversationRef.parentConversationId,
   );
   const boundDeliveryTarget = deliveryContextFromConversation(params.binding?.conversation);
   const inferredDeliveryTo =

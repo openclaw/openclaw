@@ -91,7 +91,6 @@ suite.define(() => {
         deltaText: interimText,
         message: {
           role: "assistant",
-          phase: "commentary",
           content: [{ type: "text", text: interimText }],
           timestamp: 1,
         },
@@ -103,9 +102,9 @@ suite.define(() => {
         seq: 2,
         state: "delta",
         deltaText: partialFinalText,
+        replace: true,
         message: {
           role: "assistant",
-          phase: "final_answer",
           content: [{ type: "text", text: partialFinalText }],
           timestamp: 2,
         },
@@ -155,31 +154,23 @@ suite.define(() => {
         },
       ];
       const historyCount = (await gateway.getRequests("chat.history")).length;
-      await gateway.deferNext("chat.history");
+      await gateway.setHistoryMessages(persistedHistory);
       await gateway.emitGatewayEvent("chat", {
         runId,
         sessionKey,
         state: "final",
       });
 
-      const staleRequest = await gateway.waitForRequest("chat.history", { after: historyCount });
-      expect(staleRequest.params).toMatchObject({ sessionKey, limit: 80 });
-      // The first authoritative snapshot can promote the same interim text to
-      // a durable row before the distinct terminal reply is committed. That
-      // identity change is not a recovered final; retry until new content lands.
-      await gateway.setHistoryMessages(persistedHistory);
-      await gateway.resolveDeferred("chat.history", {
-        messages: persistedInterimHistory,
-        sessionId: `session:${sessionKey}`,
-        thinkingLevel: null,
+      const recoveryRequest = await gateway.waitForRequest("chat.history", {
+        after: historyCount,
       });
-      await gateway.waitForRequest("chat.history", { after: historyCount + 1 });
+      expect(recoveryRequest.params).toMatchObject({ sessionKey, limit: 80 });
       const visibleFinal = page.locator(".chat-thread-inner .chat-text", { hasText: finalText });
       await visibleFinal.waitFor({ timeout: 10_000 });
       await expect.poll(() => visibleFinal.count()).toBe(1);
       await expect
         .poll(async () => (await gateway.getRequests("chat.history")).length)
-        .toBe(historyCount + 2);
+        .toBe(historyCount + 1);
       if (recordProof) {
         await writeFile(
           path.join(

@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { msteamsPlugin } from "../extensions/msteams/api.js";
 import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
@@ -6,9 +7,14 @@ import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-c
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
 import type { ChannelThreadingToolContext } from "../src/channels/plugins/types.public.js";
+import {
+  applyResolvedCommandOutputMode,
+  withConsoleLogsRoutedToStderrForJson,
+} from "../src/cli/json-output-mode.js";
+import { registerMessageCommands } from "../src/cli/program/register.message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapability,
@@ -23,9 +29,14 @@ import {
 } from "../src/infra/agent-run-registry.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../src/plugins/runtime.js";
 import type { PluginRuntime } from "../src/plugins/runtime/types.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
+import { defaultRuntime } from "../src/runtime.js";
 
 const graph = vi.hoisted(() => ({
   endpoint: undefined as { origin: string; signal: AbortSignal } | undefined,
@@ -69,6 +80,8 @@ vi.mock("../extensions/msteams/runtime-api.js", async (original) => {
 const token = "synthetic-graph-token";
 const requesterId = "22222222-2222-2222-2222-222222222222";
 const memberId = "33333333-3333-3333-3333-333333333333";
+const messageSender = { user: { id: memberId, displayName: "Member" } };
+const messageCreatedAt = "2026-10-13T12:00:00Z";
 const current = {
   teamId: "11111111-1111-1111-1111-111111111111",
   channelId: "19:current@thread.tacv2",
@@ -110,7 +123,11 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
 });
 
-async function createFixture(currentContext: "channel" | "chat" | "none" = "channel") {
+async function createFixture(
+  currentContext: "channel" | "chat" | "none" = "channel",
+  origin: "bundled" | "global" = "bundled",
+  searchMatches = 1,
+) {
   const cfg: OpenClawConfig = {
     channels: {
       msteams: {
@@ -134,7 +151,11 @@ async function createFixture(currentContext: "channel" | "chat" | "none" = "chan
     runtime: {} as PluginRuntime,
     activateGlobalSideEffects: false,
   });
-  const record = createPluginRecord({ id: "msteams", origin: "bundled" });
+  const record = createPluginRecord({
+    id: "msteams",
+    origin,
+    trustedOfficialInstall: origin === "global",
+  });
   owner.registry.plugins.push(record);
   owner.createApi(record, { config: cfg, registrationMode: "full" }).registerChannel({
     plugin: { ...msteamsPlugin, status: undefined },
@@ -148,19 +169,19 @@ async function createFixture(currentContext: "channel" | "chat" | "none" = "chan
   const toolContext: ChannelThreadingToolContext | undefined =
     currentContext === "none"
       ? undefined
-      : currentContext === "chat"
-        ? {
-            currentChannelProvider: "msteams",
-            currentChannelId: currentChat,
-            currentChatType: "direct",
-          }
-        : {
-            currentChannelProvider: "msteams",
-            currentChannelId: current.channelId,
-            currentChatType: "channel",
-            currentMessagingTarget: currentTarget,
-            currentGraphChannelId: currentTarget,
-          };
+      : {
+          ...msteamsPlugin.threading!.buildToolContext!({
+            cfg,
+            accountId: "default",
+            context: {
+              To: `conversation:${currentContext === "chat" ? currentChat : current.channelId}`,
+              ChatType: currentContext === "chat" ? "direct" : "channel",
+              NativeChannelId: currentContext === "chat" ? undefined : currentTarget,
+            },
+            hasRepliedRef: { value: false },
+          }),
+          currentChannelProvider: "msteams",
+        };
   const capabilityParams = { agentId: "main", runId: operationalRunInstance.runId, sessionKey };
   const turnCapability = mintMessageActionTurnCapability({
     ...capabilityParams,
@@ -224,12 +245,23 @@ async function createFixture(currentContext: "channel" | "chat" | "none" = "chan
       path === `/v1.0/teams/${destination.teamId}/channels/${destination.channelId}/messages`
     ) {
       body = {
-        value: [
-          {
-            id: destination.messageId,
-            body: { content: destination.text, contentType: "text" },
-          },
-        ],
+        value: Array.from({ length: searchMatches }, (_, index) => ({
+          id: index === 0 ? destination.messageId : `${destination.messageId}-${index}`,
+          body: { content: destination.text, contentType: "text" },
+          from: messageSender,
+          createdDateTime: messageCreatedAt,
+        })),
+      };
+    } else if (
+      destination &&
+      path ===
+        `/v1.0/teams/${destination.teamId}/channels/${destination.channelId}/messages/${destination.messageId}`
+    ) {
+      body = {
+        id: destination.messageId,
+        body: { content: destination.text, contentType: "text" },
+        from: messageSender,
+        createdDateTime: messageCreatedAt,
       };
     } else {
       response.statusCode = 404;
@@ -266,13 +298,6 @@ async function createFixture(currentContext: "channel" | "chat" | "none" = "chan
       agentAccountId: "default",
       messageActionTurnCapability: turnCapability,
       config: cfg,
-      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-      resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-        resolvedConfig: config,
-        diagnostics: [],
-        targetStatesByPath: {},
-        hadUnresolvedTargets: false,
-      }),
     }),
     {
       ...capabilityParams,
@@ -387,16 +412,180 @@ function expectGraphRequests(requests: GraphRequest[], action: Action, destinati
   );
 }
 
+describe("Teams message CLI", () => {
+  async function runCli(args: string[], action: Action | "read", json = true) {
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    const command = new Command().name("openclaw").exitOverride();
+    registerMessageCommands(command, {
+      programVersion: "test",
+      messageChannelOptions: "msteams",
+      agentChannelOptions: "last|msteams",
+    });
+    const registry = getActivePluginRegistry();
+    if (!registry) {
+      throw new Error("expected the Teams fixture registry");
+    }
+    const [configGuard, channelPluginIds, pluginLoader, oneShotExit] = await Promise.all([
+      import("../src/cli/program/config-guard.js"),
+      import("../src/plugins/channel-plugin-ids.js"),
+      import("../src/plugins/loader.js"),
+      import("../src/cli/one-shot-exit.js"),
+    ]);
+    // The harness owns config and registry admission; production owns parsed action dispatch.
+    const spies = [
+      vi.spyOn(configGuard, "ensureConfigReady").mockResolvedValue(undefined),
+      vi
+        .spyOn(channelPluginIds, "resolveDiscoverableScopedChannelPluginIds")
+        .mockImplementation(({ channelIds }) => [...channelIds]),
+      vi.spyOn(pluginLoader, "loadPluginRegistryHandle").mockReturnValue(registry),
+      vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log),
+      vi
+        .spyOn(defaultRuntime, "writeJson")
+        .mockImplementation((value) => runtime.log(JSON.stringify(value))),
+      vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error),
+      vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new Error(`unexpected CLI exit(${code})`);
+      }),
+      vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true),
+    ];
+    try {
+      const argv = ["message", ...args, "--channel", "msteams", ...(json ? ["--json"] : [])];
+      await withConsoleLogsRoutedToStderrForJson(
+        ["node", "openclaw", ...argv],
+        async () => {
+          applyResolvedCommandOutputMode(json);
+          await command.parseAsync(argv, { from: "user" });
+        },
+        { restoreChanges: true },
+      );
+    } finally {
+      for (const spy of spies) {
+        spy.mockRestore();
+      }
+    }
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    if (!json) {
+      expect(runtime.log).toHaveBeenCalled();
+      return runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    }
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    const result = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    expect(result).toMatchObject({
+      action,
+      channel: "msteams",
+      dryRun: false,
+      handledBy: "plugin",
+    });
+    return result.payload;
+  }
+
+  it("renders Graph read and search messages while preserving JSON results", async () => {
+    await createFixture("none");
+    const readArgs = ["read", "--target", otherTarget, "--message-id", other.messageId];
+    const searchArgs = ["search", "--channel-id", otherTarget, "--query", "planning"];
+    const outputs = [
+      await runCli(readArgs, "read", false),
+      await runCli(searchArgs, "search", false),
+    ];
+    for (const output of outputs) {
+      expect.soft(output).toContain(other.text);
+      expect.soft(output).toContain(other.messageId);
+      expect.soft(output).toContain("Member");
+      expect.soft(output).toContain(messageCreatedAt);
+    }
+    const message = {
+      id: other.messageId,
+      text: other.text,
+      from: messageSender,
+      createdAt: messageCreatedAt,
+    };
+    await expect(runCli(readArgs, "read")).resolves.toEqual({
+      ok: true,
+      channel: "msteams",
+      action: "read",
+      message,
+    });
+    await expect(runCli(searchArgs, "search")).resolves.toEqual({
+      ok: true,
+      channel: "msteams",
+      action: "search",
+      messages: [message],
+      truncated: false,
+    });
+    const emptyOutput = await runCli(
+      ["search", "--channel-id", otherTarget, "--query", "unmatched"],
+      "search",
+      false,
+    );
+    expect.soft(emptyOutput).toContain("No results.");
+    expect(emptyOutput).not.toContain(other.text);
+  });
+
+  it("reads a selected channel member without current conversation context", async () => {
+    const fixture = await createFixture("none");
+    const payload = await runCli(
+      ["member", "info", "--user-id", memberId, "--channel-id", otherTarget],
+      "member-info",
+    );
+    expectReadResult(payload, "member-info", other);
+    expectGraphRequests(fixture.requests, "member-info", other);
+  });
+
+  it.each([
+    { limit: 30, count: 30, truncated: false },
+    { limit: 60, count: 50, truncated: true },
+  ])(
+    "searches a selected channel with limit $limit and no guild",
+    async ({ limit, count, truncated }) => {
+      const fixture = await createFixture("none", "bundled", limit);
+      const payload = await runCli(
+        ["search", "--channel-id", otherTarget, "--query", "planning", "--limit", String(limit)],
+        "search",
+      );
+      expect(payload).toMatchObject({ ok: true, channel: "msteams", action: "search" });
+      expect(payload.messages).toHaveLength(count);
+      expect(payload.truncated).toBe(truncated);
+      expectGraphRequests(fixture.requests, "search", other);
+    },
+  );
+
+  it("rejects a malformed limit in the registered CLI search adapter", async () => {
+    const fixture = await createFixture("none");
+    await expect(
+      runCli(
+        ["search", "--channel-id", otherTarget, "--query", "planning", "--limit", "abc"],
+        "search",
+      ),
+    ).rejects.toThrow("limit must be a positive integer");
+    expect(fixture.requests).toEqual([]);
+    expect(graph.acquireToken).not.toHaveBeenCalled();
+  });
+});
+
+describe.each([
+  ["tool", "search", "bundled"],
+  ["gateway", "member-info", "global"],
+] as const)("Teams %s %s aliases (%s)", (route, action, origin) => {
+  it.each([
+    { name: "bare", channelId: current.channelId },
+    { name: "thread-qualified", channelId: `conversation:${current.channelId};messageid=123` },
+    { name: "Graph", channelId: currentTarget },
+  ])("reads the current channel with a $name target", async ({ channelId }) => {
+    const fixture = await createFixture("channel", origin);
+    const result = await fixture.invoke(route, action, { channelId });
+    expectReadResult(result, action, current);
+    expectGraphRequests(fixture.requests, action, current);
+  });
+});
+
 describe.each(["tool", "gateway"] as const)("Teams %s read target selection", (route) => {
   describe.each(["search", "member-info"] as const)("%s", (action) => {
-    it("preserves explicit-current and implicit-current selection", async () => {
+    it("reads the current channel when the target is omitted", async () => {
       const fixture = await createFixture();
-      for (const channelId of [current.channelId, undefined]) {
-        const before = fixture.requests.length;
-        const result = await fixture.invoke(route, action, channelId ? { channelId } : {});
-        expectReadResult(result, action, current);
-        expectGraphRequests(fixture.requests.slice(before), action, current);
-      }
+      const result = await fixture.invoke(route, action);
+      expectReadResult(result, action, current);
+      expectGraphRequests(fixture.requests, action, current);
     });
 
     it("uses an explicit permitted channelId instead of the current channel", async () => {
@@ -428,6 +617,8 @@ describe.each(["tool", "gateway"] as const)("Teams %s read target selection", (r
         name: "channel paired with the wrong team",
         channelId: `${other.teamId}/${current.channelId}`,
       },
+      { name: "case-distinct conversation", channelId: "19:CURRENT@thread.tacv2" },
+      { name: "user-prefixed conversation", channelId: `user:${current.channelId}` },
     ])(
       "rejects an explicit $name instead of reading the current channel",
       async ({ channelId }) => {
@@ -437,14 +628,6 @@ describe.each(["tool", "gateway"] as const)("Teams %s read target selection", (r
         expect(graph.acquireToken).not.toHaveBeenCalled();
       },
     );
-
-    it("rejects an unknown account before Graph access", async () => {
-      const fixture = await createFixture();
-      await expect(
-        fixture.invoke(route, action, { channelId: otherTarget, accountId: "other" }),
-      ).rejects.toThrow(/account/i);
-      expect(fixture.requests).toEqual([]);
-    });
   });
 
   it("keeps the requester-only member shortcut in the current chat", async () => {

@@ -1,18 +1,6 @@
 import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
-import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
-import type {
-  InternalGetReplyOptions,
-  PendingContinuationSettlement,
-  ReplySessionBinding,
-} from "./get-reply.types.js";
-
-export type InternalReplyResolverOptions = {
-  onDeliberateSilentTerminalReply?: () => void;
-  onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
-  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
-  onSessionPrepared?: (binding: ReplySessionBinding) => void;
-  onRunVerbosityResolved?: InternalGetReplyOptions["onRunVerbosityResolved"];
-};
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 
 export type PluginBindingTranscriptOwner = {
   agentId: string;
@@ -33,11 +21,33 @@ export function admittedSessionSettingsRestrictRuntime(
 export function createReplyDispatchEvent(
   params: Omit<PluginHookReplyDispatchEvent, "shouldSendToolSummaries"> & {
     shouldSendToolSummaries: () => boolean;
+    shouldSendToolSummariesAsync: () => Promise<boolean>;
+    shouldSendFullToolDetailsAsync: () => Promise<boolean>;
   },
 ): PluginHookReplyDispatchEvent {
-  const { shouldSendToolSummaries, ...event } = params;
-  return Object.defineProperty(event, "shouldSendToolSummaries", {
-    enumerable: true,
-    get: shouldSendToolSummaries,
+  const { shouldSendToolSummaries, shouldSendFullToolDetails, ...event } = params;
+  return Object.defineProperties(event, {
+    shouldSendToolSummaries: {
+      enumerable: true,
+      get() {
+        warnPluginSdkDeprecation({
+          family: "reply-visibility",
+          method: "reply_dispatch.shouldSendToolSummaries",
+          replacement: "await shouldSendToolSummariesAsync()",
+        });
+        return shouldSendToolSummaries();
+      },
+    },
+    shouldSendFullToolDetails: {
+      enumerable: true,
+      get() {
+        warnPluginSdkDeprecation({
+          family: "reply-visibility",
+          method: "reply_dispatch.shouldSendFullToolDetails",
+          replacement: "await shouldSendFullToolDetailsAsync()",
+        });
+        return shouldSendFullToolDetails;
+      },
+    },
   }) as PluginHookReplyDispatchEvent;
 }

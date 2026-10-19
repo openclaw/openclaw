@@ -1,5 +1,3 @@
-// Gateway wizard session tracker.
-// Tracks active setup/onboarding wizard sessions and purges completed ones.
 import type { WizardSession } from "../wizard/session.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 
@@ -20,7 +18,6 @@ export function canAccessWizardSession(
 
 const UNCOLLECTED_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
 
-/** Creates the in-memory tracker used for active Gateway wizard sessions. */
 export function createWizardSessionTracker(options?: { now?: () => number }) {
   const wizardSessions = new Map<string, WizardSession>();
   const terminalSince = new Map<string, number>();

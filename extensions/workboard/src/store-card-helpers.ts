@@ -12,22 +12,19 @@ import {
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,
+  MAX_CARD_COMMENTS,
   MAX_CARD_EVENTS,
+  MAX_WORKER_CONTEXT_PARENTS,
+  MAX_WORKER_CONTEXT_RECENT_CARDS,
   READY_STRANDED_MS,
   RUNNING_HEARTBEAT_STALE_MS,
 } from "./store-constants.js";
 import type { WorkboardMutationScope } from "./store-inputs.js";
-import {
-  capText,
-  metadataIsEmpty,
-  normalizeEvents,
-  normalizeTimestamp,
-  removeUndefinedMetadataFields,
-} from "./store-normalizers.js";
+import { capText, normalizeTimestamp, removeUndefinedMetadataFields } from "./store-normalizers.js";
 
 export function compareCards(left: WorkboardCard, right: WorkboardCard): number {
   if (left.status !== right.status) {
@@ -70,15 +67,16 @@ export function syncExecutionAttemptMetadata(
   }
   const attemptStatus = executionAttemptStatus(execution);
   const attempts = [...(metadata.attempts ?? [])];
-  const key = execution.runId ?? execution.sessionKey ?? execution.id;
-  const existingIndex = attempts.findIndex(
-    (attempt) =>
-      (execution.runId && attempt.runId === execution.runId) ||
-      (!execution.runId && attempt.id === key),
+  const existingIndex = attempts.findIndex((attempt) =>
+    execution.runId
+      ? attempt.runId === execution.runId
+      : execution.sessionKey
+        ? !attempt.runId && attempt.sessionKey === execution.sessionKey
+        : !attempt.runId && !attempt.sessionKey,
   );
   const existingAttempt = existingIndex >= 0 ? attempts[existingIndex] : undefined;
   const nextAttempt: WorkboardRunAttempt = {
-    id: existingAttempt?.id ?? key,
+    id: existingAttempt?.id ?? randomUUID(),
     status: attemptStatus,
     startedAt: existingAttempt?.startedAt ?? execution.startedAt,
     mode: execution.mode,
@@ -98,7 +96,7 @@ export function syncExecutionAttemptMetadata(
   }
   const previousFailed =
     existingAttempt?.status === "blocked" || existingAttempt?.status === "failed";
-  const attemptFailed = attemptStatus === "blocked" || attemptStatus === "failed";
+  const attemptFailed = attemptStatus === "blocked";
   const failureCount = attemptFailed
     ? previousFailed
       ? metadata.failureCount
@@ -119,13 +117,25 @@ export function appendEvent(
   at = Date.now(),
 ): WorkboardEvent[] {
   return [
-    ...normalizeEvents(card.events),
+    ...(card.events ?? []),
     {
       id: randomUUID(),
       at,
       ...event,
     },
   ].slice(-MAX_CARD_EVENTS);
+}
+
+export function appendComment(
+  comments: WorkboardMetadata["comments"],
+  body: string | undefined,
+  now?: number,
+): WorkboardMetadata["comments"] {
+  return body
+    ? [...(comments ?? []), { id: randomUUID(), body, createdAt: now ?? Date.now() }].slice(
+        -MAX_CARD_COMMENTS,
+      )
+    : comments;
 }
 
 function metadataEntriesChanged(
@@ -150,17 +160,10 @@ function metadataEntriesChanged(
 }
 
 export function lifecycleStatusSourceUpdatedAtFromPatch(metadata: unknown): number | undefined {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+  if (!isRecord(metadata) || !Object.hasOwn(metadata, "lifecycleStatusSourceUpdatedAt")) {
     return undefined;
   }
-  if (!Object.hasOwn(metadata, "lifecycleStatusSourceUpdatedAt")) {
-    return undefined;
-  }
-  const sourceUpdatedAt = normalizeTimestamp(
-    (metadata as Record<string, unknown>).lifecycleStatusSourceUpdatedAt,
-    0,
-  );
-  return sourceUpdatedAt;
+  return normalizeTimestamp(metadata.lifecycleStatusSourceUpdatedAt, 0);
 }
 
 function latestStatusTransitionAt(card: WorkboardCard): number | undefined {
@@ -170,9 +173,7 @@ function latestStatusTransitionAt(card: WorkboardCard): number | undefined {
       (event?.kind === "moved" || event?.kind === "created") &&
       ((event.kind === "created" && card.status !== "todo") ||
         (event.kind === "moved" && event.fromStatus !== event.toStatus)) &&
-      event.toStatus === card.status &&
-      typeof event.at === "number" &&
-      Number.isFinite(event.at)
+      event.toStatus === card.status
     ) {
       return event.at;
     }
@@ -245,21 +246,16 @@ export function updateEvent(
     const existingAttempts = existing.metadata?.attempts ?? [];
     const nextAttempts = next.metadata?.attempts ?? [];
     const latestAttempt = nextAttempts.at(-1);
-    if (nextAttempts.length > existingAttempts.length) {
+    const attemptStarted = nextAttempts.length > existingAttempts.length;
+    const previousAttempt =
+      !attemptStarted && latestAttempt
+        ? existingAttempts.find((attempt) => attempt.id === latestAttempt.id)
+        : undefined;
+    if (attemptStarted || (latestAttempt && previousAttempt?.status !== latestAttempt.status)) {
       return {
-        kind: "attempt_started",
+        kind: attemptStarted ? "attempt_started" : "attempt_updated",
         ...(latestAttempt?.sessionKey ? { sessionKey: latestAttempt.sessionKey } : {}),
         ...(latestAttempt?.runId ? { runId: latestAttempt.runId } : {}),
-      };
-    }
-    const previousAttempt = latestAttempt
-      ? existingAttempts.find((attempt) => attempt.id === latestAttempt.id)
-      : undefined;
-    if (latestAttempt && previousAttempt?.status !== latestAttempt.status) {
-      return {
-        kind: "attempt_updated",
-        ...(latestAttempt.sessionKey ? { sessionKey: latestAttempt.sessionKey } : {}),
-        ...(latestAttempt.runId ? { runId: latestAttempt.runId } : {}),
       };
     }
     return {
@@ -283,10 +279,10 @@ export function updateEvent(
       ? { kind: "attachment_added" }
       : { kind: "edited" };
   }
-  if (existing.metadata?.workerProtocol?.state !== next.metadata?.workerProtocol?.state) {
-    return { kind: "orchestration" };
-  }
-  if (metadataEntriesChanged(existing, next, "workerLogs")) {
+  if (
+    existing.metadata?.workerProtocol?.state !== next.metadata?.workerProtocol?.state ||
+    metadataEntriesChanged(existing, next, "workerLogs")
+  ) {
     return { kind: "orchestration" };
   }
   if ((existing.metadata?.diagnostics?.length ?? 0) !== (next.metadata?.diagnostics?.length ?? 0)) {
@@ -311,30 +307,6 @@ export function updateEvent(
     return { kind: "stale" };
   }
   return { kind: "edited" };
-}
-
-export function removeUndefinedCardFields(card: WorkboardCard): WorkboardCard {
-  const next = { ...card };
-  for (const key of [
-    "notes",
-    "agentId",
-    "sessionKey",
-    "runId",
-    "taskId",
-    "sourceUrl",
-    "execution",
-    "startedAt",
-    "completedAt",
-    "metadata",
-  ] as const) {
-    if (next[key] === undefined) {
-      delete next[key];
-    }
-  }
-  if (metadataIsEmpty(next.metadata)) {
-    delete next.metadata;
-  }
-  return next;
 }
 
 export function assertCanMutateClaimedCard(
@@ -566,7 +538,7 @@ export function buildWorkerContext(
   const parentResults = cardParentIds(card)
     .map((parentId) => cardsById.get(parentId))
     .filter((parent): parent is WorkboardCard => parent !== undefined && parent.status === "done")
-    .slice(-6);
+    .slice(-MAX_WORKER_CONTEXT_PARENTS);
   appendWorkerContextSection(
     lines,
     "Parent results",
@@ -585,7 +557,7 @@ export function buildWorkerContext(
               entry.status === "done",
           )
           .toSorted((a, b) => b.updatedAt - a.updatedAt)
-          .slice(0, 5)
+          .slice(0, MAX_WORKER_CONTEXT_RECENT_CARDS)
       : [];
   appendWorkerContextSection(
     lines,
@@ -625,18 +597,19 @@ export function buildWorkerContext(
   return lines.join("\n");
 }
 
-export function cardParentIds(card: WorkboardCard): string[] {
+function cardDependencyIds(card: WorkboardCard, type: "parent" | "child"): string[] {
   return (card.metadata?.links ?? [])
-    .filter((link) => link.type === "parent" && link.targetCardId)
+    .filter((link) => link.type === type && link.targetCardId)
     .map((link) => link.targetCardId!)
     .filter((id, index, ids) => ids.indexOf(id) === index);
 }
 
+export function cardParentIds(card: WorkboardCard): string[] {
+  return cardDependencyIds(card, "parent");
+}
+
 export function cardChildIds(card: WorkboardCard): string[] {
-  return (card.metadata?.links ?? [])
-    .filter((link) => link.type === "child" && link.targetCardId)
-    .map((link) => link.targetCardId!)
-    .filter((id, index, ids) => ids.indexOf(id) === index);
+  return cardDependencyIds(card, "child");
 }
 
 export function latestRunningAttempt(card: WorkboardCard): WorkboardRunAttempt | undefined {
@@ -681,18 +654,12 @@ export function closeRunningAttempts(
   );
 }
 
-export function notificationSequence(event: WorkboardNotification): number | undefined {
-  return typeof event.sequence === "number" && Number.isFinite(event.sequence)
-    ? Math.trunc(event.sequence)
-    : undefined;
-}
-
 export function compareNotifications(a: WorkboardNotification, b: WorkboardNotification): number {
   if (a.createdAt !== b.createdAt) {
     return a.createdAt - b.createdAt;
   }
-  const aSequence = notificationSequence(a);
-  const bSequence = notificationSequence(b);
+  const aSequence = a.sequence;
+  const bSequence = b.sequence;
   if (aSequence !== undefined && bSequence !== undefined) {
     return aSequence - bSequence || a.id.localeCompare(b.id);
   }

@@ -2,14 +2,14 @@
 
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import { sortAndLimitByWork } from "../shared/sort-and-limit.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 
 export type SessionEntryPair = [string, SessionEntry];
 
-function compareSessionEntryPairs(
+export function compareSessionEntryPairs(
   a: SessionEntryPair,
   b: SessionEntryPair,
   sortBy: SessionsListParams["sortBy"] = "updatedAt",
@@ -23,18 +23,8 @@ function compareSessionEntryPairs(
       return bPinnedAt - aPinnedAt;
     }
   }
-  const aTimestamp =
-    sortBy === "activity"
-      ? sessionActivityTimestamp(a[1])
-      : sortBy === "lastInteractionAt"
-        ? a[1]?.lastInteractionAt
-        : a[1]?.updatedAt;
-  const bTimestamp =
-    sortBy === "activity"
-      ? sessionActivityTimestamp(b[1])
-      : sortBy === "lastInteractionAt"
-        ? b[1]?.lastInteractionAt
-        : b[1]?.updatedAt;
+  const aTimestamp = sortBy === "activity" ? sessionActivityTimestamp(a[1]) : a[1][sortBy];
+  const bTimestamp = sortBy === "activity" ? sessionActivityTimestamp(b[1]) : b[1][sortBy];
   const byTimestamp = (bTimestamp ?? 0) - (aTimestamp ?? 0);
   if (byTimestamp !== 0) {
     return byTimestamp;

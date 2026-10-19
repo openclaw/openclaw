@@ -1,3 +1,9 @@
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  hasGatewayClientCap,
+  normalizeGatewayClientName,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
 type IndexedClient = {
@@ -7,10 +13,42 @@ type IndexedClient = {
 
 export class GatewayClientRegistry extends Set<GatewayWsClient> {
   readonly #byConnectionId = new Map<string, IndexedClient>();
+  readonly #unscopedSessionEventConnIds = new Set<string>();
+  readonly #subscribers = new Set<() => void>();
   #nextOrder = 0;
+  readonly #onRemove?: (client: GatewayWsClient) => void;
+  readonly #activeRequests = new Map<GatewayWsClient, number>();
+  // Handshake capabilities stay fixed for an operator connection's lifetime.
+  get unscopedSessionEventConnIds(): ReadonlySet<string> {
+    return this.#unscopedSessionEventConnIds;
+  }
+  // Revocation covers retained requests; presence and fanout still see live transports only.
+  get authorityClients(): Iterable<GatewayWsClient> {
+    return {
+      [Symbol.iterator]: () => new Set([...this, ...this.#activeRequests.keys()]).values(),
+    };
+  }
 
-  constructor(clients?: Iterable<GatewayWsClient>) {
+  retainRequest(client: GatewayWsClient): () => void {
+    this.#activeRequests.set(client, (this.#activeRequests.get(client) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      const remaining = this.#activeRequests.get(client)! - 1;
+      if (remaining === 0) {
+        this.#activeRequests.delete(client);
+      } else {
+        this.#activeRequests.set(client, remaining);
+      }
+    };
+  }
+
+  constructor(clients?: Iterable<GatewayWsClient>, onRemove?: (client: GatewayWsClient) => void) {
     super();
+    this.#onRemove = onRemove;
     for (const client of clients ?? []) {
       this.add(client);
     }
@@ -19,23 +57,54 @@ export class GatewayClientRegistry extends Set<GatewayWsClient> {
   override add(client: GatewayWsClient): this {
     if (!this.has(client)) {
       this.#byConnectionId.set(client.connId, { client, order: this.#nextOrder++ });
+      if (
+        normalizeGatewayClientName(client.connect.client?.id) !==
+          GATEWAY_CLIENT_IDS.BROWSER_COPILOT &&
+        !hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS)
+      ) {
+        this.#unscopedSessionEventConnIds.add(client.connId);
+      }
+      super.add(client);
+      this.#publish();
     }
-    return super.add(client);
+    return this;
   }
 
   override delete(client: GatewayWsClient): boolean {
     if (!super.delete(client)) {
       return false;
     }
+    this.#onRemove?.(client);
     if (this.#byConnectionId.get(client.connId)?.client === client) {
       this.#byConnectionId.delete(client.connId);
+      this.#unscopedSessionEventConnIds.delete(client.connId);
     }
+    this.#publish();
     return true;
   }
 
   override clear(): void {
+    if (this.size === 0) {
+      return;
+    }
+    for (const client of this) {
+      this.#onRemove?.(client);
+    }
     super.clear();
     this.#byConnectionId.clear();
+    this.#unscopedSessionEventConnIds.clear();
+    this.#publish();
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.#subscribers.add(listener);
+    return () => this.#subscribers.delete(listener);
+  }
+
+  #publish(): void {
+    for (const listener of this.#subscribers) {
+      listener();
+    }
   }
 
   getByConnectionId(connId: string): GatewayWsClient | undefined {

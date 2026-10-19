@@ -1,7 +1,10 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { MeetingRealtimeAudioEngineHealth } from "openclaw/plugin-sdk/meeting-runtime";
+import type {
+  MeetingRealtimeAudioEngineHealth,
+  MeetingRealtimeAudioTransport,
+} from "openclaw/plugin-sdk/meeting-runtime";
 import { vi } from "vitest";
 import { resolveGoogleMeetConfig } from "../config.js";
 import { GoogleMeetRuntime } from "../runtime.js";
@@ -190,6 +193,31 @@ export function meetAudioBridge(stop = vi.fn(async () => {})) {
     speak: vi.fn(),
     getHealth: vi.fn(emptyRealtimeAudioHealth),
     stop,
+  };
+}
+
+export function createTestMeetRealtimeAudioTransport() {
+  let inputHandler: ((audio: Buffer) => void) | undefined;
+  const writeOutput = vi.fn(async () => {});
+  const transport: MeetingRealtimeAudioTransport = {
+    onFatal: vi.fn(),
+    startInput: vi.fn((handler) => {
+      inputHandler = handler;
+    }),
+    stop: vi.fn(async () => {}),
+    writeOutput,
+    clearOutput: vi.fn(async () => {}),
+    dispose: vi.fn(async () => {}),
+  };
+  return {
+    transport,
+    writeOutput,
+    deliverInput: (audio: Buffer) => {
+      if (!inputHandler) {
+        throw new Error("Expected Google Meet realtime input to be started");
+      }
+      inputHandler(audio);
+    },
   };
 }
 

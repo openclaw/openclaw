@@ -15,7 +15,7 @@ Adds agent-callable tools. Adds web search provider support.
 ## Distribution
 
 - Package: `@openclaw/tavily-plugin`
-- Install route: npm or ClawHub: `clawhub:@openclaw/tavily-plugin`
+- Install route: npm or ClawHub: `@openclaw/tavily-plugin`
 
 ## Surface
 

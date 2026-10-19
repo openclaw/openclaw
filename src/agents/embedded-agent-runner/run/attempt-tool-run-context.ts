@@ -4,8 +4,11 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
+import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
-import type { EmbeddedRunTrigger, RunEmbeddedAgentParams } from "./params.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptToolRunFacts = Pick<
   RunEmbeddedAgentParams,
@@ -29,6 +32,10 @@ type AttemptToolRunFacts = Pick<
   | "senderUsername"
   | "senderE164"
   | "senderIsOwner"
+  | "gitContributorProfileId"
+  | "requesterOrigin"
+  | "operatorProfileId"
+  | "conversationId"
   | "scheduledToolPolicy"
   | "approvalReviewerDeviceId"
   | "currentChannelId"
@@ -46,10 +53,14 @@ type AttemptToolRunFacts = Pick<
  */
 export function buildEmbeddedAttemptToolRunContext(
   params: AttemptToolRunFacts & {
+    model?: Pick<EmbeddedRunAttemptParams["model"], "provider" | "id">;
     thinkLevel?: ThinkLevel;
+    thinkingExplicit?: boolean;
     trigger?: EmbeddedRunTrigger;
+    continuesConversation?: boolean;
     jobId?: string;
     memoryFlushWritePath?: string;
+    memoryFlushTools?: RunEmbeddedAgentParams["memoryFlushTools"];
     toolsAllow?: string[];
     forceMessageTool?: boolean;
     swarmCollector?: boolean;
@@ -57,10 +68,18 @@ export function buildEmbeddedAttemptToolRunContext(
     conversationToolPolicy?: GroupToolPolicyConfig;
     trace?: DiagnosticTraceContext;
     currentInboundAudio?: boolean;
+    sessionId?: string;
+    sessionKey?: string;
     replyOperation?: { readonly acceptedSteeredInboundAudio: boolean };
   },
 ) {
-  const { currentInboundAudio, replyOperation } = params;
+  const { currentInboundAudio } = params;
+  const currentOwner = getCurrentSessionControllerOwner();
+  const replyOperation =
+    params.replyOperation ??
+    (currentOwner?.sessionId === params.sessionId && currentOwner?.key === params.sessionKey
+      ? currentOwner
+      : undefined);
   // Collector output is mandatory result transport, even on a narrowed tool surface.
   const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
     forceMessageTool: params.forceMessageTool,
@@ -88,6 +107,10 @@ export function buildEmbeddedAttemptToolRunContext(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
+    gitContributorProfileId: params.gitContributorProfileId,
+    requesterOrigin: params.requesterOrigin,
+    operatorProfileId: params.operatorProfileId,
+    conversationId: params.conversationId,
     scheduledToolPolicy: params.scheduledToolPolicy,
     approvalReviewerDeviceId: params.approvalReviewerDeviceId,
     currentChannelId: params.currentChannelId,
@@ -99,9 +122,16 @@ export function buildEmbeddedAttemptToolRunContext(
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     requesterThinkingLevel: params.thinkLevel,
+    requesterThinkingExplicit: params.thinkingExplicit,
+    // modelId may still be a configured alias; children need the prepared identity.
+    requesterModel: params.model
+      ? { provider: params.model.provider, model: params.model.id }
+      : undefined,
     trigger: params.trigger,
+    continuesConversation: params.continuesConversation,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
+    memoryFlushTools: params.memoryFlushTools,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
     currentInboundAudio,

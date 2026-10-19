@@ -1,22 +1,52 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage, redirect } from "@openclaw/uirouter";
-import { html, nothing } from "lit";
-import { pathForRoute, routePageSpec } from "../../app-route-paths.ts";
+import { pathForRoute, routePageSpec, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
-import type { ConfigPageId } from "./config-sections.ts";
-import {
-  configRouteData,
-  configTargetIdFromHash,
-  SETTINGS_ROUTE_TARGETS,
-  type ConfigRouteData,
-} from "./route-data.ts";
+import { CONFIG_PAGE_IDS, type ConfigPageId } from "./config-sections.ts";
+import { configRouteData, configTargetIdFromHash, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
+
+// Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
+// Kept so pre-restructure bookmarks and generated links still land somewhere
+// sensible instead of silently opening the old page's default section.
+const MOVED_SECTION_ROUTES: Record<
+  string,
+  { routeId: RouteId; keepSection: boolean; search?: string; advanced?: boolean }
+> = {
+  "communications:__notifications__": { routeId: "notifications", keepSection: false },
+  "communications:channels": { routeId: "channels", keepSection: false },
+  "communications:broadcast": { routeId: "advanced", keepSection: true },
+  "communications:talk": { routeId: "talk", keepSection: true },
+  "appearance:wizard": { routeId: "advanced", keepSection: true },
+  "advanced:transcripts": { routeId: "communications", keepSection: true, advanced: true },
+  "automation:approvals": { routeId: "security", keepSection: true },
+  "automation:plugins": {
+    routeId: "plugin-settings",
+    keepSection: false,
+    search: "?tab=advanced",
+  },
+  "ai-agents:memory": { routeId: "memory", keepSection: true },
+  "ai-agents:models": { routeId: "model-providers", keepSection: false },
+};
 
 function loadConfigRoute(
   context: ApplicationContext,
   location: RouteLocation,
   pageId: ConfigPageId,
 ) {
+  const route = configRouteData(location);
+  const movedRoute = route.section ? MOVED_SECTION_ROUTES[`${pageId}:${route.section}`] : undefined;
+  if (route.section && movedRoute) {
+    return redirect({
+      pathname: pathForRoute(movedRoute.routeId, context.basePath),
+      search:
+        movedRoute.search ??
+        (movedRoute.keepSection
+          ? `?section=${encodeURIComponent(route.section)}${movedRoute.advanced ? "&advanced=1" : ""}`
+          : ""),
+      hash: route.hash,
+    });
+  }
   const agentSelectionIntent =
     pageId === "memory"
       ? {
@@ -29,7 +59,8 @@ function loadConfigRoute(
     void primaryLoad.then(() => context.runtimeConfig.ensureSchemaLoaded()).catch(() => undefined);
   }
   return {
-    ...configRouteData(location),
+    ...route,
+    pageId,
     ...(agentSelectionIntent ? { agentSelectionIntent } : {}),
   };
 }
@@ -46,11 +77,11 @@ function configPage(id: ConfigPageId) {
     },
     loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location, id),
     component: () =>
-      import("./config-page.ts").then(() => ({
+      import("./config-page.tsx").then((module) => ({
         header: true,
-        render: (data: ConfigRouteData | undefined) => html`
-          <openclaw-config-page .pageId=${id} .routeData=${data ?? null}></openclaw-config-page>
-        `,
+        // Keep the current owner while another Settings subpage loads its data.
+        renderOwnerKey: () => "settings-config",
+        renderSolid: module.ConfigRoute,
       })),
   });
 }
@@ -71,7 +102,7 @@ const removedGeneralRedirectPage = definePage({
     });
   },
   // Redirect routes still require a module by contract, but never render page content.
-  component: async () => ({ header: true, render: () => nothing }),
+  component: async () => ({ header: true, renderSolid: () => null }),
 });
 
 export const pages = [
@@ -82,19 +113,8 @@ export const pages = [
         ? undefined
         : redirect({ ...location, pathname: pathForRoute("chat", context.basePath) }),
     // The shell reuses its lazy settings navigation as the embedded list page.
-    component: async () => ({ render: () => nothing }),
+    component: async () => ({ renderSolid: () => null }),
   }),
   removedGeneralRedirectPage,
-  configPage("communications"),
-  configPage("appearance"),
-  configPage("notifications"),
-  configPage("security"),
-  configPage("automation"),
-  configPage("mcp"),
-  configPage("memory"),
-  configPage("talk"),
-  configPage("infrastructure"),
-  configPage("updates"),
-  configPage("ai-agents"),
-  configPage("advanced"),
+  ...CONFIG_PAGE_IDS.map(configPage),
 ] as const;

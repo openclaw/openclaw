@@ -101,10 +101,6 @@ export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
           },
         }),
       });
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
-        throw new Error(`guard HTTP ${response.status}`);
-      }
       const envelope = await parseJsonResponse(response);
       if (
         !isRecord(envelope) ||
@@ -193,10 +189,6 @@ export function createAnthropicGuard(options: AdapterOptions): GuardAdapter {
           messages: [{ role: "user", content: JSON.stringify(request) }],
         }),
       });
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
-        throw new Error(`guard HTTP ${response.status}`);
-      }
       const envelope = await parseJsonResponse(response);
       if (
         !isRecord(envelope) ||
@@ -232,6 +224,10 @@ function attachProviderModel(value: unknown, model: string): unknown {
 }
 
 async function parseJsonResponse(response: Response): Promise<unknown> {
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`guard HTTP ${response.status}`);
+  }
   const text = await readProviderTextResponse(response, "Reef guard response", {
     maxBytes: 256 * 1024,
   });

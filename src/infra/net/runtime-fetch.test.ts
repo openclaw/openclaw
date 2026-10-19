@@ -19,28 +19,6 @@ class RuntimeFormData {
       ...(typeof filename === "string" ? { filename } : {}),
     });
   }
-
-  *entries(): IterableIterator<[string, unknown]> {
-    for (const record of this.records) {
-      yield [record.name, record.value];
-    }
-  }
-
-  get [Symbol.toStringTag](): string {
-    return "FormData";
-  }
-}
-
-class MockAgent {
-  readonly __testStub = true;
-}
-
-class MockEnvHttpProxyAgent {
-  readonly __testStub = true;
-}
-
-class MockProxyAgent {
-  readonly __testStub = true;
 }
 
 function requireFetchInit(mock: ReturnType<typeof vi.fn>): RequestInit {
@@ -67,10 +45,10 @@ describe("fetchWithRuntimeDispatcher", () => {
     });
 
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: MockAgent,
-      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
+      Agent: vi.fn(),
+      EnvHttpProxyAgent: vi.fn(),
       FormData: RuntimeFormData,
-      ProxyAgent: MockProxyAgent,
+      ProxyAgent: vi.fn(),
       fetch: runtimeFetch,
     };
 
@@ -97,8 +75,7 @@ describe("fetchWithRuntimeDispatcher", () => {
 
   it("normalizes global FormData bodies into the runtime FormData implementation", async () => {
     const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      // init.body was rebuilt as RuntimeFormData by normalizeRuntimeFormData;
-      // BodyInit and RuntimeFormData live in separate type namespaces so a double cast is needed.
+      // BodyInit and RuntimeFormData live in separate type namespaces.
       const body = init?.body as unknown as RuntimeFormData;
       expect(body).toBeInstanceOf(RuntimeFormData);
       const modelRecord = body.records.find((record) => record.name === "model");
@@ -109,10 +86,10 @@ describe("fetchWithRuntimeDispatcher", () => {
     });
 
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: MockAgent,
-      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
+      Agent: vi.fn(),
+      EnvHttpProxyAgent: vi.fn(),
       FormData: RuntimeFormData,
-      ProxyAgent: MockProxyAgent,
+      ProxyAgent: vi.fn(),
       fetch: runtimeFetch,
     };
 

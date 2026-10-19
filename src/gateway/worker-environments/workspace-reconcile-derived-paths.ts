@@ -1,13 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError, root as openFsSafeRoot, type Root } from "../../infra/fs-safe.js";
+import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import {
   createStagedInputPathMatcher,
   isStagedInputPath,
   stagedInputDirectoriesFromEntries,
 } from "../../media/staged-inputs.js";
 import type { WorkerWorkspaceManifestEntry } from "./workspace-manifest.js";
-import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
+import {
+  isDerivedWorkspacePath,
+  isRuntimeOwnedWorkspacePath,
+} from "./workspace-path-exclusions.js";
 
 export function reconciliationEntries(
   entries: readonly WorkerWorkspaceManifestEntry[],
@@ -29,10 +34,6 @@ export function reconciliationDirectories(
   );
 }
 
-function localPath(root: string, relative: string): string {
-  return path.join(root, ...relative.split("/"));
-}
-
 async function removeDerivedWorkspaceDescendants(
   root: Root,
   relativeDirectory: string,
@@ -40,6 +41,9 @@ async function removeDerivedWorkspaceDescendants(
 ): Promise<void> {
   for (const entry of await root.list(relativeDirectory, { withFileTypes: true })) {
     const child = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+    if (isRuntimeOwnedWorkspacePath(child)) {
+      continue;
+    }
     if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
       await removeDerivedWorkspaceEntry(root, child, entry.isDirectory);
       continue;
@@ -83,11 +87,8 @@ async function removeDerivedWorkspaceEntry(
 }
 
 async function hasWorkspaceSymlinkAncestor(root: string, relativePath: string): Promise<boolean> {
-  const segments = relativePath.split("/");
-  for (let index = 1; index < segments.length; index += 1) {
-    const stats = await fs
-      .lstat(localPath(root, segments.slice(0, index).join("/")))
-      .catch(() => undefined);
+  for (const ancestor of workspacePathAncestors(relativePath)) {
+    const stats = await fs.lstat(path.join(root, ancestor)).catch(() => undefined);
     if (stats?.isSymbolicLink()) {
       return true;
     }
@@ -99,24 +100,23 @@ export async function prepareNonDirectoryTargets(
   root: string,
   entries: readonly WorkerWorkspaceManifestEntry[],
   retainedInput?: ReturnType<typeof createStagedInputPathMatcher>,
+  assertCurrent?: () => void,
 ): Promise<void> {
-  const workspaceRoot = await openFsSafeRoot(root);
+  const workspaceRoot = await openFsSafeRoot(root, { assertBeforeMutation: assertCurrent });
   const isRetainedInput = retainedInput ?? createStagedInputPathMatcher(workspaceRoot);
   // Entries are an already-selected delta; an unchanged ownership marker may be absent.
   for (const entry of entries) {
-    if (await hasWorkspaceSymlinkAncestor(root, entry.path)) {
-      continue;
-    }
-    let stats;
-    try {
-      stats = await workspaceRoot.stat(entry.path);
-    } catch (error) {
-      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
-        continue;
+    const stats = await fs.lstat(path.join(root, entry.path)).catch(async (error: unknown) => {
+      if (
+        hasNodeErrorCode(error, "ENOENT") ||
+        hasNodeErrorCode(error, "ENOTDIR") ||
+        (await hasWorkspaceSymlinkAncestor(root, entry.path))
+      ) {
+        return undefined;
       }
       throw error;
-    }
-    if (stats.isDirectory) {
+    });
+    if (stats?.isDirectory() && !(await hasWorkspaceSymlinkAncestor(root, entry.path))) {
       // Excluded descendants cannot fence a namespace replacement, but Git
       // cannot replace their still-nonempty parent until they are removed.
       // fs-safe binds traversal/removal to root-relative directory handles, so
