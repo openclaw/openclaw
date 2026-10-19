@@ -1,7 +1,7 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { guardedJsonApiRequestMock } = vi.hoisted(() => ({
   guardedJsonApiRequestMock: vi.fn(),
@@ -14,7 +14,11 @@ vi.mock("./shared/guarded-json-api.js", async (importOriginal) => ({
 
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { MediaStreamHandler } from "../media-stream.js";
-import { createTelephonyTtsProvider, type TelephonyTtsRuntime } from "../telephony-tts.js";
+import {
+  createTelephonyTtsProvider,
+  type TelephonyTtsProvider,
+  type TelephonyTtsRuntime,
+} from "../telephony-tts.js";
 import { connectWs, startUpgradeWsServer, withTimeout } from "../websocket-test-support.js";
 import { TwilioProvider } from "./twilio.js";
 
@@ -22,12 +26,37 @@ beforeEach(() => {
   vi.useRealTimers();
   guardedJsonApiRequestMock.mockReset();
 });
+afterEach(() => vi.useRealTimers());
 
 function createProvider(): TwilioProvider {
   return new TwilioProvider(
     { accountSid: "AC123", authToken: "secret" },
     { publicUrl: "https://example.ngrok.app", streamPath: "/voice/stream" },
   );
+}
+
+function timedPlayback(synthesizeForTelephony: TelephonyTtsProvider["synthesizeForTelephony"]) {
+  vi.useFakeTimers();
+  const provider = createProvider();
+  provider.registerCallStream("CA-timed", "MZ-timed");
+  const controller = new AbortController();
+  const sendAudio = vi.fn<MediaStreamHandler["sendAudio"]>(() => true);
+  const sendMarkAndWait = vi.fn(async () => {});
+  provider.setMediaStreamHandler({
+    queueTts: async (_streamSid: string, play: (signal: AbortSignal) => Promise<void>) =>
+      await play(controller.signal),
+    sendAudio,
+    sendMarkAndWait,
+    clearAudio: vi.fn(),
+  } as never);
+  provider.setTTSProvider({ synthesisTimeoutMs: 5000, synthesizeForTelephony });
+  return {
+    controller,
+    sendAudio,
+    sendMarkAndWait,
+    play: (text: string) =>
+      provider.playTts({ callId: "call-timed", providerCallId: "CA-timed", text }),
+  };
 }
 
 type StreamFrame =
@@ -182,45 +211,14 @@ async function withStreamingProvider(
 
 describe("TwilioProvider", () => {
   it("times out telephony synthesis in stream mode and does not send completion mark", async () => {
-    vi.useFakeTimers();
-    try {
-      const provider = createProvider();
-      provider.registerCallStream("CA-timeout", "MZ-timeout");
-
-      const sendAudio = vi.fn<MediaStreamHandler["sendAudio"]>(() => true);
-      const sendMarkAndWait = vi.fn();
-      const mediaStreamHandler = {
-        queueTts: async (
-          _streamSid: string,
-          playFn: (signal: AbortSignal) => Promise<void>,
-        ): Promise<void> => {
-          await playFn(new AbortController().signal);
-        },
-        sendAudio,
-        sendMarkAndWait,
-        clearAudio: vi.fn(),
-      };
-
-      provider.setMediaStreamHandler(mediaStreamHandler as never);
-      provider.setTTSProvider({
-        synthesisTimeoutMs: 5000,
-        synthesizeForTelephony: async () => await new Promise<Buffer>(() => {}),
-      });
-
-      const playExpectation = expect(
-        provider.playTts({
-          callId: "call-timeout",
-          providerCallId: "CA-timeout",
-          text: "Timeout me",
-        }),
-      ).rejects.toThrow("Telephony TTS synthesis timed out after 5000ms");
-      await vi.advanceTimersByTimeAsync(5_100);
-      await playExpectation;
-      expect(sendAudio).toHaveBeenCalled();
-      expect(sendMarkAndWait).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    const f = timedPlayback(async () => await new Promise<Buffer>(() => {}));
+    const playExpectation = expect(f.play("Timeout me")).rejects.toThrow(
+      "Telephony TTS synthesis timed out after 5000ms",
+    );
+    await vi.advanceTimersByTimeAsync(5_100);
+    await playExpectation;
+    expect(f.sendAudio).toHaveBeenCalled();
+    expect(f.sendMarkAndWait).not.toHaveBeenCalled();
   });
 
   it("stops and clears real stream playback on the first failed audio chunk", async () => {
@@ -269,57 +267,21 @@ describe("TwilioProvider", () => {
   });
 
   it("exits chunk pacing early when the abort signal fires after the first chunk", async () => {
-    vi.useFakeTimers();
-    try {
-      const provider = createProvider();
-      provider.registerCallStream("CA-abort-chunk", "MZ-abort-chunk");
+    const f = timedPlayback(async () => Buffer.alloc(160 * 10, 0x80));
+    f.sendAudio.mockImplementation(() => {
+      // The first send is the synthesis keepalive; the second is the first real audio chunk.
+      if (f.sendAudio.mock.calls.length === 2) {
+        f.controller.abort();
+      }
+      return true;
+    });
 
-      const sendMarkAndWait = vi.fn(async () => {});
-      const controller = new AbortController();
-      const sendAudio = vi.fn<MediaStreamHandler["sendAudio"]>(() => {
-        // The first send is the synthesis keepalive; the second is the first real audio chunk.
-        if (sendAudio.mock.calls.length === 2) {
-          controller.abort();
-        }
-        return true;
-      });
-
-      const mediaStreamHandler = {
-        queueTts: async (
-          _streamSid: string,
-          playFn: (signal: AbortSignal) => Promise<void>,
-        ): Promise<void> => {
-          await playFn(controller.signal);
-        },
-        sendAudio,
-        sendMarkAndWait,
-        clearAudio: vi.fn(),
-      };
-
-      provider.setMediaStreamHandler(mediaStreamHandler as never);
-      provider.setTTSProvider({
-        synthesisTimeoutMs: 5000,
-        synthesizeForTelephony: async () => Buffer.alloc(160 * 10, 0x80),
-      });
-
-      const startedAt = Date.now();
-      await expect(
-        provider.playTts({
-          callId: "call-abort-chunk",
-          providerCallId: "CA-abort-chunk",
-          text: "hello",
-          voice: "default",
-          locale: "en-US",
-        }),
-      ).resolves.toBeUndefined();
-
-      expect(Date.now()).toBe(startedAt);
-      expect(sendAudio).toHaveBeenCalledTimes(2);
-      expect(sendMarkAndWait).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    const startedAt = Date.now();
+    await expect(f.play("hello")).resolves.toBeUndefined();
+    expect(Date.now()).toBe(startedAt);
+    expect(f.sendAudio).toHaveBeenCalledTimes(2);
+    expect(f.sendMarkAndWait).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("streams exact PCM output and gates the real queue on echoed playback marks", async () => {
