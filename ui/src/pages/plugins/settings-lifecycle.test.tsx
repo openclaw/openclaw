@@ -1,17 +1,23 @@
 /* @vitest-environment jsdom */
 
 import { flush } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createInspectResult, createPlugin, createResult } from "./plugins-page.test-support.ts";
 import { renderPluginSettingsDetail, type DetailProps } from "./settings-view.tsx";
 
 beforeEach(() => i18n.setLocale("en"));
-afterEach(() => {
-  document.body.replaceChildren();
-});
+
+function objectSchema(properties: Record<string, JsonSchema>): JsonSchema {
+  return { type: "object", additionalProperties: false, properties };
+}
+
+function setting(container: ParentNode, key: string) {
+  return container.querySelector(`[data-setting="${key}"]`)!;
+}
 
 function mount(overrides: Partial<DetailProps>) {
   const props: DetailProps = {
@@ -53,9 +59,7 @@ function mount(overrides: Partial<DetailProps>) {
     onRefresh: vi.fn(),
     ...overrides,
   };
-  const container = document.createElement("div");
-  document.body.append(container);
-  mountSolid(() => renderPluginSettingsDetail(props), { container });
+  const { container } = mountSolid(() => renderPluginSettingsDetail(props));
   flush();
   return container;
 }
@@ -88,7 +92,6 @@ it("does not dispatch enablement when setup is missing", () => {
     onSetEnabled,
   });
   const button = container.querySelector<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
-  expect(button).not.toBeNull();
   expect(button.disabled || button.getAttribute("aria-disabled") === "true").toBe(true);
   button.click();
   expect(onSetEnabled).not.toHaveBeenCalled();
@@ -100,7 +103,6 @@ it("retains disconnected plugin details without dispatching enablement", () => {
   expect(container.textContent).toContain("Agent work queue and session handoff.");
   expect(container.querySelector("[inert]")).toBeNull();
   const button = container.querySelector<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
-  expect(button).not.toBeNull();
   expect(button.disabled).toBe(true);
   button.click();
   expect(onSetEnabled).not.toHaveBeenCalled();
@@ -114,28 +116,16 @@ it("gives host permissions the setting menu and preserves configured, inherited,
     tab: "configuration",
     inspection: createInspectResult(),
     configValue: { plugins: { entries: { workboard: { hooks: { timeoutMs: 5000 } } } } },
-    hostControlsSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        hooks: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            allowPromptInjection: { type: "boolean" },
-            allowConversationAccess: { type: "boolean" },
-            timeoutMs: { type: "integer", title: "Timeout", minimum: 1 },
-          },
-        },
-        llm: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            allowedModels: { type: "array", title: "Allowed models", items: { type: "string" } },
-          },
-        },
-      },
-    },
+    hostControlsSchema: objectSchema({
+      hooks: objectSchema({
+        allowPromptInjection: { type: "boolean" },
+        allowConversationAccess: { type: "boolean" },
+        timeoutMs: { type: "integer", title: "Timeout", minimum: 1 },
+      }),
+      llm: objectSchema({
+        allowedModels: { type: "array", title: "Allowed models", items: { type: "string" } },
+      }),
+    }),
     onConfigPatch: onPatch,
     onConfigRemove: onRemove,
     onAskSetting: onAsk,
@@ -143,8 +133,7 @@ it("gives host permissions the setting menu and preserves configured, inherited,
   const container = mount(props);
   await Promise.resolve();
   flush();
-  const row = container.querySelector('[data-setting="hooks.allowPromptInjection"]')!;
-  expect(row).not.toBeNull();
+  const row = setting(container, "hooks.allowPromptInjection");
   expect(row.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true);
   expect(row.querySelector('[data-value="reset"]')?.hasAttribute("disabled")).toBe(true);
   await selectSettingAction(row, "ask");
@@ -160,20 +149,15 @@ it("gives host permissions the setting menu and preserves configured, inherited,
     ["plugins", "entries", "workboard", "hooks", "allowPromptInjection"],
     false,
   );
-  await selectSettingAction(container.querySelector('[data-setting="hooks.timeoutMs"]')!, "reset");
+  await selectSettingAction(setting(container, "hooks.timeoutMs"), "reset");
   expect(onRemove).toHaveBeenCalledWith(["plugins", "entries", "workboard", "hooks", "timeoutMs"]);
-  expect(
-    container.querySelector('[data-setting="llm.allowedModels"] .oc-menu-trigger'),
-  ).not.toBeNull();
-  expect(container.textContent).not.toContain("Declared capabilities");
-  expect(container.textContent).not.toContain("Your grants");
+  expect(setting(container, "llm.allowedModels").querySelector(".oc-menu-trigger")).not.toBeNull();
+  expect(container.textContent).not.toMatch(/Declared capabilities|Your grants/);
   onPatch.mockClear();
   const readOnly = mount({ ...props, canEditConfig: false });
   await Promise.resolve();
   flush();
-  const readOnlyInput = readOnly.querySelector<HTMLInputElement>(
-    '[data-setting="hooks.allowPromptInjection"] input',
-  )!;
+  const readOnlyInput = setting(readOnly, "hooks.allowPromptInjection").querySelector("input")!;
   expect(readOnlyInput.disabled).toBe(true);
   readOnlyInput.click();
   expect(onPatch).not.toHaveBeenCalled();
@@ -203,7 +187,5 @@ it("shows selected capabilities without a catalog", () => {
   expect(titles).toEqual(["Capabilities2", "Tools1"]);
   expect(container.textContent).toContain("Text to speech");
   expect(container.textContent).toContain("Pages");
-  expect(container.textContent).not.toContain("speechProviders:");
-  expect(container.textContent).not.toContain("sibling-");
-  expect(container.textContent).not.toContain("Video generation");
+  expect(container.textContent).not.toMatch(/speechProviders:|sibling-|Video generation/);
 });

@@ -6,6 +6,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
+import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import type { PluginMutationResult } from "../../lib/plugins/index.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -31,17 +32,62 @@ beforeEach(async () => {
 });
 afterEach(resetPluginsPageTestState);
 
+function rpc(handlers: Record<string, (params: unknown) => unknown>) {
+  return createClient(async (method, params) => {
+    if (!Object.hasOwn(handlers, method)) {
+      throw new Error(`Unexpected request: ${method}`);
+    }
+    return handlers[method](params);
+  });
+}
+
+function routeData(
+  harness: ReturnType<typeof createGateway>,
+  path: string,
+  result = createResult(),
+) {
+  return createPluginsRouteData(harness.gateway, result, createPluginsRouteLocation(path));
+}
+
+function objectSchema(properties: Record<string, JsonSchema>): JsonSchema {
+  return { type: "object", properties };
+}
+
+function requests(request: ReturnType<typeof createClient>["request"], name: string) {
+  return request.mock.calls.filter(([method]) => method === name);
+}
+
+async function waitForRequest(request: ReturnType<typeof createClient>["request"], name: string) {
+  await waitForSolid(() => expect(requests(request, name).length).toBeGreaterThan(0));
+}
+
+function publishGeneration(
+  harness: ReturnType<typeof createGateway>,
+  generation: number,
+  methods: string[] = [],
+) {
+  harness.emit(harness.gateway.snapshot.client, true, {
+    hello: harness.gateway.snapshot.hello,
+    pluginCapabilities: {
+      ok: true,
+      generation,
+      descriptors: [],
+      methods,
+      controlUiTabs: [],
+      controlUiWidgetKinds: [],
+      pluginSurfaceUrls: {},
+    },
+  });
+}
+
 it("retains installed settings and an unfinished input across transport loss, but retires them for a new client", async () => {
   const refresh = deferred();
-  const { client } = createClient(async (method) => {
-    if (method === "plugins.list") {
+  const { client } = rpc({
+    "plugins.list": async () => {
       await refresh.promise;
       return createResult();
-    }
-    if (method === "plugins.inspect") {
-      return createInspectResult();
-    }
-    throw new Error(`Unexpected request: ${method}`);
+    },
+    "plugins.inspect": () => createInspectResult(),
   });
   const harness = createGateway(client);
   const context = createContext(harness.gateway);
@@ -49,37 +95,16 @@ it("retains installed settings and an unfinished input across transport loss, bu
   context.runtimeConfig.state.configForm = {
     plugins: { entries: { workboard: { config: { greeting: "Saved greeting" } } } },
   };
-  context.runtimeConfig.state.configSchema = {
-    type: "object",
-    properties: {
-      plugins: {
-        type: "object",
-        properties: {
-          entries: {
-            type: "object",
-            properties: {
-              workboard: {
-                type: "object",
-                properties: {
-                  config: {
-                    type: "object",
-                    properties: { greeting: { type: "string" } },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  };
+  context.runtimeConfig.state.configSchema = objectSchema({
+    plugins: objectSchema({
+      entries: objectSchema({
+        workboard: objectSchema({ config: objectSchema({ greeting: { type: "string" } }) }),
+      }),
+    }),
+  });
   const { page } = await mountPage(
     context,
-    createPluginsRouteData(
-      harness.gateway,
-      createResult(),
-      createPluginsRouteLocation("/settings/plugins/workboard?view=settings"),
-    ),
+    routeData(harness, "/settings/plugins/workboard?view=settings"),
   );
   try {
     await waitForSolid(() =>
@@ -113,14 +138,9 @@ it.each([
   async ({ granted, revoked }) => {
     const pending = deferred<ReturnType<typeof createResult>>();
     let inventory = pending.promise;
-    const { client, request } = createClient(async (method) => {
-      if (method === "plugins.list") {
-        return inventory;
-      }
-      if (method === "plugins.inspect") {
-        return createInspectResult();
-      }
-      throw new Error(`Unexpected request: ${method}`);
+    const { client, request } = rpc({
+      "plugins.list": () => inventory,
+      "plugins.inspect": () => createInspectResult(),
     });
     const harness = createGateway(client);
     harness.emit(client, true, {
@@ -136,9 +156,7 @@ it.each([
     );
     await waitForSolid(() => expect(page.querySelector(".plugin-catalog-detail")).not.toBeNull());
     harness.publishPlugins();
-    await waitForSolid(() =>
-      expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(1),
-    );
+    await waitForSolid(() => expect(requests(request, "plugins.list")).toHaveLength(1));
     const snapshot = harness.gateway.snapshot;
     harness.emit(client, true, {
       ...snapshot,
@@ -158,7 +176,7 @@ it.each([
     await settlePlugins();
     expect(page.querySelector(".plugin-catalog-detail")).toBeNull();
     expect(page.textContent).not.toContain("Retired inventory");
-    expect(request.mock.calls.filter(([method]) => method === "plugins.inspect")).toHaveLength(1);
+    expect(requests(request, "plugins.inspect")).toHaveLength(1);
 
     inventory = Promise.resolve({ ...createResult(), generation: 1 });
     harness.emit(client, true, snapshot);
@@ -186,29 +204,23 @@ it.each([
     const detail = createDiscoveryDetail(plugin);
     detail.plugin.id = "catalog-workboard";
     detail.plugin.catalog.categories = ["productivity"];
-    const { client, request } = createClient(async (method) => {
-      if (method === "plugins.list") {
-        return result;
-      }
-      if (method === "plugins.catalog.browse") {
-        return {
-          items: [detail.plugin],
-          categories: [
-            {
-              slug: "productivity",
-              label: "Productivity",
-              description: "Work tools",
-              icon: "checkSquare",
-              order: 1,
-            },
-          ],
-        };
-      }
-      if (method === "plugins.catalog.get") {
-        return detail;
-      }
-      if (method === "plugins.inspect") {
-        return createInspectResult({
+    const { client, request } = rpc({
+      "plugins.list": () => result,
+      "plugins.catalog.browse": () => ({
+        items: [detail.plugin],
+        categories: [
+          {
+            slug: "productivity",
+            label: "Productivity",
+            description: "Work tools",
+            icon: "checkSquare",
+            order: 1,
+          },
+        ],
+      }),
+      "plugins.catalog.get": () => detail,
+      "plugins.inspect": () =>
+        createInspectResult({
           plugin: {
             id: plugin.id,
             name: plugin.name,
@@ -216,9 +228,7 @@ it.each([
             installed: true,
             enabled: false,
           },
-        });
-      }
-      throw new Error(`Unexpected request: ${method}`);
+        }),
     });
     const harness = createGateway(client);
     const route = createPluginsRouteData(
@@ -228,18 +238,7 @@ it.each([
     );
     const { page } = await mountPage(createContext(harness.gateway), undefined, surface);
     const connect = vi.spyOn(harness.gateway, "connect");
-    harness.emit(client, true, {
-      hello: harness.gateway.snapshot.hello,
-      pluginCapabilities: {
-        ok: true,
-        generation: 1,
-        descriptors: [],
-        methods: [],
-        controlUiTabs: [],
-        controlUiWidgetKinds: [],
-        pluginSurfaceUrls: {},
-      },
-    });
+    publishGeneration(harness, 1);
     await page.updateComplete;
     page.routeData = route;
     await page.updateComplete;
@@ -247,7 +246,7 @@ it.each([
       expect(page.querySelector(selector)).not.toBeNull();
       expect(page.querySelector(selector)?.textContent).toContain(plugin.name);
     });
-    expect(request.mock.calls.some(([method]) => method === "plugins.list")).toBe(true);
+    expect(requests(request, "plugins.list").length).toBeGreaterThan(0);
     expect(connect).not.toHaveBeenCalled();
     expect(
       request.mock.calls.some(
@@ -268,11 +267,9 @@ it("targets the selected installed route after its stale inventory refresh fails
   const beta = createPlugin({ id: "beta", name: "Beta" });
   const inventory = { ...createResult([alpha, beta]), generation: 1 };
   const refresh = deferred<typeof inventory>();
-  const { client, request } = createClient(async (method, params) => {
-    if (method === "plugins.list") {
-      return refresh.promise;
-    }
-    if (method === "plugins.inspect") {
+  const { client, request } = rpc({
+    "plugins.list": () => refresh.promise,
+    "plugins.inspect": (params) => {
       const plugin = (params as { pluginId: string }).pluginId === alpha.id ? alpha : beta;
       return createInspectResult({
         plugin: {
@@ -283,44 +280,25 @@ it("targets the selected installed route after its stale inventory refresh fails
           enabled: false,
         },
       });
-    }
-    if (method === "plugins.setEnabled") {
+    },
+    "plugins.setEnabled": () => {
       throw new Error("Synthetic enable refused");
-    }
-    throw new Error(`Unexpected request: ${method}`);
-  });
-  const harness = createGateway(client);
-  harness.emit(client, true, {
-    hello: harness.gateway.snapshot.hello,
-    pluginCapabilities: {
-      ok: true,
-      generation: 1,
-      descriptors: [],
-      methods: ["plugins.setEnabled"],
-      controlUiTabs: [],
-      controlUiWidgetKinds: [],
-      pluginSurfaceUrls: {},
     },
   });
+  const harness = createGateway(client);
+  publishGeneration(harness, 1, ["plugins.setEnabled"]);
   const { page } = await mountPage(
     createContext(harness.gateway),
-    createPluginsRouteData(
-      harness.gateway,
-      inventory,
-      createPluginsRouteLocation("/settings/plugins/alpha#lifecycle"),
-    ),
+    routeData(harness, "/settings/plugins/alpha#lifecycle", inventory),
   );
   await waitForSolid(() => expect(page.querySelector("h1")?.textContent).toBe(alpha.name));
   try {
-    page.routeData = createPluginsRouteData(
-      harness.gateway,
-      { ...inventory, generation: 0 },
-      createPluginsRouteLocation("/settings/plugins/beta#lifecycle"),
-    );
+    page.routeData = routeData(harness, "/settings/plugins/beta#lifecycle", {
+      ...inventory,
+      generation: 0,
+    });
     await page.updateComplete;
-    await waitForSolid(() =>
-      expect(request.mock.calls.some(([method]) => method === "plugins.list")).toBe(true),
-    );
+    await waitForRequest(request, "plugins.list");
     refresh.reject(new Error("Inventory unavailable"));
     await waitForSolid(() =>
       expect(page.querySelector('[aria-label="Enable Beta"]')).not.toBeNull(),
@@ -329,10 +307,8 @@ it("targets the selected installed route after its stale inventory refresh fails
     const enable = page.querySelector<HTMLButtonElement>('[aria-label="Enable Beta"]');
     expect(enable).not.toBeNull();
     enable!.click();
-    await waitForSolid(() =>
-      expect(request.mock.calls.some(([method]) => method === "plugins.setEnabled")).toBe(true),
-    );
-    expect(request.mock.calls.filter(([method]) => method === "plugins.setEnabled")).toEqual([
+    await waitForRequest(request, "plugins.setEnabled");
+    expect(requests(request, "plugins.setEnabled")).toEqual([
       ["plugins.setEnabled", { pluginId: beta.id, enabled: true }],
     ]);
     expect(page.querySelector("h1")?.textContent).toBe(beta.name);
@@ -347,7 +323,7 @@ it("targets the selected installed route after its stale inventory refresh fails
   }
 });
 
-it.each(["settings", "uninstall", "failure"] as const)(
+it.each(["settings", "failure"] as const)(
   "keeps the pending install owner after inventory publication: %s",
   async (surface) => {
     const plugin = createPlugin({
@@ -364,81 +340,55 @@ it.each(["settings", "uninstall", "failure"] as const)(
     const install = deferred<PluginMutationResult>();
     const refresh = deferred();
     let inventoryPlugin = plugin;
-    const { client, request } = createClient(async (method) => {
-      if (method === "plugins.install") {
-        return install.promise;
-      }
-      if (method === "plugins.list") {
-        return createResult(inventoryPlugin);
-      }
-      if (method === "plugins.catalog.get") {
-        return catalog;
-      }
-      if (method === "plugins.inspect") {
-        return createInspectResult({ plugin });
-      }
-      if (method === "plugins.setEnabled" && surface === "failure") {
+    const { client, request } = rpc({
+      "plugins.install": () => install.promise,
+      "plugins.list": () => createResult(inventoryPlugin),
+      "plugins.catalog.get": () => catalog,
+      "plugins.inspect": () => createInspectResult({ plugin }),
+      "plugins.setEnabled": () => {
+        if (surface !== "failure") {
+          throw new Error("Unexpected request: plugins.setEnabled");
+        }
         inventoryPlugin = { ...plugin, enabled: false, state: "disabled" };
         return {
           ok: true,
           plugin: inventoryPlugin,
           restartRequired: false,
         };
-      }
-      throw new Error(`Unexpected request: ${method}`);
+      },
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
       createContext(harness.gateway, () => refresh.promise),
-      createPluginsRouteData(
-        harness.gateway,
-        createResult([]),
-        createPluginsRouteLocation("/plugins/catalog-calendar"),
-      ),
+      routeData(harness, "/plugins/catalog-calendar", createResult([])),
     );
     await waitForSolid(() =>
       expect(page.querySelector("openclaw-plugin-install-action")).not.toBeNull(),
     );
     await clickPluginAction(page, "Install");
     try {
-      await waitForSolid(() =>
-        expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(true),
-      );
+      await waitForRequest(request, "plugins.install");
       const original = page.querySelector("openclaw-plugin-install-action");
       await settlePlugins();
       original?.querySelector("button")?.click();
       await settlePlugins();
       expect(original?.getAttribute("open")).toBe("");
       harness.publishPlugins();
-      await waitForSolid(() =>
-        expect(request.mock.calls.some(([method]) => method === "plugins.inspect")).toBe(true),
-      );
-      if (surface === "uninstall") {
-        const uninstall = page.querySelector<HTMLButtonElement>(
-          '[aria-label="Uninstall Calendar Plus"]',
-        );
-        expect(uninstall).toBeNull();
-        expect(
-          request.mock.calls.filter(
-            ([method]) => method === "plugins.setEnabled" || method === "plugins.uninstall",
-          ),
-        ).toEqual([]);
-      } else {
-        if (surface === "settings") {
-          page.surface = "settings";
-          page.routeData = createPluginsRouteData(
-            harness.gateway,
-            createResult(plugin),
-            createPluginsRouteLocation(`/settings/plugins/${plugin.id}`),
-          );
-          await page.updateComplete;
-        }
-        const action = page.querySelector("openclaw-plugin-install-action");
-        await settlePlugins();
-        expect(action?.textContent).toContain("Installing");
-        expect(page.querySelector('[aria-label="Disable Calendar Plus"]')).toBeNull();
-        expect(page.querySelector('[aria-label="Uninstall Calendar Plus"]')).toBeNull();
+      await waitForRequest(request, "plugins.inspect");
+      expect([
+        ...requests(request, "plugins.setEnabled"),
+        ...requests(request, "plugins.uninstall"),
+      ]).toEqual([]);
+      if (surface === "settings") {
+        page.surface = "settings";
+        page.routeData = routeData(harness, `/settings/plugins/${plugin.id}`, createResult(plugin));
+        await page.updateComplete;
       }
+      const action = page.querySelector("openclaw-plugin-install-action");
+      await settlePlugins();
+      expect(action?.textContent).toContain("Installing");
+      expect(page.querySelector('[aria-label="Disable Calendar Plus"]')).toBeNull();
+      expect(page.querySelector('[aria-label="Uninstall Calendar Plus"]')).toBeNull();
       if (surface === "failure") {
         install.reject(
           new GatewayRequestError({
@@ -481,23 +431,14 @@ it("retains same-plugin inspection after a failed refresh", async () => {
   const initial = createInspectResult();
   initial.components.skills = ["Known skill"];
   let inspections = 0;
-  const { client } = createClient(async (method) => {
-    if (method === "plugins.inspect") {
-      return ++inspections === 1 ? initial : fresh.promise;
-    }
-    if (method === "plugins.list") {
-      return createResult(plugin);
-    }
-    throw new Error(`Unexpected method: ${method}`);
+  const { client } = rpc({
+    "plugins.inspect": () => (++inspections === 1 ? initial : fresh.promise),
+    "plugins.list": () => createResult(plugin),
   });
   const harness = createGateway(client);
   const { page } = await mountPage(
     createContext(harness.gateway),
-    createPluginsRouteData(
-      harness.gateway,
-      createResult(plugin),
-      createPluginsRouteLocation("/settings/plugins/workboard"),
-    ),
+    routeData(harness, "/settings/plugins/workboard", createResult(plugin)),
   );
   await waitForSolid(() => expect(page.textContent).toContain("Known skill"));
   harness.publishPlugins();

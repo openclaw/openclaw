@@ -32,6 +32,43 @@ beforeEach(async () => {
 });
 afterEach(resetPluginsPageTestState);
 
+function rpc(handlers: Record<string, () => unknown>) {
+  return createClient(async (method) => {
+    if (!Object.hasOwn(handlers, method)) {
+      throw new Error(`Unexpected request: ${method}`);
+    }
+    return handlers[method]();
+  });
+}
+
+function snapshot(config: Record<string, unknown>, hash: string) {
+  return {
+    config,
+    sourceConfig: config,
+    hash,
+    valid: true,
+    raw: JSON.stringify(config),
+    issues: [],
+    path: "/synthetic/openclaw.json",
+  };
+}
+
+async function mountRuntime(
+  harness: ReturnType<typeof createGateway>,
+  result: ReturnType<typeof createResult>,
+  path: string,
+) {
+  const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
+  const { page } = await mountPage(
+    { ...createContext(harness.gateway), runtimeConfig },
+    createPluginsRouteData(harness.gateway, result, createPluginsRouteLocation(path)),
+  );
+  return { page, runtimeConfig };
+}
+
+const spinner = ".plugin-catalog-detail__actions .btn__spinner";
+const alert = '.plugins-row-message[role="alert"]';
+
 const available = createPlugin({
   id: "calendar-runtime",
   name: "Calendar Plus",
@@ -51,74 +88,40 @@ const runtimeFailure = {
   committed: false,
 };
 const persistence = { operation: "install", pluginId: available.id };
-const config = { plugins: { entries: { [available.id]: { enabled: true } } } };
-const configSnapshot = {
-  config,
-  sourceConfig: config,
-  hash: "saved-install",
-  valid: true,
-  raw: JSON.stringify(config),
-  issues: [],
-  path: "/synthetic/openclaw.json",
-};
-const initialConfigSnapshot = {
-  ...configSnapshot,
-  config: {},
-  sourceConfig: {},
-  hash: "before-install",
-  raw: "{}",
-};
+const initialConfigSnapshot = snapshot({}, "before-install");
 
 it("retires saved-install refreshes when their Gateway owner is replaced", async () => {
   const catalog = createDiscoveryDetail(available);
   catalog.plugin.id = "catalog-calendar-runtime";
   const replacementCatalog = createDiscoveryDetail({ ...available, name: "Replacement Calendar" });
   replacementCatalog.plugin.id = catalog.plugin.id;
-  const configRead = deferred<typeof configSnapshot>();
+  const configRead = deferred<ReturnType<typeof snapshot>>();
   const catalogRead = deferred<ReturnType<typeof createResult>>();
   let installSaved = false;
-  const { client, request: initialRequest } = createClient(async (method) => {
-    if (method === "plugins.install") {
+  const { client, request: initialRequest } = rpc({
+    "plugins.install": () => {
       installSaved = true;
       throw new GatewayRequestError({
         code: "UNAVAILABLE",
         message: "Old startup failed",
         details: { persistence, runtime: runtimeFailure },
       });
-    }
-    if (method === "config.get") {
-      return installSaved ? configRead.promise : initialConfigSnapshot;
-    }
-    if (method === "plugins.list") {
-      return catalogRead.promise;
-    }
-    if (method === "plugins.catalog.get") {
-      return catalog;
-    }
-    throw new Error(`Unexpected request: ${method}`);
+    },
+    "config.get": () => (installSaved ? configRead.promise : initialConfigSnapshot),
+    "plugins.list": () => catalogRead.promise,
+    "plugins.catalog.get": () => catalog,
   });
   const replacementConfig = { ...initialConfigSnapshot, hash: "replacement-config" };
-  const { client: replacement, request: replacementRequest } = createClient(async (method) => {
-    if (method === "plugins.list") {
-      return createResult();
-    }
-    if (method === "config.get") {
-      return replacementConfig;
-    }
-    if (method === "plugins.catalog.get") {
-      return replacementCatalog;
-    }
-    throw new Error(`Unexpected request: ${method}`);
+  const { client: replacement, request: replacementRequest } = rpc({
+    "plugins.list": () => createResult(),
+    "config.get": () => replacementConfig,
+    "plugins.catalog.get": () => replacementCatalog,
   });
   const harness = createGateway(client);
-  const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
-  const { page } = await mountPage(
-    { ...createContext(harness.gateway), runtimeConfig },
-    createPluginsRouteData(
-      harness.gateway,
-      createResult(available),
-      createPluginsRouteLocation(pathForPluginCatalogEntry(catalog.plugin.id)),
-    ),
+  const { page, runtimeConfig } = await mountRuntime(
+    harness,
+    createResult(available),
+    pathForPluginCatalogEntry(catalog.plugin.id),
   );
   try {
     await runtimeConfig.ensureLoaded();
@@ -154,15 +157,7 @@ it("retires saved-install refreshes when their Gateway owner is replaced", async
 
 describe("plugin runtime mutations", () => {
   const enablementConfig = { plugins: { entries: { workboard: { enabled: false } } } };
-  const enablementSnapshot = {
-    config: enablementConfig,
-    sourceConfig: enablementConfig,
-    hash: "unchanged-config",
-    raw: JSON.stringify(enablementConfig),
-    valid: true,
-    issues: [],
-    path: "/synthetic/openclaw.json",
-  };
+  const enablementSnapshot = snapshot(enablementConfig, "unchanged-config");
   const receipt: PluginMutationResult = {
     ok: true,
     plugin: createPlugin({ enabled: true, state: "enabled" }),
@@ -179,36 +174,25 @@ describe("plugin runtime mutations", () => {
       ...createResult(createPlugin({ removable: true })),
       generation: 6,
     };
-    const { client, request } = createClient(async (method) => {
-      if (method === "config.get") {
+    const { client, request } = rpc({
+      "config.get": () => {
         if (holdMutationConfig) {
           holdMutationConfig = false;
           mutationConfigStarted.resolve();
           return mutationConfig.promise;
         }
         return enablementSnapshot;
-      }
-      if (method === "plugins.list") {
-        return catalog;
-      }
-      if (method === "plugins.setEnabled") {
-        return enabling.promise;
-      }
-      if (method === "plugins.inspect") {
-        return createInspectResult();
-      }
-      throw new Error(`Unexpected request: ${method}`);
+      },
+      "plugins.list": () => catalog,
+      "plugins.setEnabled": () => enabling.promise,
+      "plugins.inspect": () => createInspectResult(),
     });
     const harness = createGateway(client);
     const reconnect = vi.spyOn(harness.gateway, "connect");
-    const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
-    const { page } = await mountPage(
-      { ...createContext(harness.gateway), runtimeConfig },
-      createPluginsRouteData(
-        harness.gateway,
-        catalog,
-        createPluginsRouteLocation("/settings/plugins/workboard#lifecycle"),
-      ),
+    const { page, runtimeConfig } = await mountRuntime(
+      harness,
+      catalog,
+      "/settings/plugins/workboard#lifecycle",
     );
     const publish = () =>
       harness.emit(client, true, {
@@ -235,9 +219,7 @@ describe("plugin runtime mutations", () => {
       const busyButton = page.querySelector<HTMLButtonElement>('[aria-label="Enable Workboard"]');
       expect(busyButton?.getAttribute("aria-busy")).toBe("true");
       expect(busyButton?.querySelector(".btn__spinner")).not.toBeNull();
-      expect(page.querySelectorAll(".plugin-catalog-detail__actions .btn__spinner")).toHaveLength(
-        1,
-      );
+      expect(page.querySelectorAll(spinner)).toHaveLength(1);
       busyButton!.click();
       catalog = {
         ...catalog,
@@ -255,11 +237,10 @@ describe("plugin runtime mutations", () => {
       });
       mutationConfig.resolve(enablementSnapshot);
       await waitForSolid(() => {
-        expect(page.querySelector(".plugin-catalog-detail__actions .btn__spinner")).toBeNull();
+        expect(page.querySelector(spinner)).toBeNull();
         expect(page.querySelector('[aria-label="Disable Workboard"]')).not.toBeNull();
       });
       expect(page.querySelector(".plugins-row-message")).toBeNull();
-      expect(page.querySelector(".plugin-catalog-detail__actions .btn__spinner")).toBeNull();
       expect(page.querySelector(".plugins-row-message--success")).toBeNull();
       expect(request.mock.calls.filter(([method]) => method === "plugins.setEnabled")).toHaveLength(
         1,
@@ -301,35 +282,24 @@ describe("plugin runtime mutations", () => {
         ...createResult(createPlugin({ enabled: action === "enable", state: "error" })),
         generation: applied === "earlier" ? 7 : 8,
       };
-      const { client, request } = createClient(async (method) => {
-        if (method === "config.get") {
-          return enablementSnapshot;
-        }
-        if (method === "plugins.list") {
-          return refreshed;
-        }
-        if (method === methodName) {
+      const { client, request } = rpc({
+        "config.get": () => enablementSnapshot,
+        "plugins.list": () => refreshed,
+        [methodName]: () => {
           throw error;
-        }
-        if (method === "plugins.inspect") {
-          return createInspectResult();
-        }
-        throw new Error(`Unexpected request: ${method}`);
+        },
+        "plugins.inspect": () => createInspectResult(),
       });
       const harness = createGateway(client);
-      const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
-      const { page } = await mountPage(
-        { ...createContext(harness.gateway), runtimeConfig },
-        createPluginsRouteData(
-          harness.gateway,
-          createResult(
-            createPlugin({
-              enabled: action === "disable",
-              state: action === "disable" ? "enabled" : "disabled",
-            }),
-          ),
-          createPluginsRouteLocation("/settings/plugins/workboard#lifecycle"),
+      const { page, runtimeConfig } = await mountRuntime(
+        harness,
+        createResult(
+          createPlugin({
+            enabled: action === "disable",
+            state: action === "disable" ? "enabled" : "disabled",
+          }),
         ),
+        "/settings/plugins/workboard#lifecycle",
       );
       try {
         await runtimeConfig.ensureLoaded();
@@ -339,14 +309,10 @@ describe("plugin runtime mutations", () => {
           action === "enable" ? "Enable Workboard" : "Disable Workboard",
         );
         await waitForSolid(() => {
-          expect(page.querySelector('.plugins-row-message[role="alert"]')?.textContent).toContain(
-            error.message,
-          );
-          expect(page.querySelector(".plugin-catalog-detail__actions .btn__spinner")).toBeNull();
+          expect(page.querySelector(alert)?.textContent).toContain(error.message);
+          expect(page.querySelector(spinner)).toBeNull();
         });
-        expect(page.querySelector('.plugins-row-message[role="alert"]')?.textContent).toContain(
-          "Runtime phase: activate.",
-        );
+        expect(page.querySelector(alert)?.textContent).toContain("Runtime phase: activate.");
         expect(page.textContent).not.toContain("Installation saved");
         const calls = request.mock.calls.slice(actionStart);
         expect(calls.filter(([method]) => method === methodName)).toHaveLength(1);
