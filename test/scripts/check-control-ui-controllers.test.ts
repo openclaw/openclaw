@@ -22,6 +22,10 @@ function fixture(source = "export {};\n") {
   const root = tempDirs.make("openclaw-controller-guard-");
   fs.mkdirSync(path.join(root, "ui/src"), { recursive: true });
   fs.writeFileSync(path.join(root, "ui/src/view.ts"), source);
+  fs.mkdirSync(path.join(root, "config"));
+  for (const pattern of ["createEffect", "untrack", "addEventListener", "querySelector"]) {
+    fs.writeFileSync(path.join(root, `config/control-ui-${pattern}-baseline.txt`), "");
+  }
   for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
     git(root, args);
   }
@@ -41,6 +45,85 @@ function runLint(root: string, args: string[]) {
 }
 
 describe("Control UI controller guard", () => {
+  it.each([
+    'import { createRenderEffect as render } from "solid-js"; render(() => 1, () => {});',
+    'import * as solid from "solid-js"; solid.createRenderEffect(() => 1, () => {});',
+    'element["addEventListener"]("click", handler);',
+    'element?.querySelector<HTMLElement>("button");',
+    'element[`querySelectorAll`]("button");',
+  ])("rejects forbidden production call syntax: %s", (source) => {
+    const root = fixture();
+    fs.writeFileSync(path.join(root, "ui/src/new.tsx"), source);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain("ui/src/new.tsx:1");
+    expect(errors.mock.calls.flat().join("\n")).toContain("refactor-checklist.md");
+  });
+
+  it("excludes test helpers, comments, and strings; permits primitive render effects", () => {
+    const root = fixture('// createEffect(() => {});\nconst example = "element.querySelector()";');
+    fs.mkdirSync(path.join(root, "ui/src/lib/reactive"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "ui/src/lib/reactive/binding.ts"),
+      "createRenderEffect(read, write);",
+    );
+    for (const name of ["view.test.tsx", "view.test-helpers.ts", "view.test-support.ts"]) {
+      fs.writeFileSync(
+        path.join(root, "ui/src", name),
+        "element.querySelector('button'); element.addEventListener('click', fn);",
+      );
+    }
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(root, [])).toBe(0);
+  });
+
+  it.each([
+    [
+      "createEffect",
+      "ui/src/view.ts",
+      'import { createEffect as effect } from "solid-js"; effect(read, write);',
+    ],
+    ["untrack", "ui/src/view.ts", "untrack(read);"],
+    ["addEventListener", "ui/src/view.ts", "signal.addEventListener('abort', done);"],
+    ["querySelector", "ui/src/components/markdown.ts", "root.querySelectorAll<HTMLElement>('a');"],
+  ])("ratchets %s per file and rejects allowance inflation", (pattern, file, source) => {
+    const root = fixture();
+    const target = path.join(root, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, source);
+    const baseline = path.join(root, `config/control-ui-${pattern}-baseline.txt`);
+    fs.writeFileSync(baseline, `${file}\t1\n`);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "existing debt"]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, [])).toBe(0);
+    const addedCall = pattern === "createEffect" ? "effect(read, write);" : source;
+    fs.writeFileSync(target, `${source}\n${addedCall}`);
+    fs.writeFileSync(baseline, `${file}\t2\n`);
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain("allowances must not increase");
+    fs.writeFileSync(baseline, `${file}\t1\n`);
+    fs.writeFileSync(target, "export {};\n");
+    expect(main(root, [])).toBe(1);
+    expect(main(root, ["--prune"])).toBe(0);
+    expect(fs.readFileSync(baseline, "utf8")).not.toContain(`${file}\t`);
+    fs.writeFileSync(target, source);
+    expect(main(root, [])).toBe(1);
+  });
+
+  it("checks staged Solid debt instead of the working tree", () => {
+    const root = fixture();
+    fs.writeFileSync(path.join(root, "ui/src/view.ts"), "createEffect(read, write);");
+    git(root, ["add", "."]);
+    fs.writeFileSync(path.join(root, "ui/src/view.ts"), "export {};\n");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, ["--staged"])).toBe(1);
+    expect(main(root, [])).toBe(0);
+  });
+
   it.each(["./lib/reactive/solid-controller-host.ts", "./lib/subscriptions-controller.ts"])(
     "rejects existing and new production or test consumers of retired %s",
     (module) => {
