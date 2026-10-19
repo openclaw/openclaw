@@ -18,17 +18,13 @@ import { coordinateWorkerPlacementDispatch } from "../../../src/gateway/worker-e
 import { createCoordinatorTestService } from "../../../src/gateway/worker-environments/placement-dispatch-coordinator.test-support.js";
 import { createWorkerSessionPlacementStore } from "../../../src/gateway/worker-environments/placement-store.js";
 import { createWorkerSessionPlacementGate } from "../../../src/gateway/worker-environments/placement-worker-gate.js";
-import type { WorkerTurnTunnelHandle } from "../../../src/gateway/worker-environments/tunnel-contract.js";
 import { createWorkerSessionTurnPlacementProvider } from "../../../src/gateway/worker-environments/worker-turn-launcher.js";
 import {
   attachedEnvironment,
+  createWorkerTurnTunnel,
   credential,
   dispatchInitialWorkerPlacement,
-  ENVIRONMENT_ID,
-  MANIFEST_REF,
-  measureLaunchTurn,
-  readLaunchToolNames,
-  OWNER_EPOCH,
+  reconcileUnchangedLocalWorkspace,
   unusedEnvironments,
 } from "../../../src/gateway/worker-environments/worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "../../../src/gateway/worker-environments/workspace-operation-coordinator.js";
@@ -158,18 +154,13 @@ suite.define(() => {
       const unexpected = (operation: string) => async () => {
         throw new Error(`unexpected ${operation}`);
       };
-      const tunnel: WorkerTurnTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
+      const tunnel = createWorkerTurnTunnel({
         runWorkspaceCommand: async (command) =>
           await runCommandWithTimeout([...command.argv], {
             cwd: workspace,
             input: command.input,
             timeoutMs: 5000,
           }),
-        measureLaunchTurn,
-        readLaunchToolNames,
         launchTurn: async (request) => {
           request.onDispatchReady?.();
           launched.push(request.turnClaim.runId);
@@ -199,22 +190,8 @@ suite.define(() => {
           };
         },
         syncWorkspace: unexpected("resync"),
-        reconcileWorkspace: async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected local fixture source");
-          }
-          await request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-            publishStagedResult: async () => {},
-            discardPreparedStagedResult: async () => {},
-          };
-        },
-        stop: async () => {},
-      };
+        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+      });
       uninstall = installSessionPlacementAdmissionProvider(
         createWorkerSessionTurnPlacementProvider({
           placements,

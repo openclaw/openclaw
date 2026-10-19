@@ -201,19 +201,17 @@ suite.define(() => {
           message: "Now check the examples",
           deliver: false,
         });
+        const methods = (await gateway.getRequests()).map(({ method }) => method);
         expect(
-          (await gateway.getRequests())
-            .filter(({ method }) =>
-              ["sessions.create", "sessions.dispatch", "sessions.send", "chat.send"].includes(
-                method,
-              ),
-            )
-            .map(({ method }) => method),
-        ).toEqual(
-          required
-            ? ["sessions.create", "sessions.send", "chat.send"]
-            : ["sessions.create", "sessions.dispatch", "sessions.send", "chat.send"],
-        );
+          methods.filter((method) =>
+            ["sessions.create", "sessions.dispatch", "sessions.send", "chat.send"].includes(method),
+          ),
+        ).toEqual([
+          "sessions.create",
+          ...(required ? [] : ["sessions.dispatch"]),
+          "sessions.send",
+          "chat.send",
+        ]);
       }),
   );
 });

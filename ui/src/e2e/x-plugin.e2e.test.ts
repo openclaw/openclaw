@@ -1,8 +1,7 @@
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
-import { buildPluginControlUi } from "../../../src/cli/plugins-control-ui-build.js";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -13,27 +12,9 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const pluginRoot = fileURLToPath(new URL("../../../extensions/x/", import.meta.url));
-const assets = new Map<string, Buffer>();
-const assetRoot = "/__openclaw__/plugins/control-ui/x/solid-proof";
-let styles: string[] = [];
-const suite = createControlUiE2eSuite({
-  name: "X native plugin",
-  resources: {
-    async run() {
-      const build = await buildPluginControlUi({
-        rootDir: pluginRoot,
-        source: "src/control-ui.tsx",
-      });
-      const directory = path.dirname(path.join(pluginRoot, build.entry));
-      for (const name of await readdir(directory)) {
-        assets.set(name, await readFile(path.join(directory, name)));
-      }
-      styles = (build.styles ?? []).map((file) => `${assetRoot}/${path.basename(file)}`);
-    },
-  },
-});
+const suite = createControlUiE2eSuite({ name: "X native plugin" });
 
-function snapshot(accountId = "primary") {
+function snapshot(accountId = "primary", enabled = false) {
   return {
     accountId,
     accounts: [
@@ -50,8 +31,7 @@ function snapshot(accountId = "primary") {
       },
     ],
     guests: {
-      enabled: false,
-      helpersAvailable: true,
+      enabled,
       maxMentionsPerAuthorPerDay: 5,
       admittedToday: 2,
       rateLimitedToday: 1,
@@ -73,25 +53,11 @@ suite.define(() => {
       async ({ page }) => {
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
-        const catalog = {
-          revision: "solid-proof",
-          diagnostics: [],
-          plugins: [
-            {
-              pluginId: "x",
-              name: "X",
-              revision: "solid-proof",
-              entryUrl: `${assetRoot}/index.js`,
-              styles,
-            },
-          ],
-        };
         const gateway = await installMockGateway(page, {
+          nativePlugins: [{ pluginId: "x", rootDir: pluginRoot, source: "src/control-ui.tsx" }],
           operatorScopes: ["operator.admin"],
           featureMethods: [
             ...defaultControlUiFeatureMethods,
-            "plugins.controlUi.list",
-            "plugins.controlUi.report",
             "x.allowlist.list",
             "x.allowlist.add",
             "x.allowlist.remove",
@@ -99,27 +65,12 @@ suite.define(() => {
           ],
           methodResponses: {
             "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
-            "plugins.catalog.browse": { items: [] },
-            "plugins.catalog.categories": { categories: [] },
-            "plugins.controlUi.list": catalog,
-            "plugins.controlUi.report": { ok: true },
             "x.allowlist.list": snapshot(),
           },
         });
-        await page.route(`**${assetRoot}/*`, async (route) => {
-          const name = path.basename(new URL(route.request().url()).pathname);
-          const body = assets.get(name);
-          if (!body) {
-            throw new Error(`Missing built X asset: ${name}`);
-          }
-          await route.fulfill({
-            status: 200,
-            contentType: name.endsWith(".css") ? "text/css" : "text/javascript",
-            body,
-          });
-        });
         await page.goto(`${suite.server.baseUrl}plugin?plugin=x&id=replies`);
         const surface = page.locator(".x-replies");
+        const button = (name: string) => surface.getByRole("button", { name, exact: true });
         const account = surface.getByRole("combobox", { name: "Bot account" });
         const handle = surface.getByRole("textbox", { name: "Add by X handle" });
         const guestMode = surface.getByRole("switch", { name: "Guest mode" });
@@ -164,7 +115,7 @@ suite.define(() => {
         });
         await gateway.setMethodResponse("x.allowlist.add", added);
         await handle.fill("@example_new");
-        await surface.getByRole("button", { name: "Add account", exact: true }).click();
+        await button("Add account").click();
         expect((await gateway.waitForRequest("x.allowlist.add")).params).toEqual({
           accountId: "primary",
           username: "@example_new",
@@ -175,18 +126,14 @@ suite.define(() => {
         await surface.getByText("Account added. Its mentions can now receive replies.").waitFor();
 
         await gateway.setMethodResponse("x.allowlist.remove", snapshot());
-        await surface
-          .getByRole("button", { name: "Remove stored entry for @example_new", exact: true })
-          .click();
+        await button("Remove stored entry for @example_new").click();
         expect((await gateway.waitForRequest("x.allowlist.remove")).params).toEqual({
           accountId: "primary",
           userId: "202",
         });
         await surface.getByText("@example_new", { exact: true }).waitFor({ state: "detached" });
 
-        const guests = snapshot();
-        guests.guests.enabled = true;
-        await gateway.setMethodResponse("x.guests.set", guests);
+        await gateway.setMethodResponse("x.guests.set", snapshot("primary", true));
         await guestMode.click();
         expect((await gateway.waitForRequest("x.guests.set")).params).toEqual({
           accountId: "primary",
@@ -201,7 +148,7 @@ suite.define(() => {
         expect(await surface.getByText("@example_maint", { exact: true }).count()).toBe(0);
 
         const pending = await gateway.deferNext("x.allowlist.list");
-        await surface.getByRole("button", { name: "Refresh", exact: true }).click();
+        await button("Refresh").click();
         await gateway.waitForRequest("x.allowlist.list", { after: pending });
         await gateway.setOperatorScopes(["operator.read"]);
         await reconnectMockGateway(page, gateway);
@@ -215,7 +162,7 @@ suite.define(() => {
         await reconnectMockGateway(page, gateway);
         await surface.getByText("@example_helper", { exact: true }).waitFor();
         const retired = await gateway.deferNext("x.allowlist.list");
-        await surface.getByRole("button", { name: "Refresh", exact: true }).click();
+        await button("Refresh").click();
         await gateway.waitForRequest("x.allowlist.list", { after: retired });
         const pages = await openSidebarPages(page);
         await pages.getByRole("link", { name: "Plugins", exact: true }).click();
