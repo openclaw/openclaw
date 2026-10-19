@@ -4,9 +4,9 @@ import type { SessionFileDownload } from "../../../api/session-file-download.ts"
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { readBlobAsDataUrl } from "../../../lib/blob-data-url.ts";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
+import { isTextAttachment } from "../../../lib/media-file-extension.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import type { FilePreviewSource, SidebarContent } from "./chat-sidebar-content-types.ts";
-import { isTextAttachment } from "./chat-text-attachment.tsx";
 
 function formatMarkdownCodeSpan(value: string): string {
   // Markdown finds block boundaries before inline spans, so filenames must

@@ -78,21 +78,13 @@ suite.define(() => {
   it("keeps a newly opened project file selected after an older directory response", async () => {
     await suite.withPage({}, async ({ page }) => {
       const rootListing = listing("agent:main:main", "", [dir("reports")]);
-      const reportsListing = listing("agent:main:main", "reports", [
-        { kind: "file", name: "inventory.csv", path: "reports/inventory.csv", size: 24 },
-      ]);
       const gateway = await installMockGateway(page, {
         historyMessages: [
           { role: "assistant", content: [{ type: "text", text: "Open `reports/inventory.csv`." }] },
         ],
         methodResponses: {
           "artifacts.list": { artifacts: [] },
-          [listMethod]: {
-            cases: [
-              { match: { path: "" }, response: rootListing },
-              { match: { path: "reports" }, response: reportsListing },
-            ],
-          },
+          [listMethod]: rootListing,
           "sessions.files.get": {
             sessionKey: "agent:main:main",
             root: "/workspace",
@@ -128,30 +120,35 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".chat-files-panel__page:not([hidden]) .cm-content").textContent())
         .toContain("notebooks");
-      await page
-        .locator('[data-region-header="side"]')
-        .getByRole("button", { name: "Files", exact: true })
-        .click();
-      const directoryRequest = { ...rootRequest, path: "reports" };
-      const beforeBrowse = (await gateway.getRequests("sessions.files.list", directoryRequest))
-        .length;
-      await rail.getByRole("button", { name: "reports", exact: true }).click();
-      await gateway.resolveDeferred(listMethod, rootListing);
-      await gateway.waitForRequest(listMethod, {
-        after: beforeBrowse,
-        match: directoryRequest,
+      const fileTab = page.getByRole("tab", { name: "inventory.csv", exact: true });
+      expect(await fileTab.getAttribute("aria-selected")).toBe("true");
+      await gateway.resolveDeferred(listMethod, {
+        ...rootListing,
+        browser: {
+          path: "",
+          entries: [{ kind: "directory", name: "refreshed-root", path: "refreshed-root" }],
+        },
       });
-      const row = rail.locator(".chat-workspace-rail__file").filter({ hasText: "inventory.csv" });
-      await row.waitFor();
-      const fileRequests = await gateway.getRequests("sessions.files.get");
-      expect(fileRequests).toHaveLength(1);
-      expect(fileRequests[0]?.params).toMatchObject({
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        path: "reports/inventory.csv",
-      });
-      await page.mouse.click(600, 300);
-      expect(await row.getAttribute("class")).toContain("chat-workspace-rail__file--active");
+      // Observe the held listing committing before checking the retained selection.
+      await rail
+        .getByRole("button", { name: "refreshed-root", exact: true, includeHidden: true })
+        .waitFor({ state: "attached" });
+      expect(await fileTab.getAttribute("aria-selected")).toBe("true");
+      expect(
+        await page.locator(".chat-files-panel__page:not([hidden]) .cm-content").textContent(),
+      ).toContain("notebooks");
+      const requests = await gateway.getRequests(listMethod);
+      expect(requests.map((request) => request.params)).toEqual(
+        ["", ""].map((folderPath) =>
+          expect.objectContaining({
+            sessionKey: "agent:main:main",
+            path: folderPath,
+            search: "",
+            agentId: "main",
+          }),
+        ),
+      );
+      expect(await gateway.getRequests("sessions.files.get")).toHaveLength(1);
     });
   });
 });

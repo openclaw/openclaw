@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openFileActions, selectFileAction } from "./chat-file-actions.test-support.ts";
 import { chatMessage, exactButton } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -16,9 +17,25 @@ declare global {
   }
 }
 
+function fileResponse(content: string) {
+  return {
+    root: "/workspace",
+    file: {
+      previewKind: "text",
+      contentEncoding: "utf8",
+      content,
+      kind: "read",
+      missing: false,
+      name: "notes.txt",
+      path: "notes.txt",
+      workspacePath: "notes.txt",
+    },
+  };
+}
+
 suite.define(() => {
   it.each(
-    (["current", "close", "raw"] as const).flatMap((lifecycle) =>
+    (["current", "close", "replacement"] as const).flatMap((lifecycle) =>
       (["path", "contents"] as const).map((action) => ({ lifecycle, action })),
     ),
   )(
@@ -47,22 +64,10 @@ suite.define(() => {
             return true;
           };
         });
-        await installMockGateway(page, {
+        const gateway = await installMockGateway(page, {
           historyMessages: [chatMessage("assistant", "Review `notes.txt`.", { timestamp: 1 })],
           methodResponses: {
-            "sessions.files.get": {
-              root: "/workspace",
-              file: {
-                previewKind: "text",
-                contentEncoding: "utf8",
-                content,
-                kind: "read",
-                missing: false,
-                name: "notes.txt",
-                path: "notes.txt",
-                workspacePath: "notes.txt",
-              },
-            },
+            "sessions.files.get": fileResponse(content),
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -70,24 +75,37 @@ suite.define(() => {
         const panel = page.locator("openclaw-chat-detail-panel:visible");
         await panel.locator(".cm-content").waitFor({ state: "visible" });
         const copyTitle = action === "path" ? "Copy path" : "Copy file contents";
-        const copyButton = exactButton(panel, copyTitle);
-        const copied = exactButton(panel, "Copied!");
-        await copyButton.click();
+        const copy = () => selectFileAction(panel, copyTitle);
+        const copied = () =>
+          panel.getByRole(action === "path" ? "menuitem" : "button", {
+            name: "Copied!",
+            exact: true,
+          });
+        await copy();
         await page.waitForFunction(() => window.fileCopyProof.nativeWrites.length === 1);
         const expected = action === "path" ? "notes.txt" : content;
         expect(await page.evaluate(() => window.fileCopyProof.nativeWrites)).toEqual([expected]);
         if (lifecycle === "close") {
           await exactButton(page, "Close tab: notes.txt").click();
           await expect.poll(() => page.locator(".sidebar-file-view:visible").count()).toBe(0);
-        } else if (lifecycle === "raw") {
-          await exactButton(panel, "View Raw Text").click();
-          await expect.poll(() => panel.locator(".sidebar-file-view").count()).toBe(0);
+        } else if (lifecycle === "replacement") {
+          await gateway.setMethodResponse("sessions.files.get", fileResponse("Updated file bytes"));
+          await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
+          await expect
+            .poll(() => panel.locator(".cm-content").textContent())
+            .toContain("Updated file bytes");
+          expect(await gateway.getRequests("sessions.files.get")).toHaveLength(2);
         }
         // Keep transient feedback alive until its assertions settle.
         await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1_000);
         await page.evaluate(() => window.fileCopyProof.reject!());
         if (lifecycle === "current") {
-          await copied.waitFor({ state: "visible" });
+          await page.waitForFunction(() => window.fileCopyProof.fallbacks.length === 1);
+          expect(await page.evaluate(() => window.fileCopyProof.fallbacks)).toEqual([expected]);
+          if (action === "path") {
+            await openFileActions(panel);
+          }
+          await copied().waitFor({ state: "visible" });
         }
         expect(await page.evaluate(() => window.fileCopyProof.fallbacks)).toEqual(
           lifecycle === "current" ? [expected] : [],
@@ -95,11 +113,13 @@ suite.define(() => {
         if (lifecycle === "current") {
           // Retire the first attempt's feedback before proving native success.
           await page.clock.fastForward(1_500);
-          await copyButton.waitFor({ state: "visible" });
-          await copyButton.click();
+          await copy();
           await page.waitForFunction(() => window.fileCopyProof.nativeWrites.length === 2);
           await page.evaluate(() => window.fileCopyProof.resolve!());
-          await copied.waitFor({ state: "visible" });
+          if (action === "path") {
+            await openFileActions(panel);
+          }
+          await copied().waitFor({ state: "visible" });
           const writes = await page.evaluate(() => window.fileCopyProof.nativeWrites);
           expect(writes).toEqual([expected, expected]);
           expect(await page.evaluate(() => window.fileCopyProof.fallbacks)).toEqual([expected]);

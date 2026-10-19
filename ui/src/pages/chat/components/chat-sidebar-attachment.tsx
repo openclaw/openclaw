@@ -2,7 +2,7 @@ import { createMemo, Match, onCleanup, refresh, Show, Switch } from "solid-js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
+import { isSvgImageMediaPath, isTextAttachment } from "../../../lib/media-file-extension.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { AttachmentStateCard, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import {
@@ -25,7 +25,7 @@ import {
   SidebarFileMobileRail,
   SidebarFileMobileImageControls,
 } from "./chat-sidebar-file-mobile.tsx";
-import { ChatTextAttachment, isTextAttachment } from "./chat-text-attachment.tsx";
+import { ChatTextAttachment } from "./chat-text-attachment.tsx";
 
 type SidebarAttachmentProps = {
   content: Extract<SidebarContent, { kind: "attachment" }>;
@@ -193,6 +193,7 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
         }
       >
         <ChatTextAttachment
+          mobile={props.mobile === true}
           plainText={props.content.plainText ?? false}
           actions={props.content.renderActions?.()}
           embedSandboxMode={props.embedSandboxMode}
