@@ -856,7 +856,10 @@ try {
       peakStreams,
       peakPrimaryStreams,
       primaryStreamRequests,
-      utilityStreamRequests: streamRequests - primaryStreamRequests - toolResults,
+      utilityStreamRequests:
+        streamRequests -
+        primaryStreamRequests -
+        (retentionScenario ? outputLimitResponses + recoveredResponses : toolResults),
       streamRequests,
       deliveredEvents,
       deliveredSessionEvents,

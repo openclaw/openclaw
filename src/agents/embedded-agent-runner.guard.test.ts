@@ -127,11 +127,10 @@ describe("guardSessionManager integration", () => {
   });
 
   it("rebinds and retires user persistence callbacks without clearing a newer attempt", async () => {
-    installWriteHook((event) =>
-      (event as { message: AgentMessage }).message.content === "blocked"
-        ? { block: true }
-        : undefined,
-    );
+    installWriteHook((event) => {
+      const { message } = event as { message: AgentMessage };
+      return message.role === "user" && message.content === "blocked" ? { block: true } : undefined;
+    });
     const callbacks = () => ({
       onUserMessagePreparingForPersistence: vi.fn(),
       onUserMessagePersisted: vi.fn(),
@@ -165,6 +164,37 @@ describe("guardSessionManager integration", () => {
       makeUserMessage("persisted", 1),
       makeUserMessage("after cleanup", 4),
     ]);
+  });
+
+  it("keeps an accepted write bound to its callbacks while the manager is rebound", async () => {
+    const manager = SessionManager.inMemory();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const append = manager.appendMessageWithTranscriptAnchorAsync.bind(manager);
+    vi.spyOn(manager, "appendMessageWithTranscriptAnchorAsync").mockImplementationOnce(
+      async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return append(...args);
+      },
+    );
+    const previous = { onMessagePersisted: vi.fn(), onUserMessagePersisted: vi.fn() };
+    const current = { onMessagePersisted: vi.fn(), onUserMessagePersisted: vi.fn() };
+    const sm = guardSessionManager(manager, { runId: "previous", ...previous });
+    const pending = sm.appendMessageAsync(makeUserMessage("previous turn", 1));
+    await entered.promise;
+    const queued = sm.appendMessageAsync(makeUserMessage("queued previous turn", 2));
+    guardSessionManager(sm, { runId: "current", ...current });
+    release.resolve();
+    await Promise.all([pending, queued]);
+
+    expect(previous.onMessagePersisted).toHaveBeenCalledTimes(2);
+    expect(previous.onUserMessagePersisted).toHaveBeenCalledTimes(2);
+    expect(current.onMessagePersisted).not.toHaveBeenCalled();
+    expect(current.onUserMessagePersisted).not.toHaveBeenCalled();
+    await sm.appendMessageAsync(makeUserMessage("current turn", 3));
+    expect(current.onMessagePersisted).toHaveBeenCalledOnce();
+    expect(current.onUserMessagePersisted).toHaveBeenCalledOnce();
   });
 
   it("publishes a suppressed user envelope while preserving runtime media facts", () => {

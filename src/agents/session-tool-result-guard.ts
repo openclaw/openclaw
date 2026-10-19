@@ -64,6 +64,13 @@ type UserMessagePersistedCallback = (
     sessionTarget?: ReturnType<SessionManager["getSessionTarget"]>;
   },
 ) => void | Promise<void>;
+type MessageCallbacks = {
+  transformMessageForPersistence?: (message: AgentMessage) => AgentMessage;
+  onUserMessagePersisted?: UserMessagePersistedCallback;
+  onUserMessagePersistenceSuppressed?: AsyncMessageCallback<UserAgentMessage>;
+  onUserMessageBlocked?: (message: UserAgentMessage) => void;
+  onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
+};
 type AppendMessageOptions = Parameters<SessionManager["appendMessage"]>[1];
 type AppendReceipt = Awaited<ReturnType<SessionManager["appendMessageWithTranscriptAnchorAsync"]>>;
 type AppendRequest = {
@@ -128,7 +135,8 @@ export function installSessionToolResultGuard(
     agentId?: string;
     /** Exact run that owns terminal assistant transcript updates. */
     runId?: string;
-    transformMessageForPersistence?: (message: AgentMessage) => AgentMessage;
+    /** Capture the accepting run before an append waits for manager admission. */
+    captureMessageCallbacks?: () => MessageCallbacks;
     transformToolResultForPersistence?: (
       message: AgentMessage,
       meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
@@ -157,13 +165,9 @@ export function installSessionToolResultGuard(
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
     assistantErrorTranscript?: AssistantErrorTranscript;
-    onUserMessagePersisted?: UserMessagePersistedCallback;
-    onUserMessagePersistenceSuppressed?: AsyncMessageCallback<UserAgentMessage>;
-    onUserMessageBlocked?: (message: UserAgentMessage) => void;
-    onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
     withCompactionPersistence?: CompactionAppendPersistence;
     withCompactionPersistenceAsync?: CompactionAppendPersistenceAsync;
-  },
+  } & MessageCallbacks,
 ): {
   hasPendingToolResults: () => boolean;
   flushPendingToolResults: () => void;
@@ -183,8 +187,10 @@ export function installSessionToolResultGuard(
   const pending = new Map<string, string | undefined>();
   // Response that most recently added pending tool calls; see clearsPendingToolCalls.
   let pendingResponseIds: readonly string[] = [];
-  const persistMessage = (message: AgentMessage) =>
-    opts?.transformMessageForPersistence?.(message) ?? message;
+  const captureMessageCallbacks = (): MessageCallbacks =>
+    opts?.captureMessageCallbacks?.() ?? opts ?? {};
+  const persistMessage = (message: AgentMessage, callbacks: MessageCallbacks) =>
+    callbacks.transformMessageForPersistence?.(message) ?? message;
 
   const persistToolResult = (
     message: AgentMessage,
@@ -287,6 +293,7 @@ export function installSessionToolResultGuard(
 
   function* appendMessageAndCacheTranscriptSeq(
     message: AgentMessage,
+    callbacks: MessageCallbacks,
     options?: AppendMessageOptions,
     acknowledgementSource: AgentMessage = message,
   ): Generator<
@@ -355,7 +362,7 @@ export function installSessionToolResultGuard(
     // Update only committed state, before callbacks can re-enter or throw.
     recordPendingReceipt(entryId, persistedMessage, viewWasSuperseded === true);
     if (appended) {
-      void opts?.onMessagePersisted?.(persistedMessage);
+      void callbacks.onMessagePersisted?.(persistedMessage);
     }
     if (!appended || !sessionTarget) {
       return { entryId, message: persistedMessage, appended, ...(anchor ? { anchor } : {}) };
@@ -402,7 +409,9 @@ export function installSessionToolResultGuard(
       : { message: msg, changed: false };
   };
 
-  function* flushPendingToolResultsOperation(): Generator<AppendRequest, void, AppendReceipt> {
+  function* flushPendingToolResultsOperation(
+    callbacks: MessageCallbacks,
+  ): Generator<AppendRequest, void, AppendReceipt> {
     if (pending.size === 0) {
       return;
     }
@@ -413,7 +422,7 @@ export function installSessionToolResultGuard(
           toolName: name,
           text: missingToolResultText,
         });
-        const persistedSynthetic = persistMessage(synthetic);
+        const persistedSynthetic = persistMessage(synthetic, callbacks);
         const transformed = persistToolResult(persistedSynthetic, {
           toolCallId: id,
           toolName: name,
@@ -428,6 +437,7 @@ export function installSessionToolResultGuard(
               : flushed.message;
           yield* appendMessageAndCacheTranscriptSeq(
             capToolResultForPersistence(canonical, maxToolResultChars),
+            callbacks,
             {
               invalidateSerializedPrefixCache:
                 persistedSynthetic !== synthetic ||
@@ -441,12 +451,18 @@ export function installSessionToolResultGuard(
     }
     pending.clear();
   }
-  const flushPendingToolResults = () => runSync(flushPendingToolResultsOperation());
-  const flushPendingToolResultsAsync = () =>
-    withSessionManagerAppend(sessionManager, () => runAsync(flushPendingToolResultsOperation()));
+  const flushPendingToolResults = () =>
+    runSync(flushPendingToolResultsOperation(captureMessageCallbacks()));
+  const flushPendingToolResultsAsync = () => {
+    const callbacks = captureMessageCallbacks();
+    return withSessionManagerAppend(sessionManager, () =>
+      runAsync(flushPendingToolResultsOperation(callbacks)),
+    );
+  };
 
   function* guardedAppend(
     message: AgentMessage,
+    callbacks: MessageCallbacks,
     callerOptions?: AppendMessageOptions,
   ): Generator<AppendRequest, string | undefined, AppendReceipt> {
     const callerInvalidatesCache = callerOptions?.invalidateSerializedPrefixCache === true;
@@ -465,7 +481,7 @@ export function installSessionToolResultGuard(
       });
       if (sanitized.length === 0) {
         if (pending.size > 0) {
-          yield* flushPendingToolResultsOperation();
+          yield* flushPendingToolResultsOperation(callbacks);
         }
         return undefined;
       }
@@ -481,7 +497,7 @@ export function installSessionToolResultGuard(
       );
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
-      const persistedToolResult = persistMessage(normalizedToolResult);
+      const persistedToolResult = persistMessage(normalizedToolResult, callbacks);
       const capped = capToolResultForPersistence(persistedToolResult, maxToolResultChars);
       const transformed = persistToolResult(capped, {
         toolCallId: id ?? undefined,
@@ -495,6 +511,7 @@ export function installSessionToolResultGuard(
       // A blocked or failed append must remain pending for transcript repair.
       return (yield* appendMessageAndCacheTranscriptSeq(
         capToolResultForPersistence(persisted.message, maxToolResultChars),
+        callbacks,
         {
           invalidateSerializedPrefixCache:
             callerInvalidatesCache ||
@@ -515,7 +532,7 @@ export function installSessionToolResultGuard(
       pending.size > 0 &&
       clearsPendingToolCalls(nextMessage, toolCalls, allowSyntheticToolResults, pendingResponseIds)
     ) {
-      yield* flushPendingToolResultsOperation();
+      yield* flushPendingToolResultsOperation(callbacks);
     }
 
     if (nextMessage.role === "user" && nextUserMessagePersistence === "runtime") {
@@ -523,11 +540,11 @@ export function installSessionToolResultGuard(
       // Publish attribution on the live message too; cold replay must keep the same model prefix.
       Object.assign(nextMessage, { provenance: { kind: "internal_system" }, display: false });
     }
-    const transformedMessage = persistMessage(nextMessage);
+    const transformedMessage = persistMessage(nextMessage, callbacks);
     const finalWrite = applyBeforeWriteHook(transformedMessage);
     if (!finalWrite) {
       if (transformedMessage.role === "user") {
-        opts?.onUserMessageBlocked?.(transformedMessage);
+        callbacks.onUserMessageBlocked?.(transformedMessage);
       }
       return undefined;
     }
@@ -550,7 +567,7 @@ export function installSessionToolResultGuard(
       const suppress = nextUserMessagePersistence === "suppress";
       nextUserMessagePersistence = "normal";
       if (suppress) {
-        void opts?.onUserMessagePersistenceSuppressed?.(finalMessage);
+        void callbacks.onUserMessagePersistenceSuppressed?.(finalMessage);
         return undefined;
       }
     }
@@ -564,6 +581,7 @@ export function installSessionToolResultGuard(
       sessionTarget,
     } = yield* appendMessageAndCacheTranscriptSeq(
       finalMessage,
+      callbacks,
       {
         invalidateSerializedPrefixCache:
           callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
@@ -587,7 +605,7 @@ export function installSessionToolResultGuard(
     }
 
     if (finalMessage.role === "user" && persistedMessage.role === "user") {
-      void opts?.onUserMessagePersisted?.(finalMessage, {
+      void callbacks.onUserMessagePersisted?.(finalMessage, {
         ...(anchor ? { anchor } : {}),
         appended,
         entryId: result,
@@ -601,11 +619,16 @@ export function installSessionToolResultGuard(
 
   // Retained third-party synchronous adapter; bundled runtime uses the awaited guard below.
   sessionManager.appendMessage = ((message, options) => {
+    const callbacks = captureMessageCallbacks();
     prepareSessionManagerSync("appendMessage", sessionManager.getSessionTarget(), sessionManager);
-    return runSync(guardedAppend(message, options));
+    return runSync(guardedAppend(message, callbacks, options));
   }) as SessionManager["appendMessage"];
-  sessionManager.appendMessageAsync = (message, options) =>
-    withSessionManagerAppend(sessionManager, () => runAsync(guardedAppend(message, options)));
+  sessionManager.appendMessageAsync = (message, options) => {
+    const callbacks = captureMessageCallbacks();
+    return withSessionManagerAppend(sessionManager, () =>
+      runAsync(guardedAppend(message, callbacks, options)),
+    );
+  };
   sessionManager.appendCompaction = guardedAppendCompaction;
   sessionManager.appendCompactionAsync = guardedAppendCompactionAsync;
 

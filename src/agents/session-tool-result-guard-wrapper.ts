@@ -276,50 +276,53 @@ export function guardSessionManager(
         ? resolveLiveToolResultMaxChars({ contextWindowTokens: opts.contextWindowTokens })
         : undefined,
   });
+  const transformMessageForPersistence = (
+    message: AgentMessage,
+    onPreparing: NonNullable<typeof options>["onUserMessagePreparingForPersistence"],
+  ) => {
+    queuedUserTurnTranscriptRecorder = undefined;
+    const withProvenance = applyInputProvenanceToUserMessage(message, inputProvenance);
+    const runtimeContext = takeRuntimeUserTurnTranscriptContext(message);
+    // Replay may reuse the current user without appending it. Its prepared
+    // metadata must not leak onto a later queued user, including staged steering.
+    if (
+      message.role === "user" &&
+      preparedUserReplayKey !== undefined &&
+      Reflect.get(runtimeContext?.message ?? message, "idempotencyKey") !== preparedUserReplayKey
+    ) {
+      pendingPreparedUserTurnMessage = undefined;
+      guard.setNextUserMessagePersistence("normal");
+    }
+    const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
+    const recorder =
+      runtimeContext?.recorder ??
+      (prepared !== undefined && prepared === pendingPreparedUserTurnMessage
+        ? preparedUserTurnTranscriptRecorder
+        : undefined);
+    if (message.role === "user") {
+      onPreparing?.(message, recorder, prepared);
+    }
+    const merged = mergePreparedUserTurnMessageForRuntime({
+      runtimeMessage: withProvenance,
+      ...(prepared ? { preparedMessage: prepared } : {}),
+    });
+    if (merged !== withProvenance) {
+      queuedUserTurnTranscriptRecorder = recorder;
+      if (!runtimeContext) {
+        pendingPreparedUserTurnMessage = undefined;
+      }
+    }
+    if (message.role === "user" && merged.role === "user") {
+      // Persistence callbacks may be re-entrant. Correlate through the exact
+      // transformed object instead of a mutable latest-message slot.
+      runtimeUserMessageByPersistedMessage.set(merged, message);
+    }
+    return merged;
+  };
   const guard = installSessionToolResultGuard(sessionManager, {
     sessionKey: opts?.sessionKey,
     agentId: opts?.agentId,
     runId: opts?.runId,
-    transformMessageForPersistence: (message) => {
-      queuedUserTurnTranscriptRecorder = undefined;
-      const withProvenance = applyInputProvenanceToUserMessage(message, inputProvenance);
-      const runtimeContext = takeRuntimeUserTurnTranscriptContext(message);
-      // Replay may reuse the current user without appending it. Its prepared
-      // metadata must not leak onto a later queued user, including staged steering.
-      if (
-        message.role === "user" &&
-        preparedUserReplayKey !== undefined &&
-        Reflect.get(runtimeContext?.message ?? message, "idempotencyKey") !== preparedUserReplayKey
-      ) {
-        pendingPreparedUserTurnMessage = undefined;
-        guard.setNextUserMessagePersistence("normal");
-      }
-      const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
-      const recorder =
-        runtimeContext?.recorder ??
-        (prepared !== undefined && prepared === pendingPreparedUserTurnMessage
-          ? preparedUserTurnTranscriptRecorder
-          : undefined);
-      if (message.role === "user") {
-        opts?.onUserMessagePreparingForPersistence?.(message, recorder, prepared);
-      }
-      const merged = mergePreparedUserTurnMessageForRuntime({
-        runtimeMessage: withProvenance,
-        ...(prepared ? { preparedMessage: prepared } : {}),
-      });
-      if (merged !== withProvenance) {
-        queuedUserTurnTranscriptRecorder = recorder;
-        if (!runtimeContext) {
-          pendingPreparedUserTurnMessage = undefined;
-        }
-      }
-      if (message.role === "user" && merged.role === "user") {
-        // Persistence callbacks may be re-entrant. Correlate through the exact
-        // transformed object instead of a mutable latest-message slot.
-        runtimeUserMessageByPersistedMessage.set(merged, message);
-      }
-      return merged;
-    },
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
     missingToolResultText: opts?.missingToolResultText,
@@ -332,39 +335,54 @@ export function guardSessionManager(
     suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
     assistantErrorTranscript: opts?.assistantErrorTranscript,
-    onMessagePersisted: (message) => opts?.onMessagePersisted?.(message),
     withCompactionPersistence: opts?.withCompactionPersistence,
     withCompactionPersistenceAsync: opts?.withCompactionPersistenceAsync,
-    onUserMessagePersisted: async (message, persistence) => {
-      const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
-      runtimeUserMessageByPersistedMessage.delete(message);
-      publishPersistedUserEnvelope(runtimeMessage, persistence.persistedMessage);
-      const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
-      recorder?.markRuntimePersisted(persistence.persistedMessage, persistence.anchor, {
-        appended: persistence.appended,
-      });
-      advanceMessageActionPrompt({
-        runId: transcriptRunId,
-        agentId,
-        sessionKey,
-        sessionId: sessionManager.getSessionId(),
-        recorder,
-      });
-      await opts?.onUserMessagePersisted?.(persistence.persistedMessage, runtimeMessage);
+    captureMessageCallbacks: () => {
+      const {
+        runId,
+        onMessagePersisted,
+        onUserMessagePreparingForPersistence,
+        onUserMessagePersisted,
+        onUserMessagePersistenceSuppressed,
+        onUserMessageBlocked,
+      } = opts ?? {};
+      const suppressionRecorder = preparedUserTurnTranscriptRecorder;
+      return {
+        transformMessageForPersistence: (message) =>
+          transformMessageForPersistence(message, onUserMessagePreparingForPersistence),
+        onMessagePersisted,
+        onUserMessagePersisted: async (message, persistence) => {
+          const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
+          runtimeUserMessageByPersistedMessage.delete(message);
+          publishPersistedUserEnvelope(runtimeMessage, persistence.persistedMessage);
+          const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
+          recorder?.markRuntimePersisted(persistence.persistedMessage, persistence.anchor, {
+            appended: persistence.appended,
+          });
+          advanceMessageActionPrompt({
+            runId,
+            agentId,
+            sessionKey,
+            sessionId: sessionManager.getSessionId(),
+            recorder,
+          });
+          await onUserMessagePersisted?.(persistence.persistedMessage, runtimeMessage);
+        },
+        onUserMessagePersistenceSuppressed: async (message) => {
+          const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
+          runtimeUserMessageByPersistedMessage.delete(message);
+          const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
+          publishPersistedUserEnvelope(
+            runtimeMessage,
+            recorder?.getPersistedMessage?.() ??
+              suppressionRecorder?.getPersistedMessage?.() ??
+              message,
+          );
+          await onUserMessagePersistenceSuppressed?.(message, runtimeMessage);
+        },
+        onUserMessageBlocked,
+      };
     },
-    onUserMessagePersistenceSuppressed: async (message) => {
-      const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
-      runtimeUserMessageByPersistedMessage.delete(message);
-      const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
-      publishPersistedUserEnvelope(
-        runtimeMessage,
-        recorder?.getPersistedMessage?.() ??
-          preparedUserTurnTranscriptRecorder?.getPersistedMessage?.() ??
-          message,
-      );
-      await opts?.onUserMessagePersistenceSuppressed?.(message, runtimeMessage);
-    },
-    onUserMessageBlocked: (message) => opts?.onUserMessageBlocked?.(message),
   });
   setSessionToolResultPreparer(guardedSessionManager, {
     cap: (message) => truncateToolResultMessage(message, maxToolResultChars),
