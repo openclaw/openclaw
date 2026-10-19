@@ -1,10 +1,13 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { zstdDecompressSync } from "node:zlib";
 import JSZip from "jszip";
-import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntryAsync,
+  loadTranscriptEvents,
+  resolveStorePath,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -126,32 +129,27 @@ function imageInHistory(history: unknown): Record<string, unknown> | undefined {
     .find((block) => block?.type === "image");
 }
 
-function readRawAssistantMessages(stateDir: string): PersistedAssistantMessage[] {
-  const database = openNodeSqliteDatabase(
-    path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite"),
-    { readOnly: true },
-  );
-  try {
-    const rows = database
-      .prepare("SELECT event_json, event_zstd FROM transcript_events ORDER BY seq")
-      .all() as Array<
-      { event_json: string; event_zstd: null } | { event_json: null; event_zstd: Uint8Array }
-    >;
-    return rows.flatMap((row) => {
-      const eventJson =
-        row.event_json === null
-          ? zstdDecompressSync(row.event_zstd).toString("utf8")
-          : row.event_json;
-      const message = (JSON.parse(eventJson) as { message?: unknown }).message;
-      return message &&
-        typeof message === "object" &&
-        (message as { role?: unknown }).role === "assistant"
-        ? [message as PersistedAssistantMessage]
-        : [];
-    });
-  } finally {
-    database.close();
+async function readRawAssistantMessages(stateDir: string): Promise<PersistedAssistantMessage[]> {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const scope = {
+    agentId: "qa",
+    env,
+    sessionKey: "agent:qa:main",
+    storePath: resolveStorePath(undefined, { agentId: "qa", env }),
+  };
+  const entry = await getSessionEntryAsync(scope);
+  if (!entry) {
+    throw new Error("QA Gateway session is unavailable");
   }
+  const events = await loadTranscriptEvents({ ...scope, sessionId: entry.sessionId });
+  return events.flatMap((event) => {
+    const message = asOptionalRecord(event)?.message;
+    return message &&
+      typeof message === "object" &&
+      (message as { role?: unknown }).role === "assistant"
+      ? [message as PersistedAssistantMessage]
+      : [];
+  });
 }
 
 function readModelReplayError(messages: AssistantMessage[]): string | null {
@@ -375,7 +373,7 @@ suite.define(() => {
           if (!stateDir) {
             throw new Error("QA Gateway state directory is unavailable");
           }
-          const rawAssistantMessages = readRawAssistantMessages(stateDir);
+          const rawAssistantMessages = await readRawAssistantMessages(stateDir);
           const rawModelContent = rawAssistantMessages.flatMap((message) =>
             Array.isArray(message.content) ? message.content : [],
           );
