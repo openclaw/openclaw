@@ -1,14 +1,19 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import { resolveRequesterConversationToolPolicy } from "../../agents/requester-tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
+import type {
+  ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityRequester,
+} from "../../sessions/session-controller.contracts.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { getRequesterProfile } from "../requester-profile.js";
 import { internalSessionConversationId } from "../../utils/message-channel-constants.js";
@@ -17,6 +22,25 @@ import { shouldUseFromAsSenderFallback } from "../sender-identity.js";
 import type { RuntimeMsgContext } from "../templating.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
+
+export function applyReplyToolAuthorityRequester(
+  snapshot: ReplyToolAuthorityInput,
+  requester: ReplyToolAuthorityRequester,
+): ReplyToolAuthorityInput {
+  return {
+    ...snapshot,
+    run: {
+      ...snapshot.run,
+      config: captureRuntimeConfig(requester.config),
+      requesterOrigin: captureRequesterOrigin(requester),
+      // This is a fresh request, not the incumbent's external snapshot or completion.
+      conversationToolPolicy: undefined,
+      trustedInternalHandoff: undefined,
+      inputProvenance: undefined,
+      scheduledToolPolicy: undefined,
+    },
+  };
+}
 
 export function applyReplyToolAuthorityOverlay(
   snapshot: ReplyToolAuthorityInput,

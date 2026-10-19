@@ -134,3 +134,13 @@ export async function waitForQueuedLocalRun(
     );
   }
 }
+
+export function isSameLocalRunScope(
+  run: LocalRunState,
+  params: { sessionKey: string; agentId?: string },
+) {
+  return (
+    run.sessionKey === params.sessionKey &&
+    (params.sessionKey !== "global" || run.agentId === params.agentId)
+  );
+}

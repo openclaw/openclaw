@@ -36,12 +36,7 @@ import { resolveTextCommand } from "../auto-reply/commands-registry.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import { executeSessionGoalCommand, parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
-import {
-  DEFAULT_QUEUE_CAP,
-  DEFAULT_QUEUE_DEBOUNCE_MS,
-  DEFAULT_QUEUE_DROP,
-} from "../auto-reply/reply/queue/state.js";
-import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
+import { DEFAULT_QUEUE_DEBOUNCE_MS } from "../auto-reply/reply/queue/state.js";
 import { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import {
@@ -112,7 +107,7 @@ import { defaultRuntime } from "../runtime.js";
 import { getSessionControllerOperation } from "../sessions/session-controller.state.js";
 import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { applyQueueDropPolicy, waitForQueueDebounce } from "../utils/queue-helpers.js";
+import { waitForQueueDebounce } from "../utils/queue-helpers.js";
 import {
   assistantChatMessage,
   payloadText,
@@ -121,9 +116,11 @@ import {
   resolveTerminalChatState,
 } from "./embedded-chat-projection.js";
 import { ensureEmbeddedHistoryRuntimePluginsLoaded } from "./embedded-history-runtime.js";
+import { enqueuePendingLocalMessage } from "./embedded-local-queue.js";
 import {
   buildLocalQueuedPrompt,
   createLocalRunState,
+  isSameLocalRunScope,
   timeoutSecondsFromMs,
   waitForLocalRunShutdown,
   waitForQueuedLocalRun,
@@ -152,12 +149,6 @@ import type {
   TuiImageData,
 } from "./tui-backend.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
-
-type LocalPendingMessage = {
-  run: LocalRunState;
-  messageIndex: number;
-  message: string;
-};
 
 export class EmbeddedTuiBackend implements TuiBackend {
   readonly connection = { url: "local embedded" };
@@ -396,7 +387,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       if (queueSettings.mode === "interrupt") {
         this.abortSessionRuns(runScope);
       } else {
-        const queued = this.enqueuePendingLocalMessage({
+        const queued = enqueuePendingLocalMessage(this.runs, {
           runScope,
           message: opts.message,
           settings: queueSettings,
@@ -854,108 +845,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
     };
   }
 
-  private enqueuePendingLocalMessage(params: {
-    runScope: { sessionKey: string; agentId?: string };
-    message: string;
-    settings: QueueSettings;
-  }):
-    | { kind: "handled"; runId: string }
-    | { kind: "rejected" }
-    | { kind: "enqueue"; queue: NonNullable<LocalRunState["pendingQueue"]> } {
-    const pendingMessages: LocalPendingMessage[] = [];
-    for (const run of this.runs.values()) {
-      if (this.isSameRunScope(run, params.runScope) && run.pendingQueue) {
-        run.pendingQueue.messages.forEach((message, messageIndex) => {
-          pendingMessages.push({ run, messageIndex, message });
-        });
-      }
-    }
-    const overflowQueue = {
-      items: [...pendingMessages],
-      cap: params.settings.cap ?? DEFAULT_QUEUE_CAP,
-      dropPolicy: params.settings.dropPolicy ?? DEFAULT_QUEUE_DROP,
-      droppedCount: 0,
-      summaryLines: [] as string[],
-    };
-    const admitted = applyQueueDropPolicy({
-      queue: overflowQueue,
-      summarize: (item) => item.message,
-    });
-    if (!admitted) {
-      return { kind: "rejected" };
-    }
-
-    const retained = new Set(overflowQueue.items);
-    const droppedByRun = new Map<LocalRunState, number[]>();
-    for (const dropped of pendingMessages) {
-      if (retained.has(dropped)) {
-        continue;
-      }
-      const indices = droppedByRun.get(dropped.run) ?? [];
-      indices.push(dropped.messageIndex);
-      droppedByRun.set(dropped.run, indices);
-    }
-    const inheritedSummaryLines: string[] = [];
-    for (const [run, indices] of droppedByRun) {
-      for (const index of indices.toSorted((a, b) => b - a)) {
-        run.pendingQueue?.messages.splice(index, 1);
-      }
-      if (run.pendingQueue?.messages.length === 0) {
-        inheritedSummaryLines.push(...run.pendingQueue.summaryLines);
-        overflowQueue.droppedCount += run.pendingQueue.droppedCount;
-        run.controller.abort();
-      }
-    }
-    overflowQueue.summaryLines.unshift(...inheritedSummaryLines);
-    if (overflowQueue.summaryLines.length > overflowQueue.cap) {
-      overflowQueue.summaryLines.splice(0, overflowQueue.summaryLines.length - overflowQueue.cap);
-    }
-
-    const enqueuedAt = Date.now();
-    for (const run of this.runs.values()) {
-      if (!this.isSameRunScope(run, params.runScope) || !run.pendingQueue) {
-        continue;
-      }
-      run.pendingQueue.lastEnqueuedAt = enqueuedAt;
-      run.pendingQueue.debounceMs = params.settings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS;
-    }
-
-    if (params.settings.mode === "collect") {
-      const target = [...this.runs.entries()].findLast(
-        ([, run]) => this.isSameRunScope(run, params.runScope) && run.pendingQueue,
-      );
-      const targetQueue = target?.[1].pendingQueue;
-      if (target && targetQueue?.mode === "collect" && !target[1].controller.signal.aborted) {
-        const [targetRunId] = target;
-        targetQueue.messages.push(params.message);
-        targetQueue.dropPolicy = params.settings.dropPolicy ?? DEFAULT_QUEUE_DROP;
-        targetQueue.droppedCount += overflowQueue.droppedCount;
-        targetQueue.summaryLines.push(...overflowQueue.summaryLines);
-        return { kind: "handled", runId: targetRunId };
-      }
-    }
-
-    return {
-      kind: "enqueue",
-      queue: {
-        mode: params.settings.mode === "collect" ? "collect" : "followup",
-        messages: [params.message],
-        debounceMs: params.settings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
-        lastEnqueuedAt: enqueuedAt,
-        dropPolicy: params.settings.dropPolicy ?? DEFAULT_QUEUE_DROP,
-        droppedCount: overflowQueue.droppedCount,
-        summaryLines: overflowQueue.summaryLines,
-      },
-    };
-  }
-
   private findQueuedSessionRunPromise(params: {
     sessionKey: string;
     agentId?: string;
   }): QueuedSessionRun | undefined {
     let queuedAfter: QueuedSessionRun | undefined;
     for (const [runId, run] of this.runs) {
-      if (this.isSameRunScope(run, params) && !run.question && run.promise) {
+      if (isSameLocalRunScope(run, params) && !run.question && run.promise) {
         queuedAfter = { runId, run, promise: run.promise };
       }
     }
@@ -964,17 +860,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   private abortSessionRuns(params: { sessionKey: string; agentId?: string }) {
     for (const run of this.runs.values()) {
-      if (this.isSameRunScope(run, params) && !run.question && this.isAbortableRun(run)) {
+      if (isSameLocalRunScope(run, params) && !run.question && this.isAbortableRun(run)) {
         run.controller.abort();
       }
     }
-  }
-
-  private isSameRunScope(run: LocalRunState, params: { sessionKey: string; agentId?: string }) {
-    return (
-      run.sessionKey === params.sessionKey &&
-      (params.sessionKey !== "global" || run.agentId === params.agentId)
-    );
   }
 
   private isAbortableRun(run: LocalRunState): boolean {

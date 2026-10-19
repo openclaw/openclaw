@@ -16,6 +16,7 @@ import {
   finalizeReplyMessageInjectionAttempt,
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
+import { canInjectReplyMessageTarget } from "../../sessions/session-controller.message-injection.js";
 import {
   getSessionControllerEntryForOperation,
   isCurrentSessionControllerOperation,
@@ -228,6 +229,9 @@ export async function runActiveReplySteer(
       followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== true &&
       hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation)
     ) {
+      if (!canInjectReplyMessageTarget(injectionTarget)) {
+        return await fallback("injection_unavailable", injectionTarget.runId);
+      }
       await refuseCollaborativeSteering(followupRun, replyOperationRunState, () => {
         custodyFinished = true;
         parked.consume("consumed");

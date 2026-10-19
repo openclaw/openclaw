@@ -425,23 +425,13 @@ export async function runReplyAgent(
         typing.cleanup();
         return undefined;
       }
-      if (replyOperationRunState) {
-        replyOperationRunState.admission = {
-          status: "accepted",
-          mode: "followup",
-          ...(explicitFollowup
-            ? { reason: "explicit-followup" as const }
-            : questionRequesterMismatch
-              ? { reason: "requester-mismatch" as const }
-              : effectiveShouldSteer &&
-                  (isActive || messageInjectionDisposition === "rejected") &&
-                  followupRun.currentInboundEventKind !== "room_event" &&
-                  (!followupRun.run.inputProvenance ||
-                    followupRun.run.inputProvenance.kind === "external_user")
-                ? { reason: "steering-unavailable" as const }
-                : {}),
-        };
-      }
+      replyRunState.recordReplyFollowupAdmission(replyOperationRunState, {
+        explicitFollowup,
+        requesterMismatch: questionRequesterMismatch,
+        unavailableSteer:
+          effectiveShouldSteer && (isActive || messageInjectionDisposition === "rejected"),
+        followupRun,
+      });
       // The queue must stay dormant while the active owner can still collect
       // messages. Registering after enqueue closes the owner-clear race.
       const queuedOperationOwner =

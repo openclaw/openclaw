@@ -1,7 +1,6 @@
 import {
   hasSessionProjectionAcceptedFinal,
   reduceSessionProjectionRunEvent,
-  type SessionProjectionRunStatus,
 } from "../../packages/gateway-client/src/session-projection.js";
 import type { ChatLogOperations } from "./components/chat-log.js";
 import {
@@ -18,6 +17,7 @@ import {
   getTuiSessionProjection,
   hasDisplayableTuiSessionFinal,
   isIdentityOnlyTuiSessionInvalidation,
+  isFailedTuiRunStatus,
   projectTuiSessionMessage,
   projectTuiSessionFinal,
   readTuiSessionProjectionScope,
@@ -42,10 +42,6 @@ import type {
 } from "./tui-types.js";
 
 const ACTIVITY_PHASES = new Set(["start", "finishing", "end", "error"]);
-
-function isFailedTuiRunStatus(status: SessionProjectionRunStatus | undefined): boolean {
-  return status === "aborted" || status === "error" || status === "timeout";
-}
 
 type EventHandlerContext = Omit<
   Parameters<typeof createTuiRunLifecycle>[0],

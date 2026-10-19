@@ -64,6 +64,7 @@ import {
 } from "./reply-tool-authority-cohort.js";
 import {
   applyReplyToolAuthorityOverlay,
+  applyReplyToolAuthorityRequester,
   isSameReplyToolAuthorityConversation,
 } from "./reply-tool-authority-inbound.js";
 import {
@@ -406,19 +407,7 @@ export function prepareReplyToolAuthority(
     const incoming = !caller
       ? snapshot
       : "requesterOrigin" in caller
-        ? {
-            ...snapshot,
-            run: {
-              ...snapshot.run,
-              config: captureRuntimeConfig(caller.config),
-              requesterOrigin: captureRequesterOrigin(caller),
-              // This is a fresh request, not the incumbent's external snapshot or completion.
-              conversationToolPolicy: undefined,
-              trustedInternalHandoff: undefined,
-              inputProvenance: undefined,
-              scheduledToolPolicy: undefined,
-            },
-          }
+        ? applyReplyToolAuthorityRequester(snapshot, caller)
         : applyReplyToolAuthorityOverlay(snapshot, caller);
     // Unidentified executions may run, but cannot lend their identity to new human input.
     if (

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi, type Mock } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -302,9 +303,8 @@ export function registerSteeringReceiptCases({
     },
   );
 
-  it("queues a waiting steer when its predecessor outlives terminal delivery", async ({
-    signal,
-  }) => {
+  const blockedSteers = ["terminal-delivery", "backend-unavailable"] as const;
+  it.for(blockedSteers)("queues a waiting steer after %s", async (change, { signal }) => {
     const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
     vi.mocked(reserveSteerCandidate).mockImplementation(actualQueue.reserveSteerCandidate);
     const sessionKey = "agent:main:main";
@@ -361,11 +361,12 @@ export function registerSteeringReceiptCases({
     const secondState: ReplyOperationRunState = {
       admission: { status: "skipped", reason: "active-run" },
     };
+    const senderId = change === "backend-unavailable" ? "bob" : "sender-42";
     const second = createMinimalRun({
       ...common,
       bindActiveAuthority: false,
       attachSteerBackend: false,
-      sessionCtx: { MessageSid: "second-parked-input" },
+      sessionCtx: { MessageSid: "second-parked-input", SenderId: senderId },
       opts: {
         [REPLY_OPERATION_RUN_STATE]: secondState,
         turnAdoptionLifecycle: {
@@ -396,29 +397,41 @@ export function registerSteeringReceiptCases({
         ),
         signal,
       );
-      await replaceSessionEntry(
-        { agentId: "main", storePath, sessionKey },
-        {
-          ...sessionEntry,
-          restartRecoveryDeliveryReceiptState: "delivered-terminal",
-          restartRecoveryDeliveryToolCallId: "terminal-message-call",
-        },
+      const backend = expectDefined(
+        getSessionControllerEntryForOperation(active).attachment?.backend.messageInjectionV2,
+        "The first steer installed its guarded backend",
       );
+      using availability =
+        change === "backend-unavailable"
+          ? vi.spyOn(backend, "isAvailable").mockReturnValue(false)
+          : undefined;
+      if (change === "terminal-delivery") {
+        await replaceSessionEntry(
+          { agentId: "main", storePath, sessionKey },
+          {
+            ...sessionEntry,
+            restartRecoveryDeliveryReceiptState: "delivered-terminal",
+            restartRecoveryDeliveryToolCallId: "terminal-message-call",
+          },
+        );
+      }
 
       firstAcceptance.resolve(true);
       await Promise.all([firstRun, secondRun]);
 
       expect(state.backendQueueMessageMock).toHaveBeenCalledOnce();
-      expect(onDeferred).toHaveBeenCalledOnce();
+      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(secondState.admission).toEqual({
         status: "accepted",
         mode: "followup",
         reason: "steering-unavailable",
       });
+      expect(onDeferred).toHaveBeenCalledOnce();
       expect(getExistingFollowupQueue(sessionKey)?.items).toEqual([
         expect.objectContaining({
           messageId: "second-parked-input",
           prompt: "answer the second input",
+          run: expect.objectContaining({ senderId }),
         }),
       ]);
     } finally {
