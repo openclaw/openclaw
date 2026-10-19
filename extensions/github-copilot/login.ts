@@ -5,14 +5,8 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
-import {
-  fetchWithSsrFGuard,
-  type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  normalizeGithubCopilotDomain,
-  PUBLIC_GITHUB_COPILOT_DOMAIN,
-} from "./domain.js";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeGithubCopilotDomain, PUBLIC_GITHUB_COPILOT_DOMAIN } from "./domain.js";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS = 30_000;
@@ -23,10 +17,8 @@ const GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS = 5_000;
 // instead of github.com. The host is threaded in from the selected auth flow so
 // the SSRF allowlist and every request target stay consistent for one login.
 const deviceCodeUrl = (domain: string) => `https://${domain}/login/device/code`;
-const accessTokenUrl = (domain: string) =>
-  `https://${domain}/login/oauth/access_token`;
-const deviceVerificationUrl = (domain: string) =>
-  `https://${domain}/login/device`;
+const accessTokenUrl = (domain: string) => `https://${domain}/login/oauth/access_token`;
+const deviceVerificationUrl = (domain: string) => `https://${domain}/login/device`;
 const githubAuthSsrfPolicy = (domain: string): SsrFPolicy => ({
   hostnameAllowlist: [domain],
 });
@@ -71,8 +63,7 @@ function parseDeviceCodeResponse(
     value.interval === undefined
       ? GITHUB_DEVICE_FLOW_DEFAULT_INTERVAL_MS
       : nonNegativeSecondsToSafeMilliseconds(value.interval);
-  const deadlineMs =
-    expiresInMs === undefined ? undefined : issuedAtMs + expiresInMs;
+  const deadlineMs = expiresInMs === undefined ? undefined : issuedAtMs + expiresInMs;
 
   if (
     typeof value.device_code !== "string" ||
@@ -179,11 +170,7 @@ async function pollForAccessToken(params: {
 
   let intervalMs = params.intervalMs;
   while (performance.now() < params.deadlineMs) {
-    await sleepGitHubDevicePollDelay(
-      intervalMs,
-      params.deadlineMs,
-      params.signal,
-    );
+    await sleepGitHubDevicePollDelay(intervalMs, params.deadlineMs, params.signal);
     params.assertCurrent?.();
     if (performance.now() >= params.deadlineMs) {
       break;
@@ -212,10 +199,7 @@ async function pollForAccessToken(params: {
     if (err === "slow_down") {
       // slow_down is cumulative; a returned interval may raise but never lower the required floor.
       intervalMs = Math.max(
-        Math.min(
-          Number.MAX_SAFE_INTEGER,
-          intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS,
-        ),
+        Math.min(Number.MAX_SAFE_INTEGER, intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS),
         positiveSecondsToSafeMilliseconds(json.interval) ?? 0,
       );
       continue;
@@ -244,17 +228,12 @@ async function sleepGitHubDevicePollDelay(
     const safeDelayMs = resolveTimerTimeoutMs(remainingMs, 1);
     const waitMs = Math.min(safeDelayMs, remainingMs);
     await sleepWithAbort(waitMs, signal).catch(() => {
-      throw signal?.reason instanceof Error
-        ? signal.reason
-        : new Error("GitHub login cancelled");
+      throw signal?.reason instanceof Error ? signal.reason : new Error("GitHub login cancelled");
     });
   }
 }
 
-function normalizeGitHubDeviceVerificationUrl(
-  raw: string,
-  domain: string,
-): string {
+function normalizeGitHubDeviceVerificationUrl(raw: string, domain: string): string {
   const parsed = URL.parse(raw);
   if (!parsed) {
     throw new Error("GitHub device flow returned an invalid verification URL");
@@ -267,9 +246,7 @@ function normalizeGitHubDeviceVerificationUrl(
     parsed.username ||
     parsed.password
   ) {
-    throw new Error(
-      "GitHub device flow returned an unexpected verification URL",
-    );
+    throw new Error("GitHub device flow returned an unexpected verification URL");
   }
 
   return deviceVerificationUrl(domain);
@@ -289,11 +266,7 @@ type GitHubCopilotDeviceFlowResult =
   | { status: "expired" };
 
 type GitHubCopilotDeviceFlowIO = {
-  showCode(args: {
-    verificationUrl: string;
-    userCode: string;
-    expiresInMs: number;
-  }): Promise<void>;
+  showCode(args: { verificationUrl: string; userCode: string; expiresInMs: number }): Promise<void>;
   openUrl?: (url: string) => Promise<void>;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -315,10 +288,7 @@ export async function runGitHubCopilotDeviceFlow(
     ...(io.signal ? { signal: io.signal } : {}),
     assertCurrent,
   });
-  const verificationUrl = normalizeGitHubDeviceVerificationUrl(
-    device.verificationUri,
-    host,
-  );
+  const verificationUrl = normalizeGitHubDeviceVerificationUrl(device.verificationUri, host);
   const userCode = normalizeGitHubDeviceUserCode(device.userCode);
   assertCurrent();
   await io.showCode({

@@ -5,9 +5,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/ssrf-runtime")
-  >("openclaw/plugin-sdk/ssrf-runtime");
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
   return { ...actual, fetchWithSsrFGuard: mocks.fetchWithSsrFGuard };
 });
 
@@ -140,11 +140,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
         tokenPolls += 1;
         if (stage === "pending response" && tokenPolls === 1) {
           current = false;
-          return guardResponse(
-            { error: "authorization_pending" },
-            200,
-            ACCESS_TOKEN_URL,
-          );
+          return guardResponse({ error: "authorization_pending" }, 200, ACCESS_TOKEN_URL);
         }
         return guardResponse(
           { access_token: "ghu_tok_xyz", token_type: "bearer" },
@@ -177,9 +173,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
     let canceled = false;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(
-          new TextEncoder().encode(JSON.stringify({ error: "server_error" })),
-        );
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: "server_error" })));
       },
       cancel() {
         canceled = true;
@@ -230,9 +224,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
       }),
     );
 
-    await expect(runDeviceFlowAfterFirstPoll()).rejects.toThrow(
-      "github-copilot.device-flow",
-    );
+    await expect(runDeviceFlowAfterFirstPoll()).rejects.toThrow("github-copilot.device-flow");
     expect(readCount).toBeLessThan(64);
     expect(canceled).toBe(true);
   });
@@ -250,10 +242,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
     );
 
     await expect(
-      runGitHubCopilotDeviceFlow(
-        { showCode: vi.fn(async () => {}) },
-        GHE_DOMAIN,
-      ),
+      runGitHubCopilotDeviceFlow({ showCode: vi.fn(async () => {}) }, GHE_DOMAIN),
     ).rejects.toThrow("unexpected verification URL");
   });
   it.each([
@@ -294,8 +283,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
     ];
     mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
       if (params.url === DEVICE_CODE_URL) {
-        const { interval: _interval, ...withoutInterval } =
-          VALID_DEVICE_CODE_BODY;
+        const { interval: _interval, ...withoutInterval } = VALID_DEVICE_CODE_BODY;
         return guardResponse({
           ...withoutInterval,
           ...(interval === undefined ? {} : { interval }),
@@ -336,11 +324,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
           return guardResponse(VALID_DEVICE_CODE_BODY);
         }
         polls += 1;
-        return guardResponse(
-          { error: "authorization_pending" },
-          200,
-          ACCESS_TOKEN_URL,
-        );
+        return guardResponse({ error: "authorization_pending" }, 200, ACCESS_TOKEN_URL);
       });
 
       let settled = false;
