@@ -26,7 +26,8 @@ import {
   adoptStartedChatRun,
   reconcileChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
-import { applyChatCacheSnapshot, type ChatSessionSnapshot } from "./session-message-cache.ts";
+import { applyChatCacheSnapshot } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 function cachedTranscript(sessionId: string, displayedLeafEntryId: string): ChatSessionSnapshot {
   return {
