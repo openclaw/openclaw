@@ -13,15 +13,9 @@ import { readSessionColdTranscript } from "../../../../src/config/sessions/sessi
 import { runSessionColdStorageMaintenance } from "../../../../src/config/sessions/session-cold-storage.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../../../src/config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import type {
-  OpenKeyedStoreOptions,
-  PluginStateKeyedStore,
-} from "../../../../src/plugin-sdk/plugin-state-runtime.js";
+import type { OpenKeyedStoreOptions } from "../../../../src/plugin-sdk/plugin-state-runtime.js";
 import { createPluginStateKeyedStoreForTests } from "../../../../src/plugin-sdk/plugin-state-test-runtime.js";
-import type {
-  MemoryPluginRuntime,
-  RegisteredMemorySearchManager,
-} from "../../../../src/plugins/registry-contribution-types.js";
+import type { RegisteredMemorySearchManager } from "../../../../src/plugins/registry-contribution-types.js";
 import { runOpenClawAgentWriteTransaction } from "../../../../src/state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../../src/state/openclaw-agent-db.paths.js";
 import {
@@ -31,11 +25,7 @@ import {
 import { buildSessionEntry } from "./session-files.js";
 
 const { configureMemoryCoreDreamingState, getMemorySearchManager } = await vi.importActual<
-  Pick<MemoryPluginRuntime, "getMemorySearchManager"> & {
-    configureMemoryCoreDreamingState: (
-      open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
-    ) => void;
-  }
+  typeof import("../../../../extensions/memory-core/runtime-api.js")
 >("../../../../extensions/memory-core/runtime-api.js");
 
 describe("memory synchronization of canonical SQLite transcripts", () => {
@@ -73,6 +63,18 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
         "SELECT text FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ? AND path = ?",
       )
       .all(word, memoryPath);
+
+  async function expectRecall(
+    manager: RegisteredMemorySearchManager,
+    color: string,
+    absent?: string,
+  ) {
+    expect(matches(color)).toEqual([{ text: `User: My ${color} preference is documented here.` }]);
+    if (absent) {
+      expect(matches(absent)).toEqual([]);
+    }
+    expect((await manager.search(color)).map((hit) => hit.path)).toContain(memoryPath);
+  }
 
   async function acquireManager(inspectSources = false) {
     const { manager, error } = await getMemorySearchManager({
@@ -180,13 +182,7 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
 
       const restarted = await acquireManager(true);
       await restarted.sync({ reason: "cli" });
-      expect(matches("orange")).toEqual([
-        { text: "User: My orange preference is documented here." },
-      ]);
-      expect(matches("violet")).toEqual([]);
-      expect((await restarted.manager.search("orange")).map((hit) => hit.path)).toContain(
-        memoryPath,
-      );
+      await expectRecall(restarted.manager, "orange", "violet");
       expect(restarted.manager.status().dirty).toBe(false);
       expect(
         observer.prepare("SELECT mtime FROM memory_index_sources WHERE path = ?").get(memoryPath),
@@ -233,14 +229,10 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
       } finally {
         retryClock?.mockRestore();
       }
-      expect(matches("violet")).toEqual([
-        { text: "User: My violet preference is documented here." },
-      ]);
-      expect((await manager.search("violet")).map((hit) => hit.path)).toContain(memoryPath);
+      await expectRecall(manager, "violet");
       expect(loadTranscriptEventsSync(scope())).toEqual(canonical);
       expect(readSessionColdTranscript(observer, sessionId)).toBeUndefined();
-      expect(manager.status().dirty).toBe(false);
-      expect(manager.status().lastSyncError).toBeUndefined();
+      expect(manager.status()).toMatchObject({ dirty: false, lastSyncError: undefined });
     },
   );
 });

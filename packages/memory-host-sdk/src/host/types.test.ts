@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveMemoryIndexIdentityDiagnostic,
-  resolveMemorySearchStaleness,
+  resolveMemorySearchStaleness as staleness,
   type MemoryProviderStatus,
 } from "./types.js";
 
@@ -25,13 +25,11 @@ describe("memory search staleness", () => {
       provider: "none",
       dirty: true,
     };
-    expect(resolveMemorySearchStaleness(status)).toBeNull();
+    expect(staleness(status)).toBeNull();
   });
 
   it("reports the latest automatic sync failure", () => {
-    expect(
-      resolveMemorySearchStaleness({ lastSyncError: "embedding request timed out" }, "main"),
-    ).toEqual({
+    expect(staleness({ lastSyncError: "embedding request timed out" }, "main")).toEqual({
       stale: true,
       warning:
         "Memory index is stale: embedding request timed out. Search results may be incomplete.",
@@ -42,7 +40,7 @@ describe("memory search staleness", () => {
 
   it("gives an incompatible index identity precedence over a sync failure", () => {
     expect(
-      resolveMemorySearchStaleness(
+      staleness(
         withIdentity(mismatch("embedding model changed", "model", "configuration"), {
           lastSyncError: "embedding request timed out",
         }),
@@ -52,7 +50,7 @@ describe("memory search staleness", () => {
 
   it("reports the failed repair prerequisite while the embedding format is still incompatible", () => {
     expect(
-      resolveMemorySearchStaleness(
+      staleness(
         withIdentity(mismatch("runtime format changed", "embedding_input_format"), {
           lastSyncError: "HTTP 400: embedding provider unavailable",
         }),
@@ -80,7 +78,7 @@ describe("memory search staleness", () => {
         versionOrder: "newer",
       }),
     };
-    const result = resolveMemorySearchStaleness(status, "main");
+    const result = staleness(status, "main");
     expect(result?.warning).toContain("newer OpenClaw version");
     expect(result?.warning).toContain("Previous memory sync failed: HTTP 400");
     expect(result?.action).toContain("Upgrade OpenClaw or reindex explicitly");
@@ -100,7 +98,7 @@ describe("memory search staleness", () => {
       code: "provenance_version",
       owner: "openclaw",
     });
-    expect(resolveMemorySearchStaleness(status, "main")).toEqual({
+    expect(staleness(status, "main")).toEqual({
       stale: true,
       warning:
         "Memory index is stale: index provenance classifier changed (owner: openclaw, code: provenance_version). Search results may be incomplete.",
@@ -109,32 +107,26 @@ describe("memory search staleness", () => {
     });
   });
 
-  it("preserves the keyword-only marker only when a pending upgrade carries it", () => {
-    const base = mismatch("index chunking implementation changed", "chunking_version");
-    expect(diagnose({ ...base, chunkingVersionOnly: true })).toEqual({
-      ...base,
-      chunkingVersionOnly: true,
-    });
-    expect(diagnose({ ...base, versionOrder: "newer", chunkingVersionOnly: true })).toEqual(base);
-    expect(diagnose(base)).toEqual({ ...base });
-  });
-
-  it("preserves lexical compatibility only for an older embedding format", () => {
-    const base = mismatch("index embedding input format changed", "embedding_input_format");
-    expect(diagnose({ ...base, lexicalCompatible: true })).toEqual({
-      ...base,
-      lexicalCompatible: true,
-    });
-    expect(diagnose({ ...base, versionOrder: "newer", lexicalCompatible: true })).toEqual(base);
-    expect(diagnose({ ...base, code: "provenance_version", lexicalCompatible: true })).toEqual({
-      ...base,
-      code: "provenance_version",
-    });
+  it.each([
+    ["chunking_version", "chunkingVersionOnly", "index chunking implementation changed"],
+    ["embedding_input_format", "lexicalCompatible", "index embedding input format changed"],
+  ])("preserves %s compatibility only for a pending upgrade", (code, flag, reason) => {
+    const base = mismatch(reason, code);
+    expect(diagnose({ ...base, [flag]: true })).toEqual({ ...base, [flag]: true });
+    expect(diagnose({ ...base, versionOrder: "newer", [flag]: true })).toEqual(base);
+    if (flag === "chunkingVersionOnly") {
+      expect(diagnose(base)).toEqual(base);
+    } else {
+      expect(diagnose({ ...base, code: "provenance_version", [flag]: true })).toEqual({
+        ...base,
+        code: "provenance_version",
+      });
+    }
   });
 
   it("does not claim provider cost for a keyword-only index", () => {
     expect(
-      resolveMemorySearchStaleness(
+      staleness(
         withIdentity(mismatch("index sources changed", "sources", "configuration"), {
           provider: "none",
           requestedProvider: "none",
