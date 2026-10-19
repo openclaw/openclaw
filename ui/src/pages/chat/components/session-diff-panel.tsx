@@ -50,8 +50,6 @@ import { createSessionDiffResultViews } from "./session-diff-result-view.tsx";
 import { SessionDiffSyncMobile } from "./session-diff-sync-mobile.tsx";
 import type { DiffValue, FileSource, FileView } from "./session-diff-types.ts";
 
-export type { FileSource, FileView, DiffValue } from "./session-diff-types.ts";
-
 function shellArgument(value: string) {
   return /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 }

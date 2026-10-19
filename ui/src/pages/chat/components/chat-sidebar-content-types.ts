@@ -94,7 +94,7 @@ export type SessionDiffOwner = { agentId: string; sessionKey: string };
 
 export type SessionDiffFileView = "reading" | "highlighted" | "plain" | "edit";
 
-export type SessionDiffMobilePageRequest = {
+type SessionDiffMobilePageRequest = {
   key: "session-diff-sync";
   title: string;
   /** Invoke in the native page outlet; dispose on Back, retain only while hidden. */
