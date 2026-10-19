@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -84,9 +85,7 @@ function isAcpChange(
 
 function requireEntry(scope: Scope) {
   const entry = loadExactSessionEntry(scope)?.entry;
-  if (!entry) {
-    throw new Error("Expected a canonical ACP lifecycle");
-  }
+  assert(entry, "Expected a canonical ACP lifecycle");
   return entry;
 }
 
@@ -137,19 +136,20 @@ it("does not publish a delayed ACP postimage over a newer native publication", a
           consume(receipt);
         });
       });
-    try {
-      await upsertAcpSessionMeta({
-        ...scope,
-        mutate: () => ({ ...META, runtimeSessionName: "older-worker" }),
-      });
-      expect(superseded).toBe(true);
-      expect(changes.length).toBeGreaterThan(0);
-      expect(changes.every((change) => change === undefined)).toBe(true);
-      expect(readAcpSessionEntry(scope)?.acp).toEqual(native);
-    } finally {
-      release();
-      intercept.mockRestore();
-    }
+    using _ = {
+      [Symbol.dispose]() {
+        release();
+        intercept.mockRestore();
+      },
+    };
+    await upsertAcpSessionMeta({
+      ...scope,
+      mutate: () => ({ ...META, runtimeSessionName: "older-worker" }),
+    });
+    expect(superseded).toBe(true);
+    expect(changes.length).toBeGreaterThan(0);
+    expect(changes.every((change) => change === undefined)).toBe(true);
+    expect(readAcpSessionEntry(scope)?.acp).toEqual(native);
   });
 });
 
@@ -214,9 +214,7 @@ it.each(["incognito", "file"] as const)(
           lifecycleRevision: created?.lifecycleRevision ?? null,
           acp: META,
         });
-        if (!created) {
-          throw new Error("Expected the initialized ACP session");
-        }
+        assert(created, "Expected the initialized ACP session");
         await expectMetadata(created, META);
         const retainedMembership: boolean[] = [];
         const releases: Array<() => void> = [];
@@ -306,6 +304,18 @@ it.each(["incognito", "file"] as const)(
   },
 );
 
+const replacementFields = {
+  "same-lifecycle": {},
+  "session-id": { sessionId: "replacement-session" },
+  "lifecycle-revision": { lifecycleRevision: "replacement-revision" },
+  "control-owner": { spawnedBy: "agent:main:new-owner" },
+  "absent-entry": {
+    sessionId: "appeared-session",
+    lifecycleRevision: "appeared-revision",
+    updatedAt: 200,
+  },
+};
+
 it.each([
   ["before-touch", "same-lifecycle"],
   ["before-touch", "session-id"],
@@ -314,44 +324,71 @@ it.each([
   ["after-touch", "session-id"],
   ["after-touch", "lifecycle-revision"],
   ["after-touch", "control-owner"],
+  ["before-commit", "absent-entry"],
 ] as const)(
   "fences a %s concurrent %s change at the original ACP lifecycle",
   async (boundary, replacement) => {
-    await withSession(`acp-write-${boundary}-${replacement}`, async (_state, scope) => {
+    await withSession(`acp-write-${boundary}-${replacement}`, async (state, scope) => {
       setRuntimeConfigSnapshot(scope.cfg);
-      await replaceSessionEntry(scope, {
-        sessionId: "initial-session",
-        lifecycleRevision: "initial-revision",
-        spawnedBy: "agent:main:owner",
-        updatedAt: 100,
-      });
-      await upsertAcpSessionMeta({ ...scope, mutate: () => META });
-      const originalEntry = requireEntry(scope);
-      expect(readLegacyAcpMigrationContext(scope).sources).toEqual([]);
+      const absent = replacement === "absent-entry";
+      if (absent) {
+        openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      } else {
+        await replaceSessionEntry(scope, {
+          sessionId: "initial-session",
+          lifecycleRevision: "initial-revision",
+          spawnedBy: "agent:main:owner",
+          updatedAt: 100,
+        });
+        await upsertAcpSessionMeta({ ...scope, mutate: () => META });
+        expect(readLegacyAcpMigrationContext(scope).sources).toEqual([]);
+      }
+      const originalEntry = absent ? undefined : requireEntry(scope);
       const reached = createDeferredCore();
       const release = createDeferredCore();
       const original = entryWorker.updateAcpSessionStoreEntry;
+      const runWorker = stateWorker.runOpenClawStateWorkerOperation;
       let paused = false;
-      const intercepted = vi
-        .spyOn(entryWorker, "updateAcpSessionStoreEntry")
-        .mockImplementation(async (input) => {
-          if (!paused && boundary === "before-touch" && input.mutation.kind === "touch") {
-            paused = true;
-            reached.resolve();
-            await release.promise;
-          }
-          const result = await original(input);
-          if (!paused && boundary === "after-touch" && input.mutation.kind === "touch") {
-            paused = true;
-            reached.resolve();
-            await release.promise;
-          }
-          return result;
-        });
+      const intercepted = absent
+        ? vi
+            .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+            .mockImplementation((context, operation, options) =>
+              runWorker(
+                context,
+                (worker) =>
+                  operation({
+                    ...worker,
+                    execute: new Proxy(worker.execute, {
+                      apply(execute, receiver, args: Parameters<typeof worker.execute>) {
+                        if (args[0].type === "acp.commitMutation") {
+                          reached.resolve();
+                          return release.promise.then(() => Reflect.apply(execute, receiver, args));
+                        }
+                        return Reflect.apply(execute, receiver, args);
+                      },
+                    }),
+                  }),
+                options,
+              ),
+            )
+        : vi.spyOn(entryWorker, "updateAcpSessionStoreEntry").mockImplementation(async (input) => {
+            if (!paused && boundary === "before-touch" && input.mutation.kind === "touch") {
+              paused = true;
+              reached.resolve();
+              await release.promise;
+            }
+            const result = await original(input);
+            if (!paused && boundary === "after-touch" && input.mutation.kind === "touch") {
+              paused = true;
+              reached.resolve();
+              await release.promise;
+            }
+            return result;
+          });
       const updatedMeta = { ...META, runtimeSessionName: "same-lifecycle-update" };
-      const mutate = vi.fn(() => updatedMeta);
+      const mutate = vi.fn(() => (absent ? null : updatedMeta));
       const expectedControlBinding =
-        replacement === "control-owner"
+        replacement === "control-owner" && originalEntry
           ? {
               sessionId: originalEntry.sessionId,
               lifecycleRevision: originalEntry.lifecycleRevision,
@@ -359,37 +396,29 @@ it.each([
               ownerKey: "agent:main:owner",
             }
           : undefined;
-      const outcome = settle(
-        upsertAcpSessionMeta({
-          ...scope,
-          mutate,
-          expectedControlBinding,
-        }),
-      );
+      const outcome = settle(upsertAcpSessionMeta({ ...scope, mutate, expectedControlBinding }));
       try {
         await awaitGateBeforeSettlement(
           reached.promise,
           outcome,
-          "ACP update settled before the requested mutation boundary",
+          "ACP mutation settled before the requested boundary",
         );
-        const next = {
-          ...originalEntry,
-          sessionId: replacement === "session-id" ? "replacement-session" : originalEntry.sessionId,
-          lifecycleRevision:
-            replacement === "lifecycle-revision"
-              ? "replacement-revision"
-              : originalEntry.lifecycleRevision,
-          updatedAt: originalEntry.updatedAt + 1,
-          label: "concurrent-label",
-          spawnedBy:
-            replacement === "control-owner" ? "agent:main:new-owner" : originalEntry.spawnedBy,
-        };
+        const next = originalEntry
+          ? {
+              ...originalEntry,
+              updatedAt: originalEntry.updatedAt + 1,
+              label: "concurrent-label",
+              ...replacementFields[replacement],
+            }
+          : replacementFields["absent-entry"];
         await replaceSessionEntry(scope, next);
         const replacementEntry = requireEntry(scope);
         if (expectedControlBinding) {
           expectedControlBinding.ownerKey = "agent:main:new-owner";
         }
-        const replacementMeta = { ...META, runtimeSessionName: "replacement-runtime" };
+        const replacementMeta = absent
+          ? META
+          : { ...META, runtimeSessionName: "replacement-runtime" };
         if (replacement !== "same-lifecycle") {
           writeNative(scope, replacementEntry, replacementMeta);
         }
@@ -400,7 +429,7 @@ it.each([
           expect(String(settled.error)).toMatch(/Canonical ACP session changed before/);
         }
         expect(mutate).toHaveBeenCalledOnce();
-        if (replacement === "same-lifecycle") {
+        if (replacement === "same-lifecycle" && originalEntry) {
           expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
             sessionId: originalEntry.sessionId,
             lifecycleRevision: originalEntry.lifecycleRevision,
@@ -420,63 +449,3 @@ it.each([
     });
   },
 );
-
-it("does not close a lifecycle that appears after an absent-entry close was prepared", async () => {
-  await withSession("acp-close-absent-race", async (state, scope) => {
-    setRuntimeConfigSnapshot(scope.cfg);
-    openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const reached = createDeferredCore();
-    const release = createDeferredCore();
-    const original = stateWorker.runOpenClawStateWorkerOperation;
-    const intercepted = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        original(
-          context,
-          (worker) =>
-            operation({
-              ...worker,
-              execute: new Proxy(worker.execute, {
-                apply(execute, receiver, args: Parameters<typeof worker.execute>) {
-                  if (args[0].type === "acp.commitMutation") {
-                    reached.resolve();
-                    return release.promise.then(() => Reflect.apply(execute, receiver, args));
-                  }
-                  return Reflect.apply(execute, receiver, args);
-                },
-              }),
-            }),
-          options,
-        ),
-      );
-    const mutate = vi.fn(() => null);
-    const outcome = settle(upsertAcpSessionMeta({ ...scope, mutate }));
-    try {
-      await awaitGateBeforeSettlement(
-        reached.promise,
-        outcome,
-        "ACP close settled before shared publication",
-      );
-      await replaceSessionEntry(scope, {
-        sessionId: "appeared-session",
-        lifecycleRevision: "appeared-revision",
-        updatedAt: 200,
-      });
-      const appeared = requireEntry(scope);
-      writeNative(scope, appeared, META);
-      release.resolve();
-      const settled = await outcome;
-      expect(settled.ok).toBe(false);
-      if (!settled.ok) {
-        expect(String(settled.error)).toMatch(/Canonical ACP session changed before/);
-      }
-      expect(mutate).toHaveBeenCalledOnce();
-      expect(loadExactSessionEntry(scope)?.entry).toEqual(appeared);
-      expect(readAcpSessionEntry(scope)?.acp).toEqual(META);
-    } finally {
-      release.resolve();
-      await outcome;
-      intercepted.mockRestore();
-    }
-  });
-});
