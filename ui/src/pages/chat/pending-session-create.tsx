@@ -8,6 +8,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { CreationComposer } from "../new-session/creation-composer-render.tsx";
 import { NewSessionBody } from "../new-session/draft-body.solid.tsx";
@@ -234,10 +235,21 @@ function PendingSessionCreateContent(
     </>
   );
 }
-export function PendingSessionCreate(props: PendingSessionCreateProps) {
-  return (
+export const PendingSessionCreate = defineSolidBridge<PendingSessionCreateProps>(
+  "openclaw-pending-session-create",
+  (props) => (
     <Show when={props.context} keyed>
       {(context) => PendingSessionCreateContent(props, context)}
     </Show>
-  );
-}
+  ),
+  {
+    properties: {
+      context: { default: undefined, attribute: false },
+      sessionKey: { default: "" },
+      narrow: { default: false },
+      mergedChrome: { default: false },
+      navDrawerOpen: { default: false },
+      gatewayStatus: { default: null },
+    },
+  },
+);

@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, For, lazy, Loading, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import "../../components/resizable-divider.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
@@ -24,14 +24,18 @@ import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { ChatSplitLayout, ChatSplitColumn, ChatSplitPane } from "./split-layout-types.ts";
 import { findPane, splitRatio } from "./split-layout.ts";
 
-// The route loader preloads this module only for pending creation.
-const PendingSessionCreate = lazy(() => import("./pending-session-create.tsx"), {
-  export: "PendingSessionCreate",
-});
+// The route loader loads this bridge only for pending creation; ordinary Chat stays lazy.
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-pending-session-create": HTMLAttributes<HTMLElement>;
+      "openclaw-pending-session-create": HTMLAttributes<HTMLElement> & {
+        "prop:context": ApplicationContext | undefined;
+        "prop:sessionKey": string;
+        "prop:narrow": boolean;
+        "prop:mergedChrome": boolean;
+        "prop:navDrawerOpen": boolean;
+        "prop:gatewayStatus"?: GatewayStatusProps | null;
+      };
     }
   }
 }
@@ -179,18 +183,13 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
           class={className()}
           aria-hidden={presented() ? "false" : "true"}
           inert={!presented()}
-        >
-          <Loading>
-            <PendingSessionCreate
-              context={props.options.context}
-              sessionKey={props.sessionKey}
-              narrow={props.options.narrow}
-              mergedChrome={props.options.mergedChrome && active()}
-              navDrawerOpen={props.options.navDrawerOpen && active()}
-              gatewayStatus={active() ? props.options.gatewayStatus : null}
-            />
-          </Loading>
-        </openclaw-pending-session-create>
+          prop:context={props.options.context}
+          prop:sessionKey={props.sessionKey}
+          prop:narrow={props.options.narrow}
+          prop:mergedChrome={props.options.mergedChrome && active()}
+          prop:navDrawerOpen={props.options.navDrawerOpen && active()}
+          prop:gatewayStatus={active() ? props.options.gatewayStatus : null}
+        />
       }
     >
       <ChatPaneView
