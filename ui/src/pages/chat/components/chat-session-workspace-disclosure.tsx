@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createSignal, onSettled, Show, untrack } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
+import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 
 /** Retains only the exiting DOM; expansion and directory data remain with the workspace. */
@@ -9,20 +10,19 @@ export function FolderDisclosure(props: {
   instant: boolean;
   children: JSX.Element;
 }) {
-  // Parent scroll restoration needs the initial content height before child effects run.
-  const initialOpen = untrack(() => props.open);
-  const [present, setPresent] = createSignal(initialOpen);
+  // Render an initially open folder synchronously and retain its children through exit.
+  const [present, setPresent] = createSignal<boolean>(
+    (previous) => props.open || previous || false,
+  );
   let shell!: HTMLDivElement;
   let content!: HTMLDivElement;
   let animation: Animation | undefined;
-  let resizeFrame = 0;
   let targetHeight = 0;
   let ready = false;
-  let current = { open: initialOpen, active: false, instant: true };
+  let current = { open: false, active: false, instant: true };
+  let applied: typeof current | undefined;
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const finish = () => {
-    cancelAnimationFrame(resizeFrame);
-    resizeFrame = 0;
     animation?.cancel();
     animation = undefined;
     shell.hidden = !current.open;
@@ -50,18 +50,30 @@ export function FolderDisclosure(props: {
     );
     animation.onfinish = finish;
   };
-  createEffect(
+  createLayoutMeasurement(
     () => ({ open: props.open, active: props.active, instant: props.instant }),
     (next) => {
-      const from = shell.hidden ? 0 : shell.getBoundingClientRect().height;
-      const opacity = shell.hidden ? 0 : Number(getComputedStyle(shell).opacity);
-      current = next;
-      shell.hidden = false;
-      if (next.open) {
-        setPresent(true);
+      if (!next) {
+        return;
       }
-      move(from, opacity);
+      if (
+        next === applied &&
+        (!animation || !current.open || content.getBoundingClientRect().height === targetHeight)
+      ) {
+        return;
+      }
+      const closed = !current.open && !animation;
+      const from = closed || shell.hidden ? 0 : shell.getBoundingClientRect().height;
+      const opacity = closed || shell.hidden ? 0 : Number(getComputedStyle(shell).opacity);
+      return () => {
+        applied = next;
+        current = next;
+        shell.hidden = false;
+        // A hidden folder has no measurable destination until it is revealed.
+        move(from, opacity);
+      };
     },
+    { targets: () => [content], changeTiming: "sync" },
   );
   onSettled(() => {
     ready = true;
@@ -71,23 +83,7 @@ export function FolderDisclosure(props: {
       }
     };
     const stopMotion = listen(reducedMotion, "change", motionChanged);
-    // A lazy directory response may change the destination during its reveal.
-    const observer = new ResizeObserver(() => {
-      if (!animation || !current.open || resizeFrame) {
-        return;
-      }
-      // Resize the ancestor after observer delivery, avoiding a browser layout loop.
-      resizeFrame = requestAnimationFrame(() => {
-        resizeFrame = 0;
-        if (animation && current.open && content.getBoundingClientRect().height !== targetHeight) {
-          move(shell.getBoundingClientRect().height, Number(getComputedStyle(shell).opacity));
-        }
-      });
-    });
-    observer.observe(content);
     return () => {
-      observer.disconnect();
-      cancelAnimationFrame(resizeFrame);
       animation?.cancel();
       stopMotion();
     };
@@ -96,9 +92,9 @@ export function FolderDisclosure(props: {
     <div
       ref={(element) => {
         shell = element;
-        shell.hidden = !initialOpen;
       }}
       class="workspace-desktop__disclosure"
+      hidden={!present()}
       inert={!props.open || !props.active}
       aria-hidden={props.open ? "false" : "true"}
     >

@@ -1,13 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  createUniqueId,
-  For,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
@@ -15,6 +7,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
+import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { WorkspaceTranscriptAttachments } from "./chat-session-workspace-attachments.tsx";
@@ -369,8 +362,8 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
   let searchField: HTMLInputElement | undefined;
   const searchValue = liveValue(() => props.workspace.browserSearch);
   let searchButton: HTMLButtonElement | undefined;
-  let treeScroll: HTMLDivElement | undefined;
-  let sessionScroll: HTMLDivElement | undefined;
+  const [treeScroll, setTreeScroll] = createSignal<HTMLDivElement>();
+  const [sessionScroll, setSessionScroll] = createSignal<HTMLDivElement>();
   const catalog = createMemo(() =>
     projectWorkspaceCatalog(props.workspace.list, props.workspace.directories),
   );
@@ -423,18 +416,25 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
       }
     },
   });
-  // Reapply owner snapshots after catalog reveal, even when the saved offsets are unchanged.
-  createEffect(
-    () => [navigation()?.treeScroll, navigation()?.sessionScroll] as const,
-    ([tree, session]) => {
-      if (treeScroll) {
-        treeScroll.scrollTop = tree ?? 0;
-      }
-      if (sessionScroll) {
-        sessionScroll.scrollTop = session ?? 0;
-      }
+  // A new owner snapshot reapplies offsets after catalog reveal, even when the numbers match.
+  const savedScroll = createMemo(() => ({
+    tree: navigation()?.treeScroll,
+    session: navigation()?.sessionScroll,
+  }));
+  createScrollPosition(() => ({
+    restore: {
+      identity: [savedScroll(), treeScroll()],
+      target: treeScroll(),
+      top: savedScroll().tree ?? 0,
     },
-  );
+  }));
+  createScrollPosition(() => ({
+    restore: {
+      identity: [savedScroll(), sessionScroll()],
+      target: sessionScroll(),
+      top: savedScroll().session ?? 0,
+    },
+  }));
   const closeSearch = () => {
     restoreSearchFocus = true;
     props.workspace.onSearchOpenChange?.(false);
@@ -581,7 +581,7 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
               class="workspace-desktop__session-scroll"
               role="list"
               ref={(element) => {
-                sessionScroll = element;
+                setSessionScroll(element);
                 element.scrollTop = navigation()?.sessionScroll ?? 0;
               }}
               onScroll={(event) =>
@@ -616,7 +616,7 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
           <div
             class="workspace-desktop__project-scroll"
             ref={(element) => {
-              treeScroll = element;
+              setTreeScroll(element);
               element.scrollTop = navigation()?.treeScroll ?? 0;
             }}
             onScroll={(event) =>

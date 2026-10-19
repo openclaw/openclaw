@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, refresh, Show, useContext } from "solid-js";
+import { createMemo, For, onSettled, refresh, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -47,17 +47,21 @@ function TranscriptAttachmentsContent(props: WorkspaceTranscriptAttachmentsProps
       : current;
   });
   const refreshMedia = () => void refresh(source);
-  createEffect(source, (current) => {
-    if (!current.pairingQrExpirations.length) {
-      return undefined;
-    }
-    observeChatMediaResourceSubscriber(current.mediaOwner, refreshMedia);
-    for (const { messageKey, nextPairingQrExpiresAt } of current.pairingQrExpirations) {
-      schedulePairingQrExpiryRefresh(messageKey, nextPairingQrExpiresAt, refreshMedia);
-    }
-    // Retire only this catalog subscriber, never the pane or an independent reader.
-    return () => releaseChatMediaResourceOwner(refreshMedia);
-  });
+  function ExpiryLifetime(lifetimeProps: { source: TranscriptAttachments }) {
+    onSettled(() => {
+      const current = lifetimeProps.source;
+      if (!current.pairingQrExpirations.length) {
+        return undefined;
+      }
+      observeChatMediaResourceSubscriber(current.mediaOwner, refreshMedia);
+      for (const { messageKey, nextPairingQrExpiresAt } of current.pairingQrExpirations) {
+        schedulePairingQrExpiryRefresh(messageKey, nextPairingQrExpiresAt, refreshMedia);
+      }
+      // Retire only this catalog subscriber, never the pane or an independent reader.
+      return () => releaseChatMediaResourceOwner(refreshMedia);
+    });
+    return null;
+  }
   const entries = createMemo(() =>
     source().entries.filter((entry) => transcriptAttachmentMatches(entry, props.query)),
   );
@@ -80,6 +84,9 @@ function TranscriptAttachmentsContent(props: WorkspaceTranscriptAttachmentsProps
       role="list"
       aria-label={t("chat.workspaceFiles.attachments")}
     >
+      <Show when={source()} keyed>
+        {(current) => <ExpiryLifetime source={current} />}
+      </Show>
       <Show when={props.presentation === "mobile" && (entries().length || notice())}>
         <div class="chat-workspace-mobile__group-heading">
           {t("chat.workspaceFiles.attachments")}
