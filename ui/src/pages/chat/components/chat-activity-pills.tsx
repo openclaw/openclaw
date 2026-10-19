@@ -1,6 +1,6 @@
 import type { ProgressCard, SessionRunStatus } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { children, createEffect, createMemo, For, onSettled, Show } from "solid-js";
+import { children, createMemo, For, onSettled, Show } from "solid-js";
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
@@ -12,7 +12,10 @@ import { BrandIcon, Icon, type IconName } from "../../../components/solid/icon.t
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import type { ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import type { SessionProgressCardRefreshState } from "../../../lib/session-progress-cards.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
@@ -380,14 +383,17 @@ function ActivityPill(props: {
   family: "subagents" | "goal" | "progress" | "pull-request" | "publication";
   view: PillView;
   onOpen: OpenActivity;
+  registerButton: (button: HTMLButtonElement) => () => void;
   leading?: JSX.Element;
   trailing?: JSX.Element;
   flow?: boolean;
 }) {
   const leading = children(() => props.leading);
   let button!: HTMLButtonElement;
-  let label!: HTMLSpanElement;
-  let overflow: ReturnType<typeof observeScrollState> | undefined;
+  const labelRef = createScrollStateRef(
+    (element, state) => element.toggleAttribute("data-overflow", state.scrollable),
+    { horizontal: true, trackScroll: false, content: () => props.view.label },
+  );
   const accessibleLabel = () =>
     props.view.description ??
     (props.view.badge
@@ -397,33 +403,20 @@ function ActivityPill(props: {
         })
       : props.view.label);
   onSettled(() => {
-    overflow = observeScrollState(
-      label,
-      (state) => label.toggleAttribute("data-overflow", state.scrollable),
-      true,
-      false,
-    );
-    const schedule = () => overflow?.schedule();
     const observer = new IntersectionObserver(([entry]) =>
       button.toggleAttribute("data-out-of-view", !entry?.isIntersecting),
     );
     observer.observe(button);
-    document.fonts.addEventListener("loadingdone", schedule);
-    return () => {
-      overflow?.disconnect();
-      observer.disconnect();
-      document.fonts.removeEventListener("loadingdone", schedule);
-    };
+    return () => observer.disconnect();
   });
-  createEffect(
-    () => props.view.label,
-    () => overflow?.schedule(),
-  );
   return (
     <button
-      ref={(element) => {
-        button = element;
-      }}
+      ref={[
+        (element) => {
+          button = element;
+        },
+        elementRef<HTMLButtonElement>((element) => props.registerButton(element)),
+      ]}
       class={[
         "activity-pill",
         { "activity-pill--attention": props.view.attention, "activity-pill--flow": props.flow },
@@ -462,9 +455,7 @@ function ActivityPill(props: {
         {leading()}
       </Show>
       <span
-        ref={(element) => {
-          label = element;
-        }}
+        ref={labelRef}
         class={["activity-pill__label", { "activity-pill__label--shine": props.view.shine }]}
       >
         {props.view.label}
@@ -503,6 +494,13 @@ function avatarColors(key: string) {
 export function ChatActivityPills(props: ChatActivityPillsProps) {
   let strip!: HTMLDivElement;
   let row!: HTMLDivElement;
+  const buttons = new Set<HTMLButtonElement>();
+  const registerButton = (button: HTMLButtonElement) => {
+    buttons.add(button);
+    return () => {
+      buttons.delete(button);
+    };
+  };
   const working = createMemo(
     () =>
       props.subagents?.activities.filter(
@@ -529,15 +527,13 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
     );
     const resize = new ResizeObserver(scroll.schedule);
     resize.observe(row);
-    document.fonts.addEventListener("loadingdone", scroll.schedule);
     const visibility = () => strip.toggleAttribute("data-document-hidden", document.hidden);
-    document.addEventListener("visibilitychange", visibility);
+    const stopVisibility = listen(document, "visibilitychange", visibility);
     visibility();
     return () => {
       scroll.disconnect();
       resize.disconnect();
-      document.fonts.removeEventListener("loadingdone", scroll.schedule);
-      document.removeEventListener("visibilitychange", visibility);
+      stopVisibility();
     };
   });
   function navigate(event: KeyboardEvent) {
@@ -547,8 +543,16 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
       return;
     }
-    const buttons = Array.from(row.querySelectorAll<HTMLButtonElement>("button.activity-pill"));
-    const index = buttons.findIndex((button) => button === event.target);
+    const orderedButtons = [...buttons]
+      .filter((button) => button.isConnected)
+      .toSorted((left, right) =>
+        left === right
+          ? 0
+          : left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING
+            ? -1
+            : 1,
+      );
+    const index = orderedButtons.findIndex((button) => button === event.target);
     if (index < 0) {
       return;
     }
@@ -556,13 +560,13 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
       event.key === "Home"
         ? 0
         : event.key === "End"
-          ? buttons.length - 1
+          ? orderedButtons.length - 1
           : Math.max(
               0,
-              Math.min(buttons.length - 1, index + (event.key === "ArrowRight" ? 1 : -1)),
+              Math.min(orderedButtons.length - 1, index + (event.key === "ArrowRight" ? 1 : -1)),
             );
     event.preventDefault();
-    const target = buttons[next];
+    const target = orderedButtons[next];
     if (!target) {
       return;
     }
@@ -596,6 +600,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
       >
         <Show when={!props.approvalPending && working().length > 0}>
           <ActivityPill
+            registerButton={registerButton}
             family="subagents"
             view={{
               label: t("chat.activityPills.working", { count: String(working().length) }),
@@ -626,6 +631,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
         </Show>
         <Show when={hasGoal()}>
           <ActivityPill
+            registerButton={registerButton}
             family="goal"
             view={{
               ...goalView(props.goal!),
@@ -639,6 +645,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
         </Show>
         <Show when={!props.approvalPending && props.progress?.showInChat}>
           <ActivityPill
+            registerButton={registerButton}
             family="progress"
             view={progressView(props.progress!)}
             onOpen={(source) => props.progress!.onOpen(source)}
@@ -648,6 +655,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
           <For each={props.pullRequests?.items ?? []} keyed={chatPullRequestId}>
             {(pr) => (
               <ActivityPill
+                registerButton={registerButton}
                 family="pull-request"
                 view={pullRequestView(pr(), props.pullRequests!.status)}
                 onOpen={(source) => props.pullRequests!.onOpen(pr(), source)}
@@ -677,6 +685,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
           </For>
           <Show when={props.publication}>
             <ActivityPill
+              registerButton={registerButton}
               family="publication"
               view={publicationView(props.publication!.view)}
               onOpen={(source) => props.publication!.onOpen(source)}

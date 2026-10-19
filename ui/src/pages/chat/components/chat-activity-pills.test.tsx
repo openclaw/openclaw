@@ -23,7 +23,10 @@ const fontsDescriptor = Object.getOwnPropertyDescriptor(document, "fonts");
 
 beforeEach(async () => {
   await i18n.setLocale("en");
-  Object.defineProperty(document, "fonts", { configurable: true, value: new EventTarget() });
+  Object.defineProperty(document, "fonts", {
+    configurable: true,
+    value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
+  });
 });
 
 afterEach(() => {
@@ -145,4 +148,63 @@ it("retains the goal action while approval hides subagent activity, then restore
   const subagentButton = view.getByRole<HTMLButtonElement>("button", { name: "1 working" });
   subagentButton.click();
   expect(onSubagents).toHaveBeenCalledExactlyOnceWith(subagentButton);
+});
+
+it("follows the current pill order after pull requests move or leave the strip", () => {
+  const pullRequest = (
+    number: number,
+  ): NonNullable<ChatActivityPillsProps["pullRequests"]>["items"][number] => ({
+    number,
+    owner: "example",
+    repo: "project",
+    branch: `change-${number}`,
+    title: `Review change ${number}`,
+    url: `https://github.com/example/project/pull/${number}`,
+    state: "open",
+  });
+  const first = pullRequest(1);
+  const second = pullRequest(2);
+  const third = pullRequest(3);
+  const fourth = pullRequest(4);
+  const onOpen = vi.fn();
+  const props = (
+    items: NonNullable<ChatActivityPillsProps["pullRequests"]>["items"],
+  ): ChatActivityPillsProps => ({
+    presented: true,
+    approvalPending: false,
+    pullRequests: { items, status: "ready", onOpen },
+  });
+  const view = mountPills(props([first, second, third]));
+  const button = (number: number) =>
+    view.getByRole<HTMLButtonElement>("button", { name: new RegExp(`Review change ${number}`) });
+  const press = (key: string, shiftKey = false) => {
+    const event = new KeyboardEvent("keydown", { key, shiftKey, bubbles: true, cancelable: true });
+    document.activeElement!.dispatchEvent(event);
+    return event;
+  };
+  const firstButton = button(1);
+  const thirdButton = button(3);
+  button(2).focus();
+  press("ArrowRight");
+  expect(document.activeElement).toBe(thirdButton);
+
+  view.update(props([third, first, second]));
+  expect(button(1)).toBe(firstButton);
+  expect(button(3)).toBe(thirdButton);
+  thirdButton.focus();
+  press("ArrowRight");
+  expect(document.activeElement).toBe(firstButton);
+
+  view.update(props([third, second, fourth]));
+  button(2).focus();
+  press("Home");
+  expect(document.activeElement).toBe(thirdButton);
+  press("End");
+  expect(document.activeElement).toBe(button(4));
+  press("ArrowLeft");
+  expect(document.activeElement).toBe(button(2));
+  expect(press("ArrowLeft", true).defaultPrevented).toBe(false);
+  expect(document.activeElement).toBe(button(2));
+  button(4).click();
+  expect(onOpen).toHaveBeenCalledExactlyOnceWith(fourth, button(4));
 });
