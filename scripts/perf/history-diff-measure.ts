@@ -379,18 +379,11 @@ async function measure() {
         method: "chat.history",
         params: { limit: 256, maxBytes: 2 * 1024 * 1024, toolResultMaxChars: 500_000 },
       },
-      ...(["all", "uncommitted"] as const).flatMap((scope) => [
-        {
-          name: `diff-${scope}-full`,
-          method: "sessions.diff",
-          params: { scope, summaryOnly: false },
-        },
-        {
-          name: `diff-${scope}-summary`,
-          method: "sessions.diff",
-          params: { scope, summaryOnly: true },
-        },
-      ]),
+      ...(["all", "uncommitted"] as const).map((scope) => ({
+        name: `diff-${scope}-full`,
+        method: "sessions.diff",
+        params: { scope, summaryOnly: false },
+      })),
     ];
     const variants =
       values.scenario === "all"
@@ -442,7 +435,7 @@ async function measure() {
         rows: rows.length,
       };
     };
-    // Keep first-use imports and worker startup separate from warm steady measurements.
+    // Record first use separately; concurrent cohorts can still start burst workers.
     const warmup = [];
     for (const variant of variants) {
       warmup.push({ variant: variant.name, sample: await request(clients[0]!, variant) });

@@ -178,21 +178,26 @@ untracked files. All repositories, worktrees and data remain inside the fixture.
 Measurement never writes the database directly. The driver owns and stops its
 loopback Gateway; `--entry` defaults to `dist/entry.js` and also accepts a prepared
 source entry. It issues small, default, and large `chat.history` requests, plus
-full and summary `sessions.diff` requests for both `all` and `uncommitted` scopes.
+full `sessions.diff` requests for both `all` and `uncommitted` scopes. Summary
+requests are excluded because their 10-second result cache would make repeated
+requests measure cached throughput instead of checkout and baseline work.
 Each operation is one concurrent cohort with one request per client. Empty
 history, missing tracked/untracked changes, missing full patches, or RPC failures
 reject the run.
 
-The first request for each variant is recorded separately as warmup. Measured
-rounds include raw latency samples, p50/p95/p99, payload bytes, returned row
+The first request for each variant is recorded separately as warmup. Later
+cohorts can still include burst-worker startup: warming one client does not warm
+all concurrent readers, and an idle start barrier can retire burst workers.
+Keep those first-cohort tails separate when attributing steady service costs.
+Measured rounds include raw latency samples, p50/p95/p99, payload bytes, returned row
 counts, main-thread/process CPU, CPU profiles and existing worker queue, run,
 and transfer diagnostics. Payload bytes measure re-encoded JSON in the driver,
 not WebSocket frame overhead. Profiles sample the main isolate; worker task
 diagnostics provide worker timings. They do not count Git subprocesses.
 `--output` names a new artifact directory (by default below the fixture).
 `--scenario` defaults to `all`; individual choices are `history-small`,
-`history-default`, `history-large`, `diff-all-full`, `diff-all-summary`,
-`diff-uncommitted-full`, and `diff-uncommitted-summary`. For a concurrent A/B
+`history-default`, `history-large`, `diff-all-full`, and
+`diff-uncommitted-full`. For a concurrent A/B
 comparison, select one matching scenario on both sides so faster completion does
 not move one side into a different workload. Generate independent, identical
 fixtures for each side, with matching client/operation/round counts and the same
