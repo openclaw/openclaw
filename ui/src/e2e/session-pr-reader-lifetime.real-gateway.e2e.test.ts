@@ -456,7 +456,12 @@ suite.define(() => {
                 await context.sessions.refresh({ agentId: "main", force: true });
               });
               await expect
-                .poll(() => pane.locator(".chat-pane__workspace-chip").getAttribute("title"))
+                .poll(() =>
+                  pane
+                    .locator(".chat-pane__workspace-chip")
+                    .filter({ visible: true })
+                    .getAttribute("title"),
+                )
                 .toBe(replacement.root);
             };
             await expect
