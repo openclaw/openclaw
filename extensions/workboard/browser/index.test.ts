@@ -9,16 +9,20 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import workboardPlugin from "./index.ts";
 import { createGatewaySession, createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
+import type { WorkboardBoardSummary } from "./lib/workboard/types.ts";
 import { workboardTestHost } from "./test/host.setup.ts";
 import { createViewContext } from "./test/host.ts";
 
 let fixture: ReturnType<typeof workboardTestHost>;
 let stopPlugin: (() => void) | undefined;
 let stopView: (() => void) | undefined;
+let request: ReturnType<typeof vi.fn<(method: string, params: unknown) => Promise<unknown>>>;
 beforeEach(() => {
   vi.useFakeTimers();
   fixture = workboardTestHost();
   fixture.connection.connected = true;
+  request = vi.fn();
+  fixture.host.request = request as typeof fixture.host.request;
 });
 afterEach(() => {
   dispose();
@@ -53,10 +57,12 @@ async function mountPage(props: Record<string, string>) {
   const page = registrations.get("page/workboard") as ControlUiPage;
   const mounted = page.mount(container, createViewContext(host, props));
   stopView = () => mounted?.dispose?.();
+  const update = (next: Record<string, string>, presented = true) =>
+    mounted?.update?.(createViewContext(host, next, presented));
   await vi.dynamicImportSettled();
-  mounted?.update?.(createViewContext(host, props));
+  update(props);
   await tick();
-  return { container, mounted };
+  return { container, update };
 }
 function mountAccessory(session: ReturnType<typeof createGatewaySession>) {
   const { host, registrations } = fixture;
@@ -70,27 +76,31 @@ function mountAccessory(session: ReturnType<typeof createGatewaySession>) {
   return container;
 }
 
-function sessionsBoard(name: string) {
+const makeBoard = (id: string, extra: Partial<WorkboardBoardSummary> = {}) => ({ id, ...extra });
+function navigationItem(id: string, label: string, icon?: string) {
   return {
-    id: "sessions",
-    name,
-    kind: "sessions",
-    total: 0,
-    active: 0,
-    archived: 0,
-    byStatus: {},
-    sessions: {
-      columns: [
-        { id: "working", label: "Working", description: "Active work", match: { run: ["active"] } },
-        { id: "done", label: "Done", description: "Completed work", fallback: true },
-      ],
-    },
+    id: `board-${id}`,
+    parent: "workboard",
+    label,
+    defaultVisible: false,
+    page: { id: "workboard", path: [id] },
+    ...(icon ? { icon } : {}),
   };
 }
+const columns: NonNullable<WorkboardBoardSummary["sessions"]>["columns"] = [
+  { id: "working", label: "Working", description: "Active work", match: { run: ["active"] } },
+  { id: "done", label: "Done", description: "Completed work", fallback: true },
+];
+const sessionsBoard = (name: string) =>
+  makeBoard("sessions", { name, kind: "sessions", sessions: { columns } });
 
 it("keeps reassigned session cards current through events without polling", async () => {
   const { host, registrations } = fixture;
   const session = createGatewaySession({ key: "agent:writer:dashboard:captured" });
+  const expectedCalls = [
+    ["workboard.boards.list", {}],
+    ["workboard.cards.list", { sessionKey: session.key }],
+  ];
   const card = createWorkboardCard({
     title: "Previously captured conversation",
     sessionKey: session.key,
@@ -103,19 +113,17 @@ it("keeps reassigned session cards current through events without polling", asyn
     selectedId: "writer",
     scopeId: "writer",
   });
-  const boards = [{ id: "ops", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } }];
+  const boards = [makeBoard("ops", { total: 1, active: 1, byStatus: { todo: 1 } })];
+  const historical = createWorkboardCard({ id: "history", notes: "history".repeat(10_000) });
   let currentCard = card;
   let responseBytes = 0;
-  const request = vi.fn(async (method: string, params: unknown) => {
+  request.mockImplementation(async (method: string, params: unknown) => {
     if (method === "workboard.cards.list") {
       const result = {
         cards:
           params && typeof params === "object" && "sessionKey" in params
             ? [currentCard]
-            : [
-                currentCard,
-                createWorkboardCard({ id: "history", notes: "history".repeat(10_000) }),
-              ],
+            : [currentCard, historical],
         boards,
       };
       responseBytes += JSON.stringify(result).length;
@@ -126,7 +134,6 @@ it("keeps reassigned session cards current through events without polling", asyn
     }
     return { tasks: [] };
   });
-  host.request = request as typeof host.request;
   await activate();
   await vi.advanceTimersByTimeAsync(0);
   expect(registrations.has("navigation/board-ops")).toBe(true);
@@ -135,10 +142,7 @@ it("keeps reassigned session cards current through events without polling", asyn
   await vi.advanceTimersByTimeAsync(0);
   expect(container.textContent).toContain(card.title);
   await vi.advanceTimersByTimeAsync(15 * 60_000);
-  expect(request.mock.calls).toEqual([
-    ["workboard.boards.list", {}],
-    ["workboard.cards.list", { sessionKey: session.key }],
-  ]);
+  expect(request.mock.calls).toEqual(expectedCalls);
   expect(responseBytes).toBeLessThan(2048);
 
   currentCard = {
@@ -150,22 +154,16 @@ it("keeps reassigned session cards current through events without polling", asyn
   await change({ epoch: "catalog-epoch", revision: 1 });
   expect(container.textContent).toContain(currentCard.title);
   expect(request).toHaveBeenCalledTimes(2);
-  expect(request.mock.calls).toEqual(
-    expect.arrayContaining([
-      ["workboard.boards.list", {}],
-      ["workboard.cards.list", { sessionKey: session.key }],
-    ]),
-  );
+  expect(request.mock.calls).toEqual(expect.arrayContaining(expectedCalls));
   expect(responseBytes).toBeLessThan(2048);
 });
 
 it("keeps catalog navigation ordered and disambiguates names only while boards share them", async () => {
   const { host, connection, registrations } = fixture;
-  const empty = { total: 0, active: 0, archived: 0, byStatus: {} };
-  const operations = { ...empty, id: "ops", name: "Zebra", icon: "rocket", color: "blue" };
+  const operations = makeBoard("ops", { name: "Zebra", icon: "rocket", color: "blue" });
   const sessions = sessionsBoard("Alpha");
   let boards = [operations, sessions];
-  host.request = vi.fn(async () => ({ cards: [], boards })) as typeof host.request;
+  request.mockImplementation(async () => ({ cards: [], boards }));
   const register = vi.spyOn(host.ui, "registerNavigation");
   await activate();
   const boardNavigation = () =>
@@ -173,23 +171,15 @@ it("keeps catalog navigation ordered and disambiguates names only while boards s
       .filter(([key]) => key.startsWith("navigation/board-"))
       .map(([, item]) => item as ControlUiNavigationItem)
       .toSorted((left, right) => (left.order ?? 0) - (right.order ?? 0));
+  async function showBoards(next: typeof boards, labels: string[]) {
+    boards = next;
+    await change();
+    expect(boardNavigation().map(({ label }) => label)).toEqual(labels);
+  }
   await vi.advanceTimersByTimeAsync(0);
   expect(boardNavigation()).toMatchObject([
-    {
-      id: "board-ops",
-      parent: "workboard",
-      label: "Zebra",
-      icon: "rocket",
-      defaultVisible: false,
-      page: { id: "workboard", path: ["ops"] },
-    },
-    {
-      id: "board-sessions",
-      parent: "workboard",
-      label: "Alpha",
-      defaultVisible: false,
-      page: { id: "workboard", path: ["sessions"] },
-    },
+    navigationItem("ops", "Zebra", "rocket"),
+    navigationItem("sessions", "Alpha"),
   ]);
   for (const item of boardNavigation()) {
     expect(item.actions).toMatchObject([
@@ -213,31 +203,20 @@ it("keeps catalog navigation ordered and disambiguates names only while boards s
   await change();
   expect(register).not.toHaveBeenCalled();
 
-  boards = [sessions, { ...operations, name: "Alpha", icon: "kanban", color: "green" }];
-  await change();
+  const ambiguous = ["Alpha (sessions)", "Alpha (cards)"];
+  await showBoards(
+    [sessions, { ...operations, name: "Alpha", icon: "kanban", color: "green" }],
+    ambiguous,
+  );
   expect(boardNavigation().map(({ id }) => id)).toEqual(["board-sessions", "board-ops"]);
-  expect(boardNavigation().map(({ label }) => label)).toEqual([
-    "Alpha (sessions)",
-    "Alpha (cards)",
-  ]);
   expect(registrations.get("navigation/board-ops")).toMatchObject({
     icon: "kanban",
   });
 
-  boards = [sessions, { ...operations, name: "Operations" }];
-  await change();
-  expect(boardNavigation().map(({ label }) => label)).toEqual(["Alpha", "Operations"]);
-
-  boards = [sessions, { ...operations, name: "Alpha" }];
-  await change();
-  expect(boardNavigation().map(({ label }) => label)).toEqual([
-    "Alpha (sessions)",
-    "Alpha (cards)",
-  ]);
-  boards = [sessions];
-  await change();
+  await showBoards([sessions, { ...operations, name: "Operations" }], ["Alpha", "Operations"]);
+  await showBoards([sessions, { ...operations, name: "Alpha" }], ambiguous);
+  await showBoards([sessions], ["Alpha"]);
   expect(boardNavigation().map(({ id }) => id)).toEqual(["board-sessions"]);
-  expect(boardNavigation().map(({ label }) => label)).toEqual(["Alpha"]);
   expect(host.ui.pinNavigation).not.toHaveBeenCalled();
   dispose();
   expect([...registrations.keys()].filter((key) => key.startsWith("navigation/"))).toEqual([]);
@@ -247,15 +226,11 @@ it.each(["open", "another board", "hidden"] as const)(
   "deletes a board after confirmation without leaving a %s page incorrectly",
   async (presentation) => {
     const { host, registrations } = fixture;
-    const empty = { total: 0, active: 0, archived: 0, byStatus: {} };
-    let boards = [
-      { ...empty, id: "ops", name: "Operations" },
-      { ...empty, id: "other" },
-    ];
+    let boards = [makeBoard("ops", { name: "Operations" }), makeBoard("other")];
     const deleted = createDeferred<{ deleted: boolean }>();
     const stale = createDeferred<{ cards: never[]; boards: typeof boards }>();
     let pendingCatalog: typeof stale.promise | undefined;
-    const request = vi.fn(async (method: string) => {
+    request.mockImplementation(async (method: string) => {
       if (method === "workboard.boards.delete") {
         return deleted.promise;
       }
@@ -266,10 +241,9 @@ it.each(["open", "another board", "hidden"] as const)(
       }
       return { cards: [], boards };
     });
-    host.request = request as typeof host.request;
     await activate();
     await vi.advanceTimersByTimeAsync(0);
-    const { mounted } = await mountPage({ boardId: "ops" });
+    const { update } = await mountPage({ boardId: "ops" });
     const previousBoards = boards;
     if (presentation === "open") {
       pendingCatalog = stale.promise;
@@ -284,12 +258,9 @@ it.each(["open", "another board", "hidden"] as const)(
     expect(request).toHaveBeenCalledWith("workboard.boards.delete", { id: "ops" });
     expect(host.ui.unpinNavigation).not.toHaveBeenCalled();
     if (presentation !== "open") {
-      mounted?.update?.(
-        createViewContext(
-          host,
-          { boardId: presentation === "another board" ? "other" : "ops" },
-          presentation !== "hidden",
-        ),
+      update(
+        { boardId: presentation === "another board" ? "other" : "ops" },
+        presentation !== "hidden",
       );
     }
     boards = boards.filter(({ id }) => id !== "ops");
@@ -314,14 +285,13 @@ it.each(["open", "another board", "hidden"] as const)(
 
 it("keeps a board and its pin when deletion is canceled, refused, or fails", async () => {
   const { host, connection, registrations } = fixture;
-  const board = { id: "ops", name: "Operations", total: 1, active: 1, archived: 0, byStatus: {} };
-  const request = vi.fn(async (method: string) => {
+  const operations = makeBoard("ops", { name: "Operations" });
+  request.mockImplementation(async (method: string) => {
     if (method === "workboard.boards.delete") {
       throw new Error("board still has cards; archive it or move/delete the cards first.");
     }
-    return { cards: [], boards: [board] };
+    return { cards: [], boards: [operations] };
   });
-  host.request = request as typeof host.request;
   await activate();
   await vi.advanceTimersByTimeAsync(0);
   const item = registrations.get("navigation/board-ops") as ControlUiNavigationItem;
@@ -357,22 +327,17 @@ it("disambiguates a created board and its sibling before pinning through a stale
   const existing = sessionsBoard("Created");
   const stale = createDeferred<unknown>();
   const refreshed = createDeferred<unknown>();
-  let refreshing = false;
-  let created = false;
-  host.request = vi.fn(async (method: string) => {
+  const read = vi.fn<() => Promise<unknown>>().mockResolvedValue({ cards: [], boards: [existing] });
+  request.mockImplementation(async (method: string) => {
     if (method === "workboard.boards.upsert") {
-      created = true;
+      read.mockReturnValue(refreshed.promise);
       return { board };
     }
     if (method === "workboard.cards.list" || method === "workboard.boards.list") {
-      return created
-        ? refreshed.promise
-        : refreshing
-          ? stale.promise
-          : { cards: [], boards: [existing] };
+      return read();
     }
     return {};
-  }) as typeof host.request;
+  });
   let pinnedNavigation: unknown;
   let siblingAtPin: unknown;
   vi.mocked(host.ui.pinNavigation).mockImplementation((id) => {
@@ -390,7 +355,7 @@ it("disambiguates a created board and its sibling before pinning through a stale
     "new board button",
   ).click();
   await vi.advanceTimersByTimeAsync(0);
-  refreshing = true;
+  read.mockReturnValue(stale.promise);
   fixture.emit("plugin.workboard.changed", {});
   const form = query<HTMLFormElement>(".workboard-board-draft", container);
   const name = query<HTMLInputElement>(".workboard-board-draft__name input", form);
@@ -399,13 +364,7 @@ it("disambiguates a created board and its sibling before pinning through a stale
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(0);
   expect(host.ui.pinNavigation).toHaveBeenCalledExactlyOnceWith("board-created");
-  expect(pinnedNavigation).toMatchObject({
-    id: "board-created",
-    parent: "workboard",
-    label: "Created (cards)",
-    icon: "rocket",
-    defaultVisible: false,
-  });
+  expect(pinnedNavigation).toMatchObject(navigationItem("created", "Created (cards)", "rocket"));
   expect(siblingAtPin).toMatchObject({ label: "Created (sessions)" });
 
   stale.resolve({ cards: [], boards: [existing] });
@@ -413,7 +372,7 @@ it("disambiguates a created board and its sibling before pinning through a stale
   expect(registrations.get("navigation/board-created")).toBe(pinnedNavigation);
   refreshed.resolve({
     cards: [],
-    boards: [existing, { ...board, total: 0, active: 0, archived: 0, byStatus: {} }],
+    boards: [existing, board],
   });
   await vi.advanceTimersByTimeAsync(0);
   register.mockClear();
@@ -427,33 +386,19 @@ it("recovers accessory reads independently from the catalog and retires pending 
   const { host, registrations } = fixture;
   const session = createGatewaySession();
   const card = createWorkboardCard({ title: "Linked card", sessionKey: session.key });
-  const boards = [{ id: "default", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } }];
+  const boards = [makeBoard("default")];
   let currentCard = card;
-  let failCardRead = false;
-  let pendingCardRead: Promise<unknown> | undefined;
-  const request = vi.fn(async (method: string) => {
-    if (method === "workboard.boards.list") {
-      return { boards };
-    }
-    if (failCardRead) {
-      failCardRead = false;
-      throw new Error("Temporary read failure");
-    }
-    if (pendingCardRead) {
-      const pending = pendingCardRead;
-      pendingCardRead = undefined;
-      return pending;
-    }
-    return { cards: [currentCard] };
-  });
-  host.request = request as typeof host.request;
+  const read = vi.fn<() => Promise<unknown>>(async () => ({ cards: [currentCard] }));
+  request.mockImplementation(async (method: string) =>
+    method === "workboard.boards.list" ? { boards } : read(),
+  );
   await activate();
   const container = mountAccessory(session);
   await vi.advanceTimersByTimeAsync(0);
   expect(container.textContent).toContain(card.title);
   expect([...registrations.keys()].filter((key) => key.startsWith("action/"))).toEqual([]);
 
-  failCardRead = true;
+  read.mockRejectedValueOnce(new Error("Temporary read failure"));
   await change();
   expect(request.mock.settledResults.some((result) => result.type === "rejected")).toBe(true);
   expect(container.textContent).toContain(card.title);
@@ -467,7 +412,7 @@ it("recovers accessory reads independently from the catalog and retires pending 
   expect(container.textContent).toContain(card.title);
 
   const pending = createDeferred<unknown>();
-  pendingCardRead = pending.promise;
+  read.mockReturnValueOnce(pending.promise);
   await change();
   const count = request.mock.calls.length;
   dispose();
