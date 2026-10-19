@@ -2,7 +2,7 @@ import { it, expect } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { closeChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatPublication } from "./chat-details.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
 import * as support from "./session-management.test-support.ts";
@@ -119,8 +119,8 @@ suite.define(() => {
           },
         },
       });
-      await openDetailsPullRequests(activePane);
-      await ui.button(activePane, "Publish PR", false).waitFor();
+      const publication = await openChatPublication(activePane);
+      await ui.button(publication, "Publish PR", false).waitFor();
       await closeChatDetails(activePane);
 
       await userBubble.click({ button: "right" });
@@ -159,8 +159,8 @@ suite.define(() => {
         .poll(() => transcript.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await expect.poll(() => branchTrigger.isDisabled()).toBe(true);
-      const archivedPullRequests = await openDetailsPullRequests(activePane);
-      await ui.expectCount(ui.button(archivedPullRequests, "Publish PR", false), 0);
+      const archivedPublication = await openChatPublication(activePane);
+      await ui.expectCount(ui.button(archivedPublication, "Publish PR", false), 0);
       await closeChatDetails(activePane);
 
       await userBubble.evaluate((element) => {
