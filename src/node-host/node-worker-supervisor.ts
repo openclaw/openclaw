@@ -92,7 +92,6 @@ class NodeWorkerSupervisor {
     this.containerLifecycle = options.containerEngine
       ? new NodeWorkerContainerLifecycle(options.containerEngine, bundleRoot, this.store)
       : undefined;
-    const containerImage = options.containerImage;
     this.workspace =
       options.workspace ??
       new NodeWorkerWorkspaceRuntime({ root: bundleRoot, env: this.workerEnv });
@@ -105,6 +104,7 @@ class NodeWorkerSupervisor {
       isRecoveryActive: () => !this.closed,
     });
     this.children = new NodeWorkerChildLifecycle({
+      onProcessesChanged: options.onProcessesChanged,
       bundleRoot,
       ...startup,
       store: this.store,
@@ -112,7 +112,7 @@ class NodeWorkerSupervisor {
       capacity: this.capacity,
       containerEngine,
       containerLifecycle: this.containerLifecycle,
-      containerImage,
+      containerImage: options.containerImage,
       starting: this.starting,
       initialize: () => this.initialize(),
       isClosed: () => this.closed,
