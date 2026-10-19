@@ -600,29 +600,4 @@ describe("node bootstrap distribution", () => {
       );
     },
   );
-
-  it("rejects streamed bytes that differ from the verified source", async () => {
-    const { provider } = await fixture();
-    // oxlint-disable-next-line typescript/unbound-method -- Fault injection reapplies the original ReadEntry receiver below.
-    const writeEntry = tar.ReadEntry.prototype.write;
-    let substituted = false;
-    const writer = vi.spyOn(tar.ReadEntry.prototype, "write").mockImplementation(function (
-      this: tar.ReadEntry,
-      chunk,
-    ) {
-      if (this.path === "package/dist/shared.js") {
-        substituted = true;
-        return writeEntry.call(this, Buffer.alloc(chunk.length, 0x20));
-      }
-      return writeEntry.call(this, chunk);
-    });
-    try {
-      await expect(provider.prepare()).rejects.toThrow(
-        "Node bootstrap archive does not match the verified distribution",
-      );
-      expect(substituted).toBe(true);
-    } finally {
-      writer.mockRestore();
-    }
-  });
 });

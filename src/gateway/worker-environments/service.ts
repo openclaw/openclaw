@@ -171,7 +171,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
     if (to !== "attached") {
       const cancellation = inference.cancelEnvironment(record.environmentId);
-      options.liveEvents?.clearEnvironment(record.environmentId, record.ownerEpoch);
+      options.liveEvents?.clearEnvironment(record.environmentId);
       await cancellation;
     }
     return next;

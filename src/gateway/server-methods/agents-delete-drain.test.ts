@@ -384,7 +384,7 @@ it.each([false, true])(
         expect(admission.isActive()).toBe(false);
         expect(ptys.map((pty) => pty.killed)).toEqual([true, true]);
         expect(terminals.size).toBe(0);
-        const released = controls.reserveSessionDrain(sessionId).accept();
+        const released = controls.reserveSessionDrain(sessionId);
         released.start();
         await released.drained;
         released.release();
