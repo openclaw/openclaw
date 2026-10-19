@@ -7,7 +7,7 @@ import { t } from "../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import "../../styles/plugins.css";
 import "../../styles/claws-catalog.css";
-import type { ClawsCatalogViewProps } from "./claws-catalog-dialog.tsx";
+import type { ClawsCatalogViewProps } from "./claws-catalog-view-props.ts";
 import { ClawsDetailView } from "./claws-detail-view.tsx";
 
 function CatalogList(

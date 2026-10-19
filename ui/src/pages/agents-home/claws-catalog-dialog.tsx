@@ -32,6 +32,7 @@ import {
   type ClawCatalogSource,
   type ClawAddReviewPlan,
 } from "./claws-catalog-client.ts";
+import type { ClawsCatalogViewProps } from "./claws-catalog-view-props.ts";
 import { ClawsCatalogView } from "./claws-catalog-view.tsx";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
@@ -479,7 +480,7 @@ class ClawsCatalogModel {
     }
   }
 
-  view() {
+  view(): ClawsCatalogViewProps {
     return {
       entries: this.entries,
       basePath: this.context.basePath,
@@ -498,10 +499,9 @@ class ClawsCatalogModel {
       reviewPlan: this.reviewPlan,
       addedAgentId: this.addedAgentId,
       canAdd: this.canAdd(),
-      onOpenPreview: (kind: "instruction" | "skill", name: string) =>
-        void this.openPreview(kind, name),
-      onSearch: (query: string) => this.search(query),
-      onSelect: (entry: ClawCatalogEntry) => this.select(entry),
+      onOpenPreview: (kind, name) => void this.openPreview(kind, name),
+      onSearch: (query) => this.search(query),
+      onSelect: (entry) => this.select(entry),
       onBack: () => this.back(),
       onClose: () => this.close(),
       onRetryCatalog: () => void this.loadCatalog(),
@@ -533,8 +533,6 @@ class ClawsCatalogModel {
     };
   }
 }
-
-export type ClawsCatalogViewProps = ReturnType<ClawsCatalogModel["view"]>;
 
 export function ClawsCatalogDialog(props: ClawsDialogProps) {
   const context = useApplication();
