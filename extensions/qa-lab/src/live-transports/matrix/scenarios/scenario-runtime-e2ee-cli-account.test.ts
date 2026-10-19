@@ -152,34 +152,27 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
-  it("retains undefined construction rejection before proxy cleanup failure", async () => {
-    proxyCleanupFailure = new Error("proxy stop failed");
-    mocks.createRuntime.mockRejectedValueOnce(undefined);
-    await expect(run()).rejects.toMatchObject({
-      cause: undefined,
-      errors: [undefined, proxyCleanupFailure],
-    });
-    expect(closed).toBe(true);
-  });
-
-  it("preserves an undefined cleanup rejection", async () => {
-    configureCli(["POST"]);
-    dispose.mockRejectedValueOnce(undefined);
-    await expect(run()).rejects.toBeUndefined();
-    expect(closed).toBe(true);
-  });
-
-  it("reports disposal and proxy cleanup failures instead of returning success", async () => {
-    const disposalFailure = new Error("CLI disposal failed");
-    proxyCleanupFailure = new Error("proxy stop failed");
-    configureCli(["POST"]);
-    dispose.mockRejectedValueOnce(disposalFailure);
-    await expect(run()).rejects.toMatchObject({
-      cause: disposalFailure,
-      errors: [disposalFailure, proxyCleanupFailure],
-    });
-    expect(closed).toBe(true);
-  });
+  it.each(["construction", "disposal", "undefined disposal"] as const)(
+    "preserves %s failure through proxy cleanup",
+    async (phase) => {
+      const failure = phase === "disposal" ? new Error("CLI disposal failed") : undefined;
+      proxyCleanupFailure =
+        phase === "undefined disposal" ? undefined : new Error("proxy stop failed");
+      if (phase === "construction") {
+        mocks.createRuntime.mockRejectedValueOnce(failure);
+      } else {
+        configureCli(["POST"]);
+        dispose.mockRejectedValueOnce(failure);
+      }
+      const rejected = expect(run()).rejects;
+      if (proxyCleanupFailure) {
+        await rejected.toMatchObject({ cause: failure, errors: [failure, proxyCleanupFailure] });
+      } else {
+        await rejected.toBeUndefined();
+      }
+      expect(closed).toBe(true);
+    },
+  );
 
   it("joins proxy cleanup before returning a CLI disposal failure", async () => {
     const disposalFailure = new Error("CLI disposal failed");

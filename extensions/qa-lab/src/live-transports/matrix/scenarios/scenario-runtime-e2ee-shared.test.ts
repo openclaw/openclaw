@@ -85,39 +85,52 @@ describe("Matrix E2EE scenario client ownership", () => {
     });
   });
 
-  it("joins both clients and preserves all errors when observer cleanup fails first", async () => {
+  it.each([true, false])("joins both cleanups (scenario also fails: %s)", async (scenarioFails) => {
     const scenarioFailure = new Error("verification failed");
-    const driverFailure = new Error("driver shutdown failed");
+    const driverFailure = scenarioFails ? new Error("driver shutdown failed") : undefined;
     const observerFailure = new Error("observer shutdown failed");
     const delayedStop = createDeferred<void>();
     const stops = {
       driver: vi.fn(async () => {
-        await delayedStop.promise;
+        if (scenarioFails) {
+          await delayedStop.promise;
+        }
         throw driverFailure;
       }),
       observer: vi.fn(async () => {
-        throw observerFailure;
+        if (scenarioFails) {
+          throw observerFailure;
+        }
+        await delayedStop.promise;
       }),
     };
     acquire(client(stops.driver), client(stops.observer));
-    const settled = vi.fn();
+    const resolved = vi.fn();
+    const rejected = vi.fn();
     const completion = runScenario(async () => {
-      throw scenarioFailure;
-    }).then(settled, settled);
+      if (scenarioFails) {
+        throw scenarioFailure;
+      }
+      return { verified: true };
+    }).then(resolved, rejected);
     try {
       await setImmediate();
       expect(stops.driver).toHaveBeenCalledTimes(1);
       expect(stops.observer).toHaveBeenCalledTimes(1);
-      expect(settled).not.toHaveBeenCalled();
+      expect(resolved).not.toHaveBeenCalled();
+      expect(rejected).not.toHaveBeenCalled();
     } finally {
       delayedStop.resolve();
       await completion;
     }
-    expect(settled).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        cause: scenarioFailure,
-        errors: [scenarioFailure, driverFailure, observerFailure],
-      }),
+    expect(resolved).not.toHaveBeenCalled();
+    expect(rejected).toHaveBeenCalledExactlyOnceWith(
+      scenarioFails
+        ? expect.objectContaining({
+            cause: scenarioFailure,
+            errors: [scenarioFailure, driverFailure, observerFailure],
+          })
+        : undefined,
     );
   });
 
@@ -134,30 +147,6 @@ describe("Matrix E2EE scenario client ownership", () => {
     expect(run).toHaveBeenCalledExactlyOnceWith({ driver, observer });
     expect(stopDriver).toHaveBeenCalledTimes(1);
     expect(stopObserver).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves a cleanup-only rejection after joining the other client", async () => {
-    const delayedStop = createDeferred<void>();
-    const stopDriver = vi.fn().mockRejectedValue(undefined);
-    const stopObserver = vi.fn(() => delayedStop.promise);
-    const driver = client(stopDriver);
-    const observer = client(stopObserver);
-    acquire(driver, observer);
-    const resolved = vi.fn();
-    const rejected = vi.fn();
-    const completion = runScenario(async () => ({ verified: true })).then(resolved, rejected);
-    try {
-      await setImmediate();
-      expect(stopDriver).toHaveBeenCalledTimes(1);
-      expect(stopObserver).toHaveBeenCalledTimes(1);
-      expect(resolved).not.toHaveBeenCalled();
-      expect(rejected).not.toHaveBeenCalled();
-    } finally {
-      delayedStop.resolve();
-      await completion;
-    }
-    expect(resolved).not.toHaveBeenCalled();
-    expect(rejected).toHaveBeenCalledExactlyOnceWith(undefined);
   });
 });
 

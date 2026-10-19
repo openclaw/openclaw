@@ -21,22 +21,25 @@ let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
-afterAll(async () => {
-  await receipts.close();
-});
-
-async function createCliFixture() {
-  return await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-"));
-}
+afterAll(() => receipts.close());
 async function writeCli(root: string, lines: string[]) {
   await mkdir(path.join(root, "dist"));
   await writeFile(path.join(root, "dist", "index.mjs"), lines.join("\n"));
 }
-async function withCliFixture(exercise: (root: string) => Promise<void>) {
-  const root = await createCliFixture();
+function killRemainingPids(pids: number[]) {
+  for (const pid of pids.toReversed()) {
+    if (isProcessRunning(pid)) {
+      process.kill(pid, "SIGKILL");
+    }
+  }
+}
+async function withCliFixture(exercise: (root: string, pids: number[]) => Promise<void>) {
+  const root = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-"));
+  const pids: number[] = [];
   try {
-    await exercise(root);
+    await exercise(root, pids);
   } finally {
+    killRemainingPids(pids);
     await rm(root, { force: true, recursive: true });
   }
 }
@@ -46,6 +49,8 @@ const cliParams = (cwd: string, timeoutMs = 500) => ({
   env: process.env,
   timeoutMs,
 });
+const waitForText = (session: ReturnType<typeof startMatrixQaOpenClawCli>, text: string) =>
+  session.waitForOutput((output) => output.stdout.includes(text), text, 5_000);
 
 function isProcessRunning(pid: number): boolean {
   try {
@@ -57,31 +62,17 @@ function isProcessRunning(pid: number): boolean {
 }
 
 async function readPidFile(pathToCheck: string): Promise<number> {
-  const value = (
-    await readFile(pathToCheck, "utf8").catch((error: unknown) => {
-      throw new Error(`Timed out waiting for a PID in ${pathToCheck}`, { cause: error });
-    })
-  ).trim();
+  const value = (await readFile(pathToCheck, "utf8")).trim();
   const pid = Number(value);
-  if (!/^[1-9]\d*$/u.test(value) || !Number.isSafeInteger(pid)) {
-    throw new Error(`Timed out waiting for a PID in ${pathToCheck}`);
-  }
+  expect(value).toMatch(/^[1-9]\d*$/u);
+  expect(Number.isSafeInteger(pid)).toBe(true);
   return pid;
 }
 
-// Session settlement verifies live group extinction, but does not join foreign zombie reaping.
-// The late-wait case also needs exit before attaching its first wait() caller.
 async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isProcessRunning(pid)) {
-      signal.throwIfAborted();
-      await sleep(5, undefined, { signal });
-    }
-  } catch (error) {
-    if (signal.aborted) {
-      throw new Error(`Timed out waiting for process ${pid} to exit`, { cause: error });
-    }
-    throw error;
+  while (isProcessRunning(pid)) {
+    signal.throwIfAborted();
+    await sleep(5, undefined, { signal });
   }
 }
 
@@ -119,23 +110,21 @@ async function withReadyCliTimeout(
 }
 
 describe("Matrix QA CLI runtime", () => {
-  it("redacts secret CLI arguments in diagnostic command text", () => {
-    expect(
-      formatMatrixQaCliCommand([
-        "matrix",
-        "verify",
-        "backup",
-        "restore",
-        "--recovery-key",
-        "abcdef1234567890ghij",
-      ]),
-    ).toBe("openclaw matrix verify backup restore --recovery-key [REDACTED]");
-    expect(formatMatrixQaCliCommand(["matrix", "account", "add", "--access-token=token-123"])).toBe(
+  it.each([
+    [
+      "matrix verify backup restore --recovery-key abcdef1234567890ghij",
+      "openclaw matrix verify backup restore --recovery-key [REDACTED]",
+    ],
+    [
+      "matrix account add --access-token=token-123",
       "openclaw matrix account add --access-token=[REDACTED]",
-    );
-    expect(
-      formatMatrixQaCliCommand(["matrix", "verify", "device", "abcdef1234567890ghij", "--json"]),
-    ).toBe("openclaw matrix verify device [REDACTED] --json");
+    ],
+    [
+      "matrix verify device abcdef1234567890ghij --json",
+      "openclaw matrix verify device [REDACTED] --json",
+    ],
+  ])("redacts secret arguments in %s", (command, expected) => {
+    expect(formatMatrixQaCliCommand(command.split(" "))).toBe(expected);
   });
 
   it("redacts Matrix token output before diagnostics and artifacts", () => {
@@ -164,11 +153,7 @@ describe("Matrix QA CLI runtime", () => {
       killMatrixQaCliChild(child, "SIGTERM", runTaskkill);
 
       expect(runTaskkill).toHaveBeenCalledTimes(2);
-      if (fallsBack) {
-        expect(killMock).toHaveBeenCalledWith("SIGTERM");
-      } else {
-        expect(killMock).not.toHaveBeenCalled();
-      }
+      expect(killMock.mock.calls).toEqual(fallsBack ? [["SIGTERM"]] : []);
     } finally {
       if (platformDescriptor) {
         Object.defineProperty(process, "platform", platformDescriptor);
@@ -225,8 +210,7 @@ describe("Matrix QA CLI runtime", () => {
       session.endStdin();
       const result = await secondWait;
 
-      expect(result.stdout).toContain('"input":"yes"');
-      expect(result.stdout).toContain('"ended":true');
+      expect(JSON.parse(result.stdout)).toEqual({ input: "yes", ended: true });
       await expect(firstWait).resolves.toEqual(result);
       await expect(session.wait()).resolves.toEqual(result);
     });
@@ -260,126 +244,81 @@ describe("Matrix QA CLI runtime", () => {
     });
   });
 
-  it("kills CLI commands that ignore graceful timeout termination", async () => {
-    await withCliFixture(async (root) => {
+  async function assertUncooperativeCli(late: boolean, signal: AbortSignal) {
+    await withCliFixture(async (root, pids) => {
       const pidPath = path.join(root, "cli.pid");
-      let childPid: number | undefined;
-      try {
-        await writeCli(root, [
-          "import { writeFileSync } from 'node:fs';",
-          `writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
-          "process.on('SIGTERM', () => { process.stdout.write('ignored sigterm\\n'); });",
-          "process.stdout.write('waiting despite graceful shutdown\\n');",
-          "setInterval(() => {}, 1000);",
-        ]);
+      const marker = late ? "late wait timeout marker" : "waiting despite graceful shutdown";
+      const handler = late ? "" : "process.stdout.write('ignored sigterm\\n');";
+      await writeCli(root, [
+        "import { writeFileSync } from 'node:fs';",
+        `writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
+        `process.on('SIGTERM', () => { ${handler} });`,
+        `process.stdout.write('${marker}\\n');`,
+        "setInterval(() => {}, 1000);",
+      ]);
 
-        await withReadyCliTimeout(
-          cliParams(root),
-          async (session) => {
-            await session.waitForOutput(
-              (output) => output.stdout.includes("waiting despite graceful shutdown"),
-              "installed SIGTERM handler",
-              5_000,
-            );
-            childPid = await readPidFile(pidPath);
-          },
-          async (session) => {
-            await expect(session.wait()).rejects.toThrow(/timed out after 500ms/u);
-            expect(isProcessRunning(childPid!)).toBe(false);
-          },
-        );
-      } finally {
-        if (childPid && isProcessRunning(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
-      }
+      await withReadyCliTimeout(
+        cliParams(root),
+        async (session) => {
+          await waitForText(session, marker);
+          pids.push(await readPidFile(pidPath));
+        },
+        async (session) => {
+          if (late) {
+            await waitForProcessExit(pids[0], signal);
+          }
+          await expect(session.wait()).rejects.toThrow(/timed out after 500ms/u);
+          if (late) {
+            await expect(session.wait()).rejects.toThrow(marker);
+          }
+          expect(isProcessRunning(pids[0])).toBe(false);
+        },
+      );
     });
+  }
+  it("kills an uncooperative CLI with an immediate waiter", async ({ signal }) => {
+    await assertUncooperativeCli(false, signal);
   });
-
-  it("preserves timeout diagnostics when wait attaches after timeout", async ({ signal }) => {
-    await withCliFixture(async (root) => {
-      const pidPath = path.join(root, "cli.pid");
-      let childPid: number | undefined;
-      try {
-        await writeCli(root, [
-          "import { writeFileSync } from 'node:fs';",
-          `writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
-          "process.on('SIGTERM', () => {});",
-          "process.stdout.write('late wait timeout marker\\n');",
-          "setInterval(() => {}, 1000);",
-        ]);
-
-        await withReadyCliTimeout(
-          cliParams(root),
-          async (session) => {
-            await session.waitForOutput(
-              (output) => output.stdout.includes("late wait timeout marker"),
-              "late wait fixture readiness",
-              5_000,
-            );
-            childPid = await readPidFile(pidPath);
-          },
-          async (session) => {
-            await waitForProcessExit(childPid!, signal);
-            await expect(session.wait()).rejects.toThrow(/timed out after 500ms/u);
-            await expect(session.wait()).rejects.toThrow(/late wait timeout marker/u);
-            expect(isProcessRunning(childPid!)).toBe(false);
-          },
-        );
-      } finally {
-        if (childPid && isProcessRunning(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
-      }
-    });
+  it("preserves timeout diagnostics for a late waiter", async ({ signal }) => {
+    await assertUncooperativeCli(true, signal);
   });
 
   it("settles and kills descendants that keep timed-out CLI stdio open", async () => {
-    await withCliFixture(async (root) => {
+    await withCliFixture(async (root, pids) => {
       const childPidPath = path.join(root, "child.pid");
       const grandchildPidPath = path.join(root, "grandchild.pid");
-      let childPid: number | undefined;
-      let grandchildPid: number | undefined;
-      try {
-        await writeCli(root, [
-          "import { spawn } from 'node:child_process';",
-          "import { writeFileSync } from 'node:fs';",
-          `writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-          "const grandchild = spawn(process.execPath, ['-e', 'process.stdout.write(\"descendant ready\\\\n\"); setInterval(() => {}, 1000);'], { stdio: ['ignore', 'inherit', 'inherit'] });",
-          `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
-          "process.on('SIGTERM', () => {});",
-          "process.stdout.write('spawned persistent descendant\\n');",
-          "setInterval(() => {}, 1000);",
-        ]);
+      await writeCli(root, [
+        "import { spawn } from 'node:child_process';",
+        "import { writeFileSync } from 'node:fs';",
+        `writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        "const grandchild = spawn(process.execPath, ['-e', 'process.stdout.write(\"descendant ready\\\\n\"); setInterval(() => {}, 1000);'], { stdio: ['ignore', 'inherit', 'inherit'] });",
+        `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
+        "process.on('SIGTERM', () => {});",
+        "process.stdout.write('spawned persistent descendant\\n');",
+        "setInterval(() => {}, 1000);",
+      ]);
 
-        await withReadyCliTimeout(
-          cliParams(root),
-          async (session) => {
-            await session.waitForOutput(
-              (output) =>
-                output.stdout.includes("spawned persistent descendant") &&
-                output.stdout.includes("descendant ready"),
-              "parent and descendant readiness",
-              5_000,
-            );
-            childPid = await readPidFile(childPidPath);
-            grandchildPid = await readPidFile(grandchildPidPath);
-          },
-          async (session) => {
-            await expect(session.wait()).rejects.toThrow(/timed out after 500ms/u);
-            expect(isProcessRunning(childPid!)).toBe(false);
-            if (process.platform !== "win32") {
-              expect(isProcessRunning(grandchildPid!)).toBe(false);
-            }
-          },
-        );
-      } finally {
-        for (const pid of [grandchildPid, childPid]) {
-          if (pid && isProcessRunning(pid)) {
-            process.kill(pid, "SIGKILL");
+      await withReadyCliTimeout(
+        cliParams(root),
+        async (session) => {
+          await session.waitForOutput(
+            (output) =>
+              output.stdout.includes("spawned persistent descendant") &&
+              output.stdout.includes("descendant ready"),
+            "parent and descendant readiness",
+            5_000,
+          );
+          pids.push(await readPidFile(childPidPath));
+          pids.push(await readPidFile(grandchildPidPath));
+        },
+        async (session) => {
+          await expect(session.wait()).rejects.toThrow(/timed out after 500ms/u);
+          expect(isProcessRunning(pids[0])).toBe(false);
+          if (process.platform !== "win32") {
+            expect(isProcessRunning(pids[1])).toBe(false);
           }
-        }
-      }
+        },
+      );
     });
   });
 
@@ -390,70 +329,54 @@ describe("Matrix QA CLI runtime", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await createCliFixture();
-    const childPidPath = path.join(root, "child.pid");
-    const grandchildPidPath = path.join(root, "grandchild.pid");
-    let childPid: number | undefined;
-    let grandchildPid: number | undefined;
-    let session: ReturnType<typeof startMatrixQaOpenClawCli> | undefined;
-    const cleanup = Promise.withResolvers<void>();
-    // Vitest can finish a timed-out callback before its async finally; the hook joins that cleanup.
-    onTestFinished(() => cleanup.promise);
-    try {
-      await writeCli(root, [
-        "import { spawn } from 'node:child_process';",
-        "import { writeFileSync } from 'node:fs';",
-        fixtureReceiptClientSource(receipts.endpoint),
-        `writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-        "const grandchild = spawn(process.execPath, ['-e', 'process.on(\\'SIGTERM\\', () => {}); setInterval(() => {}, 1000);'], { stdio: 'ignore' });",
-        "grandchild.unref();",
-        `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
-        "process.on('SIGTERM', () => process.exit(0));",
-        `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
-        "setInterval(() => {}, 1000);",
-      ]);
+    const cleanup = withCliFixture(async (root, pids) => {
+      const childPidPath = path.join(root, "child.pid");
+      const grandchildPidPath = path.join(root, "grandchild.pid");
+      let session: ReturnType<typeof startMatrixQaOpenClawCli> | undefined;
+      try {
+        await writeCli(root, [
+          "import { spawn } from 'node:child_process';",
+          "import { writeFileSync } from 'node:fs';",
+          fixtureReceiptClientSource(receipts.endpoint),
+          `writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+          "const grandchild = spawn(process.execPath, ['-e', 'process.on(\\'SIGTERM\\', () => {}); setInterval(() => {}, 1000);'], { stdio: 'ignore' });",
+          "grandchild.unref();",
+          `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
+          "setInterval(() => {}, 1000);",
+        ]);
 
-      session = startMatrixQaOpenClawCli({
-        allowNonZero: true,
-        ...cliParams(root, 10_000),
-      });
-      const readReadyPids = async () => {
-        childPid = await readPidFile(childPidPath);
-        grandchildPid = await readPidFile(grandchildPidPath);
-      };
-      // PID records precede the receipt; a session result can overtake its separate socket.
-      await withinTest(
-        Promise.race([
-          receipts.waitFor(childPidPath, "ready").then(readReadyPids),
-          session.wait().then(readReadyPids, readReadyPids),
-        ]),
-        signal,
-      );
+        session = startMatrixQaOpenClawCli({
+          allowNonZero: true,
+          ...cliParams(root, 10_000),
+        });
+        const readReadyPids = async () => {
+          pids[0] = await readPidFile(childPidPath);
+          pids[1] = await readPidFile(grandchildPidPath);
+        };
+        // PID records precede the receipt; a session result can overtake its separate socket.
+        await withinTest(
+          Promise.race([
+            receipts.waitFor(childPidPath, "ready").then(readReadyPids),
+            session.wait().then(readReadyPids, readReadyPids),
+          ]),
+          signal,
+        );
 
-      const sessionExit = expect(session.wait()).rejects.toThrow(/was cancelled/u);
-      session.kill();
+        const sessionExit = expect(session.wait()).rejects.toThrow(/was cancelled/u);
+        session.kill();
 
-      await withinTest(sessionExit, signal);
-      await Promise.all([
-        waitForProcessExit(childPid!, signal),
-        waitForProcessExit(grandchildPid!, signal),
-      ]);
-      expect(isProcessRunning(childPid!)).toBe(false);
-      expect(isProcessRunning(grandchildPid!)).toBe(false);
-    } finally {
-      cleanup.resolve(
-        (async () => {
-          session?.kill();
-          await session?.wait().catch(() => undefined);
-          for (const pid of [grandchildPid, childPid]) {
-            if (pid && isProcessRunning(pid)) {
-              process.kill(pid, "SIGKILL");
-            }
-          }
-          await rm(root, { force: true, recursive: true });
-        })(),
-      );
-      await cleanup.promise;
-    }
+        await withinTest(sessionExit, signal);
+        await Promise.all(pids.map((pid) => waitForProcessExit(pid, signal)));
+        expect(pids.map(isProcessRunning)).toEqual([false, false]);
+      } finally {
+        session?.kill();
+        await session?.wait().catch(() => undefined);
+      }
+    });
+    // A timed-out test callback may finish before its async cleanup; join the whole fixture.
+    onTestFinished(() => cleanup);
+    await cleanup;
   });
 });

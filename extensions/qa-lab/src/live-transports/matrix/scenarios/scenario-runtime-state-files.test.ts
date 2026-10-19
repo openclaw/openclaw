@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -38,42 +37,36 @@ describe("Matrix QA persisted state probes", () => {
     return stateDir;
   }
 
-  async function seedSyncStore({
-    root,
-    metadata = identity,
-    source = "sqlite",
-    legacyMetadata = false,
-    cursor = "other-cursor",
-  }: {
-    root: string;
-    metadata?: typeof identity;
-    source?: "json" | "sqlite";
-    legacyMetadata?: boolean;
-    cursor?: string;
-  }) {
+  async function seedSyncStore(
+    root: string,
+    {
+      metadata = identity,
+      source = "sqlite",
+      legacyMetadata,
+      cursor = "other-cursor",
+    }: {
+      metadata?: typeof identity;
+      source?: "json" | "sqlite";
+      legacyMetadata?: boolean;
+      cursor?: string;
+    } = {},
+  ) {
     await mkdir(root, { recursive: true });
     if (legacyMetadata) {
       await writeFile(path.join(root, "storage-meta.json"), JSON.stringify(metadata));
     } else {
       openStore(root, "storage-meta").register("current", metadata);
     }
-    const savedSync = { nextBatch: cursor, accountData: [], roomsData: {} };
+    const savedSync = { nextBatch: cursor };
     if (source === "json") {
       await writeFile(path.join(root, "bot-storage.json"), JSON.stringify({ savedSync }));
       return;
     }
-    // These are the persisted sync-cache rows produced by the Matrix store;
-    // real plugin-state writes exercise account-local SQLite discovery.
+    // Persist the rows read by the probe; omit metadata it never reads.
     const data = JSON.stringify(savedSync);
     const store = openStore(root, "sync-cache");
     store.register("current:sync:fixture:0", { kind: "sync-chunk", index: 0, data });
-    store.register("current:meta", {
-      kind: "meta",
-      version: 1,
-      generation: "fixture",
-      chunkCount: 1,
-      syncDigest: createHash("sha256").update(data).digest("hex"),
-    });
+    store.register("current:meta", { kind: "meta", generation: "fixture", chunkCount: 1 });
   }
 
   const waitForCursor = (stateDir: string, timeoutMs = 1_000) =>
@@ -94,11 +87,8 @@ describe("Matrix QA persisted state probes", () => {
       const stateDir = await createStateDir();
       const other = path.join(stateDir, "matrix", "accounts", "aa-other");
       const target = path.join(stateDir, "matrix", "accounts", "zz-target");
-      await seedSyncStore({
-        root: other,
-        metadata: { ...identity, [field]: "other" },
-      });
-      await seedSyncStore({ root: target, cursor: "target-cursor" });
+      await seedSyncStore(other, { metadata: { ...identity, [field]: "other" } });
+      await seedSyncStore(target, { cursor: "target-cursor" });
       for (const root of [other, target]) {
         openStore(root, "idb-snapshot").register("crypto-sentinel", { preserved: root });
       }
@@ -133,34 +123,27 @@ describe("Matrix QA persisted state probes", () => {
     },
   );
 
-  it.each(["json", "sqlite"] as const)(
-    "waits instead of returning another account's %s cursor",
-    async (source) => {
-      const stateDir = await createStateDir();
-      await seedSyncStore({
-        root: path.join(stateDir, "matrix", "accounts", "other"),
-        metadata: { ...identity, accountId: "other" },
-        source,
-        legacyMetadata: source === "json",
-      });
-      await expectNoCursor(stateDir);
-    },
-  );
-
-  it.each(["json", "sqlite"] as const)(
-    "does not let stale JSON metadata override a canonical mismatch for a %s cursor",
-    async (source) => {
-      const stateDir = await createStateDir();
-      const root = path.join(stateDir, "matrix", "accounts", "other");
-      await seedSyncStore({
-        root,
-        metadata: { ...identity, userId: "@other:matrix-qa.test" },
-        source,
-      });
+  it.each([
+    ["json", false],
+    ["sqlite", false],
+    ["json", true],
+    ["sqlite", true],
+  ] as const)("rejects mismatched %s identity (stale sidecar: %s)", async (source, stale) => {
+    const stateDir = await createStateDir();
+    const root = path.join(stateDir, "matrix", "accounts", "other");
+    await seedSyncStore(root, {
+      metadata: {
+        ...identity,
+        ...(stale ? { userId: "@other:matrix-qa.test" } : { accountId: "other" }),
+      },
+      source,
+      legacyMetadata: !stale && source === "json",
+    });
+    if (stale) {
       await writeFile(path.join(root, "storage-meta.json"), JSON.stringify(identity));
-      await expectNoCursor(stateDir);
-    },
-  );
+    }
+    await expectNoCursor(stateDir);
+  });
 
   it.each(["json", "sqlite"] as const)(
     "finds a boundary-depth %s cursor after deeper subtrees and skips linked state",
@@ -170,20 +153,10 @@ describe("Matrix QA persisted state probes", () => {
       const target = path.join(stateDir, "zz-target", ...levels);
       const linked = await createStateDir();
       for (const root of [path.join(stateDir, "aa-too-deep", ...levels, "extra"), linked]) {
-        await seedSyncStore({
-          root,
-          source,
-          legacyMetadata: true,
-          cursor: "excluded-cursor",
-        });
+        await seedSyncStore(root, { source, legacyMetadata: true, cursor: "excluded-cursor" });
       }
       await symlink(linked, path.join(stateDir, "aa-linked"), "junction");
-      await seedSyncStore({
-        root: target,
-        source,
-        legacyMetadata: true,
-        cursor: "legacy-cursor",
-      });
+      await seedSyncStore(target, { source, legacyMetadata: true, cursor: "legacy-cursor" });
       await expect(waitForCursor(stateDir)).resolves.toMatchObject({
         cursor: "legacy-cursor",
         source,
@@ -200,9 +173,7 @@ describe("Matrix QA persisted state probes", () => {
     const accountRoot = path.join(stateDir, "matrix", "accounts", "sut", "server", "token");
     const eventId = "$event";
     const roomId = "!room:matrix-qa.test";
-    // Mirrors the matrix monitor's guard configuration so the probe is proven
-    // against the exact persisted row shape the runtime writes, including the
-    // account-scoped key the probe must match by suffix.
+    // Match the monitor's persisted account-scoped key, including its suffix.
     const guard = createClaimableDedupe({
       pluginId: "matrix",
       namespacePrefix: "matrix.inbound-dedupe",
