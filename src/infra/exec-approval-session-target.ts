@@ -1,4 +1,3 @@
-// Resolves approval delivery targets from sessions and turn sources.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionConversationRef } from "../channels/plugins/session-conversation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

@@ -757,6 +757,9 @@ structured file log. Records are limited to 60 per minute.
 the absolute checkout path; linked checkouts have different IDs. `checkoutClass`
 is `managed` when the caller supplies managed-index ownership, otherwise
 `unspecified`. Paths, refs, command arguments, and output contents are not logged.
+For `checkout.diff`, `scope` distinguishes `all`, `uncommitted`, and `commit`;
+`summaryOnly` distinguishes summary polling from full patch requests. These
+fields describe the admitted request without inspecting the checkout again.
 
 `workerQueueWaitMs` measures admission wait (null if never dispatched).
 `firstHostRequestMs` includes that wait plus worker startup and work before the
