@@ -384,7 +384,7 @@ describe("firecrawl tools", () => {
         expect.anything(),
       );
       if (operation === "search") {
-        expect(result.provider).toBe("firecrawl-free");
+        expect(result).toMatchObject({ provider: "firecrawl-free" });
       }
     },
   );

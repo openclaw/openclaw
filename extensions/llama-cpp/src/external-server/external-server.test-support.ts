@@ -1,18 +1,5 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { vi } from "vitest";
 import type { LlamaServerDiscoveryResult } from "./discovery.js";
-
-export const discoverMock = vi.hoisted(() => vi.fn());
-export const runtimeApiKeyMock = vi.hoisted(() => vi.fn());
-vi.mock("./discovery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./discovery.js")>()),
-  discoverLlamaServer: discoverMock,
-}));
-
-vi.mock("./auth.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./auth.js")>()),
-  resolveLlamaServerRuntimeApiKey: runtimeApiKeyMock,
-}));
 
 export function modelConfig(overrides: Partial<ModelDefinitionConfig> = {}): ModelDefinitionConfig {
   return {

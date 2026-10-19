@@ -4,12 +4,19 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  discoverMock,
-  runtimeApiKeyMock,
-  successfulDiscovery,
-} from "./external-server.test-support.js";
+import { successfulDiscovery } from "./external-server.test-support.js";
 import { discoverLlamaServerProvider, prepareLlamaServerDynamicModel } from "./provider.js";
+
+const discoverMock = vi.hoisted(() => vi.fn());
+const runtimeApiKeyMock = vi.hoisted(() => vi.fn());
+vi.mock("./discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./discovery.js")>()),
+  discoverLlamaServer: discoverMock,
+}));
+vi.mock("./auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth.js")>()),
+  resolveLlamaServerRuntimeApiKey: runtimeApiKeyMock,
+}));
 
 const LOCAL_BASE_URL = "http://localhost:8080/v1";
 const DISCOVERY_ORIGIN = "http://127.0.0.1:8080";

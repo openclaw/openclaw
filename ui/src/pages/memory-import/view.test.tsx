@@ -96,7 +96,7 @@ function renderView(
   return container;
 }
 
-function query<T extends Element>(container: HTMLElement, selector: string) {
+function query<T extends Element>(container: HTMLElement, selector: string): T {
   const element = container.querySelector<T>(selector);
   if (!element) {
     throw new Error(`expected ${selector}`);

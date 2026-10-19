@@ -323,7 +323,13 @@ describe("Muse native MSP harness", () => {
     const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
     const recorder = createRecorder({
       input: { text: params.prompt, idempotencyKey: `${params.runId}:user` },
-      target: { ...params.sessionTarget!, agentId: "main", sessionEntry: undefined },
+      target: {
+        agentId: "main",
+        sessionId: "transcript-id",
+        sessionKey: "agent:main:muse-test",
+        storePath: join(workspace, "sessions.json"),
+        sessionEntry: undefined,
+      },
     });
     const aborted = await run({
       workspaceDir: bootstrapWorkspace,

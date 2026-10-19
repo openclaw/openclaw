@@ -5,12 +5,7 @@ import type {
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LLAMA_CPP_PROVIDER_ID } from "../defaults.js";
-import {
-  discoverMock,
-  runtimeApiKeyMock,
-  modelConfig,
-  successfulDiscovery,
-} from "./external-server.test-support.js";
+import { modelConfig, successfulDiscovery } from "./external-server.test-support.js";
 import {
   configureLlamaServerNonInteractive,
   detectLlamaServerSetup,
@@ -26,6 +21,16 @@ const MODEL_REF = "llama-cpp/qwen/model:Q4_K_M";
 
 const removeProfilesMock = vi.hoisted(() => vi.fn());
 const upsertProfileMock = vi.hoisted(() => vi.fn());
+const discoverMock = vi.hoisted(() => vi.fn());
+const runtimeApiKeyMock = vi.hoisted(() => vi.fn());
+vi.mock("./discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./discovery.js")>()),
+  discoverLlamaServer: discoverMock,
+}));
+vi.mock("./auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth.js")>()),
+  resolveLlamaServerRuntimeApiKey: runtimeApiKeyMock,
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-api-key", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-api-key")>()),

@@ -496,10 +496,7 @@ describe("createCopilotToolBridge tool conversion", () => {
   });
 
   it("reports owner-backed catalog tool failures to the host terminal observer", async () => {
-    const observeToolTerminal = vi.fn(() => ({
-      executionStarted: true,
-      sideEffectEvidence: true,
-    }));
+    const observeToolTerminal = vi.fn(createContractToolTerminalObserver(searchAttempt.runId));
     const opts = await captureOptions(
       { attemptParams: { ...searchAttempt, observeToolTerminal } },
       makeTools("tool_search"),
