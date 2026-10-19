@@ -42,6 +42,7 @@ const fixture = vi.hoisted(() => ({
   sessionId: "retained-collector-session",
   lifecycleRevision: "retained-collector-lifecycle",
 }));
+// mock-isolation: Control config reloads during recovery without loading host config state.
 vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: vi.fn(() => ({})) }));
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
   findTranscriptEvent: () => {

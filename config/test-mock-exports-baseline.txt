@@ -2623,7 +2623,6 @@
 ["src/agents/subagents/registry/subagent-registry-lifecycle.test.ts","../../internal-session-effects.js","b7cf40eb7030822287d9df0d0f7a85d971d66bc70b84b1b8c2aff47ad22224a3",1]
 ["src/agents/subagents/registry/subagent-registry-lifecycle.test.ts","../../runtime-plugins.js","c480434311b38a95e6ef9abd0cd438d527ae9b55f6bbaae9acb3fc537a905e8b",1]
 ["src/agents/subagents/registry/subagent-registry-lifecycle.test.ts","../announce/subagent-announce.js","e09435e3e260716d9088b8a7f45b68cf687516f6864023963e7d4bcf3dd986fb",1]
-["src/agents/subagents/registry/subagent-registry-queued-recovery.test.ts","../../../config/config.js","e4084293a4d590e53af4c73d8132a2df411c72a4e8113581fe5b24e370965689",1]
 ["src/agents/subagents/registry/subagent-registry-queued-recovery.test.ts","../../../config/sessions/session-accessor.js","9ce49c3129a6a46a53e9b9d1c70e6aa9439ec7ee96fb6e2eb5e27023035b08e5",1]
 ["src/agents/subagents/registry/subagent-registry-queued-recovery.test.ts","../../../config/sessions/session-accessor.sqlite-replacement-projection.js","c9cb5778ebf85e501690fdadfa3bed62ddb511e94f8404856a867b3e9e7f90d3",1]
 ["src/agents/subagents/registry/subagent-registry-queued-recovery.test.ts","../../../gateway/call.js","9fdb112aaa7ecd6585f449eeb4910d0891eeff9abd8b2684486ec943f952eb34",1]
