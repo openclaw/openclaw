@@ -10,29 +10,27 @@ import {
   resolveAutomaticDevicePlacementDisabledReason,
 } from "./device-placement.ts";
 
-function mountSessionItem(
-  item: Parameters<typeof SessionMenuItem>[0]["item"],
-  submitting: boolean,
-  container: HTMLElement,
-) {
-  return mountSolid(() => createComponent(SessionMenuItem, { item, submitting }), { container });
-}
-
-function mountCloudProfiles(initial: CloudProfileMenuItemsOptions, container: HTMLElement) {
+function mountCloudProfiles(options: Partial<CloudProfileMenuItemsOptions>) {
+  const initial: CloudProfileMenuItemsOptions = {
+    profiles: [],
+    selectedId: "aws",
+    compact: true,
+    submitting: false,
+    onSelect: vi.fn(),
+    ...options,
+  };
   const [params, setParams] = createSignal(initial);
-  const mounted = mountSolid(
-    () =>
-      createComponent(CloudProfileMenuItems, {
-        get params() {
-          return params();
-        },
-      }),
-    { container },
+  const mounted = mountSolid(() =>
+    createComponent(CloudProfileMenuItems, {
+      get params() {
+        return params();
+      },
+    }),
   );
   return {
     ...mounted,
-    update: (next: CloudProfileMenuItemsOptions) => {
-      setParams(next);
+    update: (next: Partial<CloudProfileMenuItemsOptions>) => {
+      setParams({ ...initial, ...next });
       flush();
     },
   };
@@ -55,28 +53,24 @@ describe("cloud target menu", () => {
     expect(request).toHaveBeenCalledExactlyOnceWith("environments.list", { runtimeId: "openclaw" });
     expect(catalog.profiles.map((entry) => entry.id)).toEqual(["alpha", "zeta"]);
     expect(catalog.environments.map((entry) => entry.id)).toEqual(["node:alpha", "node:zeta"]);
-    expect(catalog.profiles[1]).toEqual({
-      id: "zeta",
-      providerId: "crabbox",
-      machines: [{ id: "small", label: "Small", cpu: 2, memoryGb: 4 }],
-    });
+    expect(catalog.profiles[1]).toEqual(profile);
   });
 
   it("renders saved-pairing remediation commands without redeeming a new join URL", () => {
-    const container = document.createElement("div");
-    mountSessionItem(
-      {
-        value: "device:disabled",
-        label: "Device",
-        compact: true,
-        disabled: true,
-        checked: false,
-        title: "Hosting disabled",
-        remediation: "enable-session-hosting",
-        onSelect: vi.fn(),
-      },
-      false,
-      container,
+    const { container } = mountSolid(() =>
+      createComponent(SessionMenuItem, {
+        item: {
+          compact: true,
+          onSelect: vi.fn(),
+          value: "device:disabled",
+          label: "Device",
+          disabled: true,
+          checked: false,
+          title: "Hosting disabled",
+          remediation: "enable-session-hosting",
+        },
+        submitting: false,
+      }),
     );
     const card = container.querySelector('[slot="content"]');
     expect(card?.textContent).toContain(
@@ -98,19 +92,19 @@ describe("cloud target menu", () => {
       },
     ];
     const devices = projectDevicePlacements(environments);
-    const container = document.createElement("div");
-    mountSessionItem(
-      {
-        value: "auto",
-        label: "Auto",
-        compact: true,
-        disabled: true,
-        checked: false,
-        title: resolveAutomaticDevicePlacementDisabledReason(environments, devices),
-        onSelect: vi.fn(),
-      },
-      false,
-      container,
+    const { container } = mountSolid(() =>
+      createComponent(SessionMenuItem, {
+        item: {
+          compact: true,
+          onSelect: vi.fn(),
+          value: "auto",
+          label: "Auto",
+          disabled: true,
+          checked: false,
+          title: resolveAutomaticDevicePlacementDisabledReason(environments, devices),
+        },
+        submitting: false,
+      }),
     );
     expect(container.querySelector('[slot="content"]')?.textContent?.trim()).toBe(
       "No devices have session hosting enabled. Connect a machine with session hosting enabled, or enable it on a paired device.",
@@ -118,7 +112,6 @@ describe("cloud target menu", () => {
   });
 
   it("shows unselected provider defaults as suggestions and selects the provider before an explicit choice", () => {
-    const container = document.createElement("div");
     const onSelect = vi.fn();
     const onSelectOs = vi.fn();
     const params = {
@@ -137,12 +130,10 @@ describe("cloud target menu", () => {
         },
       ],
       selectedId: "",
-      compact: true,
-      submitting: false,
       onSelect,
       onSelectOs,
     };
-    const { update } = mountCloudProfiles(params, container);
+    const { container, update } = mountCloudProfiles(params);
     const suggested = container.querySelector<HTMLButtonElement>('[data-value="os:linux"]')!;
     expect(suggested.dataset.suggested).toBe("true");
     expect(suggested.getAttribute("aria-pressed")).toBe("true");
@@ -170,18 +161,10 @@ describe("cloud target menu", () => {
     { machine: { id: "memory", label: "Memory", memoryGb: 256 }, expected: "256 GB" },
     { machine: { id: "custom", label: "Custom" }, expected: "Custom" },
   ])("renders a single machine as fixed provider configuration", ({ machine, expected }) => {
-    const container = document.createElement("div");
-    mountCloudProfiles(
-      {
-        profiles: [{ id: "aws", providerId: "aws", machines: [machine] }],
-        selectedId: "aws",
-        compact: true,
-        selectedMachine: machine.id,
-        submitting: false,
-        onSelect: vi.fn(),
-      },
-      container,
-    );
+    const { container } = mountCloudProfiles({
+      profiles: [{ id: "aws", providerId: "aws", machines: [machine] }],
+      selectedMachine: machine.id,
+    });
     const machineLabel = container.querySelector(`[data-value="machine:${machine.id}"]`);
     expect(machineLabel?.classList.contains("new-session-page__fixed-machine")).toBe(true);
     expect(machineLabel?.textContent).toContain(expected);
@@ -189,7 +172,6 @@ describe("cloud target menu", () => {
   });
 
   it("forwards configuration choices and disables them while submitting", () => {
-    const container = document.createElement("div");
     const onSelectMachine = vi.fn();
     const onSelectOs = vi.fn();
     const params = {
@@ -207,16 +189,12 @@ describe("cloud target menu", () => {
           ],
         },
       ],
-      selectedId: "aws",
-      compact: true,
       selectedOs: "linux",
       selectedMachine: "small",
-      submitting: false,
       onSelectMachine,
       onSelectOs,
-      onSelect: vi.fn(),
     };
-    const { update } = mountCloudProfiles(params, container);
+    const { container, update } = mountCloudProfiles(params);
     container.querySelector<HTMLButtonElement>('[data-value="machine:large"]')!.click();
     container.querySelector<HTMLButtonElement>('[data-value="os:macos"]')!.click();
     expect(onSelectMachine).toHaveBeenCalledExactlyOnceWith("large");
@@ -226,27 +204,19 @@ describe("cloud target menu", () => {
   });
 
   it("omits unavailable OS choices even when they are the current selection", () => {
-    const container = document.createElement("div");
-    mountCloudProfiles(
-      {
-        profiles: [
-          {
-            id: "aws",
-            providerId: "aws",
-            operatingSystems: [
-              { id: "linux", label: "Linux" },
-              { id: "windows", label: "Windows", disabledReason: "Install WSL2" },
-            ],
-          },
-        ],
-        selectedId: "aws",
-        compact: true,
-        selectedOs: "windows",
-        submitting: false,
-        onSelect: vi.fn(),
-      },
-      container,
-    );
+    const { container } = mountCloudProfiles({
+      profiles: [
+        {
+          id: "aws",
+          providerId: "aws",
+          operatingSystems: [
+            { id: "linux", label: "Linux" },
+            { id: "windows", label: "Windows", disabledReason: "Install WSL2" },
+          ],
+        },
+      ],
+      selectedOs: "windows",
+    });
     const fixedOs = container.querySelector('[data-value="os:linux"]');
     expect(fixedOs?.textContent).toBe("Linux");
     expect(fixedOs?.tagName).toBe("SPAN");
@@ -258,18 +228,12 @@ describe("cloud target menu", () => {
   });
 
   it("disables cloud profiles with the runtime preflight reason", () => {
-    const container = document.createElement("div");
-    mountCloudProfiles(
-      {
-        profiles: [{ id: "aws", providerId: "crabbox" }],
-        selectedId: "",
-        submitting: false,
-        disabled: true,
-        disabledReason: "The acpx runtime does not support cloud workers.",
-        onSelect: vi.fn(),
-      },
-      container,
-    );
+    const { container } = mountCloudProfiles({
+      profiles: [{ id: "aws", providerId: "crabbox" }],
+      selectedId: "",
+      disabled: true,
+      disabledReason: "The acpx runtime does not support cloud workers.",
+    });
 
     const button = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
     expect(button?.disabled).toBe(true);
@@ -279,20 +243,14 @@ describe("cloud target menu", () => {
   it("disables only the cloud profile with a profile-specific reason", () => {
     const reason =
       "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.";
-    const container = document.createElement("div");
-    mountCloudProfiles(
-      {
-        profiles: [
-          { id: "aws", providerId: "crabbox" },
-          { id: "ssh", providerId: "static-ssh" },
-        ],
-        selectedId: "",
-        submitting: false,
-        profileDisabledReason: (profile) => (profile.id === "aws" ? reason : undefined),
-        onSelect: vi.fn(),
-      },
-      container,
-    );
+    const { container } = mountCloudProfiles({
+      profiles: [
+        { id: "aws", providerId: "crabbox" },
+        { id: "ssh", providerId: "static-ssh" },
+      ],
+      selectedId: "",
+      profileDisabledReason: (profile) => (profile.id === "aws" ? reason : undefined),
+    });
 
     const disabled = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
     const enabled = container.querySelector<HTMLButtonElement>('[data-value="cloud:ssh"]');

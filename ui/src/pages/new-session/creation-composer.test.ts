@@ -19,6 +19,11 @@ import {
 import { createDraftFixture, registerTextPayload } from "./draft-submission-flow.test-support.ts";
 import { StartedSessionNavigation } from "./started-session-navigation.ts";
 
+const sessionKey = "agent:main:canonical";
+const accepted = { key: sessionKey, initialRun: { status: "idle" as const } };
+const take = (context: Parameters<typeof takeCreatedComposer>[0]) =>
+  takeCreatedComposer(context, sessionKey, context.gateway.snapshot.client);
+
 function fixture(incognito = false) {
   const { context, request } = createDraftFixture();
   const composer = new CreationComposer(context, "main", incognito, vi.fn());
@@ -116,18 +121,11 @@ describe("creation-owned follow-up input", () => {
     expect(flow.message).toBe("original prompt");
     expect(composer.inputs[0]!.id).toBe(id);
     expect(composer.message).toBe("unfinished follower");
-    vi.mocked(context.sessions.createResult).mockResolvedValue({
-      key: "agent:main:canonical",
-      initialRun: { status: "idle" },
-    });
+    vi.mocked(context.sessions.createResult).mockResolvedValue(accepted);
     flow.setVisibility("incognito");
     await flow.submit();
     expect(flow.message).toBe("");
-    const transfer = takeCreatedComposer(
-      context,
-      "agent:main:canonical",
-      context.gateway.snapshot.client,
-    );
+    const transfer = take(context);
     expect(transfer?.inputs[0]?.id).toBe(id);
     expect(transfer?.draft).toBe("unfinished follower");
     expect(transfer?.incognito).toBe(true);
@@ -137,23 +135,19 @@ describe("creation-owned follow-up input", () => {
     const unloading = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(unloading);
     expect(unloading.defaultPrevented).toBe(true);
-    expect(
-      takeCreatedComposer(context, "agent:main:canonical", context.gateway.snapshot.client),
-    ).toBe(transfer);
+    expect(take(context)).toBe(transfer);
     transfer?.complete();
     const released = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(released);
     expect(released.defaultPrevented).toBe(false);
-    expect(
-      takeCreatedComposer(context, "agent:main:canonical", context.gateway.snapshot.client),
-    ).toBeUndefined();
+    expect(take(context)).toBeUndefined();
   });
 
   it("hands local input to the replacement client before recovery readiness", () => {
     const { context, composer, request } = fixture(true);
     composer.setMessage("accepted private draft");
-    composer.accept({ key: "agent:main:canonical", initialRun: { status: "idle" } });
-    retainCreatedComposer(context, "agent:main:canonical", composer);
+    composer.accept(accepted);
+    retainCreatedComposer(context, sessionKey, composer);
     const original = context.gateway.snapshot.client!;
     const next = createTestGatewayClient(request);
     vi.spyOn(next, "recoveryScope", "get").mockReturnValue(original.recoveryScope);
@@ -162,20 +156,12 @@ describe("creation-owned follow-up input", () => {
       value: false,
       configurable: true,
     });
-    const transferred = takeCreatedComposer(
-      context,
-      "agent:main:canonical",
-      context.gateway.snapshot.client,
-    );
+    const transferred = take(context);
     expect(transferred?.draft).toBe("accepted private draft");
     expect(transferred?.isCurrent()).toBe(true);
-    expect(
-      takeCreatedComposer(context, "agent:main:canonical", context.gateway.snapshot.client),
-    ).toBe(transferred);
+    expect(take(context)).toBe(transferred);
     transferred?.complete();
-    expect(
-      takeCreatedComposer(context, "agent:main:canonical", context.gateway.snapshot.client),
-    ).toBeUndefined();
+    expect(take(context)).toBeUndefined();
   });
 
   it("preserves queued input across reconnect but never reveals it to another owner", () => {
@@ -190,7 +176,7 @@ describe("creation-owned follow-up input", () => {
     context.gateway.snapshot.hello!.auth!.recoveryScope = "other-principal";
     expect(composer.canDisplay()).toBe(false);
     expect(composer.enqueue()).toBe(false);
-    composer.accept({ key: "agent:main:canonical", initialRun: { status: "idle" } });
+    composer.accept(accepted);
     expect(composer.take()).toBeUndefined();
   });
 
@@ -208,7 +194,7 @@ describe("creation-owned follow-up input", () => {
     const [entry] = reads.begin([new File(["late"], "late.txt")], [], destination);
     reads.updatePending(reads.readSignal, 1);
     composer.setMessage("draft with a pending file");
-    composer.accept({ key: "agent:main:canonical", initialRun: { status: "idle" } });
+    composer.accept(accepted);
     const transfer = composer.take()!;
     let attachments = transfer.attachments;
     transfer.reads.retarget(

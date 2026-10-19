@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal, flush } from "solid-js";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
@@ -99,6 +100,28 @@ vi.mock("../chat/composer-microphone-picker.ts", async (importOriginal) => ({
 
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 
+function fixture(
+  options: Partial<ConstructorParameters<typeof NewSessionDictationControl>[0]> = {},
+  text = "spoken task",
+) {
+  const captureSelection = vi.fn();
+  const insertTranscript = vi.fn(() => text);
+  const onMessage = vi.fn();
+  const onError = vi.fn();
+  const onSubmit = vi.fn();
+  const control = new NewSessionDictationControl({
+    textarea: { captureSelection, insertTranscript } as never,
+    getClient: () => ({}) as never,
+    isConnected: () => true,
+    canCommit: () => true,
+    onMessage,
+    onError,
+    onSubmit,
+    ...options,
+  });
+  return { control, captureSelection, insertTranscript, onMessage, onError, onSubmit };
+}
+
 describe("NewSessionDictationControl", () => {
   beforeEach(() => {
     dictationHarness.options = null;
@@ -107,17 +130,7 @@ describe("NewSessionDictationControl", () => {
 
   it("drops a final transcript when cloud placement claims the draft in flight", () => {
     let canCommit = true;
-    const insertTranscript = vi.fn(() => "spoken task");
-    const onMessage = vi.fn();
-    const control = new NewSessionDictationControl({
-      textarea: { captureSelection: vi.fn(), insertTranscript } as never,
-      getClient: () => ({}) as never,
-      isConnected: () => true,
-      canCommit: () => canCommit,
-      onMessage,
-      onError: vi.fn(),
-      onSubmit: vi.fn(),
-    });
+    const { control, insertTranscript, onMessage } = fixture({ canCommit: () => canCommit });
 
     control.prepare("agent-a");
     canCommit = false;
@@ -128,24 +141,10 @@ describe("NewSessionDictationControl", () => {
   });
 
   it("starts canonical dictation from a plain microphone click", () => {
-    const onError = vi.fn();
-    const captureSelection = vi.fn();
-    const control = new NewSessionDictationControl({
-      textarea: {
-        captureSelection,
-        insertTranscript: vi.fn(() => "spoken task"),
-      } as never,
-      getClient: () => ({}) as never,
-      isConnected: () => true,
-      canCommit: () => true,
-      onMessage: vi.fn(),
-      onError,
-      onSubmit: vi.fn(),
-    });
-    const container = document.createElement("div");
-    mountSolid(() => <NewSessionDictationView control={control} ownerKey="agent-a" />, {
-      container,
-    });
+    const { control, captureSelection, onError } = fixture();
+    const { container } = mountSolid(() => (
+      <NewSessionDictationView control={control} ownerKey="agent-a" />
+    ));
     const microphone = container.querySelector<HTMLButtonElement>(".chat-send-btn--voice");
 
     microphone?.click();
@@ -166,25 +165,18 @@ describe("NewSessionDictationControl", () => {
   it("keeps text from Stop and submits only after the Send check commits", async () => {
     const onMessage = vi.fn();
     const onSubmit = vi.fn();
-    const control = new NewSessionDictationControl({
+    const { control } = fixture({
       textarea: {
         captureSelection: vi.fn(),
         insertTranscript: vi.fn(() => "draft spoken task"),
         previewTranscript: vi.fn(() => "draft spoken"),
       } as never,
-      getClient: () => ({}) as never,
-      isConnected: () => true,
-      canCommit: () => true,
       onMessage,
-      onError: vi.fn(),
       onSubmit,
     });
     const container = document.createElement("div");
     control.prepare("agent-a");
-    const controller = dictationHarness.controllers[0];
-    if (!controller) {
-      throw new Error("expected dictation controller");
-    }
+    const controller = expectDefined(dictationHarness.controllers[0], "dictation controller");
 
     controller.active = true;
     controller.transcript = "spoken";
@@ -238,13 +230,9 @@ describe("NewSessionDictationControl", () => {
     const textarea = createNewSessionComposerTextarea();
     const client = createTestGatewayClient(async () => ({}));
     const onSubmit = vi.fn();
-    const control = new NewSessionDictationControl({
+    const { control } = fixture({
       textarea,
       getClient: () => client,
-      isConnected: () => true,
-      canCommit: () => true,
-      onMessage: vi.fn(),
-      onError: vi.fn(),
       onSubmit,
     });
     onTestFinished(() => {
@@ -256,10 +244,10 @@ describe("NewSessionDictationControl", () => {
     const { container } = mountSolid(() => (
       <NewSessionDictationView control={control} ownerKey={owner()} renderRevision={revision()} />
     ));
-    const dictation = dictationHarness.controllers[0];
-    if (!dictation) {
-      throw new Error("Expected the initial draft's dictation controller");
-    }
+    const dictation = expectDefined(
+      dictationHarness.controllers[0],
+      "initial dictation controller",
+    );
     dictation.active = true;
     setRevision({});
     flush();
@@ -276,17 +264,7 @@ describe("NewSessionDictationControl", () => {
   });
 
   it("cancels active dictation and drops its late transcript when the route owner changes", () => {
-    const insertTranscript = vi.fn(() => "route B draft");
-    const onMessage = vi.fn();
-    const control = new NewSessionDictationControl({
-      textarea: { captureSelection: vi.fn(), insertTranscript } as never,
-      getClient: () => ({}) as never,
-      isConnected: () => true,
-      canCommit: () => true,
-      onMessage,
-      onError: vi.fn(),
-      onSubmit: vi.fn(),
-    });
+    const { control, insertTranscript, onMessage } = fixture({}, "route B draft");
 
     control.prepare("agent-a");
     const routeAController = dictationHarness.controllers[0];

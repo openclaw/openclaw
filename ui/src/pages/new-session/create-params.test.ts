@@ -9,178 +9,130 @@ describe("create-as-draft availability", () => {
     () => {},
     () => {},
   );
-  const canStartSessionAsDraft = (policy: {
-    allowedVisibilities?: string[];
-    hasMultipleIdentities?: boolean;
-  }) =>
+  const canStartSessionAsDraft = (allowedSessionVisibilities?: string[]) =>
     capabilities.canStartAsDraft({
       gateway: {
         snapshot: {
           hello: {
             policy: {
-              allowedSessionVisibilities: policy.allowedVisibilities,
-              hasMultipleSessionSharingIdentities: policy.hasMultipleIdentities,
+              allowedSessionVisibilities,
+              hasMultipleSessionSharingIdentities: true,
             },
           },
         },
       },
     } as ApplicationContext);
   it("requires both draft policy and multiple creator identities", () => {
-    expect(
-      canStartSessionAsDraft({
-        allowedVisibilities: ["shared", "draft"],
-        hasMultipleIdentities: true,
-      }),
-    ).toBe(true);
-    expect(
-      canStartSessionAsDraft({
-        allowedVisibilities: ["shared"],
-        hasMultipleIdentities: true,
-      }),
-    ).toBe(false);
-    expect(canStartSessionAsDraft({ hasMultipleIdentities: true })).toBe(false);
+    expect(canStartSessionAsDraft(["shared", "draft"])).toBe(true);
+    expect(canStartSessionAsDraft(["shared"])).toBe(false);
+    expect(canStartSessionAsDraft()).toBe(false);
   });
 });
 
+type Draft = Parameters<typeof buildDraftSessionCreateParams>[0];
+function expectParams(input: Partial<Draft>, output: object) {
+  expect(
+    buildDraftSessionCreateParams({ agentId: "main", message: "task", worktree: false, ...input }),
+  ).toEqual({ agentId: "main", message: "task", ...output });
+}
+
 describe("buildDraftSessionCreateParams", () => {
+  const repository = { url: "https://github.com/openclaw/openclaw.git", ref: "release" };
+  const checkout = {
+    projectId: "old-clone",
+    projectGitUrl: repository.url,
+    cwd: "/old/checkout",
+    workspace: "/workspace",
+    baseRef: "old-branch",
+    worktreeName: "old-name",
+  };
   it("creates a device folder without leaking another workspace source", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
+    expectParams(
+      {
         message: "Work here",
         deferInitialTurn: true,
         deviceFolder: { deviceId: "runner", path: " /srv/existing project " },
         worktree: true,
         worktreeSource: "empty",
-        projectId: "old",
-        projectGitUrl: "https://github.com/example/project.git",
-        repository: { url: "https://github.com/example/project.git" },
-        cwd: "/gateway/old",
-        workspace: "/gateway/workspace",
-        baseRef: "main",
-        worktreeName: "old",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "",
-      titleSource: "Work here",
-      deviceFolder: { deviceId: "runner", path: "/srv/existing project" },
-    });
+        ...checkout,
+        repository,
+      },
+      {
+        message: "",
+        titleSource: "Work here",
+        deviceFolder: { deviceId: "runner", path: "/srv/existing project" },
+      },
+    );
   });
   it("creates an empty workspace without carrying a previous checkout source", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
+    expectParams(
+      {
         message: "Start a new project",
         deferInitialTurn: true,
         worktree: true,
         worktreeSource: "empty",
-        repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
-        projectId: "old-clone",
-        projectGitUrl: "https://github.com/openclaw/openclaw.git",
-        cwd: "/old/checkout",
-        workspace: "/workspace",
-        baseRef: "old-branch",
-        worktreeName: "old-name",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "",
-      titleSource: "Start a new project",
-      worktree: true,
-      worktreeSource: "empty",
-    });
+        repository,
+        ...checkout,
+      },
+      {
+        message: "",
+        titleSource: "Start a new project",
+        worktree: true,
+        worktreeSource: "empty",
+      },
+    );
   });
 
   it("retains a cloud repository through the empty create without sending local checkout options", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
+    expectParams(
+      {
         message: `${"x".repeat(999)}🦞 longer prompt`,
         deferInitialTurn: true,
-        repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
-        projectId: "old-clone",
+        repository,
+        ...checkout,
         worktree: true,
-        baseRef: "ignored-local-ref",
-        worktreeName: "ignored-local-name",
-        cwd: "/local/clone",
-        workspace: "/workspace",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "",
-      titleSource: "x".repeat(999),
-      repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
-    });
+      },
+      {
+        message: "",
+        titleSource: "x".repeat(999),
+        repository,
+      },
+    );
   });
 
-  it.each([true])(
-    "keeps incognito prompts out of early naming (deferred=%s)",
-    (deferInitialTurn) => {
-      expect(
-        buildDraftSessionCreateParams({
-          agentId: "main",
-          message: "private task",
-          deferInitialTurn,
-          visibility: "incognito",
-          worktree: false,
-        }),
-      ).toEqual({
-        agentId: "main",
-        message: deferInitialTurn ? "" : "private task",
+  it("keeps incognito prompts out of early naming", () => {
+    expectParams(
+      {
+        message: "private task",
+        deferInitialTurn: true,
+        visibility: "incognito",
+      },
+      {
+        message: "",
         incognito: true,
-      });
-    },
-  );
+      },
+    );
+  });
 
   it("adds draft visibility only when selected", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "private work in progress",
-        worktree: false,
-        visibility: "draft",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "private work in progress",
-      visibility: "draft",
-    });
+    expectParams({ visibility: "draft" }, { visibility: "draft" });
   });
 
   it("includes initial-message attachments", () => {
     const attachments = [
       { type: "image", mimeType: "image/png", fileName: "pixel.png", content: "aGVsbG8=" },
     ];
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "",
-        attachments,
-        worktree: false,
-      }),
-    ).toEqual({ agentId: "main", message: "", attachments });
+    expectParams({ message: "", attachments }, { message: "", attachments });
   });
 
   it("includes selected model, context-window, thinking, and fast overrides for a plain session", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "use the selected model",
-        model: "anthropic/claude-sonnet-4-6",
-        contextWindow: "200k",
-        thinkingLevel: "high",
-        fastMode: true,
-        worktree: false,
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "use the selected model",
+    const overrides = {
       model: "anthropic/claude-sonnet-4-6",
       contextWindow: "200k",
       thinkingLevel: "high",
       fastMode: true,
-    });
+    };
+    expectParams(overrides, overrides);
   });
 
   it("includes selected capability overrides in the atomic create request", () => {
@@ -189,93 +141,69 @@ describe("buildDraftSessionCreateParams", () => {
       skills: { release: false },
       webSearch: false,
     };
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "use these capabilities",
-        toolOverrides,
-        worktree: false,
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "use these capabilities",
-      toolOverrides,
-    });
+    expectParams({ toolOverrides }, { toolOverrides });
   });
 
   it("does not combine a catalog target with a draft model override", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "start coding",
+    expectParams(
+      {
         model: "openai/gpt-5.5",
         contextWindow: "200k",
         thinkingLevel: "medium",
         fastMode: true,
-        worktree: false,
         catalogId: "claude",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "start coding",
-      catalogId: "claude",
-    });
+      },
+      {
+        catalogId: "claude",
+      },
+    );
   });
 
   it("maps worktree selections onto additive create params", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "fix the bug",
+    expectParams(
+      {
         worktree: true,
         baseRef: "origin/main",
         worktreeName: "bug-fix",
         cwd: "/workspace",
         workspace: "/workspace",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "fix the bug",
-      worktree: true,
-      worktreeBaseRef: "origin/main",
-      worktreeName: "bug-fix",
-    });
+      },
+      {
+        worktree: true,
+        worktreeBaseRef: "origin/main",
+        worktreeName: "bug-fix",
+      },
+    );
   });
 
   it("assigns a session created from a custom group", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "start grouped work",
+    expectParams(
+      {
         worktree: true,
         cwd: "/repos/client",
         workspace: "/workspace",
         category: " Client work ",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "start grouped work",
-      category: "Client work",
-      cwd: "/repos/client",
-      worktree: true,
-    });
+      },
+      {
+        category: "Client work",
+        cwd: "/repos/client",
+        worktree: true,
+      },
+    );
   });
 
   it("submits a selected project by id without leaking its host path", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "work in the recorded repo",
+    expectParams(
+      {
         projectId: "openclaw",
         worktree: true,
         cwd: "/recorded/openclaw",
         workspace: "/workspace",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "work in the recorded repo",
-      projectId: "openclaw",
-      worktree: true,
-    });
+      },
+      {
+        projectId: "openclaw",
+        worktree: true,
+      },
+    );
   });
 });
