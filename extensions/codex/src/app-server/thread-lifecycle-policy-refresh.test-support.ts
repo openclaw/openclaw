@@ -39,29 +39,41 @@ export function registerThreadPolicyRefreshTests({
   startOrResumeThread,
   writeCodexAppServerBinding,
 }: PolicyRefreshFixtures) {
-  function fixture(threadId: string) {
-    return {
-      threadId,
-      response: threadStartResult(threadId),
-      sessionFile: path.join(tempDir, `${threadId}.jsonl`),
-      cwd: path.join(tempDir, "workspace"),
-      agentDir: path.join(tempDir, "agent"),
-    };
-  }
-  function common(
-    wire: Awaited<ReturnType<PolicyRefreshFixtures["createLeasedLifecycleWireClient"]>>,
-    sessionFile: string,
-    cwd: string,
+  async function fixture(
+    threadId: string,
+    respond: (request: RpcRequest, response: ReturnType<typeof threadStartResult>) => unknown,
+    transport: Parameters<PolicyRefreshFixtures["createLeasedLifecycleWireClient"]>[2] = "stdio",
   ) {
-    return {
+    const sessionFile = path.join(tempDir, `${threadId}.jsonl`);
+    const cwd = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const response = threadStartResult(threadId);
+    const requests: RpcRequest[] = [];
+    const wire = await createLeasedLifecycleWireClient(
+      agentDir,
+      (request) => {
+        requests.push(request);
+        return respond(request, response);
+      },
+      transport,
+    );
+    const appServer = createThreadLifecycleAppServerOptions();
+    const common = {
       client: wire.client,
-      params: { ...createParams(sessionFile, cwd), agentDir: path.join(tempDir, "agent") },
+      params: { ...createParams(sessionFile, cwd), agentDir },
       cwd,
       dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
+      appServer: { ...appServer, start: { ...appServer.start, transport } },
       userMcpServersEnabled: false,
       signal: new AbortController().signal,
     };
+    const run = (developerInstructions: string, overrides: Partial<StartParams> = {}) =>
+      startOrResumeThread({
+        ...common,
+        developerInstructions,
+        ...overrides,
+      });
+    return { threadId, sessionFile, cwd, wire, requests, run };
   }
   function close(wire: ReturnType<typeof createClientHarness>) {
     releaseLeasedSharedCodexAppServerClient(wire.client);
@@ -103,20 +115,17 @@ export function registerThreadPolicyRefreshTests({
   )(
     "preserves managed $nativeStatus history across $outcome with sibling=$sibling, closing=$closing, early=$earlyClose",
     async ({ nativeStatus, outcome, sibling, closing, earlyClose }) => {
-      const { sessionFile, cwd, agentDir, threadId, response } = fixture("managed-unload");
       const unsubscribed = createDeferred<void>();
       const resumeRequested = createDeferred<void>();
       const rejectClosing = createDeferred<void>();
       const closingRejected = createDeferred<void>();
-      const requests: RpcRequest[] = [];
       const controller = new AbortController();
       const abandonClient = vi.fn(async () => {});
       let current = true;
       let resumeCount = 0;
-      const wire = await createLeasedLifecycleWireClient(
-        agentDir,
-        async (request) => {
-          requests.push(request);
+      const { sessionFile, threadId, wire, requests, run } = await fixture(
+        "managed-unload",
+        async (request, response) => {
           switch (request.method) {
             case "thread/start":
               return response;
@@ -152,10 +161,8 @@ export function registerThreadPolicyRefreshTests({
               return configResult(request.method);
           }
         },
-        "stdio",
       );
       const options = {
-        ...common(wire, sessionFile, cwd),
         signal: controller.signal,
         abandonClient,
         assertCurrent: () => {
@@ -168,10 +175,7 @@ export function registerThreadPolicyRefreshTests({
         ? await claimCodexAppServerLiveThread(wire.client, "sibling")
         : undefined;
       try {
-        const first = await startOrResumeThread({
-          ...options,
-          developerInstructions: "old policy",
-        });
+        const first = await run("old policy", options);
         await retainCodexAppServerLiveThread(
           wire.client,
           threadId,
@@ -179,28 +183,21 @@ export function registerThreadPolicyRefreshTests({
           first.liveThreadConfigFingerprint,
         );
         const before = await readCodexAppServerBinding(sessionFile);
-        const resumed = startOrResumeThread({
-          ...options,
-          developerInstructions: "replacement policy",
-        });
+        const resumed = run("replacement policy", options);
+        const expectedError =
+          outcome === "abort" || outcome === "revoked"
+            ? closing || outcome === "revoked"
+              ? "handoff ended before replay"
+              : "cancel unload"
+            : outcome === "rejected" || closing
+              ? "is closing"
+              : nativeStatus === "systemError" && !sibling
+                ? "fresh client is required"
+                : "did not confirm unloading";
         const result =
           outcome === "unloaded"
             ? expect(resumed).resolves.toMatchObject({ threadId, lifecycle: { action: "resumed" } })
-            : expect(resumed).rejects.toThrow(
-                outcome === "abort"
-                  ? closing
-                    ? "handoff ended before replay"
-                    : "cancel unload"
-                  : outcome === "revoked"
-                    ? "handoff ended before replay"
-                    : outcome === "rejected"
-                      ? "is closing"
-                      : closing
-                        ? "is closing"
-                        : nativeStatus === "systemError" && !sibling
-                          ? "fresh client is required"
-                          : "did not confirm unloading",
-              );
+            : expect(resumed).rejects.toThrow(expectedError);
         await unsubscribed.promise;
         await vi.advanceTimersByTimeAsync(0);
         if (closing) {
@@ -280,12 +277,9 @@ export function registerThreadPolicyRefreshTests({
   ])(
     "refreshes ordinary generic policy over $transport before admitting a resumed turn: $developerInstructions / $fault",
     async ({ developerInstructions, fault, transport }) => {
-      const { sessionFile, cwd, agentDir, threadId, response } = fixture("ordinary-policy");
-      const requests: RpcRequest[] = [];
-      const wire = await createLeasedLifecycleWireClient(
-        agentDir,
-        (request) => {
-          requests.push(request);
+      const { sessionFile, cwd, threadId, wire, requests, run } = await fixture(
+        "ordinary-policy",
+        (request, response) => {
           if (request.method === "thread/read") {
             return { thread: { ...response.thread, status: { type: "notLoaded" } } };
           }
@@ -311,20 +305,19 @@ export function registerThreadPolicyRefreshTests({
       await writeCodexAppServerBinding(sessionFile, { threadId, cwd });
       const before = await readCodexAppServerBinding(sessionFile);
       try {
-        const run = startOrResumeThread({
-          ...common(wire, sessionFile, cwd),
+        const pending = run(
           developerInstructions,
-          ...(fault === "retirement failure"
+          fault === "retirement failure"
             ? {
                 abandonClient: async () => {
                   throw new Error("client retirement failed");
                 },
               }
-            : {}),
-        });
+            : {},
+        );
         if (fault !== "none") {
-          await expect(run).rejects.toBeInstanceOf(AgentHarnessPreflightError);
-          await expect(run).rejects.toMatchObject({
+          await expect(pending).rejects.toBeInstanceOf(AgentHarnessPreflightError);
+          await expect(pending).rejects.toMatchObject({
             name: "CodexThreadPolicyHandoffError",
             scope: undefined,
             outcome: "unknown",
@@ -335,7 +328,7 @@ export function registerThreadPolicyRefreshTests({
           expect(requests.some(({ method }) => method === "thread/start")).toBe(false);
           return;
         }
-        expect((await run).threadId).toBe(threadId);
+        expect((await pending).threadId).toBe(threadId);
         expect(requests.map(({ method }) => method)).toEqual([
           ...configReads,
           "thread/read",
@@ -362,13 +355,10 @@ export function registerThreadPolicyRefreshTests({
     "keeps ordinary warm configuration honest over $transport across $nativeStatus",
     async ({ nativeStatus, transport }) => {
       const developerInstructions = "replacement policy";
-      const { sessionFile, cwd, agentDir, threadId, response } = fixture("ordinary-warm-policy");
-      const methods: string[] = [];
       let subscribed = true;
-      const wire = await createLeasedLifecycleWireClient(
-        agentDir,
-        (request) => {
-          methods.push(request.method);
+      const { sessionFile, threadId, wire, requests, run } = await fixture(
+        "ordinary-warm-policy",
+        (request, response) => {
           if (request.method === "thread/unsubscribe" || request.method === "thread/resume") {
             expect(request.params).toMatchObject({ threadId });
           }
@@ -400,34 +390,29 @@ export function registerThreadPolicyRefreshTests({
       const removeNotificationHandler = wire.client.addNotificationHandler((notification) => {
         notifications.push(notification.method);
       });
-      const options = {
-        ...common(wire, sessionFile, cwd),
-        appServer: {
-          ...createThreadLifecycleAppServerOptions(),
-          start: { ...createThreadLifecycleAppServerOptions().start, transport },
-        },
-      };
       try {
-        const first = await startOrResumeThread({
-          ...options,
-          developerInstructions: "initial policy",
-        });
+        const first = await run("initial policy");
         await retainCodexAppServerLiveThread(
           wire.client,
           first.threadId,
           undefined,
           first.liveThreadConfigFingerprint,
         );
-        const resume = startOrResumeThread({ ...options, developerInstructions });
+        const resume = run(developerInstructions);
         if (nativeStatus === "active") {
           await expect(resume).rejects.toThrow("Codex session became active in another runner");
-          expect(methods).toEqual([...configReads, "thread/start", ...configReads, "thread/read"]);
+          expect(requests.map(({ method }) => method)).toEqual([
+            ...configReads,
+            "thread/start",
+            ...configReads,
+            "thread/read",
+          ]);
           expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(first.threadId);
           return;
         }
         if (nativeStatus === "systemError") {
           await expect(resume).rejects.toThrow("did not confirm unloading");
-          expect(methods).not.toContain("thread/inject_items");
+          expect(requests.map(({ method }) => method)).not.toContain("thread/inject_items");
           expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(first.threadId);
           return;
         }
@@ -435,7 +420,7 @@ export function registerThreadPolicyRefreshTests({
         expect(second.threadId).toBe(first.threadId);
         expect(notifications).toContain("thread/status/changed");
         expect(notifications).not.toContain("thread/closed");
-        expect(methods).toEqual([
+        expect(requests.map(({ method }) => method)).toEqual([
           ...configReads,
           "thread/start",
           ...configReads,

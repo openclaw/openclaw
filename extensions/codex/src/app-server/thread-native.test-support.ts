@@ -1,7 +1,51 @@
 import http from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { TestContext } from "vitest";
+import type { CodexAppServerClient } from "./client.js";
 import type { createCodexNativeTestState } from "./native-app-server.test-support.js";
+import { isJsonObject } from "./protocol.js";
 import { createAppServerOptions } from "./thread-lifecycle.test-fixtures.js";
+
+export async function runNativeTurn(
+  client: CodexAppServerClient,
+  threadId: string,
+  text: string,
+  options: { timeoutMs?: number; completionTimeoutMs?: number } = {},
+) {
+  const completed = createDeferred<unknown>();
+  void completed.promise.catch(() => undefined);
+  const timer =
+    options.completionTimeoutMs === undefined
+      ? undefined
+      : setTimeout(
+          () => completed.reject(new Error("Native PATH command timed out")),
+          options.completionTimeoutMs,
+        );
+  timer?.unref();
+  const remove = client.addNotificationHandler((notification) => {
+    if (
+      notification.method === "turn/completed" &&
+      isJsonObject(notification.params) &&
+      notification.params.threadId === threadId
+    ) {
+      completed.resolve(notification.params.turn);
+    }
+  });
+  try {
+    await client.request(
+      "turn/start",
+      {
+        threadId,
+        input: [{ type: "text", text, text_elements: [] }],
+      },
+      { timeoutMs: options.timeoutMs },
+    );
+    return await completed.promise;
+  } finally {
+    clearTimeout(timer);
+    remove();
+  }
+}
 
 export async function listenForNativeResponses(
   context: TestContext,

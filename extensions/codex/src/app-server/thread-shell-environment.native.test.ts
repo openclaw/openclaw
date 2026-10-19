@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +15,7 @@ import {
   listenForNativeResponses,
   nativeAppServerOptions,
   nativeProviderConfig,
+  runNativeTurn,
   sendNativeResponse,
 } from "./thread-native.test-support.js";
 import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
@@ -29,8 +29,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-// A loopback model selects commands; the pinned native binary owns shell execution.
-// Explicit login remains valid with configured prefixes, including after resume.
+// The loopback model selects commands; the pinned binary owns shell execution.
 // Snapshots can run login commands via -c, so assert lookup instead of argv shape.
 describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
   it.for([
@@ -214,38 +213,12 @@ describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
             );
             threadId = started.thread.id;
           }
-          const completed = createDeferred<unknown>();
-          void completed.promise.catch(() => undefined);
-          const timer = setTimeout(
-            () => completed.reject(new Error("Native PATH command timed out")),
-            30_000,
-          );
-          timer.unref();
-          const remove = client.addNotificationHandler((notification) => {
-            if (
-              notification.method === "turn/completed" &&
-              isJsonObject(notification.params) &&
-              notification.params.threadId === threadId
-            ) {
-              completed.resolve(notification.params.turn);
-            }
-          });
-          try {
-            await client.request(
-              "turn/start",
-              {
-                threadId,
-                input: [
-                  { type: "text", text: "Check command lookup and login mode.", text_elements: [] },
-                ],
-              },
-              { timeoutMs: 20_000 },
-            );
-            await expect(completed.promise).resolves.toMatchObject({ status: "completed" });
-          } finally {
-            clearTimeout(timer);
-            remove();
-          }
+          await expect(
+            runNativeTurn(client, threadId, "Check command lookup and login mode.", {
+              timeoutMs: 20_000,
+              completionTimeoutMs: 30_000,
+            }),
+          ).resolves.toMatchObject({ status: "completed" });
           expect(failures).toEqual([]);
           const input = requests.at(-1)?.input;
           expect(Array.isArray(input)).toBe(true);
@@ -253,22 +226,13 @@ describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
             (item) => isJsonObject(item) && item.type === "function_call_output",
           );
           const output = outputs.at(-1);
-          expect(output).toMatchObject({
-            output: expect.stringContaining("Process exited with code 0"),
-          });
-          expect(output).toMatchObject({
-            output: expect.stringContaining(
-              `GIT_NAME=${filters ? "" : configured ? "Native Git" : "Inherited Git"}\nfalse\n0`,
-            ),
-          });
-          if (expectPrefix) {
-            expect(output).toMatchObject({ output: expect.stringContaining(`SELECTED=${phase}`) });
-            expect(output).toMatchObject({ output: expect.stringContaining("NATIVE=preserved") });
-          }
-          if (!loginAllowed || !snapshots) {
-            expect(output).toMatchObject({
-              output: expect.stringContaining(`LOGIN=${loginAllowed ? "yes" : "no"}`),
-            });
+          for (const text of [
+            "Process exited with code 0",
+            `GIT_NAME=${filters ? "" : configured ? "Native Git" : "Inherited Git"}\nfalse\n0`,
+            ...(expectPrefix ? [`SELECTED=${phase}`, "NATIVE=preserved"] : []),
+            ...(!loginAllowed || !snapshots ? [`LOGIN=${loginAllowed ? "yes" : "no"}`] : []),
+          ]) {
+            expect(output).toMatchObject({ output: expect.stringContaining(text) });
           }
         } finally {
           host.closeHost();

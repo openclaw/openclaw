@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
-import { isJsonObject } from "./protocol.js";
 import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
 import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
@@ -18,6 +16,7 @@ import {
   listenForNativeResponses,
   nativeAppServerOptions,
   nativeProviderConfig,
+  runNativeTurn,
   sendNativeResponse,
 } from "./thread-native.test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -128,22 +127,9 @@ describe("native Codex cold thread recovery", () => {
         lifecycle: { action: "started" },
       });
       expect(bindingStore.read(identity)?.threadId).toBe(recovered.threadId);
-      const completed = createDeferred<unknown>();
-      const removeHandler = client.addNotificationHandler((notification) => {
-        if (
-          notification.method === "turn/completed" &&
-          isJsonObject(notification.params) &&
-          notification.params.threadId === recovered.threadId
-        ) {
-          completed.resolve(notification.params.turn);
-        }
-      });
-      context.onTestFinished(removeHandler);
-      await client.request("turn/start", {
-        threadId: recovered.threadId,
-        input: [{ type: "text", text: "Continue the conversation.", text_elements: [] }],
-      });
-      await expect(completed.promise).resolves.toMatchObject({ status: "completed" });
+      await expect(
+        runNativeTurn(client, recovered.threadId, "Continue the conversation."),
+      ).resolves.toMatchObject({ status: "completed" });
       expect(requests).toBe(1);
       const history = await client.request("thread/read", {
         threadId: recovered.threadId,
