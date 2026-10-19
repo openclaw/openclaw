@@ -304,7 +304,7 @@ sidebarTitle: "Voice and speech"
     set its `voice_...` ID as `talk.realtime.speakerVoiceId`,
     `channels.discord.voice.realtime.speakerVoiceId`, or `speakerVoiceId` in an
     OpenAI realtime provider block. OpenClaw sends it as the saved voice
-    reference and keeps it out of browser session responses. Saved voices
+    reference; browser WebRTC session reservations omit it. Saved voices
     require `gpt-live-1`; other models and malformed IDs fail session setup
     instead of falling back.
 

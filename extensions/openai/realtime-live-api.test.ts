@@ -103,7 +103,7 @@ it("sends a configured saved voice ID to the public API without exposing it to t
   const fixture = liveBroker({ fetchImpl });
   const providerConfig = normalizeProviderConfig({
     model: "gpt-live-1",
-    speakerVoiceId: "voice_demo123",
+    speakerVoiceId: "voice_Demo123",
   });
   const reservation = await fixture.realtime.broker.createBrowserSession(
     {
@@ -117,7 +117,7 @@ it("sends a configured saved voice ID to the public API without exposing it to t
   if (reservation.transport !== "webrtc") {
     throw new Error("Expected WebRTC reservation");
   }
-  expect(JSON.stringify(reservation)).not.toContain("voice_demo123");
+  expect(JSON.stringify(reservation)).not.toContain("voice_Demo123");
   const response = await answerOffer(fixture, reservation.clientSecret);
   expect([response.res.statusCode, response.readBody()]).toEqual([200, SDP]);
   const [url, init] = fetchImpl.mock.calls[0]!;
@@ -126,7 +126,7 @@ it("sends a configured saved voice ID to the public API without exposing it to t
     throw new Error("Expected the public session JSON body");
   }
   expect(JSON.parse(init.body)).toMatchObject({
-    session: { model: "gpt-live-1", audio: { output: { voice: { id: "voice_demo123" } } } },
+    session: { model: "gpt-live-1", audio: { output: { voice: { id: "voice_Demo123" } } } },
   });
 });
 

@@ -1,7 +1,7 @@
 import type { RealtimeVoiceProviderCapabilities } from "openclaw/plugin-sdk/realtime-voice";
 import {
   asOptionalRecord,
-  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Realtime voice uses browser or Gateway-owned WebRTC when the host owns delegation,
 // and the Platform-key direct WebSocket transport elsewhere.
@@ -45,7 +45,7 @@ const OPENAI_GPT_LIVE_VOICES = [
   "vale",
 ] as const;
 const OPENAI_GPT_LIVE_UNLISTED_VOICES = ["marin", "cedar"] as const;
-export type OpenAIGptLiveVoice =
+type OpenAIGptLiveVoice =
   | (typeof OPENAI_GPT_LIVE_API_VOICES)[number]
   | (typeof OPENAI_GPT_LIVE_VOICES)[number]
   | (typeof OPENAI_GPT_LIVE_UNLISTED_VOICES)[number];
@@ -71,27 +71,35 @@ export function isSupportedOpenAIGptLiveModel(model: string | undefined): boolea
 }
 
 /**
- * Normalizes a configured voice name or saved voice reference. Talk and channel callers
- * pass `speakerVoiceId` through the same string field, so saved IDs are recognized by
- * OpenAI's `voice_` prefix and keep their case.
+ * Reads a configured voice name or saved voice ID without validating the ID, so config
+ * and catalog reads never fail on it. Talk and channel callers pass `speakerVoiceId`
+ * through the same string field; saved IDs keep their case and stay out of string-only
+ * public projections.
  */
+export function readOpenAIQuicksilverVoiceSetting(
+  value: unknown,
+): string | OpenAIGptLiveCustomVoice | undefined {
+  const record = asOptionalRecord(value);
+  if (record && "id" in record) {
+    // Normalized configs re-enter here; an invalid shape keeps failing session validation.
+    const id =
+      typeof record.id === "string" && Object.keys(record).length === 1 ? record.id.trim() : "";
+    return { id };
+  }
+  const trimmed = normalizeOptionalString(value);
+  // A mistyped prefix must fail session validation, not lowercase into a saved ID.
+  if (trimmed?.toLowerCase().startsWith(OPENAI_GPT_LIVE_CUSTOM_VOICE_ID_PREFIX)) {
+    return { id: trimmed };
+  }
+  return trimmed?.toLowerCase();
+}
+
+/** Validates a voice setting at session creation. */
 export function normalizeOpenAIQuicksilverVoiceInput(
   value: unknown,
 ): string | OpenAIGptLiveCustomVoice | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed.startsWith(OPENAI_GPT_LIVE_CUSTOM_VOICE_ID_PREFIX)
-      ? parseOpenAIGptLiveCustomVoiceId(trimmed)
-      : normalizeOptionalLowercaseString(trimmed);
-  }
-  const record = asOptionalRecord(value);
-  if (!record) {
-    return undefined;
-  }
-  if (Object.keys(record).length !== 1 || typeof record.id !== "string") {
-    throw new Error(OPENAI_GPT_LIVE_CUSTOM_VOICE_INVALID);
-  }
-  return parseOpenAIGptLiveCustomVoiceId(record.id.trim());
+  const setting = readOpenAIQuicksilverVoiceSetting(value);
+  return typeof setting === "object" ? parseOpenAIGptLiveCustomVoiceId(setting.id) : setting;
 }
 
 function parseOpenAIGptLiveCustomVoiceId(id: string): OpenAIGptLiveCustomVoice {

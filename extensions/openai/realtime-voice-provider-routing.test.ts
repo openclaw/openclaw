@@ -500,9 +500,9 @@ describe("OpenAI realtime voice provider routing", () => {
   });
 
   it.each([
-    { source: "provider speakerVoiceId", rawConfig: { speakerVoiceId: "voice_demo123" } },
+    { source: "provider speakerVoiceId", rawConfig: { speakerVoiceId: "voice_Demo123" } },
     // Talk forwards talk.realtime.speakerVoiceId as the request's string voice override.
-    { source: "Talk speakerVoiceId", rawConfig: {}, voice: "voice_demo123" },
+    { source: "Talk speakerVoiceId", rawConfig: {}, voice: "voice_Demo123" },
   ])("passes a $source saved voice reference to the native broker", async (setting) => {
     const { provider, createBrowserSession } = browserFixture();
     await provider.createBrowserSession?.({
@@ -516,7 +516,7 @@ describe("OpenAI realtime voice provider routing", () => {
     } as never);
 
     expect(createBrowserSession).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "gpt-live-1", voice: { id: "voice_demo123" } }),
+      expect.objectContaining({ model: "gpt-live-1", voice: { id: "voice_Demo123" } }),
       { type: "api-key", token: PLATFORM_KEY },
     );
   });
@@ -529,7 +529,7 @@ describe("OpenAI realtime voice provider routing", () => {
         provider.createBrowserSession?.({
           providerConfig: { apiKey: PLATFORM_KEY, model },
           ...browserRequest,
-          voice: "voice_demo123",
+          voice: "voice_Demo123",
           runAgentConsult: vi.fn(async () => ({ text: "Done" })),
         } as never),
       ).rejects.toThrow("GPT-Live custom voice references require model gpt-live-1");

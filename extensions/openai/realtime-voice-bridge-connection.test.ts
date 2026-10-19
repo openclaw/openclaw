@@ -754,7 +754,7 @@ describe("OpenAI realtime voice bridge connection", () => {
       providers: [provider],
       configuredProviderId: provider.id,
       providerConfigs: { openai: { apiKey: "fixture-key" } },
-      providerConfigOverrides: { model: "gpt-live-1", voice: "voice_demo123" },
+      providerConfigOverrides: { model: "gpt-live-1", voice: "voice_Demo123" },
       cfg: {},
       surface: "gateway-relay",
       autoRespondToAudio: true,
@@ -777,7 +777,7 @@ describe("OpenAI realtime voice bridge connection", () => {
             type: "session.start",
             session: expect.objectContaining({
               model: "gpt-live-1",
-              audio: { output: { voice: { id: "voice_demo123" } } },
+              audio: { output: { voice: { id: "voice_Demo123" } } },
             }),
           }),
         ),
@@ -792,6 +792,35 @@ describe("OpenAI realtime voice bridge connection", () => {
       }
       await Promise.allSettled([closing]);
     }
+  });
+
+  it.each([
+    {
+      name: "malformed",
+      config: { model: "gpt-live-1", speakerVoiceId: "voice_Demo 123" },
+      error: 'Invalid GPT-Live custom voice reference: expected { id: "voice_..." }',
+    },
+    {
+      name: "default-model",
+      config: { speakerVoiceId: "voice_Demo123" },
+      error: "GPT-Live custom voice references require model gpt-live-1",
+    },
+  ])("rejects a $name saved voice before opening a socket", async ({ config, error }) => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    // Config resolution feeds catalogs and readiness, so it must not fail on the voice.
+    const providerConfig = await provider.resolveConfigAsync?.({
+      cfg: {},
+      rawConfig: { apiKey: "fixture-key", ...config },
+    });
+    expect(() =>
+      provider.createBridge({
+        providerConfig: providerConfig ?? {},
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+      }),
+    ).toThrow(new Error(error));
+    expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
   it("settles cleanly when closed before the websocket opens", async () => {

@@ -7,9 +7,10 @@ describe("GPT-Live session shaping", () => {
     [{ id: "voice_demo123", name: "extra" }],
     [{ id: "voice_demo123 secret" }],
     ["voice_demo123 secret"],
+    ["Voice_Demo123"],
   ])("rejects malformed saved voice reference %j without echoing it", (voice) => {
     expect(() => buildOpenAIQuicksilverSession({ model: "gpt-live-1", voice })).toThrow(
-      'Invalid GPT-Live custom voice reference: expected { id: "voice_..." }',
+      new Error('Invalid GPT-Live custom voice reference: expected { id: "voice_..." }'),
     );
   });
 
