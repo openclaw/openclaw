@@ -416,6 +416,7 @@ export function createSessionCapability(
     return changed;
   };
 
+  // Gateway receipts retire shared session state; first-client adoption preserves the admitted boot roster.
   const stopGateway = gateway.subscribe((next) => {
     const previousClient = connectionClient;
     const connected = next.phase === "connected";
@@ -424,7 +425,6 @@ export function createSessionCapability(
     const samePresentationScope = presentationKey === presentationScope.key;
     const retainDeferredMetadata =
       samePresentationScope && Boolean(next.deferredIntentCount || next.deferredIntentDraining);
-    // First-client adoption keeps the boot roster admitted by the cache lifecycle.
     const identityChanged =
       (previousClient !== null && previousClient !== next.client) || !samePresentationScope;
     presentationKey = presentationScope.key;

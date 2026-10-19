@@ -42,7 +42,7 @@ export function placementStoreDefaults(read: () => readonly Placement[] = () => 
 
 export function createEnvironments() {
   return {
-    subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
+    machineShapeNotifications: { onChanged: (_profileId: string) => {} },
     installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
     start: vi.fn(),
     isStopping: () => false,

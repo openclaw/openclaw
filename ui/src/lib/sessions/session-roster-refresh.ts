@@ -558,6 +558,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     list: listReader.list,
     listSnapshot: primaryWindows.snapshot,
     subscribeList(scope: SessionListScope, listener: (snapshot: SessionListSnapshot) => void) {
+      // Subscribers share the capability-owned membership window and its refresh lifecycle.
       return primaryWindows.subscribe(managedList(scope), listener, pageActive);
     },
     observeList: (scope: SessionListScope, listener: (snapshot: SessionListSnapshot) => void) => {

@@ -263,9 +263,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
       context.navigate("skills", { search: `?${search}` });
     }
   }
-  const card = createMemo(
-    (): CardPresentation | undefined => read().presentation ?? props.recommendation,
-  );
+  const card = (): CardPresentation | undefined => read().presentation ?? props.recommendation;
   const icon = createMemo(() => {
     const current = card();
     return current
@@ -276,7 +274,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
         )
       : undefined;
   });
-  const iconPending = createMemo(() => {
+  const iconPending = () => {
     const currentState = read();
     const current = card();
     return icon()
@@ -287,7 +285,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
             currentState.status !== "error" &&
             !current?.pluginId &&
             !current?.iconUrl);
-  });
+  };
   return (
     <Show when={props.recommendation && !read().dismissed && card()}>
       {(current) => (

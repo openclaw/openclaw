@@ -1,12 +1,10 @@
-import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_STARTUP_UNAVAILABLE_REASON } from "../../packages/gateway-protocol/src/startup-unavailable.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -29,6 +27,8 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+// SQLite schema custody is directory-scoped; unique filenames alone do not isolate clients.
+const identityDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const NODE_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.NODE_HOST,
@@ -114,7 +114,7 @@ describe("node pairing rate limit", () => {
     "rejects a %s shared-token node during startup without creating pairing requests",
     async (_pairingState, approveDevice, omitDevice) => {
       testState.gatewayAuth = { mode: "token", token: "secret" };
-      const identityDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-node-startup-unpaired-"));
+      const identityDir = identityDirs.make("openclaw-node-startup-unpaired-");
       const attachGatewayWsConnectionHandler = gatewayWsConnection.attachGatewayWsConnectionHandler;
       const startupAdmission = vi
         .spyOn(gatewayWsConnection, "attachGatewayWsConnectionHandler")
@@ -122,11 +122,10 @@ describe("node pairing rate limit", () => {
           attachGatewayWsConnectionHandler({ ...params, isStartupPending: () => true }),
         );
 
-      await using startup = {
+      using startup = {
         identityPath: path.join(identityDir, "identity.sqlite"),
-        async [Symbol.asyncDispose]() {
+        [Symbol.dispose]() {
           startupAdmission.mockRestore();
-          await rm(identityDir, { recursive: true, force: true });
         },
       };
       await withGatewayServer(async ({ port }) => {
@@ -157,7 +156,7 @@ describe("node pairing rate limit", () => {
   test("limits concurrent first-time node pairing requests before the pairing lock", async () => {
     setPairingLimit();
     await withGatewayServer(async ({ port }) => {
-      const identityPrefix = path.join(os.tmpdir(), `openclaw-node-pairing-${randomUUID()}`);
+      const identityPrefix = path.join(identityDirs.make("openclaw-node-pairing-"), "identity");
 
       const responses = await Promise.all(
         Array.from(
@@ -184,8 +183,8 @@ describe("node pairing rate limit", () => {
     setPairingLimit();
     await withGatewayServer(async ({ port }) => {
       const identityPrefix = path.join(
-        os.tmpdir(),
-        `openclaw-node-pairing-upgrade-${randomUUID()}`,
+        identityDirs.make("openclaw-node-pairing-upgrade-"),
+        "identity",
       );
       const identityPath = `${identityPrefix}-paired.sqlite`;
       const paired = await approveNodeIdentity({ identityPath, caps: ["camera"] });
@@ -211,8 +210,8 @@ describe("node pairing rate limit", () => {
     setPairingLimit(1, true);
     await withGatewayServer(async ({ port }) => {
       const identityPath = path.join(
-        os.tmpdir(),
-        `openclaw-node-reapproval-${randomUUID()}.sqlite`,
+        identityDirs.make("openclaw-node-reapproval-"),
+        "identity.sqlite",
       );
       const identity = await approveNodeIdentity({ identityPath, caps: ["camera"] });
       const pending = async () =>

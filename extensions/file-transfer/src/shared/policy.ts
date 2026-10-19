@@ -5,12 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { minimatch } from "minimatch";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  asNullableRecord,
-  asOptionalObjectRecord,
-  asOptionalRecord,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNullableRecord, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FILE_TRANSFER_NODE_INVOKE_COMMANDS,
   type FileTransferNodeInvokeCommand,
@@ -123,19 +120,13 @@ function readPendingReapprovals(config: FileTransferPolicyConfig): PendingReappr
   });
 }
 
-function readPluginConfigFromRuntimeConfig(): Record<string, unknown> | null {
-  const plugins = asOptionalObjectRecord(getRuntimeConfig().plugins);
-  const entries = asOptionalObjectRecord(plugins?.entries);
-  const entry = asOptionalObjectRecord(entries?.["file-transfer"]);
-  return asNullableRecord(entry?.config);
-}
-
 function readFileTransferConfig(
   pluginConfig?: Record<string, unknown>,
 ): FileTransferPolicyConfig | null {
   return (
-    readFileTransferConfigFromPluginConfig(readPluginConfigFromRuntimeConfig()) ??
-    readFileTransferConfigFromPluginConfig(pluginConfig)
+    readFileTransferConfigFromPluginConfig(
+      resolvePluginConfigObject(getRuntimeConfig(), "file-transfer"),
+    ) ?? readFileTransferConfigFromPluginConfig(pluginConfig)
   );
 }
 

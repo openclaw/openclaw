@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi, PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asNullableRecord,
@@ -7,9 +8,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function formatStatus(cfg: OpenClawConfig): string {
-  const entry = asNullableRecord(cfg.plugins?.entries?.["memory-core"]);
   const dreaming = resolveMemoryDreamingConfig({
-    pluginConfig: asNullableRecord(entry?.config) ?? {},
+    pluginConfig: resolvePluginConfigObject(cfg, "memory-core") ?? {},
     cfg,
   });
   const deep = dreaming.phases.deep;

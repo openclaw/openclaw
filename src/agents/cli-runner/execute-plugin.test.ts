@@ -72,7 +72,7 @@ function registerOwnerSession(context: PreparedCliRunContext, generation: string
 async function startBlockedRun(options: {
   timeoutMs: number;
   getDeadline: () => number | undefined;
-  onChange?: (listener: () => void) => () => void;
+  onChange?: (listener: (() => void) | undefined) => void;
 }) {
   const { context } = await createExecution({ timeoutMs: options.timeoutMs });
   const started = createDeferred();
@@ -87,7 +87,7 @@ async function startBlockedRun(options: {
       noOutputTimeoutMs: 100,
       activeToolCount: () => 1,
       getActiveLoopbackAskUserDeadline: options.getDeadline,
-      onActiveLoopbackAskUserDeadlineChange: options.onChange ?? (() => () => {}),
+      setOnActiveLoopbackAskUserDeadlineChange: options.onChange,
     },
   );
   await started.promise;
@@ -971,19 +971,18 @@ describe("plugin-owned CLI ask_user timeout", () => {
   it("restores the remaining ordinary watchdog when ask_user clears early", async () => {
     vi.useFakeTimers();
     let deadline: number | undefined = Date.now() + 3_610_000;
-    const listeners = new Set<() => void>();
+    let onChange: (() => void) | undefined;
     const { run } = await startBlockedRun({
       timeoutMs: 2_000_000,
       getDeadline: () => deadline,
       onChange: (listener) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
+        onChange = listener;
       },
     });
 
     await vi.advanceTimersByTimeAsync(200);
     deadline = undefined;
-    listeners.forEach((listener) => listener());
+    onChange?.();
     await vi.advanceTimersByTimeAsync(899_799);
     let completed = false;
     void run.then(() => {

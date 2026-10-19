@@ -134,7 +134,6 @@ function createRecoveryRuntime(options: {
     reconcile: vi.fn(async () => await options.startup?.(placements, publishPlacementChange)),
     reconcileActive: vi.fn(async () => await options.sweep?.(placements, publishPlacementChange)),
   }));
-  let onMachineShapeChanged: ((profileId: string) => void) | undefined;
   const environments = {
     ...createEnvironments(),
     get: (environmentId: string) =>
@@ -145,12 +144,6 @@ function createRecoveryRuntime(options: {
         ownerEpoch: 1,
       },
     readMachineShape: () => ({ cpu: 4 }),
-    subscribeMachineShapeChanged: (listener: (profileId: string) => void) => {
-      onMachineShapeChanged = listener;
-      return () => {
-        onMachineShapeChanged = undefined;
-      };
-    },
   };
   const readChangeSnapshot = vi.fn(async (profileIds?: readonly string[]) =>
     structuredClone(
@@ -206,7 +199,8 @@ function createRecoveryRuntime(options: {
       }
     },
     stop: async () => await sidecar.current?.stop(),
-    catalogChanged: (profileId: string) => onMachineShapeChanged?.(profileId),
+    catalogChanged: (profileId: string) =>
+      environments.machineShapeNotifications.onChanged(profileId),
     expectBroadcast: (payload: object, delivery: object = { dropIfSlow: true }) => {
       expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
         "sessions.changed",

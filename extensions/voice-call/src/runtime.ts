@@ -86,9 +86,9 @@ function mapVoiceCallConsultTranscript(
 
 async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvider> {
   const allowNgrokFreeTierLoopbackBypass =
-    config.tunnel?.provider === "ngrok" &&
-    isLoopbackHost(config.serve?.bind ?? "") &&
-    (config.tunnel?.allowNgrokFreeTierLoopbackBypass ?? false);
+    config.tunnel.provider === "ngrok" &&
+    isLoopbackHost(config.serve.bind) &&
+    config.tunnel.allowNgrokFreeTierLoopbackBypass;
 
   switch (config.provider) {
     case "telnyx": {

@@ -42,7 +42,7 @@ import {
   subscribeModelCatalogCache,
 } from "../../lib/model-catalog-store.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import {
   createDeliveryConversations,
@@ -71,17 +71,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   const gateway = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   let boundContext: ApplicationContext | null = null;
   let gatewayAvailable = false;
-  let notify: (() => void) | undefined;
-  const projection = projectSource(null, {
-    read: () => cron,
-    subscribe: (_source, listener) => {
-      notify = listener;
-      return () => {
-        notify = undefined;
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(null, () => cron);
   const agents = projectOwner(context().agents, (source) => source.state);
   const channels = projectOwner(context().channels, (source) => source.state);
   const runtimeConfig = projectOwner(context().runtimeConfig, (source) => source.state);
@@ -248,7 +238,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     }
     preparePanel();
     eventSource.sync();
-    notify?.();
+    projection.publish();
     // The state writer owns route admission; its DOM requests follow this publication's commit.
     onSettled(() => {
       if (active) {
@@ -505,10 +495,8 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     }
     cron.cronCreateOpen = false;
     startCronEdit(cron, job);
-    void runCronTask(async (cronState) => {
-      // Claim the run pane before awaiting to retire the previous job's history.
-      await loadCronRunsForJob(cronState, job.id, runId);
-    });
+    // Claim the run pane before awaiting to retire the previous job's history.
+    void runCronTask((cronState) => loadCronRunsForJob(cronState, job.id, runId));
     deliveryDirectory.openEditor();
     if (job.payload?.kind === "heartbeat") {
       void loadHeartbeatScratch(cron, job.id, heartbeatScratchRequest);
@@ -647,9 +635,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   function closePanel() {
     resetEditor(false);
     publishCronState();
-    void runCronTask(async (cronState) => {
-      await loadCronRunsForJob(cronState, null);
-    });
+    void runCronTask((cronState) => loadCronRunsForJob(cronState, null));
   }
 
   function submitForm(runNow = false) {

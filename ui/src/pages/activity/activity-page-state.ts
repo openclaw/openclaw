@@ -11,7 +11,7 @@ import { readPresenceEntries, type PresencePayload } from "../../app/user-profil
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectPresencePayload } from "../../lib/presence-users.ts";
-import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import { createLiveActivity } from "./live-activity.ts";
 import {
@@ -59,24 +59,16 @@ export function createActivityPageState(context: ApplicationContext) {
   let publish = () => {};
   const sessionActivity = createSessionActivity(reconcileSessions);
   const liveActivity = createLiveActivity(context.gateway, context.sessions);
-  const projection = projectSource(context, {
-    read: () => ({
-      context,
-      routeLocation,
-      routeData,
-      presentedRoute,
-      runInspector,
-      presencePayload,
-      sessionActivity,
-    }),
-    subscribe: (_source, notify) => {
-      publish = notify;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(context, () => ({
+    context,
+    routeLocation,
+    routeData,
+    presentedRoute,
+    runInspector,
+    presencePayload,
+    sessionActivity,
+  }));
+  publish = projection.publish;
   function setRouteLocation(location: RouteLocation | undefined) {
     routeLocation = location;
     routeData = location
