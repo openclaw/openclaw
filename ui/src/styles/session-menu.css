@@ -398,7 +398,24 @@
   font: inherit;
 }
 
+.session-actions-page__row {
+  --session-action-label-start: 12px;
+  position: relative;
+}
+
+.session-actions-page__row:has(> svg:first-child) {
+  --session-action-label-start: 38px;
+}
+
+.session-actions-page__row:has(> .session-menu__icon:first-child) {
+  --session-action-label-start: 36px;
+}
+
 .session-actions-page__row:disabled {
+  opacity: 1;
+}
+
+.session-actions-page__row:disabled > * {
   opacity: 0.5;
 }
 
@@ -412,7 +429,9 @@
   color: var(--muted);
 }
 
-.session-actions-page__row--danger {
+.session-actions-page__row--danger,
+.session-actions-page__row--danger > svg,
+.session-actions-page__row--danger .session-menu__icon {
   color: var(--danger);
 }
 
@@ -456,8 +475,14 @@
   border-radius: 0;
 }
 
-.session-actions-page__group > .session-actions-page__row + .session-actions-page__row {
-  border-top: 1px solid var(--border-strong);
+.session-actions-page__group > .session-actions-page__row + .session-actions-page__row::before {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: var(--session-action-label-start) 12px;
+  height: 1px;
+  background: var(--border-strong);
+  pointer-events: none;
+  content: "";
 }
 
 .session-actions-page__row:hover:enabled {
@@ -541,7 +566,19 @@
 }
 
 .session-actions-page__communication .session-menu__communication-row {
+  position: relative;
   min-height: 54px;
+}
+
+.session-actions-page__communication
+  .session-menu__communication-row
+  + .session-menu__communication-row::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: var(--border-strong);
+  pointer-events: none;
+  content: "";
 }
 
 .session-actions-page__communication .session-menu__communication-choice {
@@ -549,19 +586,16 @@
 }
 
 .session-actions-page--group-picker {
-  padding: 8px 0 24px;
-}
-
-.session-actions-page--group-picker > .session-actions-page__group {
-  border-radius: 0;
+  padding: 8px 16px 24px;
 }
 
 .session-actions-page--group-picker .session-actions-page__row {
+  --session-action-label-start: 16px;
   padding-inline: 16px;
 }
 
 .session-actions-page--group-picker > .session-actions-page__search {
-  margin-inline: 16px;
+  margin-inline: 0;
 }
 
 .session-actions-page--appearance {
