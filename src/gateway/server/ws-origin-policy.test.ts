@@ -11,30 +11,39 @@ import {
 } from "./ws-policy-close.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
+function policyClient(
+  initial: OpenClawConfig,
+  principal: Parameters<typeof captureGatewayAuthPolicy>[1],
+) {
+  return {
+    authPolicy: captureGatewayAuthPolicy(initial, principal),
+    invalidated: false,
+    sourceInvalidated: false,
+    socket: { close: vi.fn() },
+  };
+}
+
+function browserOrigin(origin: string, requestHost = new URL(origin).host) {
+  return { origin, requestHost, isLocalClient: false };
+}
+
 describe("committed browser origin policy", () => {
   it.each(["allowedOrigins", "publicOrigin", "host fallback"])(
     "revokes a fenced browser grant when its %s admission ends",
     (policy) => {
-      const browserOrigin = {
-        origin: "https://retained.example.test",
-        requestHost: "retained.example.test",
-        isLocalClient: false,
-      };
+      const origin = browserOrigin("https://retained.example.test");
       const initial: OpenClawConfig = {
         gateway: {
-          publicOrigin: policy === "publicOrigin" ? browserOrigin.origin : undefined,
+          publicOrigin: policy === "publicOrigin" ? origin.origin : undefined,
           controlUi: {
-            allowedOrigins: policy === "allowedOrigins" ? [browserOrigin.origin] : undefined,
+            allowedOrigins: policy === "allowedOrigins" ? [origin.origin] : undefined,
             dangerouslyAllowHostHeaderOriginFallback: policy === "host fallback",
           },
         },
       };
       const client = {
-        browserOrigin,
-        authPolicy: captureGatewayAuthPolicy(initial, { role: "operator", browserOrigin }),
-        invalidated: false,
-        sourceInvalidated: false,
-        socket: { close: vi.fn() },
+        ...policyClient(initial, { role: "operator", browserOrigin: origin }),
+        browserOrigin: origin,
       };
       const onRevoked = vi.fn();
       onTestFinished(onGatewayPolicyClientInvalidated(client, onRevoked));
@@ -60,15 +69,14 @@ describe("committed browser origin policy", () => {
     const origins = ["https://retained.example.test", "https://removed.example.test"];
     const initial: OpenClawConfig = { gateway: { controlUi: { allowedOrigins: origins } } };
     const clients = origins.map((origin) => {
-      const browserOrigin = { origin, requestHost: "gateway.example.test", isLocalClient: false };
+      const admittedOrigin = browserOrigin(origin, "gateway.example.test");
       return {
-        browserOrigin,
-        authPolicy: captureGatewayAuthPolicy(initial, {
+        ...policyClient(initial, {
           role: "operator",
           verifiedIdentity: "same@example.test",
-          browserOrigin,
+          browserOrigin: admittedOrigin,
         }),
-        socket: { close: vi.fn() },
+        browserOrigin: admittedOrigin,
       };
     });
     const next: OpenClawConfig = { gateway: { controlUi: { allowedOrigins: [origins[0]!] } } };
@@ -89,11 +97,7 @@ describe("committed browser origin policy", () => {
       const revoked = {
         connId: "revoked",
         connect: { client: { id: "openclaw-control-ui" }, role: "operator" },
-        browserOrigin: {
-          origin: "https://revoked.example.test",
-          requestHost: "revoked.example.test",
-          isLocalClient: false,
-        },
+        browserOrigin: browserOrigin("https://revoked.example.test"),
         invalidated: false,
         invalidatedReason: undefined as string | undefined,
         socket: { close: vi.fn() },
@@ -101,11 +105,7 @@ describe("committed browser origin policy", () => {
       const retained = {
         connId: "retained",
         connect: { client: { id: "openclaw-control-ui" }, role: "operator" },
-        browserOrigin: {
-          origin: "https://retained.example.test",
-          requestHost: "gateway.example.test",
-          isLocalClient: false,
-        },
+        browserOrigin: browserOrigin("https://retained.example.test", "gateway.example.test"),
         socket: { close: vi.fn() },
       };
       const backend = {
@@ -137,8 +137,10 @@ describe("committed browser origin policy", () => {
         gateway: { controlUi: { allowedOrigins: ["https://retained.example.test"] } },
       });
       expect(revoked.socket.close).toHaveBeenCalledExactlyOnceWith(1008, "origin not allowed");
-      expect(revoked.invalidated).toBe(true);
-      expect(revoked.invalidatedReason).toBe("origin-policy-changed");
+      expect(revoked).toMatchObject({
+        invalidated: true,
+        invalidatedReason: "origin-policy-changed",
+      });
       expect(retained.socket.close).not.toHaveBeenCalled();
       expect(backend.socket.close).not.toHaveBeenCalled();
     },
@@ -159,39 +161,19 @@ describe("committed authentication policy", () => {
     "Retained@example.test": ["operator.write", "operator.read"],
     "other@example.test": ["operator.admin"],
   } satisfies Record<string, OperatorScope[]>;
-  const identityChanges: Array<{
-    name: string;
-    scopes: Record<string, OperatorScope[]>;
-    revoked: boolean;
-  }> = [
-    {
-      name: "another identity added",
-      scopes: { ...grants, "new@example.test": ["operator.admin"] },
-      revoked: false,
-    },
-    {
-      name: "same scopes reordered",
-      scopes: {
+  const identityChanges: Array<[string, Record<string, OperatorScope[]>, boolean]> = [
+    ["another identity added", { ...grants, "new@example.test": ["operator.admin"] }, false],
+    [
+      "same scopes reordered",
+      {
         ...grants,
         "Retained@example.test": ["operator.read", "operator.write", "operator.read"],
       },
-      revoked: false,
-    },
-    {
-      name: "identity removed",
-      scopes: { "other@example.test": grants["other@example.test"] },
-      revoked: true,
-    },
-    {
-      name: "identity downgraded",
-      scopes: { ...grants, "Retained@example.test": ["operator.read"] },
-      revoked: true,
-    },
-    {
-      name: "exact match shadows normalized grant",
-      scopes: { ...grants, [identity]: [] },
-      revoked: true,
-    },
+      false,
+    ],
+    ["identity removed", { "other@example.test": grants["other@example.test"] }, true],
+    ["identity downgraded", { ...grants, "Retained@example.test": ["operator.read"] }, true],
+    ["exact match shadows normalized grant", { ...grants, [identity]: [] }, true],
   ];
   const trustedProxy = {
     userHeader: "x-user",
@@ -225,7 +207,7 @@ describe("committed authentication policy", () => {
       principal,
       revoked: false,
     })),
-    ...identityChanges.map<AuthPolicyTransition>(({ name, scopes, revoked }) => ({
+    ...identityChanges.map<AuthPolicyTransition>(([name, scopes, revoked]) => ({
       name,
       initial: { gateway: { auth: { identityScopes: grants } } },
       next: { gateway: { auth: { identityScopes: scopes } } },
@@ -286,17 +268,11 @@ describe("committed authentication policy", () => {
       };
     }),
   ])("reconciles the admitted grant after $name", ({ initial, next, principal, revoked }) => {
-    const client = {
-      authPolicy: captureGatewayAuthPolicy(initial, principal),
-      invalidated: false,
-      sourceInvalidated: false,
-      socket: { close: vi.fn() },
-    };
+    const client = policyClient(initial, principal);
     const onRevoked = vi.fn();
     onTestFinished(onGatewayPolicyClientInvalidated(client, onRevoked));
     disconnectDisallowedGatewayPolicyClients([client], next);
-    expect(client.invalidated).toBe(revoked);
-    expect(client.sourceInvalidated).toBe(revoked);
+    expect(client).toMatchObject({ invalidated: revoked, sourceInvalidated: revoked });
     expect(onRevoked).toHaveBeenCalledTimes(revoked ? 1 : 0);
     expect(client.socket.close).toHaveBeenCalledTimes(revoked ? 1 : 0);
     if (revoked) {
@@ -308,10 +284,8 @@ describe("committed authentication policy", () => {
     "latches an added then removed grant only for its source: %s",
     (changedIdentity) => {
       const client = {
+        ...policyClient({}, { role: "operator", verifiedIdentity: identity }),
         authenticatedUserId: identity,
-        authPolicy: captureGatewayAuthPolicy({}, { role: "operator", verifiedIdentity: identity }),
-        socket: { close: vi.fn() },
-        invalidated: false,
       };
       disconnectDisallowedGatewayPolicyClients([client], {
         gateway: { auth: { identityScopes: { [changedIdentity]: ["operator.admin"] } } },
@@ -344,12 +318,7 @@ describe("committed authentication policy", () => {
         authMethod: "trusted-proxy",
         verifiedIdentity: "retained@example.test",
       };
-      const writer = {
-        authPolicy: captureGatewayAuthPolicy(initial, principal),
-        sourceInvalidated: false,
-        socket: { close: vi.fn() },
-        invalidated: false,
-      };
+      const writer = policyClient(initial, principal);
       const onRevoked = vi.fn();
       onTestFinished(onGatewayPolicyClientInvalidated(writer, onRevoked));
       const respond = vi.fn();
@@ -377,8 +346,7 @@ describe("committed authentication policy", () => {
 
       disconnectDisallowedGatewayPolicyClients([writer, fresh, worker], nextConfig);
 
-      expect(writer.invalidated).toBe(true);
-      expect(writer.sourceInvalidated).toBe(false);
+      expect(writer).toMatchObject({ invalidated: true, sourceInvalidated: false });
       expect(onRevoked).not.toHaveBeenCalled();
       expect(writer.socket.close).not.toHaveBeenCalled();
       response?.finish();

@@ -18,7 +18,6 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
-import type { ResolvedGatewayAuth } from "../auth.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
@@ -41,7 +40,7 @@ const {
   touchPresenceMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
-  attachGatewayWsMessageHandlerMock: vi.fn(),
+  attachGatewayWsMessageHandlerMock: vi.fn<(params: GatewayWsMessageHandlerParams) => void>(),
   attachWorkerWsMessageHandlerMock: vi.fn((_params: unknown) => vi.fn()),
   cleanupTalkConnectionMock: vi.fn(),
   recordPairedNodeDisconnectionMock: vi.fn(async () => ({ recorded: true })),
@@ -69,6 +68,7 @@ vi.mock("../talk/session-registry.js", () => ({
 
 import { markPublicWorkerIngress } from "./public-worker-ingress-context.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
+import type { GatewayWsMessageHandlerParams } from "./ws-connection/message-handler-types.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 import { GATEWAY_WS_CONNECTION_KIND_PROPERTY } from "./ws-types.js";
 import type { GatewayWsClient } from "./ws-types.js";
@@ -77,12 +77,83 @@ async function waitForLazyMessageHandler() {
   await vi.dynamicImportSettled();
 }
 
-function firstAttachedHandlerParams(): unknown {
-  return attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0];
+function firstAttachedHandlerParams(): GatewayWsMessageHandlerParams {
+  return attachGatewayWsMessageHandlerMock.mock.calls[0]![0];
 }
 
 function firstAttachedWorkerHandlerParams(): unknown {
   return attachWorkerWsMessageHandlerMock.mock.calls[0]?.[0];
+}
+
+function makeClient(
+  socket: GatewayWsTestSocket | Ws.WebSocket,
+  connId: string,
+  {
+    connect,
+    ...overrides
+  }: Omit<Partial<GatewayWsClient>, "connect"> & {
+    connect?: Omit<Partial<GatewayWsClient["connect"]>, "client" | "device"> & {
+      client?: Partial<GatewayWsClient["connect"]["client"]>;
+      device?: Partial<NonNullable<GatewayWsClient["connect"]["device"]>>;
+    };
+  } = {},
+): GatewayWsClient {
+  return {
+    socket: socket as unknown as GatewayWsClient["socket"],
+    connId,
+    usesSharedGatewayAuth: false,
+    ...overrides,
+    connect: {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      ...connect,
+      client: {
+        id: "openclaw-control-ui",
+        version: "test",
+        platform: "test",
+        mode: "webchat",
+        ...connect?.client,
+      },
+      device: connect?.device && {
+        id: "test-device",
+        publicKey: "test-key",
+        signature: "test-signature",
+        signedAt: 1,
+        nonce: "test-nonce",
+        ...connect.device,
+      },
+    },
+  };
+}
+
+function registerClient(
+  handler: GatewayWsMessageHandlerParams,
+  socket: Parameters<typeof makeClient>[0],
+  overrides?: Parameters<typeof makeClient>[2],
+) {
+  const client = makeClient(socket, handler.connId, overrides);
+  expect(handler.setClient(client)).toBe(true);
+  return client;
+}
+
+async function openSocketPair() {
+  const server = new Ws.WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await once(server, "listening");
+  const accepted = once(server, "connection");
+  const peer = new Ws.WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}`);
+  await once(peer, "open");
+  const [socket, request] = (await accepted) as [Ws.WebSocket, IncomingMessage];
+  return { server, peer, socket, request };
+}
+
+async function closeSocketPair({ server, peer }: Awaited<ReturnType<typeof openSocketPair>>) {
+  peer.terminate();
+  for (const socket of server.clients) {
+    socket.terminate();
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
 }
 
 async function connectTestWs(
@@ -111,7 +182,9 @@ async function connectTestWs(
     clients: connected.clients,
     logWsControl,
     socket: connected.socket,
-    passed: firstAttachedHandlerParams(),
+    get passed() {
+      return firstAttachedHandlerParams();
+    },
   };
 }
 
@@ -153,25 +226,13 @@ describe("attachGatewayWsConnectionHandler", () => {
     first.listeners.get("connection")!(second, first.upgradeReq);
     await waitForLazyMessageHandler();
     expect(attachGatewayWsMessageHandlerMock).toHaveBeenCalledTimes(2);
-    const handlers = attachGatewayWsMessageHandlerMock.mock.calls.map(
-      ([handler]) =>
-        handler as import("./ws-connection/message-handler-types.js").GatewayWsMessageHandlerParams,
-    );
+    const handlers = attachGatewayWsMessageHandlerMock.mock.calls.map(([handler]) => handler);
     try {
       for (const [index, socket] of [first.socket, second].entries()) {
         const handler = handlers[index]!;
-        expect(
-          handler.setClient({
-            socket,
-            connId: handler.connId,
-            connect: {
-              role: "operator",
-              scopes: ["operator.read"],
-              client: { id: "openclaw-control-ui", mode: "webchat" },
-            } as GatewayWsClient["connect"],
-            usesSharedGatewayAuth: false,
-          }),
-        ).toBe(true);
+        registerClient(handler, socket, {
+          connect: { role: "operator", scopes: ["operator.read"] },
+        });
       }
       await yieldImmediate();
       await waitForDiagnosticEventsDrained();
@@ -307,10 +368,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     });
 
     expect(attachGatewayWsMessageHandlerMock).toHaveBeenCalledTimes(1);
-    const handlerParams = passed as {
-      getResolvedAuth: () => ResolvedGatewayAuth;
-      getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
-    };
+    const handlerParams = passed;
 
     currentAuth = createResolvedGatewayTokenAuth("token-after");
 
@@ -330,25 +388,16 @@ describe("attachGatewayWsConnectionHandler", () => {
       const { passed, socket, clients } = await connectTestWs({
         options: { getPluginNodeCapabilities: () => surfaces },
       });
-      const handler = passed as {
-        setClient: (client: unknown) => boolean;
-        send: (frame: unknown) => { kind: string };
-        pluginNodeCapabilities: PluginNodeCapabilitySurface[];
-      };
+      const handler = passed;
       expect(handler.pluginNodeCapabilities).toEqual([]);
       surfaces = [{ surface: "documents", scopeKey: "publisher:documents" }];
-      const node = {
-        socket,
+      const node = makeClient(socket, "pending-node", {
         connect: {
           role: "node",
-          minProtocol: PROTOCOL_VERSION,
-          maxProtocol: PROTOCOL_VERSION,
           caps: [capability],
           client: { id: "openclaw-macos", mode: "node" },
         },
-        connId: "pending-node",
-        usesSharedGatewayAuth: false,
-      };
+      });
 
       try {
         expect(handler.setClient(node)).toBe(accepted);
@@ -386,22 +435,17 @@ describe("attachGatewayWsConnectionHandler", () => {
       },
     });
 
-    const handlerParams = passed as { pluginSurfaceBaseUrl?: string };
+    const handlerParams = passed;
     expect(handlerParams.pluginSurfaceBaseUrl).toBe("https://gateway.example.com:443");
   });
 
   it("rejects late client registration after a pre-connect socket close", async () => {
     const clients = new GatewayClientRegistry();
     const { passed, socket } = await connectTestWs({ clients });
-    const handlerParams = passed as { setClient: (client: unknown) => boolean };
+    const handlerParams = passed;
     socket.emit("close", 1001, Buffer.from("client left"));
 
-    const registered = handlerParams.setClient({
-      socket,
-      connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
-      connId: "late-client",
-      usesSharedGatewayAuth: false,
-    });
+    const registered = handlerParams.setClient(makeClient(socket, "late-client"));
 
     expect(registered).toBe(false);
     expect(clients.size).toBe(0);
@@ -409,20 +453,8 @@ describe("attachGatewayWsConnectionHandler", () => {
 
   it("ends delivery subscriptions before connection-owned Talk cleanup", async () => {
     const { passed, socket } = await connectTestWs();
-    const handlerParams = passed as {
-      connId: string;
-      setClient: (client: unknown) => boolean;
-      getClient: () => GatewayWsClient | null;
-    };
-    expect(
-      handlerParams.setClient({
-        socket,
-        connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
-        connId: handlerParams.connId,
-        usesSharedGatewayAuth: false,
-        connectionSignal: AbortSignal.abort(),
-      }),
-    ).toBe(true);
+    const handlerParams = passed;
+    registerClient(handlerParams, socket, { connectionSignal: AbortSignal.abort() });
 
     const signal = handlerParams.getClient()?.connectionSignal;
     expect(signal?.aborted).toBe(false);
@@ -447,16 +479,8 @@ describe("attachGatewayWsConnectionHandler", () => {
       terminate: vi.fn(),
     });
     const { passed } = await connectTestWs({ socket });
-    const handlerParams = passed as { setClient: (client: unknown) => boolean };
-    expect(
-      handlerParams.setClient({
-        socket,
-        connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
-        connId: "ping-client",
-        presenceKey: "ping-client",
-        usesSharedGatewayAuth: false,
-      }),
-    ).toBe(true);
+    const handlerParams = passed;
+    registerClient(handlerParams, socket, { connId: "ping-client", presenceKey: "ping-client" });
 
     vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
@@ -481,13 +505,8 @@ describe("attachGatewayWsConnectionHandler", () => {
       flush = callback;
     });
     const { passed, clients } = await connectTestWs({ socket });
-    const handler = passed as { setClient: (client: unknown) => boolean };
-    handler.setClient({
-      socket,
-      connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
-      connId: "congested",
-      usesSharedGatewayAuth: false,
-    });
+    const handler = passed;
+    handler.setClient(makeClient(socket, "congested"));
     vi.advanceTimersByTime(25_000);
     socket.bufferedAmount = 4 * 1024 * 1024;
     vi.advanceTimersByTime(24_000);
@@ -512,7 +531,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     socket.terminate.mockImplementation(() => socket.emit("close", 1006, Buffer.alloc(0)));
     const connectionWork = new GatewayConnectionWork();
     const { passed } = await connectTestWs({ socket, options: { connectionWork } });
-    const handlerParams = passed as { send: (frame: unknown) => { kind: string } };
+    const handlerParams = passed;
     socket.send.mockClear();
     socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
 
@@ -540,18 +559,10 @@ describe("attachGatewayWsConnectionHandler", () => {
     const connectionWork = new GatewayConnectionWork();
     const clients = new GatewayClientRegistry();
     const { passed } = await connectTestWs({ clients, socket, options: { connectionWork } });
-    const handlerParams = passed as {
-      connId: string;
-      setClient: (client: GatewayWsClient) => boolean;
-    };
-    expect(
-      handlerParams.setClient({
-        socket: socket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.read"] },
-        connId: handlerParams.connId,
-        usesSharedGatewayAuth: false,
-      } as GatewayWsClient),
-    ).toBe(true);
+    const handlerParams = passed;
+    registerClient(handlerParams, socket, {
+      connect: { role: "operator", scopes: ["operator.read"] },
+    });
     socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
 
     const lifecycleTimerCount = vi.getTimerCount();
@@ -571,12 +582,8 @@ describe("attachGatewayWsConnectionHandler", () => {
   });
 
   it("batches a broadcast burst into one socket write while preserving response order", async () => {
-    const server = new Ws.WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await once(server, "listening");
-    const accepted = once(server, "connection");
-    const peer = new Ws.WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}`);
-    await once(peer, "open");
-    const [socket, request] = (await accepted) as [Ws.WebSocket, IncomingMessage];
+    const pair = await openSocketPair();
+    const { socket, request, peer } = pair;
     const writes = vi.spyOn(request.socket, "write");
     try {
       const { clients } = attachGatewayWsForTest({
@@ -585,30 +592,8 @@ describe("attachGatewayWsConnectionHandler", () => {
         requestSocket: request.socket,
       });
       await waitForLazyMessageHandler();
-      const handler = firstAttachedHandlerParams() as {
-        connId: string;
-        setClient: (client: GatewayWsClient) => boolean;
-        send: (frame: unknown) => unknown;
-      };
-      expect(
-        handler.setClient({
-          socket,
-          connId: handler.connId,
-          connect: {
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
-            client: {
-              id: "openclaw-control-ui",
-              version: "test",
-              platform: "test",
-              mode: "webchat",
-            },
-            role: "operator",
-            scopes: ["operator.read"],
-          },
-          usesSharedGatewayAuth: false,
-        }),
-      ).toBe(true);
+      const handler = firstAttachedHandlerParams();
+      registerClient(handler, socket, { connect: { role: "operator", scopes: ["operator.read"] } });
       writes.mockClear();
       const received: unknown[] = [];
       const complete = createDeferred();
@@ -638,38 +623,22 @@ describe("attachGatewayWsConnectionHandler", () => {
       expect(writes).toHaveBeenCalledTimes(1);
       expect(writes.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
     } finally {
-      peer.terminate();
-      socket.terminate();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeSocketPair(pair);
     }
   });
 
   it.each(["closing", "failed-send"] as const)(
     "retires a real %s WebSocket without silently losing its peer",
     async (failure) => {
-      const server = new Ws.WebSocketServer({ host: "127.0.0.1", port: 0 });
-      await once(server, "listening");
-      const accepted = once(server, "connection");
-      const peer = new Ws.WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}`);
-      await once(peer, "open");
-      const [socket] = (await accepted) as [Ws.WebSocket];
+      const pair = await openSocketPair();
+      const { socket, peer } = pair;
 
       try {
         const { clients, passed } = await connectTestWs({
           socket: socket as unknown as GatewayWsTestSocket,
         });
-        const handlerParams = passed as {
-          send: (frame: unknown) => { kind: string };
-          setClient: (client: unknown) => boolean;
-        };
-        handlerParams.setClient({
-          socket,
-          connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
-          connId: "real-closing-client",
-          usesSharedGatewayAuth: false,
-        });
+        const handlerParams = passed;
+        handlerParams.setClient(makeClient(socket, "real-closing-client"));
 
         if (failure === "closing") {
           socket.close(1000, "real close race");
@@ -691,13 +660,7 @@ describe("attachGatewayWsConnectionHandler", () => {
         expect(clients.size).toBe(0);
         await vi.waitFor(() => expect(peer.readyState).toBe(Ws.WebSocket.CLOSED));
       } finally {
-        peer.terminate();
-        for (const activeSocket of server.clients) {
-          activeSocket.terminate();
-        }
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await closeSocketPair(pair);
       }
     },
   );
@@ -717,16 +680,8 @@ describe("attachGatewayWsConnectionHandler", () => {
           }) as never,
       },
     });
-    const handler = passed as {
-      connId: string;
-      send: (frame: unknown) => { kind: string };
-      setClient: (client: GatewayWsClient) => boolean;
-      nodeLifecycleDispatch: {
-        dispatch: (method: string, run: () => Promise<void>) => Promise<void>;
-      };
-    };
-    const nodeClient: GatewayWsClient = {
-      socket: socket as unknown as GatewayWsClient["socket"],
+    const handler = passed;
+    const nodeClient = makeClient(socket, handler.connId, {
       connect: {
         minProtocol: 1,
         maxProtocol: 1,
@@ -745,20 +700,17 @@ describe("attachGatewayWsConnectionHandler", () => {
           nonce: "draining-nonce",
         },
       },
-      connId: handler.connId,
-      usesSharedGatewayAuth: false,
-    };
+    });
     expect(handler.setClient(nodeClient)).toBe(true);
     expect(nodeClient.connectionSignal?.aborted).toBe(false);
     const subscriptionEnded = vi.fn();
     nodeClient.connectionSignal?.addEventListener("abort", subscriptionEnded);
     const healthySocket = createGatewayWsTestSocket();
-    clients.add({
-      socket: healthySocket as unknown as GatewayWsClient["socket"],
-      connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-      connId: "healthy-during-node-drain",
-      usesSharedGatewayAuth: false,
-    });
+    clients.add(
+      makeClient(healthySocket, "healthy-during-node-drain", {
+        connect: { role: "operator", scopes: ["operator.read"] },
+      }),
+    );
     const { promise: pending, resolve: releaseDispatch } = createDeferred();
     const dispatch = handler.nodeLifecycleDispatch.dispatch("node.invoke.result", () => pending);
     socket.send.mockClear();
@@ -798,18 +750,8 @@ describe("attachGatewayWsConnectionHandler", () => {
   it("distinguishes serialization failure from unavailable transports", async () => {
     const socket = Object.assign(createGatewayWsTestSocket(), { terminate: vi.fn() });
     const { clients, passed } = await connectTestWs({ socket });
-    const handlerParams = passed as {
-      send: (frame: unknown) => { kind: string; error?: unknown };
-      setClient: (client: unknown) => boolean;
-    };
-    expect(
-      handlerParams.setClient({
-        socket,
-        connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
-        connId: "failed-response-client",
-        usesSharedGatewayAuth: false,
-      }),
-    ).toBe(true);
+    const handlerParams = passed;
+    registerClient(handlerParams, socket, { connId: "failed-response-client" });
     socket.send.mockClear();
 
     const cyclic: { self?: unknown } = {};
@@ -932,19 +874,12 @@ describe("attachGatewayWsConnectionHandler", () => {
         socket.emit("close", 1006, Buffer.alloc(0));
       });
       const { logWsControl, passed } = await connectTestWs({ socket });
-      const handlerParams = passed as {
-        setClient: (client: never) => boolean;
-      };
+      const handlerParams = passed;
 
-      expect(
-        handlerParams.setClient({
-          socket,
-          connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
-          connId: "conn-authenticated-user",
-          authenticatedUserId: "alice@example.com",
-          usesSharedGatewayAuth: false,
-        } as never),
-      ).toBe(true);
+      registerClient(handlerParams, socket, {
+        connId: "conn-authenticated-user",
+        authenticatedUserId: "alice@example.com",
+      });
 
       if (write === "pending") {
         vi.advanceTimersByTime(25_000);
@@ -999,29 +934,21 @@ describe("attachGatewayWsConnectionHandler", () => {
           }) as never,
       },
     });
-    const handler = passed as {
-      connId: string;
-      setClient: (client: unknown) => boolean;
-    };
+    const handler = passed;
     get.mockReturnValue({
       nodeId: "node-1",
       connId: handler.connId,
       connectedAtMs: 1_000,
       pairingGeneration: "generation-1",
     });
-    expect(
-      handler.setClient({
-        socket,
-        connect: {
-          role: "node",
-          client: { id: "openclaw-macos", mode: "node" },
-          device: { id: "node-1" },
-        },
-        connId: handler.connId,
-        presenceKey: "node-1",
-        usesSharedGatewayAuth: false,
-      }),
-    ).toBe(true);
+    registerClient(handler, socket, {
+      connect: {
+        role: "node",
+        client: { id: "openclaw-macos", mode: "node" },
+        device: { id: "node-1" },
+      },
+      presenceKey: "node-1",
+    });
 
     socket.emit("close", 1000, Buffer.from("done"));
 
@@ -1050,22 +977,16 @@ describe("attachGatewayWsConnectionHandler", () => {
           }) as never,
       },
     });
-    const handler = passed as {
-      setClient: (client: unknown) => boolean;
-    };
-    expect(
-      handler.setClient({
-        socket,
-        connect: {
-          role: "node",
-          client: { id: "openclaw-macos", mode: "node" },
-          device: { id: "node-1" },
-        },
-        connId: "conn-old",
-        presenceKey: "node-1",
-        usesSharedGatewayAuth: false,
-      }),
-    ).toBe(true);
+    const handler = passed;
+    registerClient(handler, socket, {
+      connId: "conn-old",
+      connect: {
+        role: "node",
+        client: { id: "openclaw-macos", mode: "node" },
+        device: { id: "node-1" },
+      },
+      presenceKey: "node-1",
+    });
 
     socket.emit("close", 1000, Buffer.from("stale"));
 
