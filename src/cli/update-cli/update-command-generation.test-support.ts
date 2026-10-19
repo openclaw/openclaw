@@ -39,6 +39,10 @@ export function registerGenerationRecoveryTests(
     "restores the previous running generation after candidate stamp advancement (content changed=%s)",
     async (contentChanged) => {
       const { root, configPath, mocks } = fixture();
+      const readConfig = async () => JSON.parse(await fs.readFile(configPath, "utf8"));
+      const entryPath = path.join(root, "dist/index.js");
+      const readEntry = () => fs.readFile(entryPath);
+      const writeConfig = (config: unknown) => fs.writeFile(configPath, JSON.stringify(config));
       process.env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, ".openclaw") };
       const run = {
@@ -73,14 +77,11 @@ export function registerGenerationRecoveryTests(
         updateRun: run,
         recordPhase,
       });
-      const previousBytes = await fs.readFile(path.join(root, "dist/index.js"));
-      await fs.writeFile(
-        path.join(root, "dist/index.js"),
-        "throw new Error('candidate activation');\n",
-      );
-      const candidateConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
+      const previousBytes = await readEntry();
+      await fs.writeFile(entryPath, "throw new Error('candidate activation');\n");
+      const candidateConfig = await readConfig();
       candidateConfig.meta.lastTouchedVersion = "9999.1.1";
-      await fs.writeFile(configPath, JSON.stringify(candidateConfig));
+      await writeConfig(candidateConfig);
       const activationConfig = {
         ...(await readUpdateConfigSnapshot(configPath)),
         raw: configSnapshot.raw,
@@ -88,28 +89,23 @@ export function registerGenerationRecoveryTests(
       if (contentChanged) {
         candidateConfig.gateway.port = 19306;
       }
-      await fs.writeFile(configPath, JSON.stringify(candidateConfig));
+      await writeConfig(candidateConfig);
       let restores = 0;
       mocks.child.mockImplementation(async (_args, options) => {
+        const childEnv = typeof options === "object" ? options.env : undefined;
+        const allowance =
+          typeof options === "object" && childEnv?.[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV];
         if (restores === 0) {
-          expect(
-            typeof options === "object" &&
-              options.env?.[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV],
-          ).toBeUndefined();
+          expect(allowance).toBeUndefined();
           mocks.running = false;
           throw new Error("candidate gateway exited 70");
         }
-        expect(
-          typeof options === "object" && options.env?.[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV],
-        ).toBe("1");
-        expect(JSON.parse(await fs.readFile(configPath, "utf8")).meta.lastTouchedVersion).toBe(
-          VERSION,
-        );
-        expect(await fs.readFile(path.join(root, "dist/index.js"))).toEqual(previousBytes);
+        expect(allowance).toBe("1");
+        expect((await readConfig()).meta.lastTouchedVersion).toBe(VERSION);
+        expect(await readEntry()).toEqual(previousBytes);
         // Exercise the previous binary's real lifecycle/version guard with the child env.
-        const healthy = await withOwnedManagedUpdateEnv(
-          typeof options === "object" ? options.env : undefined,
-          () => runDaemonRestart({ json: true, preserveDefinition: true }),
+        const healthy = await withOwnedManagedUpdateEnv(childEnv, () =>
+          runDaemonRestart({ json: true, preserveDefinition: true }),
         );
         return commandResult({
           code: healthy ? 0 : 1,
@@ -158,7 +154,7 @@ export function registerGenerationRecoveryTests(
           backupRoot: path.join(root, "backup"),
           rollback: async () => {
             restores++;
-            await fs.writeFile(path.join(root, "dist/index.js"), previousBytes);
+            await fs.writeFile(entryPath, previousBytes);
             return {
               name: "package rollback",
               activePackageRoot: root,
@@ -179,10 +175,12 @@ export function registerGenerationRecoveryTests(
       expect(before.serviceEnv?.[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV]).toBeUndefined();
       if (contentChanged) {
         expect(restores).toBe(0);
-        expect(record.reason).toBe("state-migrated-no-rollback");
-        expect(record.status).toBe("failed");
-        expect(record.verification.serviceRunning).toBe(false);
-        expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(candidateConfig);
+        expect(record).toMatchObject({
+          reason: "state-migrated-no-rollback",
+          status: "failed",
+          verification: { serviceRunning: false },
+        });
+        expect(await readConfig()).toEqual(candidateConfig);
       } else {
         expect(restores).toBe(1);
         expect(mocks.running).toBe(true);

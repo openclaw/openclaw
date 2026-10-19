@@ -114,12 +114,6 @@ it("changes an include-owned requested update channel under a live executor", as
         configSnapshot: snapshot,
         requestedChannel: "beta",
         assertCurrent: fence.assertCurrent,
-      }).catch(async (error: unknown) => {
-        // Distinguish capability refusal from a revoked fixture or lost input.
-        fence.assertCurrent();
-        expect(JSON.parse(await fs.readFile(include, "utf8")).channel).toBe("stable");
-        expect(await fs.readFile(state.configPath, "utf8")).toBe(originalRoot);
-        throw error;
       });
       expect(result.config.update?.channel).toBe("beta");
       fence.assertCurrent();

@@ -28,18 +28,24 @@ import * as runtimePlan from "./update-command-runtime-preflight.js";
 import * as commandTriage from "./update-command-triage.js";
 import { updateCommand } from "./update-command.js";
 
+function withDatabase<T>(filename: string, readOnly: boolean, use: (db: DatabaseSync) => T): T {
+  const db = new DatabaseSync(filename, { readOnly });
+  try {
+    return use(db);
+  } finally {
+    db.close();
+  }
+}
+
 export function createSelectedTargetStateDatabase(databasePath: string) {
   openOpenClawStateDatabase();
   closeOpenClawStateDatabaseForTest();
-  const db = new DatabaseSync(databasePath);
-  try {
+  withDatabase(databasePath, false, (db) => {
     removePreparedWorkerOwnershipColumns(db);
     db.exec(
       "PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16, app_version='2026.9.2'",
     );
-  } finally {
-    db.close();
-  }
+  });
 }
 
 function expectOriginalCapture(params: {
@@ -59,22 +65,20 @@ function expectOriginalCapture(params: {
   if (params.previousRunId !== undefined) {
     assert(captured?.kind === "file");
     expect(captured.sqlite).toBe(true);
-    const original = new DatabaseSync(
+    withDatabase(
       path.join(path.dirname(params.manifestPath), captured.archivePath),
-      { readOnly: true },
+      true,
+      (original) => {
+        expect(
+          original
+            .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+            .get("fixture.original"),
+        ).toEqual({ value_json: '{"message":"acknowledged before update"}' });
+        expect(original.prepare("SELECT run_id FROM update_runs ORDER BY run_id").all()).toEqual([
+          { run_id: params.previousRunId },
+        ]);
+      },
     );
-    try {
-      expect(
-        original
-          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-          .get("fixture.original"),
-      ).toEqual({ value_json: '{"message":"acknowledged before update"}' });
-      expect(original.prepare("SELECT run_id FROM update_runs ORDER BY run_id").all()).toEqual([
-        { run_id: params.previousRunId },
-      ]);
-    } finally {
-      original.close();
-    }
   } else {
     expect(captured).toEqual({
       kind: "missing",
@@ -105,12 +109,7 @@ export function registerOriginalCaptureTests({
     { schema: OPENCLAW_STATE_SCHEMA_VERSION + 1, existing: false, refused: false },
     { schema: OPENCLAW_STATE_SCHEMA_VERSION, existing: true, refused: false },
     { schema: OPENCLAW_STATE_SCHEMA_VERSION, existing: true, refused: true },
-    {
-      schema: OPENCLAW_STATE_SCHEMA_VERSION,
-      existing: true,
-      refused: true,
-      releaseDenied: true,
-    },
+    { schema: OPENCLAW_STATE_SCHEMA_VERSION, existing: true, refused: true, releaseDenied: true },
   ])(
     "captures original state before parent history (schema=$schema, existing=$existing, refused=$refused, release denied=$releaseDenied)",
     async ({ schema, existing, refused, releaseDenied = false }) => {
@@ -118,16 +117,13 @@ export function registerOriginalCaptureTests({
       if (previousRunId) {
         finishUpdateRun(previousRunId, { status: "succeeded" });
         await closeOpenClawStateDatabaseAsync();
-        const original = new DatabaseSync(fixture.databasePath);
-        try {
+        withDatabase(fixture.databasePath, false, (original) => {
           original
             .prepare(
               "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
             )
             .run("fixture.original", '{"message":"acknowledged before update"}', 1);
-        } finally {
-          original.close();
-        }
+        });
       }
       const captureRoot = refused ? dirs.make("managed-refused-update-") : fixture.root;
       if (refused) {
@@ -161,19 +157,15 @@ export function registerOriginalCaptureTests({
             admittedRecord = getUpdateRun(admittedRun.runId, { env: admittedRun.env });
             expect(admittedRecord).toMatchObject({ status: "running", finishedAtMs: null });
             expect(admittedRecord?.phase).not.toBe("finished");
-            const db = new DatabaseSync(
-              path.join(
-                tempRoot.resolvePreferredOpenClawTmpDir(),
-                "managed-update-handoffs.sqlite",
-              ),
+            const leasePath = path.join(
+              tempRoot.resolvePreferredOpenClawTmpDir(),
+              "managed-update-handoffs.sqlite",
             );
-            try {
+            withDatabase(leasePath, false, (db) => {
               db.exec(
                 "CREATE TRIGGER deny_refusal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture final lease delete denied'); END",
               );
-            } finally {
-              db.close();
-            }
+            });
             return handleFailure;
           },
         );
@@ -195,30 +187,18 @@ export function registerOriginalCaptureTests({
       const doctor = vi
         .spyOn(initialization, "initializeUpdateStateFromTarget")
         .mockImplementation(async () => {
-          openOpenClawStateDatabase();
-          closeOpenClawStateDatabaseForTest();
-          const db = new DatabaseSync(fixture.databasePath);
-          try {
-            db.exec(
-              `PRAGMA user_version=${schema}; UPDATE schema_meta SET schema_version=${schema}`,
-            );
-          } finally {
-            db.close();
-          }
+          throw new Error("Original capture must precede target initialization");
         });
       const execute = vi
         .spyOn(execution, "executeMutableUpdate")
         .mockImplementation(async (params) => {
           const run = params.opts.run;
           assert(run);
-          const db = new DatabaseSync(fixture.databasePath, { readOnly: true });
-          try {
+          withDatabase(fixture.databasePath, true, (db) => {
             expect(db.prepare("PRAGMA user_version").get()).toEqual({
               user_version: OPENCLAW_STATE_SCHEMA_VERSION,
             });
-          } finally {
-            db.close();
-          }
+          });
           expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
           const ref = run.originalRecoveryCapture;
           assert(ref);
