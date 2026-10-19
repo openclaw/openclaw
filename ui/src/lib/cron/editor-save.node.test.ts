@@ -7,42 +7,12 @@ import type { CronStoredJob } from "../../../../src/cron/types.js";
 import { createTestGatewayScheduler } from "../../../../src/test-utils/gateway-scheduler-clock.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CronJob } from "../../api/types.ts";
-import { addCronJob, cancelCronEdit, createInitialCronState, startCronEdit } from "./index.ts";
-import type { CronState } from "./types.ts";
-
-function createCronJob(overrides: Pick<CronJob, "id" | "name">): CronJob {
-  return {
-    ...overrides,
-    enabled: true,
-    createdAtMs: 0,
-    updatedAtMs: 0,
-    configRevision: "config-revision-1",
-    schedule: { kind: "cron", expr: "0 * * * *" },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "run" },
-    state: {},
-  };
-}
-
-function cronJobsListResponse(jobs: CronJob[]) {
-  return {
-    jobs,
-    snapshotRevision: "editor-jobs",
-    total: jobs.length,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
-  };
-}
-
-function createStateWithRequest(request: unknown, overrides: Partial<CronState>): CronState {
-  return {
-    ...createInitialCronState({ connected: true, client: { request } as CronState["client"] }),
-    ...overrides,
-  };
-}
+import {
+  createStateWithRequest,
+  createCronJob,
+  cronJobsListResponse,
+} from "./cron.test-support.ts";
+import { addCronJob, cancelCronEdit, startCronEdit } from "./index.ts";
 
 function applyWirePatch(stored: CronStoredJob, params: unknown) {
   // Exercise the Gateway's normalization against the serialized UI request.
@@ -56,10 +26,43 @@ function applyWirePatch(stored: CronStoredJob, params: unknown) {
   return patch.schedule;
 }
 
+function wireEditor(initial: CronStoredJob, create?: (input: unknown) => CronStoredJob) {
+  let stored = initial;
+  let submittedSchedule: unknown;
+  const readJob = (): CronJob => ({ ...structuredClone(stored), configRevision: "revision" });
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "cron.add" && create) {
+      stored = create(params);
+    } else if (method === "cron.update") {
+      submittedSchedule = applyWirePatch(stored, params);
+    } else if (method === "cron.list") {
+      return cronJobsListResponse([readJob()]);
+    } else if (method !== "cron.get" || create) {
+      return { enabled: !create, jobs: 1 };
+    }
+    return readJob();
+  });
+  const state = createStateWithRequest(request, { cronJobs: create ? [] : [readJob()] });
+  return {
+    state,
+    readJob,
+    get stored() {
+      return stored;
+    },
+    get submittedSchedule() {
+      return submittedSchedule;
+    },
+    reopen() {
+      cancelCronEdit(state, null);
+      startCronEdit(state, readJob());
+    },
+  };
+}
+
 it.each(["save", "conflict read", "conflict read failure"] as const)(
   "preserves a reopened editor when an earlier %s settles",
   async (pendingPhase) => {
-    const job = createCronJob({ id: "reopened-job", name: "Saved definition" });
+    const job = createCronJob("reopened-job", "Saved definition");
     const updated = { ...job, name: "Earlier save", configRevision: "earlier-save-revision" };
     const pending = createDeferred<CronJob>();
     const conflict = Object.assign(new Error("Definition changed"), {
@@ -106,7 +109,6 @@ it.each(["save", "conflict read", "conflict read failure"] as const)(
     expect(state.cronEditingJob).toBe(job);
     expect(state.cronForm).toBe(reopenedForm);
     expect(state.cronForm.name).toBe("Newer unsaved edit");
-    expect(state.cronEditingJob?.configRevision).toBe(job.configRevision);
     expect(state.cronError).toBe("New editor feedback");
     expect(state.cronBusy).toBe(false);
     expect(state.cronJobs).toEqual([updated]);
@@ -136,26 +138,9 @@ it.each([
       payload: { kind: "systemEvent", text: "Synthetic paused task" },
       state: {},
     } satisfies CronStoredJob;
-    const readJob = (): CronJob => ({
-      ...structuredClone(stored),
-      configRevision: "stagger-revision",
-    });
-    let submittedSchedule: unknown;
-    const request = vi.fn(async (method: string, params?: { patch?: unknown }) => {
-      if (method === "cron.update") {
-        submittedSchedule = applyWirePatch(stored, params);
-        return readJob();
-      }
-      if (method === "cron.get") {
-        return readJob();
-      }
-      if (method === "cron.list") {
-        return cronJobsListResponse([readJob()]);
-      }
-      return { enabled: true, jobs: 1 };
-    });
-    const state = createStateWithRequest(request, { cronJobs: [readJob()] });
-    startCronEdit(state, readJob());
+    const editor = wireEditor(stored);
+    const { state } = editor;
+    startCronEdit(state, editor.readJob());
     state.cronForm = {
       ...state.cronForm,
       description: "Saved from the automation editor",
@@ -167,8 +152,7 @@ it.each([
 
     await expect(addCronJob(state)).resolves.toEqual({ saved: true, jobId: stored.id });
     expect(state.cronError).toBeNull();
-    cancelCronEdit(state, null);
-    startCronEdit(state, readJob());
+    editor.reopen();
 
     expect(stored.schedule).toEqual({ kind: "cron", expr, tz: "UTC", staggerMs: expected });
     expect(state.cronForm).toMatchObject({
@@ -178,7 +162,7 @@ it.each([
       staggerUnit: expected === 300_000 ? "minutes" : "seconds",
     });
     if (unchanged) {
-      expect(submittedSchedule).toBeUndefined();
+      expect(editor.submittedSchedule).toBeUndefined();
     }
   },
 );
@@ -198,7 +182,7 @@ it.each(["create", "edit"] as const)(
         throw new Error("Paused automation must not execute");
       },
     });
-    let stored = createJob(service, {
+    const initial = createJob(service, {
       id: "default-timing",
       name: "Synthetic default timing",
       enabled: false,
@@ -207,30 +191,15 @@ it.each(["create", "edit"] as const)(
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "Synthetic paused task" },
     });
-    const readJob = (): CronJob => ({
-      ...structuredClone(stored),
-      configRevision: "default-timing-revision",
+    const editor = wireEditor(initial, (params) => {
+      const serialized = JSON.stringify(params);
+      const input = normalizeCronJobCreate(JSON.parse(serialized));
+      if (!input) {
+        throw new Error("Expected a valid automation create request");
+      }
+      return createJob(service, input);
     });
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "cron.add") {
-        const serialized = JSON.stringify(params);
-        const input = normalizeCronJobCreate(JSON.parse(serialized));
-        if (!input) {
-          throw new Error("Expected a valid automation create request");
-        }
-        stored = createJob(service, input);
-        return readJob();
-      }
-      if (method === "cron.update") {
-        applyWirePatch(stored, params);
-        return readJob();
-      }
-      if (method === "cron.list") {
-        return cronJobsListResponse([readJob()]);
-      }
-      return { enabled: false, jobs: 1 };
-    });
-    const state = createStateWithRequest(request, {});
+    const { state } = editor;
     if (operation === "create") {
       state.cronForm = {
         ...state.cronForm,
@@ -244,28 +213,26 @@ it.each(["create", "edit"] as const)(
         payloadText: "Synthetic paused task",
       };
     } else {
-      startCronEdit(state, readJob());
+      startCronEdit(state, editor.readJob());
       state.cronForm.cronTz = "America/New_York";
     }
-    const saved = await addCronJob(state);
-    expect(saved).toEqual({ saved: true, jobId: stored.id });
-    cancelCronEdit(state, null);
-    startCronEdit(state, readJob());
-    expect(stored.schedule).toEqual({
+    expect(await addCronJob(state)).toEqual({ saved: true, jobId: editor.stored.id });
+    editor.reopen();
+    expect(editor.stored.schedule).toEqual({
       kind: "cron",
       expr: "0 7 * * *",
       tz: operation === "create" ? "UTC" : "America/New_York",
     });
-    expect(state.cronForm.scheduleExact).toBe(false);
-    expect(state.cronForm.staggerAmount).toBe("");
+    expect(state.cronForm).toMatchObject({ scheduleExact: false, staggerAmount: "" });
 
     state.cronForm.cronExpr = "0 * * * *";
-    await expect(addCronJob(state)).resolves.toEqual({ saved: true, jobId: stored.id });
-    cancelCronEdit(state, null);
-    startCronEdit(state, readJob());
-    expect(stored.schedule).toMatchObject({ kind: "cron", staggerMs: 300_000 });
-    expect(state.cronForm.scheduleExact).toBe(false);
-    expect(state.cronForm.staggerAmount).toBe("5");
-    expect(state.cronForm.staggerUnit).toBe("minutes");
+    await expect(addCronJob(state)).resolves.toEqual({ saved: true, jobId: editor.stored.id });
+    editor.reopen();
+    expect(editor.stored.schedule).toMatchObject({ kind: "cron", staggerMs: 300_000 });
+    expect(state.cronForm).toMatchObject({
+      scheduleExact: false,
+      staggerAmount: "5",
+      staggerUnit: "minutes",
+    });
   },
 );
