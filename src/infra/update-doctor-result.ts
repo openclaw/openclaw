@@ -253,7 +253,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
           migrationSource: (pathname) =>
             migratedSources.has(pathname) ? undefined : expectedGenerations?.[pathname],
           assertCurrent: () => options.assertCurrent?.(),
-          accept(pathname, before, after) {
+          accept(pathname, before, after, retainSource) {
             options.assertCurrent?.();
             const expected = expectedGenerations;
             if (!expected || !Object.hasOwn(expected, pathname) || expected[pathname] !== before) {
@@ -261,7 +261,9 @@ export function createUpdateDoctorDatabaseWriteCapture(
               return;
             }
             expected[pathname] = after;
-            migratedSources.add(pathname);
+            if (!retainSource) {
+              migratedSources.add(pathname);
+            }
           },
           refuse(message) {
             unchanged = false;

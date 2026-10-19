@@ -16,7 +16,12 @@ export type UpdateDoctorMigrationCapture = {
   expected(pathname: string): string | null | undefined;
   migrationSource(pathname: string): string | null | undefined;
   assertCurrent(): void;
-  accept(pathname: string, before: string | null, after: string | null): void;
+  accept(
+    pathname: string,
+    before: string | null,
+    after: string | null,
+    retainSource?: boolean,
+  ): void;
   refuse(message: string): void;
 };
 
@@ -119,6 +124,7 @@ function observeMigrationClose(
   capture: UpdateDoctorMigrationCapture,
   expected: string | null,
   assertCurrent: () => void,
+  retainSource: boolean,
 ) {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   let closed = false;
@@ -138,7 +144,7 @@ function observeMigrationClose(
       assertCurrent();
       const after = readSqliteGeneration(pathname);
       assertCurrent();
-      capture.accept(pathname, expected, after);
+      capture.accept(pathname, expected, after, retainSource);
     } catch (error) {
       // Failed attribution must not strand a resource that SQLite already closed.
       capture.refuse(
@@ -168,7 +174,7 @@ export function runUpdateSqliteMigration<T>(
   db: DatabaseSync,
   pathname: string,
   operation: () => T,
-  options?: { retainExclusive?: boolean; created?: boolean },
+  options?: { retainExclusive?: boolean; created?: boolean; retainSource?: boolean },
 ): T {
   const context = captures.getStore();
   if (!context?.capture) {
@@ -243,8 +249,15 @@ export function runUpdateSqliteMigration<T>(
           truncateSqliteWal(db, pathname);
           const after = readSqliteGeneration(pathname);
           assertCurrent();
-          capture.accept(pathname, before, after);
-          observeMigrationClose(db, pathname, capture, after, assertCurrent);
+          capture.accept(pathname, before, after, options?.retainSource);
+          observeMigrationClose(
+            db,
+            pathname,
+            capture,
+            after,
+            assertCurrent,
+            options?.retainSource === true,
+          );
           return result;
         });
       } catch (error) {
