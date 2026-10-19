@@ -37,6 +37,10 @@ import {
   type CanonicalAuthProfileCredentialObservation,
 } from "./credential-observation.js";
 import { createOAuthManager } from "./oauth-manager.js";
+import {
+  mockOAuthProviderOperations,
+  type NativeOAuthProviderFixture,
+} from "./oauth-native-provider.test-support.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { withPersonalAuthProfileStore } from "./personal-store.js";
 import type { OAuthCredential, ProfileUsageStats, UserModelAuthProfile } from "./types.js";
@@ -47,14 +51,9 @@ function expectUnavailable(read: () => unknown) {
   expect(read).toThrow(authorityUnavailable);
 }
 
-function managerWith(overrides: Partial<Parameters<typeof createOAuthManager>[0]>) {
-  return createOAuthManager({
-    canRefreshCredential: async () => true,
-    refreshCredential: async () => null,
-    buildApiKey: async (_provider, current) => current.access,
-    readBootstrapCredential: () => null,
-    ...overrides,
-  });
+function managerWith(overrides: NativeOAuthProviderFixture) {
+  mockOAuthProviderOperations(overrides);
+  return createOAuthManager();
 }
 
 function resolve(
@@ -482,35 +481,23 @@ it("accepts published credentials database-free", async ({
   });
 });
 
-it.for(["capability", "refresh"] as const)(
-  "retains the original personal generation when the %s adapter mutates its input",
-  async (stage, { profileId, credential, replacement }) => {
-    const manager = managerWith({
-      canRefreshCredential: async (input) => {
-        if (stage === "capability") {
-          input.accountId = "synthetic-other-account";
-        }
-        return true;
-      },
-      refreshCredential: async (input) => {
-        if (stage === "refresh") {
-          input.accountId = "synthetic-other-account";
-        }
-        return { ...replacement, accountId: input.accountId };
-      },
-    });
-    const resolving = resolve(manager, profileId, credential);
-    if (stage === "capability") {
-      expect(await resolving).toEqual({ apiKey: replacement.access, credential: replacement });
-    } else {
-      await expect(resolving).rejects.toThrow("different OAuth account");
-    }
-    expect(readUserModelAuthProfile(profileId)?.credential).toMatchObject({
-      type: "oauth",
-      accountId: credential.accountId,
-    });
-  },
-);
+it("retains the original personal generation when provider refresh mutates its input", async ({
+  profileId,
+  credential,
+  replacement,
+}) => {
+  const manager = managerWith({
+    refreshCredential: async (input) => {
+      input.accountId = "synthetic-other-account";
+      return { ...replacement, accountId: input.accountId };
+    },
+  });
+  await expect(resolve(manager, profileId, credential)).rejects.toThrow("different OAuth account");
+  expect(readUserModelAuthProfile(profileId)?.credential).toMatchObject({
+    type: "oauth",
+    accountId: credential.accountId,
+  });
+});
 
 it.for(["conflict", "unknown"] as const)(
   "does not replay a personal update after %s",

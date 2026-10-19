@@ -38,14 +38,14 @@ import {
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
+import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
-import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 import "./agent-select-registration.ts";
 import "./settings-save-indicator.tsx";
 import "../styles/settings.css";
-import "./sidebar-build-chip.tsx";
+import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 
 registerSettingsEnglish();
 
@@ -551,11 +551,11 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
             <div class="settings-sidebar__connection">
               <openclaw-settings-save-indicator prop:props={props.saveIndicator} />
             </div>
-            <openclaw-sidebar-build-chip
-              prop:basePath={props.basePath}
-              prop:gatewayVersion={props.gatewayVersion || null}
-              prop:variant="settings"
-              prop:onNavigate={() => props.onNavigate("about")}
+            <SidebarBuildChip
+              basePath={props.basePath}
+              gatewayVersion={props.gatewayVersion || null}
+              variant="settings"
+              onNavigate={() => props.onNavigate("about")}
             />
           </footer>
         </aside>

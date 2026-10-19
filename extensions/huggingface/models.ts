@@ -133,7 +133,6 @@ export async function discoverHuggingfaceModels(
     providerConfig: { baseUrl: HUGGINGFACE_BASE_URL, api: "openai-completions" },
     models: HUGGINGFACE_MODEL_CATALOG,
     discoveryApiKey: trimmedKey,
-    signal: AbortSignal.timeout(requestTimeoutMs),
     timeoutMs: requestTimeoutMs,
     ttlMs: 0,
     readRows: readHuggingfaceModelRows,

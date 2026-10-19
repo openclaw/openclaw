@@ -27,17 +27,15 @@ function collapseErrorSnippet(text: string): string {
 
 type NextcloudTalkSendOpts = {
   cfg: CoreConfig;
-  secret?: string;
   accountId?: string;
   replyTo?: string;
-  timeoutMs?: number;
 };
 
 function resolveNextcloudTalkSendContext(opts: NextcloudTalkSendOpts) {
   const cfg = requireRuntimeConfig(opts.cfg, "Nextcloud Talk send") as CoreConfig;
   const account = resolveNextcloudTalkAccount({ cfg, accountId: opts.accountId });
   const baseUrl = account.baseUrl;
-  const secret = opts.secret?.trim() ?? account.secret;
+  const secret = account.secret;
 
   if (!baseUrl) {
     throw new Error(
@@ -69,7 +67,6 @@ async function postNextcloudTalkBot(params: {
   payload: object;
   signedValue: string;
   auditContext: string;
-  timeoutMs?: number;
   beforeRequest?: () => void;
 }) {
   const { account, baseUrl, secret } = params.context;
@@ -95,7 +92,7 @@ async function postNextcloudTalkBot(params: {
     policy: ssrfPolicyFromPrivateNetworkOptIn(
       account.config.network?.dangerouslyAllowPrivateNetwork,
     ),
-    timeoutMs: params.timeoutMs ?? NEXTCLOUD_TALK_SEND_TIMEOUT_MS,
+    timeoutMs: NEXTCLOUD_TALK_SEND_TIMEOUT_MS,
   });
   return { ...guarded, signature };
 }
@@ -131,7 +128,6 @@ export async function sendMessageNextcloudTalk(
     signedValue: message,
     beforeRequest: opts.assertDirectAdapterHandoff,
     auditContext: "nextcloud-talk-send",
-    timeoutMs: opts.timeoutMs,
   });
 
   try {
@@ -214,7 +210,7 @@ export async function sendReactionNextcloudTalk(
   messageId: string,
   reaction: string,
   opts: Omit<NextcloudTalkSendOpts, "replyTo">,
-): Promise<{ ok: true }> {
+): Promise<void> {
   const context = resolveNextcloudTalkSendContext(opts);
   const normalizedToken = normalizeRoomToken(roomToken);
 
@@ -224,7 +220,6 @@ export async function sendReactionNextcloudTalk(
     payload: { reaction },
     signedValue: reaction,
     auditContext: "nextcloud-talk-reaction",
-    timeoutMs: opts.timeoutMs,
   });
 
   try {
@@ -232,8 +227,6 @@ export async function sendReactionNextcloudTalk(
       const errorBody = collapseErrorSnippet(await readNextcloudTalkErrorBody(response, signature));
       throw new Error(`Nextcloud Talk reaction failed: ${response.status} ${errorBody}`.trim());
     }
-
-    return { ok: true };
   } finally {
     await release();
   }
