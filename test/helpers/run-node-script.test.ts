@@ -1,11 +1,10 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
-import { isProcessAlive, waitForDead, waitForPidFile } from "./process-wait.js";
+import { waitForDead, waitForPidFile } from "./process-wait.js";
 import { withinTest } from "./promise.js";
 import { runNodeScript } from "./run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
@@ -21,24 +20,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
-
-// The escaped leaf's parent exits, leaving no ChildProcess handle to join.
-async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    for (;;) {
-      signal.throwIfAborted();
-      if (!isProcessAlive(pid)) {
-        return;
-      }
-      await delay(5, undefined, { signal });
-    }
-  } catch (error) {
-    if (signal.aborted) {
-      throw new Error(`process still alive: ${pid}`, { cause: error });
-    }
-    throw error;
-  }
-}
 
 it("captures inherited output written after the script exits", async () => {
   const script = join(tempDirs.make("openclaw-node-script-output-"), "parent.mjs");
@@ -196,7 +177,7 @@ child.once('message',()=>process.exit(0));
       // The leaf writes its PID before ready; only that IPC lets the parent exit.
       const pid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
       expect(Number.isInteger(pid) && pid > 0).toBe(true);
-      await withinTest(waitForProcessExit(pid, signal), signal);
+      await withinTest(waitForDead(pid, signal), signal);
       expect(readFileSync(read, "utf8")).toBe("still owned");
     } finally {
       await cleanup();

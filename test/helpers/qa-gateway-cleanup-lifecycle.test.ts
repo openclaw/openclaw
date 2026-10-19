@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import type { Server } from "node:http";
 import { setImmediate } from "node:timers/promises";
+import { promisify } from "node:util";
 import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi, type TestContext } from "vitest";
-import { createDeferred } from "./promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "./promise.js";
 
 it.for(["cancelled import", "failed import", "failed evidence", "cancelled close"] as const)(
   "joins generation work before reset and the next case (%s)",
@@ -29,6 +30,14 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
       let first: Promise<unknown> | undefined;
       let teardown: Promise<unknown> | undefined;
       const mocks = new Set<string>();
+      const reset = (ids: Iterable<string>) => {
+        for (const id of ids) {
+          vi.doUnmock(id);
+        }
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+        vi.resetModules();
+      };
       const realDoMock = vi.doMock.bind(vi);
       const record = (_name: string, body: (context: TestContext) => Promise<unknown>) => {
         cases.push(body);
@@ -108,21 +117,9 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
               vi.doUnmock(id);
             }
           },
-          restoreAllMocks: () => {
-            if (released) {
-              vi.restoreAllMocks();
-            }
-          },
-          unstubAllEnvs: () => {
-            if (released) {
-              vi.unstubAllEnvs();
-            }
-          },
-          resetModules: () => {
-            if (released) {
-              vi.resetModules();
-            }
-          },
+          restoreAllMocks: () => released && vi.restoreAllMocks(),
+          unstubAllEnvs: () => released && vi.unstubAllEnvs(),
+          resetModules: () => released && vi.resetModules(),
           stubEnv: (key: string, value: string) => {
             if (key === "TMPDIR") {
               roots.add(value);
@@ -132,7 +129,6 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
         },
       }));
       vi.doMock("../e2e/qa-lab/runtime/worker-inference-generation-reload.js", async (original) => {
-        console.log(`lifecycle: ${fault} import barrier reached`);
         importing.resolve();
         await gate.promise;
         if (fault === "failed import") {
@@ -140,16 +136,14 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
         }
         return await original();
       });
-      const firstContext = { ...context, signal };
       try {
         await import("./qa-gateway-cleanup.test.js");
-        first = cases[0]!(firstContext).catch((error: unknown) => error);
-        await Promise.race([
+        first = cases[0]!({ ...context, signal }).catch((error: unknown) => error);
+        await awaitGateBeforeSettlement(
           importing.promise,
-          first.then(() => {
-            throw new Error("generation case ended before the import barrier");
-          }),
-        ]);
+          first,
+          "generation case ended before the import barrier",
+        );
         if (fault === "cancelled import") {
           controller.abort(reason);
         }
@@ -171,21 +165,8 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
           await hook();
         }
         const firstWrites = [...writes];
-        console.log(
-          JSON.stringify({
-            fault,
-            resetBeforeJoin,
-            completedBeforeJoin,
-            firstWrites: firstWrites.length,
-          }),
-        );
         vi.doUnmock("../e2e/qa-lab/runtime/worker-inference-generation-reload.js");
-        for (const id of mocks) {
-          vi.doUnmock(id);
-        }
-        vi.restoreAllMocks();
-        vi.unstubAllEnvs();
-        vi.resetModules();
+        reset(mocks);
         firstCase = false;
         await cases[1]!(context);
         for (const hook of after.toReversed()) {
@@ -201,11 +182,7 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
         expect(servers).toHaveLength(firstWriteCount + 1);
         for (const server of servers) {
           expect(server.listening).toBe(false);
-          expect(
-            await new Promise<number>((resolve, reject) => {
-              server.getConnections((error, count) => (error ? reject(error) : resolve(count)));
-            }),
-          ).toBe(0);
+          expect(await promisify(server.getConnections).call(server)).toBe(0);
         }
         expect(process.argv).toBe(argv);
         expect(process.exitCode).toBe(exitCode);
@@ -226,16 +203,11 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
           await first;
           await teardown;
         } finally {
-          for (const id of [
+          reset([
             "vitest",
             "../e2e/qa-lab/runtime/worker-inference-generation-reload.js",
             ...mocks,
-          ]) {
-            vi.doUnmock(id);
-          }
-          vi.restoreAllMocks();
-          vi.unstubAllEnvs();
-          vi.resetModules();
+          ]);
           process.argv = argv;
           process.exitCode = exitCode;
           for (const root of roots) {
