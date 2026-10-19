@@ -7,7 +7,7 @@ export type ThreadMenuAction = {
   disabled?: boolean;
   tooltip?: string;
   className?: string;
-  onClick: (event: Event) => void;
+  onClick: (event: Event, label?: HTMLSpanElement) => void;
 };
 
 export function mountThreadMenu(
@@ -31,6 +31,7 @@ export function mountThreadMenu(
           style={{ left: `${x}px`, top: `${y}px` }}
         >
           {actions.map(({ label, ariaLabel, disabled, tooltip, className, onClick }) => {
+            let labelElement: HTMLSpanElement | undefined;
             const button = (
               <button
                 ref={(node) => {
@@ -42,9 +43,15 @@ export function mountThreadMenu(
                 role="menuitem"
                 aria-label={ariaLabel}
                 disabled={disabled}
-                onClick={onClick}
+                onClick={(event) => onClick(event, labelElement)}
               >
-                {tooltip ? <span data-copy-label="">{label}</span> : label}
+                {tooltip ? (
+                  <span ref={(element) => (labelElement = element)} data-copy-label="">
+                    {label}
+                  </span>
+                ) : (
+                  label
+                )}
               </button>
             );
             return tooltip ? (
