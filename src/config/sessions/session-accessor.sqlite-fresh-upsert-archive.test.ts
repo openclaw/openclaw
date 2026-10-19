@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -13,6 +13,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
+import { withoutHostSql } from "./session-accessor.observation.test-support.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
 import {
@@ -76,11 +77,16 @@ describe("fresh session creation with pending transcript archives", () => {
         ])
         .where("session_id", "=", archivedSessionId),
     );
-    if (!row) {
-      throw new Error("expected the unrelated canonical archive");
-    }
-    return row;
+    return expectDefined(row, "expected the unrelated canonical archive");
   }
+
+  const removeArchived = (onLifecycleCommitted?: () => void) =>
+    applySessionEntryLifecycleMutation({
+      storePath: fixture.storePath(),
+      removals: [{ sessionKey: archivedSessionKey, archiveRemovedTranscript: true }],
+      skipMaintenance: true,
+      onLifecycleCommitted,
+    });
 
   async function failUnrelatedArchiveExport() {
     const scope = {
@@ -94,16 +100,8 @@ describe("fresh session creation with pending transcript archives", () => {
     });
     await replaceTranscriptEvents(scope, [archivedEvent]);
     await expect(
-      applySessionEntryLifecycleMutation({
-        storePath: scope.storePath,
-        removals: [{ sessionKey: archivedSessionKey, archiveRemovedTranscript: true }],
-        skipMaintenance: true,
-        onLifecycleCommitted: () => {
-          fs.writeFileSync(
-            path.join(fixture.sessionsDir(), readArchive().archive_name),
-            "collision",
-          );
-        },
+      removeArchived(() => {
+        fs.writeFileSync(path.join(fixture.sessionsDir(), readArchive().archive_name), "collision");
       }),
     ).rejects.toThrow("transcript archive file export(s) remain pending in SQLite");
     expect(loadSessionEntry(scope)).toBeUndefined();
@@ -123,11 +121,11 @@ describe("fresh session creation with pending transcript archives", () => {
       assignedAt: 42,
     };
 
-    const [creation] = await Promise.allSettled([
+    await expect(
       createSessionEntryWithTranscript(freshScope(), () => ({ ok: true, entry: freshEntry }), {
         resolveOwnerAssignment: () => owner,
       }),
-    ]);
+    ).resolves.toEqual({ ok: true, entry: freshEntry, sessionFile: freshScope().sessionKey });
 
     expect(loadSessionEntry(freshScope())).toMatchObject({ ...freshEntry, owner });
     await expect(
@@ -135,21 +133,11 @@ describe("fresh session creation with pending transcript archives", () => {
     ).resolves.toContainEqual(
       expect.objectContaining({ type: "session", id: freshEntry.sessionId }),
     );
-    expect(creation).toEqual({
-      status: "fulfilled",
-      value: { ok: true, entry: freshEntry, sessionFile: freshScope().sessionKey },
-    });
     expect(readArchive()).toEqual(pendingArchive);
     expect(fs.readFileSync(collisionPath, "utf8")).toBe("collision");
 
     fs.rmSync(collisionPath);
-    await expect(
-      applySessionEntryLifecycleMutation({
-        storePath: fixture.storePath(),
-        removals: [{ sessionKey: archivedSessionKey, archiveRemovedTranscript: true }],
-        skipMaintenance: true,
-      }),
-    ).resolves.toMatchObject({ removedEntries: 0 });
+    await expect(removeArchived()).resolves.toMatchObject({ removedEntries: 0 });
     expect(readArchive()).toMatchObject({
       archive_sha256: pendingArchive.archive_sha256,
       published_at: expect.any(Number),
@@ -198,11 +186,6 @@ describe("fresh session creation with pending transcript archives", () => {
         sessionKey: kind === "alias" ? "agent:main:signal:group:Adopted" : scope.sessionKey,
       };
       const order: string[] = [];
-      const stop = onInternalSessionTranscriptUpdate((update) => {
-        if (update.sessionFile === collisionPath) {
-          order.push("archive-published");
-        }
-      });
       const adopt = () =>
         createSessionEntryWithTranscript(
           target,
@@ -220,64 +203,54 @@ describe("fresh session creation with pending transcript archives", () => {
             },
           },
         );
-      const sql = observeHostDataSql();
-      try {
-        await expect(adopt()).rejects.toThrow(
-          "transcript archive file export(s) remain pending in SQLite",
-        );
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-        stop();
-      }
-      expect(order).toEqual(["committed", "registered"]);
-      expect(readArchive()).toEqual({
-        ...pendingArchive,
-        publish_attempts: pendingArchive.publish_attempts + 1,
-        last_publish_attempt_at: expect.any(Number),
-      });
-      expect(fs.readFileSync(collisionPath, "utf8")).toBe("collision");
-      expect(loadSessionEntry(target)).toMatchObject(adoptedEntry);
-      expect(readTranscriptStorageRows(database, scope.sessionId)).toEqual(retainedRows);
-
-      fs.rmSync(collisionPath);
-      const stopRecovered = onInternalSessionTranscriptUpdate((update) => {
-        if (update.sessionFile === collisionPath) {
-          order.push("archive-published");
+      const committedOrder = ["committed", "registered"];
+      for (const attempt of [1, 2]) {
+        const recovered = attempt === 2;
+        if (recovered) {
+          fs.rmSync(collisionPath);
         }
-      });
-      const recoverySql = observeHostDataSql();
-      try {
-        await expect(adopt()).resolves.toMatchObject({
-          ok: true,
-          entry: adoptedEntry,
-          sessionFile: target.sessionKey,
+        const stop = onInternalSessionTranscriptUpdate((update) => {
+          if (update.sessionFile === collisionPath) {
+            order.push("archive-published");
+          }
         });
-        expect(recoverySql.queries).toEqual([]);
-      } finally {
-        recoverySql.restore();
-        stopRecovered();
+        try {
+          await withoutHostSql(async () => {
+            if (recovered) {
+              await expect(adopt()).resolves.toMatchObject({
+                ok: true,
+                entry: adoptedEntry,
+                sessionFile: target.sessionKey,
+              });
+            } else {
+              await expect(adopt()).rejects.toThrow(
+                "transcript archive file export(s) remain pending in SQLite",
+              );
+            }
+          });
+        } finally {
+          stop();
+        }
+        expect(order).toEqual(
+          recovered ? [...committedOrder, ...committedOrder, "archive-published"] : committedOrder,
+        );
+        expect(readArchive()).toEqual({
+          ...pendingArchive,
+          publish_attempts: pendingArchive.publish_attempts + attempt,
+          last_publish_attempt_at: expect.any(Number),
+          ...(recovered ? { last_publish_error: null, published_at: expect.any(Number) } : {}),
+        });
+        if (recovered) {
+          expect(fs.readFileSync(collisionPath)).toEqual(Buffer.from(pendingArchive.archive_blob));
+          expect(readSessionArchiveContentSync(collisionPath)).toBe(
+            `${JSON.stringify(archivedEvent)}\n`,
+          );
+        } else {
+          expect(fs.readFileSync(collisionPath, "utf8")).toBe("collision");
+        }
+        expect(loadSessionEntry(target)).toMatchObject(adoptedEntry);
+        expect(readTranscriptStorageRows(database, scope.sessionId)).toEqual(retainedRows);
       }
-      expect(order).toEqual([
-        "committed",
-        "registered",
-        "committed",
-        "registered",
-        "archive-published",
-      ]);
-      expect(readArchive()).toEqual({
-        ...pendingArchive,
-        last_publish_attempt_at: expect.any(Number),
-        last_publish_error: null,
-        publish_attempts: pendingArchive.publish_attempts + 2,
-        published_at: expect.any(Number),
-      });
-      expect(fs.readFileSync(collisionPath)).toEqual(Buffer.from(pendingArchive.archive_blob));
-      expect(readSessionArchiveContentSync(collisionPath)).toBe(
-        `${JSON.stringify(archivedEvent)}\n`,
-      );
-      expect(loadSessionEntry(target)).toMatchObject(adoptedEntry);
-      expect(readTranscriptStorageRows(database, scope.sessionId)).toEqual(retainedRows);
     },
   );
 });

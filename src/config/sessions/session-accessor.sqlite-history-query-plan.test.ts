@@ -108,20 +108,19 @@ function readHistoryWithQueryPlans(
       maxBytes: 1_000_000,
     });
     expect(markerStatements.length).toBeLessThanOrEqual(1);
-    const plan = markerStatements.flatMap((statement) =>
-      prepare(`EXPLAIN QUERY PLAN ${statement.expandedSQL}`).all(),
-    );
-    const drivingSearch = plan.find(
-      ({ detail }) => typeof detail === "string" && detail.startsWith("SEARCH "),
-    )?.detail;
-    const anchorSearches = anchorStatements.flatMap((statement) =>
-      prepare(`EXPLAIN QUERY PLAN ${statement.expandedSQL}`)
-        .all()
-        .flatMap(({ detail }) =>
-          typeof detail === "string" && detail.startsWith("SEARCH ") ? [detail] : [],
-        ),
-    );
-    return { page, drivingSearch, anchorSearches };
+    const searches = (statements: StatementSync[]) =>
+      statements.flatMap((statement) =>
+        prepare(`EXPLAIN QUERY PLAN ${statement.expandedSQL}`)
+          .all()
+          .flatMap(({ detail }) =>
+            typeof detail === "string" && detail.startsWith("SEARCH ") ? [detail] : [],
+          ),
+      );
+    return {
+      page,
+      drivingSearch: searches(markerStatements)[0],
+      anchorSearches: searches(anchorStatements),
+    };
   } finally {
     spy.mockRestore();
   }
@@ -177,17 +176,19 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
   expect(drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
 
   const branchIds = Array.from({ length: 20 }, (_, index) => `branch-message-${index}`);
-  async function readBranch(
-    target: typeof scope,
-    marker: { id: string; parentId: string } & (
-      | { type: "compaction"; summary: string }
-      | { type: "custom_message"; customType: string; content: string; display: boolean }
-    ),
-  ) {
-    await appendTranscriptEvent(target, marker);
+  async function readBranch(target: typeof scope, type: "compaction" | "custom_message") {
+    const markerId = `${type}-branch-marker`;
+    await appendTranscriptEvent(target, {
+      type,
+      id: markerId,
+      parentId: "seed",
+      ...(type === "compaction"
+        ? { summary: "Current branch marker" }
+        : { customType: "synthetic-notice", content: "Current branch marker", display: true }),
+    });
     await persistSessionTranscriptTurn(target, {
       messages: branchIds.map((id, index) =>
-        transcriptMessage(id, index === 0 ? marker.id : branchIds[index - 1]!, {
+        transcriptMessage(id, index === 0 ? markerId : branchIds[index - 1]!, {
           role: index % 2 === 0 ? "user" : "assistant",
           content: id,
         }),
@@ -202,29 +203,16 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
     return readHistoryWithQueryPlans(database, target);
   }
 
-  // The same stored markers must stop driving reads once their branch is inactive.
-  const branch = await readBranch(denseScope, {
-    type: "custom_message",
-    id: "branch-marker",
-    parentId: "seed",
-    customType: "synthetic-notice",
-    content: "Current branch marker",
-    display: true,
-  });
-  expectPage(branch.page, branchIds, 3, 22);
-  expect(branch.drivingSearch).toMatch(/^SEARCH active .*\(session_id=\?/u);
-  expect(readSessionTranscriptHistoryEventCount(denseScope)).toBe(22);
-
-  // Discarded ordinary messages do not justify scanning a branch with few markers.
-  const sparseBranch = await readBranch(plainScope, {
-    type: "compaction",
-    id: "sparse-branch-marker",
-    parentId: "seed",
-    summary: "Current branch marker",
-  });
-  expectPage(sparseBranch.page, branchIds, 3, 22);
-  expect(sparseBranch.drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
-  expect(readSessionTranscriptHistoryEventCount(plainScope)).toBe(22);
+  // Neither inactive dense markers nor discarded ordinary messages should drive a sparse branch.
+  for (const [target, type, search] of [
+    [denseScope, "custom_message", /^SEARCH active .*\(session_id=\?/u],
+    [plainScope, "compaction", /\(session_id=\? AND event_type=\?/u],
+  ] as const) {
+    const branch = await readBranch(target, type);
+    expectPage(branch.page, branchIds, 3, 22);
+    expect(branch.drivingSearch).toMatch(search);
+    expect(readSessionTranscriptHistoryEventCount(target)).toBe(22);
+  }
 });
 
 it("reads only appended metadata for a warm marker-heavy page and quoted messages", async () => {
@@ -357,11 +345,10 @@ it("looks up nested activity anchors without scanning unrelated transcript ident
         scopeId: "attempt",
         afterEntryId,
         startOrder: index,
-        parentToolCallId: "exec",
         toolCallId: `tool-${index}`,
         toolName: "read",
         input: {},
-        result: { content: [{ type: "text", text: "done" }] },
+        result: { content: [] },
         isError: false,
         startedAt: 1,
         timestamp: 2,

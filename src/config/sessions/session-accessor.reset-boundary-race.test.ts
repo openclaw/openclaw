@@ -1,8 +1,5 @@
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import * as sqliteQueries from "../../infra/kysely-sync.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -11,6 +8,7 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { withoutPayloadReads } from "./session-accessor.observation.test-support.js";
 import {
   readRecentSessionTranscriptActiveEvents,
   waitForSessionTranscriptProjection,
@@ -18,6 +16,7 @@ import {
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { useTempSessionsFixture } from "./test-helpers.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
 
 const transactionInjection = vi.hoisted(() => ({ run: null as (() => void) | null }));
@@ -66,20 +65,15 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
 });
 
 describe("reset boundary concurrency", () => {
-  const tempDirs: string[] = [];
-  let tempDir: string;
+  const fixture = useTempSessionsFixture("openclaw-reset-boundary-race-");
   let storePath: string;
 
   beforeEach(() => {
-    tempDir = makeTempDir(tempDirs, "openclaw-reset-boundary-race-");
-    storePath = path.join(tempDir, "sessions.json");
+    storePath = fixture.storePath();
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     transactionInjection.run = null;
-    await agentDatabase.closeOpenClawAgentDatabasesAsync();
-    agentDatabase.closeOpenClawAgentDatabasesForTest();
-    cleanupTempDirs(tempDirs);
   });
 
   it("does not commit a reset after its caller closes during entry preparation", async () => {
@@ -138,25 +132,7 @@ describe("reset boundary concurrency", () => {
         });
       };
 
-      const iterate = sqliteQueries.iterateSqliteQuerySync;
-      let hydratedBodyRows = 0;
-      const reads = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync").mockImplementation(function* <
-        Row,
-      >(...args: Parameters<typeof sqliteQueries.iterateSqliteQuerySync<Row>>) {
-        for (const row of iterate<Row>(...args)) {
-          if (
-            row !== null &&
-            typeof row === "object" &&
-            "event_json" in row &&
-            typeof row.event_json === "string" &&
-            row.event_json.includes(body)
-          ) {
-            hydratedBodyRows += 1;
-          }
-          yield row;
-        }
-      });
-      try {
+      await withoutPayloadReads("event_json", body, async () => {
         if (kind === "single reset") {
           await resetSessionEntryLifecycle({
             buildNextEntry: () => entry,
@@ -171,9 +147,7 @@ describe("reset boundary concurrency", () => {
             upserts: [{ entry, resetBoundary, sessionKey: scope.sessionKey }],
           });
         }
-      } finally {
-        reads.mockRestore();
-      }
+      });
 
       const raw = await loadTranscriptEvents(scope);
       expect(raw).toContainEqual(
@@ -182,7 +156,6 @@ describe("reset boundary concurrency", () => {
           message: expect.objectContaining({ role: "user", content: body }),
         }),
       );
-      expect(hydratedBodyRows).toBe(0);
       const boundary = raw.find((event) => isRecord(event) && event.type === "reset");
       expect(boundary).toMatchObject({ parentId: "concurrent" });
       const expectConcurrent = async () => {
@@ -236,30 +209,23 @@ describe("reset boundary concurrency", () => {
       insert({ seq, eventJson: JSON.stringify(event), createdAt: seq }),
     );
 
-    const projected = loadTranscriptEventsFromDatabase(database, sessionId, {
+    const read = (options?: Parameters<typeof loadTranscriptEventsFromDatabase>[2]) =>
+      loadTranscriptEventsFromDatabase(database, sessionId, options);
+    const projected = read({
       projection: "reset-boundary",
     });
-    expect(projected[0]).toEqual({
-      type: "message",
-      id: "user",
-      timestamp: 1,
-      message: { role: "user" },
-    });
+    expect(projected[0]).toEqual({ ...navigationEvents[0], message: { role: "user" } });
     expect(projected[1]).toMatchObject(navigationEvents[1]);
     expect(projected[1]).not.toHaveProperty("appendParentId");
     expect(projected[2]).toMatchObject(navigationEvents[2]);
     expect(projected[3]).toMatchObject(navigationEvents[3]);
     expect(projected.slice(4)).toEqual(events.slice(4));
-    expect(loadTranscriptEventsFromDatabase(database, sessionId)).toEqual(events);
-    expect(loadTranscriptEventsFromDatabase(database, sessionId, { beforeEventSeq: 2 })).toEqual(
-      events.slice(0, 2),
-    );
+    expect(read()).toEqual(events);
+    expect(read({ beforeEventSeq: 2 })).toEqual(events.slice(0, 2));
 
     insert({ seq: events.length, eventJson: "{", createdAt: events.length });
     for (const projection of [undefined, "reset-boundary"] as const) {
-      expect(() => loadTranscriptEventsFromDatabase(database, sessionId, { projection })).toThrow(
-        SyntaxError,
-      );
+      expect(() => read({ projection })).toThrow(SyntaxError);
     }
   });
 });

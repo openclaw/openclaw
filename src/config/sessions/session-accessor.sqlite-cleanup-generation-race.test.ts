@@ -2,13 +2,17 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntrySync,
+  type TranscriptEvent,
 } from "./session-accessor.js";
 import {
   readSqliteSessionGenerationClaim,
@@ -52,7 +56,18 @@ describe("SQLite lifecycle generation cleanup races", () => {
     archiveMaterializationHook.onMaterialize = undefined;
   });
 
-  function captureGenerationClaims(sessionKey: string) {
+  async function fixture(
+    sessionKey: string,
+    ids: string[],
+    event: (id: string, index: number) => TranscriptEvent,
+  ) {
+    const scope = { sessionKey, storePath };
+    // Do not schedule maintenance against these deliberately old generations.
+    for (const [index, sessionId] of ids.entries()) {
+      replaceSessionEntrySync(scope, { sessionId, updatedAt: index + 1 });
+      await replaceTranscriptEvents({ ...scope, sessionId }, [event(sessionId, index)]);
+    }
+    const currentEntry = expectDefined(loadSessionEntry(scope), "Expected current generation");
     const databaseOptions = {
       agentId: "main",
       path: expectDefined(
@@ -60,16 +75,25 @@ describe("SQLite lifecycle generation cleanup races", () => {
         "Expected generation cleanup database path",
       ),
     };
-    const expected = runOpenClawAgentWriteTransaction(
-      (database) => ({
-        expectedDatabaseIdentity: readOpenClawAgentDatabaseIdentity(database).identity,
-        expectedGenerations: readSqliteSessionGenerationWindows(database, [sessionKey], []).map(
-          (window) => readSqliteSessionGenerationClaim(database, window),
-        ),
-      }),
-      databaseOptions,
-    );
-    return { databaseOptions, expected };
+    const write = <T>(operation: (database: OpenClawAgentDatabase) => T) =>
+      runOpenClawAgentWriteTransaction(operation, databaseOptions);
+    const expected = write((database) => ({
+      expectedDatabaseIdentity: readOpenClawAgentDatabaseIdentity(database).identity,
+      expectedGenerations: readSqliteSessionGenerationWindows(database, [sessionKey], []).map(
+        (window) => readSqliteSessionGenerationClaim(database, window),
+      ),
+    }));
+    const remove = (archiveTranscript: boolean) =>
+      deleteSessionEntryLifecycle({
+        ...expected,
+        storePath,
+        archiveTranscript,
+        expectedEntry: currentEntry,
+        ...(!archiveTranscript ? { deleteTranscriptWithoutArchive: true } : {}),
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      });
+    const transcript = (sessionId: string) => loadTranscriptEvents({ ...scope, sessionId });
+    return { databaseOptions, currentEntry, write, remove, transcript };
   }
 
   it.each(["target history", "other history", "current", "new history"] as const)(
@@ -89,16 +113,11 @@ describe("SQLite lifecycle generation cleanup races", () => {
           idempotencyKey: "recorded-owner",
         },
       });
-      // Fixture setup must not schedule maintenance against these deliberately old entries.
-      for (const [index, sessionId] of sessionIds.entries()) {
-        replaceSessionEntrySync({ sessionKey, storePath }, { sessionId, updatedAt: index + 1 });
-        await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [event(sessionId)]);
-      }
-      const currentEntry = expectDefined(
-        loadSessionEntry({ sessionKey, storePath }),
-        "Expected current generation before cleanup",
+      const { databaseOptions, currentEntry, write, remove, transcript } = await fixture(
+        sessionKey,
+        sessionIds,
+        event,
       );
-      const { databaseOptions, expected } = captureGenerationClaims(sessionKey);
       let plannedId: string | undefined;
       let injected = false;
       let mutation: { sessionId: string; rowsChanged: number } | undefined;
@@ -121,7 +140,7 @@ describe("SQLite lifecycle generation cleanup races", () => {
                 : plannedId;
         // Extraction has finished; the final transactional generation check has not run.
         try {
-          mutation = runOpenClawAgentWriteTransaction((database) => {
+          mutation = write((database) => {
             const rowsChanged =
               changed === "new history"
                 ? Number(
@@ -139,59 +158,45 @@ describe("SQLite lifecycle generation cleanup races", () => {
                       .run(sessionId).changes,
                   );
             return { sessionId, rowsChanged };
-          }, databaseOptions);
+          });
         } catch (error) {
           // Keep injection failure separate from the lifecycle result asserted below.
           mutationError = error;
         }
       };
-      try {
-        const result = await deleteSessionEntryLifecycle({
-          ...expected,
-          archiveTranscript: false,
-          deleteTranscriptWithoutArchive: true,
-          expectedEntry: currentEntry,
-          storePath,
-          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-        });
-        expect(mutationError).toBeUndefined();
-        expect(mutation, JSON.stringify({ plannedId, injected, result })).toMatchObject({
-          rowsChanged: 1,
-        });
-        expect(result).toMatchObject({ deleted: false, expectedEntryMismatch: true });
-        expect(loadSessionEntry({ sessionKey, storePath })).toEqual(currentEntry);
-        const retainedIds = new Set([currentId]);
-        if (changed === "target history") {
-          for (const sessionId of historicalIds) {
-            retainedIds.add(sessionId);
-          }
-        } else if (changed !== "current") {
-          retainedIds.add(mutation!.sessionId);
+      const result = await remove(false);
+      expect(mutationError).toBeUndefined();
+      expect(mutation, JSON.stringify({ plannedId, injected, result })).toMatchObject({
+        rowsChanged: 1,
+      });
+      expect(result).toMatchObject({ deleted: false, expectedEntryMismatch: true });
+      expect(loadSessionEntry({ sessionKey, storePath })).toEqual(currentEntry);
+      const retainedIds = new Set([currentId]);
+      if (changed === "target history") {
+        for (const sessionId of historicalIds) {
+          retainedIds.add(sessionId);
         }
-        const remaining = runOpenClawAgentWriteTransaction(
-          (database) => ({
-            windows: readSqliteSessionGenerationWindows(database, [sessionKey], []).map(
-              (window) => window.session_id,
-            ),
-            identity: database.db
-              .prepare(
-                "SELECT message_idempotency_key FROM transcript_event_identities WHERE session_id = ? AND event_id = 'answer'",
-              )
-              .get(mutation!.sessionId),
-          }),
-          databaseOptions,
+      } else if (changed !== "current") {
+        retainedIds.add(mutation!.sessionId);
+      }
+      const remaining = write((database) => ({
+        windows: readSqliteSessionGenerationWindows(database, [sessionKey], []).map(
+          (window) => window.session_id,
+        ),
+        identity: database.db
+          .prepare(
+            "SELECT message_idempotency_key FROM transcript_event_identities WHERE session_id = ? AND event_id = 'answer'",
+          )
+          .get(mutation!.sessionId),
+      }));
+      expect(remaining.windows).toEqual([...retainedIds].toSorted());
+      expect(remaining.identity).toEqual({
+        message_idempotency_key: changed === "new history" ? "recorded-owner" : null,
+      });
+      for (const sessionId of [...sessionIds, addedId]) {
+        await expect(transcript(sessionId)).resolves.toEqual(
+          retainedIds.has(sessionId) ? [event(sessionId)] : [],
         );
-        expect(remaining.windows).toEqual([...retainedIds].toSorted());
-        expect(remaining.identity).toEqual({
-          message_idempotency_key: changed === "new history" ? "recorded-owner" : null,
-        });
-        for (const sessionId of [...sessionIds, addedId]) {
-          await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual(
-            retainedIds.has(sessionId) ? [event(sessionId)] : [],
-          );
-        }
-      } finally {
-        archiveMaterializationHook.afterMaterialize = undefined;
       }
     },
   );
@@ -204,15 +209,11 @@ describe("SQLite lifecycle generation cleanup races", () => {
       id: sessionId,
       content: `${sessionId} transcript`,
     }));
-    for (const [index, sessionId] of sessionIds.entries()) {
-      replaceSessionEntrySync({ sessionKey, storePath }, { sessionId, updatedAt: index + 1 });
-      await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [events[index]!]);
-    }
-    const currentEntry = loadSessionEntry({ sessionKey, storePath });
-    if (!currentEntry) {
-      throw new Error("expected current guarded entry");
-    }
-    const { databaseOptions, expected } = captureGenerationClaims(sessionKey);
+    const { currentEntry, write, remove, transcript } = await fixture(
+      sessionKey,
+      sessionIds,
+      (_id, index) => events[index]!,
+    );
     let materializations = 0;
     let materializingSessionId: string | undefined;
     let changedSessionId: string | undefined;
@@ -231,7 +232,7 @@ describe("SQLite lifecycle generation cleanup races", () => {
         );
         const originalJson = JSON.stringify(original);
         const changedJson = JSON.stringify({ ...original, content: "concurrent transcript" });
-        runOpenClawAgentWriteTransaction(({ db }) => {
+        write(({ db }) => {
           const node = db.prepare("SELECT * FROM session_nodes WHERE session_key = ?");
           const window = db.prepare("SELECT * FROM session_windows WHERE session_id = ?");
           const nodeBefore = expectDefined(node.get(sessionKey), "Expected current node");
@@ -249,17 +250,11 @@ describe("SQLite lifecycle generation cleanup races", () => {
           expect(rows.all(sessionId)).toEqual([{ event_json: changedJson }]);
           expect(node.get(sessionKey)).toEqual(nodeBefore);
           expect(window.get(sessionId)).toEqual(windowBefore);
-        }, databaseOptions);
+        });
       }
     };
 
-    const result = await deleteSessionEntryLifecycle({
-      ...expected,
-      archiveTranscript: true,
-      expectedEntry: currentEntry,
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-    });
+    const result = await remove(true);
 
     expect(result).toMatchObject({ deleted: false, expectedEntryMismatch: true });
     expect(result.archivedTranscripts).toHaveLength(1);
@@ -270,16 +265,12 @@ describe("SQLite lifecycle generation cleanup races", () => {
     expect(changedSessionId).toBeDefined();
     expect(changedSessionId).not.toBe(archivedSessionId);
     for (const [index, historicalSessionId] of sessionIds.slice(0, 2).entries()) {
-      await expect(
-        loadTranscriptEvents({ sessionKey, sessionId: historicalSessionId, storePath }),
-      ).resolves.toEqual(
+      await expect(transcript(historicalSessionId)).resolves.toEqual(
         historicalSessionId === archivedSessionId
           ? []
           : [{ ...events[index]!, content: "concurrent transcript" }],
       );
     }
-    await expect(
-      loadTranscriptEvents({ sessionKey, sessionId: sessionIds[2]!, storePath }),
-    ).resolves.toEqual([events[2]!]);
+    await expect(transcript(sessionIds[2]!)).resolves.toEqual([events[2]!]);
   });
 });

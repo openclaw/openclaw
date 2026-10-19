@@ -10,9 +10,9 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import {
-  runSqliteDeferredTransactionSync,
-  runSqliteImmediateTransactionSync,
-  runSqliteReadSnapshotSync,
+  runSqliteDeferredTransactionSync as deferred,
+  runSqliteImmediateTransactionSync as immediate,
+  runSqliteReadSnapshotSync as readSnapshot,
 } from "../../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import {
@@ -27,15 +27,21 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
+const staleFacts = "Prepared session entry facts are no longer current";
 afterEach(() => {
   for (const database of databases.splice(0).toReversed()) {
     database.close();
   }
 });
 
-function fixture(filename = ":memory:") {
+function openDatabase(filename = ":memory:") {
   const db = openNodeSqliteDatabase(filename);
   databases.push(db);
+  return db;
+}
+
+function fixture(filename = ":memory:") {
+  const db = openDatabase(filename);
   db.exec(`BEGIN; ${OPENCLAW_AGENT_SCHEMA_SQL}
     INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
     VALUES ('agent:main:revision', 'revision', '{}', 1);
@@ -56,8 +62,7 @@ describe("session entry revision facts", () => {
        (session_key, identity_namespace, actor_id, contribution_count)
        VALUES (?, ?, 'participant', 1)`,
     ).run(sessionKey, '{"type":"agent"}');
-    const peer = openNodeSqliteDatabase(filename);
-    databases.push(peer);
+    const peer = openDatabase(filename);
     const read = () =>
       participantRecordsBySessionKey(db, [sessionKey]).get(sessionKey)?.[0]?.contributionCount;
     const sql = trackSqliteStatementExecutions(db, ["participants"], (statement) =>
@@ -65,18 +70,18 @@ describe("session entry revision facts", () => {
     );
     try {
       expect(read()).toBe(1);
-      runSqliteImmediateTransactionSync(db, () => {
+      immediate(db, () => {
         expect(withSessionParticipantWriteSnapshot(db, read)).toBe(1);
         expect(sql.counts.participants).toBe(1);
       });
 
       peer.exec("UPDATE session_participants SET contribution_count = 2");
-      runSqliteImmediateTransactionSync(db, () => {
+      immediate(db, () => {
         expect(withSessionParticipantWriteSnapshot(db, read)).toBe(2);
       });
       expect(read()).toBe(2);
       expect(() =>
-        runSqliteImmediateTransactionSync(db, () => {
+        immediate(db, () => {
           db.exec("UPDATE session_participants SET contribution_count = 3");
           expect(withSessionParticipantWriteSnapshot(db, read)).toBe(3);
           throw new Error("rollback participant change");
@@ -98,7 +103,7 @@ describe("session entry revision facts", () => {
       const changed = read();
       expect(changed).toBeGreaterThan(initial);
       expect(read()).toBe(changed);
-      runSqliteDeferredTransactionSync(db, () => {
+      deferred(db, () => {
         expect(read()).toBe(changed);
         expect(read()).toBe(changed);
       });
@@ -115,7 +120,7 @@ describe("session entry revision facts", () => {
     const updated = read();
     expect(updated).toBeGreaterThan(0);
     let committed = updated;
-    runSqliteDeferredTransactionSync(db, () => {
+    deferred(db, () => {
       db.exec("SAVEPOINT revision_change");
       db.prepare(
         `INSERT INTO session_participants
@@ -148,14 +153,13 @@ describe("session entry revision facts", () => {
     const filename = path.join(tempDirs.make("entry-revision-"), "agent.sqlite");
     const { db, token } = fixture(filename);
     db.exec("PRAGMA journal_mode=WAL");
-    const peer = openNodeSqliteDatabase(filename);
-    databases.push(peer);
+    const peer = openDatabase(filename);
     const initial = token();
     peer.exec("UPDATE session_nodes SET updated_at = 2");
     const changed = token();
     expect(changed.siblingWriteRevision).not.toBe(initial.siblingWriteRevision);
     expect(changed.sessionNodesGeneration).toBe(initial.sessionNodesGeneration);
-    runSqliteReadSnapshotSync(db, () => {
+    readSnapshot(db, () => {
       const read = () => db.prepare("SELECT updated_at FROM session_nodes").get()?.updated_at;
       expect(read()).toBe(2);
       peer.exec("UPDATE session_nodes SET updated_at = 3");
@@ -187,8 +191,7 @@ describe("session entry revision facts", () => {
 });
 
 function guardFixture(filename = ":memory:") {
-  const database = openNodeSqliteDatabase(filename);
-  databases.push(database);
+  const database = openDatabase(filename);
   database.exec("CREATE TABLE session_nodes (id INTEGER PRIMARY KEY, writer TEXT)");
   database.exec("INSERT INTO session_nodes VALUES (1, 'current')");
   admitSqliteSchema(database);
@@ -211,9 +214,7 @@ function guardFixture(filename = ":memory:") {
       current = false;
     },
     transaction: <T>(operation: () => T) =>
-      withSqlitePostCommitPublications(database, () =>
-        runSqliteImmediateTransactionSync(database, operation),
-      ),
+      withSqlitePostCommitPublications(database, () => immediate(database, operation)),
   };
 }
 
@@ -231,7 +232,7 @@ it("checks local writes, rollback, and released authority without freshness SQL"
       expect(() =>
         transaction(() => {
           database.exec("UPDATE session_nodes SET writer = 'revoked'");
-          expect(guard).toThrow("Prepared session entry facts are no longer current");
+          expect(guard).toThrow(staleFacts);
           throw new Error("rollback nested write");
         }),
       ).toThrow("rollback nested write");
@@ -250,21 +251,19 @@ it("checks local writes, rollback, and released authority without freshness SQL"
 it("observes a sibling writer receipt before the next authority check", () => {
   const filename = path.join(tempDirs.make("session-revision-sibling-"), "agent.sqlite");
   const { database, guard, transaction } = guardFixture(filename);
-  const writer = openNodeSqliteDatabase(filename);
-  databases.push(writer);
+  const writer = openDatabase(filename);
   runSqliteReadOperationSync(database, () => {
     writer.exec("UPDATE session_nodes SET writer = 'superseded'");
-    expect(() => transaction(guard)).toThrow("Prepared session entry facts are no longer current");
+    expect(() => transaction(guard)).toThrow(staleFacts);
   });
-  expect(guard).toThrow("Prepared session entry facts are no longer current");
+  expect(guard).toThrow(staleFacts);
 });
 
 it("checks the next predicate after a sibling commit overlaps a read", () => {
   const filename = path.join(tempDirs.make("session-revision-overlap-"), "agent.sqlite");
   const { database } = guardFixture(filename);
   database.exec("PRAGMA journal_mode = WAL");
-  const writer = openNodeSqliteDatabase(filename);
-  databases.push(writer);
+  const writer = openDatabase(filename);
   writer.exec("BEGIN IMMEDIATE; UPDATE session_nodes SET writer = 'superseded'");
   let first = true;
   const guard = createSessionEntryRevisionGuard(
@@ -281,5 +280,5 @@ it("checks the next predicate after a sibling commit overlaps a read", () => {
     },
   );
   expect(guard).not.toThrow();
-  expect(guard).toThrow("Prepared session entry facts are no longer current");
+  expect(guard).toThrow(staleFacts);
 });
