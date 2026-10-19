@@ -70,6 +70,7 @@ export class GatewayRpcDiagnostics {
 
   constructor(
     private readonly method: string,
+    clientKind: Extract<RpcEvent, { phase: "received" }>["clientKind"],
     private readonly startedAt = performance.now(),
     queueWaitMs?: number,
     modelsList?: ModelsListAttribution,
@@ -82,6 +83,7 @@ export class GatewayRpcDiagnostics {
       type: "gateway.rpc",
       method,
       phase: "received",
+      clientKind,
       ...(modelsList && { modelsList }),
       ...(sessionsList && { sessionsList }),
       ...(cronList && { cronList }),
@@ -266,6 +268,7 @@ export function createWorkerRpcDiagnostics(
   // unknown method become an unbounded metric dimension.
   return new GatewayRpcDiagnostics(
     workerMethods.has(method) ? method : "unknown",
+    "node",
     timing.receivedAt,
     timing.dequeuedAt - timing.receivedAt,
   );
@@ -369,6 +372,7 @@ export function createGatewayRpcDiagnostics(
   }
   return new GatewayRpcDiagnostics(
     label,
+    rpcClientKind(listRequest?.clientKind),
     undefined,
     undefined,
     modelsList,
@@ -378,4 +382,31 @@ export function createGatewayRpcDiagnostics(
       ? { clientKind: listRequest.clientKind, source: listRequest.source }
       : undefined,
   );
+}
+
+function rpcClientKind(
+  id: NonNullable<ModelsListAttribution>["clientKind"] | undefined,
+): NonNullable<Extract<RpcEvent, { phase: "received" }>["clientKind"]> {
+  switch (id) {
+    case "openclaw-control-ui":
+    case "webchat-ui":
+    case "openclaw-browser-copilot":
+      return "control-ui";
+    case "openclaw-macos":
+      return "macos";
+    case "openclaw-ios":
+    case "openclaw-watchos":
+      return "ios";
+    case "openclaw-android":
+      return "android";
+    case "cli":
+    case "openclaw-tui":
+      return "cli";
+    case "node-host":
+    case "openclaw-worker":
+      return "node";
+    default:
+      // Generic gateway clients and scoped plugin calls do not identify a plugin.
+      return "other";
+  }
 }
