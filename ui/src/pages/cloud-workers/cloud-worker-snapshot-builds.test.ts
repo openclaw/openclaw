@@ -96,6 +96,7 @@ it("refreshes rebuild eligibility after a machine configuration save", async () 
         result.profiles[0]!.warmImages = enabled ? "on" : "off";
         return result;
       }
+      return undefined;
     },
   });
   await waitText(() => sheet(page), "01234567");
@@ -135,6 +136,7 @@ it("keeps unlabeled builds inspectable and actionable in Advanced", async () => 
         workers = workers.filter((worker) => worker.id !== params?.environmentId);
         return {};
       }
+      return undefined;
     },
   });
   const advanced = expectDefined(page.querySelector(".cloud-environments__advanced"), "Advanced");
@@ -221,6 +223,7 @@ it("dismisses a failed build immediately even when its inventory refresh fails",
           profiles: [],
         };
       }
+      return undefined;
     },
   });
   await waitText(() => sheet(page), "Setup failed");

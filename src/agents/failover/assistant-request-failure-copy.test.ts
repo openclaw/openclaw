@@ -188,7 +188,7 @@ describe("renderAssistantRequestFailureCopy", () => {
     '400 Bad Request: [{"input":"PRIVATE_PROMPT"}]',
     '422 Unprocessable Entity: [{"input":"PRIVATE_PROMPT"',
   ])("does not display a status-prefixed raw response body: %s", (errorMessage) => {
-    const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
+    const assistant = makeAssistant({ ...target, errorMessage });
     expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("PRIVATE");
     expect(renderRecordedAssistantFailureCopy(assistant)).not.toContain("PRIVATE");
   });

@@ -22,7 +22,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function runNode(args: string[], env = resolveServiceManagerEnv()) {
+function runNode(args: string[], env: NodeJS.ProcessEnv = resolveServiceManagerEnv()) {
   const child = spawnSync(requireNodeTool("node"), args, {
     env,
     encoding: "utf8",

@@ -321,9 +321,10 @@ describe("DebugProxyCaptureStore", () => {
     const blob = recordPayload(store, "legacy-sdk-session", "legacy sdk payload");
 
     expect(store.readBlob(blob.blobId)).toBe("legacy sdk payload");
-    expect(blob.path).toBe(path.join(blobDir, `${blob.blobId}.bin.gz`));
+    const blobPath = path.join(blobDir, `${blob.blobId}.bin.gz`);
+    expect(blob.path).toBe(blobPath);
     expect(fs.existsSync(dbPath)).toBe(true);
-    expect(fs.existsSync(blob.path)).toBe(true);
+    expect(fs.existsSync(blobPath)).toBe(true);
     expect(
       store.db
         .prepare("SELECT db_path AS dbPath, blob_dir AS blobDir FROM capture_sessions WHERE id = ?")
@@ -353,7 +354,7 @@ describe("DebugProxyCaptureStore", () => {
       events: 1,
       blobs: 1,
     });
-    expect(fs.existsSync(blob.path)).toBe(false);
+    expect(fs.existsSync(blobPath)).toBe(false);
 
     release();
     expect(store.isClosed).toBe(true);

@@ -80,9 +80,12 @@ describe("failover classification", () => {
           "504 <!doctype html><html><head><title>504</title></head><body>Cloudflare</body></html>",
       },
     ],
-  ] satisfies [string, Signal, Options?][])("HTTP policy: %s for %j", (expected, signal, opts) => {
-    expectReason(expected, signal, opts);
-  });
+  ] satisfies [string, Signal, Options?][])(
+    "HTTP policy: %s for %j",
+    (expected, signal, opts = undefined) => {
+      expectReason(expected, signal, opts);
+    },
+  );
 
   it("does not treat a bare leading number and a URL as payment evidence", () => {
     expect(

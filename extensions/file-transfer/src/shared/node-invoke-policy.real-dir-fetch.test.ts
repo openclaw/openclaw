@@ -54,7 +54,7 @@ function createRealDirFetchContext(input: {
     },
     approvals,
   });
-  invokeNode.mockImplementation(async ({ params } = {}) => ({
+  invokeNode.mockImplementation(async ({ params }: Parameters<typeof invokeNode>[0] = {}) => ({
     ok: true,
     payload: await handleDirFetch((params ?? {}) as Parameters<typeof handleDirFetch>[0]),
   }));

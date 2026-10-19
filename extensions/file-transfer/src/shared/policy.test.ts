@@ -136,21 +136,21 @@ it("denies the bare directory matched by a descendant deny glob", () => {
     code: "POLICY_DENIED",
     askable: false,
   });
+});
 
-  it("denies even with ask=always (denyPaths is hard)", () => {
-    withConfig({
-      n1: {
-        ask: "always",
-        denyPaths: ["**/secrets/**"],
-      },
-    });
-    const r = evaluateFilePolicy({
-      nodeId: "n1",
-      kind: "read",
-      path: "/var/secrets/api.key",
-    });
-    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
+it("denies even with ask=always (denyPaths is hard)", () => {
+  withConfig({
+    n1: {
+      ask: "always",
+      denyPaths: ["**/secrets/**"],
+    },
   });
+  const r = evaluateFilePolicy({
+    nodeId: "n1",
+    kind: "read",
+    path: "/var/secrets/api.key",
+  });
+  expect(r).toMatchObject({ ok: false, code: "POLICY_DENIED", askable: false });
 });
 it("uses kind=write to consult allowWritePaths, not allowReadPaths", () => {
   withConfig({
@@ -161,23 +161,23 @@ it("uses kind=write to consult allowWritePaths, not allowReadPaths", () => {
     ok: false,
     code: "POLICY_DENIED",
   });
+});
 
-  it("propagates followSymlinks=false by default and =true when configured", () => {
-    withConfig({
-      n1: { allowReadPaths: ["/tmp/**"] },
-    });
-    expectResultFields(evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" }), {
-      ok: true,
-      followSymlinks: false,
-    });
+it("propagates followSymlinks=false by default and =true when configured", () => {
+  withConfig({
+    n1: { allowReadPaths: ["/tmp/**"] },
+  });
+  expect(evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" })).toMatchObject({
+    ok: true,
+    followSymlinks: false,
+  });
 
-    withConfig({
-      n2: { allowReadPaths: ["/tmp/**"], followSymlinks: true },
-    });
-    expectResultFields(evaluateFilePolicy({ nodeId: "n2", kind: "read", path: "/tmp/x" }), {
-      ok: true,
-      followSymlinks: true,
-    });
+  withConfig({
+    n2: { allowReadPaths: ["/tmp/**"], followSymlinks: true },
+  });
+  expect(evaluateFilePolicy({ nodeId: "n2", kind: "read", path: "/tmp/x" })).toMatchObject({
+    ok: true,
+    followSymlinks: true,
   });
 });
 it("falls back to '*' wildcard when neither id nor displayName matches", () => {

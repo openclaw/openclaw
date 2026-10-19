@@ -46,7 +46,7 @@ function fixture(overrides: { maxBytes?: number } = {}) {
       },
     },
   });
-  invokeNode.mockImplementation(async ({ params } = {}) => ({
+  invokeNode.mockImplementation(async ({ params }: Parameters<typeof invokeNode>[0] = {}) => ({
     ok: true,
     payload: {
       ok: true,
@@ -198,7 +198,7 @@ it("dir.list reapproves a stale grant before listing and binds the retry", async
     },
     approvals,
   });
-  invokeNode.mockImplementation(async ({ params } = {}) => {
+  invokeNode.mockImplementation(async ({ params }: Parameters<typeof invokeNode>[0] = {}) => {
     const record = requireRecord(params, "invoke params");
     events.push(record.preflightOnly === true ? "preflight" : "list");
     return {

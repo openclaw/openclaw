@@ -192,7 +192,13 @@ describe("failover user copy", () => {
     expect(
       renderCliTimeoutReplyCopy({
         message: "openai/gpt-5.6-sol: CLI exceeded timeout (90s) and was terminated",
-        cliTimeout: { mode: "overall", timeoutSeconds: 90, observedActivity: true },
+        cliTimeout: {
+          mode: "overall",
+          timeoutSeconds: 90,
+          observedActivity: true,
+          activeToolCount: 0,
+          backgroundTaskCount: 0,
+        },
       }),
     ).toBe(
       "⚠️ The task took too long. Some work may have completed. Check its results before trying again. Try a smaller task, or increase the task time limit in the Control UI settings.",

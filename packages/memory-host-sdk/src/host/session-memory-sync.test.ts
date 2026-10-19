@@ -14,9 +14,15 @@ import { readSessionColdTranscript } from "../../../../src/config/sessions/sessi
 import { runSessionColdStorageMaintenance } from "../../../../src/config/sessions/session-cold-storage.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../../../src/config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import type { OpenKeyedStoreOptions } from "../../../../src/plugin-sdk/plugin-state-runtime.js";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "../../../../src/plugin-sdk/plugin-state-runtime.js";
 import { createPluginStateKeyedStoreForTests } from "../../../../src/plugin-sdk/plugin-state-test-runtime.js";
-import type { RegisteredMemorySearchManager } from "../../../../src/plugins/registry-contribution-types.js";
+import type {
+  MemoryPluginRuntime,
+  RegisteredMemorySearchManager,
+} from "../../../../src/plugins/registry-contribution-types.js";
 import { runOpenClawAgentWriteTransaction } from "../../../../src/state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../../src/state/openclaw-agent-db.paths.js";
 import {
@@ -26,7 +32,11 @@ import {
 import { buildSessionEntry } from "./session-files.js";
 
 const { configureMemoryCoreDreamingState, getMemorySearchManager } = await vi.importActual<
-  typeof import("../../../../extensions/memory-core/runtime-api.js")
+  Pick<MemoryPluginRuntime, "getMemorySearchManager"> & {
+    configureMemoryCoreDreamingState: (
+      open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+    ) => void;
+  }
 >("../../../../extensions/memory-core/runtime-api.js");
 
 describe("memory synchronization of canonical SQLite transcripts", () => {

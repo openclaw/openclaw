@@ -318,7 +318,7 @@ describe("Mattermost registered message reads", () => {
     ["turn", metadataPath],
     ["plugin", postsPath(OTHER), 200],
     ["run", postsPath(OTHER), 403],
-  ])("fences %s revocation at %s (status=%s)", (owner, at, status) =>
+  ])("fences %s revocation at %s (status=%s)", (owner, at, status = undefined) =>
     checkRead(
       {},
       OTHER,
