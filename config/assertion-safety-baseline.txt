@@ -92,8 +92,6 @@ extensions/clickclack/src/channel-config.ts	5
 extensions/clickclack/src/channel.ts	3
 extensions/clickclack/src/discussions/service-open.ts	1
 extensions/clickclack/src/discussions/service.ts	1
-extensions/clickclack/src/discussions/tool-policy.ts	1
-extensions/clickclack/src/discussions/tool.ts	2
 extensions/clickclack/src/doctor-contract.ts	2
 extensions/clickclack/src/gateway.ts	2
 extensions/clickclack/src/http-client.ts	1
@@ -263,7 +261,6 @@ extensions/discord/src/send.shared.ts	1
 extensions/discord/src/setup-core.ts	1
 extensions/discord/src/target-parsing.ts	1
 extensions/discord/src/token.ts	2
-extensions/discord/src/voice-message.ts	2
 extensions/discord/src/voice/access.ts	1
 extensions/discord/src/voice/audio.ts	1
 extensions/discord/src/voice/realtime-turns.ts	3
@@ -1073,7 +1070,6 @@ src/acp/translator.agent-events.ts	11
 src/acp/translator.prompt-stream.ts	7
 src/acp/translator.replay.ts	1
 src/acp/translator.session-lifecycle.ts	1
-src/acp/translator.session-list.ts	1
 src/acp/translator.session-state.ts	1
 src/agents/agent-bundle-lsp-runtime.ts	3
 src/agents/agent-bundle-mcp-combined.ts	1

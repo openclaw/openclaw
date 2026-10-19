@@ -417,8 +417,6 @@
 ["extensions/discord/src/send.creates-thread.test.ts","openclaw/plugin-sdk/web-media","e47cba8f82f96ad127026c676bf2fb761d56d38235f37bf39736ca44715580b3",1]
 ["extensions/discord/src/send.permissions.authz.test.ts","./client.js","2a10d61bfc928ac6e263e741ee0560712a7535828e725f1f099890ca60f24b12",1]
 ["extensions/discord/src/send.sends-basic-channel-messages.test.ts","openclaw/plugin-sdk/web-media","7eba0d382039fc4ece9a8993e474f29923e4a450ba16e83d8b78bda9978798bb",1]
-["extensions/discord/src/send.voice.test.ts","./voice-message.js","3120de20be5028ab9f19e8df02f99a1078e75b49dfc22d1e1faefac30d2200e1",1]
-["extensions/discord/src/send.voice.test.ts","openclaw/plugin-sdk/web-media","8a3e3c5bb8f6442aa9e0aa8995fb8db35175be5b67a853552cec07d18b4cc823",1]
 ["extensions/discord/src/test-support/provider.test-support.ts","../internal/gateway.js","4abb2635e9f8ca55eea72ad3ffe201a56595d587f43de2ed258a8bc60b36b841",1]
 ["extensions/discord/src/voice/agent-control.test.ts","openclaw/plugin-sdk/realtime-voice","7026e44d3e4e833f0f651986b4e80b48ffb3242e85c5809e890dd7dc86c91b29",1]
 ["extensions/discord/src/voice/audio-transport.test.ts","./audio-worker-thread.js","3c3e68000f3192ae5535c8bbe45558985319003bcdaf35750a90a4fa5f2bec1d",1]
