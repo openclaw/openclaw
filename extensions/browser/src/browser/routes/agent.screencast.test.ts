@@ -4,7 +4,7 @@ import {
   clearBrowserScreencastTokens,
   consumeBrowserScreencastToken,
 } from "../screencast/tokens.js";
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import type { BrowserRouteContext } from "../server-context.js";
 import {
   getOrCreateProfileRuntime,
   getProfileLifecycle,
@@ -41,19 +41,16 @@ function setup(options: { existingSession?: boolean; url?: string; listedUrl?: s
   const runtime = getOrCreateProfileRuntime(state, profile);
   const tab = {
     targetId: "resolved-tab",
-    title: "Example",
     url: options.url ?? "https://example.com/",
-    type: "page",
   };
   const ensureTabAvailable = vi.fn(async () => tab);
-  const profileCtx = {
-    profile,
-    ensureTabAvailable,
-    listTabs: async () => [{ ...tab, url: options.listedUrl ?? tab.url }],
-  } as unknown as ProfileContext;
   const ctx = {
     state: () => state,
-    forProfile: () => profileCtx,
+    forProfile: () => ({
+      profile,
+      ensureTabAvailable,
+      listTabs: async () => [{ ...tab, url: options.listedUrl ?? tab.url }],
+    }),
   } as unknown as BrowserRouteContext;
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentScreencastRoutes(app, ctx);
@@ -78,29 +75,20 @@ describe("browser screencast mint route", () => {
     pw.available = true;
   });
 
-  afterEach(() => {
-    clearBrowserScreencastTokens();
-  });
+  afterEach(clearBrowserScreencastTokens);
 
   it.each([
     { when: "before request", abort: true },
     { when: "during tab resolution", abort: false },
   ])("rejects a requester invalidated $when (socket closed: $abort)", async ({ when, abort }) => {
     const { connection, requester } = requesterFixture();
-    const revoke = () => {
-      if (abort) {
-        connection.abort();
-      } else {
-        requester.invalidated = true;
-      }
-    };
     const { request, ensureTabAvailable } = setup();
     if (when === "before request") {
-      revoke();
+      connection.abort();
     } else {
       const resolveTab = ensureTabAvailable.getMockImplementation()!;
       ensureTabAvailable.mockImplementationOnce(async () => {
-        revoke();
+        requester.invalidated = true;
         return await resolveTab();
       });
     }

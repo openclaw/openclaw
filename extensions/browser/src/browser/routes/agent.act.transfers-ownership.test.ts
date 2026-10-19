@@ -87,6 +87,15 @@ const cases = [
   ["download waiter", "/wait/download", { path: "/tmp/download.txt" }, "output"],
 ] as const;
 
+async function untilEntered(entered: Promise<void>, operation: Promise<unknown>) {
+  await Promise.race([
+    entered,
+    operation.then(() => {
+      throw new Error("Operation completed before its held boundary");
+    }),
+  ]);
+}
+
 describe("dashboard transfer authority", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
   it.each(
@@ -115,12 +124,10 @@ describe("dashboard transfer authority", () => {
       const targetId = dashboard.browserTab!.targetId;
       const tab: BrowserTab = { targetId, type: "page", title: "Service", url: dashboard.url };
       const nativeEffect = vi.fn(async () => {});
-      const fileChooser = { setFiles: nativeEffect };
-      const waitForEvent = vi.fn(async () => fileChooser);
+      const waitForEvent = vi.fn(async () => ({ setFiles: nativeEffect }));
       setPwToolsCoreCurrentPage({ url: () => tab.url, isClosed: () => false, waitForEvent });
       setPwToolsCoreCurrentRefLocator({ setInputFiles: nativeEffect, click: nativeEffect });
-      const session = getPwToolsCoreSessionMocks();
-      session.armObservedDialogResponseOnPage.mockImplementation(() => {
+      getPwToolsCoreSessionMocks().armObservedDialogResponseOnPage.mockImplementation(() => {
         void nativeEffect();
       });
       setPwToolsCoreDownloadCapture({
@@ -159,22 +166,10 @@ describe("dashboard transfer authority", () => {
       );
       let retirement: Promise<unknown> | undefined;
       try {
-        await Promise.race([
-          entered.promise,
-          operation.then(() => {
-            throw new Error(
-              `Transfer ended before preparation: ${response.statusCode} ${JSON.stringify(response.body)}`,
-            );
-          }),
-        ]);
+        await untilEntered(entered.promise, operation);
         if (authority === "Stop") {
           retirement = stopBrowserDashboard(request);
-          await Promise.race([
-            closeEntered.promise,
-            retirement.then(() => {
-              throw new Error("Retirement skipped held close");
-            }),
-          ]);
+          await untilEntered(closeEntered.promise, retirement);
         }
         expect(fixture.tabs.map((entry) => entry.targetId)).toContain(targetId);
         release.resolve();

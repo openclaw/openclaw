@@ -29,24 +29,9 @@ vi.mock("../pw-ai-module.js", () => ({
   getLoadedPwAiModule: () => pwMocks,
 }));
 
-vi.mock("../cdp.js", () => ({
+vi.mock("../cdp.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cdp.js")>()),
   captureScreenshot: cdpMocks.captureScreenshot,
-  getDocumentIdentitiesViaCdp: vi.fn(),
-  snapshotAria: vi.fn(),
-  snapshotRoleViaCdp: vi.fn(),
-}));
-
-vi.mock("../chrome-mcp.js", () => ({
-  evaluateChromeMcpScript: vi.fn(),
-  navigateChromeMcpPage: vi.fn(),
-  takeChromeMcpScreenshot: vi.fn(),
-  takeChromeMcpSnapshot: vi.fn(),
-}));
-
-vi.mock("../navigation-guard.js", () => ({
-  assertBrowserNavigationAllowed: vi.fn(async () => {}),
-  assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
-  withBrowserNavigationPolicy: vi.fn(() => ({})),
 }));
 
 vi.mock("../screenshot.js", () => ({
@@ -67,14 +52,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
 
 vi.mock("./agent.shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent.shared.js")>()),
-  browserNavigationPolicyForProfile: vi.fn(() => ({})),
-  handleRouteError: vi.fn((_res, err) => {
-    throw err;
-  }),
-  readBody: vi.fn((req: { body?: unknown }) => req.body ?? {}),
   requirePwAi: vi.fn(async () => pwMocks),
-  resolveProfileContext: vi.fn(() => profileContext),
-  withPlaywrightRouteContext: vi.fn(),
   withRouteTabContext: vi.fn(
     async (params: {
       run: (ctx: {
