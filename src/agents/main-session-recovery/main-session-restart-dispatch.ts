@@ -31,6 +31,7 @@ import {
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
+import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.metadata.js";
 import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
@@ -246,7 +247,11 @@ async function resumeMainSessionWithinAdmission(
       (run) => run.runId === claimedRunId && run.lifecycleGeneration !== lifecycleGeneration,
     ) === true;
   const recoveryRunId =
-    claimedRunId && claimedRunId !== sourceRunId && !claimedRunWasAdmittedBeforeRestart
+    claimedRunId &&
+    claimedRunId !== sourceRunId &&
+    // Queued input keeps its transcript key as the source, not a new recovery reservation.
+    buildRunUserTurnIdempotencyKey(claimedRunId) !== sourceRunId &&
+    !claimedRunWasAdmittedBeforeRestart
       ? claimedRunId
       : randomUUID();
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;

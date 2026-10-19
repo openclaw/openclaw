@@ -50,7 +50,6 @@ export type ConfigViewState = {
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
-  lastCustomThemeImportFocusToken: number | null;
   rawDiffCache?: RawDiffCache;
   schemaAnalysisCache?: SchemaAnalysisCache;
   lastConfigContextKey: string | null;
@@ -154,7 +153,6 @@ export interface ConfigProps extends TabIconViewProps, AppearancePreferences {
   customThemeImportBusy: boolean;
   customThemeImportMessage: { kind: "success" | "error"; text: string } | null;
   customThemeImportExpanded?: boolean;
-  customThemeImportFocusToken?: number;
   onCustomThemeImportUrlChange: (next: string) => void;
   onImportCustomTheme: () => void;
   onClearCustomTheme: () => void;

@@ -730,7 +730,7 @@ it.for([
   },
 );
 
-it("admits an unsealed fleet in parallel without gating readiness on an unconfigured leftover", async ({
+it("admits an unsealed fleet including reserved system agents while skipping an unowned leftover", async ({
   signal,
 }) => {
   testState.agentsConfig = {
@@ -740,7 +740,7 @@ it("admits an unsealed fleet in parallel without gating readiness on an unconfig
   testState.agentConfig = { systemAgent: { agentId: "main" } };
   const env = { ...process.env };
   const cfg = loadGatewayTestConfig();
-  const agentIds = ["worker-a", "worker-b", "main"];
+  const agentIds = ["worker-a", "worker-b", "main", "openclaw", "crestodian"];
   const paths = agentIds.map((agentId) => openOpenClawAgentDatabase({ agentId, env }).path);
   const stalePaths = agentIds.map(
     (agentId) =>
@@ -750,7 +750,7 @@ it("admits an unsealed fleet in parallel without gating readiness on an unconfig
         env,
       }).path,
   );
-  const leftover = openOpenClawAgentDatabase({ agentId: "openclaw", env }).path;
+  const leftover = openOpenClawAgentDatabase({ agentId: "unowned", env }).path;
   await closeDatabases();
   for (const pathname of [...paths, leftover]) {
     expect(readSqliteDatabaseCleanClose(pathname)).toBe(true);
@@ -798,11 +798,6 @@ it("admits an unsealed fleet in parallel without gating readiness on an unconfig
   let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
   try {
     const started = await withAgentDatabaseStartupAdmission(async (admission) => {
-      const scheduling = admission.scheduling.bind(admission);
-      vi.spyOn(admission, "scheduling").mockImplementation((...args) => ({
-        ...scheduling(...args),
-        canDefer: () => true,
-      }));
       const activate = admission.activate.bind(admission);
       vi.spyOn(admission, "activate").mockImplementation((activation) =>
         activate({
@@ -845,7 +840,7 @@ it("admits an unsealed fleet in parallel without gating readiness on an unconfig
     const absentOptions = { agentId: "absent", env };
     expect(fs.existsSync(resolveOpenClawAgentSqlitePath(absentOptions))).toBe(false);
     expect(openOpenClawAgentDatabase(absentOptions).agentId).toBe("absent");
-    expect(readAgentDatabaseAdmissionRefusal("openclaw", { env })).toBeUndefined();
+    expect(readAgentDatabaseAdmissionRefusal("unowned", { env })).toBeUndefined();
     expect(fs.readFileSync(leftover)).toEqual(leftoverBytes);
     await withinTest(openingEntered[1]!.promise, signal);
     expect(openings).toHaveLength(2);
@@ -870,7 +865,7 @@ it("admits an unsealed fleet in parallel without gating readiness on an unconfig
     for (const agentId of agentIds) {
       expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
     }
-    expect(readAgentDatabaseAdmissionRefusal("openclaw", { env })).toBeUndefined();
+    expect(readAgentDatabaseAdmissionRefusal("unowned", { env })).toBeUndefined();
     expect(fs.readFileSync(leftover)).toEqual(leftoverBytes);
     expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(200);
   } finally {

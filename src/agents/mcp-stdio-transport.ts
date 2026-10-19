@@ -4,10 +4,13 @@
 import fs from "node:fs/promises";
 import process from "node:process";
 import { PassThrough } from "node:stream";
-import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import {
+  STDIO_DEFAULT_MAX_BUFFER_SIZE,
+  serializeMessage,
+  type Transport,
+  type JSONRPCMessage,
+} from "@modelcontextprotocol/client";
+import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
 import { formatErrorMessage } from "../infra/errors.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -19,11 +22,12 @@ import {
 } from "../process/owned-stdio.js";
 import type { ProcessCleanupResult } from "../process/supervisor/types.js";
 import { parseMcpDockerCommand } from "./mcp-docker-command.js";
+import { McpStdioFrameDecoder } from "./mcp-stdio-frame-decoder.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
 const log = createSubsystemLogger("mcp/stdio");
 
-type McpStdioDecoder = Pick<ReadBuffer, "append" | "readMessage" | "clear">;
+type McpStdioDecoder = Pick<McpStdioFrameDecoder, "append" | "readMessage" | "clear">;
 
 type McpStdioExit = { code: number | null; signal: NodeJS.Signals | null };
 
@@ -33,7 +37,7 @@ type OpenClawStdioServerParameters = {
   env?: NodeJS.ProcessEnv;
   /** Use only the supplied environment, including explicit omissions. */
   exactEnv?: true;
-  /** The decoder owns byte bounds and frame validation; the default is the MCP SDK decoder. */
+  /** The decoder owns byte bounds and frame validation. */
   decoder?: McpStdioDecoder;
   cwd?: string;
   prepareDataDir?: string;
@@ -61,7 +65,9 @@ export class OpenClawStdioClientTransport implements Transport {
   >;
 
   constructor(private readonly serverParams: OpenClawStdioServerParameters) {
-    this.readBuffer = serverParams.decoder ?? new ReadBuffer();
+    // Keep malformed-frame errors visible; the v2 SDK buffer silently drops invalid JSON.
+    this.readBuffer =
+      serverParams.decoder ?? new McpStdioFrameDecoder(STDIO_DEFAULT_MAX_BUFFER_SIZE, "transport");
     if (serverParams.stderr === "pipe" || serverParams.stderr === "overlapped") {
       this.stderrStream = new PassThrough();
     }

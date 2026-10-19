@@ -121,15 +121,20 @@ function SignIn(props: Pick<WizardStepControlsProps, "step" | "presentation" | "
             </a>
           </Show>
           <Show when={copyValue()} keyed>
-            {(value) => (
-              <button
-                type="button"
-                class="btn"
-                onClick={(event) => void handleCopyButton(event, value, copyLabel())}
-              >
-                <span data-copy-label>{copyLabel()}</span>
-              </button>
-            )}
+            {(value) => {
+              let label!: HTMLSpanElement;
+              return (
+                <button
+                  type="button"
+                  class="btn"
+                  onClick={(event) => void handleCopyButton(event, value, copyLabel(), { label })}
+                >
+                  <span ref={(element) => (label = element)} data-copy-label>
+                    {copyLabel()}
+                  </span>
+                </button>
+              );
+            }}
           </Show>
         </div>
         <div

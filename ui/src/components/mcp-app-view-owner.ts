@@ -185,7 +185,7 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
   function updatePresentation() {
     confirmation.update();
     if (host.displayMode === "fullscreen") {
-      promoteToPopoverTopLayer(host);
+      promoteToPopoverTopLayer(host, () => [host]);
     } else {
       host.removeAttribute("popover");
     }
