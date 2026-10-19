@@ -46,7 +46,7 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
         errorCode: "openclaw_repeated_tool_error",
       };
       expect(formatUserFacingAssistantErrorText(message)).toBe(
-        "OpenClaw stopped this turn after 3 consecutive identical tool failures. Check the tool arguments or switch to a model with native tool calling before retrying.",
+        "OpenClaw stopped this turn after 3 consecutive failures of the same tool call. Check the tool arguments or switch to a model with native tool calling before retrying.",
       );
     },
   );
