@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { buildCerebrasCatalogModels } from "./api.js";
 import plugin from "./index.js";
 import { applyCerebrasConfig, CEREBRAS_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -51,10 +51,17 @@ function mockCatalogResponse(body: unknown, init?: ResponseInit) {
 async function runCerebrasCatalog() {
   const provider = await registerSingleProviderPlugin(plugin);
   const result = await provider.catalog?.run(createCatalogContext());
-  if (!result || !("provider" in result)) {
-    throw new Error("expected authenticated Cerebras provider catalog");
-  }
+  assert(result && "provider" in result, "expected authenticated Cerebras provider catalog");
   return result.provider;
+}
+
+function expectedCost(input: number, output: number) {
+  return expect.objectContaining({
+    input: expect.closeTo(input, 10),
+    output: expect.closeTo(output, 10),
+    cacheRead: expect.closeTo(input, 10),
+    cacheWrite: 0,
+  });
 }
 
 beforeEach(clearLiveCatalogCacheForTests);
@@ -64,152 +71,120 @@ afterEach(() => {
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
 });
 
-describe("Cerebras", () => {
-  it("selects the default and alias when seeding a replace-mode catalog", () => {
-    const config = applyCerebrasConfig({ models: { mode: "replace" } });
+it("selects the default and alias when seeding a replace-mode catalog", () => {
+  const config = applyCerebrasConfig({ models: { mode: "replace" } });
 
-    expect(config.models?.mode).toBe("replace");
-    expect(config.models?.providers?.cerebras?.models).toEqual(buildCerebrasCatalogModels());
-    expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
-      "cerebras/gpt-oss-120b",
-    );
-    expect(config.agents?.defaults?.models).toEqual({
-      [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "Cerebras GPT OSS 120B" },
-    });
+  expect(config.models?.mode).toBe("replace");
+  expect(config.models?.providers?.cerebras?.models).toEqual(buildCerebrasCatalogModels());
+  expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
+    "cerebras/gpt-oss-120b",
+  );
+  expect(config.agents?.defaults?.models).toEqual({
+    [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "Cerebras GPT OSS 120B" },
   });
+});
 
-  it("discovers native prices, limits, and capabilities without sending credentials", async () => {
-    mockCatalogResponse({
-      object: "list",
-      data: [
-        NATIVE_TEXT_MODEL,
-        {
-          ...NATIVE_TEXT_MODEL,
-          id: "vision",
-          name: "Vision",
-          pricing: { prompt: "0.00000099", completion: "0.00000149" },
-          capabilities: { reasoning: false, vision: true, tools: true },
-          limits: { max_context_length: 262144, max_completion_tokens: 65536 },
-        },
-      ],
-    });
-
-    const catalog = await runCerebrasCatalog();
-
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
-    const request = ssrfRuntimeMocks.fetchWithSsrFGuard.mock.calls[0]?.[0];
-    expect(request?.url).toBe(CEREBRAS_PUBLIC_MODELS_URL);
-    expect(Object.fromEntries(new Headers(request?.init?.headers))).toEqual({
-      accept: "application/json",
-    });
-    expect(catalog).toMatchObject({
-      apiKey: "fixture-cerebras-key",
-      api: "openai-completions",
-      baseUrl: "https://api.cerebras.ai/v1",
-    });
-    expect(
-      catalog.models.map(({ id, name, reasoning, input, contextWindow, maxTokens }) => [
-        id,
-        name,
-        reasoning,
-        input,
-        contextWindow,
-        maxTokens,
-      ]),
-    ).toEqual([
-      ["text", "Text", true, ["text"], 131072, 40960],
-      ["vision", "Vision", false, ["text", "image"], 262144, 65536],
-    ]);
-    for (const [id, input, output] of [
-      ["text", 0.35, 0.75],
-      ["vision", 0.99, 1.49],
-    ] as const) {
-      const model = catalog.models.find((entry) => entry.id === id);
-      expect(model?.cost.input).toBeCloseTo(input, 10);
-      expect(model?.cost.output).toBeCloseTo(output, 10);
-      expect(model?.cost.cacheRead).toBeCloseTo(input, 10);
-      expect(model?.cost.cacheWrite).toBe(0);
-    }
-  });
-
-  it("keeps an available row with unknown runtime prices when completion pricing is missing", async () => {
-    mockCatalogResponse({
-      data: [{ ...NATIVE_TEXT_MODEL, pricing: { prompt: "0.00000035" } }],
-    });
-
-    const catalog = await runCerebrasCatalog();
-
-    expect(catalog.models).toEqual([
-      expect.objectContaining({
-        id: NATIVE_TEXT_MODEL.id,
-        // Required runtime cost retains its unknown placeholder, not a free-billing claim.
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      }),
-    ]);
-  });
-
-  it("reports unavailable discovery and recovers on the next request", async () => {
-    mockCatalogResponse({ error: "unavailable" }, { status: 503 });
-    const provider = await registerSingleProviderPlugin(plugin);
-    await expect(provider.catalog?.run(createCatalogContext())).resolves.toEqual({
-      providers: {},
-      outcomes: [{ provider: "cerebras", status: "unavailable" }],
-    });
-
-    mockCatalogResponse({ data: [NATIVE_TEXT_MODEL] });
-    const recovered = await runCerebrasCatalog();
-
-    expect(recovered.models).toEqual([
-      expect.objectContaining({
-        id: NATIVE_TEXT_MODEL.id,
-        cost: { input: 0.35, output: 0.75, cacheRead: 0.35, cacheWrite: 0 },
-      }),
-    ]);
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([
-    { baseUrl: "https://api.cerebras.ai/v1", key: "synthetic-session" },
-    { baseUrl: "https://proxy.example/v1", key: undefined },
-    { baseUrl: "https://api.cerebras.ai/v1", optOut: true, key: undefined },
-  ])("sends native cache affinity at $baseUrl with optOut=$optOut", async (route) => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const model: Model = {
-      id: "fixture-text-model",
-      name: "Synthetic model",
-      provider: "cerebras",
-      api: "openai-completions",
-      baseUrl: route.baseUrl,
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 8192,
-      maxTokens: 128,
-      ...(route.optOut ? { compat: { supportsPromptCacheKey: false } } : {}),
-    };
-    const normalized =
-      provider.normalizeResolvedModel?.({
-        provider: model.provider,
-        modelId: model.id,
-        model,
-      }) ?? model;
-    let payload: unknown;
-    const result = await streamSimple(
-      normalized,
-      { messages: [] },
+it.each([
+  { pricing: NATIVE_TEXT_MODEL.pricing, cost: expectedCost(0.35, 0.75) },
+  { pricing: { prompt: "0.00000035" }, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+])("discovers credential-free native metadata with pricing $pricing", async ({ pricing, cost }) => {
+  mockCatalogResponse({
+    object: "list",
+    data: [
+      { ...NATIVE_TEXT_MODEL, pricing },
       {
-        apiKey: "synthetic-unused-key",
-        sessionId: "synthetic-session",
-        cacheRetention: "long",
-        onPayload(value) {
-          payload = value;
-          throw new Error("captured before request");
-        },
+        ...NATIVE_TEXT_MODEL,
+        id: "vision",
+        name: "Vision",
+        pricing: { prompt: "0.00000099", completion: "0.00000149" },
+        capabilities: { reasoning: false, vision: true, tools: true },
+        limits: { max_context_length: 262144, max_completion_tokens: 65536 },
       },
-    ).result();
-    expect(result.errorMessage).toBe("captured before request");
-    expect(payload).toMatchObject({ prompt_cache_key: route.key });
-    expect(payload).not.toHaveProperty("prompt_cache_retention");
-    expect(payload).not.toHaveProperty("prompt_cache_options");
+    ],
   });
+
+  const catalog = await runCerebrasCatalog();
+
+  expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
+  const request = ssrfRuntimeMocks.fetchWithSsrFGuard.mock.calls[0]?.[0];
+  expect(request?.url).toBe(CEREBRAS_PUBLIC_MODELS_URL);
+  expect(Object.fromEntries(new Headers(request?.init?.headers))).toEqual({
+    accept: "application/json",
+  });
+  expect(catalog).toMatchObject({
+    apiKey: "fixture-cerebras-key",
+    api: "openai-completions",
+    baseUrl: "https://api.cerebras.ai/v1",
+  });
+  expect(
+    catalog.models.map(({ id, name, reasoning, input, contextWindow, maxTokens }) => [
+      id,
+      name,
+      reasoning,
+      input,
+      contextWindow,
+      maxTokens,
+    ]),
+  ).toEqual([
+    ["text", "Text", true, ["text"], 131072, 40960],
+    ["vision", "Vision", false, ["text", "image"], 262144, 65536],
+  ]);
+  expect(catalog.models.map((model) => model.cost)).toEqual([cost, expectedCost(0.99, 1.49)]);
+});
+
+it("reports unavailable discovery and recovers on the next request", async () => {
+  mockCatalogResponse({ error: "unavailable" }, { status: 503 });
+  const provider = await registerSingleProviderPlugin(plugin);
+  await expect(provider.catalog?.run(createCatalogContext())).resolves.toEqual({
+    providers: {},
+    outcomes: [{ provider: "cerebras", status: "unavailable" }],
+  });
+
+  mockCatalogResponse({ data: [NATIVE_TEXT_MODEL] });
+  const recovered = await runCerebrasCatalog();
+
+  expect(recovered.models).toEqual([
+    expect.objectContaining({
+      id: NATIVE_TEXT_MODEL.id,
+      cost: { input: 0.35, output: 0.75, cacheRead: 0.35, cacheWrite: 0 },
+    }),
+  ]);
+  expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+});
+
+it.each([
+  { baseUrl: "https://api.cerebras.ai/v1", key: "synthetic-session" },
+  { baseUrl: "https://proxy.example/v1", key: undefined },
+  { baseUrl: "https://api.cerebras.ai/v1", optOut: true, key: undefined },
+])("sends native cache affinity at $baseUrl with optOut=$optOut", async (route) => {
+  const provider = await registerSingleProviderPlugin(plugin);
+  const [seed] = buildCerebrasCatalogModels();
+  assert(seed);
+  const model: Model = {
+    ...seed,
+    provider: "cerebras",
+    api: "openai-completions",
+    baseUrl: route.baseUrl,
+    compat: route.optOut ? { supportsPromptCacheKey: false } : undefined,
+  };
+  const normalized =
+    provider.normalizeResolvedModel?.({ provider: "cerebras", modelId: model.id, model }) ?? model;
+  let payload: unknown;
+  const result = await streamSimple(
+    normalized,
+    { messages: [] },
+    {
+      apiKey: "synthetic-unused-key",
+      sessionId: "synthetic-session",
+      cacheRetention: "long",
+      onPayload(value) {
+        payload = value;
+        throw new Error("captured before request");
+      },
+    },
+  ).result();
+  expect(result.errorMessage).toBe("captured before request");
+  expect(payload).toMatchObject({ prompt_cache_key: route.key });
+  expect(payload).not.toHaveProperty("prompt_cache_retention");
+  expect(payload).not.toHaveProperty("prompt_cache_options");
 });
