@@ -15,6 +15,7 @@ import {
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
+import { registrationStoreOptions } from "./transport-registration-fixtures.test-support.js";
 import { closeCodexAppServerTransportAndWait, hasCodexAppServerNaturalExit } from "./transport.js";
 
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -29,8 +30,7 @@ afterAll(async () => {
   await receipts.close();
 });
 
-// The killed launcher cannot report its inherited-pipe child's extinction.
-// Keep the process-table observation, bounded only by the owning test signal.
+// A killed launcher cannot report its inherited-pipe child's extinction.
 async function waitForNativeExit(
   pid: number,
   readSnapshot: typeof processSnapshot.readCodexAppServerProcessSnapshot,
@@ -88,13 +88,10 @@ describe.skipIf(process.platform === "win32")("Codex failed launcher startup", (
       await expect(closing).resolves.toEqual({ exited: mode === "drained", cleanup: "uncertain" });
       expect(diagnostic).toEqual(["last startup diagnostic"]);
       expect(hasCodexAppServerNaturalExit(child)).toBe(mode === "drained");
-      expect(child.stdout.destroyed).toBe(true);
-      expect(child.stderr.destroyed).toBe(true);
+      expect(child).toMatchObject({ stdout: { destroyed: true }, stderr: { destroyed: true } });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
-      child.stdin.destroy();
-      child.stdout.destroy();
-      child.stderr.destroy();
+      [child.stdin, child.stdout, child.stderr].forEach((stream) => stream.destroy());
     }
   });
 
@@ -108,11 +105,7 @@ describe.skipIf(process.platform === "win32")("Codex failed launcher startup", (
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
       const { createPluginStateSyncKeyedStore } =
         await import("openclaw/plugin-sdk/plugin-state-store-runtime");
-      const store = createPluginStateSyncKeyedStore("codex", {
-        namespace: "app-server-processes",
-        maxEntries: 512,
-        overflowPolicy: "reject-new",
-      });
+      const store = createPluginStateSyncKeyedStore("codex", registrationStoreOptions);
       const nativePath = path.join(root, "native.mjs");
       const wrapperPath = path.join(root, "wrapper.mjs");
       const readyPath = path.join(root, "native.pid");
@@ -131,7 +124,6 @@ sendReceipt(ready, "ready");
 `,
       );
       // Match the pinned npm launcher's inherited pipes and signal mirroring.
-      // Clean EOF refusal coverage lives at the shared/isolated startup owner.
       await fs.writeFile(
         wrapperPath,
         `
@@ -150,9 +142,11 @@ child.on("exit", (code, signal) => {
       let wrapperClosed: Promise<unknown> | undefined;
       let nativePid: number | undefined;
       let nativeExited = false;
-      const spawnSpy = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+      let wrapperSpawns = 0;
+      vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
         const child = spawn(...args);
         if (Array.isArray(args[1]) && args[1].includes(wrapperPath)) {
+          wrapperSpawns++;
           wrapper = child;
           wrapperClosed = once(child, "close");
         }
@@ -172,10 +166,7 @@ child.on("exit", (code, signal) => {
           },
         );
       }
-      let inspected!: () => void;
-      const inspection = new Promise<void>((resolve) => {
-        inspected = resolve;
-      });
+      const inspection = Promise.withResolvers<void>();
       vi.spyOn(processSnapshot, "readCodexAppServerProcessCommand").mockImplementation(
         async (observed, deadline) => {
           if (observed.pid !== wrapper?.pid) {
@@ -197,7 +188,7 @@ child.on("exit", (code, signal) => {
               store.register(`capacity-${index}`, {});
             }
           }
-          inspected();
+          inspection.resolve();
           if (failure === "inspection") {
             throw new processSnapshot.ProcessInspectionError("unavailable");
           }
@@ -213,14 +204,13 @@ child.on("exit", (code, signal) => {
       try {
         await withinTest(
           awaitGateBeforeSettlement(
-            inspection,
+            inspection.promise,
             started,
             "Startup settled before fixture inspection",
           ),
           signal,
         );
-        // Observe actual cleanup independently of the injected inspection failure;
-        // an outer acquire timeout must not make a live descendant look settled.
+        // The injected inspection failure cannot certify physical descendant exit.
         await waitForNativeExit(nativePid!, readSnapshot, signal);
         nativeExited = true;
         const error = await started;
@@ -229,17 +219,15 @@ child.on("exit", (code, signal) => {
           failure === "inspection" ? "Cannot inspect Codex processes" : "512-row limit",
         );
         expect((error as Error).message).toContain("launcher startup diagnostic");
-        expect(
-          spawnSpy.mock.calls.filter(
-            ([, args]) => Array.isArray(args) && args.includes(wrapperPath),
-          ),
-        ).toHaveLength(1);
+        expect(wrapperSpawns).toBe(1);
         await expect(fs.access(inputPath)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(wrapper?.stdout?.destroyed).toBe(true);
-        expect(wrapper?.stderr?.destroyed).toBe(true);
+        expect(wrapper).toMatchObject({
+          stdout: { destroyed: true },
+          stderr: { destroyed: true },
+          exitCode: null,
+          signalCode: "SIGKILL",
+        });
         expect(containmentRefused).toBe(containment === "unavailable");
-        expect(wrapper?.exitCode).toBeNull();
-        expect(wrapper?.signalCode).toBe("SIGKILL");
       } finally {
         vi.restoreAllMocks();
         nativePid ??= Number(await fs.readFile(readyPath, "utf8").catch(() => "")) || undefined;

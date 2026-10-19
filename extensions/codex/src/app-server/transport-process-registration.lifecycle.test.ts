@@ -1,12 +1,17 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {
   createCodexAppServerProcessReaperService,
   prepareCodexAppServerProcessRegistration,
 } from "./transport-process-registration.js";
-import { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
+import type { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
+import {
+  createRegistrationChild,
+  registrationServiceContext,
+} from "./transport-registration-fixtures.test-support.js";
 import { createStdioTransport } from "./transport-stdio.js";
 import { closeCodexAppServerTransportAndWait } from "./transport.js";
 
@@ -43,18 +48,12 @@ vi.mock("./transport-process-containment.js", () => ({
   terminateCodexAppServerOrphan: vi.fn(),
 }));
 
-const children: RegistrationTestChildProcess[] = [];
 const transportOptions = {
   transport: "stdio",
   command: "codex",
   args: [],
   headers: {},
 } satisfies Parameters<typeof createStdioTransport>[0];
-function child() {
-  const spawned = new RegistrationTestChildProcess(500002);
-  children.push(spawned);
-  return spawned;
-}
 function queueSpawn(spawned: RegistrationTestChildProcess) {
   state.spawn.mockImplementation(() => {
     queueMicrotask(() => spawned.emit("spawn"));
@@ -97,162 +96,136 @@ beforeEach(() => {
   state.entries.mockResolvedValue([]);
 });
 afterEach(() => {
-  for (const spawned of children.splice(0)) {
-    spawned.stdin.destroy();
-    spawned.stdout.destroy();
-    spawned.stderr.destroy();
-    spawned.removeAllListeners();
-  }
   vi.restoreAllMocks();
   vi.resetAllMocks();
 });
 
-describe("Codex registration settlement", () => {
-  it("starts process inspection after a slow durable registration read", async () => {
-    const reading = createDeferred<{ key: string; value: unknown }[]>();
-    const existing = {
-      parent: { pid: process.pid, pgid: process.pid, startedAt: "parent-start" },
-      child: { pid: 500001, pgid: 500001, startedAt: "existing-child-start" },
-    };
-    state.rows.set("live-owner", existing);
-    state.entries.mockReturnValue(reading.promise);
-    // Advance the owner's clock to prove durable reads do not consume its inspection budget.
-    let now = performance.now();
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    const spawned = child();
-    queueSpawn(spawned);
-    const starting = createStdioTransport(transportOptions);
-    const started = expect(starting).resolves.toBe(spawned);
-    await vi.waitFor(() => expect(state.entries).toHaveBeenCalledOnce());
-    expect(state.spawn).not.toHaveBeenCalled();
-    now += 11_000;
-    reading.resolve([{ key: "live-owner", value: existing }]);
-    await started;
+it("starts process inspection after a slow durable registration read", async (ctx) => {
+  const reading = createDeferred<{ key: string; value: unknown }[]>();
+  const existing = {
+    parent: { pid: process.pid, pgid: process.pid, startedAt: "parent-start" },
+    child: { pid: 500001, pgid: 500001, startedAt: "existing-child-start" },
+  };
+  state.rows.set("live-owner", existing);
+  state.entries.mockReturnValue(reading.promise);
+  // Advance the owner's clock to prove durable reads do not consume its inspection budget.
+  let now = performance.now();
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  const spawned = createRegistrationChild(ctx);
+  queueSpawn(spawned);
+  const starting = createStdioTransport(transportOptions);
+  const started = expect(starting).resolves.toBe(spawned);
+  await vi.waitFor(() => expect(state.entries).toHaveBeenCalledOnce());
+  expect(state.spawn).not.toHaveBeenCalled();
+  now += 11_000;
+  reading.resolve([{ key: "live-owner", value: existing }]);
+  await started;
 
-    expect(state.spawn).toHaveBeenCalledOnce();
-    expect(state.register).toHaveBeenCalledOnce();
-    expect(state.rows.size).toBe(2);
-    expect(state.rows.get("live-owner")).toEqual(existing);
-    expect(terminateCodexAppServerOrphan).not.toHaveBeenCalled();
-    expect(state.delete).not.toHaveBeenCalled();
-    exit(spawned);
-    await closeCodexAppServerTransportAndWait(spawned);
-    expect([...state.rows.entries()]).toEqual([["live-owner", existing]]);
-  });
+  expect(state.spawn).toHaveBeenCalledOnce();
+  expect(state.register).toHaveBeenCalledOnce();
+  expect(state.rows.size).toBe(2);
+  expect(state.rows.get("live-owner")).toEqual(existing);
+  expect(terminateCodexAppServerOrphan).not.toHaveBeenCalled();
+  expect(state.delete).not.toHaveBeenCalled();
+  exit(spawned);
+  await closeCodexAppServerTransportAndWait(spawned);
+  expect([...state.rows.entries()]).toEqual([["live-owner", existing]]);
+});
 
-  it("keeps startup pending until the durable registration commits", async () => {
-    const admission = holdRegistration();
-    const spawned = child();
-    const { registered } = await startRegistration(spawned);
-    let published = false;
-    void registered.then(() => {
-      published = true;
-    });
-    await vi.waitFor(() => expect(state.register).toHaveBeenCalledOnce());
-    expect(published).toBe(false);
-    expect(state.rows.size).toBe(0);
-    admission.resolve();
-    await registered;
-    expect(state.rows.size).toBe(1);
-    exit(spawned);
-    await closeCodexAppServerTransportAndWait(spawned);
-    expect(state.rows.size).toBe(0);
-  });
+it("keeps startup pending until the durable registration commits", async (ctx) => {
+  const admission = holdRegistration();
+  const spawned = createRegistrationChild(ctx);
+  const { registered } = await startRegistration(spawned);
+  const published = vi.fn();
+  void registered.then(published);
+  await vi.waitFor(() => expect(state.register).toHaveBeenCalledOnce());
+  expect(published).not.toHaveBeenCalled();
+  expect(state.rows.size).toBe(0);
+  admission.resolve();
+  await registered;
+  expect(state.rows.size).toBe(1);
+  exit(spawned);
+  await closeCodexAppServerTransportAndWait(spawned);
+  expect(state.rows.size).toBe(0);
+});
 
-  it("orders an early exit after the pending insertion and rejects startup", async () => {
-    const admission = holdRegistration();
-    const spawned = child();
-    const { registered } = await startRegistration(spawned);
-    const rejected = expect(registered).rejects.toThrow("exited during registration");
-    await vi.waitFor(() => expect(state.register).toHaveBeenCalledOnce());
-    exit(spawned);
-    let closed = false;
-    const closing = closeCodexAppServerTransportAndWait(spawned).then(() => {
-      closed = true;
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(closed).toBe(false);
-    expect(state.delete).not.toHaveBeenCalled();
-    admission.resolve();
-    await rejected;
-    await closing;
-    expect(state.delete).toHaveBeenCalledOnce();
-    expect(state.rows.size).toBe(0);
-  });
-
-  it("joins delayed cleanup, retaining the fact when deletion fails", async () => {
-    const deletion = createDeferred<void>();
+it.for(["insertion", "failed deletion"])("joins pending %s before closing", async (mode, ctx) => {
+  const gate = mode === "insertion" ? holdRegistration() : createDeferred<void>();
+  if (mode === "failed deletion") {
     state.delete.mockImplementation(async () => {
-      await deletion.promise;
+      await gate.promise;
       throw new Error("database unavailable");
     });
-    const spawned = child();
-    const { registered } = await startRegistration(spawned);
-    await registered;
-    exit(spawned);
-    let closed = false;
-    const closing = closeCodexAppServerTransportAndWait(spawned).then(() => {
-      closed = true;
-    });
+  }
+  const spawned = createRegistrationChild(ctx);
+  const { registered } = await startRegistration(spawned);
+  const startup =
+    mode === "insertion"
+      ? expect(registered).rejects.toThrow("exited during registration")
+      : registered;
+  if (mode === "insertion") {
+    await vi.waitFor(() => expect(state.register).toHaveBeenCalledOnce());
+  } else {
+    await startup;
+  }
+  exit(spawned);
+  const closed = vi.fn();
+  const closing = closeCodexAppServerTransportAndWait(spawned).then(closed);
+  if (mode === "insertion") {
+    await setImmediate();
+    expect(state.delete).not.toHaveBeenCalled();
+  } else {
     await vi.waitFor(() => expect(state.delete).toHaveBeenCalledOnce());
-    expect(closed).toBe(false);
     expect(state.rows.size).toBe(1);
-    deletion.resolve();
-    await closing;
-    expect(state.rows.size).toBe(1);
-  });
+  }
+  expect(closed).not.toHaveBeenCalled();
+  gate.resolve();
+  await startup;
+  await closing;
+  expect(state.delete).toHaveBeenCalledOnce();
+  expect(state.rows.size).toBe(mode === "insertion" ? 0 : 1);
+});
 
-  it.for(["revoked", "commit failure"])(
-    "closes an unpublished transport after %s",
-    async (mode) => {
-      const admission = holdRegistration(mode === "commit failure");
-      const spawned = child();
-      spawned.stdout.resume();
-      spawned.stderr.resume();
-      spawned.stdin.on("finish", () => exit(spawned));
-      queueSpawn(spawned);
-      let active = true;
-      const starting = createStdioTransport(transportOptions, {}, () => {
-        if (!active) {
-          throw new Error("owner closed");
-        }
-      });
-      const rejected = expect(starting).rejects.toThrow(
-        mode === "revoked" ? "owner closed" : "registration refused",
-      );
-      await vi.waitFor(() => expect(state.register).toHaveBeenCalledOnce());
-      expect(spawned.stdin.readableLength).toBe(0);
-      active = mode !== "revoked";
-      admission.resolve();
-      await rejected;
-      expect(spawned.exitCode).toBe(0);
-      expect(state.delete).toHaveBeenCalledOnce();
-      expect(state.rows.size).toBe(0);
-    },
-  );
+it.for(["revoked", "commit failure"])(
+  "closes an unpublished transport after %s",
+  async (mode, ctx) => {
+    const admission = holdRegistration(mode === "commit failure");
+    const spawned = createRegistrationChild(ctx);
+    spawned.stdout.resume();
+    spawned.stderr.resume();
+    spawned.stdin.on("finish", () => exit(spawned));
+    queueSpawn(spawned);
+    let active = true;
+    const starting = createStdioTransport(transportOptions, {}, () => {
+      if (!active) {
+        throw new Error("owner closed");
+      }
+    });
+    const rejected = expect(starting).rejects.toThrow(
+      mode === "revoked" ? "owner closed" : "registration refused",
+    );
+    await vi.waitFor(() => expect(state.register).toHaveBeenCalledOnce());
+    expect(spawned.stdin.readableLength).toBe(0);
+    active = mode !== "revoked";
+    admission.resolve();
+    await rejected;
+    expect(spawned.exitCode).toBe(0);
+    expect(state.delete).toHaveBeenCalledOnce();
+    expect(state.rows.size).toBe(0);
+  },
+);
 
-  it("joins the best-effort boot sweep when the service stops", async () => {
-    const reading = createDeferred<{ key: string; value: unknown }[]>();
-    state.entries.mockReturnValue(reading.promise);
-    const service = createCodexAppServerProcessReaperService();
-    const ctx = {
-      config: {},
-      stateDir: "/fixture",
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    };
-    expect(service.start(ctx)).toBeUndefined();
-    let stopped = false;
-    const stopping = Promise.resolve(service.stop?.(ctx)).then(() => {
-      stopped = true;
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(stopped).toBe(false);
-    reading.resolve([]);
-    await stopping;
-    expect(stopped).toBe(true);
-  });
+it("joins the best-effort boot sweep when the service stops", async () => {
+  const reading = createDeferred<{ key: string; value: unknown }[]>();
+  state.entries.mockReturnValue(reading.promise);
+  const service = createCodexAppServerProcessReaperService();
+  const ctx = registrationServiceContext("/fixture");
+  expect(service.start(ctx)).toBeUndefined();
+  const stopped = vi.fn();
+  const stopping = Promise.resolve(service.stop?.(ctx)).then(stopped);
+  await setImmediate();
+  expect(stopped).not.toHaveBeenCalled();
+  reading.resolve([]);
+  await stopping;
+  expect(stopped).toHaveBeenCalledOnce();
 });

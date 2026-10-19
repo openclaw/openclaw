@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { setTimeout as delay } from "node:timers/promises";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
@@ -17,16 +18,6 @@ type FixtureEvent = {
   pgid: number;
 };
 
-type ProcessRow = {
-  pid: number;
-  command: string;
-};
-
-const delay = (ms: number) =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-
 const repeat = (rows: PosixProcess[], times = 2) => Array.from({ length: times }, () => rows);
 const closeOptions = { forceKillDelayMs: 500, exitTimeoutMs: 2_000 };
 
@@ -37,65 +28,51 @@ function spawnRoot(file: string, args: string[]) {
   });
 }
 
-async function cleanupFixture(tempDir: string) {
-  await removeTaskOwnedFixtureProcesses(tempDir);
-  await fs.rm(tempDir, { recursive: true, force: true });
-}
-
-async function listProcesses(tempDir: string): Promise<ProcessRow[]> {
+async function listProcesses(tempDir: string): Promise<number[]> {
   // Stream and retain only owned fixtures: unrelated host command lines can
   // exceed execFileSync's buffer and must not leak into a failed assertion.
   const child = spawn("ps", ["-axo", "pid=,command="], { stdio: ["ignore", "pipe", "ignore"] });
   const closed = once(child, "close");
-  const rows: ProcessRow[] = [];
+  const rows: number[] = [];
   for await (const line of createInterface({ input: child.stdout })) {
     if (!line.includes(tempDir)) {
       continue;
     }
     const match = /^\s*(\d+)\s+(.*)$/.exec(line);
     if (match) {
-      rows.push({
-        pid: Number(match[1]),
-        command: match[2] ?? "",
-      });
+      rows.push(Number(match[1]));
     }
   }
   expect((await closed)[0]).toBe(0);
   return rows;
 }
 
-function fixtureReadiness(child: ChildProcessWithoutNullStreams, count: number): Promise<void> {
-  return new Promise<void>((resolve) => {
+function fixtureReadiness(child: ChildProcessWithoutNullStreams, count: number): Promise<string[]> {
+  return new Promise((resolve) => {
     const lines = createInterface({ input: child.stdout });
-    let received = 0;
-    lines.on("line", () => {
-      if (++received === count) {
+    const received: string[] = [];
+    lines.on("line", (line) => {
+      received.push(line);
+      if (received.length === count) {
         lines.close();
-        resolve();
+        resolve(received);
       }
     });
     child.once("close", () => lines.close());
   });
 }
 
-async function readFixtureEvents(logPath: string): Promise<FixtureEvent[]> {
-  const contents = await fs.readFile(logPath, "utf8").catch(() => "");
-  return contents
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as FixtureEvent);
-}
-
-async function removeTaskOwnedFixtureProcesses(tempDir: string): Promise<void> {
+async function cleanupFixture(tempDir: string): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
     const ownedRows = await listProcesses(tempDir);
     if (ownedRows.length === 0) {
+      await fs.rm(tempDir, { recursive: true, force: true });
       return;
     }
-    for (const row of ownedRows) {
+    for (const pid of ownedRows) {
       try {
-        process.kill(row.pid, "SIGKILL");
+        process.kill(pid, "SIGKILL");
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
           throw error;
@@ -108,6 +85,7 @@ async function removeTaskOwnedFixtureProcesses(tempDir: string): Promise<void> {
   if (survivors.length > 0) {
     throw new Error(`task-owned process fixture survived cleanup: ${JSON.stringify(survivors)}`);
   }
+  await fs.rm(tempDir, { recursive: true, force: true });
 }
 
 describe.skipIf(process.platform === "win32")("Codex app-server process containment", () => {
@@ -132,8 +110,7 @@ describe.skipIf(process.platform === "win32")("Codex app-server process containm
             : { ...identity, pgid: identity.pgid + 1 };
         // PID reuse retires a stale row; group drift remains ambiguous and blocks startup.
         expect(await terminateCodexAppServerOrphan(stale)).toBe(field === "startedAt");
-        expect(child.exitCode).toBeNull();
-        expect(child.signalCode).toBeNull();
+        expect(child).toMatchObject({ exitCode: null, signalCode: null });
         expect(process.kill(child.pid!, 0)).toBe(true);
       } finally {
         const exited = once(child, "exit");
@@ -147,70 +124,44 @@ describe.skipIf(process.platform === "win32")("Codex app-server process containm
     signal,
   }) => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-transport-process-"));
-    const logPath = path.join(tempDir, "processes.jsonl");
     const rootPath = path.join(tempDir, "root.mjs");
-    const leaderPath = path.join(tempDir, "leader.mjs");
-    const descendantPath = path.join(tempDir, "descendant.mjs");
-    await fs.writeFile(logPath, "");
-    await fs.writeFile(
-      descendantPath,
-      `
-import { appendFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
-const [logPath, role] = process.argv.slice(2);
-const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
-appendFileSync(logPath, JSON.stringify({ role, pid: process.pid, pgid }) + "\\n");
-for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"]) process.on(signal, () => {});
-process.send({ ready: true });
-setInterval(() => {}, 1_000);
-`,
-    );
-    await fs.writeFile(
-      leaderPath,
-      `
-import { appendFileSync } from "node:fs";
-import { execFileSync, spawn } from "node:child_process";
-const [logPath, role, descendantPath] = process.argv.slice(2);
-const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
-appendFileSync(logPath, JSON.stringify({ role, pid: process.pid, pgid }) + "\\n");
-const descendant = spawn(process.execPath, [descendantPath, logPath, role.replace("leader", "descendant")], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
-descendant.on("message", (message) => process.send(message));
-descendant.unref();
-for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"]) process.on(signal, () => {});
-process.send({ ready: true });
-setInterval(() => {}, 1_000);
-`,
-    );
     await fs.writeFile(
       rootPath,
       `
-import { appendFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
-const [logPath, leaderPath, descendantPath] = process.argv.slice(2);
+const [role] = process.argv.slice(2);
 const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
-appendFileSync(logPath, JSON.stringify({ role: "root", pid: process.pid, pgid }) + "\\n");
-for (const [role, detached] of [["separate-leader", true], ["shared-leader", false]]) {
-  const child = spawn(process.execPath, [leaderPath, logPath, role, descendantPath], { detached, stdio: ["ignore", "ignore", "ignore", "ipc"] });
-  child.on("message", () => process.stdout.write("ready\\n"));
+const emit = (event) => process.send ? process.send(event) : process.stdout.write(JSON.stringify(event) + "\\n");
+function start(role, detached = false) {
+  const child = spawn(process.execPath, [process.argv[1], role], { detached, stdio: ["ignore", "ignore", "ignore", "ipc"] });
+  child.on("message", emit);
   child.unref();
 }
-process.stdout.write("ready\\n");
-process.stdin.resume();
-process.stdin.on("end", () => process.exit(0));
+if (role === "root") {
+  emit({ role, pid: process.pid, pgid });
+  start("separate-leader", true);
+  start("shared-leader");
+  process.stdin.resume();
+  process.stdin.on("end", () => process.exit(0));
+} else {
+  if (role.endsWith("leader")) start(role.replace("leader", "descendant"));
+  for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"]) process.on(signal, () => {});
+  emit({ role, pid: process.pid, pgid });
+  setInterval(() => {}, 1_000);
+}
 `,
     );
 
-    const root = spawnRoot(rootPath, [logPath, leaderPath, descendantPath]);
+    const root = spawnRoot(rootPath, ["root"]);
 
     const ready = fixtureReadiness(root, 5);
     const closed = once(root, "close");
     try {
-      await withinTest(
+      const lines = await withinTest(
         awaitGateBeforeSettlement(ready, closed, "timed out waiting for 5 process fixture events"),
         signal,
       );
-      // Every fixture appends its identity before relaying readiness through the root's stdout.
-      const events = await readFixtureEvents(logPath);
+      const events = lines.map((line) => JSON.parse(line) as FixtureEvent);
       const eventByRole = new Map(events.map((event) => [event.role, event]));
       const rootEvent = eventByRole.get("root");
       const separateLeader = eventByRole.get("separate-leader");
@@ -251,7 +202,6 @@ process.stdin.on("end", () => process.exit(0));
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-identity-reuse-"));
     const rootPath = path.join(tempDir, "root.mjs");
     const sentinelPath = path.join(tempDir, "sentinel.mjs");
-    const sentinelPidPath = path.join(tempDir, "sentinel.pid");
     await fs.writeFile(
       sentinelPath,
       `
@@ -263,27 +213,23 @@ setInterval(() => {}, 1_000);
       rootPath,
       `
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
-const [sentinelPath, sentinelPidPath] = process.argv.slice(2);
+const [sentinelPath] = process.argv.slice(2);
 const sentinel = spawn(process.execPath, [sentinelPath], { detached: true, stdio: "ignore" });
 sentinel.unref();
-writeFileSync(sentinelPidPath, String(sentinel.pid));
-process.stdout.write("ready\\n");
+process.stdout.write(String(sentinel.pid) + "\\n");
 process.stdin.resume();
 process.stdin.on("end", () => process.exit(0));
 `,
     );
-    const root = spawnRoot(rootPath, [sentinelPath, sentinelPidPath]);
+    const root = spawnRoot(rootPath, [sentinelPath]);
     const ready = fixtureReadiness(root, 1);
     const rootClosed = once(root, "close");
-    let restoreInspection: (() => void) | undefined;
     try {
-      await withinTest(
+      const [sentinelPidLine] = await withinTest(
         awaitGateBeforeSettlement(ready, rootClosed, "Missing root or sentinel process identity"),
         ctx.signal,
       );
-      // The root writes this PID before writing readiness to its owned stdout.
-      const sentinelPid = Number(await fs.readFile(sentinelPidPath, "utf8"));
+      const sentinelPid = Number(sentinelPidLine);
       const initial = await processSnapshot.readCodexAppServerProcessSnapshot(undefined, [
         root.pid!,
         sentinelPid,
@@ -333,11 +279,9 @@ process.stdin.on("end", () => process.exit(0));
       const actualProcess = processSnapshot.readCodexAppServerProcess;
       let rootStopObserved = false;
       const actualKill = process.kill.bind(process);
-      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
         const signalled = actualKill(pid, signal);
-        if (pid === sentinelPid && signal === "SIGKILL") {
-          descendantSignalled = true;
-        }
+        descendantSignalled ||= pid === sentinelPid && signal === "SIGKILL";
         return signalled;
       });
       const readSnapshot = async (
@@ -371,31 +315,22 @@ process.stdin.on("end", () => process.exit(0));
         }
         return rows;
       };
-      const snapshotSpy = vi
-        .spyOn(processSnapshot, "readCodexAppServerProcessSnapshot")
-        .mockImplementation((inspectionDeadline, pids) =>
+      vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(
+        (inspectionDeadline, pids) =>
           readSnapshot(inspectionDeadline ?? performance.now() + 2_000, pids),
-        );
-      const processSpy = vi
-        .spyOn(processSnapshot, "readCodexAppServerProcess")
-        .mockImplementation(async (pid, inspectionDeadline) =>
+      );
+      vi.spyOn(processSnapshot, "readCodexAppServerProcess").mockImplementation(
+        async (pid, inspectionDeadline) =>
           (await readSnapshot(inspectionDeadline, [pid]))?.find((row) => row.pid === pid),
-        );
-      restoreInspection = () => {
-        snapshotSpy.mockRestore();
-        processSpy.mockRestore();
-        killSpy.mockRestore();
-      };
+      );
       const closed = await closeCodexAppServerTransportAndWait(root, closeOptions);
-      restoreInspection();
+      vi.restoreAllMocks();
       expect(closed).toEqual({
         exited: true,
         cleanup: sentinelSurvived || mode === "unconfirmed-termination" ? "uncertain" : "closed",
       });
       expect(root.exitCode).toBe(0);
-      const survived = (await listProcesses(tempDir)).some(
-        (row) => row.pid === sentinelPid && row.command.includes(tempDir),
-      );
+      const survived = (await listProcesses(tempDir)).includes(sentinelPid);
       expect(survived).toBe(sentinelSurvived);
       if (mode === "snapshot-failure" || mode === "inspection-timeout") {
         const sentinel = await processSnapshot.readCodexAppServerProcess(
@@ -406,7 +341,7 @@ process.stdin.on("end", () => process.exit(0));
         expect(sentinel?.state).not.toMatch(/^[Tt]/);
       }
     } finally {
-      restoreInspection?.();
+      vi.restoreAllMocks();
       await cleanupFixture(tempDir);
     }
   });
