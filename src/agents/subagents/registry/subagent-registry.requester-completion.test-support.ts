@@ -11,9 +11,16 @@ import {
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
-import { SharedGatewaySessionGenerationState } from "../../../gateway/server-shared-auth-generation.js";
+import {
+  enforceSharedGatewaySessionGenerationForConfigWrite,
+  SharedGatewaySessionGenerationState,
+} from "../../../gateway/server-shared-auth-generation.js";
 import { resolveSharedGatewaySessionGeneration } from "../../../gateway/server/ws-shared-generation.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  registerAgentRunContext,
+} from "../../../infra/agent-run-registry.js";
 import { WorkerTaskError } from "../../../infra/worker-task-pool.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import {
@@ -64,6 +71,9 @@ export function registerRequesterCompletionCustodyTests({
     "owner current",
     "owner nested password",
     "owner rotated",
+    "current with child",
+    "owner current with child",
+    "owner revoked with child",
     "overloaded then current",
     "overloaded then revoked",
     "overloaded then retired",
@@ -79,6 +89,8 @@ export function registerRequesterCompletionCustodyTests({
     "revalidates %s for a cold-loaded interrupted child batch without widening the parent",
     async (recovery) => {
       const owner = recovery.startsWith("owner ");
+      const spawnsChild = recovery.endsWith(" with child");
+      const revokesChild = recovery === "owner revoked with child";
       const nestedOwner = recovery === "owner nested password";
       const ownerAuth = nestedOwner
         ? { mode: "password" as const, password: "owner-password-fixture" }
@@ -96,6 +108,7 @@ export function registerRequesterCompletionCustodyTests({
         recovery === "mismatched source" ||
         recovery === "revoked grant";
       const canDispatch =
+        spawnsChild ||
         recovery === "current" ||
         recovery === "owner current" ||
         nestedOwner ||
@@ -209,6 +222,8 @@ export function registerRequesterCompletionCustodyTests({
             return captureRequester(...args);
           });
         let deliveredAuthority: ReturnType<typeof createAdmittedRunOperatorAuthority> | undefined;
+        let childAuthority: typeof deliveredAuthority;
+        const childRunId = "replacement-child";
         const deliver = vi
           .spyOn(delivery, "deliverSubagentAnnouncement")
           .mockImplementation(async (params) => {
@@ -216,6 +231,41 @@ export function registerRequesterCompletionCustodyTests({
             deliveredAuthority =
               getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
             expectDefined(deliveredAuthority, "restored requester authority").assertCurrent();
+            if (spawnsChild && !childAuthority) {
+              const gateway = expectDefined(
+                getPluginRuntimeGatewayRequestScope()?.context,
+                "recovered requester Gateway",
+              );
+              await upsertSessionEntryCore(
+                {
+                  storePath: cfg.session.store,
+                  sessionKey: `agent:main:subagent:${childRunId}`,
+                  agentId: "main",
+                },
+                { sessionId: `original-${childRunId}`, updatedAt: Date.now() },
+              );
+              registerAgentRunContext(childRunId, {
+                agentId: "main",
+                sessionKey: `agent:main:subagent:${childRunId}`,
+                sessionId: `original-${childRunId}`,
+              });
+              await registerSubagentRun(
+                registration(childRunId, {
+                  requesterSessionKey,
+                  requesterAgentId: "main",
+                  requesterTurnRunId: "recovered-requester-turn",
+                  completionTarget: "parent",
+                  completionRequesterSessionId: sessionId,
+                  completionRequesterLifecycleRevision: lifecycleRevision,
+                  gatewayContextResolver: () => gateway,
+                }),
+              );
+              childAuthority = subagentRuns.runWithCompletionAuthority(
+                currentChild(childRunId),
+                () => getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
+              );
+              expectDefined(childAuthority, "replacement child authority").assertCurrent();
+            }
             params.onAccepted?.({ status: "accepted" });
             return { delivered: true, path: "direct" };
           });
@@ -332,7 +382,9 @@ export function registerRequesterCompletionCustodyTests({
                 required: null,
               });
           }
-          replacement.recoveryRuntime = createMockGatewayRecoveryRuntime();
+          replacement.recoveryRuntime = createMockGatewayRecoveryRuntime({
+            waitForAgent: vi.fn().mockResolvedValue({ status: "pending" }),
+          });
           const recoveryTarget = {
             ...buildRequesterSettleWakeIdentity({
               requesterSessionKey,
@@ -492,11 +544,76 @@ export function registerRequesterCompletionCustodyTests({
             expect(deliveredAuthority?.profileId).toBe(source.authority.profileId);
             expect(deliveredAuthority?.scopes).toEqual(["operator.write"]);
             expect(deliveredAuthority?.gatewayAccessGrant).toEqual(owner ? null : grantRef);
-            // Committed batch settlement releases its restored completion custody.
-            expect(deliveredAuthority?.assertCurrent).toThrow(/authority/);
+            if (!spawnsChild) {
+              // Committed batch settlement releases its restored completion custody.
+              expect(deliveredAuthority?.assertCurrent).toThrow(/authority/);
+            }
             const message = deliver.mock.calls[0]?.[0].triggerMessage;
             expect(message).toContain("restart-child-a interrupted by Gateway restart");
             expect(message).toContain("restart-child-b interrupted by Gateway restart");
+          }
+          if (spawnsChild) {
+            const child = currentChild(childRunId);
+            const retained = expectDefined(childAuthority, "retained replacement child authority");
+            expect(retained.assertCurrent).not.toThrow();
+            expect(retained.signal?.aborted).toBe(false);
+            expect(child.execution).toMatchObject({ status: "running" });
+            expect(retained.scopes).toEqual(["operator.write"]);
+            expect(() => subagentRuns.runWithCompletionAuthority(child, () => {})).not.toThrow();
+            expect(() => subagentRuns.runWithCompletionAuthority(currentChild(), () => {})).toThrow(
+              /authority/,
+            );
+            if (revokesChild) {
+              const generation = resolveSharedGatewaySessionGeneration({
+                mode: "token",
+                token: "rotated-owner-fixture",
+                allowTailscale: false,
+              });
+              const generationOwner = expectDefined(
+                replacement.sharedGatewaySessionGenerationState,
+                "shared authentication owner",
+              );
+              enforceSharedGatewaySessionGenerationForConfigWrite({
+                state: generationOwner,
+                nextConfig: cfg,
+                resolveRuntimeSnapshotGeneration: () => generation,
+                clients: [],
+              });
+              expect(retained.signal?.aborted).toBe(true);
+              expect(retained.assertCurrent).toThrow(/authority/);
+            }
+            await updateRun(childRunId, (draft) => {
+              draft.execution = {
+                ...draft.execution,
+                status: "terminal",
+                endedAt: Date.now(),
+                outcome: { status: "ok" },
+              };
+              draft.completion = {
+                required: true,
+                resultText: "replacement child completed",
+                terminalReply: { disposition: "visible", text: "replacement child completed" },
+              };
+              draft.delivery = { status: "pending" };
+              draft.cleanupCompletedAt = Date.now();
+              draft.requesterTurnRunId = undefined;
+              draft.requesterSettleWake = {
+                status: "pending",
+                attemptCount: 0,
+                rearmGeneration: 1,
+                batchRunIds: [childRunId],
+              };
+            });
+            clearAgentRunContext(childRunId);
+            await testing.sweepOnceForTests();
+            await join(true);
+            await settleSubagentRegistryPersistenceWork();
+            expect(deliver).toHaveBeenCalledTimes(revokesChild ? 1 : 2);
+            if (!revokesChild) {
+              expect(deliver.mock.calls[1]?.[0].triggerMessage).toContain(
+                "replacement child completed",
+              );
+            }
           }
           for (const runId of runIds) {
             const entry = settled.get(runId);
@@ -522,6 +639,7 @@ export function registerRequesterCompletionCustodyTests({
             expect(persisted.get("fresh-child-task")?.operatorRecoverySource).toBeUndefined();
           }
         } finally {
+          clearAgentRunContext(childRunId);
           resumeDelivery.resolve();
           await join();
           requesterRead.mockRestore();

@@ -104,6 +104,10 @@ and cannot authorize execution by itself. Missing, invalid, or revoked evidence 
 the interrupted result available for inspection; recovery never substitutes system
 authority. Start a new authorized requester turn to continue that work.
 
+Children spawned by a recovered requester retain its authority after that requester
+yields or finishes. They remain subject to the original scope ceiling and current
+policy; credential rotation or other source revocation still stops them.
+
 Shared-token and password owner connections, including CLI/backend requests,
 retain this evidence too. Recovery requires the same shared authentication
 generation and method; rotating the credential or changing authentication mode
