@@ -5,25 +5,26 @@ import "../../test-support/browser-security.mock.js";
 import { handleRouteError, resolveSafeRouteTabUrl, withRouteTabContext } from "./agent.shared.js";
 import { createBrowserRouteResponse } from "./test-helpers.js";
 
-function routeContext(ssrfPolicy?: unknown) {
-  return {
-    state: () => ({
-      resolved: {
-        extraArgs: [],
-        ssrfPolicy,
-      },
-    }),
-  };
-}
-
-function profileContext(tabs: Array<{ targetId: string; url: string }>) {
-  return {
-    profile: {
-      cdpIsLoopback: true,
-      driver: "openclaw",
-    },
-    listTabs: async () => tabs,
-  };
+function safeUrl(
+  url?: string,
+  options: {
+    fallbackUrl?: string;
+    signal?: AbortSignal;
+    ssrfPolicy?: unknown;
+  } = {},
+) {
+  return resolveSafeRouteTabUrl({
+    ctx: {
+      state: () => ({ resolved: { extraArgs: [], ssrfPolicy: options.ssrfPolicy } }),
+    } as never,
+    profileCtx: {
+      profile: { cdpIsLoopback: true, driver: "openclaw" },
+      listTabs: async () => (url ? [{ targetId: "tab-1", url }] : []),
+    } as never,
+    targetId: "tab-1",
+    fallbackUrl: options.fallbackUrl,
+    signal: options.signal,
+  });
 }
 
 function routeContextForTab(
@@ -36,21 +37,13 @@ function routeContextForTab(
   })),
 ): BrowserRouteContext {
   const profileCtx = {
-    profile: {
-      cdpUrl: "http://127.0.0.1:9222",
-      name: "default",
-    },
+    profile: { cdpUrl: "http://127.0.0.1:9222", name: "default" },
     ensureTabAvailable,
   } as unknown as ProfileContext;
 
   return {
     forProfile: () => profileCtx,
-    state: () => ({
-      resolved: {
-        actionTimeoutMs: 60_000,
-        ssrfPolicy: {},
-      },
-    }),
+    state: () => ({ resolved: { actionTimeoutMs: 60_000, ssrfPolicy: {} } }),
   } as unknown as BrowserRouteContext;
 }
 
@@ -81,9 +74,9 @@ describe("browser route shared helpers", () => {
       targetId: "tab-1",
       run,
     });
-    expect(response.statusCode).toBe(500);
-    expect(response.body).toMatchObject({
-      error: expect.stringContaining("dashboard was removed"),
+    expect(response).toMatchObject({
+      statusCode: 500,
+      body: { error: expect.stringContaining("dashboard was removed") },
     });
     expect(run).not.toHaveBeenCalled();
   });
@@ -96,8 +89,10 @@ describe("browser route shared helpers", () => {
 
     handleRouteError(response.res, error);
 
-    expect(response.statusCode).toBe(500);
-    expect(response.body).toMatchObject({ error: expect.stringContaining("browserless.example") });
+    expect(response).toMatchObject({
+      statusCode: 500,
+      body: { error: expect.stringContaining("browserless.example") },
+    });
     expect(JSON.stringify(response.body)).not.toContain("browser-user");
     expect(JSON.stringify(response.body)).not.toContain("browser-password");
     expect(JSON.stringify(response.body)).not.toContain("browser-token");
@@ -106,23 +101,14 @@ describe("browser route shared helpers", () => {
   describe("safe route tab URLs", () => {
     it("falls back to the ensured tab URL when tab listing is stale", async () => {
       await expect(
-        resolveSafeRouteTabUrl({
-          ctx: routeContext() as never,
-          profileCtx: profileContext([]) as never,
-          targetId: "tab-1",
-          fallbackUrl: "https://example.com/fallback",
-        }),
+        safeUrl(undefined, { fallbackUrl: "https://example.com/fallback" }),
       ).resolves.toBe("https://example.com/fallback");
     });
 
     it("omits URLs blocked by the browser SSRF policy", async () => {
       await expect(
-        resolveSafeRouteTabUrl({
-          ctx: routeContext({ dangerouslyAllowPrivateNetwork: false }) as never,
-          profileCtx: profileContext([
-            { targetId: "tab-1", url: "http://127.0.0.1:9222/" },
-          ]) as never,
-          targetId: "tab-1",
+        safeUrl("http://127.0.0.1:9222/", {
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
         }),
       ).resolves.toBeUndefined();
     });
@@ -138,14 +124,7 @@ describe("browser route shared helpers", () => {
         });
       try {
         await expect(
-          resolveSafeRouteTabUrl({
-            ctx: routeContext() as never,
-            profileCtx: profileContext([
-              { targetId: "tab-1", url: "https://example.com/current" },
-            ]) as never,
-            targetId: "tab-1",
-            signal: controller.signal,
-          }),
+          safeUrl("https://example.com/current", { signal: controller.signal }),
         ).rejects.toBe(reason);
         expect(guard).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
       } finally {

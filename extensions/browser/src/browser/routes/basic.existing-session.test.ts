@@ -1,6 +1,6 @@
-// Browser tests cover basic.existing session plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import chromeExtensionManifest from "../../../chrome-extension/manifest.json" with { type: "json" };
+import { makeBrowserProfile } from "../server-context.test-harness.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const { inspectChromeGraphicsDiagnosticsMock } = vi.hoisted(() => ({
@@ -12,17 +12,23 @@ vi.mock("../chrome-mcp.js", () => ({
   takeChromeMcpSnapshot: vi.fn(async () => ({})),
 }));
 
-vi.mock("../chrome.graphics.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../chrome.graphics.js")>();
-  return {
-    ...actual,
-    inspectChromeGraphicsDiagnostics: inspectChromeGraphicsDiagnosticsMock,
-  };
-});
+vi.mock("../chrome.graphics.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../chrome.graphics.js")>()),
+  inspectChromeGraphicsDiagnostics: inspectChromeGraphicsDiagnosticsMock,
+}));
 
 const { BrowserProfileUnavailableError } = await import("../errors.js");
 const { ProfileRestartRequiredError } = await import("../server-context.lifecycle.js");
 const { registerBrowserBasicRoutes } = await import("./basic.js");
+
+function managedProfile(overrides: Record<string, unknown> = {}) {
+  return makeBrowserProfile({
+    userDataDir: "/tmp/openclaw-profile",
+    headless: true,
+    headlessSource: "default",
+    ...overrides,
+  });
+}
 
 function createExistingSessionProfileState(params?: {
   isHttpReachable?: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
@@ -112,20 +118,7 @@ function createManagedProfileState(
     profiles: new Map(),
     forProfile: () =>
       ({
-        profile: {
-          name: "openclaw",
-          driver: "openclaw",
-          cdpPort: 18800,
-          cdpUrl: "http://127.0.0.1:18800",
-          cdpHost: "127.0.0.1",
-          cdpIsLoopback: true,
-          userDataDir: "/tmp/openclaw-profile",
-          color: "#FF4500",
-          headless: true,
-          headlessSource: "default",
-          attachOnly: false,
-          ...profileOverrides,
-        },
+        profile: managedProfile(profileOverrides),
         isHttpReachable: reachability?.isHttpReachable ?? (async () => false),
         isTransportAvailable: reachability?.isTransportAvailable ?? (async () => false),
         isReachable: async () => false,
@@ -138,11 +131,13 @@ async function callBasicRouteWithState(params: {
   query?: Record<string, string>;
   state: ReturnType<typeof createExistingSessionProfileState | typeof createManagedProfileState>;
   signal?: AbortSignal;
+  forProfile?: () => unknown;
+  expectedStatus?: number;
 }) {
   const { app, getHandlers } = createBrowserRouteApp();
   registerBrowserBasicRoutes(app, {
     state: () => params.state,
-    forProfile: params.state.forProfile,
+    forProfile: params.forProfile ?? params.state.forProfile,
   } as never);
 
   const handler = getHandlers.get(params.route ?? "/");
@@ -157,7 +152,26 @@ async function callBasicRouteWithState(params: {
     },
     response.res,
   );
-  return response;
+  expect(response.statusCode).toBe(params.expectedStatus ?? 200);
+  return responseBodyRecord(response);
+}
+
+function trackLaunch(
+  state: ReturnType<typeof createManagedProfileState>,
+  mode: { headless?: boolean; headlessSource?: string } = {},
+) {
+  const profile = (state.forProfile() as { profile: unknown }).profile as never;
+  state.profiles.set("openclaw", {
+    profile,
+    running: {
+      pid: 222,
+      exe: { kind: "chromium", path: "/usr/bin/chromium" },
+      userDataDir: "/tmp/openclaw-profile",
+      cdpPort: 18800,
+      proc: {} as never,
+      ...mode,
+    },
+  });
 }
 
 async function callStartRoute(params: {
@@ -170,20 +184,7 @@ async function callStartRoute(params: {
       throw params.error;
     }
   });
-  const profile = {
-    name: "openclaw",
-    driver: "openclaw",
-    cdpPort: 18800,
-    cdpUrl: "http://127.0.0.1:18800",
-    cdpHost: "127.0.0.1",
-    cdpIsLoopback: true,
-    userDataDir: "/tmp/openclaw-profile",
-    color: "#FF4500",
-    headless: false,
-    headlessSource: "default",
-    attachOnly: false,
-    ...params.profile,
-  };
+  const profile = managedProfile({ headless: false, ...params.profile });
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserBasicRoutes(app, {
     state: () => ({ resolved: { enabled: true, headless: false }, profiles: new Map() }),
@@ -230,13 +231,11 @@ describe("basic browser routes", () => {
       ]),
     };
 
-    const response = await callBasicRouteWithState({
+    const report = await callBasicRouteWithState({
       route: "/doctor",
       query: { profile: "chrome" },
       state,
     });
-    const report = responseBodyRecord(response);
-    expect(response.statusCode).toBe(200);
     expect(report.checks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -268,19 +267,12 @@ describe("basic browser routes", () => {
       ensureBrowserAvailable,
       ensureTabAvailable,
     };
-    const { app, getHandlers } = createBrowserRouteApp();
-    registerBrowserBasicRoutes(app, {
-      state: () => state,
+    await callBasicRouteWithState({
+      state,
       forProfile: () => profileCtx,
-    } as never);
-    const response = createBrowserRouteResponse();
-
-    await getHandlers.get("/doctor")?.(
-      { params: {}, query: { profile: "chrome-live", deep: "true" } },
-      response.res,
-    );
-
-    expect(response.statusCode).toBe(200);
+      route: "/doctor",
+      query: { profile: "chrome-live", deep: "true" },
+    });
     expect(ensureBrowserAvailable).toHaveBeenCalledOnce();
     expect(ensureTabAvailable).toHaveBeenCalledTimes(2);
   });
@@ -289,8 +281,7 @@ describe("basic browser routes", () => {
     const response = await callBasicRouteWithState({
       state: createManagedProfileState({ engine: "lightpanda", attachOnly: true }),
     });
-    expect(response.statusCode).toBe(200);
-    expect(responseBodyRecord(response)).toMatchObject({
+    expect(response).toMatchObject({
       engine: "lightpanda",
       sessionScope: "connection",
       screenshotFidelity: "none",
@@ -322,16 +313,14 @@ describe("basic browser routes", () => {
       ),
     });
 
-    expect(response.statusCode).toBe(200);
-    const body = responseBodyRecord(response);
-    const browserStatus = responseBodyRecord({ body: body.status });
+    const browserStatus = responseBodyRecord({ body: response.status });
     expect(browserStatus).toMatchObject({
       executablePath: process.execPath,
       detectedBrowser: "custom",
       detectedExecutablePath: process.execPath,
       detectError: null,
     });
-    expect(body.ok).toBe(true);
+    expect(response.ok).toBe(true);
   });
 
   it("ignores a non-owning remote CDP profile executable override", async () => {
@@ -351,8 +340,7 @@ describe("basic browser routes", () => {
       ),
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(responseBodyRecord(response)).toMatchObject({
+    expect(response).toMatchObject({
       executablePath: ignoredExecutable,
       detectedBrowser: "custom",
       detectedExecutablePath: process.execPath,
@@ -364,34 +352,22 @@ describe("basic browser routes", () => {
     const state = createManagedProfileState({
       cdpUrl: "http://openclaw:relay-token@127.0.0.1:18800",
     });
-    const profile = (state.forProfile() as { profile: unknown }).profile as never;
-    state.profiles.set("openclaw", {
-      profile,
-      running: {
-        pid: 222,
-        exe: { kind: "chromium", path: "/usr/bin/chromium" },
-        userDataDir: "/tmp/openclaw-profile",
-        cdpPort: 18800,
-        proc: {} as never,
-        headless: true,
-        headlessSource: "request",
-      },
-    });
+    trackLaunch(state, { headless: true, headlessSource: "request" });
 
     const response = await callBasicRouteWithState({
       query: { profile: "openclaw" },
       state,
     });
 
-    expect(response.statusCode).toBe(200);
-    const body = responseBodyRecord(response);
-    expect(body.profile).toBe("openclaw");
-    expect(body.pid).toBe(222);
-    expect(body.chosenBrowser).toBe("chromium");
-    expect(body.cdpUrl).toBe("http://127.0.0.1:18800");
-    expect(body.headless).toBe(true);
-    expect(body.headlessSource).toBe("request");
-    expect(body.graphics).toBeNull();
+    expect(response).toMatchObject({
+      profile: "openclaw",
+      pid: 222,
+      chosenBrowser: "chromium",
+      cdpUrl: "http://127.0.0.1:18800",
+      headless: true,
+      headlessSource: "request",
+      graphics: null,
+    });
     expect(inspectChromeGraphicsDiagnosticsMock).not.toHaveBeenCalled();
   });
 
@@ -426,25 +402,15 @@ describe("basic browser routes", () => {
         isTransportAvailable: async () => true,
       },
     );
-    const profile = (state.forProfile() as { profile: unknown }).profile as never;
-    state.profiles.set("openclaw", {
-      profile,
-      running: {
-        pid: 222,
-        exe: { kind: "chromium", path: "/usr/bin/chromium" },
-        userDataDir: "/tmp/openclaw-profile",
-        cdpPort: 18800,
-        proc: {} as never,
-      },
-    });
+    trackLaunch(state);
 
     const first = await callBasicRouteWithState({ query: { profile: "openclaw" }, state });
     const second = await callBasicRouteWithState({ query: { profile: "openclaw" }, state });
     const third = await callBasicRouteWithState({ query: { profile: "openclaw" }, state });
 
-    expect(responseBodyRecord(first).graphics).toEqual(unavailable);
-    expect(responseBodyRecord(second).graphics).toEqual(available);
-    expect(responseBodyRecord(third).graphics).toEqual(available);
+    expect(first.graphics).toEqual(unavailable);
+    expect(second.graphics).toEqual(available);
+    expect(third.graphics).toEqual(available);
     expect(inspectChromeGraphicsDiagnosticsMock).toHaveBeenCalledTimes(2);
   });
 
@@ -459,23 +425,7 @@ describe("basic browser routes", () => {
   });
 
   it("returns structured no-display metadata without replacing the error message", async () => {
-    const { response } = await callStartRoute({
-      error: new BrowserProfileUnavailableError("display required", {
-        metadata: {
-          reason: "no_display_for_headed_profile",
-          details: {
-            profile: "openclaw",
-            requestedHeadless: false,
-            headlessSource: "profile",
-            displayPresent: false,
-          },
-        },
-      }),
-    });
-
-    expect(response.statusCode).toBe(409);
-    expect(response.body).toEqual({
-      error: "display required",
+    const metadata = {
       reason: "no_display_for_headed_profile",
       details: {
         profile: "openclaw",
@@ -483,6 +433,15 @@ describe("basic browser routes", () => {
         headlessSource: "profile",
         displayPresent: false,
       },
+    };
+    const { response } = await callStartRoute({
+      error: new BrowserProfileUnavailableError("display required", { metadata }),
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toEqual({
+      error: "display required",
+      ...metadata,
     });
   });
 
@@ -527,14 +486,14 @@ describe("basic browser routes", () => {
       }),
     });
 
-    expect(response.statusCode).toBe(200);
-    const body = responseBodyRecord(response);
-    expect(body.profile).toBe("chrome-live");
-    expect(body.driver).toBe("existing-session");
-    expect(body.transport).toBe("chrome-mcp");
-    expect(body.running).toBe(true);
-    expect(body.cdpReady).toBe(true);
-    expect(body.pageReady).toBe(false);
+    expect(response).toMatchObject({
+      profile: "chrome-live",
+      driver: "existing-session",
+      transport: "chrome-mcp",
+      running: true,
+      cdpReady: true,
+      pageReady: false,
+    });
   });
 
   it("cancels an in-flight Chrome MCP page-readiness probe", async () => {
@@ -552,13 +511,13 @@ describe("basic browser routes", () => {
     const pending = callBasicRouteWithState({
       state: createExistingSessionProfileState({ isReachable }),
       signal: controller.signal,
+      expectedStatus: 500,
     });
     await vi.waitFor(() => expect(isReachable).toHaveBeenCalledOnce());
     controller.abort(cancellation);
 
     const response = await pending;
-    expect(response.statusCode).toBe(500);
-    expect(responseBodyRecord(response).error).toBe("Error: browser status cancelled");
+    expect(response.error).toBe("Error: browser status cancelled");
     const [, options] = readFirstReachabilityCall(isReachable);
     expect(options?.signal?.aborted).toBe(true);
     expect(options?.signal?.reason).toBe(cancellation);
@@ -579,10 +538,9 @@ describe("basic browser routes", () => {
         }),
       });
 
-      expect(response.statusCode).toBe(200);
       const [timeoutMs, reachabilityOptions] = readFirstReachabilityCall(isReachable);
       expect(timeoutMs).toBe(4_000);
-      expect(responseBodyRecord(response)).toMatchObject({
+      expect(response).toMatchObject({
         cdpHttp: true,
         cdpReady: true,
         pageReady: true,
