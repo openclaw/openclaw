@@ -91,6 +91,24 @@ it("restarts Slack when plugin approvers are edited", async () => {
   expect(plan.reloadPlugins).toBe(false);
 });
 
+it.each([
+  "channels.slack.requireExplicitBotMention",
+  "channels.slack.accounts.support.requireExplicitBotMention",
+  "channels.slack.channels.C123.requireExplicitBotMention",
+  "channels.slack.accounts.support.channels.C123.requireExplicitBotMention",
+])("applies strict Slack bot policy without a connection restart: %s", async (changedPath) => {
+  const { slackSetupPlugin } = await loadBundledPluginFacade<{
+    slackSetupPlugin: ChannelPlugin;
+  }>({ pluginId: "slack", artifactBasename: "setup-plugin-api.ts" });
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "slack", plugin: slackSetupPlugin, source: "test" }]),
+  );
+  const plan = buildGatewayReloadPlan([changedPath]);
+  expect(isNoopGatewayReloadPlan(plan)).toBe(true);
+  expect(plan.restartChannels.size).toBe(0);
+  expect(plan.restartChannelAccounts).toEqual(new Map());
+});
+
 const { telegramSetupPlugin } = await loadBundledPluginFacade<{
   telegramSetupPlugin: ChannelPlugin;
 }>({ artifactBasename: "setup-plugin-api", pluginId: "telegram" });

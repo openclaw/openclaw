@@ -264,6 +264,60 @@ describe("Slack strict bot mentions", () => {
     },
   );
 
+  it.each(["reply_to_bot", "bot_thread_participant"])(
+    "uses newly published strict policy for %s waiting in the debounce queue",
+    async (kind) => {
+      const test = fixture(
+        {
+          allowBots: "mentions",
+          requireExplicitBotMention: false,
+          implicitMentions: { replyToBot: true, threadParticipation: true },
+          channels: { C123: { users: ["UOTHERBOT"] } },
+        },
+        "default",
+        { ackReaction: "eyes", ackReactionScope: "all", inbound: { debounceMs: 25 } },
+      );
+      test.message.bot_id = "OTHERBOT";
+      test.message.user = "UOTHERBOT";
+      if (kind === "bot_thread_participant") {
+        test.message.parent_user_id = "UROOT";
+        recordSlackThreadParticipation("default", "C123", test.threadTs);
+      }
+      const onPrepared = vi.fn();
+      const abort = new AbortController();
+      const handler = createSlackMessageHandler({
+        ctx: test.ctx,
+        onPrepared,
+        abortSignal: abort.signal,
+      });
+      vi.useFakeTimers();
+      try {
+        await handler(test.message, { source: "message" });
+        expect(onPrepared).not.toHaveBeenCalled();
+        expect(test.info).not.toHaveBeenCalled();
+        const next: OpenClawConfig = {
+          ...test.ctx.cfg,
+          channels: { slack: { ...test.ctx.cfg.channels?.slack, requireExplicitBotMention: true } },
+        };
+        setRuntimeConfigSnapshot(next, next);
+        await vi.advanceTimersByTimeAsync(25);
+        await vi.waitFor(() =>
+          expect(test.info).toHaveBeenCalledWith(
+            expect.objectContaining({ reason: "bot-missing-mention", messageTs: test.message.ts }),
+            expect.any(String),
+          ),
+        );
+        expect(onPrepared).not.toHaveBeenCalled();
+        expect(test.addReaction).not.toHaveBeenCalled();
+        expect(enqueueRoutedSystemEvent).not.toHaveBeenCalled();
+      } finally {
+        abort.abort();
+        await vi.runOnlyPendingTimersAsync();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each<[SlackConfig, string, boolean]>([
     [
       { requireExplicitBotMention: false, accounts: { work: { requireExplicitBotMention: true } } },
