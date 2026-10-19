@@ -73,14 +73,11 @@ async function withSessionUsageDiagnosticSource<
   read: (scoped: Params, sessionFile: string) => Promise<Result>,
 ): Promise<Result | null> {
   const source = await resolveUsageSessionSource(params);
-  if (
-    !source ||
-    (!parseSqliteSessionFileMarker(source.sessionFile) && !fs.existsSync(source.sessionFile))
-  ) {
+  const marker = source && parseSqliteSessionFileMarker(source.sessionFile);
+  if (!source || (!marker && !fs.existsSync(source.sessionFile))) {
     return null;
   }
   const signal = getAsyncWorkSignal();
-  const marker = parseSqliteSessionFileMarker(source.sessionFile);
   const memory =
     marker &&
     captureSessionActorStorageOwner(marker, {

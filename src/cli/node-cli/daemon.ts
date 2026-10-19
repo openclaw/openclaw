@@ -1,10 +1,14 @@
 // Node-host daemon lifecycle commands for install, status, start, stop, and restart.
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import {
+  resolveDaemonInstallRuntimeInputs,
+  resolveDaemonRuntimeBinDir,
+} from "../../commands/daemon-install-plan.shared.js";
+import { emitNodeRuntimeWarning } from "../../commands/daemon-install-runtime-warning.js";
+import {
   resolveGatewayDaemonRuntime,
   isGatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
-import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
 import {
   resolveNodeLaunchAgentLabel,
   resolveNodeSystemdServiceName,
@@ -12,6 +16,8 @@ import {
   resolveNodeServiceIdentityEnvironment,
 } from "../../daemon/constants.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
+import { resolveDurableNodeEntrypoint } from "../../daemon/npx-service-install.js";
+import { resolveNodeProgramArguments } from "../../daemon/program-args.js";
 import {
   buildPlatformRuntimeLogHints,
   buildPlatformServiceStartHints,
@@ -24,6 +30,7 @@ import {
   withDaemonRuntimePinMigration,
   readDaemonRuntimePinForInstall,
 } from "../../daemon/runtime-pin-state.js";
+import { buildNodeServiceEnvironment } from "../../daemon/service-env.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import {
@@ -31,9 +38,12 @@ import {
   readSystemdUserLingerStatus,
   resolveSystemdUserServiceAccount,
 } from "../../daemon/systemd.js";
+import { loadDeviceIdentityIfPresent } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
+import { canReuseNodeHostDeviceToken } from "../../node-host/gateway-auth.js";
 import { defaultRuntime } from "../../runtime.js";
+import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   assertExpectedRuntimePin,
@@ -56,6 +66,7 @@ import {
 } from "../daemon-cli/shared.js";
 import { inspectServiceRuntimeIntent } from "../daemon-cli/status.runtime-intent.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
 import { resolveNodeGatewayOptions } from "./gateway-options.js";
 
 type NodeDaemonInstallOptions = Parameters<typeof resolveNodeGatewayOptions>[0] & {
@@ -175,7 +186,9 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     fail(`Runtime pin inspection failed: ${formatErrorMessage(error)}`);
     return;
   }
-  let restoreServiceCli: Parameters<typeof buildNodeInstallPlan>[0]["serviceCli"];
+  let restoreServiceCli:
+    | Awaited<ReturnType<typeof resolveRestoreServiceCli>>["serviceCli"]
+    | undefined;
   let restoredRuntimePath: string | undefined;
   try {
     if (opts.expectedRuntimePin !== undefined) {
@@ -236,8 +249,22 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       : undefined;
   const retainedRuntime = recordedRuntime?.status === "supported" ? recordedRuntime : undefined;
 
-  const installPlan = await buildNodeInstallPlan({
+  const wrapperPath = installEnv.OPENCLAW_WRAPPER;
+  const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: installEnv,
+    runtime: retainedRuntime?.runtime ?? runtimeRaw,
+    runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
+    runtimePath: restoredRuntimePath ?? retainedRuntime?.path,
+    pinnedRuntimePath,
+    devMode: restoreServiceCli ? false : undefined,
+    wrapperPath,
+    warn,
+  });
+  const cliEntrypoint =
+    restoreServiceCli?.entrypoint ??
+    (!devMode && !wrapperPath ? await resolveDurableNodeEntrypoint(installEnv) : undefined);
+  const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
+    cliEntrypoint,
     host,
     port,
     contextPath,
@@ -248,23 +275,60 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     installedAppsSharing: opts.shareInstalledApps,
     commands: opts.commands,
     allCommands: opts.allCommands,
-    gatewayAuthFromEnv: opts.authFromEnv,
-    runtime: retainedRuntime?.runtime ?? runtimeRaw,
-    runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
-    runtimePath: restoredRuntimePath ?? retainedRuntime?.path,
-    pinnedRuntimePath,
-    serviceCli: restoreServiceCli,
-    warn,
+    dev: devMode,
+    runtime,
+    runtimePath,
+    wrapperPath,
   });
+  if (opts.authFromEnv) {
+    programArguments.push("--auth-from-env");
+  }
+  await emitNodeRuntimeWarning({
+    env: installEnv,
+    runtime,
+    nodeProgram: programArguments[0],
+    warn,
+    title: "Node daemon runtime",
+  });
+  const environment = buildNodeServiceEnvironment({
+    env: installEnv,
+    execPath: restoreServiceCli?.executable,
+    runtime,
+    // Match the Gateway install path so supervised services keep the chosen
+    // runtime toolchain on PATH for sibling binaries when needed.
+    extraPathDirs: resolveDaemonRuntimeBinDir(runtimePath),
+  });
+  if (!opts.authFromEnv) {
+    const savedGateway = (await loadNodeHostConfig(installEnv))?.gateway;
+    const identity = savedGateway ? loadDeviceIdentityIfPresent({ env: installEnv }) : null;
+    if (
+      identity &&
+      (await canReuseNodeHostDeviceToken({
+        savedGateway,
+        gatewayCandidates: [{ host, port, contextPath, tls: Boolean(tls) }],
+        deviceId: identity.deviceId,
+        env: installEnv,
+      }))
+    ) {
+      delete environment.OPENCLAW_GATEWAY_TOKEN;
+      delete environment.OPENCLAW_GATEWAY_PASSWORD;
+    }
+  }
+  const installationMessage = [
+    `OpenClaw ${VERSION}`,
+    `Runtime: ${runtime} (${programArguments[0]})`,
+    `Service command: ${programArguments.map(quoteCliArg).join(" ")}`,
+    `Update this node: ${formatCliCommand("openclaw node install --force", installEnv).replace("openclaw", "npx -y openclaw@latest")}`,
+  ].join("\n");
 
-  if (!json && installPlan.installationMessage) {
-    defaultRuntime.log(installPlan.installationMessage);
+  if (!json) {
+    defaultRuntime.log(installationMessage);
   }
   await installDaemonServiceAndEmit({
     serviceNoun: "Node",
     service,
     warnings,
-    emit: (payload) => emit({ ...payload, message: installPlan.installationMessage }),
+    emit: (payload) => emit({ ...payload, message: installationMessage }),
     fail,
     install: async () => {
       await service.install({
@@ -283,7 +347,16 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         env: installEnv,
         stdout,
         warn,
-        ...installPlan,
+        programArguments,
+        workingDirectory,
+        environment,
+        environmentValueSources: {
+          OPENCLAW_GATEWAY_TOKEN: "file",
+          OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+          CF_ACCESS_CLIENT_ID: "file",
+          CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
+        },
+        description: "OpenClaw Node Host",
         ...(restoreServiceCli
           ? { workingDirectory: existingManagedCommand?.workingDirectory }
           : {}),

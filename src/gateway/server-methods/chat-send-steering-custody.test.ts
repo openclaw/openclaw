@@ -85,6 +85,8 @@ describe("steering input custody", () => {
         ? ensureProfileForEmail("other-steering@example.test")
         : profile;
       const fixture = await createBrowserFollowupFixture({
+        // This matrix compares task collaborators; main requester changes have separate coverage.
+        sessionKey: "agent:main:dashboard:steering-collaboration",
         preserveContent: true,
         active: !startOwnerTurn,
         sandbox: scenario === "different role sandbox across profiles" ? "required" : undefined,
@@ -300,6 +302,7 @@ describe("steering input custody", () => {
           agentId: fixture.scope.agentId,
           sessionId: fixture.scope.sessionId,
           sessionKey: fixture.scope.sessionKey,
+          gitContributorProfileId: profile.id,
           messageProvider: "webchat",
           chatType: "direct",
           clientCaps: ["ui-commands"],

@@ -410,6 +410,7 @@ export async function maybeSpawnVisibleSession(params: {
             requesterSessionKey: requesterKey,
             ...(childSessionPublication ? { childSessionPublication } : {}),
             requesterSenderIsOwner: params.options?.senderIsOwner === true,
+            gitContributorProfileId: params.options?.gitContributorProfileId,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
             ...(params.options?.sessionPermissionPolicy
               ? { inheritedPermissionMode: params.options.sessionPermissionPolicy.mode }
