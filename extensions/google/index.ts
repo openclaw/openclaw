@@ -1,4 +1,7 @@
-import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  createLazyRuntimeModule,
+  createLazyRuntimeSurface,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
@@ -34,11 +37,22 @@ const loadGoogleVideoGenerationProvider = createLazyRuntimeSurface(
   (mod) => mod.buildGoogleVideoGenerationProvider(),
 );
 
+const loadResearch = createLazyRuntimeModule(() => import("./research-gateway.js"));
+
 export default definePluginEntry({
   id: "google",
   name: "Google Plugin",
   description: "Bundled Google plugin",
   register(api) {
+    api.registerGatewayMethod(
+      "google.research.v1",
+      async (options) => (await loadResearch()).handleGoogleResearch(api, options),
+      {
+        scope: "operator.write",
+        profileAccess: "required",
+        sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "deep_research" },
+      },
+    );
     api.registerCliBackend(buildGoogleGeminiCliBackend());
     api.registerProvider(buildGoogleGeminiCliProvider());
     api.registerProvider(buildGoogleProvider());

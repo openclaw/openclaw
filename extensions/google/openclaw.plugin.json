@@ -20,7 +20,8 @@
     }
   ],
   "activation": {
-    "onStartup": false
+    "onStartup": false,
+    "onConfigPaths": ["plugins.entries.google.config.research"]
   },
   "enabledByDefault": true,
   "providers": ["google", "google-gemini-cli", "google-vertex"],
@@ -1037,6 +1038,11 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "research": {
+        "type": "object", "additionalProperties": false,
+        "properties": {"enabled": {"type": "boolean"}, "profileId": {"type": "string", "minLength": 1}},
+        "required": ["enabled", "profileId"]
+      },
       "webSearch": {
         "type": "object",
         "additionalProperties": false,

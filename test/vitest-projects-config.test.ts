@@ -476,6 +476,19 @@ describe("projects vitest config", () => {
   );
 
   it.each([
+    "extensions/google/research-gateway.test.ts",
+  ])("routes %s through the host database owner exactly once", (file) => {
+    const project = "test/vitest/vitest.extension-database-workers.config.ts";
+    expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
+    expect(requireTestConfig(createExtensionDatabaseWorkersVitestConfig({})).pool).toBe(
+      diagnosticForksPool,
+    );
+    expect(requireTestConfig(createExtensionsVitestConfig({})).exclude).toContain(
+      file.slice("extensions/".length),
+    );
+  });
+
+  it.each([
     {
       file: "approval-reactions.persistence.test.ts",
       source: "approval-reactions.ts",
