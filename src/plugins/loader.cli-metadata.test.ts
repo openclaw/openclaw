@@ -15,13 +15,12 @@ import {
   writePluginMetadata,
 } from "./loader.test-fixtures.js";
 
-afterEach(() => {
-  resetPluginLoaderTestStateForTest();
-});
+afterEach(resetPluginLoaderTestStateForTest);
+afterAll(cleanupPluginLoaderFixturesForTest);
 
-afterAll(() => {
-  cleanupPluginLoaderFixturesForTest();
-});
+function pluginConfig(file: string, id: string) {
+  return { plugins: { load: { paths: [file] }, allow: [id] } };
+}
 
 function bundledChannelFixture(id: string) {
   const bundledRoot = makePluginLoaderTempDir();
@@ -145,7 +144,7 @@ describe("plugin loader CLI metadata", () => {
       body: 'module.exports = { id: "empty-scope", register(api) { api.registerCli(() => {}, { commands: ["empty-scope"] }); } };',
     });
     const registry = await loadOpenClawPluginCliRegistry({
-      config: { plugins: { load: { paths: [plugin.file] }, allow: [plugin.id] } },
+      config: pluginConfig(plugin.file, plugin.id),
       manifestRegistry: { plugins: [], diagnostics: [] },
       installRecords: {},
     });
@@ -186,12 +185,7 @@ module.exports = { id: "packaged-cli-metadata", register() {} };`,
     );
 
     const registry = await loadOpenClawPluginCliRegistry({
-      config: {
-        plugins: {
-          load: { paths: [pluginDir] },
-          allow: [plugin.id],
-        },
-      },
+      config: pluginConfig(pluginDir, plugin.id),
     });
 
     expect(fs.existsSync(heavyMarker)).toBe(false);
@@ -210,15 +204,16 @@ module.exports = { id: "packaged-cli-metadata", register() {} };`,
 
   it("can force channel runtime entries for CLI registration when setup entries exist", () => {
     useNoBundledPlugins();
+    const id = "force-runtime-cli-channel";
     const pluginDir = makePluginLoaderTempDir();
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const setupMarker = path.join(pluginDir, "setup-loaded.txt");
 
     writePluginMetadata({
       dir: pluginDir,
-      id: "force-runtime-cli-channel",
+      id,
       configSchema: EMPTY_PLUGIN_SCHEMA,
-      channels: ["force-runtime-cli-channel"],
+      channels: [id],
       packageJson: {
         name: "@openclaw/force-runtime-cli-channel",
         openclaw: { extensions: ["./index.cjs"], setupEntry: "./setup-entry.cjs" },
@@ -260,23 +255,13 @@ module.exports = defineChannelPluginEntry({
       cache: false,
       channelPluginLoadIntent: "full",
       config: {
-        plugins: {
-          load: { paths: [pluginDir] },
-          allow: ["force-runtime-cli-channel"],
-          entries: {
-            "force-runtime-cli-channel": {
-              enabled: true,
-            },
-          },
-        },
+        plugins: { ...pluginConfig(pluginDir, id).plugins, entries: { [id]: { enabled: true } } },
       },
     });
 
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.readFileSync(modeMarker, "utf-8")).toBe("discovery");
-    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
-      "force-runtime-cli-channel",
-    );
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(id);
   });
 
   it("sanitizes plugin CLI descriptor descriptions and rejects unsafe command names", async () => {
@@ -310,22 +295,13 @@ module.exports = defineChannelPluginEntry({
 
     const registry = await loadOpenClawPluginCliRegistry({
       cache: false,
-      config: {
-        plugins: {
-          load: { paths: [plugin.dir] },
-          allow: ["unsafe-cli-descriptors"],
-        },
-      },
+      config: pluginConfig(plugin.dir, plugin.id),
     });
 
     expect(registry.cliRegistrars).toHaveLength(1);
     expect(registry.cliRegistrars[0]?.commands).toEqual(["safe-command"]);
     expect(registry.cliRegistrars[0]?.descriptors).toEqual([
-      {
-        name: "safe-command",
-        description: "Open link now",
-        hasSubcommands: false,
-      },
+      { name: "safe-command", description: "Open link now", hasSubcommands: false },
     ]);
     expect(registry.diagnostics.map((diag) => diag.message)).toEqual([
       'invalid cli descriptor name: "bad\\nname"',
@@ -358,12 +334,7 @@ module.exports = defineChannelPluginEntry({
         }],
       });`,
     });
-    const config = {
-      plugins: {
-        load: { paths: [plugin.file] },
-        allow: ["machine-output-cli"],
-      },
-    };
+    const config = pluginConfig(plugin.file, plugin.id);
 
     const metadataRegistry = await loadOpenClawPluginCliRegistry({ cache: false, config });
     const fullRegistry = loadOpenClawPlugins({ cache: false, config });
@@ -373,15 +344,9 @@ module.exports = defineChannelPluginEntry({
         registry.plugins.find((entry) => entry.id === "machine-output-cli")?.cliCommands,
       ).toEqual(["machine-output-cli", "additional-cli", "nodes nested-machine-output"]);
       const resolver = registry.cliRegistrars[0]?.descriptors[0]?.machineOutput;
-      expect(
-        resolver?.({ argv: ["node", "openclaw", "machine-output-cli"], stdoutIsTTY: false }),
-      ).toBe(true);
-      expect(
-        resolver?.({
-          argv: ["node", "openclaw", "machine-output-cli", "--machine"],
-          stdoutIsTTY: true,
-        }),
-      ).toBe(true);
+      const argv = ["node", "openclaw", "machine-output-cli"];
+      expect(resolver?.({ argv, stdoutIsTTY: false })).toBe(true);
+      expect(resolver?.({ argv: [...argv, "--machine"], stdoutIsTTY: true })).toBe(true);
       const nested = registry.cliRegistrars.find((entry) => entry.parentPath.length > 0);
       expect(nested?.commands).toEqual(["nested-machine-output"]);
       expect(nested?.descriptors[0]).not.toHaveProperty("machineOutput");

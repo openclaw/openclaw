@@ -17,13 +17,23 @@ import {
 
 const retentionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function makePackage(
+  projectRoot = path.join(retentionTempDirs.make("openclaw-retention-"), "npm"),
+  name = "retained-plugin",
+) {
+  const packageDir = path.join(projectRoot, "node_modules", name);
+  fs.mkdirSync(packageDir, { recursive: true });
+  return packageDir;
+}
+
+const mark = (packageDir: string, reason = "test-retired-generation", pluginId = "codex") =>
+  markRetainedManagedNpmInstall({ packageDir, pluginId, reason });
+
 describe("managed npm retention", () => {
   it.each(["stat", "mkdir"] as const)(
     "fences marker creation after authority is revoked during %s",
     async (preparation) => {
-      const stateDir = retentionTempDirs.make("openclaw-retention-fence-");
-      const packageDir = path.join(stateDir, "npm", "node_modules", "retained-plugin");
-      fs.mkdirSync(packageDir, { recursive: true });
+      const packageDir = makePackage();
       const markerPath = resolveRetainedManagedNpmInstallMarkerPath(packageDir);
       const markerDir = path.dirname(markerPath);
       const previous = '{"reason":"existing-retention"}\n';
@@ -71,14 +81,8 @@ describe("managed npm retention", () => {
   );
 
   it("preserves a marker when clearing loses authority and still permits independent callers", async () => {
-    const stateDir = retentionTempDirs.make("openclaw-retention-clear-fence-");
-    const packageDir = path.join(stateDir, "npm", "node_modules", "retained-plugin");
-    fs.mkdirSync(packageDir, { recursive: true });
-    await markRetainedManagedNpmInstall({
-      packageDir,
-      pluginId: "retained-plugin",
-      reason: "retained-package",
-    });
+    const packageDir = makePackage();
+    await mark(packageDir, "retained-package", "retained-plugin");
     const markerPath = resolveRetainedManagedNpmInstallMarkerPath(packageDir);
     const before = fs.readFileSync(markerPath, "utf8");
     const failure = Object.assign(new Error("update authority revoked"), { code: "ENOENT" });
@@ -98,14 +102,8 @@ describe("managed npm retention", () => {
   });
 
   it("does not swallow a one-shot refusal or remove the marker directory after awaited removal", async () => {
-    const stateDir = retentionTempDirs.make("openclaw-retention-clear-fence-");
-    const packageDir = path.join(stateDir, "npm", "node_modules", "retained-plugin");
-    fs.mkdirSync(packageDir, { recursive: true });
-    await markRetainedManagedNpmInstall({
-      packageDir,
-      pluginId: "retained-plugin",
-      reason: "retained-package",
-    });
+    const packageDir = makePackage();
+    await mark(packageDir, "retained-package", "retained-plugin");
     const markerPath = resolveRetainedManagedNpmInstallMarkerPath(packageDir);
     let current = true;
     const failure = new Error("update authority revoked after removal");
@@ -150,15 +148,9 @@ describe("managed npm retention", () => {
         packageName,
         generationKey: "codex-v2",
       });
-      const oldPackageDir = path.join(oldProjectRoot, "node_modules", "@openclaw", "codex");
-      const activePackageDir = path.join(activeProjectRoot, "node_modules", "@openclaw", "codex");
-      fs.mkdirSync(oldPackageDir, { recursive: true });
-      fs.mkdirSync(activePackageDir, { recursive: true });
-      await markRetainedManagedNpmInstall({
-        packageDir: oldPackageDir,
-        pluginId: "codex",
-        reason: "test-retired-generation",
-      });
+      const oldPackageDir = makePackage(oldProjectRoot, packageName);
+      const activePackageDir = makePackage(activeProjectRoot, packageName);
+      await mark(oldPackageDir);
 
       const refused = new Error("cleanup lease was replaced");
       const onError = vi.fn();
@@ -191,13 +183,8 @@ describe("managed npm retention", () => {
   it("cleans retained packages from the legacy shared npm root", async () => {
     const stateDir = retentionTempDirs.make("openclaw-retention-");
     const npmDir = path.join(stateDir, "npm");
-    const packageDir = path.join(npmDir, "node_modules", "@openclaw", "codex");
-    fs.mkdirSync(packageDir, { recursive: true });
-    await markRetainedManagedNpmInstall({
-      packageDir,
-      pluginId: "codex",
-      reason: "test-legacy-generation",
-    });
+    const packageDir = makePackage(npmDir, "@openclaw/codex");
+    await mark(packageDir, "test-legacy-generation");
 
     const refused = new Error("cleanup lease was replaced");
     await expect(
@@ -212,11 +199,7 @@ describe("managed npm retention", () => {
     expect(fs.existsSync(packageDir)).toBe(true);
     expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(true);
 
-    await expect(
-      cleanupRetainedManagedNpmInstallGenerations({
-        npmDir,
-      }),
-    ).resolves.toBe(1);
+    await expect(cleanupRetainedManagedNpmInstallGenerations({ npmDir })).resolves.toBe(1);
     expect(fs.existsSync(packageDir)).toBe(false);
     expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(false);
   });
@@ -225,15 +208,10 @@ describe("managed npm retention", () => {
     const stateDir = retentionTempDirs.make("openclaw-retention-noncanonical-");
     const npmDir = path.join(stateDir, "npm");
     const projectRoot = path.join(npmDir, "projects", "noncanonical-sibling");
-    const packageDir = path.join(projectRoot, "node_modules", "@openclaw", "codex");
+    const packageDir = makePackage(projectRoot, "@openclaw/codex");
     const siblingFile = path.join(projectRoot, "must-remain.txt");
-    fs.mkdirSync(packageDir, { recursive: true });
     fs.writeFileSync(siblingFile, "preserve me", "utf8");
-    await markRetainedManagedNpmInstall({
-      packageDir,
-      pluginId: "codex",
-      reason: "test-retired-generation",
-    });
+    await mark(packageDir);
 
     await expect(cleanupRetainedManagedNpmInstallGenerations({ npmDir })).resolves.toBe(0);
     expect(fs.readFileSync(siblingFile, "utf8")).toBe("preserve me");
@@ -249,15 +227,10 @@ describe("managed npm retention", () => {
       npmDir,
       packageName: "@openclaw/codex",
     });
-    const packageDir = path.join(projectRoot, "node_modules", "@openclaw", "codex");
+    const packageDir = makePackage(projectRoot, "@openclaw/codex");
     const sentinel = path.join(projectRoot, "must-remain.txt");
-    fs.mkdirSync(packageDir, { recursive: true });
     fs.writeFileSync(sentinel, "preserve me", "utf8");
-    await markRetainedManagedNpmInstall({
-      packageDir,
-      pluginId: "codex",
-      reason: "test-retired-generation",
-    });
+    await mark(packageDir);
 
     await expect(cleanupRetainedManagedNpmInstallGenerations({ npmDir })).resolves.toBe(0);
     expect(fs.readFileSync(sentinel, "utf8")).toBe("preserve me");
@@ -276,13 +249,8 @@ describe("managed npm retention", () => {
               packageName: "@openclaw/kept-plugin",
               generationKey: "kept-plugin-v1",
             });
-      const packageDir = path.join(projectRoot, "node_modules", "@openclaw", "kept-plugin");
-      fs.mkdirSync(packageDir, { recursive: true });
-      await markRetainedManagedNpmInstall({
-        packageDir,
-        pluginId: "kept-plugin",
-        reason: RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
-      });
+      const packageDir = makePackage(projectRoot, "@openclaw/kept-plugin");
+      await mark(packageDir, RETAINED_MANAGED_NPM_KEEP_FILES_REASON, "kept-plugin");
 
       await expect(cleanupRetainedManagedNpmInstallGenerations({ npmDir })).resolves.toBe(0);
       expect(fs.existsSync(packageDir)).toBe(true);

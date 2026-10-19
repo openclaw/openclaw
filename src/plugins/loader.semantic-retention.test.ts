@@ -39,16 +39,17 @@ it.each(["manifest", "config"] as const)(
     });
     const policy = { enabled: true, hooks: { allowPromptInjection: false } };
     const settings = { outer: { first: "one", second: "two" }, order: ["one", "two"] };
+    const configWith = (config: typeof settings) => ({
+      plugins: {
+        allow: [plugin.id],
+        load: { paths: [plugin.file] },
+        slots: { memory: "none" },
+        entries: { [plugin.id]: { ...policy, config } },
+      },
+    });
     const install = { source: "path" as const, sourcePath: plugin.dir, installPath: plugin.dir };
     const options: PluginLoadOptions = {
-      config: {
-        plugins: {
-          allow: [plugin.id],
-          load: { paths: [plugin.file] },
-          slots: { memory: "none" },
-          entries: { [plugin.id]: { ...policy, config: settings } },
-        },
-      },
+      config: configWith(settings),
       installRecords: { [plugin.id]: install },
       activate: false,
       runtimeSideEffects: true,
@@ -72,21 +73,11 @@ it.each(["manifest", "config"] as const)(
           return { ...metadata, source, id };
         }),
       },
-      config: {
-        ...options.config,
-        plugins: {
-          ...options.config?.plugins,
-          entries: {
-            [plugin.id]: {
-              ...policy,
-              config:
-                input === "config"
-                  ? { order: settings.order, outer: { second: "two", first: "one" } }
-                  : settings,
-            },
-          },
-        },
-      },
+      config: configWith(
+        input === "config"
+          ? { order: settings.order, outer: { second: "two", first: "one" } }
+          : settings,
+      ),
     };
     // Gateway replacement first plans without modules, then registers the candidate.
     for (const loadModules of [false, true]) {
@@ -121,15 +112,7 @@ it.each(["manifest", "config"] as const)(
             },
           }
         : {
-            config: {
-              ...reordered.config,
-              plugins: {
-                ...reordered.config?.plugins,
-                entries: {
-                  [plugin.id]: { ...policy, config: { ...settings, order: ["two", "one"] } },
-                },
-              },
-            },
+            config: configWith({ ...settings, order: ["two", "one"] }),
           }),
     });
     registries.push(changed);

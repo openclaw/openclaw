@@ -51,13 +51,8 @@ afterEach(() => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 it.each([
-  { explicit: "nodes", nodes: true, subagent: false, activate: false },
-  {
-    explicit: "neither facet after root activation",
-    nodes: false,
-    subagent: false,
-    activate: true,
-  },
+  { explicit: "nodes", nodes: true, activate: false },
+  { explicit: "neither facet after root activation", nodes: false, activate: true },
 ])("refreshes borrowed Gateway bindings with explicit $explicit", async (explicit) => {
   useNoBundledPlugins();
   const plugin = writePlugin({
@@ -138,7 +133,6 @@ it.each([
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
       ...(explicit.nodes ? { nodes: supplied.nodes } : {}),
-      ...(explicit.subagent ? { subagent: supplied.subagent } : {}),
     },
   };
   const read = async (registry: ReturnType<typeof loadPluginRegistryHandle>) => {
@@ -169,21 +163,19 @@ it.each([
     expect(donor.reads.nodes).not.toHaveBeenCalled();
     expect(donor.reads.subagent).not.toHaveBeenCalled();
     expect(getGatewayContextResolver(getPluginRegistryRuntime(registry)!)).toBe(
-      explicit.subagent
-        ? getGatewayContextResolver(supplied.subagent)
-        : donor.resolveGatewayContext,
+      donor.resolveGatewayContext,
     );
     expect(await read(registry)).toMatchObject({
       details: {
         nodes: [explicit.nodes ? "explicit" : owner],
-        messages: [explicit.subagent ? "explicit" : owner],
+        messages: [owner],
       },
     });
     expect(donor.reads.nodes.mock.calls.length > 0).toBe(!explicit.nodes);
-    expect(donor.reads.subagent.mock.calls.length > 0).toBe(!explicit.subagent);
+    expect(donor.reads.subagent.mock.calls.length > 0).toBe(true);
     expect(loadPluginRegistryHandle(options)).toBe(registry);
     if (previous) {
-      expect(registry === previous).toBe(explicit.nodes && explicit.subagent);
+      expect(registry).not.toBe(previous);
     }
     previous = registry;
   }

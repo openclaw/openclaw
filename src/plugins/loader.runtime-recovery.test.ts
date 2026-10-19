@@ -51,6 +51,17 @@ function resolveProbe(registry: PluginRegistry) {
   return tool;
 }
 
+function pluginConfig(id: string, file: string, config?: Record<string, unknown>) {
+  return {
+    plugins: {
+      allow: [id],
+      load: { paths: [file] },
+      slots: { memory: "none" },
+      ...(config ? { entries: { [id]: { config } } } : {}),
+    },
+  };
+}
+
 it.each(["installed", "bundled-mjs"] as const)(
   "publishes fresh %s recovery for inbound work without another registration",
   async (kind) => {
@@ -244,6 +255,7 @@ it("joins a failed candidate's declared stop hook before recovering the previous
   const gate = createDeferredCore();
   const plugin = writePlugin({
     id: "failed-resource-owner",
+    configSchema: { type: "object", properties: { fail: { type: "boolean" } } },
     body: `const fs = require('node:fs');
       module.exports = { id: 'failed-resource-owner', register(api) {
         const lock = ${JSON.stringify(lock)};
@@ -258,21 +270,7 @@ it("joins a failed candidate's declared stop hook before recovering the previous
     path.join(plugin.dir, "close.cjs"),
     "exports.close = (fd, lock) => { const fs = require('node:fs'); fs.closeSync(fd); fs.unlinkSync(lock); };",
   );
-  fs.writeFileSync(
-    path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: plugin.id,
-      configSchema: { type: "object", properties: { fail: { type: "boolean" } } },
-    }),
-  );
-  const config = {
-    plugins: {
-      allow: [plugin.id],
-      load: { paths: [plugin.file] },
-      slots: { memory: "none" },
-      entries: { [plugin.id]: { config: { fail: false } } },
-    },
-  };
+  const config = pluginConfig(plugin.id, plugin.file, { fail: false });
   const options = { config, activate: false, runtimeSideEffects: true, cache: false };
   const registries: PluginRegistry[] = [];
   let recovery: ReturnType<typeof capturePluginRuntimeRecovery>;
@@ -290,12 +288,7 @@ it("joins a failed candidate's declared stop hook before recovering the previous
     await disposePluginRegistryInstances(old);
     const candidate = loadOpenClawPlugins({
       ...options,
-      config: {
-        plugins: {
-          ...config.plugins,
-          entries: { [plugin.id]: { config: { fail: true } } },
-        },
-      },
+      config: pluginConfig(plugin.id, plugin.file, { fail: true }),
       manifestRegistry,
       previousRegistry: old,
       prepareRegistrationFailureCleanup(registry, record) {
@@ -357,9 +350,7 @@ it("preserves the registration error and disposes resources when cleanup prepara
   let registry: PluginRegistry | undefined;
   try {
     registry = loadOpenClawPlugins({
-      config: {
-        plugins: { allow: [plugin.id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
-      },
+      config: pluginConfig(plugin.id, plugin.file),
       activate: false,
       cache: false,
       prepareRegistrationFailureCleanup() {

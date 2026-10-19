@@ -33,6 +33,22 @@ function validatePluginConfig(
   return validatePluginConfigByOrigin({ ...params, origin: "global" });
 }
 
+function withCredential(
+  config: OpenClawConfig,
+  id: string,
+  credential: unknown,
+  enabled = true,
+): OpenClawConfig {
+  return {
+    ...config,
+    plugins: { ...config.plugins, entries: { [id]: { enabled, config: { credential } } } },
+  };
+}
+
+const credentialRef = (id = "KEY") => ({ source: "store", provider: "default", id });
+const cliDescriptors = (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+  registry.cliRegistrars.flatMap((registrar) => registrar.descriptors);
+
 const manifestRecord = {
   id: "example",
   channels: [],
@@ -255,23 +271,11 @@ module.exports = { id: "source-fixture", register(api) {
                 },
               },
             };
-            const source: OpenClawConfig = {
-              ...runtime,
-              plugins: {
-                ...runtime.plugins,
-                entries: {
-                  [configId]: {
-                    enabled: true,
-                    config: {
-                      credential:
-                        scenario === "invalid-source"
-                          ? "invalid-plaintext-fixture"
-                          : { source: "store", provider: "default", id: "KEY" },
-                    },
-                  },
-                },
-              },
-            };
+            const source = withCredential(
+              runtime,
+              configId,
+              scenario === "invalid-source" ? "invalid-plaintext-fixture" : credentialRef(),
+            );
             const before = structuredClone({ runtime, source });
             setRuntimeConfigSnapshot(runtime, source);
             const config = scenario === "candidate" ? structuredClone(runtime) : runtime;
@@ -303,9 +307,7 @@ module.exports = { id: "source-fixture", register(api) {
                 expect(registry.plugins.find((plugin) => plugin.id === id)?.status).toBe(
                   accepted ? "loaded" : "error",
                 );
-                expect(
-                  registry.cliRegistrars.flatMap((registrar) => registrar.descriptors),
-                ).toEqual(accepted ? [descriptor] : []);
+                expect(cliDescriptors(registry)).toEqual(accepted ? [descriptor] : []);
                 expect(fs.existsSync(marker)).toBe(accepted);
                 if (surface === "runtime" && scenario === "paired") {
                   const candidate = structuredClone(runtime);
@@ -323,20 +325,7 @@ module.exports = { id: "source-fixture", register(api) {
                     }) === registry,
                   ).toBe(true);
 
-                  const alternateSource: OpenClawConfig = {
-                    ...source,
-                    plugins: {
-                      ...source.plugins,
-                      entries: {
-                        [id]: {
-                          enabled: true,
-                          config: {
-                            credential: { source: "store", provider: "default", id: "OTHER" },
-                          },
-                        },
-                      },
-                    },
-                  };
+                  const alternateSource = withCredential(source, id, credentialRef("OTHER"));
                   const alternateOptions = {
                     ...options,
                     config: candidate,
@@ -344,9 +333,10 @@ module.exports = { id: "source-fixture", register(api) {
                   };
                   const alternate = loadOpenClawPlugins(alternateOptions);
                   expect.soft(alternate === registry).toBe(false);
-                  expect
-                    .soft(alternate.cliRegistrars.flatMap((registrar) => registrar.descriptors))
-                    .toEqual([{ ...descriptor, description: "Alternate command" }]);
+                  const alternateDescriptors = [
+                    { ...descriptor, description: "Alternate command" },
+                  ];
+                  expect.soft(cliDescriptors(alternate)).toEqual(alternateDescriptors);
                   expect(
                     loadOpenClawPlugins({
                       ...alternateOptions,
@@ -359,42 +349,19 @@ module.exports = { id: "source-fixture", register(api) {
                     cache: false,
                     previousRegistry: registry,
                   });
-                  expect(
-                    replacement.cliRegistrars.flatMap((registrar) => registrar.descriptors),
-                  ).toEqual([{ ...descriptor, description: "Alternate command" }]);
+                  expect(cliDescriptors(replacement)).toEqual(alternateDescriptors);
                   for (const change of ["source-invalid", "resolved-secret", "disabled"] as const) {
-                    const nextRuntime: OpenClawConfig = {
-                      ...runtime,
-                      plugins: {
-                        ...runtime.plugins,
-                        entries: {
-                          [id]: {
-                            enabled: change !== "disabled",
-                            config: {
-                              credential:
-                                change === "resolved-secret"
-                                  ? "rotated-fixture-key"
-                                  : "resolved-fixture-key",
-                            },
-                          },
-                        },
-                      },
-                    };
+                    const enabled = change !== "disabled";
+                    const nextRuntime = withCredential(
+                      runtime,
+                      id,
+                      change === "resolved-secret" ? "rotated-fixture-key" : "resolved-fixture-key",
+                      enabled,
+                    );
                     const nextSource =
                       change === "resolved-secret"
                         ? source
-                        : {
-                            ...source,
-                            plugins: {
-                              ...source.plugins,
-                              entries: {
-                                [id]: {
-                                  enabled: change !== "disabled",
-                                  config: { credential: null },
-                                },
-                              },
-                            },
-                          };
+                        : withCredential(source, id, null, enabled);
                     const rejected = loadOpenClawPlugins({
                       ...options,
                       config: nextRuntime,
