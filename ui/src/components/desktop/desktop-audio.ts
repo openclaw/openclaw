@@ -2,7 +2,7 @@ import type { DesktopObserveResult } from "@openclaw/gateway-protocol";
 import { onCleanup, onSettled } from "solid-js";
 import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import type { DesktopAudioState } from "./desktop-audio-view.tsx";
 import { DesktopPcmQueue } from "./desktop-pcm-queue.ts";
 
@@ -19,16 +19,12 @@ export function createDesktopAudio(
   // Protocol admission is synchronous; the view reads through its projection.
   let playbackState: DesktopAudioState = "unavailable";
   let changed: (() => void) | undefined;
-  const presentation = projectSource(() => playbackState, {
-    read: (read) => read(),
-    subscribe: (_read, notify) => {
-      changed = notify;
-      return () => {
-        changed = undefined;
-      };
-    },
-    equality: Object.is,
-  });
+  const presentation = projectMutableSource(
+    () => playbackState,
+    (read) => read(),
+    Object.is,
+  );
+  changed = presentation.publish;
   let activeSocket: WebSocket | null = null;
   let removeSocketListeners: (() => void) | null = null;
   let activeContext: AudioContext | null = null;

@@ -4,7 +4,7 @@ import { TERMINAL_UPLOAD_RETENTION_MS } from "../../../../packages/gateway-proto
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import {
   uploadsEnabled as policyAllowsUploads,
   uploadsDisabledMessage,
@@ -61,16 +61,11 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
   let dragDepth = 0;
   let notifyBatch = () => {};
   // Transport admission and cancellation remain synchronous; Solid reads that owner.
-  const currentBatch = projectSource(() => activeBatch, {
-    read: (read) => read(),
-    subscribe: (_read, notify) => {
-      notifyBatch = notify;
-      return () => {
-        notifyBatch = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const currentBatch = projectMutableSource(
+    () => activeBatch,
+    (read) => read(),
+  );
+  notifyBatch = currentBatch.publish;
 
   const uploadsEnabled = () => policyAllowsUploads(host.config?.());
 
