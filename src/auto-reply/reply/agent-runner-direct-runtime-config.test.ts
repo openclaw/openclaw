@@ -382,7 +382,10 @@ describe("runReplyAgent runtime config", () => {
               status: "ok",
               result: {
                 payloads: [{ text: finalText }],
-                meta: { finalAssistantVisibleText: finalText },
+                meta: {
+                  finalAssistantVisibleText: finalText,
+                  terminalReply: { disposition: "visible", text: finalText },
+                },
               },
               resolved: { provider: "openai", model: "gpt-5.4" },
               fallback: { exhausted: false, attempts: [] },
