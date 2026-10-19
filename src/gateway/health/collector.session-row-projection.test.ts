@@ -51,6 +51,24 @@ async function readStatusSessionStores(
   return (await prepareStatusSessionStores(cfg, agents, recentLimit, { projection })).publish();
 }
 
+function readHealth(cfg: OpenClawConfig, projection: SessionRowProjection) {
+  return buildHealthAgentSummaries(cfg, resolveHealthAgentOrder(cfg), projection);
+}
+
+function writeSession(agentId: string, key: string, updatedAt: number, storePath: string) {
+  replaceSessionEntrySync({ agentId, sessionKey: key, storePath }, { sessionId: key, updatedAt });
+}
+
+function fleetConfig(
+  entries: NonNullable<OpenClawConfig["agents"]>["entries"],
+  store?: string,
+): OpenClawConfig {
+  return {
+    agents: { ownership: "explicit", entries, defaults: { systemAgent: { agentId: "main" } } },
+    ...(store ? { session: { store } } : {}),
+  };
+}
+
 describe("health agent summaries heartbeat roster", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -154,11 +172,7 @@ describe("health and status resident session summaries", () => {
             startClosing();
             await closing.promise;
           }
-          const summaries = await buildHealthAgentSummaries(
-            cfg,
-            resolveHealthAgentOrder(cfg),
-            projection,
-          );
+          const summaries = await readHealth(cfg, projection);
           expect(summaries.map(({ agentId, sessions }) => [agentId, sessions.count])).toEqual([
             ["main", 1],
           ]);
@@ -228,15 +242,8 @@ describe("health and status resident session summaries", () => {
       const first = "agent:main:first";
       const second = "agent:main:second";
       const added = "agent:main:added";
-      for (const [key, updatedAt] of [
-        [first, 10],
-        [second, 20],
-      ] as const) {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: key, storePath },
-          { sessionId: key, updatedAt },
-        );
-      }
+      writeSession("main", first, 10, storePath);
+      writeSession("main", second, 20, storePath);
       const projection = await createSessionRowProjection({ cfg });
       const release = createDeferred();
       const displayJoined = createDeferred();
@@ -246,14 +253,8 @@ describe("health and status resident session summaries", () => {
         await settleProjection(projection);
         held = projection.withSelectionPreparation(() => release.promise);
         sessionChanges.emit({ all: true, scope: "catalog" });
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: first, storePath },
-          { sessionId: first, updatedAt: 30 },
-        );
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: added, storePath },
-          { sessionId: added, updatedAt: 40 },
-        );
+        writeSession("main", first, 30, storePath);
+        writeSession("main", added, 40, storePath);
         expect(projection.dirtyRowCount).toBeGreaterThan(0);
         const ensureMaterialized = projection.ensureMaterialized;
         vi.spyOn(projection, "ensureMaterialized").mockImplementation(() => {
@@ -261,7 +262,7 @@ describe("health and status resident session summaries", () => {
           displayJoined.resolve();
           return ensureMaterialized();
         });
-        health = buildHealthAgentSummaries(cfg, resolveHealthAgentOrder(cfg), projection);
+        health = readHealth(cfg, projection);
         const outcome = await withinTest(
           Promise.race([
             health.then((agents) => ({ kind: "summary", agents })),
@@ -298,14 +299,7 @@ describe("health and status resident session summaries", () => {
   it("counts a shared physical store once while retaining bounded per-agent windows", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
       const storePath = path.join(stateDir, "shared-sessions.sqlite");
-      const cfg: OpenClawConfig = {
-        agents: {
-          ownership: "explicit",
-          entries: { main: {}, worker: {} },
-          defaults: { systemAgent: { agentId: "main" } },
-        },
-        session: { store: storePath },
-      };
+      const cfg = fleetConfig({ main: {}, worker: {} }, storePath);
       setRuntimeConfigSnapshot(cfg);
       const agentIds = ["main", "worker"];
       const suffixes = Array.from({ length: 12 }, (_, index) => String(index).padStart(2, "0"));
@@ -315,10 +309,7 @@ describe("health and status resident session summaries", () => {
       for (const agentId of agentIds) {
         for (const suffix of suffixes.toReversed()) {
           const key = `agent:${agentId}:${suffix}`;
-          replaceSessionEntrySync(
-            { agentId, sessionKey: key, storePath },
-            { sessionId: key, updatedAt: agentId === "worker" ? 20 : 10 },
-          );
+          writeSession(agentId, key, agentId === "worker" ? 20 : 10, storePath);
         }
       }
       const projection = await createSessionRowProjection({ cfg });
@@ -367,11 +358,7 @@ describe("health and status resident session summaries", () => {
             ["main", 12, sessionKeys.slice(0, limit)],
           ]);
         }
-        const health = await buildHealthAgentSummaries(
-          cfg,
-          resolveHealthAgentOrder(cfg),
-          projection,
-        );
+        const health = await readHealth(cfg, projection);
         expect(health.map((agent) => agent.agentId)).toEqual(agentIds);
         for (const agent of health) {
           expect(agent.sessions.count).toBe(12);
@@ -403,37 +390,29 @@ describe("health and status resident session summaries", () => {
       const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
       try {
         await settleProjection(projection);
-        expect(
-          projection.describe({
-            agentId: "main",
-            key: mainKey,
-          })?.entry,
-        ).toMatchObject({ sessionId: committed.sessionId, updatedAt: initialUpdatedAt });
+        expect(projection.describe({ agentId: "main", key: mainKey })?.entry).toMatchObject({
+          sessionId: committed.sessionId,
+          updatedAt: initialUpdatedAt,
+        });
 
         const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
         const reads = observeMainThreadReads();
         const agents = [{ id: "main" }];
         const readStatus = () => readStatusSessionStores(cfg, agents, 10, projection);
-        const readHealth = () =>
-          buildHealthAgentSummaries(cfg, resolveHealthAgentOrder(cfg), projection);
+        const health = () => readHealth(cfg, projection);
 
         const firstStatus = await readStatus();
         expect(firstStatus.byAgent[0]).toMatchObject({
           count: 1,
-          recent: [
-            expect.objectContaining({
-              sessionKey: mainKey,
-              entry: expect.objectContaining({ updatedAt: initialUpdatedAt }),
-            }),
-          ],
+          recent: [{ sessionKey: mainKey, entry: { updatedAt: initialUpdatedAt } }],
         });
-        const firstHealth = await readHealth();
+        const firstHealth = await health();
         expect(firstHealth[0]?.sessions).toMatchObject({
           count: 1,
-          recent: [expect.objectContaining({ key: mainKey, updatedAt: initialUpdatedAt })],
+          recent: [{ key: mainKey, updatedAt: initialUpdatedAt }],
         });
         await readStatus();
-        await readHealth();
+        await health();
         expect(prepares).not.toHaveBeenCalled();
         reads.expectIdle();
 
@@ -449,7 +428,7 @@ describe("health and status resident session summaries", () => {
 
         prepares.mockClear();
         reads.clear();
-        const clean = await readHealth();
+        const clean = await health();
         expect(clean[0]?.sessions.recent[0]?.updatedAt).toBe(20);
         expect(prepares).not.toHaveBeenCalled();
         reads.expectIdle();
@@ -459,20 +438,10 @@ describe("health and status resident session summaries", () => {
           { agentId: "worker", sessionKey: workerKey },
           { sessionId: "worker-primary", updatedAt: 30 },
         );
-        cfg = {
-          agents: {
-            ownership: "explicit",
-            entries: { main: {}, worker: {} },
-            defaults: { systemAgent: { agentId: "main" } },
-          },
-        };
+        cfg = fleetConfig({ main: {}, worker: {} });
         setRuntimeConfigSnapshot(cfg);
         sessionChanges.emit({ all: true, scope: "config" });
-        const topology = await buildHealthAgentSummaries(
-          cfg,
-          resolveHealthAgentOrder(cfg),
-          projection,
-        );
+        const topology = await readHealth(cfg, projection);
         expect(topology.map((agent) => [agent.agentId, agent.sessions.count])).toEqual([
           ["main", 1],
           ["worker", 1],

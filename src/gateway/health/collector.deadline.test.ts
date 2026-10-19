@@ -26,6 +26,7 @@ const readSessionStoreSummaryReadOnly = vi.fn(() => ({
 }));
 let collectGatewayHealthSnapshot: typeof import("./collector.js").collectGatewayHealthSnapshot;
 let createChannelTestPluginBase: typeof import("../../test-utils/channel-plugins.js").createChannelTestPluginBase;
+const timeoutProbe = { timedOut: true, error: "health collection timed out after 7000ms" };
 
 function createDeadlinePlugin(params: {
   accountIds: string[];
@@ -57,6 +58,30 @@ async function collectDeadlineSnapshot(params: { audience?: "public" | "admin" }
     audience: params.audience ?? "admin",
     probe: true,
   });
+}
+
+function installProbe(
+  accountIds: string[],
+  probe: Parameters<typeof createDeadlinePlugin>[0]["probe"],
+) {
+  healthPluginsForTest = [createDeadlinePlugin({ accountIds, probe })];
+}
+
+function installBlockedProbes(accountIds: string[]) {
+  const started: string[] = [];
+  const releases: Array<() => void> = [];
+  const work = { started, releases, active: 0, maxActive: 0 };
+  installProbe(accountIds, async (account) => {
+    work.started.push(account.accountId);
+    work.maxActive = Math.max(work.maxActive, ++work.active);
+    return await new Promise<Record<string, unknown>>((resolve) => {
+      work.releases.push(() => {
+        work.active -= 1;
+        resolve({ ok: true });
+      });
+    });
+  });
+  return work;
 }
 
 async function flushHealthPreparation() {
@@ -108,7 +133,7 @@ describe("gateway health collection deadline", () => {
   it("does not start probes when session preparation exhausts the aggregate deadline", async () => {
     vi.useFakeTimers();
     const probe = vi.fn(async () => ({ ok: true }));
-    healthPluginsForTest = [createDeadlinePlugin({ accountIds: ["default"], probe })];
+    installProbe(["default"], probe);
     readSessionStoreSummaryReadOnly.mockImplementationOnce(() => {
       vi.advanceTimersByTime(7_000);
       return { count: 0, recent: [], byAgent: new Map() };
@@ -120,14 +145,8 @@ describe("gateway health collection deadline", () => {
     expect(snap.sessions.path).toBe(
       path.join(path.dirname(sessionStorePath), "openclaw-agent.sqlite"),
     );
-    expect(channel?.probe).toEqual({
-      timedOut: true,
-      error: "health collection timed out after 7000ms",
-    });
-    expect(channel?.accounts?.default?.probe).toEqual({
-      timedOut: true,
-      error: "health collection timed out after 7000ms",
-    });
+    expect(channel?.probe).toEqual(timeoutProbe);
+    expect(channel?.accounts?.default?.probe).toEqual(timeoutProbe);
     expect(probe).not.toHaveBeenCalled();
   }, 1_000);
 
@@ -174,7 +193,7 @@ describe("gateway health collection deadline", () => {
                 error:
                   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
               }
-            : { timedOut: true, error: "health collection timed out after 7000ms" },
+            : timeoutProbe,
         );
         expect(JSON.stringify(result)).not.toContain("/Users/synthetic");
       } finally {
@@ -195,26 +214,21 @@ describe("gateway health collection deadline", () => {
     let maxActive = 0;
     let snapshotPromise: ReturnType<typeof collectDeadlineSnapshot> | undefined;
     let draining: Promise<void> | undefined;
-    healthPluginsForTest = [
-      createDeadlinePlugin({
-        accountIds,
-        probe: async (account) => {
-          started.push(account.accountId);
-          active += 1;
-          maxActive = Math.max(maxActive, active);
-          if (account.accountId === "default") {
-            try {
-              return await slowProbe.promise;
-            } finally {
-              active -= 1;
-            }
-          }
-          await Promise.resolve();
+    installProbe(accountIds, async (account) => {
+      started.push(account.accountId);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      if (account.accountId === "default") {
+        try {
+          return await slowProbe.promise;
+        } finally {
           active -= 1;
-          return { ok: true, accountId: account.accountId };
-        },
-      }),
-    ];
+        }
+      }
+      await Promise.resolve();
+      active -= 1;
+      return { ok: true, accountId: account.accountId };
+    });
 
     try {
       snapshotPromise = scope.track(() => collectDeadlineSnapshot());
@@ -225,10 +239,7 @@ describe("gateway health collection deadline", () => {
 
       expect(started).toEqual(accountIds);
       expect(maxActive).toBeLessThanOrEqual(5);
-      expect(channel?.probe).toEqual({
-        timedOut: true,
-        error: "health collection timed out after 7000ms",
-      });
+      expect(channel?.probe).toEqual(timeoutProbe);
       for (const accountId of accountIds.slice(1)) {
         expect(channel?.accounts?.[accountId]?.probe).toMatchObject({ ok: true });
       }
@@ -260,37 +271,22 @@ describe("gateway health collection deadline", () => {
       "queued-1",
       "queued-2",
     ];
-    const started: string[] = [];
-    const releaseProbes: Array<() => void> = [];
-    healthPluginsForTest = [
-      createDeadlinePlugin({
-        accountIds,
-        probe: async (account) => {
-          started.push(account.accountId);
-          return await new Promise<Record<string, unknown>>((resolve) => {
-            releaseProbes.push(() => resolve({ ok: true }));
-          });
-        },
-      }),
-    ];
+    const work = installBlockedProbes(accountIds);
 
     const snapshotPromise = collectDeadlineSnapshot({ audience: "public" });
     try {
       await flushHealthPreparation();
-      expect(started).toEqual(accountIds.slice(0, 5));
+      expect(work.started).toEqual(accountIds.slice(0, 5));
       await vi.advanceTimersByTimeAsync(7_000);
       const snap = await snapshotPromise;
       const channel = snap.channels["deadline-test"];
 
-      expect(started).toEqual(accountIds.slice(0, 5));
+      expect(work.started).toEqual(accountIds.slice(0, 5));
       for (const accountId of accountIds) {
-        expect(channel?.accounts?.[accountId]?.probe).toEqual({
-          error: "health collection timed out after 7000ms",
-          timedOut: true,
-        });
+        expect(channel?.accounts?.[accountId]?.probe).toEqual(timeoutProbe);
       }
     } finally {
-      for (const release of releaseProbes) {
+      for (const release of work.releases) {
         release();
       }
       await vi.advanceTimersByTimeAsync(7_000);
@@ -302,19 +298,14 @@ describe("gateway health collection deadline", () => {
     { stepMs: 60_000, probe: { ok: true } },
     {
       stepMs: -60_000,
-      probe: { error: "health collection timed out after 7000ms", timedOut: true },
+      probe: timeoutProbe,
     },
   ])(
     "keeps the 7s budget when the wall clock steps $stepMs ms",
     async ({ stepMs, probe }) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
       const slowProbe = createDeferredCore<Record<string, unknown>>();
-      healthPluginsForTest = [
-        createDeadlinePlugin({
-          accountIds: ["default"],
-          probe: async () => (stepMs > 0 ? { ok: true } : await slowProbe.promise),
-        }),
-      ];
+      installProbe(["default"], async () => (stepMs > 0 ? { ok: true } : await slowProbe.promise));
       readSessionStoreSummaryReadOnly.mockImplementation(() => {
         // setSystemTime moves only Date; performance.now() keeps monotonic time.
         vi.setSystemTime(Date.now() + stepMs);
@@ -335,56 +326,35 @@ describe("gateway health collection deadline", () => {
   it("retains timed-out permits across repeated health collections", async () => {
     vi.useFakeTimers();
     const accountIds = ["default", "blocked-1", "blocked-2", "blocked-3", "blocked-4"];
-    const started: string[] = [];
-    const releaseProbes: Array<() => void> = [];
-    let active = 0;
-    let maxActive = 0;
-    healthPluginsForTest = [
-      createDeadlinePlugin({
-        accountIds,
-        probe: async (account) => {
-          started.push(account.accountId);
-          active += 1;
-          maxActive = Math.max(maxActive, active);
-          return await new Promise<Record<string, unknown>>((resolve) => {
-            releaseProbes.push(() => {
-              active -= 1;
-              resolve({ ok: true });
-            });
-          });
-        },
-      }),
-    ];
+    const work = installBlockedProbes(accountIds);
 
     const firstSnapshot = collectDeadlineSnapshot();
     try {
       await flushHealthPreparation();
-      expect(started).toEqual(accountIds);
+      expect(work.started).toEqual(accountIds);
       await vi.advanceTimersByTimeAsync(7_000);
       await firstSnapshot;
 
       const secondSnapshot = collectDeadlineSnapshot();
       await flushHealthPreparation();
-      expect(started).toEqual(accountIds);
+      expect(work.started).toEqual(accountIds);
       await vi.advanceTimersByTimeAsync(7_000);
       const second = await secondSnapshot;
 
-      expect(started).toEqual(accountIds);
-      expect(active).toBe(5);
-      expect(maxActive).toBe(5);
+      expect(work.started).toEqual(accountIds);
+      expect(work).toMatchObject({ active: 5, maxActive: 5 });
       for (const accountId of accountIds) {
-        expect(second.channels["deadline-test"]?.accounts?.[accountId]?.probe).toEqual({
-          error: "health collection timed out after 7000ms",
-          timedOut: true,
-        });
+        expect(second.channels["deadline-test"]?.accounts?.[accountId]?.probe).toEqual(
+          timeoutProbe,
+        );
       }
     } finally {
-      for (const release of releaseProbes) {
+      for (const release of work.releases) {
         release();
       }
       await vi.advanceTimersByTimeAsync(7_000);
       await firstSnapshot;
     }
-    expect(active).toBe(0);
+    expect(work.active).toBe(0);
   }, 1_000);
 });

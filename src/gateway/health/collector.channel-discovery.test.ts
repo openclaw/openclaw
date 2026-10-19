@@ -23,6 +23,18 @@ import {
 import { collectGatewayHealthSnapshot } from "./collector.js";
 
 let state: OpenClawTestState | undefined;
+const privateRuntimeFields = {
+  channelSecret: "private-channel-secret",
+  channelAccessToken: "private-channel-token",
+  webhookUrl: "https://private-webhook.example.test/secret",
+  publicKey: "private-provider-key",
+  ...Object.fromEntries(
+    ["probe", "audit", "application", "bot", "profile"].map((field) => [
+      field,
+      { credential: `private-${field}` },
+    ]),
+  ),
+};
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -69,12 +81,6 @@ describe("Gateway health channel discovery", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "admitted-owner", plugin, source: "fixture" }]),
     );
-    const baseUrl = new URL("https://chat.example.test/?token=runtime-token");
-    baseUrl.username = "runtime-user";
-    baseUrl.password = "runtime-password";
-    const audienceUrl = new URL("https://audience.example.test/?token=audience-token");
-    audienceUrl.username = "audience-user";
-    audienceUrl.password = "audience-password";
     const recovered: ChannelAccountSnapshot = {
       accountId: "recovered",
       enabled: true,
@@ -85,17 +91,10 @@ describe("Gateway health channel discovery", () => {
       lastStartAt: 1200,
       tokenSource: "config",
       tokenStatus: "available",
-      baseUrl: baseUrl.href,
-      audience: audienceUrl.href,
-      channelSecret: "private-channel-secret",
-      channelAccessToken: "private-channel-token",
-      webhookUrl: "https://private-webhook.example.test/secret",
-      publicKey: "private-provider-key",
-      probe: { credential: "private-runtime-probe" },
-      audit: { credential: "private-runtime-audit" },
-      application: { credential: "private-application" },
-      bot: { credential: "private-bot" },
-      profile: { credential: "private-profile" },
+      baseUrl: "https://runtime-user:runtime-password@chat.example.test/?token=runtime-token",
+      audience:
+        "https://audience-user:audience-password@audience.example.test/?token=audience-token",
+      ...privateRuntimeFields,
     };
     const snapshot = await collectGatewayHealthSnapshot({
       audience: "public",
@@ -163,17 +162,7 @@ describe("Gateway health channel discovery", () => {
       audience: "https://audience.example.test/?token=***",
     });
     expect(admitted.connected).toBeUndefined();
-    for (const field of [
-      "channelSecret",
-      "channelAccessToken",
-      "webhookUrl",
-      "publicKey",
-      "probe",
-      "audit",
-      "application",
-      "bot",
-      "profile",
-    ]) {
+    for (const field of Object.keys(privateRuntimeFields)) {
       expect(admitted[field], field).toBeUndefined();
     }
     expect(accounts.retrying).toMatchObject({
@@ -194,14 +183,14 @@ describe("Gateway health channel discovery", () => {
       healthState: "terminal-disconnect",
       lastError: "account requires login",
     });
-    expect(new Set(resolveAccount.mock.calls.map((call) => call[1]))).toEqual(
-      new Set(["primary", "bound"]),
-    );
-    expect(new Set(inspectAccount.mock.calls.map((call) => call[1]))).toEqual(
-      new Set(["primary", "bound"]),
-    );
-    expect(probeAccount).toHaveBeenCalledTimes(2);
-    expect(buildChannelSummary).toHaveBeenCalledTimes(2);
+    for (const resolve of [resolveAccount, inspectAccount]) {
+      expect(new Set(resolve.mock.calls.map((call) => call[1]))).toEqual(
+        new Set(["primary", "bound"]),
+      );
+    }
+    for (const hook of [probeAccount, buildChannelSummary]) {
+      expect(hook).toHaveBeenCalledTimes(2);
+    }
     expect(accounts.primary?.probe).toBeUndefined();
     expect(JSON.stringify(snapshot)).not.toContain("private-live-probe");
   });
