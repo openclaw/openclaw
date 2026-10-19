@@ -84,15 +84,38 @@ afterEach(async () => {
 
 describe("processEvent (functional)", () => {
   it.each([
-    { path: "machine policy", answeredBy: "machine_start", reason: "voicemail" },
-    { path: "notify fax", answeredBy: "fax", reason: "failed" },
-    { path: "playback recovery", answeredBy: "machine_end_beep", reason: "error" },
+    {
+      path: "machine policy",
+      answeredBy: "machine_start",
+      reason: "voicemail",
+      failure: "carrier",
+    },
+    { path: "notify fax", answeredBy: "fax", reason: "failed", failure: "carrier" },
+    {
+      path: "playback recovery",
+      answeredBy: "machine_end_beep",
+      reason: "error",
+      failure: "carrier",
+    },
+    {
+      path: "machine policy",
+      answeredBy: "machine_start",
+      reason: "voicemail",
+      failure: "finalization",
+    },
   ] as const)(
-    "reports failed $path hangup without claiming termination",
-    async ({ path, answeredBy, reason }) => {
+    "reports failed $path $failure cleanup without claiming termination",
+    async ({ path, answeredBy, reason, failure }) => {
       const work: Promise<unknown>[] = [];
+      let failPersistence = false;
+      if (failure === "finalization") {
+        installStateRuntime(() => failPersistence);
+      }
       const hangupCall = vi.fn(async () => {
-        throw new Error("synthetic private carrier response");
+        if (failure === "carrier") {
+          throw new Error("synthetic private carrier response");
+        }
+        failPersistence = true;
       });
       const ctx = createContext({
         provider: createProvider({
@@ -140,7 +163,7 @@ describe("processEvent (functional)", () => {
         reason,
       });
       expect(logSpy.logEntries).toEqual([
-        "Detected-call hangup failed; check carrier access and retry ending the call.",
+        `Detected-call cleanup failed for ${call.callId}; inspect voice-call status and logs.`,
       ]);
       expect(ctx.activeCalls.get(call.callId)).toBe(call);
       expect(call.endedAt).toBeUndefined();

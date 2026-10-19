@@ -73,7 +73,7 @@ async function endDetectedCall(
 ): Promise<void> {
   const result = await endCall(ctx, callId, { reason });
   if (!result.success) {
-    log.warn("Detected-call hangup failed; check carrier access and retry ending the call.");
+    log.warn(`Detected-call cleanup failed for ${callId}; inspect voice-call status and logs.`);
   }
 }
 
