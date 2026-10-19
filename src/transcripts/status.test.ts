@@ -115,23 +115,13 @@ function metadataFixture(cfg: OpenClawConfig, sources: Record<string, string>) {
   return createPluginMetadataSnapshot({ config: cfg, manifestRegistry });
 }
 
-function installedPlugin(
-  pluginId: string,
-  { manifestPath, rootDir, source }: { manifestPath: string; rootDir: string; source?: string },
-  enabled = true,
-) {
-  return {
-    pluginId,
-    manifestPath,
-    rootDir,
-    ...(source ? { source } : {}),
-    manifestHash: "fixture",
-    origin: "config" as const,
-    enabled,
-    startup: { sidecar: false, memory: false, agentHarnesses: [] },
-    compat: [],
-  };
-}
+const installedDefaults = {
+  manifestHash: "fixture",
+  origin: "config" as const,
+  enabled: true,
+  startup: { sidecar: false, memory: false, agentHarnesses: [] },
+  compat: [],
+};
 
 function readMetadata(
   store: TranscriptsStore,
@@ -204,13 +194,13 @@ describe("transcript library capture health", () => {
         "fixture-plugin": "declared-source",
         "disabled-plugin": "disabled-source",
       });
-      metadata.index.plugins = metadata.plugins.map((plugin) =>
-        installedPlugin(
-          plugin.id,
-          { manifestPath: plugin.manifestPath, rootDir: plugin.rootDir },
-          plugin.id !== "disabled-plugin",
-        ),
-      );
+      metadata.index.plugins = metadata.plugins.map((plugin) => ({
+        ...installedDefaults,
+        pluginId: plugin.id,
+        manifestPath: plugin.manifestPath,
+        rootDir: plugin.rootDir,
+        enabled: plugin.id !== "disabled-plugin",
+      }));
       const hooks = { start: vi.fn(), stop: vi.fn(), status: vi.fn() };
       setActivePluginRegistry(providerRegistry("live-plugin", "live-source", hooks));
       const store = new TranscriptsStore(path.join(state.stateDir, "transcripts"));
@@ -370,7 +360,7 @@ it("offers a cold manifest source before and after scoped registration without d
       },
     };
     const initial = metadataFixture(cfg, {});
-    initial.index.plugins = [installedPlugin(pluginId, { source, manifestPath, rootDir })];
+    initial.index.plugins = [{ ...installedDefaults, pluginId, source, manifestPath, rootDir }];
     const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
       index: initial.index,
       config: cfg,
@@ -526,9 +516,7 @@ describe("configured transcript shutdown cleanup", () => {
         const terminal = fault === "session-write" || fault === "summary-write";
         await expect(f.tool.execute("status", { action: "status" })).resolves.toMatchObject({
           details: {
-            [terminal ? "pendingFinalization" : "active"]: [
-              expect.objectContaining({ sessionId: session.sessionId }),
-            ],
+            [terminal ? "pendingFinalization" : "active"]: [{ sessionId: session.sessionId }],
           },
         });
         const otherConfig = {

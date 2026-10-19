@@ -164,29 +164,26 @@ it("reuses list pages without worker requests and observes another store's write
   const target = { ...session(), title: "Initial title" };
   await writer.writeSession(target);
   const options = { limit: 50, projection: "public" } as const;
-  const initial = await store.listReadEntries(options);
-  expect(initial.entries).toMatchObject([{ title: "Initial title", utteranceCount: 0 }]);
-  initial.entries[0]!.title = "Caller mutation";
+  const page = async (reader = store) => (await reader.listReadEntries(options)).entries;
+  const initial = await page();
+  expect(initial).toMatchObject([{ title: "Initial title", utteranceCount: 0 }]);
+  initial[0]!.title = "Caller mutation";
 
   const requests = vi.spyOn(Worker.prototype, "postMessage");
   const sql = observeMainThreadSql();
   try {
-    expect((await createStore().listReadEntries(options)).entries).toMatchObject([
+    expect(await page(createStore())).toMatchObject([
       { title: "Initial title", utteranceCount: 0 },
     ]);
     expect(requests).not.toHaveBeenCalled();
     sql.expectIdle();
 
     await writer.writeSession({ ...target, title: "Updated title" });
-    expect((await store.listReadEntries(options)).entries).toMatchObject([
-      { title: "Updated title", utteranceCount: 0 },
-    ]);
+    expect(await page()).toMatchObject([{ title: "Updated title", utteranceCount: 0 }]);
     await writer.appendUtteranceForSession(target, { text: "New speech", final: true });
-    expect((await store.listReadEntries(options)).entries).toMatchObject([
-      { title: "Updated title", utteranceCount: 1 },
-    ]);
+    expect(await page()).toMatchObject([{ title: "Updated title", utteranceCount: 1 }]);
     expect((await store.listReadEntries({ ...options, query: "absent" })).entries).toEqual([]);
-    expect((await store.listReadEntries(options)).entries).toHaveLength(1);
+    expect(await page()).toHaveLength(1);
     sql.expectIdle();
   } finally {
     requests.mockRestore();
@@ -623,7 +620,6 @@ it("does not let a case-distinct SQLite owner mask a legacy directory", async ()
   await store.writeSession(upper);
   updateExports(upper, { export_pending_json: '["metadata.json","transcript.jsonl"]' });
   writeLegacyArtifact(store.sessionDir(lower));
-
   await expectLegacyRejection(lower);
 });
 
@@ -647,9 +643,7 @@ it("recognizes case-variant artifact names only when the filesystem aliases them
 
 it("refuses to overwrite an unclaimed legacy export directory", async () => {
   const target = session("legacy-collision");
-  const sessionDir = store.sessionDir(target);
-  const transcriptPath = writeLegacyArtifact(sessionDir, '{"text":"legacy line"}\n');
-
+  const transcriptPath = writeLegacyArtifact(store.sessionDir(target), '{"text":"legacy line"}\n');
   await expect(store.writeSession(target)).rejects.toThrow("run openclaw doctor --fix");
   expect(readText(transcriptPath)).toContain("legacy line");
 });
@@ -667,9 +661,7 @@ it.runIf(process.platform !== "win32")(
 
 it("does not let a dot session mask the shipped dot-dot root layout", async () => {
   await store.writeSession(session("."));
-  const transcriptRoot = path.join(suiteStateDir, "transcripts");
-  writeLegacyArtifact(transcriptRoot, "legacy root transcript\n");
-
+  writeLegacyArtifact(path.join(suiteStateDir, "transcripts"), "legacy root transcript\n");
   await expectLegacyRejection(session(".."));
 });
 
