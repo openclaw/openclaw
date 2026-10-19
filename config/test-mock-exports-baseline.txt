@@ -5388,7 +5388,6 @@
 ["src/daemon/gateway-service-probe-hosts.test.ts","../gateway/net.js","d54f345e7ef5cb573f39542b18cab9b28f60215e8dec2f4cfd4eac095fa1b11c",1]
 ["src/daemon/gateway-service-probe-hosts.test.ts","../infra/container-environment.js","71a9c70a6e60ea9ad16f0c6582988500dd8f394c8df06cd3b862d7f672d7c154",1]
 ["src/daemon/gateway-service-probe-hosts.test.ts","../infra/tailnet.js","b99e89a211b177934e08750afa3bd541d9f7c24a4d123c9180f50d43d8e076b5",1]
-["src/daemon/hosted-stop.test.ts","../shared/pid-alive.js","ccd55c880d3dc17c863536d310478b23ef19b046e5828b8335a1bc249c6d7c46",1]
 ["src/daemon/hosted-stop.test.ts","./hosted-stop-executor.js","6b38da0b9ed5ead9ac1255d7ec15d421fe918794789ce131e12936ad95d4a89b",1]
 ["src/daemon/hosted-stop.test.ts","./launchd-runtime.js","2bc378ed313875d09d9fb0b6d5736249df47c41b73e11180804c2396b8643808",1]
 ["src/daemon/hosted-stop.test.ts","./systemd-exec.js","6acc462cff969b2fd0ff9d59919984e5dd851018645bbcb37342d577814d5b24",1]
