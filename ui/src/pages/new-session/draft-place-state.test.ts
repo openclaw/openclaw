@@ -277,11 +277,14 @@ describe("DraftPlaceState repository selection", () => {
     expect(createParams(state).model).toBe("example/first");
     expect(persistPreference).not.toHaveBeenCalled();
 
-    const choice = view.querySelector<HTMLButtonElement>(
-      '[data-chat-model-option="example/second"]',
-    );
-    expect(choice).not.toBeNull();
-    choice!.click();
+    const choice = await vi.waitFor(() => {
+      const option = view.querySelector<HTMLButtonElement>(
+        '[data-chat-model-option="example/second"]',
+      );
+      expect(option).not.toBeNull();
+      return option!;
+    });
+    choice.click();
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
     state.modelControl.load(context, "main", true, { agent: state.selectedAgent() });
     state.adoptAgentDefaults();
