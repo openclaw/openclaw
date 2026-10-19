@@ -98,7 +98,7 @@ Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 ### OpenClaw Bun fork
 
 Local source development uses the [OpenClaw Bun fork](https://github.com/openclaw/bun)
-for tests, `pnpm dev`, and local formatting, with a linter opt-in described below.
+for tests, `pnpm dev`, local formatting, and linting.
 The exact release, revision, and checksums are pinned in
 `scripts/lib/openclaw-bun.json`. Use this fork for the Bun development path:
 its runtime and built-in formatter and linter are the versions validated against
@@ -106,7 +106,7 @@ this repository. These defaults do not change an installed Gateway's runtime;
 see [Bun compatibility](/install/bun-compatibility).
 
 `scripts/lib/pinned-bun.mts` owns resolution for tests, `pnpm dev`, formatting,
-and opt-in Bun linting. On first use it downloads the pinned release through
+and linting. On first use it downloads the pinned release through
 `scripts/stage-openclaw-bun.sh`, verifies the archive and executable checksums
 and release identity, and caches the executable at
 `~/.cache/openclaw/bun/<tag>/<platform>-<arch>/bin/bun`. `XDG_CACHE_HOME` replaces
@@ -121,9 +121,9 @@ they do not enable automatic staging in this development resolver.
 Local tests and `pnpm dev` default to the pinned fork. If it is unavailable, they
 fall back to Node with one notice explaining why. `pnpm format` and
 `pnpm format:check` also default locally to the pinned fork, falling back to
-oxfmt with one notice if it is unavailable. `pnpm lint` defaults to oxlint;
-Bun lint is opt-in until the required upstream fix and exact diagnostic parity
-are verified. The oxlint default needs no Bun download and prints no fallback notice.
+oxfmt with one notice if it is unavailable. `pnpm lint` and its shared lint
+callers default locally to the pinned fork via `bun lint --no-script`, falling
+back to oxlint with the same notice if the fork is unavailable.
 Explicit Bun formatting or linting fails if the fork is unavailable.
 
 The October 18, 2026 comparison used pinned Bun `1.4.4-canary.1+7bd4fdff3`
@@ -143,6 +143,15 @@ or an extra local formatting pass. Every run preserved the tracked bytes.
 The Mac run held the shared build lock but had substantial background load
 (about 65); it does not establish a write-speed gain there. Use the oxfmt
 override below when it performs better on your machine.
+
+The S3 lint comparison used Bun `1.4.4-canary.1+ef37c31de` and oxlint 1.87.0
+on a clean AWS `c7a.8xlarge`, with one warm-up and five interleaved runs per
+core, scripts, extensions, and UI scope. The sum of native scope medians was
+23.32 s for Bun versus 143.34 s for oxlint: 6.15× faster at default threads.
+At four threads it was 81.73 s versus 208.83 s, or 2.56× faster. At four threads, peak RSS across the scopes ranged from 1.72–4.69 GiB for Bun
+and 3.66–22.39 GiB for oxlint; the largest scopes used about a fifth of the memory. Full diagnostic multisets matched in every
+scope and both thread modes. These numbers exclude installation and wrapper
+preparation and are not loaded-Mac timings.
 
 Formatting reads `.oxfmtrc.jsonc`, including the 100-column print width and ignore
 patterns. Selecting Bun lint retains the existing pipeline, configuration,
@@ -164,7 +173,7 @@ OPENCLAW_LINT_TOOL=bun pnpm lint
 ```
 
 Explicit `bun` selection fails if the executable is unavailable instead of
-silently using another tool. Explicit Node or oxfmt selection suppresses the
+silently using another tool. Explicit Node, oxfmt, or oxlint selection suppresses the
 fallback notice. `OPENCLAW_BUN_PATH=/absolute/path/to/bun` overrides the executable
 for every Bun-selected command. This custom binary must be executable, but does
 not receive the pinned cache's checksum validation. An invalid path follows the
@@ -200,8 +209,14 @@ See [CI runtime selection](/ci/pipeline#test-runtime-selection).
 
 CI formatting always gates on oxfmt and checks that pinned Bun identifies the same
 files needing formatting, even when a format override is set. CI lint continues
-to gate on oxlint. Bun lint becomes the default only after the required upstream
-fix is included in the pin and exact diagnostic parity is verified.
+to gate on oxlint, regardless of the lint override, and runs Bun sequentially
+against the same prepared configs and files. The existing lint jobs fail if exit
+status or full diagnostic multisets differ, preserving duplicate findings and all
+spans, messages, severity, and help text. Only rule spelling, documentation URLs,
+report order, and timing metadata are normalized. No additional runner is needed.
+Windows CI retains oxlint alone unless `OPENCLAW_BUN_PATH` supplies an executable;
+automatic fork staging supports macOS and Linux.
+Metadata queries and commands that write fixes or output files do not run parity.
 
 On macOS, Bun test runs select SQLite like a standalone Bun install and refuse
 Apple's system library; see [SQLite library selection](/install/bun-compatibility#sqlite-library-selection).
