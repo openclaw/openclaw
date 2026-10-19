@@ -32,6 +32,13 @@ export function createNativeApprovalTestFixture(params: {
   const native = capability.nativeAsync ?? capability.native;
   const nativeRuntime = capability.nativeRuntimeAsync ?? capability.nativeRuntime;
   const directTarget = "+15551230000";
+  const origin = (to: string) => ({
+    agentId: "main",
+    turnSourceChannel: channel,
+    turnSourceTo: to,
+    turnSourceAccountId: "default",
+    sessionKey: `agent:main:${channel}:${to}`,
+  });
   function buildExecRequest(
     to = directTarget,
     overrides: Partial<ExecApprovalRequest["request"]> = {},
@@ -40,11 +47,7 @@ export function createNativeApprovalTestFixture(params: {
       id: "exec-1",
       request: {
         command: "echo hi",
-        agentId: "main",
-        turnSourceChannel: channel,
-        turnSourceTo: to,
-        turnSourceAccountId: "default",
-        sessionKey: `agent:main:${channel}:${to}`,
+        ...origin(to),
         ...overrides,
       },
       createdAtMs: 0,
@@ -60,11 +63,7 @@ export function createNativeApprovalTestFixture(params: {
       request: {
         title: "Plugin approval",
         description: "Allow plugin action",
-        agentId: "main",
-        turnSourceChannel: channel,
-        turnSourceTo: to,
-        turnSourceAccountId: "default",
-        sessionKey: `agent:main:${channel}:${to}`,
+        ...origin(to),
         ...overrides,
       },
       createdAtMs: 0,
@@ -139,6 +138,17 @@ export function createNativeApprovalTestFixture(params: {
       request,
     });
   }
+  async function expectHandling(
+    cfg: OpenClawConfig,
+    request: ApprovalRequest,
+    expected: boolean,
+    approvalKind: ChannelApprovalKind = "exec",
+  ) {
+    expect(await nativeShouldHandle({ cfg, approvalKind, request })).toBe(expected);
+  }
+  const enabledConfig = (
+    exec: NonNullable<OpenClawConfig["approvals"]>["exec"] = { enabled: true },
+  ) => buildConfig({ approvals: { exec } });
   return {
     buildConfig,
     buildExecRequest,
@@ -158,15 +168,11 @@ export function createNativeApprovalTestFixture(params: {
         expect(getAvailability(cfg)).toEqual({ kind: "disabled" });
         expect(getAvailability(cfg, "default", "plugin")).toEqual({ kind: "disabled" });
         expect((await describeDelivery(cfg, execRequest))?.enabled).toBe(false);
-        expect(await nativeShouldHandle({ cfg, approvalKind: "exec", request: execRequest })).toBe(
-          false,
-        );
-        expect(
-          await nativeShouldHandle({ cfg, approvalKind: "plugin", request: pluginRequest }),
-        ).toBe(false);
+        await expectHandling(cfg, execRequest, false);
+        await expectHandling(cfg, pluginRequest, false, "plugin");
       },
       sessionDelivery: async () => {
-        const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
+        const cfg = enabledConfig();
         const request = buildExecRequest();
         expect(await describeDelivery(cfg, request)).toEqual({
           enabled: true,
@@ -175,41 +181,23 @@ export function createNativeApprovalTestFixture(params: {
           supportsApproverDmSurface: false,
           notifyOriginWhenDmOnly: true,
         });
-        expect(await nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(true);
+        await expectHandling(cfg, request, true);
       },
       independentKinds: async () => {
-        const execOnly = buildConfig({ approvals: { exec: { enabled: true } } });
+        const execOnly = enabledConfig();
         const pluginOnly = buildConfig({ approvals: { plugin: { enabled: true } } });
-        expect(
-          await nativeShouldHandle({
-            cfg: execOnly,
-            approvalKind: "plugin",
-            request: buildPluginRequest(),
-          }),
-        ).toBe(false);
-        expect(
-          await nativeShouldHandle({
-            cfg: pluginOnly,
-            approvalKind: "exec",
-            request: buildExecRequest(),
-          }),
-        ).toBe(false);
-        expect(
-          await nativeShouldHandle({
-            cfg: pluginOnly,
-            approvalKind: "plugin",
-            request: buildPluginRequest(),
-          }),
-        ).toBe(true);
+        await expectHandling(execOnly, buildPluginRequest(), false, "plugin");
+        await expectHandling(pluginOnly, buildExecRequest(), false);
+        await expectHandling(pluginOnly, buildPluginRequest(), true, "plugin");
       },
       foreignOrigin: async () => {
-        const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
+        const cfg = enabledConfig();
         const request = buildExecRequest("", {
           turnSourceChannel: "slack",
           turnSourceTo: "C123",
           sessionKey: "agent:main:slack:channel:c123",
         });
-        expect(await nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(false);
+        await expectHandling(cfg, request, false);
         expect((await describeDelivery(cfg, request))?.enabled).toBe(false);
       },
       targetMode: async (cfg = buildTargetModeConfig("exec", [{ channel, to: directTarget }])) => {
@@ -222,7 +210,7 @@ export function createNativeApprovalTestFixture(params: {
             context: {},
           }),
         ).toBe(false);
-        expect(await nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(false);
+        await expectHandling(cfg, request, false);
         expect((await describeDelivery(cfg, request))?.enabled).toBe(false);
       },
       noMatchingTarget: () => {
@@ -234,18 +222,10 @@ export function createNativeApprovalTestFixture(params: {
           agentId: "main",
           sessionKey: `agent:main:${channel}:+15551230000`,
         });
-        const blockedByAgent = buildConfig({
-          approvals: { exec: { enabled: true, agentFilter: ["other"] } },
-        });
-        const blockedBySession = buildConfig({
-          approvals: { exec: { enabled: true, sessionFilter: ["telegram"] } },
-        });
-        expect(
-          await nativeShouldHandle({ cfg: blockedByAgent, approvalKind: "exec", request }),
-        ).toBe(false);
-        expect(
-          await nativeShouldHandle({ cfg: blockedBySession, approvalKind: "exec", request }),
-        ).toBe(false);
+        const blockedByAgent = enabledConfig({ enabled: true, agentFilter: ["other"] });
+        const blockedBySession = enabledConfig({ enabled: true, sessionFilter: ["telegram"] });
+        await expectHandling(blockedByAgent, request, false);
+        await expectHandling(blockedBySession, request, false);
       },
       accountScopedTargets: () => {
         const cfg = buildTargetModeConfig(
@@ -257,7 +237,7 @@ export function createNativeApprovalTestFixture(params: {
         expect(getAvailability(cfg, "work")).toEqual({ kind: "enabled" });
       },
       exactSessionTarget: async () => {
-        const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
+        const cfg = enabledConfig();
         const request = buildExecRequest();
         for (const [to, expected] of [
           [directTarget, true],
@@ -321,6 +301,8 @@ export function createLocalApprovalPromptTestFixture(params: {
     approvalKind: "exec",
     nativeRouteActive: true,
   } as const;
+  const localConfig = (exec: NonNullable<OpenClawConfig["approvals"]>["exec"]) =>
+    buildConfig({ channel: { allowFrom: ["+15551230000"] }, approvals: { exec } });
   function buildLocalApprovalPayload(
     input: {
       approvalKind?: ChannelApprovalKind;
@@ -362,10 +344,7 @@ export function createLocalApprovalPromptTestFixture(params: {
     suppressLocalSessionPrompt,
     checks: {
       eligibleSession: () => {
-        const cfg = buildConfig({
-          channel: { allowFrom: ["+15551230000"] },
-          approvals: { exec: { enabled: true, agentFilter: ["main"] } },
-        });
+        const cfg = localConfig({ enabled: true, agentFilter: ["main"] });
         expect(
           suppressLocalSessionPrompt(cfg, `agent:main:${channel}:+15551230000`, {
             accountId: "default",
@@ -374,10 +353,7 @@ export function createLocalApprovalPromptTestFixture(params: {
         ).toBe(true);
       },
       inactiveRoutes: () => {
-        const enabledConfig = buildConfig({
-          channel: { allowFrom: ["+15551230000"] },
-          approvals: { exec: { enabled: true } },
-        });
+        const enabledConfig = localConfig({ enabled: true });
         const payload = buildLocalApprovalPayload({
           agentId: "main",
           sessionKey: `agent:main:${channel}:+15551230000`,
@@ -385,22 +361,14 @@ export function createLocalApprovalPromptTestFixture(params: {
         const routes: LocalSuppressionParams[] = [
           { cfg: buildConfig(), payload },
           {
-            cfg: buildConfig({
-              channel: { allowFrom: ["+15551230000"] },
-              approvals: { exec: { enabled: false } },
-            }),
+            cfg: localConfig({ enabled: false }),
             payload,
           },
           {
-            cfg: buildConfig({
-              channel: { allowFrom: ["+15551230000"] },
-              approvals: {
-                exec: {
-                  enabled: true,
-                  mode: "targets",
-                  targets: [{ channel, to: "+15551230000" }],
-                },
-              },
+            cfg: localConfig({
+              enabled: true,
+              mode: "targets",
+              targets: [{ channel, to: "+15551230000" }],
             }),
             payload,
           },
@@ -413,10 +381,7 @@ export function createLocalApprovalPromptTestFixture(params: {
         }
       },
       sessionFilters: () => {
-        const cfg = buildConfig({
-          channel: { allowFrom: ["+15551230000"] },
-          approvals: { exec: { enabled: true, agentFilter: ["ops"], sessionFilter: [channel] } },
-        });
+        const cfg = localConfig({ enabled: true, agentFilter: ["ops"], sessionFilter: [channel] });
         for (const [sessionKey, expected] of [
           [`agent:ops:${channel}:+15551230000`, true],
           [`agent:main:${channel}:+15551230000`, false],

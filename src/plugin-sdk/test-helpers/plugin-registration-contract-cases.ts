@@ -1,66 +1,48 @@
-/**
- * Installs bundled plugin registration contract cases used across provider tests.
- */
 import type { PluginRegistrationContractParams } from "./plugin-registration-contract.js";
 
+type RegistrationSurfaces = Omit<PluginRegistrationContractParams, "pluginId">;
+
+function registration<T extends RegistrationSurfaces>(
+  pluginId: string,
+  surfaces: T & Record<Exclude<keyof T, keyof RegistrationSurfaces>, never>,
+) {
+  return { pluginId, ...surfaces };
+}
+
 export const pluginRegistrationContractCases = {
-  alibaba: {
-    pluginId: "alibaba",
-    videoGenerationProviderIds: ["alibaba"],
-  },
-  anthropic: {
-    pluginId: "anthropic",
+  alibaba: registration("alibaba", { videoGenerationProviderIds: ["alibaba"] }),
+  anthropic: registration("anthropic", {
     providerIds: ["anthropic"],
     mediaUnderstandingProviderIds: ["anthropic"],
     cliBackendIds: ["claude-cli"],
-  },
-  brave: {
-    pluginId: "brave",
-    webSearchProviderIds: ["brave"],
-  },
-  byteplus: {
-    pluginId: "byteplus",
+  }),
+  brave: registration("brave", { webSearchProviderIds: ["brave"] }),
+  byteplus: registration("byteplus", {
     providerIds: ["byteplus", "byteplus-plan"],
     videoGenerationProviderIds: ["byteplus"],
-  },
-  comfy: {
-    pluginId: "comfy",
+  }),
+  comfy: registration("comfy", {
     providerIds: ["comfy"],
     imageGenerationProviderIds: ["comfy"],
     musicGenerationProviderIds: ["comfy"],
     videoGenerationProviderIds: ["comfy"],
-  },
-  deepgram: {
-    pluginId: "deepgram",
-    mediaUnderstandingProviderIds: ["deepgram"],
-  },
-  duckduckgo: {
-    pluginId: "duckduckgo",
-    webSearchProviderIds: ["duckduckgo"],
-  },
-  elevenlabs: {
-    pluginId: "elevenlabs",
-    speechProviderIds: ["elevenlabs"],
-  },
-  exa: {
-    pluginId: "exa",
-    webSearchProviderIds: ["exa"],
-  },
-  fal: {
-    pluginId: "fal",
+  }),
+  deepgram: registration("deepgram", { mediaUnderstandingProviderIds: ["deepgram"] }),
+  duckduckgo: registration("duckduckgo", { webSearchProviderIds: ["duckduckgo"] }),
+  elevenlabs: registration("elevenlabs", { speechProviderIds: ["elevenlabs"] }),
+  exa: registration("exa", { webSearchProviderIds: ["exa"] }),
+  fal: registration("fal", {
     providerIds: ["fal"],
     imageGenerationProviderIds: ["fal"],
     musicGenerationProviderIds: ["fal"],
     videoGenerationProviderIds: ["fal"],
-  },
-  firecrawl: {
-    pluginId: "firecrawl",
+  }),
+  firecrawl: registration("firecrawl", {
     webFetchProviderIds: ["firecrawl"],
     webSearchProviderIds: ["firecrawl", "firecrawl-free"],
     toolNames: ["firecrawl_search", "firecrawl_scrape"],
-  },
-  google: {
-    pluginId: "google",
+  }),
+  google: registration("google", {
     providerIds: ["google", "google-gemini-cli", "google-vertex"],
     webSearchProviderIds: ["gemini"],
     realtimeVoiceProviderIds: ["google"],
@@ -68,29 +50,13 @@ export const pluginRegistrationContractCases = {
     mediaUnderstandingProviderIds: ["google"],
     imageGenerationProviderIds: ["google"],
     videoGenerationProviderIds: ["google"],
-  },
-  gradium: {
-    pluginId: "gradium",
-    speechProviderIds: ["gradium"],
-  },
-  groq: {
-    pluginId: "groq",
-    mediaUnderstandingProviderIds: ["groq"],
-  },
-  kie: {
-    pluginId: "kie",
-    videoGenerationProviderIds: ["kie"],
-  },
-  lmstudio: {
-    pluginId: "lmstudio",
-    providerIds: ["lmstudio"],
-  },
-  microsoft: {
-    pluginId: "microsoft",
-    speechProviderIds: ["microsoft", "edge"],
-  },
-  minimax: {
-    pluginId: "minimax",
+  }),
+  gradium: registration("gradium", { speechProviderIds: ["gradium"] }),
+  groq: registration("groq", { mediaUnderstandingProviderIds: ["groq"] }),
+  kie: registration("kie", { videoGenerationProviderIds: ["kie"] }),
+  lmstudio: registration("lmstudio", { providerIds: ["lmstudio"] }),
+  microsoft: registration("microsoft", { speechProviderIds: ["microsoft", "edge"] }),
+  minimax: registration("minimax", {
     providerIds: ["minimax", "minimax-portal"],
     speechProviderIds: ["minimax"],
     mediaUnderstandingProviderIds: ["minimax", "minimax-portal"],
@@ -98,13 +64,9 @@ export const pluginRegistrationContractCases = {
     musicGenerationProviderIds: ["minimax", "minimax-portal"],
     videoGenerationProviderIds: ["minimax", "minimax-portal"],
     webSearchProviderIds: ["minimax"],
-  },
-  mistral: {
-    pluginId: "mistral",
-    mediaUnderstandingProviderIds: ["mistral"],
-  },
-  moonshot: {
-    pluginId: "moonshot",
+  }),
+  mistral: registration("mistral", { mediaUnderstandingProviderIds: ["mistral"] }),
+  moonshot: registration("moonshot", {
     providerIds: ["moonshot"],
     webSearchProviderIds: ["kimi"],
     mediaUnderstandingProviderIds: ["moonshot"],
@@ -116,13 +78,9 @@ export const pluginRegistrationContractCases = {
       groupLabel: "Moonshot AI (Kimi)",
       groupHint: "Kimi Code membership · https://www.kimi.com/membership/pricing",
     },
-  },
-  novita: {
-    pluginId: "novita",
-    videoGenerationProviderIds: ["novita"],
-  },
-  nvidia: {
-    pluginId: "nvidia",
+  }),
+  novita: registration("novita", { videoGenerationProviderIds: ["novita"] }),
+  nvidia: registration("nvidia", {
     providerIds: ["nvidia"],
     manifestAuthChoice: {
       pluginId: "nvidia",
@@ -132,53 +90,38 @@ export const pluginRegistrationContractCases = {
       groupLabel: "NVIDIA",
       groupHint: "Direct API key",
     },
-  },
-  ollama: {
-    pluginId: "ollama",
+  }),
+  ollama: registration("ollama", {
     providerIds: ["ollama", "ollama-cloud"],
     webSearchProviderIds: ["ollama"],
-  },
-  openai: {
-    pluginId: "openai",
+  }),
+  openai: registration("openai", {
     providerIds: ["openai"],
     speechProviderIds: ["openai"],
     realtimeTranscriptionProviderIds: ["openai"],
     realtimeVoiceProviderIds: ["openai"],
     mediaUnderstandingProviderIds: ["openai"],
     imageGenerationProviderIds: ["openai"],
-  },
-  "opencode-go": {
-    pluginId: "opencode-go",
+  }),
+  "opencode-go": registration("opencode-go", {
     providerIds: ["opencode-go"],
     mediaUnderstandingProviderIds: ["opencode-go"],
-  },
-  opencode: {
-    pluginId: "opencode",
+  }),
+  opencode: registration("opencode", {
     providerIds: ["opencode"],
     mediaUnderstandingProviderIds: ["opencode"],
-  },
-  openrouter: {
-    pluginId: "openrouter",
+  }),
+  openrouter: registration("openrouter", {
     providerIds: ["openrouter"],
     mediaUnderstandingProviderIds: ["openrouter"],
     imageGenerationProviderIds: ["openrouter"],
     musicGenerationProviderIds: ["openrouter"],
     videoGenerationProviderIds: ["openrouter"],
-  },
-  parallel: {
-    pluginId: "parallel",
-    webSearchProviderIds: ["parallel", "parallel-free"],
-  },
-  perplexity: {
-    pluginId: "perplexity",
-    webSearchProviderIds: ["perplexity"],
-  },
-  pixverse: {
-    pluginId: "pixverse",
-    videoGenerationProviderIds: ["pixverse"],
-  },
-  qwen: {
-    pluginId: "qwen",
+  }),
+  parallel: registration("parallel", { webSearchProviderIds: ["parallel", "parallel-free"] }),
+  perplexity: registration("perplexity", { webSearchProviderIds: ["perplexity"] }),
+  pixverse: registration("pixverse", { videoGenerationProviderIds: ["pixverse"] }),
+  qwen: registration("qwen", {
     providerIds: [
       "qwen",
       "qwencloud",
@@ -189,31 +132,19 @@ export const pluginRegistrationContractCases = {
     ],
     mediaUnderstandingProviderIds: ["qwen"],
     videoGenerationProviderIds: ["qwen"],
-  },
-  runway: {
-    pluginId: "runway",
-    videoGenerationProviderIds: ["runway"],
-  },
-  senseaudio: {
-    pluginId: "senseaudio",
-    mediaUnderstandingProviderIds: ["senseaudio"],
-  },
-  tavily: {
-    pluginId: "tavily",
+  }),
+  runway: registration("runway", { videoGenerationProviderIds: ["runway"] }),
+  senseaudio: registration("senseaudio", { mediaUnderstandingProviderIds: ["senseaudio"] }),
+  tavily: registration("tavily", {
     webSearchProviderIds: ["tavily"],
     toolNames: ["tavily_search", "tavily_extract"],
-  },
-  together: {
-    pluginId: "together",
+  }),
+  together: registration("together", {
     providerIds: ["together"],
     videoGenerationProviderIds: ["together"],
-  },
-  "tts-local-cli": {
-    pluginId: "tts-local-cli",
-    speechProviderIds: ["tts-local-cli", "cli"],
-  },
-  vydra: {
-    pluginId: "vydra",
+  }),
+  "tts-local-cli": registration("tts-local-cli", { speechProviderIds: ["tts-local-cli", "cli"] }),
+  vydra: registration("vydra", {
     providerIds: ["vydra"],
     speechProviderIds: ["vydra"],
     imageGenerationProviderIds: ["vydra"],
@@ -226,19 +157,17 @@ export const pluginRegistrationContractCases = {
       groupLabel: "Vydra",
       groupHint: "Image, video, and speech",
     },
-  },
-  xai: {
-    pluginId: "xai",
+  }),
+  xai: registration("xai", {
     providerIds: ["xai"],
     webSearchProviderIds: ["grok"],
     realtimeTranscriptionProviderIds: ["xai"],
     mediaUnderstandingProviderIds: ["xai"],
     videoGenerationProviderIds: ["xai"],
     toolNames: ["code_execution", "x_search"],
-  },
-  zai: {
-    pluginId: "zai",
+  }),
+  zai: registration("zai", {
     mediaUnderstandingProviderIds: ["zai"],
     videoGenerationProviderIds: ["zai"],
-  },
+  }),
 } satisfies Record<string, PluginRegistrationContractParams>;

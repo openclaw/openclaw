@@ -38,6 +38,21 @@ type ChromeFixtureOptions = MeetingBrowserFixtureOptions & {
 
 export function defineMeetingChromeCleanupTests(options: ChromeFixtureOptions) {
   const logger = createMeetingLogger();
+  const launchParams = (
+    runtime: MeetingBrowserFixture["runtime"],
+    recovering = false,
+  ): MeetingChromeLaunchParams<MeetingChromeTransportConfig, "agent"> => ({
+    config: options.resolveConfig({
+      chrome: { waitForInCallMs: 1, ...(recovering ? { launch: false } : {}) },
+    }),
+    fullConfig: {},
+    logger,
+    meetingSessionId: "session-1",
+    mode: "agent",
+    runtime,
+    url: options.url,
+    ...(recovering ? { trackedTargetId: options.tabId } : {}),
+  });
   const readyStatus = () => ({
     audioInputRouted: true,
     audioOutputRouted: true,
@@ -62,20 +77,9 @@ export function defineMeetingChromeCleanupTests(options: ChromeFixtureOptions) {
       status: readyStatus,
     });
 
-    await expect(
-      options.launchInChrome({
-        config: options.resolveConfig({
-          chrome: { launch: false, waitForInCallMs: 1 },
-        }),
-        fullConfig: {},
-        logger,
-        meetingSessionId: "session-1",
-        mode: "agent",
-        runtime,
-        trackedTargetId: options.tabId,
-        url: options.url,
-      }),
-    ).rejects.toThrow("realtime startup failed");
+    await expect(options.launchInChrome(launchParams(runtime, true))).rejects.toThrow(
+      "realtime startup failed",
+    );
 
     expectAudioCaptureReleased(state);
 
@@ -106,17 +110,9 @@ export function defineMeetingChromeCleanupTests(options: ChromeFixtureOptions) {
       status: readyStatus,
     });
 
-    await expect(
-      options.launchInChrome({
-        config: options.resolveConfig({ chrome: { waitForInCallMs: 1 } }),
-        fullConfig: {},
-        logger,
-        meetingSessionId: "session-1",
-        mode: "agent",
-        runtime,
-        url: options.url,
-      }),
-    ).rejects.toThrow("realtime startup failed");
+    await expect(options.launchInChrome(launchParams(runtime))).rejects.toThrow(
+      "realtime startup failed",
+    );
 
     expectAudioCaptureReleased(state);
     expect(options.engineMocks.localDispose).toHaveBeenCalled();
@@ -135,17 +131,9 @@ export function defineMeetingChromeCleanupTests(options: ChromeFixtureOptions) {
       status: readyStatus,
     });
 
-    await expect(
-      options.launchOnNode({
-        config: options.resolveConfig({ chrome: { waitForInCallMs: 1 } }),
-        fullConfig: {},
-        logger,
-        meetingSessionId: "session-1",
-        mode: "agent",
-        runtime,
-        url: options.url,
-      }),
-    ).rejects.toThrow("realtime startup failed");
+    await expect(options.launchOnNode(launchParams(runtime))).rejects.toThrow(
+      "realtime startup failed",
+    );
 
     expectAudioCaptureReleased(state);
     expect(options.engineMocks.nodeDispose).toHaveBeenCalled();
@@ -174,20 +162,9 @@ export function defineMeetingChromeCleanupTests(options: ChromeFixtureOptions) {
         status: readyStatus,
       });
 
-      await expect(
-        options.launchOnNode({
-          config: options.resolveConfig({
-            chrome: { launch: false, waitForInCallMs: 1 },
-          }),
-          fullConfig: {},
-          logger,
-          meetingSessionId: "session-1",
-          mode: "agent",
-          runtime,
-          trackedTargetId: options.tabId,
-          url: options.url,
-        }),
-      ).rejects.toThrow("realtime startup failed");
+      await expect(options.launchOnNode(launchParams(runtime, true))).rejects.toThrow(
+        "realtime startup failed",
+      );
 
       expectAudioCaptureReleased(state);
       expect(options.engineMocks.nodeDispose).toHaveBeenCalled();
