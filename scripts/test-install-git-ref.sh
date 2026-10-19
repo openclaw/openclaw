@@ -4,8 +4,10 @@ set -euo pipefail
 # Run each installer in a fresh environment, without the developer's Git/npm config.
 if [[ "${1:-}" != --case ]]; then
   root="$(cd "$(dirname "$0")/.." && pwd)"
-  for installer in "${@:-$root/scripts/install-cli.sh}"; do
-    for scenario in transient exhausted authentication missing lightweight annotated full; do
+  default_installer="$root/scripts/install-cli.sh"
+  [[ ! -f "$root/public/install-cli.sh" ]] || default_installer="$root/public/install-cli.sh"
+  for installer in "${@:-$default_installer}"; do
+    for scenario in transient exhausted authentication missing lightweight annotated full retained retained-annotated; do
       fixture="$(mktemp -d)"
       mkdir -p "$fixture/home"
       result=0
@@ -33,7 +35,11 @@ git() {
     count=$((count + 1))
     printf '%s\n' "$count" > "$work/probes"
     if [[ "$scenario" == exhausted || ( "$scenario" == transient && "$count" -lt 3 ) ]]; then
-      printf '%s\n' 'fatal: unable to access https://user:synthetic-password@example.invalid/repo?token=synthetic-query: Could not resolve host: example.invalid' >&2
+      if [[ "$scenario" == transient ]]; then
+        printf '%s\n' 'fatal: unable to access https://user:synthetic-password@example.invalid/repo?token=synthetic-query: Empty reply from server' >&2
+      else
+        printf '%s\n' 'fatal: unable to access https://user:synthetic-password@example.invalid/repo?token=synthetic-query: Could not resolve host: example.invalid' >&2
+      fi
       return 128
     elif [[ "$scenario" == authentication ]]; then
       printf '%s\n' 'fatal: Authentication failed for https://user:synthetic-password@example.invalid/repo' 'aUtHoRiZaTiOn: Bearer synthetic-header' 'COOKIE: synthetic-cookie' >&2
@@ -57,7 +63,7 @@ printf 'release\n' > "$seed/state.txt"
 command git -C "$seed" add state.txt
 command git -C "$seed" commit -qm release
 expected="$(command git -C "$seed" rev-parse HEAD)"
-if [[ "$scenario" == annotated ]]; then
+if [[ "$scenario" == annotated || "$scenario" == retained-annotated ]]; then
   command git -C "$seed" tag -am release "$ref"
 else
   command git -C "$seed" tag "$ref"
@@ -66,6 +72,8 @@ printf 'main\n' > "$seed/state.txt"
 command git -C "$seed" commit -qam main
 if [[ "$scenario" == full ]]; then
   command git clone -q --no-tags "file://$seed" "$repo"
+elif [[ "$scenario" == retained* ]]; then
+  command git clone -q --depth 3 --no-tags "file://$seed" "$repo"
 else
   command git clone -q --depth 1 --no-tags "file://$seed" "$repo"
 fi
@@ -84,15 +92,16 @@ if grep -Eq 'synthetic-password|synthetic-query|synthetic-header|synthetic-cooki
   exit 1
 fi
 case "$scenario" in
-  transient|lightweight|annotated|full)
+  transient|lightweight|annotated|full|retained|retained-annotated)
     [[ "$result" == 0 ]] || exit 1
     [[ "$(command git -C "$repo" rev-parse HEAD)" == "$expected" ]] || exit 1
     [[ -z "$(command git -C "$repo" symbolic-ref --quiet HEAD || true)" ]] || exit 1
-    if [[ "$scenario" == full ]]; then
+    if [[ "$scenario" == full || "$scenario" == retained* ]]; then
       [[ "$(command git -C "$repo" rev-list --count HEAD)" == 2 ]] || exit 1
     else
       [[ "$(command git -C "$repo" rev-list --count HEAD)" == 1 ]] || exit 1
     fi
+    [[ "$scenario" != retained* || "$(command git -C "$repo" rev-list --count main)" == 3 ]] || exit 1
     ;;
   exhausted|authentication)
     [[ "$result" != 0 ]] || exit 1
@@ -105,7 +114,7 @@ case "$scenario" in
 esac || exit 1
 case "$scenario" in
   transient|exhausted) [[ "$(cat "$work/probes")" == 3 ]] ;;
-  authentication|lightweight|annotated|full) [[ "$(cat "$work/probes")" == 1 ]] ;;
+  authentication|lightweight|annotated|full|retained|retained-annotated) [[ "$(cat "$work/probes")" == 1 ]] ;;
   missing) [[ "$(cat "$work/probes")" == 2 ]] ;;
 esac || exit 1
 printf 'PASS: %s %s\n' "$(basename "$installer")" "$scenario"
