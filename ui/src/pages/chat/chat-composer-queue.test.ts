@@ -12,10 +12,8 @@ type QueueProps = Parameters<typeof renderChatQueueSolid>[0];
 const queues = new WeakMap<HTMLElement, (props: QueueProps) => void>();
 const keydown = (key: string, extra: KeyboardEventInit = {}) =>
   new KeyboardEvent("keydown", { key, bubbles: true, ...extra });
-const find = <T extends Element = HTMLElement>(
-  root: ParentNode | null | undefined,
-  part: string,
-): T | null | undefined => root?.querySelector<T>(`.chat-queue__${part}`);
+const find = (root: ParentNode | null | undefined, part: string) =>
+  root?.querySelector<HTMLElement>(`.chat-queue__${part}`);
 const text = (root: ParentNode | null | undefined, part: string) =>
   find(root, part)?.textContent?.trim();
 const all = <T extends Element = HTMLElement>(root: ParentNode, part: string) =>
@@ -60,8 +58,8 @@ describe("chat composer steering queue", () => {
     );
     expect(rows[0]?.getAttribute("data-chat-queue-item")).toBe("reset");
     expect(text(rows[0], "badge")).toBe(t("chat.queue.states.needsReview"));
-    find<HTMLButtonElement>(rows[0], "retry")?.click();
-    find<HTMLButtonElement>(rows[0], "remove")?.click();
+    find(rows[0], "retry")?.click();
+    find(rows[0], "remove")?.click();
     expect(onQueueRetry).toHaveBeenCalledWith("reset");
     expect(onQueueRemove).toHaveBeenCalledWith("reset");
   });
@@ -75,7 +73,7 @@ describe("chat composer steering queue", () => {
     });
 
     expect(find(container, "badge")).toBeNull();
-    const steerButton = find<HTMLButtonElement>(container, "steer");
+    const steerButton = find(container, "steer");
     expect(steerButton?.textContent?.trim()).toBe(t("chat.queue.steer"));
     steerButton?.click();
     expect(onQueueSteer).toHaveBeenCalledWith("steer-1");
@@ -145,7 +143,7 @@ function editFixture(editingText?: string) {
   return {
     props,
     container,
-    editor: find<HTMLTextAreaElement>(container, "edit-input")!,
+    editor: container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")!,
     change: callbacks.onEditChange,
     submit: callbacks.onEditSubmit,
     cancel: callbacks.onCancel,
@@ -251,7 +249,7 @@ describe("chat composer queue reordering", () => {
       expect(find(rows[1], part)).not.toBeNull();
     }
 
-    find<HTMLButtonElement>(rows[2], "remove")?.click();
+    find(rows[2], "remove")?.click();
     expect(onQueueRemove).toHaveBeenCalledWith("c");
   });
 

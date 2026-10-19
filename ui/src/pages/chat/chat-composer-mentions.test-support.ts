@@ -194,8 +194,7 @@ export function composerFixture(
       };
     },
     edit,
-    query: <T extends Element = HTMLElement>(selector: string): T | null =>
-      container.querySelector<T>(selector),
+    query: container.querySelector.bind(container),
     options: () => container.querySelectorAll('[role="option"]'),
     search: async (text: string, options?: Parameters<typeof edit>[1]) => {
       edit(text, options);
