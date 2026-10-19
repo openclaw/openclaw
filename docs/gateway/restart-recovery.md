@@ -68,7 +68,8 @@ agents continue loading. Startup preparation failures still report an error.
 After the HTTP listener binds, interrupted main-session marking overlaps session
 projection preparation. Both settle before channels start and the Gateway reports
 ready. Post-ready recovery reuses the completed store checks instead of repeating
-that scan.
+that scan. Both main-session recovery and queued session deliveries wait for
+subagent source restoration before attempting to resume interrupted work.
 
 ## What survives a restart
 
@@ -134,6 +135,23 @@ input saved, with a fixed failure-reason code and attempt count recorded in the
 recovery notice details. The notice explains the failure and directs you to resend
 the update or ask the sender to retry. Detailed diagnostics stay in operator logs. Recovery never
 reruns the sender task or restores old approvals.
+
+If an accepted peer input was already consumed by a turn when the Gateway died,
+main-session recovery uses its saved delivery source to resume that turn. It checks
+the exact interrupted run's delivery before falling back to an older transcript key;
+an older delivery cannot override an existing exact match. Recovery checks
+the original endpoints and current communication permissions again, including
+after another forced restart. Recovered execution retains these checks for tool
+effects, so revoking communication permission stops further effects. Its authority
+follows successors committed by the compaction owner; unrelated endpoint replacements
+still stop execution. The input remains consumed and is not submitted as a new
+message. A queued session event
+joins this recovery through normal session admission instead of treating the
+missing live sender as an ended session.
+
+If the original peer endpoint was reset, archived, or lost communication permission,
+recovery records one interruption notice and settles that input through the existing
+recovery owner. Temporary storage failures remain retryable.
 
 When an update replaces the bundled Control UI, an open tab reloads after the
 Gateway reports the new build. Automatic recovery for that reported build and

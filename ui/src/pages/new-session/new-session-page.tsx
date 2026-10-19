@@ -65,7 +65,10 @@ const pageOwners = new WeakMap<PageHost, NewSessionPageOwner>();
 // Retained draft hosts can reconnect under a fresh native bridge root.
 const renderedPages = new WeakSet<PageHost>();
 
-function DraftAgentSelect(props: { page: () => NewSessionPageOwner }) {
+function DraftAgentSelect(props: {
+  page: () => NewSessionPageOwner;
+  ref?: (element: HTMLSpanElement) => void;
+}) {
   const place = () => props.page().place;
   const submission = () => props.page().submission;
   return (
@@ -73,6 +76,7 @@ function DraftAgentSelect(props: { page: () => NewSessionPageOwner }) {
       <AgentSelect
         ref={(node) => {
           props.page().agentPicker = node;
+          props.ref?.(node);
         }}
         params={{
           agents: place().agents(),
@@ -97,6 +101,23 @@ function DraftBlock(props: {
 }) {
   const submission = () => props.page().submission;
   const place = () => props.page().place;
+  let root: HTMLDivElement | undefined;
+  let agent: HTMLSpanElement | undefined;
+  let notice: HTMLDivElement | undefined;
+  let catalogElements: () => readonly HTMLElement[] = () => [];
+  let placeElements: () => readonly HTMLElement[] = () => [];
+  const surroundings = () =>
+    root
+      ? {
+          root,
+          obstacles: [
+            agent,
+            ...catalogElements(),
+            ...placeElements(),
+            ...(submission().visibility === "incognito" ? [notice] : []),
+          ].filter((element): element is HTMLElement => element?.isConnected === true),
+        }
+      : undefined;
   const placeOptions = createMemo((): NewSessionPlaceControlsOptions => ({
     context: props.page().context,
     data: props.page().data,
@@ -136,12 +157,18 @@ function DraftBlock(props: {
   return (
     <div
       class="new-session-page__draft"
+      ref={(element) => {
+        root = element;
+      }}
       aria-busy={submission().submitting ? "true" : "false"}
       onCompositionStart={() => props.page().titlePreparation?.setComposing(true)}
       onCompositionEnd={() => props.page().titlePreparation?.setComposing(false)}
       onFocusOut={() => props.page().titlePreparation?.setComposing(false)}
     >
       <CatalogBar
+        ref={(read) => {
+          catalogElements = read;
+        }}
         data={props.page().data}
         groupPending={catalog.isGroupRoutePending(
           props.page().data,
@@ -156,10 +183,22 @@ function DraftBlock(props: {
         onRetry={() => props.page().gateway.handleCatalogRetry()}
         agentSelect={
           <Show when={Boolean(props.page().submission.completedSubmission)}>
-            <DraftAgentSelect page={props.page} />
+            <DraftAgentSelect
+              page={props.page}
+              ref={(element) => {
+                agent = element;
+              }}
+            />
           </Show>
         }
-        placeSelect={<NewSessionPlaceControls params={placeOptions()} />}
+        placeSelect={
+          <NewSessionPlaceControls
+            params={placeOptions()}
+            ref={(read) => {
+              placeElements = read;
+            }}
+          />
+        }
       />
       <Show when={place().worktree && !isWorktreeNameValid(place().worktreeName)}>
         <DraftError message={t("newSession.worktreeNameInvalid")} />
@@ -191,6 +230,7 @@ function DraftBlock(props: {
         />
       </Show>
       <NewSessionComposer
+        surroundings={surroundings}
         options={Object.assign(props.options(), {
           permissionControl,
           dictationStatus,
@@ -198,7 +238,12 @@ function DraftBlock(props: {
         })}
       />
       <Show when={!catalog.isTarget(props.page().data)}>
-        <NewSessionIncognitoNotice active={submission().visibility === "incognito"} />
+        <NewSessionIncognitoNotice
+          active={submission().visibility === "incognito"}
+          ref={(element) => {
+            notice = element;
+          }}
+        />
       </Show>
     </div>
   );

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { LobsterComposerElements } from "../../components/lobster-pet-contract.ts";
 import {
   composerContext,
   renderComposer,
@@ -64,10 +65,16 @@ describe("new-session composer critter visits", () => {
 
   it("keeps the visitor cast stable while editing and rerolls only for a new draft or opening", () => {
     const first = renderComposer();
+    document.body.append(first.container);
+    onTestFinished(() => first.container.remove());
     const visitor = () =>
-      first.composer.querySelector<HTMLElement & { seed: number; floorEnabled: boolean }>(
-        "openclaw-lobster-pet",
-      )!;
+      first.composer.querySelector<
+        HTMLElement & {
+          seed: number;
+          floorEnabled: boolean;
+          composerElements: () => LobsterComposerElements | null;
+        }
+      >("openclaw-lobster-pet")!;
     const initial = visitor();
     const seed = initial.seed;
     expect(initial.parentElement?.classList.contains("agent-chat__input")).toBe(true);
@@ -77,6 +84,14 @@ describe("new-session composer critter visits", () => {
     expect(visitor()).toBe(initial);
     expect(visitor().seed).toBe(seed);
     const textarea = first.composer.querySelector("textarea")!;
+    const elements = initial.composerElements()!;
+    expect(elements.composer).toBe(initial.parentElement);
+    expect(elements.editor).toBe(textarea);
+    expect(elements.footer).toBe(first.composer.querySelector(".agent-chat__composer-footer"));
+    expect(elements.controls).toEqual([
+      first.composer.querySelector(".agent-chat__composer-lead"),
+      first.composer.querySelector(".agent-chat__composer-actions"),
+    ]);
     textarea.value = "A prompt takes priority over the visitors";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
     expect(visitor().seed).toBe(seed);

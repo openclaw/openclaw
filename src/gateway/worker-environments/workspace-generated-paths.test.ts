@@ -42,6 +42,8 @@ const userFiles = {
   [`${stagedRoot}/.gitignore`]: STAGED_INPUT_GITIGNORE,
   [`${stagedRoot}/.local/share/pnpm/store/input.txt`]: "staged input\n",
   ".artifacts/report.md": "user report\n",
+  ".artifacts/build-all-cache/authored.txt": "original input\n",
+  ".artifacts/build-cache-inputs/authored.json": "original input\n",
   ".artifacts/vitest-worker-cache-notes.md": "user notes\n",
   ".artifacts/vitest-shard-timings.json-notes": "user notes\n",
   "fixtures/.artifacts/vitest-worker-cache/input.js": "nested user fixture\n",

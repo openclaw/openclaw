@@ -820,10 +820,12 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(cards[0]?.querySelector(".context-breakdown-more")?.textContent).toContain("1 more");
     document.body.append(container);
     const toggle = container.querySelector<HTMLButtonElement>(".context-breakdown-header button")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
     toggle.focus();
     toggle.click();
     flush();
     expect(onToggleContextExpanded).toHaveBeenCalledOnce();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(container.querySelector(".context-breakdown-header button")).toBe(toggle);
     expect(document.activeElement).toBe(toggle);
     expect(
@@ -832,5 +834,12 @@ describe("renderSessionDetailPanel filtered usage", () => {
         ?.querySelectorAll(".context-breakdown-item"),
     ).toHaveLength(5);
     expect(container.querySelector(".context-breakdown-more")).toBeNull();
+
+    toggle.click();
+    flush();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(toggle);
+    expect(cards[0]?.querySelectorAll(".context-breakdown-item")).toHaveLength(4);
+    expect(cards[0]?.querySelector(".context-breakdown-more")?.textContent).toContain("1 more");
   });
 });

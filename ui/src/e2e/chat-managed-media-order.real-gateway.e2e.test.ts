@@ -490,7 +490,7 @@ suite.define(() => {
                 .filter({ hasText: intro })
                 .locator(".chat-turn-recap")
                 .waitFor({ state: "visible" });
-              const diagnostic = await observeManagedMediaCapture(page, bubble, intro);
+              const diagnostic = await observeManagedMediaCapture(page, bubble, intro, "live");
               let liveOrder: string[];
               try {
                 // Capture before the order assertion so an unfixed run retains the actual flattening.
@@ -570,8 +570,29 @@ suite.define(() => {
               await waitForControlUiGatewayReady(page);
               await bubble.getByText(closing, { exact: true }).waitFor();
               await assertDecoded();
-              await capture(page, bubble, "02-reloaded");
-              const reloadedOrder = await assertRenderedOrder(bubble);
+              const reloadedDiagnostic = await observeManagedMediaCapture(
+                page,
+                bubble,
+                intro,
+                "reloaded",
+              );
+              let reloadedOrder: string[];
+              try {
+                await capture(page, bubble, "02-reloaded", reloadedDiagnostic);
+                reloadedOrder = await assertRenderedOrder(bubble);
+              } catch (error) {
+                try {
+                  await reloadedDiagnostic.report();
+                } catch (captureError) {
+                  console.error(
+                    "[control-ui-e2e] managed image reload diagnostics failed",
+                    captureError instanceof Error ? captureError.name : "UnknownError",
+                  );
+                }
+                throw error;
+              } finally {
+                await reloadedDiagnostic.stop();
+              }
               expect(await page.locator(".chat-group.assistant .chat-bubble").count()).toBe(1);
               expect(sends).toEqual([prompt]);
               expect(provider.requests.filter((model) => model === "echo")).toHaveLength(1);

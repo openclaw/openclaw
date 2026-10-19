@@ -167,7 +167,13 @@ export function createControlUiComponents(options: {
         props,
         async () => {
           await import("../components/modal-dialog.ts");
-          return document.createElement("openclaw-modal-dialog");
+          const dialog = document.createElement("openclaw-modal-dialog");
+          // Plugin content is a foreign DOM island with native autofocus semantics.
+          dialog.initialFocus = () =>
+            content?.matches("[autofocus]")
+              ? content
+              : (content?.querySelector<HTMLElement>("[autofocus]") ?? null);
+          return dialog;
         },
         (element, next) => {
           element.label = next.label;

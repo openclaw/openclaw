@@ -25,20 +25,23 @@ import {
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const env = { HOME: "/home/caller", OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway" };
 let target: SystemdServiceReadTarget;
-let serviceUser: string;
-let managerUid: number;
-let assignments: string[];
-let unset: string[];
-let managerChanges: boolean;
 let ownerReads: number;
-let fileSpecs: [string, boolean][];
-let loaded: boolean;
-let loadState: string;
-let unitFileState: string;
-let activeState: string;
-let canStart: boolean;
-let refuseManualStart: boolean;
-let emptyCommand: boolean;
+const defaults = {
+  serviceUser: "gateway",
+  managerUid: 0,
+  assignments: ["OPENCLAW_SERVICE_KIND=gateway"],
+  unset: [] as string[],
+  managerChanges: false,
+  fileSpecs: [] as [string, boolean][],
+  loaded: true,
+  loadState: "loaded",
+  unitFileState: "enabled",
+  activeState: "active",
+  canStart: true,
+  refuseManualStart: false,
+  emptyCommand: false,
+};
+let state = { ...defaults };
 
 const success = (stdout: string): ExecResult => ({
   code: 0,
@@ -47,6 +50,22 @@ const success = (stdout: string): ExecResult => ({
   stderr: "",
 });
 const property = (type: string, data: unknown) => ({ type, data });
+const reply = (type: string, data: unknown) => success(JSON.stringify(property(type, data)));
+const readLoaded = () =>
+  readSystemdServiceExecStart(env, {
+    requireEffective: true,
+    requireLoaded: true,
+    systemdReadTarget: target,
+  });
+const expectNoLoad = () =>
+  expect(systemBus.mock.calls.some(([args]) => args.includes("LoadUnit"))).toBe(false);
+const account = (username: string, uid: number) => ({
+  username,
+  uid,
+  gid: uid,
+  homedir: uid === 0 ? "/root" : `/home/${username}`,
+  shell: "/bin/sh",
+});
 
 beforeEach(async () => {
   const home = dirs.make("openclaw-system-scope-");
@@ -58,42 +77,22 @@ beforeEach(async () => {
   await fs.writeFile(target.unitPath, "[Service]\nExecStart=/local/stale gateway\n");
   findScope.mockReset().mockResolvedValue(target);
   userBus.mockReset().mockRejectedValue(new Error("wrong user manager"));
-  serviceUser = "gateway";
-  managerUid = 0;
-  assignments = ["OPENCLAW_SERVICE_KIND=gateway"];
-  unset = [];
-  managerChanges = false;
+  state = { ...defaults };
   ownerReads = 0;
-  fileSpecs = [];
-  loaded = true;
-  loadState = "loaded";
-  unitFileState = "enabled";
-  activeState = "active";
-  canStart = true;
-  refuseManualStart = false;
-  emptyCommand = false;
-  vi.spyOn(os, "userInfo").mockReturnValue({
-    username: "gateway",
-    uid: 2001,
-    gid: 2001,
-    homedir: "/home/gateway",
-    shell: "/bin/sh",
-  });
+  vi.spyOn(os, "userInfo").mockReturnValue(account("gateway", 2001));
   systemBus.mockReset().mockImplementation(async (args) => {
     if (args.includes("GetNameOwner")) {
-      return success(
-        JSON.stringify(property("s", [managerChanges && ++ownerReads > 1 ? ":1.99" : ":1.42"])),
-      );
+      return reply("s", [state.managerChanges && ++ownerReads > 1 ? ":1.99" : ":1.42"]);
     }
     if (args.includes("GetConnectionUnixUser")) {
-      return success(JSON.stringify(property("u", [managerUid])));
+      return reply("u", [state.managerUid]);
     }
     if (args.includes("GetUnitFileState")) {
-      return success(JSON.stringify(property("s", [unitFileState])));
+      return reply("s", [state.unitFileState]);
     }
     if (args.includes("GetUnit") || args.includes("LoadUnit")) {
       expect(args.at(-1)).toBe(target.unitName);
-      if (!loaded) {
+      if (!state.loaded) {
         return {
           code: 1,
           termination: "exit",
@@ -101,30 +100,28 @@ beforeEach(async () => {
           stderr: `Call failed: Unit ${target.unitName} not loaded.`,
         };
       }
-      return success(
-        JSON.stringify(property("o", ["/org/freedesktop/systemd1/unit/openclaw_2eservice"])),
-      );
+      return reply("o", ["/org/freedesktop/systemd1/unit/openclaw_2eservice"]);
     }
     const properties: Record<string, unknown> = {
       FragmentPath: property("s", target.unitPath),
       DropInPaths: property("as", []),
       NeedDaemonReload: property("b", false),
-      LoadState: property("s", loadState),
-      UnitFileState: property("s", unitFileState),
-      ActiveState: property("s", activeState),
-      CanStart: property("b", canStart),
-      RefuseManualStart: property("b", refuseManualStart),
+      LoadState: property("s", state.loadState),
+      UnitFileState: property("s", state.unitFileState),
+      ActiveState: property("s", state.activeState),
+      CanStart: property("b", state.canStart),
+      RefuseManualStart: property("b", state.refuseManualStart),
       ExecStart: property(
         "a(sasbttttuii)",
-        emptyCommand
+        state.emptyCommand
           ? []
           : [["/usr/bin/openclaw", ["/usr/bin/openclaw", "gateway"], false, 0, 0, 0, 0, 0, 0, 0]],
       ),
       WorkingDirectory: property("s", "/home/gateway"),
-      Environment: property("as", assignments),
-      EnvironmentFiles: property("a(sb)", fileSpecs),
-      UnsetEnvironment: property("as", unset),
-      User: property("s", serviceUser),
+      Environment: property("as", state.assignments),
+      EnvironmentFiles: property("a(sb)", state.fileSpecs),
+      UnsetEnvironment: property("as", state.unset),
+      User: property("s", state.serviceUser),
     };
     const index = args.findIndex((arg) => /\.(Unit|Service)$/.test(arg));
     if (index < 0) {
@@ -151,16 +148,14 @@ describe("system-scope effective command", () => {
   ])(
     "preserves start policy when command inspection fails ($reason, refuse=$refuse)",
     async (row) => {
-      unitFileState = row.file ?? "disabled";
-      activeState = "inactive";
-      canStart = row.canStart;
-      refuseManualStart = row.refuse;
-      emptyCommand = row.empty;
-      const command = readSystemdServiceExecStart(env, {
-        requireEffective: true,
-        requireLoaded: true,
-        systemdReadTarget: target,
+      Object.assign(state, {
+        unitFileState: row.file ?? "disabled",
+        activeState: "inactive",
+        canStart: row.canStart,
+        refuseManualStart: row.refuse,
+        emptyCommand: row.empty,
       });
+      const command = readLoaded();
       if (row.reason) {
         await expect(command).rejects.toMatchObject({
           name: "ServiceStartRefusalError",
@@ -172,27 +167,23 @@ describe("system-scope effective command", () => {
           programArguments: ["/usr/bin/openclaw", "gateway"],
         });
       }
-      expect(systemBus.mock.calls.some(([args]) => args.includes("LoadUnit"))).toBe(false);
+      expectNoLoad();
     },
   );
 
   it.each(["masked", "masked-runtime"])(
     "retains %s refusal before command inspection",
-    async (state) => {
-      loadState = "masked";
-      unitFileState = state;
-      loaded = state === "masked";
-      await expect(
-        readSystemdServiceExecStart(env, {
-          requireEffective: true,
-          requireLoaded: true,
-          systemdReadTarget: target,
-        }),
-      ).rejects.toMatchObject({
+    async (unitFileState) => {
+      Object.assign(state, {
+        loadState: "masked",
+        unitFileState,
+        loaded: unitFileState === "masked",
+      });
+      await expect(readLoaded()).rejects.toMatchObject({
         name: "ServiceStartRefusalError",
         message: expect.stringContaining(`sudo systemctl --system unmask ${target.unitName}`),
       });
-      expect(systemBus.mock.calls.some(([args]) => args.includes("LoadUnit"))).toBe(false);
+      expectNoLoad();
     },
   );
 
@@ -200,19 +191,13 @@ describe("system-scope effective command", () => {
     vi.spyOn(process, "geteuid").mockReturnValue(0);
     const environmentFile = path.join(path.dirname(target.unitPath), "gateway.env");
     await fs.writeFile(environmentFile, "OPENCLAW_STATE_DIR=/var/lib/example\n");
-    fileSpecs = [[environmentFile, false]];
-    vi.spyOn(os, "userInfo").mockReturnValue({
-      username: "root",
-      uid: 0,
-      gid: 0,
-      homedir: "/root",
-      shell: "/bin/sh",
-    });
+    state.fileSpecs = [[environmentFile, false]];
+    vi.spyOn(os, "userInfo").mockReturnValue(account("root", 0));
 
     await expect(readSystemdServiceExecStartAsRoot(env, target, "gateway")).resolves.toMatchObject({
       environment: { OPENCLAW_STATE_DIR: "/var/lib/example", OPENCLAW_SERVICE_KIND: "gateway" },
     });
-    expect(systemBus.mock.calls.some(([args]) => args.includes("LoadUnit"))).toBe(false);
+    expectNoLoad();
     await expect(readSystemdServiceExecStartAsRoot(env, target, "other")).rejects.toMatchObject({
       reason: "systemd-account-refused",
     });
@@ -229,9 +214,9 @@ describe("system-scope effective command", () => {
   it.each(["gateway", "other"])(
     "reads %s's location without accessing protected credentials",
     async (user) => {
-      serviceUser = user;
+      state.serviceUser = user;
       const protectedFile = path.join(path.dirname(target.unitPath), "protected-service.env");
-      fileSpecs = [[protectedFile, false]];
+      state.fileSpecs = [[protectedFile, false]];
       const readFile = fs.readFile;
       const reads = vi.spyOn(fs, "readFile").mockImplementation(async (file, ...args) => {
         if (file === protectedFile) {
@@ -257,13 +242,7 @@ describe("system-scope effective command", () => {
             args.includes("LoadUnit"),
         ),
       ).toBe(false);
-      await expect(
-        readSystemdServiceExecStart(env, {
-          requireEffective: true,
-          requireLoaded: true,
-          systemdReadTarget: target,
-        }),
-      ).rejects.toMatchObject(
+      await expect(readLoaded()).rejects.toMatchObject(
         user === "gateway" ? { code: "EACCES" } : { reason: "systemd-account-refused" },
       );
       if (user === "other") {
@@ -273,18 +252,12 @@ describe("system-scope effective command", () => {
   );
 
   it("distinguishes an unloaded runtime from an absent installed service", async () => {
-    loaded = false;
+    state.loaded = false;
     await expect(readSystemdServiceCommandLocation(env, target)).resolves.toEqual({
       kind: "not-loaded",
     });
-    await expect(
-      readSystemdServiceExecStart(env, {
-        requireEffective: true,
-        requireLoaded: true,
-        systemdReadTarget: target,
-      }),
-    ).rejects.toThrow("Effective systemd service command");
-    expect(systemBus.mock.calls.some(([args]) => args.includes("LoadUnit"))).toBe(false);
+    await expect(readLoaded()).rejects.toThrow("Effective systemd service command");
+    expectNoLoad();
   });
 
   it("does not turn unavailable native metadata into an unloaded runtime", async () => {
@@ -322,7 +295,7 @@ describe("system-scope effective command", () => {
   it.each(["2001", "other"])(
     "requires the service account for strict inspection: %s",
     async (user) => {
-      serviceUser = user;
+      state.serviceUser = user;
       const command = readSystemdServiceExecStart(env, { requireEffective: true });
       if (user === "2001") {
         await expect(command).resolves.toMatchObject({ environment: { HOME: "/home/gateway" } });
@@ -339,8 +312,8 @@ describe("system-scope effective command", () => {
   );
 
   it.each(["uid", "replacement"])("rejects an unverified system manager: %s", async (fault) => {
-    managerUid = fault === "uid" ? 2001 : 0;
-    managerChanges = fault === "replacement";
+    state.managerUid = fault === "uid" ? 2001 : 0;
+    state.managerChanges = fault === "replacement";
     await expect(
       readSystemdServiceExecStart(env, { requireEffective: true }),
     ).rejects.toMatchObject({
@@ -351,7 +324,7 @@ describe("system-scope effective command", () => {
   it.each(["HOME", "HOME=/home/gateway"])(
     "honors explicit HOME removal: %s",
     async (assignment) => {
-      unset = [assignment];
+      state.unset = [assignment];
       const command = await readSystemdServiceExecStart(env, { requireEffective: true });
       expect(command?.environment).not.toHaveProperty("HOME");
     },

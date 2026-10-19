@@ -173,6 +173,7 @@ export async function directoryContainsOnlyWorkspaceEntries(
   directory: string,
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
   journal?: { paths: ReadonlySet<string>; directories: ReadonlySet<string> },
+  excludeBuildCaches = false,
 ): Promise<boolean> {
   let foundEntry = false;
   for (const name of await fs.readdir(localPath(root, directory))) {
@@ -180,7 +181,7 @@ export async function directoryContainsOnlyWorkspaceEntries(
     if (isRuntimeOwnedWorkspacePath(child)) {
       return false;
     }
-    if (!isDerivedWorkspacePath(child, await isRetainedInput(child))) {
+    if (!isDerivedWorkspacePath(child, await isRetainedInput(child), excludeBuildCaches)) {
       const stats = await fs.lstat(localPath(root, child));
       if (stats.isDirectory() && !stats.isSymbolicLink()) {
         if (
@@ -189,6 +190,7 @@ export async function directoryContainsOnlyWorkspaceEntries(
             child,
             isRetainedInput,
             journal?.directories.has(child) ? journal : undefined,
+            excludeBuildCaches,
           ))
         ) {
           return false;

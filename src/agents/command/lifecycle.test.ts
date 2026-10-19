@@ -221,6 +221,7 @@ describe("createAgentCommandLifecycle", () => {
         livenessState: "blocked",
         yielded: true,
         replayInvalid: true,
+        suppressErrorNotice: phase === "finishing",
         error: { message: `Authorization: Bearer ${secret}`, nested: { secret } },
         terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot({
           status: "sent",
@@ -271,6 +272,7 @@ describe("createAgentCommandLifecycle", () => {
             livenessState: "blocked",
             yielded: true,
             replayInvalid: true,
+            suppressErrorNotice: phase === "finishing",
             error: "Request timed out before a response was generated.",
             ...(phase !== "finishing" ? { executionSettled: true } : {}),
           }),
@@ -605,6 +607,7 @@ describe("createAgentCommandLifecycle", () => {
     const lifecycle = createLifecycle("post-turn-delivery-owner");
     lifecycle.emitPostTurnError(new Error("delivery failed"), {
       metadata: {
+        suppressErrorNotice: true,
         terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot({
           status: "failed",
           resultCount: 0,
@@ -648,6 +651,7 @@ describe("createAgentCommandLifecycle", () => {
       "providerStarted",
       "terminalReceipt",
       "terminalReply",
+      "suppressErrorNotice",
       "unsafeMetadata",
     ]) {
       expect(event.data).not.toHaveProperty(field);

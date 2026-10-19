@@ -19,6 +19,7 @@ import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   isDerivedWorkspacePath,
   isRuntimeOwnedWorkspacePath,
+  buildCacheInputPaths,
 } from "./workspace-path-exclusions.js";
 import {
   directoryContainsOnlyWorkspaceEntries,
@@ -33,6 +34,7 @@ async function localWorkspaceDescendantPaths(
   entryPaths: readonly string[],
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
   nonDirectoryReplacements: ReadonlySet<string>,
+  excludeBuildCaches: boolean,
 ): Promise<string[]> {
   const paths: string[] = [];
   const pending = [...entryPaths];
@@ -62,7 +64,7 @@ async function localWorkspaceDescendantPaths(
         }
         continue;
       }
-      if (isDerivedWorkspacePath(childPath, await isRetainedInput(childPath))) {
+      if (isDerivedWorkspacePath(childPath, await isRetainedInput(childPath), excludeBuildCaches)) {
         continue;
       }
       paths.push(childPath);
@@ -78,7 +80,15 @@ async function localWorkspaceDescendantPaths(
 export async function preflightWorkspaceApplyImpl(
   params: Omit<WorkspaceManifestValueInputs["workspace.reconcile.preflight"], "hashes">,
 ): Promise<WorkspaceManifestValueOutputs["workspace.reconcile.preflight"]["value"]> {
-  const isRetainedInput = createStagedInputPathMatcher(await openFsSafeRoot(params.root));
+  const excludeBuildCaches =
+    params.base.buildCacheInputs !== undefined || params.current.buildCacheInputs !== undefined;
+  const staged = createStagedInputPathMatcher(await openFsSafeRoot(params.root));
+  const retained = buildCacheInputPaths([
+    ...(params.base.buildCacheInputs ?? []),
+    ...(params.current.buildCacheInputs ?? []),
+  ]);
+  const isRetainedInput = async (entryPath: string) =>
+    retained.has(entryPath) || (await staged(entryPath));
   const baseNodes = manifestNodes(params.base);
   const currentNodes = manifestNodes(params.current);
   const manifestPaths = [...new Set([...baseNodes.keys(), ...currentNodes.keys()])];
@@ -111,6 +121,7 @@ export async function preflightWorkspaceApplyImpl(
     localStructuralRoots,
     isRetainedInput,
     new Set(structuralRoots.filter((entryPath) => currentNodes.has(entryPath))),
+    excludeBuildCaches,
   );
   const paths = [...new Set([...changed, ...localStructuralPaths])].toSorted();
   const applyPaths = new Set<string>();
@@ -184,7 +195,13 @@ export async function preflightWorkspaceApplyImpl(
         !isRuntimeOwnedWorkspacePath(entryPath) &&
         (!baseNodes.has(entryPath) || !currentNodes.has(entryPath)) &&
         currentNodes.get(entryPath)?.type !== "directory" &&
-        (await directoryContainsOnlyWorkspaceEntries(params.root, entryPath, isRetainedInput))
+        (await directoryContainsOnlyWorkspaceEntries(
+          params.root,
+          entryPath,
+          isRetainedInput,
+          undefined,
+          excludeBuildCaches,
+        ))
       ) {
         local = undefined;
       }

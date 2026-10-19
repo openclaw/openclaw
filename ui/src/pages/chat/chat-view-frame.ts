@@ -70,6 +70,8 @@ export type ChatProps = Omit<
   ChatDetailsProps &
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
+    onConversationFrameRef?: (element: HTMLElement) => void | (() => void);
+    onFooterElementRef?: (element: HTMLElement) => void | (() => void);
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
     transcript: ChatTranscript;
     asyncQuestionStorage?:

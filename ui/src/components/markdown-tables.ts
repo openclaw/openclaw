@@ -259,6 +259,7 @@ async function showTableDialog(
     dismiss.className = "markdown-table-dialog__close";
     dismiss.setAttribute("aria-label", t("common.closeTable"));
     dismiss.autofocus = true;
+    dialog.initialFocus = () => dismiss;
     stopListeners.push(listen(dismiss, "click", close));
     dismiss.append(createIconElement("x", document));
     content.append(dismiss, table.cloneNode(true));

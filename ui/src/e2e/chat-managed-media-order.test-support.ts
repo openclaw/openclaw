@@ -1,15 +1,54 @@
 import type { Locator, Page } from "playwright";
 import { vi } from "vitest";
 import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 
-export async function observeManagedMediaCapture(page: Page, bubble: Locator, intro: string) {
+// The suite installs this private runtime probe on every browser context.
+type DiagnosticChatPane = ChatPaneElement & { readonly state?: ChatPageHost };
+
+export async function observeManagedMediaCapture(
+  page: Page,
+  bubble: Locator,
+  intro: string,
+  phase: "live" | "reloaded",
+) {
   const liveNodes = await bubble.evaluateHandle((element) => {
-    const pane = element.closest<ChatPaneElement>("openclaw-chat-pane");
+    const pane = element.closest<DiagnosticChatPane>("openclaw-chat-pane");
     const readPresentation = (target: ChatPaneElement | null) => ({
       presented: target?.presented ?? null,
       visuallyPresented: target?.visuallyPresented ?? null,
       conversationPresented: target?.conversationPresented ?? null,
     });
+    const policyValues = new Map<unknown, number>();
+    const policyIdentity = (value: unknown) => {
+      if (value === undefined || value === null) {
+        return null;
+      }
+      if (!policyValues.has(value)) {
+        policyValues.set(value, policyValues.size + 1);
+      }
+      return policyValues.get(value)!;
+    };
+    // Compare policy inputs without exporting workspace paths or session identities.
+    const readPolicy = (target: DiagnosticChatPane | null) => {
+      const state = target?.state;
+      const row = state?.sessionsResult?.sessions.find(
+        (candidate) => candidate.key === state.sessionKey,
+      );
+      return {
+        epoch: state?.mediaPolicyEpoch ?? 0,
+        selectedRow: Boolean(row),
+        sessionId: policyIdentity(row?.sessionId),
+        permissionMode: policyIdentity(row?.permissionMode),
+        permissionModePending: policyIdentity(row?.permissionModePending),
+        execNode: policyIdentity(row?.execNode),
+        execCwd: policyIdentity(row?.execCwd),
+        sessionRoot: policyIdentity(row?.sessionRoot),
+        spawnedWorkspaceDir: policyIdentity(row?.spawnedWorkspaceDir),
+        spawnedCwd: policyIdentity(row?.spawnedCwd),
+        worktree: policyIdentity(row?.worktree?.id),
+      };
+    };
     const events = {
       presentation: 0,
       lifecycle: 0,
@@ -106,6 +145,7 @@ export async function observeManagedMediaCapture(page: Page, bubble: Locator, in
         bubbleConnected: element.isConnected,
         rowConnected: element.closest("[data-chat-row-key]")?.isConnected ?? false,
         presentation: readPresentation(pane),
+        policy: readPolicy(pane),
       });
     };
     const relevant = (node: Node) =>
@@ -202,7 +242,9 @@ export async function observeManagedMediaCapture(page: Page, bubble: Locator, in
       images: Array.from(element.querySelectorAll("img.chat-message-image")),
       pane,
       presentation: readPresentation(pane),
+      policy: readPolicy(pane),
       readPresentation,
+      readPolicy,
       events,
       mark: (stage: string) => record(stage),
       trace: () => ({ records: [...records], dropped }),
@@ -283,7 +325,7 @@ export async function observeManagedMediaCapture(page: Page, bubble: Locator, in
           document.querySelectorAll(".chat-group.assistant .chat-bubble"),
         ).filter((element) => element.textContent?.includes(expectedIntro));
         const current = matches.length === 1 ? matches[0] : undefined;
-        const pane = current?.closest<ChatPaneElement>("openclaw-chat-pane") ?? null;
+        const pane = current?.closest<DiagnosticChatPane>("openclaw-chat-pane") ?? null;
         const galleries = Array.from(current?.querySelectorAll(".chat-message-images") ?? []);
         const frames = Array.from(current?.querySelectorAll(".chat-image-frame") ?? []);
         const count = (selector: string) => current?.querySelectorAll(selector).length ?? 0;
@@ -297,6 +339,7 @@ export async function observeManagedMediaCapture(page: Page, bubble: Locator, in
           schemaVersion: 1,
           kind: "managed-image-order-after-capture",
           trace: before.trace(),
+          policy: { before: before.policy, after: before.readPolicy(pane) },
           matchingBubbles: matches.length,
           originalBubbleConnected: before.bubble.isConnected,
           sameBubble: current === before.bubble,
@@ -342,7 +385,10 @@ export async function observeManagedMediaCapture(page: Page, bubble: Locator, in
         };
       }, intro);
       reported = true;
-      console.error("[control-ui-e2e] managed image order failure", JSON.stringify(diagnostic));
+      console.error(
+        "[control-ui-e2e] managed image order failure",
+        JSON.stringify({ ...diagnostic, phase }),
+      );
     },
     async stop() {
       for (const restore of restores.toReversed()) {
@@ -351,7 +397,10 @@ export async function observeManagedMediaCapture(page: Page, bubble: Locator, in
       try {
         if (!reported && !page.isClosed()) {
           const trace = await liveNodes.evaluate((state) => state.trace()).catch(() => undefined);
-          console.info("[control-ui-e2e] managed image capture trace", JSON.stringify(trace));
+          console.info(
+            "[control-ui-e2e] managed image capture trace",
+            JSON.stringify({ phase, ...trace }),
+          );
         }
       } finally {
         try {

@@ -175,12 +175,19 @@ describe("openclaw-modal-dialog", () => {
     },
   );
 
-  it("focuses slotted input once the opening update commits, without waiting for a frame", async () => {
+  it("focuses the explicit slotted input at opening commit, without waiting for a frame", async () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+    let input!: HTMLTextAreaElement;
     mountSolid(
       () => (
-        <openclaw-modal-dialog label="Edit">
-          <textarea autofocus></textarea>
+        <openclaw-modal-dialog label="Edit" prop:initialFocus={() => input}>
+          <button autofocus>Other action</button>
+          <textarea
+            ref={(element) => {
+              input = element;
+            }}
+            autofocus
+          ></textarea>
         </openclaw-modal-dialog>
       ),
       { container },
@@ -207,10 +214,18 @@ describe("openclaw-modal-dialog", () => {
         showModal.call(this);
         container.querySelector<HTMLVideoElement>("video")!.focus();
       });
+      let closeButton!: HTMLButtonElement;
       mountSolid(
         () => (
-          <openclaw-modal-dialog label="Media">
-            <button autofocus>Close</button>
+          <openclaw-modal-dialog label="Media" prop:initialFocus={() => closeButton}>
+            <button
+              ref={(element) => {
+                closeButton = element;
+              }}
+              autofocus
+            >
+              Close
+            </button>
             <video controls tabindex="0"></video>
           </openclaw-modal-dialog>
         ),

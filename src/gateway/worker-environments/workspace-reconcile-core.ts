@@ -69,17 +69,26 @@ export async function inspectAcceptedWorkerWorkspace(params: {
     reconciliationDirectories(
       params.current.directories,
       stagedInputDirectoriesFromEntries(params.current.entries),
+      params.current.buildCacheInputs,
     ),
   );
   const includePaths = params.current.baseCommit
     ? new Set([...manifestNodes(params.base).keys(), ...manifestNodes(params.current).keys()])
     : undefined;
   params.additionalPaths?.forEach((entryPath) => includePaths?.add(entryPath));
+  const buildCacheInputs =
+    params.base.buildCacheInputs === undefined && params.current.buildCacheInputs === undefined
+      ? undefined
+      : new Set([
+          ...(params.base.buildCacheInputs ?? []),
+          ...(params.current.buildCacheInputs ?? []),
+        ]);
   const actual = await captureWorkspaceManifest({
     root,
     baseCommit: params.current.baseCommit,
     preserveDirectories,
     includePaths,
+    buildCacheInputs,
   });
   if (actual.manifestRef !== params.expectedManifestRef && !params.allowAdvancedLocalState) {
     return undefined;
@@ -101,6 +110,7 @@ export async function inspectAcceptedWorkerWorkspace(params: {
       baseCommit: actual.manifest.baseCommit,
       preserveDirectories,
       includePaths,
+      buildCacheInputs,
     }),
   };
 }
@@ -111,6 +121,7 @@ export async function assertActualWorkspaceManifest(params: {
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
+  buildCacheInputs?: ReadonlySet<string>;
 }): Promise<void> {
   const actual = await captureWorkspaceManifest(params);
   if (actual.manifestRef !== params.expectedRef) {

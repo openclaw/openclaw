@@ -744,6 +744,43 @@ submission counts include work before the diagnostics exporter starts; queue
 metrics do not. Record the kind breakdown and verify memory catch-up actually
 ran before attributing an improvement to it. Use a fresh fixture for each revision.
 
+## Checkout diff command fan-out
+
+`checkout-diff-measure.ts` exercises the production Git worker or its read-cache
+owner against a small synthetic checkout, without a Gateway or model:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/checkout-diff-measure.ts \
+  --state-dir /path/to/new-diff-fixture --seed
+node --import ./scripts/tsx.mjs scripts/perf/checkout-diff-measure.ts \
+  --state-dir /path/to/new-diff-fixture --boundary worker --summary --mutate \
+  --samples 40 --output /path/to/summary-result.json
+```
+
+The seed refuses an existing directory. It creates 100 untracked files,
+including binary, large, empty, and symlink cases, three tracked changes, and an
+ignored file. `--untracked` adjusts the count. Omit `--summary` to measure full
+patches. `--mutate` changes one tracked file before each request; omit it for
+unchanged polls. `--boundary read` uses `loadCheckoutDiff`, including revision
+validation and caching. Use `--poll-ms 10050` to cross the former summary cache's
+ten-second TTL; immediate repeated reads alone cannot demonstrate that change.
+
+Run identical separate fixtures concurrently with `--start-at <epoch-ms>` under
+the host's exclusive measurement lock, then swap CPU halves for the next pair.
+The report includes per-request latency, actual Git process counts from trace2,
+command families, payload size, and a SHA-256 of each response with the fixture's
+absolute root removed. Compare matching sample hashes across revisions before
+attributing speedups. Setup and worker warmup are separate from measured samples;
+trace2's small write overhead is included identically on both sides. These are
+Git owner timings, not end-to-end `sessions.diff` RPC or browser latency.
+
+Acceptance for untracked batching is a Git command bound independent of the
+untracked-file count, byte-identical returned file statistics and patches, and
+paired p50/p99 that improve or remain within noise for a simplification. An
+unchanged checkout eligible for revision caching should issue zero Git commands,
+including after the prior TTL. Compare B minus A within each concurrent pair;
+use at least two pairs with swapped CPU halves and record outside load for context.
+
 ## Sandbox measurements
 
 Follow the current host policy. On Team, use only a task-owned
