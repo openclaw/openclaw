@@ -14,10 +14,8 @@ const runtimeCleanups: Array<() => Promise<void>> = [];
 async function useRuntime(cleanup: () => void | Promise<unknown> = () => {}) {
   const request = vi.fn(async () => ({}));
   const runtime = await startRuntime(createNodeHostClient(request));
-  const pending: Promise<unknown>[] = [];
   runtimeCleanups.push(async () => {
     await cleanup();
-    await Promise.allSettled(pending);
     await runtime.close();
     resetPluginRuntimeStateForTest();
   });
@@ -28,14 +26,7 @@ async function useRuntime(cleanup: () => void | Promise<unknown> = () => {}) {
       ok: false,
       error: { code: "UNAVAILABLE", message: expect.stringContaining("updating") },
     });
-  return {
-    runtime,
-    expectUnavailable,
-    track<T>(promise: Promise<T>) {
-      pending.push(promise);
-      return promise;
-    },
-  };
+  return { runtime, expectUnavailable };
 }
 
 describe("node-host update pause", () => {
@@ -59,11 +50,11 @@ describe("node-host update pause", () => {
         mocks.workerHasActiveWork.mockImplementationOnce(async () => await idle.promise);
       }
       let disconnecting: Promise<void> | undefined;
-      const { runtime, expectUnavailable, track } = await useRuntime(() => {
+      const { runtime, expectUnavailable } = await useRuntime(() => {
         idle.resolve(false);
         cleanup.resolve();
       });
-      const pausing = track(runtime.tryPauseForUpdate());
+      const pausing = runtime.tryPauseForUpdate();
       const result =
         outcome === "error"
           ? expect(pausing).rejects.toThrow("journal unavailable")
@@ -79,7 +70,7 @@ describe("node-host update pause", () => {
         mocks.pluginHasActiveWork.mockReturnValue(true);
       } else if (outcome === "disconnect") {
         mocks.disconnectPlugins.mockImplementationOnce(async () => await cleanup.promise);
-        disconnecting = track(runtime.cancelAll());
+        disconnecting = runtime.cancelAll();
       } else if (outcome === "close") {
         await runtime.close();
       }
@@ -115,32 +106,29 @@ describe("node-host update pause", () => {
         retainedWork = false;
       });
       const registry = createEmptyPluginRegistry();
-      registry.nodeHostCommands = [
-        {
-          pluginId: "legacy-work",
-          pluginName: "Legacy work",
-          source: "test",
-          command: {
-            command: "legacy.start",
-            isAvailable: () => available,
-            handle: async () => {
-              retainedWork = true;
-              return "{}";
-            },
-            onDisconnect,
-            ...(mode === "missing"
-              ? {}
-              : {
-                  hasActiveWork: () => {
-                    if (mode === "throwing") {
-                      throw new Error("plugin work state unavailable");
-                    }
-                    return retainedWork;
-                  },
-                }),
+      registry.nodeHostCommands.push({
+        pluginId: "legacy-work",
+        source: "test",
+        command: {
+          command: "legacy.start",
+          isAvailable: () => available,
+          handle: async () => {
+            retainedWork = true;
+            return "{}";
           },
+          onDisconnect,
+          ...(mode === "missing"
+            ? {}
+            : {
+                hasActiveWork: () => {
+                  if (mode === "throwing") {
+                    throw new Error("plugin work state unavailable");
+                  }
+                  return retainedWork;
+                },
+              }),
         },
-      ];
+      });
       setActivePluginRegistry(registry);
       mocks.pluginHasActiveWork.mockImplementation(
         pluginBridge.hasRegisteredNodeHostCommandActiveWork,
@@ -166,8 +154,8 @@ describe("node-host update pause", () => {
 
   it("keeps an invocation busy from admission through disconnected command settlement", async () => {
     const held = holdInvoke();
-    const { runtime, expectUnavailable, track } = await useRuntime(held.release);
-    const invoking = track(runtime.invoke(frame));
+    const { runtime, expectUnavailable } = await useRuntime(held.release);
+    const invoking = runtime.invoke(frame);
     expect(await runtime.tryPauseForUpdate()).toBe(false);
     await vi.waitFor(() => expect(held.signal).toBeDefined());
     await runtime.cancelAll();
@@ -190,14 +178,14 @@ describe("node-host update pause", () => {
     const first = holdInvoke();
     const second = holdInvoke();
     const flushed = createDeferred();
-    const { runtime, track } = await useRuntime(() => {
+    const { runtime } = await useRuntime(() => {
       first.release();
       second.release();
       flushed.resolve();
     });
-    const original = track(runtime.invoke(frame));
+    const original = runtime.invoke(frame);
     await vi.waitFor(() => expect(first.signal).toBeDefined());
-    const replacement = track(runtime.invoke(frame));
+    const replacement = runtime.invoke(frame);
     await vi.waitFor(() => expect(second.signal).toBeDefined());
     second.release();
     await replacement;

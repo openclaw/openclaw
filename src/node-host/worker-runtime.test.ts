@@ -621,69 +621,67 @@ it.each(["prepared failure", "later failure"] as const)(
     const reason = `Docker authentication failed (password=${secret}); ${action}`;
     const preparedFailure = scenario === "prepared failure";
     const laterFailure = scenario === "later failure";
-    const { connect, ready, messages, stderr, stdout, stop } = startWorkerFixture(
+    await withWorker(
+      async ({ connect, messages, stderr, stdout }) => {
+        const expectDiagnostic = () => {
+          expect(stderr).toHaveBeenCalledOnce();
+          const diagnostic = String(stderr.mock.calls[0]?.[0]);
+          expect(diagnostic).toContain(
+            "node host worker hosting disabled: Docker authentication failed",
+          );
+          expect(diagnostic).toContain(action);
+          expect(diagnostic).not.toContain(secret);
+        };
+
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({ type: "ready", workerHostingEnabled: laterFailure });
+        if (preparedFailure) {
+          expectDiagnostic();
+          expect(stderr.mock.invocationCallOrder[0]).toBeLessThan(
+            stdout.mock.invocationCallOrder[0]!,
+          );
+        } else {
+          expect(stderr).not.toHaveBeenCalled();
+        }
+        const connection = {
+          url: "wss://gateway.example.test/current",
+          protocol: 4,
+          capabilities: [],
+        };
+        const inventories = () =>
+          messages.filter((message) => message.method === "node.runnerInventory.update");
+        connect(1, connection);
+        await setImmediate();
+        if (laterFailure) {
+          expect(inventories()).toHaveLength(1);
+          expect(inventories()[0]?.params).toMatchObject({ workerHost: { enabled: true } });
+          fixture.start.mock.calls[0]?.[0].onWorkerHostingDisabled(reason);
+          fixture.start.mock.calls[0]?.[0].onRunnerCapacityChanged({ total: 2, available: 2 });
+          await setImmediate();
+          expectDiagnostic();
+        }
+        const disabledInventory = expect.objectContaining({ workerHost: { enabled: false } });
+        expect(inventories()).toHaveLength(laterFailure ? 2 : 1);
+        expect(inventories().at(-1)?.params).toEqual(disabledInventory);
+        connect(2, null);
+        connect(3, connection);
+        await setImmediate();
+        expect(inventories()).toHaveLength(laterFailure ? 3 : 2);
+        expect(inventories().at(-1)).toMatchObject({ generation: 3, params: disabledInventory });
+        expectDiagnostic();
+        const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
+        expect(output).not.toContain(secret);
+        expect(output).not.toContain(reason);
+        expect(output).not.toContain(action);
+        expect(output).not.toContain("worker hosting disabled");
+        expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
+        expect(messages.some((message) => message.type === "manifest")).toBe(false);
+        expect(messages.filter((message) => message.type === "worker-hosting")).toEqual(
+          laterFailure ? [{ type: "worker-hosting", enabled: false }] : [],
+        );
+      },
       laterFailure,
       preparedFailure ? reason : undefined,
     );
-    const expectDiagnostic = () => {
-      expect(stderr).toHaveBeenCalledOnce();
-      const diagnostic = String(stderr.mock.calls[0]?.[0]);
-      expect(diagnostic).toContain(
-        "node host worker hosting disabled: Docker authentication failed",
-      );
-      expect(diagnostic).toContain(action);
-      expect(diagnostic).not.toContain(secret);
-    };
-    try {
-      await ready();
-      expect(messages).toHaveLength(1);
-      expect(messages[0]).toMatchObject({ type: "ready", workerHostingEnabled: laterFailure });
-      if (preparedFailure) {
-        expectDiagnostic();
-        expect(stderr.mock.invocationCallOrder[0]).toBeLessThan(
-          stdout.mock.invocationCallOrder[0]!,
-        );
-      } else {
-        expect(stderr).not.toHaveBeenCalled();
-      }
-      const connection = {
-        url: "wss://gateway.example.test/current",
-        protocol: 4,
-        capabilities: [],
-      };
-      const inventories = () =>
-        messages.filter((message) => message.method === "node.runnerInventory.update");
-      connect(1, connection);
-      await setImmediate();
-      if (laterFailure) {
-        expect(inventories()).toHaveLength(1);
-        expect(inventories()[0]?.params).toMatchObject({ workerHost: { enabled: true } });
-        fixture.start.mock.calls[0]?.[0].onWorkerHostingDisabled(reason);
-        fixture.start.mock.calls[0]?.[0].onRunnerCapacityChanged({ total: 2, available: 2 });
-        await setImmediate();
-        expectDiagnostic();
-      }
-      const disabledInventory = expect.objectContaining({ workerHost: { enabled: false } });
-      expect(inventories()).toHaveLength(laterFailure ? 2 : 1);
-      expect(inventories().at(-1)?.params).toEqual(disabledInventory);
-      connect(2, null);
-      connect(3, connection);
-      await setImmediate();
-      expect(inventories()).toHaveLength(laterFailure ? 3 : 2);
-      expect(inventories().at(-1)).toMatchObject({ generation: 3, params: disabledInventory });
-      expectDiagnostic();
-      const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
-      expect(output).not.toContain(secret);
-      expect(output).not.toContain(reason);
-      expect(output).not.toContain(action);
-      expect(output).not.toContain("worker hosting disabled");
-      expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
-      expect(messages.some((message) => message.type === "manifest")).toBe(false);
-      expect(messages.filter((message) => message.type === "worker-hosting")).toEqual(
-        laterFailure ? [{ type: "worker-hosting", enabled: false }] : [],
-      );
-    } finally {
-      await stop();
-    }
   },
 );
