@@ -1,4 +1,4 @@
-import { For, Show, untrack } from "solid-js";
+import { For, Show } from "solid-js";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import {
   SettingsEmpty,
@@ -27,16 +27,11 @@ const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees"
 
 export function WorktreesPage() {
   const context = useApplication();
-  return (
-    <openclaw-worktrees-page>
-      <WorktreesView model={new WorktreesModel(() => context)} />
-    </openclaw-worktrees-page>
-  );
+  const view = renderWorktreesView(new WorktreesModel(() => context));
+  return <openclaw-worktrees-page>{view}</openclaw-worktrees-page>;
 }
 
-export function WorktreesView(props: { model: WorktreesModel }) {
-  // One model owns this mounted view; its Gateway context remains live.
-  const model = untrack(() => props.model);
+export function renderWorktreesView(model: WorktreesModel) {
   model.gateway = useGatewayPage({
     getGateway: () => model.context.gateway,
     onIdentityChange: () => model.update({ records: [], error: null }),

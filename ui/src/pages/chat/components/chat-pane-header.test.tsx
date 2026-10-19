@@ -3,12 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { GatewaySessionRow, PresenceEntry, SessionsListResult } from "../../../api/types.ts";
+import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
+import { RouteElements, type RouteElementEvent } from "../../../app/route-elements.ts";
 import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   activePlacementSession,
   createPaneHeaderWorkspaceFixture,
@@ -113,6 +116,31 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__nav-toggle")).toBeNull();
     expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
   });
+
+  it.each(["openclaw", null])(
+    "replaces the mobile workspace line with connection status for %s",
+    (workspaceLabel) => {
+      const retry = vi.fn();
+      const { container, update } = mountHeader({ mergedChrome: true, workspaceLabel });
+      const title = container.querySelector(".chat-pane__session-title");
+      const drawer = container.querySelector<HTMLButtonElement>(".chat-pane__nav-toggle")!;
+      update({ gatewayStatus: { kind: "offline", queuedCount: 2, onRetry: retry } });
+      const line = container.querySelector(".mobile-connection-status")!;
+      expect(line.textContent).toBe("Disconnected · 2 queued");
+      expect(line.querySelector('[role="status"]')).toBeNull();
+      expect(container.querySelector(".chat-pane__workspace-chip")).toBeNull();
+      expect(container.querySelector(".chat-pane__session-title")).toBe(title);
+      expect(drawer.dataset.connectionStatus).toBe("offline");
+      line.querySelector<HTMLButtonElement>("button")!.click();
+      expect(retry).toHaveBeenCalledOnce();
+      update({ gatewayStatus: { kind: "connected" } });
+      expect(container.querySelector(".mobile-connection-status")).toBeNull();
+      expect(container.querySelector(".chat-pane__workspace-chip") !== null).toBe(
+        Boolean(workspaceLabel),
+      );
+      expect(drawer.dataset.connectionStatus).toBe("connected");
+    },
+  );
 
   it("keeps only Share, Layout, and overflow at rest and moves layout actions into the menu", async () => {
     const onClosePane = vi.fn();
@@ -988,4 +1016,41 @@ describe("chat pane workspace chip icon", () => {
       "blob:new-gateway-connection",
     );
   });
+});
+
+it("releases each merged-chrome toggle when its header branch closes", async () => {
+  const elements = new RouteElements();
+  const mounted = mountHeader({ mergedChrome: false });
+  mounted.container.addEventListener("openclaw-route-element", (event) =>
+    elements.register(event as RouteElementEvent),
+  );
+  for (let mount = 0; mount < 2; mount += 1) {
+    mounted.update({ mergedChrome: true });
+    const toggle = mounted.container.querySelector<HTMLButtonElement>(".chat-pane__nav-toggle")!;
+    await waitForSolid(() =>
+      expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([toggle]),
+    );
+    mounted.update({ mergedChrome: false });
+    // A connected retired button exposes a stale map entry instead of letting isConnected mask it.
+    mounted.container.append(toggle);
+    try {
+      await waitForSolid(() =>
+        expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([]),
+      );
+    } finally {
+      toggle.remove();
+    }
+  }
+  mounted.update({ mergedChrome: true });
+  const toggle = mounted.container.querySelector<HTMLButtonElement>(".chat-pane__nav-toggle")!;
+  await waitForSolid(() =>
+    expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([toggle]),
+  );
+  mounted.unmount();
+  document.body.append(toggle);
+  try {
+    expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([]);
+  } finally {
+    toggle.remove();
+  }
 });

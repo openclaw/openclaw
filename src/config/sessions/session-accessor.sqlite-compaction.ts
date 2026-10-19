@@ -30,6 +30,7 @@ import type {
   InitialSessionEntryCommit,
 } from "./session-manager-write-contract.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
+import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";
 import {
   getOwnedSessionTranscriptInitialWriter,
   SessionTranscriptWriterClaimReboundError,
@@ -83,8 +84,10 @@ function persistCompactionBoundary(
     preparedTarget.agentId !== resolved.agentId ||
     preparedTarget.sessionId !== resolved.sessionId ||
     preparedTarget.sessionKey !== resolved.sessionKey ||
-    resolveOpenClawAgentSqlitePath(toDatabaseOptions(preparedTarget)) !==
-      resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved))
+    !sameSessionTranscriptStorePath(
+      resolveOpenClawAgentSqlitePath(toDatabaseOptions(preparedTarget)),
+      resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
+    )
   ) {
     throw new SessionTranscriptWriterClaimReboundError();
   }
@@ -136,6 +139,9 @@ function persistCompactionBoundary(
               },
             }
           : undefined,
+        undefined,
+        // Catching an inner failure and continuing requires a savepoint on PostgreSQL.
+        database,
       );
       const committed = requireTranscriptEventAppendSnapshot(
         appended,

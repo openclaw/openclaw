@@ -1,4 +1,3 @@
-/** Adaptive Node heap policy for the managed Gateway service. */
 import os from "node:os";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";

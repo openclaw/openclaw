@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { extractQueryTerms, filterSessionsByQuery } from "../../../../src/shared/usage-query.js";
-import { parseToolSummary } from "./helpers.ts";
+import { parseSessionLog } from "./helpers.ts";
 
 describe("usage-helpers", () => {
   it("tokenizes query terms including quoted strings", () => {
@@ -171,9 +171,11 @@ describe("usage-helpers", () => {
   });
 
   it("parses tool summaries from compact session logs", () => {
-    const res = parseToolSummary(
-      "[Tool: read]\n[Tool Result]\n[Tool: exec]\n[Tool: read]\n[Tool Result]",
-    );
+    const { toolInfo: res } = parseSessionLog({
+      timestamp: 0,
+      role: "assistant",
+      content: "[Tool: read]\n[Tool Result]\n[Tool: exec]\n[Tool: read]\n[Tool Result]",
+    });
     expect(res.summary).toBe("Tools: read×2, exec×1 (3 calls)");
     expect(res.cleanContent).toBe("");
     expect(res.tools[0]).toEqual(["read", 2]);

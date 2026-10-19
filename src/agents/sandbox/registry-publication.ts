@@ -9,6 +9,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   createKeyedStateDomainPublication,
@@ -84,14 +85,9 @@ export function withSandboxRegistryPublication(
       pending.finish(false);
       throw error;
     }
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        pending.finish(owner.admission.settlement?.kind === "completed");
-      }
-    };
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      pending.finish(owner.admission.settlement?.kind === "completed");
+    });
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => pending.committed(facts));
     return owner;
   };

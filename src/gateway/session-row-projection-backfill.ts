@@ -81,8 +81,8 @@ export function createSessionRowProjectionBackfill(params: {
         // A replacement/private-session revocation must not publish another session's text.
         if (!disposed && live?.entry && params.current(row)) {
           const facts = live.retainedDatabaseFacts;
-          // A newer unknown assistant fact needs its queued read, not this older snapshot.
-          if (revisions.get(id) !== captured && facts?.transcriptAssistantMessage === "unknown") {
+          // Superseded reads must not restore previews cleared by broad invalidation.
+          if (revisions.get(id) !== captured) {
             continue;
           }
           if (fields && facts?.transcriptAssistantMessage === "unknown") {

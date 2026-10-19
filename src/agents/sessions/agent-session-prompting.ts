@@ -4,6 +4,7 @@ import {
   MessageInjectionAcceptedUnconfirmedError,
   withMessageInjectionAdmission,
 } from "../../auto-reply/reply/message-injection-authority.js";
+import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -609,12 +610,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       notifyListeners([() => this.emitQueueUpdate(), () => notifyAgent()], undefined, (error) =>
         errors.push(error),
       );
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Steering notifications failed");
-      }
+      throwCollectedErrors(errors, "Steering notifications failed");
     };
   }
 

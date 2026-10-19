@@ -480,8 +480,12 @@ it.each([
   unmount();
   await Promise.resolve();
   expect(loaded.parentNode).toBeNull();
-  expect(removeListener).toHaveBeenCalledWith("load", expect.any(Function));
-  expect(removeListener).toHaveBeenCalledWith("error", expect.any(Function));
+  expect(removeListener.mock.calls.map(([type, listener]) => [type, listener])).toEqual(
+    expect.arrayContaining([
+      ["load", expect.any(Function)],
+      ["error", expect.any(Function)],
+    ]),
+  );
   if (change === "expiry") {
     await vi.advanceTimersByTimeAsync(300_001);
   } else if (change === "connectionEpoch") {
@@ -570,7 +574,6 @@ it("ignores replaced observers and aborts detached artifact resolution before bl
 
 describe("message attachment availability", () => {
   const panes: { container: HTMLElement; draw: () => void; unmount: () => void }[] = [];
-  beforeEach(() => vi.stubGlobal("IntersectionObserver", undefined));
   afterEach(() => {
     for (const pane of panes.splice(0)) {
       pane.unmount();
@@ -589,6 +592,8 @@ describe("message attachment availability", () => {
     );
     const pane = { container: target, draw: redraw, unmount: root.unmount };
     panes.push(pane);
+    intersections.at(-1)!();
+    flush();
     return pane;
   }
   const availabilityTicket = (mediaTicket: string) => ticketResponse(mediaTicket, 60_000);

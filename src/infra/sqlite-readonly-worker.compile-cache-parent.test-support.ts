@@ -9,7 +9,6 @@ import { enableOpenClawCompileCache } from "../entry.compile-cache.js";
 import {
   captureSqliteReadOnlyWorkerLaunch,
   createScopedSqliteReadOnlyWorker,
-  runScopedSqliteReadOnlyOperation,
 } from "./sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
@@ -81,20 +80,20 @@ try {
   const startupEntries = cacheEntries();
   assert.ok(startupEntries > 0, "retained child must persist startup bytecode before close");
 
-  const result = await runScopedSqliteReadOnlyOperation(
-    worker,
-    source,
-    {
+  const result = await worker.run(source, {
+    mode: "operation",
+    command: {
       type: "agentRetirement.sessionStoreBlocker",
       input: prepareAgentSessionStoreDeletionSafety({}, "main", process.env),
     },
-    {
-      source: "snapshot",
-      expectedIdentity: readDatabasePathIdentitySync(source).key,
-      env: process.env,
-    },
-  );
-  assert.deepEqual(result, { blocker: undefined });
+    source: "snapshot",
+    expectedIdentity: readDatabasePathIdentitySync(source).key,
+    env: process.env,
+  });
+  assert.deepEqual(result, {
+    operation: "agentRetirement.sessionStoreBlocker",
+    value: { blocker: undefined },
+  });
   assert.ok(
     cacheEntries() > startupEntries,
     "retained child must persist later operation bytecode before close",

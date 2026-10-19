@@ -1,14 +1,5 @@
-import {
-  context,
-  diag,
-  DiagLogLevel,
-  metrics,
-  propagation,
-  type Tracer,
-  trace,
-  TraceFlags,
-} from "@opentelemetry/api";
-import { logs } from "@opentelemetry/api-logs";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { type Tracer, trace, TraceFlags } from "@opentelemetry/api";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import {
@@ -18,101 +9,33 @@ import {
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { afterEach, beforeEach, expect, test } from "vitest";
+import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
+import { clearOtelGlobals, snapshotOtelEnv } from "./service.test-helpers.js";
 
-const OTEL_GLOBAL_API_KEY = Symbol.for("opentelemetry.js.api.1");
-const OTEL_GLOBAL_LOGS_KEY = Symbol.for("io.opentelemetry.js.api.logs");
+installRealOtelSdkTestHarness();
+
 const ENV_KEYS = [
   "OTEL_ATTRIBUTE_COUNT_LIMIT",
   "OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT",
-  "OTEL_LOG_LEVEL",
-  "OTEL_LOGS_EXPORTER",
-  "OTEL_METRICS_EXPORTER",
-  "OTEL_SDK_DISABLED",
   "OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT",
   "OTEL_SPAN_ATTRIBUTE_PER_EVENT_COUNT_LIMIT",
   "OTEL_SPAN_ATTRIBUTE_PER_LINK_COUNT_LIMIT",
   "OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT",
   "OTEL_SPAN_EVENT_COUNT_LIMIT",
   "OTEL_SPAN_LINK_COUNT_LIMIT",
-  "OTEL_TRACES_EXPORTER",
   "OTEL_TRACES_SAMPLER",
   "OTEL_TRACES_SAMPLER_ARG",
 ] as const;
 
-type OtelGlobalRegistrations = {
-  context?: Parameters<typeof context.setGlobalContextManager>[0];
-  diag?: Parameters<typeof diag.setLogger>[0];
-  metrics?: Parameters<typeof metrics.setGlobalMeterProvider>[0];
-  propagation?: Parameters<typeof propagation.setGlobalPropagator>[0];
-  trace?: Parameters<typeof trace.setGlobalTracerProvider>[0];
-};
-
-let originalEnv: Record<(typeof ENV_KEYS)[number], string | undefined>;
-let originalGlobals: OtelGlobalRegistrations;
-let originalLogsProvider: ReturnType<typeof logs.getLoggerProvider> | undefined;
-
-function registeredOtelGlobals(): OtelGlobalRegistrations | undefined {
-  return (globalThis as unknown as Record<symbol, OtelGlobalRegistrations | undefined>)[
-    OTEL_GLOBAL_API_KEY
-  ];
-}
-
-function clearGlobalProviders(): void {
-  context.disable();
-  logs.disable();
-  metrics.disable();
-  propagation.disable();
-  trace.disable();
-}
-
+let restoreEnv: () => void;
 beforeEach(() => {
-  originalEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]])) as Record<
-    (typeof ENV_KEYS)[number],
-    string | undefined
-  >;
-  originalGlobals = { ...registeredOtelGlobals() };
-  originalLogsProvider = Object.hasOwn(globalThis, OTEL_GLOBAL_LOGS_KEY)
-    ? logs.getLoggerProvider()
-    : undefined;
-  clearGlobalProviders();
+  restoreEnv = snapshotOtelEnv(ENV_KEYS);
+  clearOtelGlobals();
   for (const key of ENV_KEYS) {
     delete process.env[key];
   }
 });
-
-afterEach(() => {
-  clearGlobalProviders();
-  if (originalGlobals.context) {
-    context.setGlobalContextManager(originalGlobals.context);
-  }
-  if (originalGlobals.propagation) {
-    propagation.setGlobalPropagator(originalGlobals.propagation);
-  }
-  if (originalGlobals.metrics) {
-    metrics.setGlobalMeterProvider(originalGlobals.metrics);
-  }
-  if (originalGlobals.trace) {
-    trace.setGlobalTracerProvider(originalGlobals.trace);
-  }
-  if (originalLogsProvider) {
-    logs.setGlobalLoggerProvider(originalLogsProvider);
-  }
-  diag.disable();
-  if (originalGlobals.diag) {
-    diag.setLogger(originalGlobals.diag, {
-      logLevel: DiagLogLevel.ALL,
-      suppressOverrideMessage: true,
-    });
-  }
-  for (const key of ENV_KEYS) {
-    const value = originalEnv[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-});
+afterEach(() => restoreEnv());
 
 async function capturePrivateProviderSpans(emit: (tracer: Tracer) => void) {
   const exporter = new InMemorySpanExporter();
@@ -136,47 +59,30 @@ async function captureNodeSdkSpans(emit: (tracer: Tracer) => void) {
   });
   sdk.start();
   emit(trace.getTracer("openclaw-node-sdk-parity"));
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  await nextTurn();
   const spans = [...exporter.getFinishedSpans()];
   await sdk.shutdown();
-  clearGlobalProviders();
+  clearOtelGlobals();
   return spans;
 }
 
-const SAMPLER_CASES: ReadonlyArray<{
-  label: string;
-  sampler?: string;
-  arg?: string;
-  expected: number;
-}> = [
-  { label: "default", expected: 1 },
-  { label: "always_on", sampler: "always_on", expected: 1 },
-  { label: "always_off", sampler: "always_off", expected: 0 },
-  { label: "parentbased_always_on", sampler: "parentbased_always_on", expected: 1 },
-  { label: "parentbased_always_off", sampler: "parentbased_always_off", expected: 0 },
-  { label: "traceidratio=1", sampler: "traceidratio", arg: "1", expected: 1 },
-  { label: "traceidratio=0", sampler: "traceidratio", arg: "0", expected: 0 },
-  {
-    label: "parentbased_traceidratio=1",
-    sampler: "parentbased_traceidratio",
-    arg: "1",
-    expected: 1,
-  },
-  {
-    label: "parentbased_traceidratio=0",
-    sampler: "parentbased_traceidratio",
-    arg: "0",
-    expected: 0,
-  },
-  { label: "invalid sampler", sampler: "invalid", expected: 1 },
-  { label: "invalid ratio", sampler: "traceidratio", arg: "-1", expected: 1 },
+const SAMPLER_CASES: ReadonlyArray<[string | undefined, number, string?]> = [
+  [undefined, 1],
+  ["always_on", 1],
+  ["always_off", 0],
+  ["parentbased_always_on", 1],
+  ["parentbased_always_off", 0],
+  ["traceidratio", 1, "1"],
+  ["traceidratio", 0, "0"],
+  ["parentbased_traceidratio", 1, "1"],
+  ["parentbased_traceidratio", 0, "0"],
+  ["invalid", 1],
+  ["traceidratio", 1, "-1"],
 ];
 
 test.each(SAMPLER_CASES)(
-  "matches NodeSDK sampler behavior for $label",
-  async ({ sampler, arg, expected }) => {
+  "matches NodeSDK sampler %s (expected=%s, ratio=%s)",
+  async (sampler, expected, arg) => {
     if (sampler !== undefined) {
       process.env.OTEL_TRACES_SAMPLER = sampler;
     }
@@ -184,42 +90,26 @@ test.each(SAMPLER_CASES)(
       process.env.OTEL_TRACES_SAMPLER_ARG = arg;
     }
     const emit = (tracer: Tracer) => tracer.startSpan("sampler-probe").end();
-
-    const nodeSdkSpans = await captureNodeSdkSpans(emit);
-    const privateProviderSpans = await capturePrivateProviderSpans(emit);
-
-    expect(nodeSdkSpans).toHaveLength(expected);
-    expect(privateProviderSpans).toHaveLength(expected);
+    expect(await captureNodeSdkSpans(emit)).toHaveLength(expected);
+    expect(await capturePrivateProviderSpans(emit)).toHaveLength(expected);
   },
 );
 
 function emitLimitProbe(tracer: Tracer): void {
+  const attributes = { first: "abcdef", second: "ghijkl" };
   const span = tracer.startSpan("limit-probe", {
-    attributes: {
-      first: "abcdef",
-      second: "ghijkl",
-    },
-    links: [
-      {
-        context: {
-          traceId: "11111111111111111111111111111111",
-          spanId: "1111111111111111",
-          traceFlags: TraceFlags.SAMPLED,
-        },
-        attributes: { first: "abcdef", second: "ghijkl" },
+    attributes,
+    links: ["1", "2"].map((digit) => ({
+      context: {
+        traceId: digit.repeat(32),
+        spanId: digit.repeat(16),
+        traceFlags: TraceFlags.SAMPLED,
       },
-      {
-        context: {
-          traceId: "22222222222222222222222222222222",
-          spanId: "2222222222222222",
-          traceFlags: TraceFlags.SAMPLED,
-        },
-        attributes: { first: "abcdef", second: "ghijkl" },
-      },
-    ],
+      attributes,
+    })),
   });
-  span.addEvent("first", { first: "abcdef", second: "ghijkl" });
-  span.addEvent("second", { first: "abcdef", second: "ghijkl" });
+  span.addEvent("first", attributes);
+  span.addEvent("second", attributes);
   span.end();
 }
 

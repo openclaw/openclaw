@@ -331,9 +331,11 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `b76e4b4e6725dfc84eadc67059753a389e4b1c54` with WebKit
-`01f208ae7a87661e7503f514c946a37bc76ad1d1` in prerelease
-`openclaw-v1.4.3-20261017-b76e4b4e67-webkit-01f208ae7a`.
+The pinned build pairs Bun `7bd4fdff3d4035bcea50718673c663f5474bae89` with WebKit
+`f8521bb45429b3e1df6bc6d9b98b8df4376a89c5` in prerelease
+`openclaw-v1.4.4-20261017-7bd4fdff3d-webkit-f8521bb454`.
+It includes the Bun 1.4.4 upstream sync, honors disabled source maps in the
+transpiler cache, and shares identical `node:vm` source buffers and source-map URIs.
 This build preserves `DONT_CONTEXTIFY` global receiver identity for jsdom, keeps
 `availableParallelism()` independent of `navigator`, and fixes `SourceMap.findOrigin()`
 coordinates. It registers `fs.watch` callbacks on the returned watcher, treats
@@ -610,9 +612,9 @@ The job is part of `openclaw/ci-gate`. It uses at most one runner registration p
 selected run; widening survivor selection does not increase the full-inventory
 registration cap, job count, or matrix fanout.
 
-Standalone Periphery workflows enforce zero dead-code findings for the iOS and macOS apps. The shared OpenClawKit workflow scans both consumers in parallel and reports a declaration only when Periphery emits the same Swift USR from both builds. Its generated `GenerateGatewayProtocol/GatewayModels.swift` build-plugin output is retained as generator-owned code rather than treated as app-local dead code. The shared scan and native CI jobs install the filtered gateway-protocol generator dependencies alongside their existing native asset dependencies; CodeQL installs the same generator dependencies before its Swift build.
+The iOS and combined macOS Periphery workflows enforce zero dead-code findings for their apps. The combined macOS workflow builds one Swift index for separate app and shared OpenClawKit scans, alongside an independent iOS shared scan. It reports a shared declaration only when Periphery emits the same Swift USR from both consumers. The shared OpenClawKit workflow remains a manual entrypoint for those shared scans. Its generated `GenerateGatewayProtocol/GatewayModels.swift` build-plugin output is retained as generator-owned code rather than treated as app-local dead code. The shared scan and native CI jobs install the filtered gateway-protocol generator dependencies alongside their existing native asset dependencies; CodeQL installs the same generator dependencies before its Swift build.
 
-All four scans use `scripts/install-periphery.sh` to install the checksum-pinned Periphery 3.8.0 OSS release, including its adjacent `libIndexStore.dylib`, in a dedicated runner-temporary directory. The installer rejects download, checksum, and version failures without falling back to Homebrew. Installer changes select all three native workflows.
+All four scans use `scripts/install-periphery.sh` to install the checksum-pinned Periphery 3.8.0 OSS release, including its adjacent `libIndexStore.dylib`, in a dedicated runner-temporary directory. The installer rejects download, checksum, and version failures without falling back to Homebrew. Installer changes automatically select the iOS and combined macOS workflows, including both shared consumers.
 
 [Upstream archived the OSS project](https://github.com/peripheryapp/periphery/commit/56a0eb6fb97b785c8fbc1044ccbc7b5d9f06ebec). The pin remains a maintainer-owned bridge, not a claim of ongoing upstream support. All four scans target Xcode 27 on GitHub-hosted `xcode-27`. Toolchain, pinned-release, or analyzer changes require native compatibility proof for both app scans and both shared consumers, preserving the zero-findings policy and exact-USR intersection without a baseline or weaker fallback. Four declaration-specific annotations retain confirmed SwiftUI false positives; they do not exclude their files or runtime tests from validation.
 

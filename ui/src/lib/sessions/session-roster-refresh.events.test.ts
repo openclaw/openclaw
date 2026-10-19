@@ -129,6 +129,8 @@ describe("session roster event traffic", () => {
         updatedAt: 100_001 + index,
         snapshotAt: Date.now() + 1,
         totalTokens: index + 1,
+        hasActiveRun: index % 20 < 10,
+        status: index % 20 < 10 ? "running" : "done",
         unread: hot % 2 === 0,
         lastReadAt: hot % 2 === 0 ? 98_000 : 100_001 + index,
       };
@@ -139,10 +141,8 @@ describe("session roster event traffic", () => {
         expect(bytes).toEqual(bootBytes);
       }
     }
-    expect(reads).toEqual({ shared: bootReads.shared + 1, personal: bootReads.personal + 1 });
-    for (const scope of ["shared", "personal"] as const) {
-      expect(bytes[scope] - bootBytes[scope]).toBeLessThan(2 * bootBytes[scope]);
-    }
+    expect(reads).toEqual(bootReads);
+    expect(bytes).toEqual(bootBytes);
     for (const query of [shared, personal]) {
       const held = listRows(query) ?? [];
       expect(held.slice(0, 10).map((row) => row.key)).toEqual(
@@ -159,7 +159,7 @@ describe("session roster event traffic", () => {
         lastReadAt: 101_200,
       });
     }
-    // Explicit reads absorb the minute fallback before exercising membership changes.
+    // Explicit reads still reconcile both windows before exercising membership changes.
     const fresh = [
       sessions.refresh({ ...shared, force: true }),
       sessions.refreshList({ ...personal, force: true }),
@@ -770,7 +770,7 @@ describe("session roster event traffic", () => {
       }
       await advance(1_000);
     }
-    await advance(54_999);
+    await advance(125_000);
     expect(summaryRequest).toHaveBeenCalledOnce();
     counts.running = 1;
     emitEvent(

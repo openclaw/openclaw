@@ -193,58 +193,75 @@ it("serves the same validated generation and inventory from the development serv
   }
 });
 
-it("prepares source Settings assets for a UI-only build and preserves sibling distributions", async () => {
-  const { pluginRoot, files, generation } = await fixture();
-  const settingsRoot = path.join(root, "extensions/settings-fixture");
-  await fs.mkdir(settingsRoot, { recursive: true });
-  const manifestOnly = path.join(root, "extensions/manifest-only");
-  await fs.mkdir(manifestOnly);
-  await fs.writeFile(path.join(manifestOnly, "openclaw.plugin.json"), '{"id":"manifest-only"}');
-  await fs.symlink(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", type: "module" }),
-  );
-  await fs.writeFile(
-    path.join(settingsRoot, "package.json"),
-    JSON.stringify({
-      name: "@openclaw/settings-fixture",
-      version: "1.0.0",
-      type: "module",
-      openclaw: { extensions: ["./index.ts"], controlUi: "./browser.ts" },
-    }),
-  );
-  const placement = { section: "memory", panel: "overview" };
-  const manifest = JSON.stringify({
-    id: "settings-fixture",
-    controlUi: {
-      activation: "settings-only",
-      entry: "dist/control-ui/source/index.js",
-      settingsViews: [placement],
-    },
-  });
-  await fs.writeFile(path.join(settingsRoot, "openclaw.plugin.json"), manifest);
-  await fs.writeFile(path.join(settingsRoot, "index.ts"), "export default {};\n");
-  await fs.writeFile(
-    path.join(settingsRoot, "browser.ts"),
-    'export default { pluginId: "settings-fixture", settingsViews: [] };\n',
-  );
-  await compile(new Set());
-  const packaged = JSON.parse(
-    await fs.readFile(
-      path.join(root, "dist/extensions/settings-fixture/openclaw.plugin.json"),
-      "utf8",
-    ),
-  );
-  expect(packaged.controlUi.settingsViews).toEqual([placement]);
-  expect(packaged.controlUi.activation).toBe("settings-only");
-  const revisions = await fs.readdir(path.join(root, "ui-output/assets/plugins/settings-fixture"));
-  expect(revisions).toHaveLength(1);
-  expect(await fs.readFile(path.join(settingsRoot, "openclaw.plugin.json"), "utf8")).toBe(manifest);
-  for (const [name, body] of files) {
-    expect(await fs.readFile(path.join(pluginRoot, generation, name), "utf8")).toBe(body);
-  }
-  expect(JSON.parse(await fs.readFile(path.join(pluginRoot, "package.json"), "utf8")).name).toBe(
-    "@openclaw/workboard",
-  );
-});
+it.each([
+  { section: "memory", panel: "overview" },
+  { section: "channels", panel: "detail", channelId: "custom" },
+])(
+  "prepares source Settings assets for a UI-only build and preserves sibling distributions (%s)",
+  async (placement) => {
+    vi.stubEnv("OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS", "1");
+    const { pluginRoot, files, generation } = await fixture();
+    const settingsRoot = path.join(root, "extensions/settings-fixture");
+    await fs.mkdir(settingsRoot, { recursive: true });
+    const manifestOnly = path.join(root, "extensions/manifest-only");
+    await fs.mkdir(manifestOnly);
+    await fs.writeFile(path.join(manifestOnly, "openclaw.plugin.json"), '{"id":"manifest-only"}');
+    await fs.symlink(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        type: "module",
+        ...(placement.section === "channels"
+          ? { files: ["!dist/extensions/settings-fixture/**"] }
+          : {}),
+      }),
+    );
+    await fs.writeFile(
+      path.join(settingsRoot, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/settings-fixture",
+        version: "1.0.0",
+        type: "module",
+        openclaw: { extensions: ["./index.ts"], controlUi: "./browser.ts" },
+      }),
+    );
+    const manifest = JSON.stringify({
+      id: "settings-fixture",
+      ...(placement.section === "channels" ? { channels: [placement.channelId] } : {}),
+      controlUi: {
+        activation: "settings-only",
+        entry: "dist/control-ui/source/index.js",
+        settingsViews: [placement],
+      },
+    });
+    await fs.writeFile(path.join(settingsRoot, "openclaw.plugin.json"), manifest);
+    await fs.writeFile(path.join(settingsRoot, "index.ts"), "export default {};\n");
+    await fs.writeFile(
+      path.join(settingsRoot, "browser.ts"),
+      'export default { pluginId: "settings-fixture", settingsViews: [] };\n',
+    );
+    await compile(new Set());
+    const packaged = JSON.parse(
+      await fs.readFile(
+        path.join(root, "dist/extensions/settings-fixture/openclaw.plugin.json"),
+        "utf8",
+      ),
+    );
+    expect(packaged.controlUi.settingsViews).toEqual([placement]);
+    expect(packaged.controlUi.activation).toBe("settings-only");
+    const revisions = await fs.readdir(
+      path.join(root, "ui-output/assets/plugins/settings-fixture"),
+    );
+    expect(revisions).toHaveLength(1);
+    expect(await fs.readFile(path.join(settingsRoot, "openclaw.plugin.json"), "utf8")).toBe(
+      manifest,
+    );
+    for (const [name, body] of files) {
+      expect(await fs.readFile(path.join(pluginRoot, generation, name), "utf8")).toBe(body);
+    }
+    expect(JSON.parse(await fs.readFile(path.join(pluginRoot, "package.json"), "utf8")).name).toBe(
+      "@openclaw/workboard",
+    );
+  },
+);

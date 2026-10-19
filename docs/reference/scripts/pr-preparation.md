@@ -32,6 +32,21 @@ does not require additional local signer trust; task commits on either merge
 parent still require valid signatures. Missing or changed baseline authority
 refuses publication before transport selection.
 
+Review initialization retains and verifies the previous PR metadata and associated
+review in `.local/review-evidence.*` before replacing either metadata file. A failed
+retention leaves the active identity unchanged. Keep that history while the
+correction remains unfinished; it does not approve a new incoming head.
+
+Correction continuation also supports a published correction followed by a native
+baseline refresh that retired its active incoming-review copy. The existing
+`prepare-correction-continue` command derives publication lineage from the exact
+signed baseline binding and its named retained archive. It keeps that historical
+lineage separate from the snapshot used to retire or recover current metadata.
+Missing original metadata is never reconstructed, and this route does not replay
+the old baseline review as current approval. A genuine fresh incoming NEEDS WORK
+review, the existing publication, signature and live-identity checks, and a new
+candidate READY review and gates are still required.
+
 ## Signing a baseline on another host
 
 When the preparation host can verify signatures but the signing key is available

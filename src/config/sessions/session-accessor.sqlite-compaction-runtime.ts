@@ -11,6 +11,7 @@ import {
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -21,6 +22,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionManagerIncognitoDatabase } from "./session-manager-write-contract.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";
 import {
   captureSessionTranscriptTargetBinding,
   sameSessionTranscriptStorageEnvironment,
@@ -86,6 +88,20 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
       async (worker) => {
         const { env: _env, ...target } = captured;
         const { env: _preparedEnv, ...preparedTarget } = prepared.scope;
+        // The worker receives canonical admission locations, not the host's alias map.
+        const admittedPath =
+          "withMetadata" in database ? database.path : database.fileIdentity?.nativeLocation;
+        const preparedStorePath = memory
+          ? database.path
+          : admittedPath &&
+              sameSessionTranscriptStorePath(
+                resolveOpenClawAgentSqlitePath(
+                  toDatabaseOptions(resolveSqliteTranscriptScope(prepared.scope)),
+                ),
+                admittedPath,
+              )
+            ? admittedPath
+            : preparedTarget.storePath;
         const acknowledged = await receiveSessionManagerCommit(
           "session.transcript.compactionBoundary",
           () =>
@@ -95,7 +111,7 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
                 scope: memory ? { ...target, storePath: database.path } : target,
                 prepared: {
                   ...prepared,
-                  scope: memory ? { ...preparedTarget, storePath: database.path } : preparedTarget,
+                  scope: { ...preparedTarget, storePath: preparedStorePath },
                 },
                 transcriptByteCompactionLatch,
                 tokensAfter: params.tokensAfter,

@@ -1,3 +1,4 @@
+import { symlinkSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -15,11 +16,13 @@ import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { openOpenClawAgentSqliteWorkerStoreV2 } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { assertCompactionPathAlias } from "./compaction-pathalias.test-support.js";
 import { sessionNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
   loadSessionEntry,
@@ -114,6 +117,21 @@ function expectRolledBack(
   expect(loadSessionEntry(scope)).toMatchObject({ compactionCount: 0 });
   expect(loadSessionEntry(scope)?.transcriptByteCompactionLatch).toBeUndefined();
 }
+
+it.each([undefined, "different store", "changed writer"] as const)(
+  "compacts through a symlinked state root (refusal=%s)",
+  async (refusal) => {
+    const canonical = sessionScope("symlink-compaction");
+    const alias = path.join(sessionDirs.make(), "state");
+    symlinkSync(canonical.env!.OPENCLAW_STATE_DIR, alias, "junction");
+    const scope = {
+      ...canonical,
+      env: { OPENCLAW_STATE_DIR: alias },
+      storePath: path.join(alias, "sessions.json"),
+    };
+    await assertCompactionPathAlias(scope, { ...canonical, env: canonical.env! }, refusal);
+  },
+);
 
 it.each([false, true])(
   "fuses summary accounting and intervening metadata (incognito=%s)",
@@ -439,6 +457,11 @@ it("rolls back accounting when the prepared boundary identity already exists", a
   };
   const { keptId } = await seedCompaction(scope, expected);
   const before = loadTranscriptEventsSync(scope);
+  const database = openOpenClawAgentDatabase(
+    toDatabaseOptions(resolveSqliteTranscriptScope(scope)),
+  );
+  const transactionSql = vi.spyOn(database.db, "exec");
+  onTestFinished(() => transactionSql.mockRestore());
 
   expect(() =>
     persistCompactionBoundaryWithSessionEntrySync(
@@ -454,6 +477,7 @@ it("rolls back accounting when the prepared boundary identity already exists", a
     ),
   ).toThrow(`Session transcript entry was not persisted: ${keptId}: transcript-event-not-appended`);
 
+  expect(transactionSql.mock.calls.map(([sql]) => sql)).toEqual(["BEGIN IMMEDIATE", "ROLLBACK"]);
   expectRolledBack(scope, before);
 });
 

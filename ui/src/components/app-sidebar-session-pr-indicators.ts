@@ -16,6 +16,8 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 type IndicatorEntry = {
   summary: SessionCatalogPullRequestSummary | undefined;
   worktreeId: string;
+  count: number | undefined;
+  branchKnown: boolean;
 };
 
 type SessionPullRequestIndicatorsOptions = {
@@ -40,7 +42,7 @@ export function createSessionPullRequestIndicators(options: SessionPullRequestIn
       ? gateway
       : null;
   };
-  const rows = createMemo(() => options.getRows().filter((row) => !row.isChild && row.worktreeId));
+  const rows = createMemo(() => options.getRows().filter((row) => !row.isChild));
   const scope = createMemo(
     () => {
       const gateway = readable();
@@ -83,7 +85,12 @@ export function createSessionPullRequestIndicators(options: SessionPullRequestIn
             undefined,
             sessions.capturePullRequestEpoch(row.key),
           );
-        } else if (snapshot && (snapshot.status === "ready" || snapshot.pullRequests.length)) {
+        } else if (
+          snapshot &&
+          (snapshot.status === "ready" ||
+            snapshot.pullRequests.length ||
+            snapshot.taskPullRequests?.length)
+        ) {
           seen.add(row.key);
         }
       }
@@ -145,15 +152,45 @@ export function createSessionPullRequestIndicators(options: SessionPullRequestIn
         if (!snapshot) {
           continue;
         }
-        if (snapshot.status !== "ready" && snapshot.pullRequests.length === 0) {
+        if (
+          snapshot.status !== "ready" &&
+          snapshot.pullRequests.length === 0 &&
+          !snapshot.taskPullRequests?.length
+        ) {
           if (prior) {
             entries.set(row.key, prior);
           }
           continue;
         }
+        const branchKnown =
+          snapshot.branchRead !== false ||
+          snapshot.pullRequestCount !== undefined ||
+          snapshot.pullRequests.length > 0 ||
+          (prior?.worktreeId === (row.worktreeId ?? "") && prior.branchKnown);
         entries.set(row.key, {
-          summary: summarizeSessionPullRequests(snapshot.pullRequests, prior?.summary),
-          worktreeId: row.worktreeId!,
+          summary: summarizeSessionPullRequests(
+            [
+              ...snapshot.pullRequests,
+              ...(snapshot.taskPullRequests ?? []).flatMap((task) =>
+                task.pullRequest ? [task.pullRequest] : [],
+              ),
+            ],
+            prior?.summary,
+          ),
+          worktreeId: row.worktreeId ?? "",
+          branchKnown,
+          count:
+            !branchKnown && snapshot.pullRequests.length === 0 && !snapshot.taskPullRequestCount
+              ? undefined
+              : (snapshot.pullRequestCount ??
+                Math.max(
+                  new Set(
+                    [...snapshot.pullRequests, ...(snapshot.taskPullRequests ?? [])].map(
+                      (request) => request.url,
+                    ),
+                  ).size,
+                  snapshot.taskPullRequestCount ?? 0,
+                )),
         });
       }
     }
@@ -164,14 +201,21 @@ export function createSessionPullRequestIndicators(options: SessionPullRequestIn
     options.getPresented,
   );
   return {
+    count(sessionKey: string) {
+      const current = presentation();
+      return current.readable ? current.entries.get(sessionKey)?.count : undefined;
+    },
     summary(sessionKey: string, worktreeId: string, initial?: SessionCatalogPullRequestSummary) {
       const current = presentation();
       if (!current.readable) {
-        return undefined;
+        // Catalog-only rows already carry an authorized summary; live PR access is separate.
+        return worktreeId ? undefined : initial;
       }
       const entry = current.entries.get(sessionKey);
-      // Ready-empty is authoritative; only seed rows before their first snapshot.
-      return entry?.worktreeId === worktreeId ? entry.summary : initial;
+      // Receipt-only hydration says nothing about a catalog branch summary.
+      return entry?.worktreeId === worktreeId
+        ? (entry.summary ?? (!entry.branchKnown ? initial : undefined))
+        : initial;
     },
   };
 }

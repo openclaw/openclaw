@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import { GatewayCredentialsRequiredError, GatewayTransportError } from "../gateway/call.js";
-import { StateDatabaseOfflineMaintenanceError } from "../infra/gateway-state-owner-record.js";
+import {
+  StateDatabaseMaintenanceScopeError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner-record.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import {
   ExpectedCliError,
@@ -130,7 +133,9 @@ it.each([
   ["gateway", "--port", "18789"],
   ["gateway", "run", "--bind", "loopback", "--port", "18789"],
   ["--profile", "work", "gateway", "run"],
-])("prints the redacted Gateway startup reason without debug: %j", (...args) => {
+  ["node", "run", "--host", "127.0.0.1", "--port", "18789", "--no-tls"],
+  ["--profile", "work", "node", "run", "--pair-if-needed", "setup-code"],
+])("prints the redacted service startup reason without debug: %j", (...args) => {
   const token = "sk-abcdefghijklmnopqrstuv";
   const lines = failure(
     new Error(`Gateway startup failed. Authorization: Bearer ${token}`, {
@@ -148,6 +153,7 @@ it.each([
 
 it.each([
   ["gateway", "status"],
+  ["node", "status"],
   ["sessions", "list"],
 ])("keeps ordinary command failures terse: %j", (...args) => {
   expect(failure(new Error("internal detail"), [...args])).toEqual([
@@ -172,6 +178,17 @@ it("prints the actionable offline maintenance refusal without debug", () => {
   expect(output).not.toMatch(
     /sk-abcdefghijklmnopqrstuv|private nested diagnostic|private sibling diagnostic|Stack:|openclaw doctor/u,
   );
+});
+
+it("prints the actionable missing-maintenance-scope refusal without debug", () => {
+  const error = Object.assign(new StateDatabaseMaintenanceScopeError("/fixture/state.sqlite"), {
+    cause: new Error("private nested diagnostic"),
+  });
+
+  expect(failure(error, ["plugins", "enable", "github"])).toEqual([
+    "[openclaw] The CLI command failed.",
+    "[openclaw] Reason: Internal state ownership error at /fixture/state.sqlite: this process holds maintenance ownership without an active schema lease or maintenance scope. Retry the command; if it persists, report this error.",
+  ]);
 });
 
 it("emits expected guidance only when not already written even with debug output", () => {

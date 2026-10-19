@@ -39,6 +39,14 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-chat-tool-content": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-tool-raw": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-tool-outcome": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-tool-card": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-tool-icon": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-tool-reviews": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-tool-outcome-summary": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-tool-review-outcome": HTMLAttributes<HTMLElement>;
       "openclaw-custodian-setup-card": HTMLAttributes<HTMLElement>;
       "openclaw-agent-memory-panel": HTMLAttributes<HTMLElement>;
       "openclaw-chat-ci-details": HTMLAttributes<HTMLElement> & ElementProperties<ChatCiProperties>;
@@ -119,6 +127,7 @@ declare module "@solidjs/web" {
       "openclaw-tooltip": HTMLAttributes<Tooltip> & {
         "prop:content"?: Tooltip["content"];
         "prop:describe"?: Tooltip["describe"];
+        "prop:descriptionTarget"?: Tooltip["descriptionTarget"];
         "prop:pointerThrough"?: Tooltip["pointerThrough"];
         "prop:openOnClick"?: Tooltip["openOnClick"];
         "prop:disabled"?: Tooltip["disabled"];

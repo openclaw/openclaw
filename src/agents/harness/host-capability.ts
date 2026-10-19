@@ -367,12 +367,12 @@ export function createAgentHarnessHostCapabilities(params: {
       }
       recovery.assertActive();
     };
-    return Object.freeze({
+    return {
       assertActive: assertRecoveryActive,
       release: recovery.release,
       runBeforeToolCall: async (request) =>
         await runBeforeToolCallWithAssertion(assertRecoveryActive, request),
-    });
+    };
   });
 
   const scheduledToolSources = new WeakMap<

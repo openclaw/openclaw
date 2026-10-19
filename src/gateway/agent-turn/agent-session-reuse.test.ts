@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import crypto from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
+import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   mergeSessionEntry,
@@ -26,10 +28,30 @@ const expiredEntry: SessionEntry = {
   lastInteractionAt: 1,
 };
 const freshEntry: SessionEntry = { ...expiredEntry, lastInteractionAt: now - 1 };
+const failedEntry: SessionEntry = { ...expiredEntry, status: "failed" };
+const requested = { requestedSessionId: "requested" };
 const resetPolicy = resolveSessionResetPolicy({
   sessionCfg: { reset: { mode: "idle", idleMinutes: 1 } },
   resetType: "direct",
 });
+
+function prepare(
+  cfg: PatchParams["cfg"],
+  sessionKey: string,
+  options: Partial<Parameters<typeof prepareAgentSession>[0]> = {},
+) {
+  return prepareAgentSession({
+    cfg,
+    requestedSessionKey: sessionKey,
+    request: { message: "continue", idempotencyKey: "reuse-proof" },
+    canUseCronRunContinuation: false,
+    lifecycleGeneration: "reuse-proof",
+    respond: () => {
+      throw new Error("Unexpected preparation rejection");
+    },
+    ...options,
+  });
+}
 
 function buildReusePatch(input: Partial<PatchParams>) {
   return buildAgentSessionPatch({
@@ -52,301 +74,249 @@ function buildReusePatch(input: Partial<PatchParams>) {
   });
 }
 
-describe("agent session reuse at mutation", () => {
-  it.each(["killed", "failed"] as const)(
-    "refreshes %s session reuse after a transcript append without replacing the prepared row",
-    async (status) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const cfg = { session: { reset: { mode: "idle" as const, idleMinutes: 60 } } };
-        await state.writeConfig(cfg);
-        setRuntimeConfigSnapshot(cfg);
-        const timestamp = Date.now();
-        const sessionKey = "agent:main:main";
-        const sessionId = `original-${status}`;
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          {
-            sessionId,
-            status,
-            updatedAt: timestamp,
-            sessionStartedAt: timestamp,
-            lastInteractionAt: timestamp,
-          },
-        );
-        const prepared = await prepareAgentSession({
-          cfg,
-          requestedSessionKey: sessionKey,
-          request: { message: "continue", idempotencyKey: `append-${status}` },
-          canUseCronRunContinuation: false,
-          lifecycleGeneration: "append-reuse",
-          respond: () => {
-            throw new Error("Unexpected preparation rejection");
-          },
-        });
-        if (!prepared?.entry) {
-          throw new Error("Session preparation did not return the stored row");
-        }
-        expect(prepared.isNewSession).toBe(status === "failed");
-        expect(
-          await appendTranscriptEvent(
-            {
-              agentId: "main",
-              sessionKey,
-              sessionId,
-              storePath: prepared.storePath,
-            },
-            { type: "custom", timestamp: new Date(timestamp).toISOString() },
-          ),
-        ).toBe(true);
-
-        const result = await buildAgentSessionPatch({
-          ...prepared,
-          freshEntry: prepared.entry,
-          initialEntry: prepared.entry,
-          sessionAgentId: "main",
-          canonicalSessionKey: prepared.canonicalKey,
-          normalizedSpawned: {},
-          requestDeliveryHint: undefined,
-          hasRestoredCronContinuation: false,
-          fallbackSessionId: "after-append",
-        });
-        expect(result.isNewSession).toBe(status === "killed");
-        expect(result.patch.sessionId).toBe(status === "killed" ? "after-append" : sessionId);
-      });
-    },
-  );
-
-  it("backfills the current candidate header while new windows start at the current time", async () => {
+it.each(["killed", "failed"] as const)(
+  "refreshes %s session reuse after a transcript append without replacing the prepared row",
+  async (status) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "current-candidate",
-        sessionKey: "agent:main:reuse-header",
-        storePath: state.statePath("reuse-header.sqlite"),
-      };
-      const current: SessionEntry = {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        lastInteractionAt: now - 1,
-      };
-      await upsertSessionEntryCore(scope, current);
-      await replaceTranscriptEvents(scope, [
-        { type: "session", id: scope.sessionId, version: 3, timestamp: new Date(42).toISOString() },
-      ]);
-      for (const candidate of [
-        { initial: current, fresh: current, expectedId: scope.sessionId, startedAt: 42 },
+      const cfg = { session: { reset: { mode: "idle" as const, idleMinutes: 60 } } };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      const timestamp = Date.now();
+      const sessionKey = "agent:main:main";
+      const sessionId = `original-${status}`;
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
         {
-          initial: { ...current, sessionId: "predecessor" },
-          fresh: current,
-          expectedId: scope.sessionId,
-          startedAt: 42,
+          sessionId,
+          status,
+          updatedAt: timestamp,
+          sessionStartedAt: timestamp,
+          lastInteractionAt: timestamp,
         },
-        {
-          initial: current,
-          fresh: { ...current, lastInteractionAt: 1 },
-          expectedId: "replacement",
-          startedAt: now,
-        },
-      ]) {
-        const result = await buildReusePatch({
-          initialEntry: candidate.initial,
-          freshEntry: candidate.fresh,
-          canonicalSessionKey: scope.sessionKey,
-          storePath: scope.storePath,
-        });
-        expect(result.patch).toMatchObject({
-          sessionId: candidate.expectedId,
-          sessionStartedAt: candidate.startedAt,
-        });
+      );
+      const prepared = await prepare(cfg, sessionKey);
+      if (!prepared?.entry) {
+        throw new Error("Session preparation did not return the stored row");
       }
-    });
-  });
+      const patchParams = {
+        ...prepared,
+        freshEntry: prepared.entry,
+        initialEntry: prepared.entry,
+        canonicalSessionKey: prepared.canonicalKey,
+        fallbackSessionId: "after-append",
+      };
+      const initialPatch = await buildReusePatch(patchParams);
+      expect(initialPatch.isNewSession).toBe(status === "failed");
+      expect(
+        await appendTranscriptEvent(
+          { agentId: "main", sessionKey, sessionId, storePath: prepared.storePath },
+          { type: "custom", timestamp: new Date(timestamp).toISOString() },
+        ),
+      ).toBe(true);
 
-  it.each([
-    { name: "expired ordinary turn", input: {}, sessionId: "replacement", isNew: true },
-    { name: "fresh ordinary turn", input: { freshEntry }, sessionId: "original", isNew: false },
-    {
-      name: "expected existing identity",
-      input: { expectedExistingSessionId: "original" },
-      sessionId: "original",
-      isNew: false,
-    },
-    {
-      name: "restored cron continuation",
-      input: { hasRestoredCronContinuation: true },
-      sessionId: "original",
-      isNew: false,
-    },
-    {
-      name: "model-locked identity",
-      input: { freshEntry: { ...expiredEntry, modelSelectionLocked: true } },
-      sessionId: "original",
-      isNew: false,
-    },
-    {
-      name: "visible terminal recovery",
-      input: { freshEntry: { ...expiredEntry, status: "failed" } },
-      sessionId: "original",
-      isNew: false,
-    },
-    {
-      name: "background terminal expiry",
-      input: { freshEntry: { ...expiredEntry, status: "failed" }, visibleRequest: false },
-      sessionId: "replacement",
-      isNew: true,
-    },
-    {
-      name: "missing failed transcript",
-      input: {
-        freshEntry: { ...freshEntry, status: "failed" },
-      },
-      transcriptMissing: true,
-      sessionId: "replacement",
-      isNew: true,
-    },
-    {
-      name: "requested identity for an expired row",
-      input: { requestedSessionId: "requested" },
-      sessionId: "replacement",
-      isNew: true,
-    },
-    {
-      name: "requested identity for a fresh row",
-      input: { freshEntry, requestedSessionId: "requested" },
-      sessionId: "requested",
-      isNew: true,
-    },
-    {
-      name: "requested identity for a missing row",
-      input: { freshEntry: undefined, initialEntry: undefined, requestedSessionId: "requested" },
-      sessionId: "requested",
-      isNew: true,
-    },
-  ] satisfies Array<{
-    name: string;
-    input: Partial<PatchParams>;
-    transcriptMissing?: boolean;
-    sessionId: string;
-    isNew: boolean;
-  }>)("preserves $name", async (scenario) => {
+      const result = await buildReusePatch(patchParams);
+      expect(result.isNewSession).toBe(status === "killed");
+      expect(result.patch.sessionId).toBe(status === "killed" ? "after-append" : sessionId);
+    });
+  },
+);
+
+it("backfills the current candidate header while new windows start at the current time", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "current-candidate",
+      sessionKey: "agent:main:reuse-header",
+      storePath: state.statePath("reuse-header.sqlite"),
+    };
+    const current: SessionEntry = {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      lastInteractionAt: now - 1,
+    };
+    await upsertSessionEntryCore(scope, current);
+    await replaceTranscriptEvents(scope, [
+      { type: "session", id: scope.sessionId, version: 3, timestamp: new Date(42).toISOString() },
+    ]);
+    const candidates: Array<[SessionEntry, SessionEntry, string, number]> = [
+      [current, current, scope.sessionId, 42],
+      [{ ...current, sessionId: "predecessor" }, current, scope.sessionId, 42],
+      [current, { ...current, lastInteractionAt: 1 }, "replacement", now],
+    ];
+    for (const [initialEntry, candidate, sessionId, sessionStartedAt] of candidates) {
+      const result = await buildReusePatch({
+        initialEntry,
+        freshEntry: candidate,
+        canonicalSessionKey: scope.sessionKey,
+        storePath: scope.storePath,
+      });
+      expect(result.patch).toMatchObject({ sessionId, sessionStartedAt });
+    }
+  });
+});
+
+it.each<[Partial<PatchParams>, string, boolean, boolean?]>([
+  [{}, "replacement", true],
+  [{ freshEntry }, "original", false],
+  [{ expectedExistingSessionId: "original" }, "original", false],
+  [{ hasRestoredCronContinuation: true }, "original", false],
+  [{ freshEntry: { ...expiredEntry, modelSelectionLocked: true } }, "original", false],
+  [{ freshEntry: failedEntry }, "original", false],
+  [{ freshEntry: failedEntry, visibleRequest: false }, "replacement", true],
+  [{ freshEntry: { ...freshEntry, status: "failed" } }, "replacement", true, true],
+  [requested, "replacement", true],
+  [{ ...requested, freshEntry }, "requested", true],
+  [{ ...requested, freshEntry: undefined, initialEntry: undefined }, "requested", true],
+])(
+  "reuses %j as %s (new=%s, transcript missing=%s)",
+  async (input, sessionId, isNew, transcriptMissing) => {
     const read = vi.spyOn(transcriptReader, "readSessionTranscriptAnchorsAsync").mockResolvedValue({
       anchors: [],
-      metadata: {
-        present: !("transcriptMissing" in scenario && scenario.transcriptMissing),
-        observedAt: null,
-        updatedAt: null,
-      },
+      metadata: { present: !transcriptMissing, observedAt: null, updatedAt: null },
     });
     try {
-      const result = await buildReusePatch(scenario.input);
-      expect(result.patch.sessionId).toBe(scenario.sessionId);
-      expect(result.isNewSession).toBe(scenario.isNew);
+      const result = await buildReusePatch(input);
+      expect(result).toMatchObject({ patch: { sessionId }, isNewSession: isNew });
     } finally {
       read.mockRestore();
     }
-  });
+  },
+);
 
-  it("keeps a concurrent replacement after preparing a rotation from the stored row", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = { session: { reset: { mode: "idle" as const, idleMinutes: 1 } } };
-      await state.writeConfig(cfg);
-      setRuntimeConfigSnapshot(cfg);
-      const sessionKey = "agent:main:reuse-proof";
-      const scope = {
-        agentId: "main",
-        sessionKey,
-        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-      };
-      await upsertSessionEntryCore(scope, expiredEntry);
-      const prepared = await prepareAgentSession({
-        cfg,
-        requestedSessionKey: sessionKey,
-        request: { message: "continue", idempotencyKey: "reuse-proof" },
-        canUseCronRunContinuation: false,
-        lifecycleGeneration: "reuse-proof",
-        respond: () => {
-          throw new Error("Unexpected preparation rejection");
-        },
-      });
-      if (!prepared) {
-        throw new Error("Session preparation did not return a candidate");
-      }
-      expect(prepared.isNewSession).toBe(true);
-      expect(prepared.sessionId).not.toBe("original");
-      const concurrent: SessionEntry = {
-        ...freshEntry,
-        sessionId: "concurrent",
-        sessionStartedAt: prepared.now,
-        lastInteractionAt: prepared.now,
-        status: "done",
-        lifecycleRunId: "concurrent-run",
-        cliSessionIds: { "claude-cli": "native-concurrent" },
-      };
-      await upsertSessionEntryCore(scope, concurrent);
-      const latest = loadSessionEntry(scope);
-      const updated = await buildReusePatch({
-        initialEntry: prepared.entry,
-        freshEntry: latest,
-        cfg: prepared.cfg,
-        canonicalSessionKey: prepared.canonicalKey,
-        storePath: prepared.storePath,
-        resetPolicy: prepared.resetPolicy,
-        now: prepared.now,
-        requestedSessionId: "original",
-        fallbackSessionId: prepared.sessionId,
-      });
-      expect(mergeSessionEntry(latest, updated.patch)).toMatchObject({
-        sessionId: "concurrent",
-        sessionStartedAt: prepared.now,
-        status: "done",
-        lifecycleRunId: "concurrent-run",
-        cliSessionIds: { "claude-cli": "native-concurrent" },
-      });
+it.each([
+  { name: "existing identity", input: { freshEntry }, sessionId: "original", allocations: 0 },
+  {
+    name: "requested missing identity",
+    input: { freshEntry: undefined, initialEntry: undefined, requestedSessionId: "requested" },
+    sessionId: "requested",
+    allocations: 0,
+  },
+  {
+    name: "requested fresh identity",
+    input: { freshEntry, requestedSessionId: "requested" },
+    sessionId: "requested",
+    allocations: 0,
+  },
+  {
+    name: "new identity",
+    input: {},
+    sessionId: "00000000-0000-4000-8000-000000000001",
+    allocations: 1,
+  },
+  {
+    name: "stable writer fallback",
+    input: { fallbackSessionId: "selected" },
+    sessionId: "selected",
+    allocations: 0,
+  },
+] satisfies Array<{
+  name: string;
+  input: Partial<PatchParams>;
+  sessionId: string;
+  allocations: number;
+}>)("allocates a UUID only when needed for $name", async (scenario) => {
+  const randomUUID = vi
+    .spyOn(crypto, "randomUUID")
+    .mockReturnValue("00000000-0000-4000-8000-000000000001");
+  try {
+    syncBuiltinESMExports();
+    const result = await buildReusePatch({ fallbackSessionId: undefined, ...scenario.input });
+    expect(result.patch.sessionId).toBe(scenario.sessionId);
+    expect(randomUUID).toHaveBeenCalledTimes(scenario.allocations);
+  } finally {
+    randomUUID.mockRestore();
+    syncBuiltinESMExports();
+  }
+});
+
+it("keeps a concurrent replacement after preparing a rotation from the stored row", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { session: { reset: { mode: "idle" as const, idleMinutes: 1 } } };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const sessionKey = "agent:main:reuse-proof";
+    const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+    const scope = { agentId: "main", sessionKey, storePath };
+    await upsertSessionEntryCore(scope, expiredEntry);
+    const prepared = await prepare(cfg, sessionKey);
+    if (!prepared) {
+      throw new Error("Session preparation did not return a candidate");
+    }
+    const initialPatch = await buildReusePatch({
+      freshEntry: prepared.entry,
+      initialEntry: prepared.entry,
+      cfg: prepared.cfg,
+      canonicalSessionKey: prepared.canonicalKey,
+      storePath: prepared.storePath,
+      resetPolicy: prepared.resetPolicy,
+      now: prepared.now,
+      fallbackSessionId: undefined,
+    });
+    expect(initialPatch.isNewSession).toBe(true);
+    expect(initialPatch.patch.sessionId).not.toBe("original");
+    const concurrent: SessionEntry = {
+      ...freshEntry,
+      sessionId: "concurrent",
+      sessionStartedAt: prepared.now,
+      lastInteractionAt: prepared.now,
+      status: "done",
+      lifecycleRunId: "concurrent-run",
+      cliSessionIds: { "claude-cli": "native-concurrent" },
+    };
+    await upsertSessionEntryCore(scope, concurrent);
+    const latest = loadSessionEntry(scope);
+    const updated = await buildReusePatch({
+      ...prepared,
+      initialEntry: prepared.entry,
+      freshEntry: latest,
+      canonicalSessionKey: prepared.canonicalKey,
+      requestedSessionId: "original",
+      fallbackSessionId: initialPatch.patch.sessionId,
+    });
+    expect(mergeSessionEntry(latest, updated.patch)).toMatchObject({
+      sessionId: "concurrent",
+      sessionStartedAt: prepared.now,
+      status: "done",
+      lifecycleRunId: "concurrent-run",
+      cliSessionIds: { "claude-cli": "native-concurrent" },
     });
   });
+});
 
-  it("refuses a replaced expected session after the worker read yields", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = {};
-      await state.writeConfig(cfg);
-      setRuntimeConfigSnapshot(cfg);
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:admission-replacement",
-        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-      };
-      await upsertSessionEntryCore(scope, { ...freshEntry, sessionId: "original" });
-      const read = sessionReader.loadGatewaySessionEntryReadOnlyInWorker;
-      const admission = vi
-        .spyOn(sessionReader, "loadGatewaySessionEntryReadOnlyInWorker")
-        .mockImplementationOnce(async (...args) => {
-          await upsertSessionEntryCore(scope, { ...freshEntry, sessionId: "successor" });
-          return read(...args);
-        });
-      const respond = vi.fn();
-      try {
-        const prepared = await prepareAgentSession({
-          cfg,
-          requestedSessionKey: scope.sessionKey,
-          expectedExistingSessionId: "original",
-          request: { message: "continue", idempotencyKey: "admission-replacement" },
-          canUseCronRunContinuation: false,
-          lifecycleGeneration: "admission-replacement",
-          respond,
-        });
-        expect(prepared).toBeUndefined();
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "UNAVAILABLE",
-            message: expect.stringContaining("changed before expected work could start"),
-          }),
-        );
-        expect(loadSessionEntry(scope)?.sessionId).toBe("successor");
-      } finally {
-        admission.mockRestore();
-      }
-    });
+it("refuses a replaced expected session after the worker read yields", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = {};
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const sessionKey = "agent:main:admission-replacement";
+    const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+    const scope = { agentId: "main", sessionKey, storePath };
+    await upsertSessionEntryCore(scope, { ...freshEntry, sessionId: "original" });
+    const read = sessionReader.loadGatewaySessionEntryReadOnlyInWorker;
+    const admission = vi
+      .spyOn(sessionReader, "loadGatewaySessionEntryReadOnlyInWorker")
+      .mockImplementationOnce(async (...args) => {
+        await upsertSessionEntryCore(scope, { ...freshEntry, sessionId: "successor" });
+        return read(...args);
+      });
+    const respond = vi.fn();
+    try {
+      const prepared = await prepare(cfg, scope.sessionKey, {
+        expectedExistingSessionId: "original",
+        respond,
+      });
+      expect(prepared).toBeUndefined();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("changed before expected work could start"),
+        }),
+      );
+      expect(loadSessionEntry(scope)?.sessionId).toBe("successor");
+    } finally {
+      admission.mockRestore();
+    }
   });
 });

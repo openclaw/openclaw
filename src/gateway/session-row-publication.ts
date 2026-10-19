@@ -49,7 +49,7 @@ export function prepareSessionRowPublicationView(
       const retained = publication;
       projection.onSelectionChange((change) => {
         if (change.kind === "reset") {
-          if (retained.lists.hasSidebarBaselines()) {
+          if (retained.lists.hasRowBaselines()) {
             emitTrustedDiagnosticEvent({
               type: "sessions.list.baseline.retired",
               cause: "selection-reset",
@@ -78,7 +78,7 @@ export function prepareSessionRowPublicationView(
     } else {
       // Exact row publications cannot mask a preceding profile/configuration invalidation.
       if (publication.cfg !== cfg || publication.identityRevision !== identityRevision) {
-        if (publication.lists.hasSidebarBaselines()) {
+        if (publication.lists.hasRowBaselines()) {
           emitTrustedDiagnosticEvent({
             type: "sessions.list.baseline.retired",
             cause: publication.cfg !== cfg ? "config" : "identity",

@@ -1,6 +1,3 @@
-// TUI theme tests cover theme defaults and environment-driven variants.
-
-import { expectDefined } from "@openclaw/normalization-core";
 import chalk from "chalk";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -45,31 +42,6 @@ function colorFromStyle(style: (text: string) => string, layer: 38 | 48): string
     .join("")}`.toUpperCase();
 }
 
-function readActivePalette(mod: ThemeModule) {
-  return {
-    text: colorFromStyle(mod.tuiTheme.fg, 38),
-    dim: colorFromStyle(mod.tuiTheme.dim, 38),
-    accent: colorFromStyle(mod.tuiTheme.accent, 38),
-    accentSoft: colorFromStyle(mod.tuiTheme.accentSoft, 38),
-    border: colorFromStyle(mod.tuiTheme.border, 38),
-    userBg: colorFromStyle(mod.tuiTheme.userBg, 48),
-    userText: colorFromStyle(mod.tuiTheme.userText, 38),
-    systemText: colorFromStyle(mod.tuiTheme.system, 38),
-    toolPendingBg: colorFromStyle(mod.tuiTheme.toolPendingBg, 48),
-    toolSuccessBg: colorFromStyle(mod.tuiTheme.toolSuccessBg, 48),
-    toolErrorBg: colorFromStyle(mod.tuiTheme.toolErrorBg, 48),
-    toolTitle: colorFromStyle(mod.tuiTheme.toolTitle, 38),
-    toolOutput: colorFromStyle(mod.tuiTheme.toolOutput, 38),
-    quote: colorFromStyle(mod.markdownTheme.quote, 38),
-    quoteBorder: colorFromStyle(mod.markdownTheme.quoteBorder, 38),
-    code: colorFromStyle(mod.markdownTheme.code, 38),
-    codeBorder: colorFromStyle(mod.markdownTheme.codeBlockBorder, 38),
-    link: colorFromStyle(mod.markdownTheme.link, 38),
-    error: colorFromStyle(mod.tuiTheme.error, 38),
-    success: colorFromStyle(mod.tuiTheme.success, 38),
-  };
-}
-
 async function importThemeWithEnv(env: ThemeEnvOverrides) {
   if (Object.hasOwn(env, "OPENCLAW_THEME")) {
     vi.stubEnv("OPENCLAW_THEME", env.OPENCLAW_THEME);
@@ -77,16 +49,7 @@ async function importThemeWithEnv(env: ThemeEnvOverrides) {
   if (Object.hasOwn(env, "COLORFGBG")) {
     vi.stubEnv("COLORFGBG", env.COLORFGBG);
   }
-  const mod = await importFreshModule<ThemeModule>(
-    import.meta.url,
-    `./theme.js?env=${++themeImportCase}`,
-  );
-  const lightPalette = readActivePalette(mod);
-  return {
-    ...mod,
-    lightMode: lightPalette.text === "#1E1E1E",
-    lightPalette,
-  };
+  return importFreshModule<ThemeModule>(import.meta.url, `./theme.js?env=${++themeImportCase}`);
 }
 
 function relativeLuminance(hex: string): number {
@@ -98,29 +61,20 @@ function relativeLuminance(hex: string): number {
   if (!channels || channels.length !== 3) {
     throw new Error(`invalid color: ${hex}`);
   }
-  return (
-    0.2126 * expectDefined(channels[0], "channels[0] test invariant") +
-    0.7152 * expectDefined(channels[1], "channels[1] test invariant") +
-    0.0722 * expectDefined(channels[2], "channels[2] test invariant")
-  );
+  const [red = 0, green = 0, blue = 0] = channels;
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }
 
 function contrastRatio(foreground: string, background: string): number {
-  const [lighter, darker] = [relativeLuminance(foreground), relativeLuminance(background)].toSorted(
-    (a, b) => b - a,
-  );
-  return (
-    (expectDefined(lighter, "lighter test invariant") + 0.05) /
-    (expectDefined(darker, "darker test invariant") + 0.05)
-  );
+  const fg = relativeLuminance(foreground);
+  const bg = relativeLuminance(background);
+  return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
 }
 
-describe("markdownTheme", () => {
-  describe("highlightCode", () => {
-    it("preserves multi-line code blocks", () => {
-      const result = markdownTheme.highlightCode!("line-1\nline-2", "javascript");
-      expect(result.map((line) => stripAnsi(line))).toEqual(["line-1", "line-2"]);
-    });
+describe("markdownTheme.highlightCode", () => {
+  it("preserves multi-line code blocks", () => {
+    const result = markdownTheme.highlightCode!("line-1\nline-2", "javascript");
+    expect(result.map((line) => stripAnsi(line))).toEqual(["line-1", "line-2"]);
   });
 });
 
@@ -141,7 +95,7 @@ describe("light background detection", () => {
     { name: "oversized background", background: "0;".repeat(40), light: false },
   ])("selects the expected palette for $name", async ({ theme, background, light }) => {
     const mod = await importThemeWithEnv({ OPENCLAW_THEME: theme, COLORFGBG: background });
-    expect(mod.lightMode).toBe(light);
+    expect(colorFromStyle(mod.tuiTheme.fg, 38) === "#1E1E1E").toBe(light);
   });
 
   it("keeps assistantText as identity in both modes", async () => {
@@ -154,44 +108,34 @@ describe("light background detection", () => {
 
 describe("light palette accessibility", () => {
   it("keeps light theme text colors at WCAG AA contrast or better", async () => {
-    const mod = await importThemeWithEnv({ OPENCLAW_THEME: "light" });
-    const backgrounds = {
-      page: "#FFFFFF",
-      user: mod.lightPalette.userBg,
-      pending: mod.lightPalette.toolPendingBg,
-      success: mod.lightPalette.toolSuccessBg,
-      error: mod.lightPalette.toolErrorBg,
-      code: "#FFFFFF",
+    const { tuiTheme: tui, markdownTheme: md } = await importThemeWithEnv({
+      OPENCLAW_THEME: "light",
+    });
+    const check = (foreground: (text: string) => string, background = "#FFFFFF") => {
+      expect(contrastRatio(colorFromStyle(foreground, 38), background)).toBeGreaterThanOrEqual(4.5);
     };
-
-    const textPairs = [
-      [mod.lightPalette.text, backgrounds.page],
-      [mod.lightPalette.dim, backgrounds.page],
-      [mod.lightPalette.accent, backgrounds.page],
-      [mod.lightPalette.accentSoft, backgrounds.page],
-      [mod.lightPalette.systemText, backgrounds.page],
-      [mod.lightPalette.link, backgrounds.page],
-      [mod.lightPalette.quote, backgrounds.page],
-      [mod.lightPalette.error, backgrounds.page],
-      [mod.lightPalette.success, backgrounds.page],
-      [mod.lightPalette.userText, backgrounds.user],
-      [mod.lightPalette.dim, backgrounds.pending],
-      [mod.lightPalette.dim, backgrounds.success],
-      [mod.lightPalette.dim, backgrounds.error],
-      [mod.lightPalette.toolTitle, backgrounds.pending],
-      [mod.lightPalette.toolTitle, backgrounds.success],
-      [mod.lightPalette.toolTitle, backgrounds.error],
-      [mod.lightPalette.toolOutput, backgrounds.pending],
-      [mod.lightPalette.toolOutput, backgrounds.success],
-      [mod.lightPalette.toolOutput, backgrounds.error],
-      [mod.lightPalette.code, backgrounds.code],
-      [mod.lightPalette.border, backgrounds.page],
-      [mod.lightPalette.quoteBorder, backgrounds.page],
-      [mod.lightPalette.codeBorder, backgrounds.page],
-    ] as const;
-
-    for (const [foreground, background] of textPairs) {
-      expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
+    for (const style of [
+      tui.fg,
+      tui.dim,
+      tui.accent,
+      tui.accentSoft,
+      tui.system,
+      md.link,
+      md.quote,
+      tui.error,
+      tui.success,
+      md.code,
+      tui.border,
+      md.quoteBorder,
+      md.codeBlockBorder,
+    ]) {
+      check(style);
+    }
+    check(tui.userText, colorFromStyle(tui.userBg, 48));
+    for (const background of [tui.toolPendingBg, tui.toolSuccessBg, tui.toolErrorBg]) {
+      for (const foreground of [tui.dim, tui.toolTitle, tui.toolOutput]) {
+        check(foreground, colorFromStyle(background, 48));
+      }
     }
   });
 });

@@ -1,7 +1,10 @@
+import path from "node:path";
 import { readFileWindowFully, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
 import { startsWithSvgRootElement } from "../../packages/gateway-protocol/src/svg-image.js";
+import { relativePathInsideSandboxRoot, resolveSandboxPathMapping } from "../agents/path-policy.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
 import { resolveMediaReferenceLocalPathInfo } from "../media/media-reference.js";
 import { resolvePlaybackMetadataForSource } from "../media/playback-transcode.js";
@@ -12,6 +15,7 @@ import {
 } from "./assistant-media-errors.js";
 import {
   createAssistantMediaTicket,
+  resolveAssistantMediaWorkspaceTicketKey,
   type resolveAssistantMediaPolicy,
   type AssistantMediaTicketPayload,
 } from "./assistant-media-policy.js";
@@ -37,6 +41,28 @@ export function normalizeAssistantMediaSource(source: string): string | null {
 type AssistantMediaPolicy = NonNullable<Awaited<ReturnType<typeof resolveAssistantMediaPolicy>>>;
 type AssistantMediaFile = NonNullable<AssistantMediaTicketPayload["file"]>;
 
+/** Keep relative sandbox references in their namespace for reads, association and tickets. */
+export function resolveAssistantMediaSource(
+  source: string,
+  policy: AssistantMediaPolicy,
+): string | null {
+  if (path.isAbsolute(source) || /^[a-z][a-z0-9+.-]*:/iu.test(source)) {
+    return source;
+  }
+  if (policy.remote || !policy.executionCwd || !path.isAbsolute(policy.executionCwd)) {
+    return null;
+  }
+  const resolved = path.resolve(policy.executionCwd, source);
+  const sandbox = policy.sandboxWorkspace;
+  if (!sandbox) {
+    return resolved;
+  }
+  const relative = relativePathInsideSandboxRoot(sandbox.hostRoot, resolved);
+  return relative === null
+    ? null
+    : path.posix.join(sandbox.containerRoot, ...relative.split(path.sep));
+}
+
 function sameAssistantMediaFile(actual: AssistantMediaFile, expected: AssistantMediaFile) {
   return (
     actual.realPath === expected.realPath &&
@@ -49,10 +75,29 @@ export async function openAssistantMedia(
   source: string,
   policy: AssistantMediaPolicy,
   allowance: true | AssistantMediaFile | undefined,
+  assertCurrent: () => void,
 ) {
-  const reference = await resolveMediaReferenceLocalPathInfo(source);
+  const sandbox = policy.sandboxWorkspace;
+  const mapped = !policy.remote && sandbox ? resolveSandboxPathMapping([sandbox], source) : null;
+  const reference = await resolveMediaReferenceLocalPathInfo(mapped?.hostPath ?? source);
+  let workspaceDir = sandbox?.hostRoot;
   if (policy.remote && reference.kind === "local") {
     throw new LocalMediaAccessError("invalid-path", "File is on another computer");
+  }
+  if (sandbox && reference.kind === "local" && isPathInside(sandbox.hostRoot, reference.path)) {
+    const { withSettledLocalWorkspacePath } =
+      await import("./worker-environments/local-workspace-projection.js");
+    assertCurrent();
+    workspaceDir = await withSettledLocalWorkspacePath(
+      { cwd: sandbox.hostRoot, assertCurrent },
+      async (custody) => {
+        if (mapped && custody?.worktreeId !== sandbox.worktreeId) {
+          throw new LocalMediaAccessError("invalid-path", "Sandbox image backing is unavailable");
+        }
+        return custody?.projectionPath ?? sandbox.hostRoot;
+      },
+    );
+    assertCurrent();
   }
   let outsideRoots = false;
   try {
@@ -68,6 +113,26 @@ export async function openAssistantMedia(
   }
   const opened = await openLocalFileSafely({ filePath: reference.path });
   try {
+    let assertSourceCurrent = assertCurrent;
+    if (mapped && sandbox && workspaceDir) {
+      if (!isPathInside(sandbox.hostRoot, opened.realPath)) {
+        throw new LocalMediaAccessError("invalid-path", "Sandbox image backing is unavailable");
+      }
+      const { prepareLocalWorkspaceImageRead } =
+        await import("../agents/sandbox/local-workspace-quiescence.js");
+      assertSourceCurrent = await prepareLocalWorkspaceImageRead({
+        workspaceDir,
+        containerRoot: sandbox.containerRoot,
+        targets: [
+          source,
+          path.posix.join(
+            sandbox.containerRoot,
+            ...path.relative(sandbox.hostRoot, opened.realPath).split(path.sep),
+          ),
+        ],
+        assertCurrent,
+      });
+    }
     let file: AssistantMediaFile | undefined;
     if (outsideRoots && allowance) {
       const identity = await opened.handle.stat({ bigint: true });
@@ -99,7 +164,8 @@ export async function openAssistantMedia(
     if (outsideRoots && kindFromMime(mimeType) !== "image") {
       throw new LocalMediaAccessError("unsupported-media-type", "Not an image");
     }
-    return { opened, reference, mimeType, outsideRoots, file };
+    assertSourceCurrent();
+    return { opened, reference, mimeType, outsideRoots, file, assertSourceCurrent };
   } catch (error) {
     await opened.handle.close().catch(() => {});
     throw error;
@@ -113,10 +179,21 @@ export async function resolveAssistantMediaAvailability(
   agentId: string | undefined,
   signal: AbortSignal,
   assertCurrent: () => void,
-): Promise<AssistantMediaAvailability & { mediaTicket?: string; mediaTicketExpiresAt?: string }> {
+): Promise<
+  AssistantMediaAvailability & {
+    mediaTicket?: string;
+    mediaTicketExpiresAt?: string;
+    assertSourceCurrent?: () => void;
+  }
+> {
   try {
     assertCurrent();
-    const { opened, mimeType, file } = await openAssistantMedia(source, policy, allowance);
+    const { opened, mimeType, file, assertSourceCurrent } = await openAssistantMedia(
+      source,
+      policy,
+      allowance,
+      assertCurrent,
+    );
     // The inspection owner reopens and verifies this identity after queue admission.
     await opened[Symbol.asyncDispose]();
     const mediaKind = kindFromMime(mimeType);
@@ -133,17 +210,19 @@ export async function resolveAssistantMediaAvailability(
             mimeType,
             kind: mediaKind,
             signal,
-            assertCurrent,
+            assertCurrent: assertSourceCurrent,
           })
         : undefined;
-    assertCurrent();
+    assertSourceCurrent();
     return {
       available: true,
+      assertSourceCurrent,
       ...(mimeType ? { mimeType } : {}),
       sizeBytes: opened.stat.size,
       ...playbackMetadata,
       ...createAssistantMediaTicket({
         source,
+        workspaceKey: resolveAssistantMediaWorkspaceTicketKey(source, policy),
         agentId,
         session: policy.session,
         ...(policy.messageId ? { messageId: policy.messageId } : {}),

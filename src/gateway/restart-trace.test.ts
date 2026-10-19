@@ -10,6 +10,7 @@ import {
   finishGatewayRestartTrace,
   formatGatewayPendingCloseSteps,
   measureGatewayCloseStep,
+  measureGatewayRestartTrace,
   recordGatewayRestartTraceSpan,
   startGatewayRestartTrace,
 } from "./restart-trace.js";
@@ -29,6 +30,7 @@ describe("gateway shutdown diagnostics", () => {
   });
   afterEach(() => {
     finishGatewayRestartTrace("test.finish");
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     logInfo.mockClear();
@@ -81,6 +83,58 @@ describe("gateway shutdown diagnostics", () => {
       first.resolve();
       second.resolve();
       await Promise.allSettled([closingFirst, closingSecond]);
+    }
+  });
+
+  it("reports live sub-waits every five seconds only while shutdown joins are pending", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const subWait = createDeferredCore();
+    const first = createDeferredCore();
+    const second = createDeferredCore();
+    const runtime = measureGatewayRestartTrace(
+      "worker-placement.reconcile.read",
+      () => subWait.promise,
+      undefined,
+      true,
+    );
+    let closingFirst: Promise<void> | undefined;
+    let closingSecond: Promise<void> | undefined;
+    try {
+      clock = 5_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(logInfo).not.toHaveBeenCalled();
+      expect(formatGatewayPendingCloseSteps()).toBe("none");
+
+      closingFirst = measureGatewayCloseStep("shutdown.worker-placement", () => first.promise);
+      clock = 10_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(logInfo).toHaveBeenLastCalledWith(
+        "shutdown pending: count=2 worker-placement.reconcile.read=10000ms, shutdown.worker-placement=5000ms",
+      );
+      closingSecond = measureGatewayCloseStep("shutdown.worker-environments", () => second.promise);
+      first.resolve();
+      await closingFirst;
+      clock = 15_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(logInfo).toHaveBeenLastCalledWith(
+        "shutdown pending: count=2 worker-placement.reconcile.read=15000ms, shutdown.worker-environments=5000ms",
+      );
+
+      second.resolve();
+      await closingSecond;
+      logInfo.mockClear();
+      clock = 20_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(logInfo).not.toHaveBeenCalled();
+      expect(formatGatewayPendingCloseSteps()).toBe("none");
+      subWait.resolve();
+      await runtime;
+      expect(logInfo).not.toHaveBeenCalled();
+    } finally {
+      subWait.resolve();
+      first.resolve();
+      second.resolve();
+      await Promise.allSettled([runtime, closingFirst, closingSecond]);
     }
   });
 

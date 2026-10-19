@@ -83,6 +83,22 @@ function templateFragment(fragment: SqliteMemorySearchFragment): SqliteMemorySea
       };
 }
 
+/** Include deployed explicit-unicode spellings as well as current lazy FTS schemas. */
+export function getSqliteMemorySearchFtsSchemas(): string[] {
+  return (["body-fts", "path-fts"] as const).flatMap((kind) => {
+    const fragment = templateFragment({ kind, tableName: "", tokenizer: "unicode61" });
+    if (fragment.kind === "vector") {
+      return [];
+    }
+    return [
+      buildTextSchema(fragment, ""),
+      buildTextSchema(fragment, ", tokenize='unicode61'"),
+      buildTextSchema(fragment, ', tokenize="unicode61"'),
+      buildTextSchema(fragment, tokenizerClause("trigram")),
+    ];
+  });
+}
+
 /** One generated hash per fragment; dimensions and custom names belong to the owner's receipt. */
 export function getSqliteMemorySearchFragmentFingerprint(
   fragment: SqliteMemorySearchFragment,

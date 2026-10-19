@@ -270,8 +270,6 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
         params.sessionId,
         params.previousSessionId,
       );
-      params.assertCurrent();
-      assertCurrent();
       return withSessionDeletion({ ...params, sessionId }, run, true);
     },
     dispose: async () => {

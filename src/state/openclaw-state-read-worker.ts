@@ -1,10 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import {
-  createRetainedOperation,
-  flatMapRetainedOperation,
-  mapRetainedOperation,
-  type RetainedOperation,
-} from "@openclaw/worker-runtime/lifecycle";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
@@ -24,7 +18,6 @@ import {
 import {
   closeReadResources,
   createStateReadPool,
-  startReadTask,
   stateReadPools,
   type ReadPool,
 } from "./openclaw-state-read-pool.js";
@@ -44,9 +37,7 @@ import {
   retainOpenClawStateWorkerErrorPayload,
 } from "./openclaw-state-worker-error.js";
 
-export function decodeOpenClawStateReadReply(
-  reply: OpenClawStateReadReply,
-): OpenClawStateReadOutcome {
+function decodeOpenClawStateReadReply(reply: OpenClawStateReadReply): OpenClawStateReadOutcome {
   if (reply.ok) {
     return { value: reply };
   }
@@ -269,25 +260,16 @@ function createReadTransport(
 ) {
   // Capture nested input before the read owner can yield during snapshot preparation.
   const capturedCommand = structuredClone(command);
-  type ReadTask = ReturnType<ReadPool["startTask"]>;
+  type ReadTask = ReturnType<ReadPool["runTask"]>;
   const tasks = new Map<ReadTask, { retire: boolean }>();
   let closed = false;
-  let closing: RetainedOperation<void> | undefined;
+  let closing: Promise<void> | undefined;
   let pendingChunks = 0;
+  let chunksDrained: (() => void) | undefined;
 
-  const startCloseTask = (task: ReadTask): RetainedOperation<void> => {
-    try {
-      return mapRetainedOperation(
-        task.release(tasks.get(task)?.retire ? { retire: true } : undefined),
-        () => {
-          tasks.delete(task);
-        },
-      );
-    } catch (error) {
-      const completion = createRetainedOperation<void>(() => {});
-      completion.reject(error);
-      return completion.operation;
-    }
+  const closeTask = async (task: ReadTask): Promise<void> => {
+    await task.close(tasks.get(task)?.retire ? { retire: true } : undefined);
+    tasks.delete(task);
   };
 
   const startRun = (
@@ -300,38 +282,8 @@ function createReadTransport(
     snapshotRoot?: string,
     postgresSnapshot?: string,
   ) => {
-    const inContext = AsyncLocalStorage.snapshot();
-    let task: ReadTask | undefined;
     let releaseAdmission: (() => void) | undefined;
-    let retireAfterRead = false;
     const cleanup = { retire: true };
-    const completion = createRetainedOperation<OpenClawStateReadOutcome>(() => inContext(service));
-    function service() {
-      if (!task || completion.operation.read().status !== "pending") {
-        return;
-      }
-      let outcome: OpenClawStateReadOutcome;
-      try {
-        task.service();
-        const read = task.read();
-        if (read.status === "pending") {
-          return;
-        }
-        if (read.status === "rejected") {
-          throw read.error;
-        }
-        const reply = read.value;
-        cleanup.retire = retireAfterRead || Boolean(reply.nativeCleanupFailure);
-        outcome = decodeOpenClawStateReadReply(reply);
-      } catch (error) {
-        outcome = { error };
-      }
-      releaseAdmission?.();
-      releaseAdmission = undefined;
-      // Native closes and quarantine cleanup can require exit even when the domain read succeeds.
-      cleanup.retire ||= "error" in outcome;
-      completion.resolve(outcome);
-    }
     try {
       if (closed) {
         throw new WorkerTaskError("Shared-state read transport is closed", "unavailable");
@@ -353,9 +305,9 @@ function createReadTransport(
       };
       const pool = readPool(state, ownsAdmission(), awaitedOnly);
       // Maintenance reuses this reader; standalone inspection releases it before metadata loads.
-      retireAfterRead = !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";
-      task = startReadTask(
-        pool,
+      const retireAfterRead =
+        !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";
+      const task = pool.pool.runTask(
         () => {
           const physicalLocation = resolveSqliteDatabaseFilePath(location);
           const requestForDispatch = () => {
@@ -399,7 +351,9 @@ function createReadTransport(
                     return { input: null, timeoutMs: 300_000 };
                   } finally {
                     pendingChunks -= 1;
-                    closing?.service();
+                    if (pendingChunks === 0) {
+                      chunksDrained?.();
+                    }
                   }
                 },
               }
@@ -415,23 +369,33 @@ function createReadTransport(
         },
       );
       tasks.set(task, cleanup);
-      void task.result.then(
-        () => completion.operation.service(),
-        () => completion.operation.service(),
-      );
-      completion.operation.service();
+      const result = (async (): Promise<OpenClawStateReadOutcome> => {
+        let outcome: OpenClawStateReadOutcome;
+        try {
+          const reply = await task.result;
+          cleanup.retire = retireAfterRead || Boolean(reply.nativeCleanupFailure);
+          outcome = decodeOpenClawStateReadReply(reply);
+        } catch (error) {
+          outcome = { error };
+        }
+        releaseAdmission?.();
+        releaseAdmission = undefined;
+        // Native closes and quarantine cleanup can require exit even when the domain read succeeds.
+        cleanup.retire ||= "error" in outcome;
+        return outcome;
+      })();
+      return { task, result };
     } catch (error) {
       releaseAdmission?.();
       releaseAdmission = undefined;
-      completion.reject(error);
+      throw error;
     }
-    return { task, operation: completion.operation };
   };
 
-  const startValidateFresh = (
+  const startValidateFresh = async (
     context: OpenClawStateWorkerContext,
     authority: OpenClawStateReadAuthority,
-  ): RetainedOperation<void> => {
+  ): Promise<void> => {
     const run = startRun(
       context,
       context.admission.databasePath,
@@ -439,19 +403,18 @@ function createReadTransport(
       { type: "admit" },
       authority,
     );
-    return flatMapRetainedOperation(run.operation, (read) => {
-      if ("error" in read) {
-        throw read.error;
-      }
-      authority.assertCurrent();
-      if (!run.task) {
-        throw new Error("Shared-state admission completed without its retained task");
-      }
-      return startCloseTask(run.task);
-    });
+    const read = await run.result;
+    if ("error" in read) {
+      throw read.error;
+    }
+    authority.assertCurrent();
+    await closeTask(run.task);
   };
-  const startRead = (source: OpenClawStateReadLocation, authority: OpenClawStateReadAuthority) =>
-    startRun(
+  const startRead = async (
+    source: OpenClawStateReadLocation,
+    authority: OpenClawStateReadAuthority,
+  ): Promise<OpenClawStateReadOutcome> =>
+    await startRun(
       source.context,
       source.location,
       source.checkFreshAdmission,
@@ -460,50 +423,29 @@ function createReadTransport(
       source.expectedIdentity,
       source.snapshotRoot,
       source.postgresSnapshot,
-    ).operation;
-  const startClose = (): RetainedOperation<void> => {
+    ).result;
+  const startClose = (): Promise<void> => {
     closed = true;
     if (closing) {
       return closing;
     }
-    const releases = [...tasks.keys()].map(startCloseTask);
-    const inContext = AsyncLocalStorage.snapshot();
-    const completion = createRetainedOperation<void>(() => inContext(service));
-    closing = completion.operation;
-    function service() {
-      if (completion.operation.read().status !== "pending") {
-        return;
-      }
-      const errors: unknown[] = [];
+    closing = (async () => {
+      const releases = await Promise.allSettled([...tasks.keys()].map(closeTask));
       // Pool cancellation stops the worker, but an accepted host consumer still owns its data.
-      let pending = pendingChunks > 0;
-      for (const release of releases) {
-        release.service();
-        const outcome = release.read();
-        pending ||= outcome.status === "pending";
-        if (outcome.status === "rejected") {
-          errors.push(outcome.error);
-        }
+      if (pendingChunks > 0) {
+        await new Promise<void>((resolve) => {
+          chunksDrained = resolve;
+        });
       }
-      if (pending) {
-        return;
-      }
-      closing = undefined;
-      try {
-        throwSqliteLifecycleErrors(errors, "Shared-state reader task cleanup failed");
-        completion.resolve(undefined);
-      } catch (error) {
-        completion.reject(error);
-      }
-    }
-    for (const release of releases) {
-      void release.result.then(
-        () => completion.operation.service(),
-        () => completion.operation.service(),
+      throwSqliteLifecycleErrors(
+        releases.flatMap((release) => (release.status === "rejected" ? [release.reason] : [])),
+        "Shared-state reader task cleanup failed",
       );
-    }
-    completion.operation.service();
-    return completion.operation;
+    })().finally(() => {
+      chunksDrained = undefined;
+      closing = undefined;
+    });
+    return closing;
   };
   return {
     startValidateFresh,

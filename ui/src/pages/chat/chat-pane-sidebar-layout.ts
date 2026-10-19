@@ -8,7 +8,9 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import type { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
+import type { BoardProvider } from "../../lib/board/provider.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { uiConversationMatches } from "../../lib/sessions/session-key.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
@@ -17,6 +19,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar-content-types.ts";
 import type { SidebarRegionCallbacks } from "./components/chat-sidebar-region-types.ts";
+import { createChatWidgetLayout } from "./session-message-cache.ts";
 import {
   activatePanel,
   toggleSidebarPanelExpanded,
@@ -201,6 +204,20 @@ export function renderSidebarRegion(params: SidebarRegionParams) {
   };
 }
 
+export function chatWidgetRenderOptions(
+  state: ChatPageHost,
+  boardProvider: BoardProvider | undefined,
+) {
+  return {
+    canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
+    boardProvider,
+    widgetLayout: createChatWidgetLayout(state.chatMessagesBySession, state, {
+      sessionKey: state.sessionKey,
+      ...scopedAgentParamsForSession(state, state.sessionKey),
+    }),
+  };
+}
+
 export function resolveSidebarLayoutForBoard(params: {
   board: ResolvedBoardView;
   layout: SidebarLayout;
@@ -265,7 +282,7 @@ export function createSidebarFullMessageLoader(
     }
     const client = state.client;
     const generation = state.connectionEpoch;
-    const scope = { ...readScope() };
+    const scope = readScope();
     const sameScope = (other: FullMessageScope) =>
       scope.owner === other.owner &&
       scope.sessionKey === other.sessionKey &&

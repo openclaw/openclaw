@@ -18,17 +18,14 @@ import { attachGatewayConnection, type GatewayConnectionOptions } from "./connec
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { takePublicWorkerIngress } from "./public-worker-ingress-context.js";
 import { installGatewayDeflateCodec } from "./ws-compression.js";
-import {
-  isWsPayloadLimitError,
-  resolveSocketAddress,
-  recordGatewayWsEvent,
-} from "./ws-connection-diagnostics.js";
+import { isWsPayloadLimitError, resolveSocketAddress } from "./ws-connection-diagnostics.js";
 import type { WsOriginCheckMetrics } from "./ws-connection/message-handler-types.js";
 import {
   attachWorkerWsMessageHandler,
   type WorkerConnectionService,
 } from "./ws-connection/worker-connection.js";
 import { prepareGatewayReceiverHandoff } from "./ws-receiver.js";
+import { createGatewayWebSocketTransport } from "./ws-transport.js";
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
@@ -74,32 +71,19 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       return;
     }
     // Install before ws parses the first frame; the upgrade emits synchronously.
-    const compression = installGatewayDeflateCodec(socket);
+    const compression = installGatewayDeflateCodec(socket, upgradeReq.socket);
     if (!compression && !warnedDeflateCodec) {
       warnedDeflateCodec = true;
       params.logWsControl.warn(
         "unsupported ws permessage-deflate extension; compressed frames use the slower ws path",
       );
     }
-    let batched = false;
-    Object.assign(socket, {
-      recordEventSent: recordGatewayWsEvent,
-      acceptsDeflatedSegments: compression?.acceptsDeflatedSegments ?? false,
-      batchWrites() {
-        if (batched) {
-          return;
-        }
-        batched = true;
-        upgradeReq.socket.cork();
-        process.nextTick(() => {
-          batched = false;
-          upgradeReq.socket.uncork();
-        });
-      },
-      sendUncompressed(frame: string, callback?: (error?: Error) => void) {
-        socket.send(frame, { compress: false }, callback);
-      },
-    });
+    const transport = createGatewayWebSocketTransport(
+      socket,
+      upgradeReq.socket,
+      compression?.acceptsDeflatedSegments ?? false,
+      compression?.observeFrameBytes,
+    );
     const ingressSocket = socket as GatewayIngressWebSocket;
     const connectionKind = ingressSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
     const publicWorkerIngress =
@@ -125,7 +109,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     attachGatewayConnection({
       ...params,
-      socket,
+      socket: transport,
       connectionKind,
       request: upgradeReq,
       ingressAttribution: readPreparedGatewayIngressAttribution(upgradeReq),
@@ -136,6 +120,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       originCheckMetrics,
       prepareAuthenticatedReceive: (role) => prepareGatewayReceiverHandoff(socket, role),
       onAuthenticated: (client, onHeartbeatTimeout) => {
+        client.socket = transport;
         client.webSocket = socket;
         const stopKeepalive = startWebSocketKeepalive(
           socket,

@@ -1,4 +1,3 @@
-// Shared status scan overview used by compact status, status --json, and status --all.
 // It collects config, update, gateway, channel, and local agent state before specialized callers add details.
 
 import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
@@ -11,10 +10,13 @@ import type { UpdateCheckResult } from "../infra/update-check.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import type { StatusSessionStores } from "../status/session-stores.js";
+import type { PreparedStatusSessionStores } from "../status/session-stores.js";
 import type { StatusSummary } from "../status/summary.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
-import type { AgentLocalStatusesResult } from "./status.agent-local.js";
+import type {
+  AgentLocalStatusesResult,
+  PreparedStatusLocalSnapshot,
+} from "./status.agent-local.js";
 import {
   resolveStatusGatewayProbeTimeoutMs,
   type StatusGatewayProbeBudget,
@@ -106,6 +108,7 @@ export type StatusScanOverviewResult = {
         | "installationReplacementWarning"
         | "childRuntime"
         | "secretEgressProxy"
+        | "pluginReload"
         | "sqliteWal"
         | "databaseStores"
       > &
@@ -114,8 +117,8 @@ export type StatusScanOverviewResult = {
   channelsStatus: unknown;
   channelIssues: ReturnType<typeof collectChannelStatusIssuesFn>;
   channels: Awaited<ReturnType<typeof buildChannelsTableFn>>;
-  agentStatus: AgentLocalStatusesResult;
-  sessionStores?: StatusSessionStores;
+  agentStatus: AgentLocalStatusesResult | PreparedStatusLocalSnapshot;
+  sessionStores?: PreparedStatusSessionStores;
 };
 
 /** Collects the common status scan data shared by text, JSON, and status-all commands. */
@@ -215,8 +218,10 @@ export async function collectStatusScanOverview(params: {
         }),
       );
   const osSummary = resolveOsSummary();
-  let sessionStores: StatusSessionStores | undefined;
-  const bootstrap = await createStatusScanCoreBootstrap<AgentLocalStatusesResult>({
+  let sessionStores: PreparedStatusSessionStores | undefined;
+  const bootstrap = await createStatusScanCoreBootstrap<
+    AgentLocalStatusesResult | PreparedStatusLocalSnapshot
+  >({
     coldStart,
     cfg,
     configPath: snapshot.path,
@@ -252,7 +257,7 @@ export async function collectStatusScanOverview(params: {
           statusAgentLocalModuleLoader.load().then(async ({ collectStatusLocalSnapshot }) => {
             const local = await collectStatusLocalSnapshot(bootstrapCfg);
             sessionStores = local.sessionStores;
-            return local.agentStatus;
+            return local;
           }),
         { config: cfg, env },
       ),
@@ -267,7 +272,7 @@ export async function collectStatusScanOverview(params: {
   params.progress?.tick();
 
   setProgressLabel("resolvingAgents");
-  const agentStatus = await bootstrap.agentStatusPromise;
+  const localSnapshot = await bootstrap.agentStatusPromise;
   params.progress?.tick();
 
   setProgressLabel("probingGateway");
@@ -302,6 +307,7 @@ export async function collectStatusScanOverview(params: {
           installationReplacementWarning: status.installationReplacementWarning,
           ...(params.opts.deep && status.childRuntime ? { childRuntime: status.childRuntime } : {}),
           secretEgressProxy: status.secretEgressProxy,
+          pluginReload: status.pluginReload,
           sqliteWal: status.sqliteWal,
           ...(status.databaseStores ? { databaseStores: status.databaseStores } : {}),
           // The Gateway owns route readiness; CLI channel runtimes stay unloaded.
@@ -376,26 +382,29 @@ export async function collectStatusScanOverview(params: {
     channelsStatus,
     channelIssues,
     channels,
-    agentStatus,
+    agentStatus: localSnapshot,
     ...(sessionStores ? { sessionStores } : {}),
   };
 }
 
-/** Resolves the summary object from overview data, preserving cold-start fast-path behavior. */
-export async function resolveStatusSummaryFromOverview(params: {
+/** Prepares a local summary while preserving the cold-start fast path. */
+export async function prepareStatusSummaryFromOverview(params: {
   overview: Pick<
     StatusScanOverviewResult,
     "skipColdStartNetworkChecks" | "cfg" | "sourceConfig" | "runtimeDegradation" | "sessionStores"
   >;
-}): Promise<StatusSummary> {
+}) {
   if (params.overview.skipColdStartNetworkChecks) {
-    return buildColdStartStatusSummary();
+    const summary: StatusSummary = buildColdStartStatusSummary();
+    return {
+      publish: () => ({ summary, sessionStores: undefined }),
+    };
   }
-  const summary = await measureCliCommandStartup(
+  const prepared = await measureCliCommandStartup(
     "status.summary",
     () =>
-      statusSummaryModuleLoader.load().then(({ getStatusSummary }) =>
-        getStatusSummary({
+      statusSummaryModuleLoader.load().then(({ prepareStatusSummary }) =>
+        prepareStatusSummary({
           config: params.overview.cfg,
           sourceConfig: params.overview.sourceConfig,
           // CLI scans own channel output separately; skip duplicate plugin discovery in the summary.
@@ -407,7 +416,15 @@ export async function resolveStatusSummaryFromOverview(params: {
       ),
     { config: params.overview.cfg },
   );
-  return params.overview.runtimeDegradation
-    ? { ...summary, ...params.overview.runtimeDegradation }
-    : summary;
+  return {
+    publish() {
+      const result = prepared.publish();
+      return {
+        ...result,
+        summary: params.overview.runtimeDegradation
+          ? { ...result.summary, ...params.overview.runtimeDegradation }
+          : result.summary,
+      };
+    },
+  };
 }

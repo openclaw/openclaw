@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { DEFAULT_MODEL_ALIASES } from "../../config/defaults.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -36,7 +37,7 @@ export async function modelsAliasesListCommand(
   }
   if (opts.plain) {
     for (const [alias, target] of aliasEntries) {
-      writeRuntimeStdout(runtime, `${alias} ${target}`);
+      writeRuntimeStdout(runtime, `${sanitizeTerminalText(alias)} ${sanitizeTerminalText(target)}`);
     }
     return;
   }
@@ -47,7 +48,7 @@ export async function modelsAliasesListCommand(
     return;
   }
   for (const [alias, target] of aliasEntries) {
-    runtime.log(`- ${alias} -> ${target}`);
+    runtime.log(`- ${sanitizeTerminalText(alias)} -> ${sanitizeTerminalText(target)}`);
   }
 }
 

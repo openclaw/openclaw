@@ -261,7 +261,9 @@ export function prepareBundledPluginRuntime() {
                 expect(maintenance).toBeDefined();
                 maintenance?.assertDatabaseAccess(lease.databasePath);
                 runOutsideOpenClawDatabaseMaintenanceScope(() => {
-                  expect(() => openOpenClawStateDatabase({ env })).toThrow("offline maintenance");
+                  expect(() => openOpenClawStateDatabase({ env })).toThrow(
+                    "without an active schema lease or maintenance scope",
+                  );
                 });
                 const before = readExpiry();
                 await vi.advanceTimersByTimeAsync(leaseMs * 4);

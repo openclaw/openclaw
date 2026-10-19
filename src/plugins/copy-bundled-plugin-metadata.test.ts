@@ -97,6 +97,40 @@ function writeStaleMetadata(dir: string, id: string, skills?: string[]) {
 afterEach(() => cleanupTempDirs(tempDirs));
 
 describe("copyBundledPluginMetadata", () => {
+  it.each([false, true])(
+    "copies owned channel Settings declarations from generated=%s metadata without touching siblings",
+    (generated) => {
+      const repoRoot = makeRepoRoot("openclaw-bundled-channel-settings-");
+      const controlUi = {
+        entry: "dist/control-ui/fixture/index.js",
+        activation: "settings-only",
+        settingsViews: [{ section: "channels", panel: "detail", channelId: "custom" }],
+      };
+      const pluginDir = createPlugin(repoRoot, {
+        id: "profile-fixture",
+        manifest: { channels: ["custom"], controlUi },
+      });
+      if (generated) {
+        writeJsonFile(path.join(pluginDir, "package.json"), {
+          name: "@openclaw/profile-fixture",
+          openclaw: { extensions: ["./index.ts"], controlUi: "./browser.ts" },
+        });
+        writeJsonFile(path.join(pluginDir, "dist/openclaw.plugin.json"), { controlUi });
+      }
+      const sibling = bundledPluginDir(repoRoot, "sibling");
+      writeFiles(sibling, {
+        "index.js": "preserve runtime",
+        "openclaw.plugin.json": '{"id":"sibling"}',
+      });
+      copyBundledPluginMetadata({ repoRoot, pluginIds: new Set(["profile-fixture"]) });
+      expect(readBundledManifest(repoRoot, "profile-fixture")).toMatchObject({
+        channels: ["custom"],
+        controlUi,
+      });
+      expect(readText(sibling, "index.js")).toBe("preserve runtime");
+      expect(readText(sibling, "openclaw.plugin.json")).toBe('{"id":"sibling"}');
+    },
+  );
   it("copies plugin metadata, README, activity artwork, and skills without replacing runtime assets", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-meta-");
     const pluginDir = createPlugin(repoRoot, {

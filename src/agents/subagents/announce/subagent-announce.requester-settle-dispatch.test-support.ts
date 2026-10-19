@@ -4,6 +4,10 @@ import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.j
 import { createChatRunState } from "../../../gateway/server-chat-state.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
+import {
+  clearSessionControllerMailbox,
+  sessionControllerMailboxes,
+} from "../../../sessions/session-controller.mailbox.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { trackAsyncWork } from "../../../shared/async-work-scope.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -20,7 +24,8 @@ import {
   readDescendantFacts,
   loadRequester,
 } from "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
-import type { RequesterSettleWakeBatchCallbacks } from "./subagent-announce.requester-settle-state.js";
+
+export { publishWakeTransition } from "./subagent-announce.requester-settle-wake.test-support.js";
 
 export { deliver, registryRead, startTurn, readDescendantFacts, loadRequester };
 
@@ -65,17 +70,22 @@ export function useRequesterSettleDispatchFixture() {
     resetCommandQueueStateForTest();
     startTurn.mockReset();
     deliver.mockReset();
-    loadRequester.mockReset().mockResolvedValue({
+    loadRequester.mockReset().mockImplementation(async (sessionKey) => ({
       cfg: {},
-      canonicalKey: REQUESTER_KEY,
+      canonicalKey: sessionKey,
+      agentId: "main",
+      storePath: "/synthetic/requester-settle-dispatch/sessions.db",
       entry: { sessionId: "requester-session", updatedAt: 1 },
-    });
+    }));
     readDescendantFacts.mockReset().mockResolvedValue({ unsettled: false, active: 0 });
     registryRead.getLatestLiveSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
     registryRead.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
   });
 
   afterEach(() => {
+    for (const mailbox of sessionControllerMailboxes()) {
+      clearSessionControllerMailbox(mailbox, () => {});
+    }
     vi.mocked(announceOutput.readChildCompletionFindings).mockRestore();
     resetCommandQueueStateForTest();
     setSubagentAnnounceDeliveryDepsForTest();
@@ -86,17 +96,6 @@ export function useRequesterSettleDispatchFixture() {
 }
 
 export const REQUESTER_KEY = "agent:main:main";
-
-export const publishWakeTransition: RequesterSettleWakeBatchCallbacks["transitionBatch"] = (
-  batch,
-  state,
-  onPublished,
-) => {
-  for (const entry of batch) {
-    entry.requesterSettleWake = state;
-  }
-  onPublished(batch);
-};
 
 export function settledChild(): SubagentRunRecord {
   return {
@@ -133,7 +132,6 @@ export function createRequesterSettleContext(): GatewayRequestContext {
     trackExecution: trackAsyncWork,
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
-    chatAbortControllers: new Map(),
     chatRunState,
     dedupe: new Map(),
     getRuntimeConfig: () => ({}),

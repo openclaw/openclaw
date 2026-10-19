@@ -623,7 +623,10 @@ describe("openrouter video generation provider", () => {
     expect(requireRecord(requirePostJsonParams().body, "OpenRouter request body").duration).toBe(8);
   });
 
-  it("preserves runtime-normalized live catalog durations in request bodies", async () => {
+  it.each([
+    { hint: [5], expected: 5 },
+    { hint: [], expected: 6 },
+  ])("uses live duration hint $hint and static values when empty", async ({ hint, expected }) => {
     postJsonRequestMock.mockResolvedValue(
       releasedJson({
         id: "job-123",
@@ -639,10 +642,12 @@ describe("openrouter video generation provider", () => {
     await generateVideo({
       prompt: "A brushed steel logo rotates against a clean white backdrop",
       durationSeconds: 5,
-      [SUPPORTED_DURATIONS_HINT]: [5],
+      [SUPPORTED_DURATIONS_HINT]: hint,
     });
 
-    expect(requireRecord(requirePostJsonParams().body, "OpenRouter request body").duration).toBe(5);
+    expect(requireRecord(requirePostJsonParams().body, "OpenRouter request body").duration).toBe(
+      expected,
+    );
   });
 
   it("submits OpenRouter video jobs, polls completion, and downloads the result", async () => {

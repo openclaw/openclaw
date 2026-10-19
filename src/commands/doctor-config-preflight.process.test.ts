@@ -402,6 +402,62 @@ describe("doctor invalid config process exit", () => {
     getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
   );
 
+  it.each(
+    ["sqlite", "postgres"].flatMap((engine) =>
+      ["onboard", "setup"].map((entry) => ({ engine, entry })),
+    ),
+  )(
+    "preserves setup JSON failure output for malformed $engine config through $entry",
+    async ({ engine, entry }) => {
+      const { stateDir, configPath, run } = createDoctorFixture("setup-invalid-json", true);
+      const raw = `{"database":{"engine":"${engine}"}, broken`;
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(configPath, raw);
+
+      const result = await run([entry, "--json"], DOCTOR_CHILD_TIMEOUT_MS);
+      expect(result, result.stderr).toMatchObject({ code: 1, signal: null });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        error: { type: "cli_error", message: expect.stringContaining("Invalid config at") },
+      });
+      expect(result.stderr).not.toContain('Run "openclaw doctor --fix" now?');
+      expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+      expect(
+        fs
+          .readdirSync(stateDir, { recursive: true, encoding: "utf8" })
+          .filter((file) => /\.(?:sqlite|db)(?:$|-(?:wal|shm|journal)$)/u.test(file)),
+      ).toEqual([]);
+    },
+    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
+  );
+
+  it.each([
+    { args: ["onboard"], flag: "OPENCLAW_CONFIG_READONLY" },
+    { args: ["setup", "--wizard"], flag: "OPENCLAW_NIX_MODE" },
+  ])(
+    "preserves immutable setup guidance for $flag without opening storage",
+    async ({ args, flag }) => {
+      const { stateDir, configPath, env, run } = createDoctorFixture("setup-immutable", true);
+      const raw = 'synthetic warning\n{"database":{"engine":"postgres"}}\n';
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(configPath, raw);
+
+      const result = await run(args, DOCTOR_CHILD_TIMEOUT_MS, { ...env, [flag]: "1" });
+      const output = `${result.stderr}\n${result.stdout}`;
+      expect(result, output).toMatchObject({ code: 1, signal: null });
+      expect(output).toContain(`${flag}=1`);
+      expect(output).toContain("immutable");
+      expect(output).not.toContain('Run "openclaw doctor --fix"');
+      expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+      expect(
+        fs
+          .readdirSync(stateDir, { recursive: true, encoding: "utf8" })
+          .filter((file) => /\.(?:sqlite|db)(?:$|-(?:wal|shm|journal)$)/u.test(file)),
+      ).toEqual([]);
+    },
+    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
+  );
+
   it.each(["sqlite", "postgres"] as const)(
     "leaves prefixed %s config untouched while a live Gateway owns the target",
     async (engine) => {
@@ -495,13 +551,23 @@ describe("doctor invalid config process exit", () => {
 });
 
 describe("Doctor repair followed by gateway readiness", () => {
-  it("serves canonical state after Doctor repairs cron and preserves retired plugin sidecars", async () => {
+  it("serves canonical state after Doctor repairs cron and preserves retired plugin sidecars", async ({
+    signal,
+    onTestFailed,
+  }) => {
+    const phases: Array<{ name: string; elapsedMs: number }> = [];
+    const startedAt = performance.now();
+    const mark = (name: string) => phases.push({ name, elapsedMs: performance.now() - startedAt });
+    mark("runtime fixture");
+    onTestFailed(() => console.error("[doctor-cron-readiness]", JSON.stringify(phases)));
     const nodeExecutable = resolveTestNodeExecPath();
     const runtimeRoot = createBuiltRuntime(
       tempDirs.createTempDir("openclaw-cron-upgrade-runtime-"),
     );
+    mark("instance fixture");
     const instance = await createOpenClawTestInstance({
       name: "cron-upgrade-ready",
+      signal,
       cwd: runtimeRoot,
       gatewayCommandPrefix: [nodeExecutable],
       entrypoint: [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js")],
@@ -530,6 +596,7 @@ describe("Doctor repair followed by gateway readiness", () => {
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
 
     try {
+      mark("seed state");
       await instance.state.writeConfig({
         agents: { entries: { main: {} } },
         gateway: { mode: "local", port, auth: { mode: "none" } },
@@ -588,10 +655,12 @@ describe("Doctor repair followed by gateway readiness", () => {
         database.close();
       }
 
+      mark("doctor CLI");
       const doctor = await instance.cli(doctorArgs("fix"), {
         execPath: nodeExecutable,
         timeoutMs: 30_000,
       });
+      mark("verify Doctor repair");
       const doctorOutput = `${doctor.stdout}\n${doctor.stderr}`;
       expect(doctor.code, doctorOutput).toBe(0);
       expect(doctorOutput).not.toContain("Building Control UI assets");
@@ -611,12 +680,15 @@ describe("Doctor repair followed by gateway readiness", () => {
       });
 
       try {
+        mark("Gateway start");
         await instance.startGateway();
-        const response = await fetch(`http://127.0.0.1:${port}/readyz`);
+        mark("readyz");
+        const response = await fetch(`http://127.0.0.1:${port}/readyz`, { signal });
         await expect(response.json()).resolves.toMatchObject({ ready: true, failing: [] });
         const logs = instance.logs();
         expect(logs).not.toContain("Left plugin-state sidecar in place");
         expect(logs).not.toContain(STARTUP_REFUSAL);
+        mark("status CLI");
         const status = await instance.cli(["gateway", "call", "status", "--json"], {
           execPath: nodeExecutable,
         });
@@ -624,10 +696,12 @@ describe("Doctor repair followed by gateway readiness", () => {
         expect(JSON.parse(status.stdout).startupMigrationWarning).toBeUndefined();
         expect(fs.readFileSync(sidecarPath)).toEqual(preservedSidecar);
       } finally {
+        mark("Gateway stop");
         await instance.stopGateway();
       }
       expect(readPluginState()).toEqual({ value_json: '{"ok":false}', created_at: 2_000 });
 
+      mark("read canonical cron");
       const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env);
       expect(loaded.store.jobs.map((entry) => entry.id)).toContain("valid-job");
       // SQLite config decoding quarantines the trigger before Doctor validates runtime state.
@@ -643,7 +717,9 @@ describe("Doctor repair followed by gateway readiness", () => {
       ]);
       expect(fs.existsSync(storePath)).toBe(false);
     } finally {
+      mark("cleanup");
       await instance.cleanup();
+      mark("cleanup settled");
     }
   }, 45_000);
 

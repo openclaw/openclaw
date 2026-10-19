@@ -1,4 +1,3 @@
-// Session patch hook dispatcher.
 // Publishes internal mutation notifications after Gateway session patch calls.
 import {
   hasInternalHookListeners,

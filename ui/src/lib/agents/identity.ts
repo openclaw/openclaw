@@ -3,16 +3,20 @@ import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/s
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import { isGatewayAvailable, resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
 
 type AgentIdentityGatewaySnapshot = Pick<
   ApplicationGatewaySnapshot,
   "client" | "phase" | "restartPending" | "suspensionPhase"
->;
+> &
+  Partial<Pick<ApplicationGatewaySnapshot, "hello" | "selfUser">>;
 
 type AgentIdentityGateway = {
   readonly snapshot: AgentIdentityGatewaySnapshot;
+  readonly connectionRevision?: number;
   subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
   subscribeEvents?: (listener: (event: { event: string; payload?: unknown }) => void) => () => void;
 };
@@ -102,6 +106,7 @@ export type AgentIdentityCapability = ReturnType<typeof createAgentIdentityCapab
 export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
   let cachedClient: GatewayBrowserClient | null = gateway.snapshot.client;
   let cachedConnected = gateway.snapshot.phase === "connected";
+  let presentationKey = gatewayPresentationScope(gateway).key;
   let connectionGeneration = 0;
   const identities = new Map<string, AgentIdentityResult>();
   const listeners = new Set<() => void>();
@@ -114,16 +119,25 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
 
   const resetForGateway = (snapshot: AgentIdentityGatewaySnapshot) => {
     const connected = snapshot.phase === "connected";
-    if (snapshot.client === cachedClient && connected === cachedConnected) {
+    const nextPresentationKey = gatewayPresentationScope(gateway).key;
+    const identityChanged =
+      snapshot.client !== cachedClient || presentationKey !== nextPresentationKey;
+    const accessLost = connected && !hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null);
+    if (!identityChanged && connected === cachedConnected && !accessLost) {
       return;
     }
+    presentationKey = nextPresentationKey;
     const hadIdentities = identities.size > 0;
     invalidateAgentIdentityCache(cachedClient);
     cachedClient = snapshot.client;
     cachedConnected = connected;
     connectionGeneration += 1;
-    identities.clear();
-    if (hadIdentities) {
+    if (identityChanged || accessLost) {
+      identities.clear();
+    } else if (connected && hadIdentities) {
+      void capability.ensure([...identities.keys()]);
+    }
+    if ((identityChanged || accessLost) && hadIdentities) {
       publish();
     }
   };
@@ -159,7 +173,7 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
     publish();
   });
 
-  return {
+  const capability = {
     get(agentId: string | null | undefined) {
       const normalized = agentId?.trim();
       return normalized ? (identities.get(normalized) ?? null) : null;
@@ -171,7 +185,11 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
       const snapshot = gateway.snapshot;
       resetForGateway(snapshot);
       const client = snapshot.client;
-      if (!client || !isGatewayAvailable(snapshot)) {
+      if (
+        !client ||
+        !isGatewayAvailable(snapshot) ||
+        !hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null)
+      ) {
         return;
       }
       const generation = connectionGeneration;
@@ -211,4 +229,5 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
     invalidate,
     subscribe: (listener: () => void) => registerListener(listeners, listener),
   };
+  return capability;
 }

@@ -1,4 +1,3 @@
-// Doctor repair sequence coordinator for config, auth, plugin, and warning repairs.
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, tryResolveSoleAgentId } from "../../agents/agent-scope.js";
 import {

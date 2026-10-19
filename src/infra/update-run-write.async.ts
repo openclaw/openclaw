@@ -93,7 +93,7 @@ async function recordUpdateRunMutationAsync(
   }
   if (reply.kind === "bookkeeping-skipped") {
     console.warn(
-      "[update] History database is locked; bookkeeping was not recorded. The update will continue.",
+      "[update] History database is busy or commit admission timed out; bookkeeping was not recorded. The update will continue.",
     );
     return undefined;
   }

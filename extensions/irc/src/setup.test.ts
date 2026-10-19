@@ -17,7 +17,7 @@ import {
   resolveDefaultIrcAccountId,
   type ResolvedIrcAccount,
 } from "./accounts.js";
-import { startIrcGatewayAccount } from "./gateway.js";
+import { ircPlugin } from "./channel.js";
 import {
   ircSetupAdapter,
   setIrcAllowFrom,
@@ -286,11 +286,7 @@ describe("irc setup", () => {
     hoisted.monitorIrcProvider.mockResolvedValue({ stop });
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: async (ctx) =>
-        await startIrcGatewayAccount({
-          ...ctx,
-          cfg: ctx.cfg as CoreConfig,
-        }),
+      startAccount: ircPlugin.gateway!.startAccount!,
       account,
     });
 

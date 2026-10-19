@@ -66,6 +66,7 @@ const realGatewayFiles = [
   "model-api-keys.real-gateway",
   "model-catalog-partial-refresh.real-gateway",
   "model-picker-search.real-gateway",
+  "peer-followup-restart.real-gateway",
   "profile-page.real-gateway",
   "provider-browser-login.real-gateway",
   "quota-reset-status.real-gateway",
@@ -73,6 +74,7 @@ const realGatewayFiles = [
   "session-progress-hovercard.real-gateway",
   "session-roster-request-rate.real-gateway",
   "sidebar-running-counts.real-gateway",
+  "task-pull-requests.real-gateway",
   "usage-sessions-owner-attribution",
   "worker-initial-setup.real-gateway",
 ]
@@ -529,6 +531,13 @@ describe("Control UI E2E resource ownership", () => {
           fileParallelism: false,
         },
         {
+          file: "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
@@ -551,6 +560,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: "ui/src/e2e/sidebar-running-counts.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/task-pull-requests.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial",
           phase: 1,
           workers: 1,

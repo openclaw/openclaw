@@ -13,6 +13,7 @@ import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
 import * as cliCredentials from "../agents/cli-credentials.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
+import * as modelAuth from "../agents/model-auth.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { buildAllowedModelSet } from "../agents/model-selection.js";
 import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
@@ -143,7 +144,7 @@ describe("setup activation credentials and configuration", () => {
         source: "Codex native login",
         mode: "api-key" as const,
       };
-      setup.deps.resolveApiKeyForProvider = async () => nativeAuth;
+      vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockResolvedValue(nativeAuth);
       const readNativeKey = vi.fn(() => credential);
       setup.readCodexCliActiveApiKey.mockImplementation(readNativeKey);
       setup.run.mockImplementation(async (params) => {
@@ -716,7 +717,7 @@ describe("setup activation credentials and configuration", () => {
     };
     await writeConfig(setup, configured);
     await saveProfile(setup, "openai:replacement", configured);
-    const method = setup.deps.resolvePluginProviders?.({ config: configured })[0]?.auth[0];
+    const method = setup.provider.auth[0];
     assert.ok(method);
     method.starterModel = "openai/provider-default";
 

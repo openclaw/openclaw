@@ -287,7 +287,7 @@ describe("terminal tool", () => {
         { action: "close", sessionId },
       ]) {
         await expect(tool.execute(params.action, params)).rejects.toThrow(
-          "Terminal session unavailable. Use action=list to find a shared terminal or ask the operator to open one in this chat.",
+          "Terminal session unavailable. Use action=list to find a terminal the operator opened in this chat. This tool cannot open one; run your own commands with exec when available, otherwise ask the operator to open a terminal.",
         );
       }
     }

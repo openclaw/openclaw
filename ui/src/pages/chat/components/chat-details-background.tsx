@@ -3,13 +3,14 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { listSubagents, type ChatSubagentActivity } from "../chat-subagent-wait.ts";
-import { ProcessesPanelData } from "../processes-panel-data.ts";
+import {
+  listSubagents,
+  type ChatSubagentActivity as ChatSubagentActivityRow,
+} from "../chat-subagent-wait.ts";
+import type { ProcessesPanelData } from "../processes-panel-data.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import { useSessionPanel } from "./chat-session-panel.tsx";
-import "./chat-subagent-activity-live.ts";
+import { ChatSubagentActivity } from "./chat-subagent-activity-live.ts";
 
 type Props = { details: ChatDetailsProps; presented: boolean };
 type State = "running" | "queued" | "failed" | "stopped" | "done";
@@ -22,7 +23,7 @@ const SUMMARY = ["running", "queued", "done", "failed", "stopped"] as const;
 const ORDER: Record<State, number> = { running: 0, queued: 1, failed: 2, stopped: 3, done: 4 };
 const PREVIEW_ROWS = 3;
 
-function subagentState(row: ChatSubagentActivity): State {
+function subagentState(row: ChatSubagentActivityRow): State {
   return row.status === "waiting" ? "running" : row.status;
 }
 
@@ -163,36 +164,22 @@ function ProcessRow(props: { row: SessionProcessSummary; onOpen?: () => void }) 
 }
 
 /** The subagents and background processes this session started, as two groups. */
-export function ChatDetailsBackground(props: Props) {
-  const context = useOptionalApplication();
+export function ChatDetailsBackground(
+  props: Props,
+  processes: () => ProcessesPanelData | undefined,
+) {
   const [subagentsExpanded, setSubagentsExpanded] = createSignal(false);
   const [processesExpanded, setProcessesExpanded] = createSignal(false);
   const subagents = createMemo(() => attentionOrder(listSubagents(props.details), subagentState));
   const subagentTally = createMemo(() => tally(subagents(), subagentState));
-  // The Processes panel's owner polls only while Details is open in a pane that can show it.
-  const processes = context
-    ? useSessionPanel(
-        {
-          get sessionKey() {
-            return props.details.sessionKey;
-          },
-          get agentId() {
-            return props.details.currentAgentId ?? "main";
-          },
-          get presented() {
-            return props.presented && Boolean(props.details.onOpenProcesses);
-          },
-        },
-        ProcessesPanelData,
-        () => undefined,
-      )
-    : () => undefined;
-  const processRows = createMemo(() => attentionOrder(processes()?.rows ?? [], processState));
+  const processRows = createMemo(() =>
+    attentionOrder(processes()?.snapshot.rows ?? [], processState),
+  );
   const processTally = createMemo(() => tally(processRows(), processState));
   const visibleProcesses = createMemo(() =>
     processesExpanded() ? processRows() : processRows().slice(0, PREVIEW_ROWS),
   );
-  const processError = () => (processRows().length === 0 ? processes()?.error : null);
+  const processError = () => (processRows().length === 0 ? processes()?.snapshot.error : null);
   const openSubagents = () => {
     if (props.presented) {
       props.details.onOpenSubagents?.();
@@ -218,12 +205,12 @@ export function ChatDetailsBackground(props: Props) {
           onExpandedChange={setSubagentsExpanded}
         >
           {props.presented && (
-            <openclaw-chat-subagent-activity
-              prop:rows={subagents()}
-              prop:limit={subagentsExpanded() ? undefined : PREVIEW_ROWS}
-              prop:compact={true}
-              prop:onOpenSubagent={props.details.onOpenSubagent}
-              prop:onOpenSession={props.details.onSessionSelect}
+            <ChatSubagentActivity
+              rows={subagents()}
+              limit={subagentsExpanded() ? undefined : PREVIEW_ROWS}
+              compact={true}
+              onOpenSubagent={props.details.onOpenSubagent}
+              onOpenSession={props.details.onSessionSelect}
             />
           )}
         </BackgroundGroup>

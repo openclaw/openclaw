@@ -888,7 +888,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     expect((await search("hidden")).hits).toEqual([]);
   });
 
-  it.each([4, 67])(
+  it.each([4, 515])(
     "preserves FTS row identity for %i nullable and repeated message IDs in bounded statements",
     async (count) => {
       const sessionId = `fts-identities-${count}`;
@@ -976,7 +976,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       }
       // Each observed PostgreSQL statement makes one bridge/server request.
       expect(statements).toBe(count === 4 ? 1 : 2);
-      if (count > 64) {
+      if (count > 512) {
         withEngineStoreAdmission(() => {
           // Keep the first bridge open so the pooled writer uses another backend.
           const next = owners.openAgentEngineStore(

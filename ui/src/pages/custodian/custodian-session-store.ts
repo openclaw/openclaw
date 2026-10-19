@@ -706,10 +706,8 @@ export class CustodianSessionStore {
       this.inferenceState = "ready";
       this.wizardValue = result.step ? initialWizardValue(result.step) : undefined;
       const message = createCustodianReplyMessage(this.nextMessageId, result);
-      if (message) {
-        this.nextMessageId += 1;
-        this.messages = [...this.messages, message];
-      }
+      this.nextMessageId += 1;
+      this.messages = [...this.messages, message];
       if (result.handoff?.kind === "model-accounts") {
         this.exitSetup("profile");
       } else if (result.action === "open-agent") {

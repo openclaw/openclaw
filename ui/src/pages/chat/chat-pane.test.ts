@@ -227,6 +227,13 @@ describe("chat pane header state", () => {
 
       result.sessions = [];
       landCatalogWrite();
+      await vi.waitFor(() =>
+        expect(document.body.querySelector("openclaw-modal-dialog [role=alert]")).not.toBeNull(),
+      );
+      expect((await waitForInputDialog()).value).toBe("Projects");
+      document.body
+        .querySelector<HTMLButtonElement>('openclaw-modal-dialog button[type="button"]')
+        ?.click();
       await pending;
 
       expect(patch).not.toHaveBeenCalled();
@@ -902,7 +909,10 @@ describe("chat pane session creation lifecycle", () => {
 
     const pending = pane.createSession();
     await expect(pane.createSession()).resolves.toBe(false);
-    expect(sessions.create).toHaveBeenCalledExactlyOnceWith({ agentId: "main", incognito: true });
+    expect(sessions.create).toHaveBeenCalledExactlyOnceWith(
+      { agentId: "main", incognito: true },
+      { signal: expect.any(AbortSignal) },
+    );
     const nextKey = "agent:main:dashboard:incognito-fresh";
     created.resolve(nextKey);
     await expect(pending).resolves.toBe(true);
@@ -1034,9 +1044,13 @@ describe("chat pane history pagination intent", () => {
     pane.historyAutoLoadBlocked = true;
     pane.hasOlderMessages = vi.fn(() => true);
     pane.loadOlderMessages = vi.fn(async () => true);
-    vi.stubGlobal("IntersectionObserver", undefined);
     vi.stubGlobal("TouchEvent", undefined);
     const thread = document.createElement("div");
+    const sentinel = thread.appendChild(document.createElement("div"));
+    sentinel.className = "chat-history-sentinel";
+    pane.historySentinel = sentinel;
+    pane.append(thread);
+    vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     const event = new WheelEvent("wheel", { deltaY: -1 });
     Object.defineProperty(event, "currentTarget", { value: thread });
 
@@ -1055,7 +1069,6 @@ describe("chat pane history pagination intent", () => {
     pane.historyAutoLoadBlocked = true;
     pane.hasOlderMessages = vi.fn(() => true);
     pane.loadOlderMessages = vi.fn(async () => true);
-    vi.stubGlobal("IntersectionObserver", undefined);
     class TestTouchEvent extends Event {
       readonly touches: Array<{ clientY: number }>;
 
@@ -1066,6 +1079,11 @@ describe("chat pane history pagination intent", () => {
     }
     vi.stubGlobal("TouchEvent", TestTouchEvent);
     const thread = document.createElement("div");
+    const sentinel = thread.appendChild(document.createElement("div"));
+    sentinel.className = "chat-history-sentinel";
+    pane.historySentinel = sentinel;
+    pane.append(thread);
+    vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     const touchEvent = (type: string, clientY: number) => {
       const event = new TestTouchEvent(type, clientY);
       Object.defineProperty(event, "currentTarget", { value: thread });

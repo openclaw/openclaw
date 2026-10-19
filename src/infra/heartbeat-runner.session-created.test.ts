@@ -244,7 +244,18 @@ it.for(["stopped", "failed"] as const)(
       const capture = (accept: (candidate: typeof owner.identity) => boolean) =>
         captureExecRequestCancellation(currentTarget, accept);
       const byConnection = (connId: string) =>
-        capture((candidate) => canRequesterAbortChatRun(candidate, { connId, isAdmin: false }));
+        capture((candidate) =>
+          canRequesterAbortChatRun(
+            {
+              ...candidate,
+              requester: {
+                connectionId: candidate.ownerConnId,
+                deviceId: candidate.ownerDeviceId,
+              },
+            },
+            { connId, isAdmin: false },
+          ),
+        );
       const foreign = byConnection("foreign-connection");
       expect([foreign.owners, foreign.cancel()]).toEqual([[], false]);
       expect(capture((candidate) => candidate.controlUiVisible !== false).owners).toEqual([]);

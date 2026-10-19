@@ -39,6 +39,23 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+function fixture(prefix: string, stateSubdir = "") {
+  const home = directories.make(prefix);
+  const configPath = path.join(home, "openclaw.json");
+  const env = { HOME: home, OPENCLAW_STATE_DIR: path.join(home, stateSubdir) };
+  return { home, configPath, env, homedir: () => home, logger: { warn: vi.fn(), error: vi.fn() } };
+}
+
+function readHealthRow(db: ReturnType<typeof openOpenClawStateDatabase>["db"], configPath: string) {
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<DB>(db)
+      .selectFrom("config_health_entries")
+      .selectAll()
+      .where("config_path", "=", configPath),
+  );
+}
+
 it.each([
   { phase: "after basis read", present: true, suspicious: false },
   { phase: "before admission", present: true, suspicious: false },
@@ -49,20 +66,17 @@ it.each([
 ])(
   "preserves newer persisted health facts $phase (existing row: $present, suspicious: $suspicious)",
   async ({ phase, present, suspicious }) => {
-    const home = directories.make("openclaw-observation-freshness-");
-    const configPath = path.join(home, "openclaw.json");
+    const context = fixture("openclaw-observation-freshness-", "state-root");
+    const { home, configPath } = context;
     const siblingPath = path.join(home, "sibling.json");
     const env = {
-      HOME: home,
-      OPENCLAW_STATE_DIR: path.join(home, "state-root"),
+      ...context.env,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       VITEST: "true",
     };
     const options = {
+      ...context,
       env,
-      homedir: () => home,
-      configPath,
-      logger: { warn: vi.fn(), error: vi.fn() },
     };
     const raw = (port: number) =>
       JSON.stringify({
@@ -72,12 +86,17 @@ it.each([
     const baselineRaw = raw(18789);
     const olderRaw = suspicious ? JSON.stringify({ update: { channel: "beta" } }) : baselineRaw;
     const newerRaw = suspicious ? JSON.stringify({ update: { channel: "stable" } }) : raw(18799);
-    fs.writeFileSync(configPath, newerRaw);
-    const newer = await createConfigIO({ ...options, observe: false }).readConfigFileSnapshot();
-    expect(newer.valid).toBe(true);
-    fs.writeFileSync(configPath, olderRaw);
-    const older = await createConfigIO({ ...options, observe: false }).readConfigFileSnapshot();
-    expect(older.valid).toBe(true);
+    const readSnapshot = async (bytes: string) => {
+      fs.writeFileSync(configPath, bytes);
+      const snapshot = await createConfigIO({
+        ...options,
+        observe: false,
+      }).readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+      return snapshot;
+    };
+    const newer = await readSnapshot(newerRaw);
+    await readSnapshot(olderRaw);
     const oldPromotion = observationState.createConfigHealthFingerprint({
       raw: baselineRaw,
       parsed: JSON.parse(baselineRaw),
@@ -86,36 +105,23 @@ it.each([
     });
     const timestamp = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(timestamp);
-    const initial = {
-      entries: {
-        ...(present
-          ? {
-              [configPath]: {
-                lastPromotedGood: oldPromotion,
-                ...(suspicious
-                  ? { lastKnownGood: oldPromotion, lastObservedSuspiciousSignature: "seed" }
-                  : {}),
-              },
-            }
+    if (present) {
+      patchConfigHealthEntryToStore(options, configPath, {
+        lastPromotedGood: oldPromotion,
+        ...(suspicious
+          ? { lastKnownGood: oldPromotion, lastObservedSuspiciousSignature: "seed" }
           : {}),
-        [siblingPath]: { lastKnownGood: oldPromotion, lastPromotedGood: oldPromotion },
-      },
-    };
-    for (const [entryPath, entry] of Object.entries(initial.entries)) {
-      patchConfigHealthEntryToStore(options, entryPath, entry);
+      });
     }
+    patchConfigHealthEntryToStore(options, siblingPath, {
+      lastKnownGood: oldPromotion,
+      lastPromotedGood: oldPromotion,
+    });
     const baseline = readConfigHealthStateFromStore(options);
     const { db } = openOpenClawStateDatabase({ env });
-    const readUpdatedAt = () =>
-      executeSqliteQueryTakeFirstSync(
-        db,
-        getNodeSqliteKysely<DB>(db)
-          .selectFrom("config_health_entries")
-          .select("updated_at_ms")
-          .where("config_path", "=", configPath),
-      );
+    const readUpdatedAt = () => readHealthRow(db, configPath)?.updated_at_ms;
     if (present) {
-      expect(readUpdatedAt()?.updated_at_ms).toBe(timestamp);
+      expect(readUpdatedAt()).toBe(timestamp);
     }
 
     const entered = createDeferredCore();
@@ -124,23 +130,20 @@ it.each([
     const observationWork = new AsyncWorkScope();
     let expected: ConfigHealthState | undefined;
     let intervened = false;
-    const recordNewerObservation = () => {
-      expected = readConfigHealthStateInDatabase(db);
-      if (suspicious) {
-        expect(expected.entries?.[configPath]?.lastObservedSuspiciousSignature).toContain(
-          hashConfigRaw(newerRaw),
-        );
-      } else {
-        expect(expected.entries?.[configPath]?.lastKnownGood?.hash).toBe(hashConfigRaw(newerRaw));
-      }
-      expect(readUpdatedAt()?.updated_at_ms).toBe(timestamp);
-      intervened = true;
-    };
     const writeNewerObservation = () =>
       observationWork.run(() => {
         fs.writeFileSync(configPath, newerRaw);
         observeConfigSnapshotSync(deps, newer);
-        recordNewerObservation();
+        expected = readConfigHealthStateInDatabase(db);
+        if (suspicious) {
+          expect(expected.entries?.[configPath]?.lastObservedSuspiciousSignature).toContain(
+            hashConfigRaw(newerRaw),
+          );
+        } else {
+          expect(expected.entries?.[configPath]?.lastKnownGood?.hash).toBe(hashConfigRaw(newerRaw));
+        }
+        expect(readUpdatedAt()).toBe(timestamp);
+        intervened = true;
       });
     if (phase === "before admission") {
       const readFingerprint = observationState.readConfigFingerprintForPath;
@@ -229,22 +232,13 @@ it.each([
 it.each([' { "hash" : "legacy" } ', "{invalid"])(
   "compares raw legacy health facts without tightening their decoder: %s",
   async (legacyText) => {
-    const home = directories.make("openclaw-health-legacy-basis-");
-    const configPath = path.join(home, "openclaw.json");
-    const env = { HOME: home, OPENCLAW_STATE_DIR: home };
-    const deps = { env, homedir: () => home, logger: { warn: vi.fn() } };
+    const deps = fixture("openclaw-health-legacy-basis-");
+    const { configPath, env } = deps;
     patchConfigHealthEntryToStore(deps, configPath, {
       lastObservedSuspiciousSignature: "seed",
     });
     const { db } = openOpenClawStateDatabase({ env });
-    const readRow = () =>
-      executeSqliteQueryTakeFirstSync(
-        db,
-        getNodeSqliteKysely<DB>(db)
-          .selectFrom("config_health_entries")
-          .selectAll()
-          .where("config_path", "=", configPath),
-      );
+    const readRow = () => readHealthRow(db, configPath);
     const writeRaw = (text: string) =>
       runOpenClawStateWriteTransaction(
         ({ db: writeDb }) => {

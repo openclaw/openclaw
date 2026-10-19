@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   AuthProfileMigrationRequiredError,
@@ -16,6 +16,7 @@ import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import * as configModule from "../config/config.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -38,6 +39,7 @@ import {
   verifySetupInference,
   verifySetupInferenceConfig,
 } from "./setup-inference-turn.js";
+import * as setupInference from "./setup-inference.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   resolveSystemAgentVerifiedInferenceRoute,
@@ -48,8 +50,9 @@ vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
 
 const key = "synthetic-setup-test-key";
 const secretRef = { source: "store", provider: "default", id: "SETUP_TEST_KEY" } as const;
+const readConfigFileSnapshotOwner = readConfigFileSnapshot;
 const readSnapshot = () =>
-  readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" });
+  readConfigFileSnapshotOwner({ observe: false, pluginValidation: "core-only" });
 let temp: TempHomeEnv;
 let configPath: string;
 
@@ -166,6 +169,8 @@ beforeEach(async () => {
   await fs.writeFile(configPath, JSON.stringify(config));
   await storeKey(key);
   await activate();
+  const reader = vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(readSnapshot);
+  onTestFinished(() => reader.mockRestore());
 });
 
 afterEach(async () => {
@@ -374,21 +379,24 @@ it.each([
     };
     vi.mocked(runEmbeddedAgentOwner).mockImplementation(runEmbeddedAgent);
     const deps = { readConfigFileSnapshot: readSnapshot };
-    const attemptedOwners: string[] = [];
+    const attemptedOwners: Array<string | undefined> = [];
+    if (entrypoint === "fallback") {
+      const verify = vi
+        .spyOn(setupInference, "verifySetupInference")
+        .mockImplementation(async (params) => {
+          attemptedOwners.push(params.agentId);
+          return params.agentId === "main"
+            ? { ok: false, status: "auth", error: "Primary owner unavailable" }
+            : verifySetupInference({ ...params, bindSession: true });
+        });
+      onTestFinished(() => verify.mockRestore());
+    }
     const boundVerification =
       entrypoint === "verify"
-        ? await verifySetupInference({ agentId: "main", bindSession: true, runtime, deps })
+        ? await verifySetupInference({ agentId: "main", bindSession: true, runtime })
         : entrypoint === "fallback"
           ? await verifySystemAgentInferenceWithFallback({
               runtime,
-              deps: {
-                verify: async (params) => {
-                  attemptedOwners.push(params.agentId);
-                  return params.agentId === "main"
-                    ? { ok: false, status: "auth", error: "Primary owner unavailable" }
-                    : verifySetupInference({ ...params, deps });
-                },
-              },
             })
           : undefined;
     const result =
@@ -398,10 +406,9 @@ it.each([
             config: (await readSnapshot()).sourceConfig,
             requireExecutionOwner: true,
             runtime,
-            deps,
           })
         : entrypoint === "complete"
-          ? await completeSetupInference({ prompt: "Reply with OK", runtime, deps })
+          ? await completeSetupInference({ prompt: "Reply with OK", runtime })
           : await activateSetupInference({
               kind: "existing-model",
               surface: "gateway",

@@ -9,7 +9,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { requestSharedHistory } from "./chat-history-request.ts";
 import { formatChatHistoryLoadError, isRetryableChatReadError } from "./chat-history-retry.ts";
 import {
@@ -55,7 +55,6 @@ import { retainPersistedStreamPrefix } from "./stream-causal-boundary.ts";
 import {
   hasVisibleStreamParts,
   historyReplacedVisibleStream,
-  maybeResetToolStream,
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
 import {
@@ -65,6 +64,7 @@ import {
 } from "./stream-segment-pruning.ts";
 import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
 import { persistedCurrentToolStreamIds } from "./tool-stream-identity.ts";
+import { resetToolStream } from "./tool-stream-state.ts";
 
 export async function hydrateChatHistory(
   state: ChatHistoryHost,
@@ -157,10 +157,15 @@ export async function hydrateChatHistory(
       }
       admission = requests.subscriptionReady;
     }
+    // A pane mounted after hello can still be hydrating its retained cursor and
+    // receipts. Join that data read before constructing the first request.
+    const hydration = waitForInitialChatSnapshot(state);
+    if ((hydration && !(await hydration)) || !isCurrent()) {
+      return undefined;
+    }
     // The snapshot covers activity emitted before the foreground observer was
     // admitted; subsequent activity arrives through its acknowledged full stream.
     setChatError(state, null);
-    // The cached transcript can finish hydrating while stream admission is pending.
     let response = await request(readChatHistoryCursor(state));
     if (!isCurrent()) {
       return undefined;
@@ -171,12 +176,6 @@ export async function hydrateChatHistory(
       if (!isCurrent()) {
         return undefined;
       }
-    }
-    // Fetch in parallel with IndexedDB, then reconcile against the cached paint.
-    // Joining at publication keeps a fast response from retiring the local read.
-    const hydration = waitForInitialChatSnapshot(state);
-    if ((hydration && !(await hydration)) || !isCurrent()) {
-      return undefined;
     }
     const previousMessages = state.chatMessages;
     const previousPagination = state.chatHistoryPagination;
@@ -205,7 +204,7 @@ export async function hydrateChatHistory(
         throw new Error("chat history delta omitted uncached session metadata");
       }
       const runProjectionsBeforeApply = readRunProjections(state, sessionKey, requestAgentId);
-      const runActive = isSessionRunActive(response.sessionInfo);
+      const runActive = isSessionRunStateActive(response.sessionInfo);
       for (const payload of response.messages) {
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
       }
@@ -315,7 +314,7 @@ export async function hydrateChatHistory(
           res.sessionInfo &&
           (typeof res.sessionInfo.hasActiveRun === "boolean" ||
             res.sessionInfo.status !== undefined)
-            ? isSessionRunActive(res.sessionInfo)
+            ? isSessionRunStateActive(res.sessionInfo)
             : undefined,
       },
     );
@@ -374,7 +373,7 @@ export async function hydrateChatHistory(
       const liveToolStreamReplaced = liveToolIds.length === 0 || historyReplacedToolStream;
       const reconcileToolStream = (replaced: boolean, preserveStreamSegments: boolean) => {
         if (replaced) {
-          maybeResetToolStream(state, { preserveStreamSegments });
+          resetToolStream(state, { preserveStreamSegments });
         } else {
           prunePersistedToolStreamMessages(state, persistedToolStreamIds);
         }
@@ -393,7 +392,7 @@ export async function hydrateChatHistory(
           state,
           materializeVisibleAssistantStreamMessages(state.chatMessages, state),
         );
-        maybeResetToolStream(state);
+        resetToolStream(state);
         state.chatStream = null;
         state.chatStreamStartedAt = null;
       } else if (historyReplacedSomeToolStream) {

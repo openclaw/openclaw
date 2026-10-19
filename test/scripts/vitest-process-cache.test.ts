@@ -20,22 +20,29 @@ it.each([
   ["hermetic", ""],
   ["hermetic", "0"],
 ] as const)(
-  "runs source children without TSX disk writes (%s, Bun cache %s)",
+  "reuses owned source compiler caches (%s, Bun cache %s)",
   async (homeMode, bunCache) => {
     const root = fs.realpathSync(tempDirs.make("oc-vt-source-cache-"));
     const sourcePath = path.join(root, "source.mts");
-    fs.writeFileSync(sourcePath, "enum Value { Answer = 42 }\nconsole.log(Value.Answer);\n");
+    fs.writeFileSync(sourcePath, "export enum Value { Answer = 42 }\n");
     const script = `
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-const result = spawnSync(process.execPath, ["--import", ${JSON.stringify(tsxPreload)}, ${JSON.stringify(sourcePath)}], { encoding: "utf8" });
-if (result.error) throw result.error;
-if (result.status !== 0) throw new Error(result.stderr);
 const namespace = os.tmpdir();
 const cache = path.join(namespace, "tsx-" + (process.geteuid?.() ?? os.userInfo().username));
-console.log(JSON.stringify({ namespace, output: result.stdout, disabled: process.env.TSX_DISABLE_CACHE, cached: fs.existsSync(cache) && fs.readdirSync(cache).length > 0, bunCache: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH }));
+const entries = () => fs.existsSync(cache) ? fs.readdirSync(cache).map(name => [name, fs.statSync(path.join(cache, name)).mtimeMs]) : [];
+const run = () => {
+  const result = spawnSync(process.execPath, ["--import", ${JSON.stringify(tsxPreload)}, "--input-type=module", "-e", ${JSON.stringify(`import { Value } from ${JSON.stringify(pathToFileURL(sourcePath).href)}; console.log(Value.Answer);`)}], { encoding: "utf8" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr);
+  return result.stdout;
+};
+const output = run();
+const first = entries();
+const again = run();
+console.log(JSON.stringify({ namespace, output, again, disabled: process.env.TSX_DISABLE_CACHE, cached: first.length > 0, reused: JSON.stringify(entries()) === JSON.stringify(first), bunCache: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH }));
 `;
     const env = {
       PATH: process.env.PATH,
@@ -69,8 +76,10 @@ console.log(JSON.stringify({ namespace, output: result.stdout, disabled: process
     });
     const observed = JSON.parse(output);
     expect(observed.output).toBe("42\n");
-    expect(observed.disabled).toBe("1");
-    expect(observed.cached, JSON.stringify(observed)).toBe(false);
+    expect(observed.again).toBe("42\n");
+    expect(observed.disabled).toBe(homeMode === "tooling" ? "1" : undefined);
+    expect(observed.cached, JSON.stringify(observed)).toBe(homeMode !== "tooling");
+    expect(observed.reused).toBe(true);
     expect(observed.bunCache).toBe(
       bunCache ??
         (homeMode === "tooling"

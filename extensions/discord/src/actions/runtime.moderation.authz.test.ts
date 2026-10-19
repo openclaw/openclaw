@@ -1,8 +1,7 @@
 import { PermissionFlagsBits } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
+import { handleDiscordAction } from "./runtime.js";
 import type { DiscordModerationAction } from "./runtime.moderation-shared.js";
-import { handleDiscordModerationAction } from "./runtime.moderation.js";
 
 const { banMemberDiscord, kickMemberDiscord, timeoutMemberDiscord, hasAnyGuildPermissionDiscord } =
   vi.hoisted(() => ({
@@ -20,10 +19,10 @@ vi.mock("../send.js", async (importOriginal) => ({
   hasAnyGuildPermissionDiscord,
 }));
 
-const cfg = EMPTY_DISCORD_TEST_CONFIG;
+const cfg = { channels: { discord: { actions: { moderation: true } } } };
 const target = { guildId: "guild-1", userId: "user-1", senderUserId: "sender-1" };
 function moderate(action: DiscordModerationAction, params: Record<string, unknown> = {}) {
-  return handleDiscordModerationAction(action, { ...target, ...params }, () => true, cfg);
+  return handleDiscordAction({ ...target, ...params, action }, cfg);
 }
 
 describe("discord moderation sender authorization", () => {

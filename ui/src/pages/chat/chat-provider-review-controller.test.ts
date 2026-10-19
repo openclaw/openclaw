@@ -319,6 +319,13 @@ it.each([
     expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(false);
     expect(f.calls()).toHaveLength(1);
     expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
+    if (source === "row") {
+      // A later row may omit the terminal receipt; only an explicit retry retires it.
+      f.state.sessionsResult = sessionsResult([{ ...row }], 3);
+      f.publishSource();
+      expect(f.container.textContent).toContain("Continuation was not accepted.");
+      expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(false);
+    }
     await expectFreshRetry(f, first);
   },
 );

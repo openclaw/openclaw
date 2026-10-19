@@ -1,10 +1,11 @@
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
-import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
+import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import {
   resolveProviderSystemPromptContribution,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
+import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { prepareTtsPreferences } from "../../../tts/tts-preferences.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
@@ -171,11 +172,18 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
 
   const toolSchemaDirectoryPrompt = resolveToolSchemaDirectoryPrompt();
 
+  // Only externally publishable origins need the admitted session's sharing facts.
+  const preparedSessionEntry = resolveControlUiLinkLocation(attempt.config)?.origin.startsWith(
+    "https://",
+  )
+    ? (await policyPreparation.reader?.readEntry(assertPreparationCurrent))?.entry
+    : undefined;
   const { runtimeChannel, runtimeCapabilities, ...runtimePrompt } = await resolveAgentRuntimePrompt(
     {
       remoteWorkspace: params.remoteWorkspace,
       config: attempt.config,
       preparedGitCoauthorPrompt: attempt.gitCoauthorPrompt,
+      preparedSessionEntry,
       agentId: params.setup.sessionAgentId,
       workspaceDir: params.setup.effectiveWorkspace,
       cwd: params.setup.effectiveCwd,
@@ -389,6 +397,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     injectedWorkspaceFiles: params.bootstrap.bootstrapInjectionStats,
     skillsPrompt: attemptSystemPrompt.skillsPrompt,
     tools: params.effectiveTools,
+    catalogEntries: params.toolSearchCatalogRef?.current?.entries,
   };
   const systemPromptReport = buildSystemPromptReport(reportInputs);
   params.setup.prepStages?.mark("system-prompt");
@@ -471,6 +480,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
               systemPrompt,
               skillsPrompt: nextSystemPrompt.skillsPrompt,
               tools,
+              catalogEntries,
             }),
           );
           return systemPrompt;

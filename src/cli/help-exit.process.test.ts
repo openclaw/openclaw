@@ -385,10 +385,10 @@ it("drains a large piped JSON payload before exiting nonzero on a structured tar
     const configPath = path.join(stateDir, "openclaw.json");
     const entryPath = path.join(root, "run-message-broadcast.mjs");
     const largePayload = "x".repeat(8_388_608);
-    const helpersUrl = resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.helpers);
+    const registrationUrl = resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.registration);
     const nodeExecutable = resolveTestNodeExecPath();
-    const commandSpecifier = /\.[cm]?ts$/u.test(helpersUrl.pathname)
-      ? "../../../commands/message.js"
+    const commandSpecifier = /\.[cm]?ts$/u.test(registrationUrl.pathname)
+      ? "../../commands/message.js"
       : resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.command).href;
     const finalizerUrl = resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.oneShotExit);
     await fs.writeFile(
@@ -417,16 +417,22 @@ registerHooks({
       : nextResolve(specifier, context);
   },
 });
-const { createMessageCliHelpers } = await import(${JSON.stringify(helpersUrl.href)});
+const { Command } = await import(${JSON.stringify(import.meta.resolve("commander"))});
+const { registerMessageCommands } = await import(${JSON.stringify(registrationUrl.href)});
 const { runCliWithExitFinalization } = await import(${JSON.stringify(finalizerUrl.href)});
-const { runMessageAction } = createMessageCliHelpers("fixture");
+const program = new Command();
+registerMessageCommands(program, {
+  programVersion: "test",
+  messageChannelOptions: "fixture",
+  agentChannelOptions: "last|fixture",
+});
 await runCliWithExitFinalization({
-  run: () =>
-    runMessageAction("broadcast", {
-      channel: "fixture",
-      targets: ["ok-target", "failed-target"],
-      message: "hello",
-    }),
+  run: async () => {
+    await program.parseAsync([
+      "message", "broadcast", "--channel", "fixture", "--targets",
+      "ok-target", "failed-target", "--message", "hello",
+    ], { from: "user" });
+  },
   onError: (err) => {
     console.error(err);
   },
@@ -442,7 +448,7 @@ await runCliWithExitFinalization({
       runNodeScript(
         (workerArgv) => [
           ...resolveVitestNodeArgs(),
-          ...workerArgv(helpersUrl).slice(0, -1),
+          ...workerArgv(registrationUrl).slice(0, -1),
           entryPath,
         ],
         {

@@ -288,10 +288,12 @@ it.each(
         expect(stagedPackageFiles.toSorted()).toEqual(nativeAssets.toSorted());
       }
       expect(readdirSync(directory)).toEqual(["runtime"]);
-      expect(readdirSync(path.dirname(entry))).toEqual([
-        MANAGED_HANDOFF_RUNTIME_ENTRY,
-        ...(freebsd ? ["node_modules"] : windows ? [helperName] : []),
-      ]);
+      expect(readdirSync(path.dirname(entry)).toSorted()).toEqual(
+        [
+          MANAGED_HANDOFF_RUNTIME_ENTRY,
+          ...(freebsd ? ["node_modules"] : windows ? [helperName] : []),
+        ].toSorted(),
+      );
     } else {
       const base = path.join(realpathSync(directory), "literal-$HOME-`id`-'quoted'");
       mkdirSync(base, { mode: 0o700 });

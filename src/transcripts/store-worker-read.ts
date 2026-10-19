@@ -1,6 +1,6 @@
 import { ok } from "@openclaw/normalization-core/result";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import {
@@ -77,15 +77,15 @@ export const transcriptReadOperations = {
   ),
   "transcripts.summarySnapshot": readTranscript<"transcripts.summarySnapshot">(
     (db, { session, maxUtterances }) =>
-      runSqliteDeferredTransactionSync(db, () =>
+      runSqliteReadSnapshotSync(db, () =>
         readTranscriptSummarySnapshot(db, session, maxUtterances),
       ),
   ),
   "transcripts.sessionEntries": readTranscript<"transcripts.sessionEntries">((db) =>
-    runSqliteDeferredTransactionSync(db, () => readTranscriptSessionEntries(db)),
+    runSqliteReadSnapshotSync(db, () => readTranscriptSessionEntries(db)),
   ),
   "transcripts.matches": readTranscript<"transcripts.matches">((db, { value }) =>
-    runSqliteDeferredTransactionSync(db, () => readTranscriptSessionMatches(db, value)),
+    runSqliteReadSnapshotSync(db, () => readTranscriptSessionMatches(db, value)),
   ),
   "transcripts.session": readTranscript<"transcripts.session">((db, { session }) =>
     readTranscriptSessionByIdentity(db, session),
@@ -98,7 +98,7 @@ export const transcriptReadOperations = {
     readStoredTranscriptNotes(db, session, purpose),
   ),
   "transcripts.libraryEntry": readTranscript<"transcripts.libraryEntry">((db, params) =>
-    runSqliteDeferredTransactionSync(db, () => readTranscriptLibraryEntry(db, params)),
+    runSqliteReadSnapshotSync(db, () => readTranscriptLibraryEntry(db, params)),
   ),
   "transcripts.recentStopped": readTranscript<"transcripts.recentStopped">(
     (db, { source, stoppedAfter, stoppedBefore }) =>

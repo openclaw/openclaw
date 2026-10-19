@@ -1,6 +1,5 @@
 import { listAgentIds, resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
   asToolParamsRecord,
   jsonResult,
@@ -86,9 +85,6 @@ function createLazyStandingIntentTool(
   ctx: OpenClawPluginToolContext,
   reportUnavailable: (reason: string) => void,
 ): AnyAgentTool | null {
-  if (ctx.senderIsOwner !== true) {
-    return null;
-  }
   const cfg = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
   const provider = ctx.messageChannel?.trim();
   const senderId = ctx.requesterSenderId?.trim();

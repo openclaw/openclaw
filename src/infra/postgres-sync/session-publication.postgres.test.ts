@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
+import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
+import { assertCompactionPathAlias } from "../../config/sessions/compaction-pathalias.test-support.js";
 import { readPreparedSessionEntryChange } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryPublicationSource } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { captureDurableSessionActor } from "../../config/sessions/session-actor-durable.js";
+import {
+  assertSessionActorPathAliasReuse,
+  createAliasedSessionStateRoot,
+} from "../../config/sessions/session-actor-pathalias.test-support.js";
 import {
   readSessionActorEntryFacts,
   readSessionActorRowFacts,
@@ -31,6 +38,7 @@ const configured: unknown = getEnvironmentData("openclaw.test.workboard.connecti
 const connection = typeof configured === "string" ? configured : undefined;
 const prefix = `publication_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
 let root: string;
+let rootPath: string;
 let client: pg.Client;
 let owners: Awaited<ReturnType<typeof loadOwners>>;
 let database: ReturnType<typeof owners.openOpenClawAgentDatabase>;
@@ -47,7 +55,7 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
         withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
       }
       if (root) {
-        await owners.cleanupSessionStateForTest({ stateDir: root });
+        await owners.cleanupSessionStateForTest({ stateDir: root, rootPath });
       }
       if (client) {
         const schemas = await client.query<{ nspname: string }>(
@@ -83,7 +91,7 @@ function targetFor(sessionKey: string) {
       kind: "file" as const,
       physicalIdentity: identity.identity,
       birthtime: identity.birthtime,
-      nativeLocation: database.path,
+      nativeLocation: identity.canonicalPath,
     },
   };
 }
@@ -105,7 +113,8 @@ function observeEntries(sessionKey: string) {
 
 describe.skipIf(!connection)("PostgreSQL committed session publications", () => {
   beforeAll(async () => {
-    root = directories.make("pg-session-publication-");
+    rootPath = directories.make("pg-session-publication-");
+    root = await createAliasedSessionStateRoot(rootPath);
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     installDatabaseEngineSelection({
       effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
@@ -119,6 +128,45 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
     );
   });
   beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
+
+  it.each([undefined, "different store", "changed writer"] as const)(
+    "compacts through a symlinked state root (refusal=%s)",
+    async (refusal) => {
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+      await captureRuntimeConfigAsyncReader()();
+      const canonical = {
+        ...scopeFor("compaction"),
+        storePath: readOpenClawAgentDatabaseIdentity(database).canonicalPath,
+        sessionId: `alias-compaction-${refusal ?? "success"}`,
+        sessionKey: `agent:main:compaction-${refusal ?? "success"}`,
+        env: { OPENCLAW_STATE_DIR: root },
+      };
+      await assertCompactionPathAlias(
+        {
+          ...canonical,
+          storePath: database.path,
+        },
+        canonical,
+        refusal,
+      );
+    },
+  );
+
+  it("reuses the actor through admitted PG path aliases without crossing database identities", async () => {
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+    await captureRuntimeConfigAsyncReader()();
+    const otherDatabase = withEngineStoreAdmission(() =>
+      owners.openOpenClawAgentDatabase({
+        agentId: "main",
+        path: path.join(path.dirname(database.path), "other.sqlite"),
+      }),
+    );
+    try {
+      await assertSessionActorPathAliasReuse(database, otherDatabase);
+    } finally {
+      withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(otherDatabase.path));
+    }
+  });
 
   it("publishes complete replacements under PG admission and reuses fresh actor facts after patches", async () => {
     const scope = scopeFor("patch");

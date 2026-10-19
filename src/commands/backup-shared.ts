@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
+import { readExistingWorktreePaths } from "../agents/worktrees/registry-read.js";
 import {
   createConfigIO,
   resolveConfigPath,
@@ -621,9 +622,10 @@ async function resolveBackupPlanFromState(params: {
         ).preparePostgresBackupDiscovery(discoveryInput)
       ).pluginInventory
     : resolveActivatedPluginBackupInventory(discoveryInput);
-  // Effective agent workspaces can omit their shared base. Exclude it only here
-  // so full backups and destructive cleanup retain their existing selection.
+  // Effective agent workspaces omit managed chat worktrees and can omit their shared base.
+  // Keep these exclusions here so full backups and destructive cleanup retain their selection.
   if (!includeWorkspace && discoverySnapshot.valid) {
+    discoveredWorkspaceDirs.push(...(await readExistingWorktreePaths(process.env)));
     const sharedWorkspaceBase = discoverySnapshot.config.agents?.defaults?.workspace?.trim();
     if (sharedWorkspaceBase) {
       discoveredWorkspaceDirs.push(resolveUserPath(sharedWorkspaceBase));

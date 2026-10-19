@@ -1,12 +1,4 @@
-import fs, {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import fs, { existsSync, readFileSync, writeFileSync } from "node:fs";
 import os, { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -14,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import type { FileLockOptions } from "../../infra/file-lock.js";
 import { snapshotFiles } from "../../infra/state-migrations.caller-mode.test-helpers.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn());
@@ -40,13 +31,62 @@ vi.mock("../../infra/file-lock.js", () => ({
   withFileLock: withFileLockMock,
 }));
 
-let originalAgentDir: string | undefined;
 let tempAgentDir: string | undefined;
 
+function stubHome(home: string, stateDir = home) {
+  vi.spyOn(os, "homedir").mockReturnValue(home);
+  for (const key of ["HOME", "USERPROFILE", "OPENCLAW_HOME"]) {
+    vi.stubEnv(key, home);
+  }
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+}
+
+function guardedResponse(response: Response, release = vi.fn(async () => {})) {
+  return { response, release };
+}
+
+function writeBinary(path: string, contents = "binary") {
+  fs.mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, contents);
+}
+
+function byteStream(sizes: number[], highWaterMark = 1) {
+  let reads = 0;
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        const size = sizes[reads];
+        if (size !== undefined) {
+          controller.enqueue(new Uint8Array(size));
+          reads += 1;
+        } else {
+          controller.close();
+        }
+      },
+      cancel,
+    },
+    { highWaterMark },
+  );
+  return { body, cancel, readCount: () => reads };
+}
+
+function expectReleased(releases: ReturnType<typeof mockDownload>) {
+  expect(releases.releaseCheckRelease).toHaveBeenCalledOnce();
+  expect(releases.downloadRelease).toHaveBeenCalledOnce();
+}
+
+function mockDownload(response: Response, release = vi.fn(async () => {})) {
+  const metadata = guardedResponse(Response.json({ tag_name: "14.1.1" }));
+  fetchWithSsrFGuardMock
+    .mockResolvedValueOnce(metadata)
+    .mockResolvedValueOnce(guardedResponse(response, release));
+  return { releaseCheckRelease: metadata.release, downloadRelease: release };
+}
+
 beforeEach(() => {
-  originalAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  tempAgentDir = mkdtempSync(join(tmpdir(), "openclaw-tools-manager-"));
-  setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
+  tempAgentDir = fs.mkdtempSync(join(tmpdir(), "openclaw-tools-manager-"));
+  vi.stubEnv("OPENCLAW_AGENT_DIR", tempAgentDir);
   fetchWithSsrFGuardMock.mockReset();
   extractArchiveMock.mockReset();
   withFileLockMock
@@ -54,12 +94,7 @@ beforeEach(() => {
     .mockImplementation(
       async (_path: string, _options: FileLockOptions, fn: () => Promise<unknown>) => fn(),
     );
-  spawnSyncMock.mockReturnValue({
-    error: new Error("ENOENT"),
-    status: null,
-    stderr: Buffer.alloc(0),
-    stdout: Buffer.alloc(0),
-  });
+  spawnSyncMock.mockReturnValue({ error: new Error("ENOENT"), status: null });
 });
 
 afterEach(() => {
@@ -68,13 +103,8 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.resetModules();
   vi.unstubAllEnvs();
-  if (originalAgentDir === undefined) {
-    deleteTestEnvValue("OPENCLAW_AGENT_DIR");
-  } else {
-    setTestEnvValue("OPENCLAW_AGENT_DIR", originalAgentDir);
-  }
   if (tempAgentDir) {
-    rmSync(tempAgentDir, { recursive: true, force: true });
+    fs.rmSync(tempAgentDir, { recursive: true, force: true });
   }
   tempAgentDir = undefined;
 });
@@ -85,11 +115,7 @@ describe("ensureTool", () => {
     async (tool) => {
       const home = expectDefined(tempAgentDir, "test home");
       const configPath = join(home, "openclaw.json");
-      vi.spyOn(os, "homedir").mockReturnValue(home);
-      vi.stubEnv("HOME", home);
-      vi.stubEnv("USERPROFILE", home);
-      vi.stubEnv("OPENCLAW_HOME", home);
-      vi.stubEnv("OPENCLAW_STATE_DIR", home);
+      stubHome(home);
       vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
       vi.stubEnv("OPENCLAW_AGENT_DIR", "");
       writeFileSync(
@@ -116,95 +142,58 @@ describe("ensureTool", () => {
     },
   );
 
-  it.each([
-    { name: "legacy only", legacy: "payload", canonical: "missing", selected: "legacy" },
-    { name: "migrated", legacy: "missing", canonical: "payload", selected: "canonical" },
-    { name: "both present", legacy: "payload", canonical: "payload", selected: "legacy" },
-    { name: "empty canonical", legacy: "payload", canonical: "empty", selected: "legacy" },
-    {
-      name: "completed migration",
-      legacy: "payload",
-      canonical: "payload",
-      receipt: "valid",
-      selected: "canonical",
-    },
-    {
-      name: "incomplete receipt",
-      legacy: "payload",
-      canonical: "empty",
-      receipt: "partial",
-      selected: "legacy",
-    },
-    {
-      name: "another source's receipt",
-      legacy: "payload",
-      canonical: "payload",
-      receipt: "other-source",
-      selected: "legacy",
-    },
-    {
-      name: "another target's receipt",
-      legacy: "payload",
-      canonical: "payload",
-      receipt: "other-target",
-      selected: "legacy",
-    },
-    { name: "empty legacy", legacy: "empty", canonical: "missing", selected: "canonical" },
-    { name: "missing legacy", legacy: "missing", canonical: "missing", selected: "canonical" },
+  it.each<[string, string, string, string, string?]>([
+    ["legacy only", "payload", "missing", "legacy"],
+    ["migrated", "missing", "payload", "canonical"],
+    ["both present", "payload", "payload", "legacy"],
+    ["empty canonical", "payload", "empty", "legacy"],
+    ["completed migration", "payload", "payload", "canonical", "valid"],
+    ["incomplete receipt", "payload", "empty", "legacy", "partial"],
+    ["another source's receipt", "payload", "payload", "legacy", "other-source"],
+    ["another target's receipt", "payload", "payload", "legacy", "other-target"],
+    ["empty legacy", "empty", "missing", "canonical"],
+    ["missing legacy", "missing", "missing", "canonical"],
   ])(
-    "reuses managed binaries across default-profile agent directory migration: $name",
-    async (testCase) => {
+    "reuses managed binaries across default-profile agent directory migration: %s",
+    async (_name, legacy, canonical, selected, receipt) => {
       const home = expectDefined(tempAgentDir, "test home");
-      vi.spyOn(os, "homedir").mockReturnValue(home);
       const stateDir = join(home, ".openclaw");
-      vi.stubEnv("HOME", home);
-      vi.stubEnv("USERPROFILE", home);
-      vi.stubEnv("OPENCLAW_HOME", home);
+      stubHome(home, stateDir);
       vi.stubEnv("OPENCLAW_PROFILE", "");
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       vi.stubEnv("OPENCLAW_AGENT_DIR", "");
       vi.stubEnv("OPENCLAW_OFFLINE", "1");
       const canonicalDir = join(stateDir, "agents", "main", "agent");
       const legacyDir = join(home, ".openclaw", "agent");
       const binaryName = process.platform === "win32" ? "fd.exe" : "fd";
-      for (const { directory, contents } of [
-        { directory: legacyDir, contents: testCase.legacy },
-        { directory: canonicalDir, contents: testCase.canonical },
-      ]) {
+      for (const [directory, contents] of [
+        [legacyDir, legacy],
+        [canonicalDir, canonical],
+      ] as const) {
         if (contents === "payload") {
-          const binaryPath = join(directory, "bin", binaryName);
-          mkdirSync(dirname(binaryPath), { recursive: true });
-          writeFileSync(binaryPath, "managed binary");
+          writeBinary(join(directory, "bin", binaryName), "managed binary");
         } else if (contents === "empty") {
-          mkdirSync(directory, { recursive: true });
+          fs.mkdirSync(directory, { recursive: true });
         }
       }
 
-      if (testCase.receipt) {
+      if (receipt) {
+        const source =
+          receipt === "other-source" ? join(home, "other-agent") : fs.realpathSync(legacyDir);
+        const target =
+          receipt === "other-target" ? join(home, "other-target") : fs.realpathSync(canonicalDir);
         writeFileSync(
           join(canonicalDir, ".legacy-agent-dir-migration.json"),
-          testCase.receipt === "partial"
+          receipt === "partial"
             ? '{"version":1'
-            : JSON.stringify({
-                version: 1,
-                source:
-                  testCase.receipt === "other-source"
-                    ? join(home, "other-agent")
-                    : realpathSync(legacyDir),
-                target:
-                  testCase.receipt === "other-target"
-                    ? join(home, "other-target")
-                    : realpathSync(canonicalDir),
-              }) + "\n",
+            : JSON.stringify({ version: 1, source, target }) + "\n",
         );
       }
 
       const { getAgentDir } = await import("../config.js");
       const { resolveAgentDir } = await import("../agent-scope-config.js");
       const { ensureTool } = await import("./tools-manager.js");
-      const selectedDir = testCase.selected === "legacy" ? legacyDir : canonicalDir;
-      const selectedContents =
-        testCase.selected === "legacy" ? testCase.legacy : testCase.canonical;
+      const selectedDir = selected === "legacy" ? legacyDir : canonicalDir;
+      const selectedContents = selected === "legacy" ? legacy : canonical;
 
       await expect(ensureTool("fd")).resolves.toBe(
         selectedContents === "payload" ? join(selectedDir, "bin", binaryName) : undefined,
@@ -212,89 +201,67 @@ describe("ensureTool", () => {
       expect(getAgentDir()).toBe(selectedDir);
       expect(resolveAgentDir({}, "main")).toBe(canonicalDir);
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-      expect(existsSync(legacyDir)).toBe(testCase.legacy !== "missing");
+      expect(existsSync(legacyDir)).toBe(legacy !== "missing");
     },
   );
 
-  it.each(["unreadable"])(
-    "keeps installed tools available with %s config and follows repaired configuration",
-    async (condition) => {
-      const root = expectDefined(tempAgentDir, "test root");
-      const configPath = join(root, "openclaw.json");
-      const firstDir = join(root, "first-agent");
-      const secondDir = join(root, "second-agent");
-      const defaultDir = join(root, "agents/main/agent");
-      vi.spyOn(os, "homedir").mockReturnValue(root);
-      vi.stubEnv("HOME", root);
-      vi.stubEnv("OPENCLAW_HOME", root);
-      vi.stubEnv("OPENCLAW_STATE_DIR", root);
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-      vi.stubEnv("OPENCLAW_AGENT_DIR", firstDir);
-      vi.stubEnv("OPENCLAW_OFFLINE", "1");
-      if (condition === "unreadable") {
-        mkdirSync(configPath);
-      } else if (condition !== "missing") {
-        writeFileSync(
-          configPath,
-          condition === "malformed" ? "{broken config" : '{"gateway":{"port":false}}',
-        );
-      }
-      const binary = process.platform === "win32" ? "fd.exe" : "fd";
-      for (const agentDir of [defaultDir, firstDir, secondDir]) {
-        mkdirSync(join(agentDir, "bin"), { recursive: true });
-        writeFileSync(join(agentDir, "bin", binary), "managed binary");
-      }
-      const { ensureTool } = await import("./tools-manager.js");
-      const { getAgentDir } = await import("../config.js");
-      const read = vi.spyOn(fs, "readFileSync");
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const before = snapshotFiles(root);
-      read.mockClear();
-      expect(getAgentDir()).toBe(firstDir);
-      await expect(ensureTool("fd")).resolves.toBe(join(firstDir, "bin", binary));
-      expect(read.mock.calls.some(([file]) => file === configPath)).toBe(false);
-      expect(warn).not.toHaveBeenCalled();
+  it("keeps installed tools available with unreadable config and follows repaired configuration", async () => {
+    const root = expectDefined(tempAgentDir, "test root");
+    const configPath = join(root, "openclaw.json");
+    const firstDir = join(root, "first-agent");
+    const secondDir = join(root, "second-agent");
+    const defaultDir = join(root, "agents/main/agent");
+    stubHome(root);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", firstDir);
+    vi.stubEnv("OPENCLAW_OFFLINE", "1");
+    fs.mkdirSync(configPath);
+    const binary = process.platform === "win32" ? "fd.exe" : "fd";
+    for (const agentDir of [defaultDir, firstDir, secondDir]) {
+      writeBinary(join(agentDir, "bin", binary), "managed binary");
+    }
+    const { ensureTool } = await import("./tools-manager.js");
+    const { getAgentDir } = await import("../config.js");
+    const read = vi.spyOn(fs, "readFileSync");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const before = snapshotFiles(root);
+    read.mockClear();
+    expect(getAgentDir()).toBe(firstDir);
+    await expect(ensureTool("fd")).resolves.toBe(join(firstDir, "bin", binary));
+    expect(read.mock.calls.some(([file]) => file === configPath)).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
 
-      vi.stubEnv("OPENCLAW_AGENT_DIR", "");
-      const beforeEnv = { ...process.env };
-      expect(getAgentDir()).toBe(defaultDir);
-      await expect(ensureTool("fd")).resolves.toBe(join(defaultDir, "bin", binary));
-      expect(getAgentDir()).toBe(defaultDir);
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("default agent directory"));
-      expect(process.env).toEqual(beforeEnv);
-      expect(snapshotFiles(root)).toEqual(before);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", "");
+    const beforeEnv = { ...process.env };
+    expect(getAgentDir()).toBe(defaultDir);
+    await expect(ensureTool("fd")).resolves.toBe(join(defaultDir, "bin", binary));
+    expect(getAgentDir()).toBe(defaultDir);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("default agent directory"));
+    expect(process.env).toEqual(beforeEnv);
+    expect(snapshotFiles(root)).toEqual(before);
 
-      if (condition === "unreadable") {
-        rmSync(configPath, { recursive: true });
-      }
-      for (const agentDir of [firstDir, secondDir]) {
-        writeFileSync(configPath, JSON.stringify({ agents: { entries: { main: { agentDir } } } }));
-        await expect(ensureTool("fd")).resolves.toBe(join(agentDir, "bin", binary));
-      }
-    },
-  );
+    fs.rmSync(configPath, { recursive: true });
+    for (const agentDir of [firstDir, secondDir]) {
+      writeFileSync(configPath, JSON.stringify({ agents: { entries: { main: { agentDir } } } }));
+      await expect(ensureTool("fd")).resolves.toBe(join(agentDir, "bin", binary));
+    }
+  });
 
   it("single-flights concurrent installs of the same tool", async () => {
     const { ensureTool } = await import("./tools-manager.js");
     const releaseCheckRelease = vi.fn(async () => {});
     const downloadRelease = vi.fn(async () => {});
-    let resolveReleaseCheck!: (value: {
-      response: Response;
-      release: typeof releaseCheckRelease;
-      finalUrl: string;
-    }) => void;
-    const releaseCheck = new Promise<Parameters<typeof resolveReleaseCheck>[0]>((resolve) => {
-      resolveReleaseCheck = resolve;
+    let resolveCheck!: (value: ReturnType<typeof guardedResponse>) => void;
+    const releaseCheck = new Promise<Parameters<typeof resolveCheck>[0]>((resolve) => {
+      resolveCheck = resolve;
     });
     extractArchiveMock.mockImplementation(async (params: { destDir: string }) => {
       writeFileSync(join(params.destDir, "fd"), "binary");
     });
-    fetchWithSsrFGuardMock.mockReturnValueOnce(releaseCheck).mockResolvedValueOnce({
-      response: new Response("archive-bytes", { status: 200 }),
-      release: downloadRelease,
-      finalUrl: "https://github.com/sharkdp/fd/releases/download/v10.3.0/archive.tar.gz",
-    });
+    fetchWithSsrFGuardMock
+      .mockReturnValueOnce(releaseCheck)
+      .mockResolvedValueOnce(guardedResponse(new Response("archive-bytes"), downloadRelease));
     withFileLockMock.mockImplementationOnce(
       async (lockPath: string, _options: FileLockOptions, fn: () => Promise<unknown>) => {
         expect(existsSync(dirname(lockPath))).toBe(true);
@@ -303,42 +270,29 @@ describe("ensureTool", () => {
     );
 
     const installs = [ensureTool("fd"), ensureTool("fd")];
-
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-    resolveReleaseCheck({
-      response: new Response(JSON.stringify({ tag_name: "v10.3.0" }), { status: 200 }),
-      release: releaseCheckRelease,
-      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
-    });
-    await expect(Promise.all(installs)).resolves.toEqual([
-      join(tempAgentDir!, "bin", "fd"),
-      join(tempAgentDir!, "bin", "fd"),
-    ]);
+    resolveCheck(guardedResponse(Response.json({ tag_name: "v10.3.0" }), releaseCheckRelease));
+    const binaryPath = join(tempAgentDir!, "bin", "fd");
+    await expect(Promise.all(installs)).resolves.toEqual([binaryPath, binaryPath]);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
     expect(extractArchiveMock).toHaveBeenCalledOnce();
     expect(withFileLockMock).toHaveBeenCalledOnce();
     const lockOptions = withFileLockMock.mock.calls[0]?.[1];
-    if (!lockOptions) {
-      throw new Error("expected tool installation lock options");
-    }
-    const minimumLockWaitMs = Array.from({ length: lockOptions.retries.retries }, (_, attempt) =>
+    const { retries, stale } = expectDefined(lockOptions, "tool installation lock options");
+    const minimumLockWaitMs = Array.from({ length: retries.retries }, (_, attempt) =>
       Math.min(
-        lockOptions.retries.maxTimeout,
-        Math.max(
-          lockOptions.retries.minTimeout,
-          lockOptions.retries.minTimeout * lockOptions.retries.factor ** attempt,
-        ),
+        retries.maxTimeout,
+        Math.max(retries.minTimeout, retries.minTimeout * retries.factor ** attempt),
       ),
     ).reduce((total, delay) => total + delay, 0);
-    expect(minimumLockWaitMs).toBeGreaterThan(lockOptions.stale);
+    expect(minimumLockWaitMs).toBeGreaterThan(stale);
   });
 
   it("reuses an installation published while waiting for the file lock", async () => {
     const binaryPath = join(tempAgentDir!, "bin", "fd");
     withFileLockMock.mockImplementationOnce(
       async (_path: string, _options: FileLockOptions, fn: () => Promise<unknown>) => {
-        mkdirSync(join(tempAgentDir!, "bin"), { recursive: true });
-        writeFileSync(binaryPath, "binary");
+        writeBinary(binaryPath);
         return fn();
       },
     );
@@ -349,31 +303,6 @@ describe("ensureTool", () => {
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
-  it("cancels download error bodies before releasing guarded fetches", async () => {
-    const { ensureTool } = await import("./tools-manager.js");
-    const releaseCheckRelease = vi.fn(async () => {});
-    const downloadRelease = vi.fn(async () => {});
-    const downloadResponse = new Response("missing asset", { status: 404 });
-    const cancel = vi.spyOn(downloadResponse.body!, "cancel").mockResolvedValue(undefined);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }),
-        release: releaseCheckRelease,
-        finalUrl: "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest",
-      })
-      .mockResolvedValueOnce({
-        response: downloadResponse,
-        release: downloadRelease,
-        finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive",
-      });
-
-    await expect(ensureTool("rg")).resolves.toBeUndefined();
-
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(releaseCheckRelease).toHaveBeenCalledOnce();
-    expect(downloadRelease).toHaveBeenCalledOnce();
-  });
-
   it("extracts Windows zip downloads via safe archive API with size limits", async () => {
     vi.doMock("node:os", async (importOriginal) => ({
       ...(await importOriginal<typeof import("node:os")>()),
@@ -382,22 +311,10 @@ describe("ensureTool", () => {
     }));
 
     const { ensureTool } = await import("./tools-manager.js");
-    const releaseCheckRelease = vi.fn(async () => {});
-    const downloadRelease = vi.fn(async () => {});
     extractArchiveMock.mockImplementation(async (params: { destDir: string }) => {
       writeFileSync(join(params.destDir, "rg.exe"), "binary");
     });
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }),
-        release: releaseCheckRelease,
-        finalUrl: "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest",
-      })
-      .mockResolvedValueOnce({
-        response: new Response("zip-bytes", { status: 200 }),
-        release: downloadRelease,
-        finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive.zip",
-      });
+    mockDownload(new Response("zip-bytes", { status: 200 }));
 
     await expect(ensureTool("rg")).resolves.toBe(join(tempAgentDir!, "bin", "rg.exe"));
 
@@ -420,31 +337,19 @@ describe("ensureTool", () => {
     const agentDir = expectDefined(tempAgentDir, "test agent directory");
     const binaryName = process.platform === "win32" ? "rg.exe" : "rg";
     const archive = "decoded archive bytes";
-    const releaseCheckRelease = vi.fn(async () => {});
-    const downloadRelease = vi.fn(async () => {});
     extractArchiveMock.mockImplementation(
       async (params: { archivePath: string; destDir: string }) => {
         expect(readFileSync(params.archivePath, "utf8")).toBe(archive);
-        const binary = join(params.destDir, "vendor", "bin", binaryName);
-        mkdirSync(dirname(binary), { recursive: true });
-        writeFileSync(binary, "binary");
+        writeBinary(join(params.destDir, "vendor", "bin", binaryName));
       },
     );
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }),
-        release: releaseCheckRelease,
-        finalUrl: "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest",
-      })
-      .mockResolvedValueOnce({
-        // Fetch has already decoded the body; this header still describes wire bytes.
-        response: new Response(archive, {
-          status: 200,
-          headers: { "content-encoding": "gzip", "content-length": "104857601" },
-        }),
-        release: downloadRelease,
-        finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive",
-      });
+    // Fetch has already decoded the body; this header still describes wire bytes.
+    const releases = mockDownload(
+      new Response(archive, {
+        status: 200,
+        headers: { "content-encoding": "gzip", "content-length": "104857601" },
+      }),
+    );
     const { ensureTool } = await import("./tools-manager.js");
     const binaryPath = join(agentDir, "bin", binaryName);
 
@@ -452,8 +357,7 @@ describe("ensureTool", () => {
 
     expect(readFileSync(binaryPath, "utf8")).toBe("binary");
     expect(extractArchiveMock).toHaveBeenCalledOnce();
-    expect(releaseCheckRelease).toHaveBeenCalledOnce();
-    expect(downloadRelease).toHaveBeenCalledOnce();
+    expectReleased(releases);
     expect(fs.readdirSync(join(agentDir, "bin"))).toEqual([binaryName]);
   });
 
@@ -464,57 +368,30 @@ describe("ensureTool", () => {
     "rejects $name above the archive cap and cleans installation staging",
     async ({ declaredBytes, readsBody }) => {
       const agentDir = expectDefined(tempAgentDir, "test agent directory");
-      let reads = 0;
-      const cancel = vi.fn();
-      const response = new Response(
-        new ReadableStream<Uint8Array>(
-          {
-            pull(controller) {
-              reads += 1;
-              if (reads === 1) {
-                controller.enqueue(new Uint8Array([1]));
-              } else if (reads === 2) {
-                // The first byte is written; this chunk exceeds the cap before its disk write.
-                controller.enqueue(new Uint8Array(100 * 1024 * 1024));
-              } else {
-                controller.close();
-              }
-            },
-            cancel,
-          },
-          { highWaterMark: 0 },
-        ),
-        { status: 200, headers: { "content-length": String(declaredBytes) } },
-      );
-      const releaseCheckRelease = vi.fn(async () => {});
-      const downloadRelease = vi.fn(async () => {
-        await response.body?.cancel();
+      // Write one byte before the second chunk exceeds the cap.
+      const stream = byteStream([1, 100 * 1024 * 1024], 0);
+      const response = new Response(stream.body, {
+        headers: { "content-length": String(declaredBytes) },
       });
-      fetchWithSsrFGuardMock
-        .mockResolvedValueOnce({
-          response: new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }),
-          release: releaseCheckRelease,
-          finalUrl: "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest",
-        })
-        .mockResolvedValueOnce({
-          response,
-          release: downloadRelease,
-          finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive",
-        });
+      const releases = mockDownload(
+        response,
+        vi.fn(async () => {
+          await response.body?.cancel();
+        }),
+      );
       const { ensureTool } = await import("./tools-manager.js");
 
       await expect(ensureTool("rg")).resolves.toBeUndefined();
 
       if (readsBody) {
-        expect(reads).toBeGreaterThanOrEqual(2);
+        expect(stream.readCount()).toBeGreaterThanOrEqual(2);
       } else {
-        expect(reads).toBe(0);
+        expect(stream.readCount()).toBe(0);
       }
-      expect(cancel).toHaveBeenCalledOnce();
+      expect(stream.cancel).toHaveBeenCalledOnce();
       expect(response.body?.locked).toBe(false);
       expect(extractArchiveMock).not.toHaveBeenCalled();
-      expect(releaseCheckRelease).toHaveBeenCalledOnce();
-      expect(downloadRelease).toHaveBeenCalledOnce();
+      expectReleased(releases);
       expect(fs.readdirSync(join(agentDir, "bin"))).toEqual([]);
     },
   );
@@ -540,29 +417,15 @@ describe("ensureTool", () => {
       }
       return readdir(...args);
     });
-    const releaseCheckRelease = vi.fn(async () => {});
-    const downloadRelease = vi.fn(async () => {});
     extractArchiveMock.mockImplementation(async (params: { destDir: string }) => {
       blockedDir = join(params.destDir, "nested");
-      mkdirSync(blockedDir);
+      fs.mkdirSync(blockedDir);
       writeFileSync(join(blockedDir, binaryName), "binary");
       if (readableBinary) {
-        const readablePath = join(params.destDir, "readable", binaryName);
-        mkdirSync(dirname(readablePath));
-        writeFileSync(readablePath, "readable binary");
+        writeBinary(join(params.destDir, "readable", binaryName), "readable binary");
       }
     });
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }),
-        release: releaseCheckRelease,
-        finalUrl: "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest",
-      })
-      .mockResolvedValueOnce({
-        response: new Response("archive bytes", { status: 200 }),
-        release: downloadRelease,
-        finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive",
-      });
+    const releases = mockDownload(new Response("archive bytes", { status: 200 }));
     const { ensureTool } = await import("./tools-manager.js");
 
     const installed = await ensureTool("rg");
@@ -575,70 +438,46 @@ describe("ensureTool", () => {
     } else {
       expect(installed).toBeUndefined();
     }
-    expect(releaseCheckRelease).toHaveBeenCalledOnce();
-    expect(downloadRelease).toHaveBeenCalledOnce();
+    expectReleased(releases);
     expect(fs.readdirSync(join(agentDir, "bin"))).toEqual(readableBinary ? [binaryName] : []);
   });
 
   it("bounds GitHub release metadata reads", async () => {
-    let reads = 0;
-    let canceled = false;
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (reads >= 20) {
-            controller.close();
-            return;
-          }
-          reads += 1;
-          controller.enqueue(new Uint8Array(512 * 1024));
-        },
-        cancel() {
-          canceled = true;
-        },
+    const stream = byteStream(Array.from({ length: 20 }, () => 512 * 1024));
+    const guarded = guardedResponse(
+      new Response(stream.body, {
+        headers: { "content-type": "application/json" },
       }),
-      { status: 200, headers: { "content-type": "application/json" } },
     );
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response,
-      release,
-      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
-    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(guarded);
 
     const { ensureTool } = await import("./tools-manager.js");
     await expect(ensureTool("fd")).resolves.toBeUndefined();
 
-    expect(reads).toBeLessThan(20);
-    expect(canceled).toBe(true);
-    expect(release).toHaveBeenCalledOnce();
+    expect(stream.readCount()).toBeLessThan(20);
+    expect(stream.cancel).toHaveBeenCalledOnce();
+    expect(guarded.release).toHaveBeenCalledOnce();
   });
-});
-
-describe("ensureTool exit-status handling", () => {
-  it("treats a binary that spawns but exits non-zero as missing", async () => {
-    const { ensureTool } = await import("./tools-manager.js");
-    // execve succeeded (no result.error) but the child exited non-zero — the
-    // signature of an installed-but-broken binary (GLIBC / shared-lib mismatch).
-    // Must not be reported as available, or ensureTool skips its download path.
-    spawnSyncMock.mockReturnValue({
-      error: undefined,
-      status: 1,
-      stderr: Buffer.alloc(0),
-      stdout: Buffer.alloc(0),
-    });
-    const release = vi.fn(async () => {});
-    const response = new Response("unavailable", { status: 503 });
-    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response,
-      release,
-      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
-    });
-
-    await expect(ensureTool("fd")).resolves.toBeUndefined();
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-  });
+  it.each(["release", "download"] as const)(
+    "cancels and releases %s HTTP errors",
+    async (phase) => {
+      const { ensureTool } = await import("./tools-manager.js");
+      const response = new Response("unavailable", { status: phase === "release" ? 503 : 404 });
+      const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+      if (phase === "release") {
+        // A successful spawn with a nonzero exit (e.g. GLIBC mismatch) must still download.
+        spawnSyncMock.mockReturnValue({ status: 1 });
+        const guarded = guardedResponse(response);
+        fetchWithSsrFGuardMock.mockResolvedValueOnce(guarded);
+        await expect(ensureTool("fd")).resolves.toBeUndefined();
+        expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+        expect(guarded.release).toHaveBeenCalledOnce();
+      } else {
+        const releases = mockDownload(response);
+        await expect(ensureTool("rg")).resolves.toBeUndefined();
+        expectReleased(releases);
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
 });

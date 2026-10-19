@@ -1,14 +1,17 @@
-import { Show, createMemo, createUniqueId } from "solid-js";
+import { Show, createMemo, createUniqueId, onSettled } from "solid-js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../../app/control-ui-auth.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
+import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
+import { createRouteElementRef } from "../../../app/route-element-ref.ts";
 import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
+import type { GatewayStatusProps } from "../../../components/gateway-status.ts";
 import { StandalonePersonLink } from "../../../components/person-activity-link-solid.tsx";
 import {
   personActivityLink,
@@ -16,6 +19,7 @@ import {
 } from "../../../components/person-activity-link.ts";
 import { SessionColorDot } from "../../../components/session-color.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
+import { GatewayStatus } from "../../../components/solid/gateway-status.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
@@ -31,6 +35,7 @@ import {
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending, resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
@@ -67,9 +72,11 @@ type ChatPaneParentSession = {
 };
 
 export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
+  onHeaderRef?: (element: HTMLElement) => void | (() => void);
   presented: PresentationValue;
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
+  gatewayStatus?: GatewayStatusProps | null;
   title: string;
   agent?: AgentIdentity & { name: string };
   titlePending?: boolean;
@@ -161,11 +168,17 @@ export function resolveChatPaneParentSession(
 
 function IdentityCrumbs(props: ChatPaneHeaderProps) {
   const hasProject = () => !props.catalog && Boolean(props.workspaceLabel);
+  const status = () =>
+    props.mergedChrome && props.gatewayStatus?.kind !== "connected" && props.gatewayStatus?.kind;
   return (
     <div class="chat-pane__crumbs">
-      <Show when={hasProject()}>
+      <Show when={hasProject() || status()}>
         <div class="chat-pane__project-row">
-          <ProjectCrumb {...props} />
+          <Show when={status()} fallback={<ProjectCrumb {...props} />}>
+            <div class="mobile-connection-status">
+              <GatewayStatus {...props.gatewayStatus!} />
+            </div>
+          </Show>
         </div>
       </Show>
       <div class="chat-pane__session-trail">
@@ -294,32 +307,47 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
         </Show>
       }
     >
-      <input
-        class="chat-pane__session-title-input"
-        value={props.renameValue}
-        aria-label={t("chat.sessionHeader.renameInputAria")}
-        placeholder={t("chat.sessionHeader.renameInputPlaceholder")}
-        onInput={(event) => props.onRenameInput(event.currentTarget.value)}
-        onCompositionEnd={recordCompositionEnd}
-        ref={nativeListener("keyup", clearCompositionEnd)}
-        onKeyDown={(event) => {
-          if (isComposingKeyboardEvent(event)) {
-            return;
-          }
-          if (event.key === "Enter") {
-            event.preventDefault();
-            props.onCommitRename();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            props.onCancelRename();
-          }
-        }}
-        onBlur={(event) => {
-          clearCompositionEnd(event);
-          props.onCommitRename();
-        }}
-      />
+      <SessionRenameInput {...props} />
     </Show>
+  );
+}
+
+function SessionRenameInput(props: ChatPaneHeaderProps) {
+  let input!: HTMLInputElement;
+  onSettled(() => {
+    input.focus();
+    input.select();
+  });
+  return (
+    <input
+      class="chat-pane__session-title-input"
+      value={props.renameValue}
+      aria-label={t("chat.sessionHeader.renameInputAria")}
+      placeholder={t("chat.sessionHeader.renameInputPlaceholder")}
+      onInput={(event) => props.onRenameInput(event.currentTarget.value)}
+      onCompositionEnd={recordCompositionEnd}
+      ref={[(element) => (input = element), nativeListener("keyup", clearCompositionEnd)]}
+      onKeyDown={(event) => {
+        if (isComposingKeyboardEvent(event)) {
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          if (!props.actionsDisabled) {
+            props.onCommitRename();
+          }
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          props.onCancelRename();
+        }
+      }}
+      onBlur={(event) => {
+        clearCompositionEnd(event);
+        if (!props.actionsDisabled) {
+          props.onCommitRename();
+        }
+      }}
+    />
   );
 }
 
@@ -422,6 +450,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
   return (
     <>
       <div
+        ref={[elementRef(props.onHeaderRef)]}
         class={[
           "chat-pane__header",
           {
@@ -438,27 +467,37 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
         onMouseDown={beginNativeWindowDrag}
       >
         <div class="chat-pane__header-leading">
-          {props.mergedChrome ? (
-            <openclaw-tooltip prop:content={drawerLabel()}>
-              <button
-                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
-                type="button"
-                aria-label={drawerLabel()}
-                aria-expanded={props.navDrawerOpen ? "true" : "false"}
-                onClick={(event) => {
-                  window.dispatchEvent(
-                    new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
-                      detail: {
-                        trigger: event.currentTarget,
-                      },
-                    }),
-                  );
-                }}
-              >
-                <Icon name="menu" />
-              </button>
-            </openclaw-tooltip>
-          ) : undefined}
+          <Show when={props.mergedChrome}>
+            {(_mergedChrome) => {
+              const drawerRef = createRouteElementRef(NAV_DRAWER_TOGGLE_REGISTRATION);
+              return (
+                <openclaw-tooltip prop:content={drawerLabel()}>
+                  <button
+                    ref={drawerRef}
+                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
+                    type="button"
+                    aria-label={drawerLabel()}
+                    aria-expanded={props.navDrawerOpen ? "true" : "false"}
+                    data-connection-status={props.gatewayStatus?.kind ?? undefined}
+                    onClick={(event) => {
+                      window.dispatchEvent(
+                        new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
+                          detail: {
+                            trigger: event.currentTarget,
+                          },
+                        }),
+                      );
+                    }}
+                  >
+                    <Icon name="menu" />
+                    <Show when={props.gatewayStatus?.kind}>
+                      <span class="gateway-status-dot" aria-hidden="true" />
+                    </Show>
+                  </button>
+                </openclaw-tooltip>
+              );
+            }}
+          </Show>
           <Show when={incognito()}>
             <openclaw-tooltip
               prop:content={t("sessionsView.incognitoDescription")}

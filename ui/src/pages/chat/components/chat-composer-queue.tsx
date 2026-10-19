@@ -1,11 +1,4 @@
-import {
-  For,
-  createEffect,
-  createMemo,
-  createRenderEffect,
-  createUniqueId,
-  onCleanup,
-} from "solid-js";
+import { For, createMemo, createUniqueId, onCleanup, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import {
@@ -21,6 +14,7 @@ import {
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
@@ -302,8 +296,8 @@ function ChatQueueItem(rowProps: {
   let pointerSelection = false;
   const item = () => rowProps.item;
   const reorder = () => rowProps.reorder;
-  const edit = createMemo(() => rowProps.controls.queuedEdit);
-  const hasAuthorAvatar = createMemo(() => Boolean(formatSenderLabel(item().sender)));
+  const edit = () => rowProps.controls.queuedEdit;
+  const hasAuthorAvatar = () => Boolean(formatSenderLabel(item().sender));
   const images = createMemo(() =>
     item().attachments?.filter((attachment) => attachment.mimeType.startsWith("image/")),
   );
@@ -311,92 +305,53 @@ function ChatQueueItem(rowProps: {
     const image = images()?.[0];
     return image ? getChatAttachmentPreviewUrl(image) : null;
   });
-  const failed = createMemo(
-    () =>
-      item().sendState === "failed" ||
-      item().sendState === "unconfirmed" ||
-      item().sendState === "held",
-  );
-  const reconnecting = createMemo(
-    () =>
-      !item().serverQueued &&
-      !failed() &&
-      (rowProps.controls.offline === true ||
-        isChatSendReconnecting(item().sendState, rowProps.controls.connected)),
-  );
-  const stateLabel = createMemo(() =>
+  const failed = () =>
+    item().sendState === "failed" ||
+    item().sendState === "unconfirmed" ||
+    item().sendState === "held";
+  const reconnecting = () =>
+    !item().serverQueued &&
+    !failed() &&
+    (rowProps.controls.offline === true ||
+      isChatSendReconnecting(item().sendState, rowProps.controls.connected));
+  const stateLabel = () =>
     sendStateLabel(
       item(),
       !item().serverQueued && rowProps.controls.offline === true,
       rowProps.controls.connected,
-    ),
-  );
-  const steered = createMemo(() => item().queueMode === "steer" && stateLabel() === null);
-  const busy = createMemo(() => item().sendState === "executing-command");
-  const editing = createMemo(() => edit()?.editingId === item().id);
-  let editInput: HTMLTextAreaElement | undefined;
-  createRenderEffect(
-    () => (editing() ? (edit()?.editingText ?? item().text) : undefined),
-    (value) => {
-      // Recovery may publish its draft after the editor mounts. Native input already matches.
-      if (editInput && value !== undefined && editInput.value !== value) {
-        editInput.value = value;
-        fitQueueEditInput(editInput);
-      }
-    },
-  );
-  const mentionText = createMemo(() =>
-    editing() ? (edit()?.editingText ?? item().text) : item().text,
-  );
-  const mentions = createMemo(() => (editing() ? edit()?.editingMentions : item().mentions));
-  const canSteer = createMemo(
-    () =>
-      Boolean(rowProps.controls.canAbort && rowProps.controls.onQueueSteer) &&
-      isSteerableQueuedMessage(item()) &&
-      !editing(),
-  );
-  const showsSteer = createMemo(
-    () =>
-      Boolean(rowProps.controls.canAbort && rowProps.controls.onQueueSteer) &&
-      !editing() &&
-      !item().localCommandName &&
-      !item().intent &&
-      (isSteerableQueuedMessage(item()) || item().sendState === "waiting-model"),
-  );
+    );
+  const steered = () => item().queueMode === "steer" && stateLabel() === null;
+  const busy = () => item().sendState === "executing-command";
+  const editing = () => edit()?.editingId === item().id;
+  const mentionText = () => (editing() ? (edit()?.editingText ?? item().text) : item().text);
+  const mentions = () => (editing() ? edit()?.editingMentions : item().mentions);
+  const canSteer = () =>
+    Boolean(rowProps.controls.canAbort && rowProps.controls.onQueueSteer) &&
+    isSteerableQueuedMessage(item()) &&
+    !editing();
+  const showsSteer = () =>
+    Boolean(rowProps.controls.canAbort && rowProps.controls.onQueueSteer) &&
+    !editing() &&
+    !item().localCommandName &&
+    !item().intent &&
+    (isSteerableQueuedMessage(item()) || item().sendState === "waiting-model");
   const segment = createMemo(() => reorder().segments.find((ids) => ids.includes(item().id)) ?? []);
-  const moveIndex = createMemo(() => segment().indexOf(item().id));
-  let keyboardMoveHandle: HTMLButtonElement | undefined;
-  createEffect(reorder, () => {
-    const handle = keyboardMoveHandle;
-    keyboardMoveHandle = undefined;
-    // Keyed moves can blur descendants after the handler's microtask. Restore
-    // the retained handle only after this reorder projection commits its DOM.
-    if (
-      handle?.isConnected &&
-      !handle.disabled &&
-      handle.ownerDocument.activeElement === handle.ownerDocument.body
-    ) {
-      handle.focus({ preventScroll: true });
-    }
-  });
-  const move = createMemo(() => rowProps.controls.onQueueMove);
+  const moveIndex = () => segment().indexOf(item().id);
+  const move = () => rowProps.controls.onQueueMove;
   // Queue-level: once any row can move, every row's own state icon becomes the
   // handle so text stays on one x without adding a second grabber column.
-  const showsHandle = createMemo(() => Boolean(move()) && reorder().offered);
-  const canMove = createMemo(() => showsHandle() && moveIndex() >= 0 && segment().length > 1);
+  const showsHandle = () => Boolean(move()) && reorder().offered;
+  const canMove = () => showsHandle() && moveIndex() >= 0 && segment().length > 1;
   // Every row keeps its handle and action slots in every state and goes inert
   // instead of empty while an edit is open, so no column moves mid-flow.
-  const editable = createMemo(
-    () => Boolean(edit()?.onEdit) && isMovableChatQueueItem(item()) && !item().localCommandName,
-  );
-  const canEdit = createMemo(() => editable() && !edit()?.editingId);
-  const text = createMemo(
-    () =>
-      item().text ||
-      (item().attachments?.length
-        ? t("chat.queue.imageCount", { count: String(item().attachments?.length ?? 0) })
-        : ""),
-  );
+  const editable = () =>
+    Boolean(edit()?.onEdit) && isMovableChatQueueItem(item()) && !item().localCommandName;
+  const canEdit = () => editable() && !edit()?.editingId;
+  const text = () =>
+    item().text ||
+    (item().attachments?.length
+      ? t("chat.queue.imageCount", { count: String(item().attachments?.length ?? 0) })
+      : "");
   const renderDeliveryAction = (action: "retry" | "steer", disabled = false) => (
     <button
       class={["chat-queue__action", `chat-queue__${action}`]}
@@ -512,10 +467,17 @@ function ChatQueueItem(rowProps: {
             const targetId = segment()[moveIndex() + delta];
             if (targetId) {
               const handle = event.currentTarget;
-              if (handle instanceof HTMLButtonElement) {
-                keyboardMoveHandle = handle;
-              }
               move()?.(item().id, targetId);
+              // Restore only after the keyed move settles, without stealing newer focus.
+              onSettled(() => {
+                if (
+                  handle.isConnected &&
+                  !handle.disabled &&
+                  handle.ownerDocument.activeElement === handle.ownerDocument.body
+                ) {
+                  handle.focus({ preventScroll: true });
+                }
+              });
             }
           }}
         >
@@ -550,10 +512,10 @@ function ChatQueueItem(rowProps: {
         <textarea
           class="chat-queue__edit-input"
           rows="1"
-          ref={(element) => {
-            editInput = element;
-            mountQueueEditInput(element, edit()?.editingText ?? item().text);
-          }}
+          ref={[
+            (element) => mountQueueEditInput(element, edit()?.editingText ?? item().text),
+            liveValue(() => edit()?.editingText ?? item().text, fitQueueEditInput),
+          ]}
           aria-label={t("chat.queue.editQueuedMessage")}
           onBeforeInput={(event) => {
             queueMentionInputs.set(event.currentTarget, {

@@ -162,6 +162,7 @@ const resolveCatalog = (constraints: { expectedIntegrity?: string; expectedPlugi
   resolveManagedPluginInstallRequest(
     { source: "clawhub", packageName: "community/fixture", ...constraints },
     catalog,
+    "https://clawhub.ai",
   );
 
 it("normalizes the installer's ClawHub digest before comparing catalog provenance", () => {

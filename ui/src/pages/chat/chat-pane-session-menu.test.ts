@@ -602,12 +602,15 @@ describe("chat pane session menu boundary", () => {
 
     await pane.handleHeaderSessionAction({ kind: "fork" }, session);
 
-    expect(create).toHaveBeenCalledWith({
-      parentSessionKey: session.key,
-      fork: true,
-      forkFrom: "last-completed",
-      agentId: "main",
-    });
+    expect(create).toHaveBeenCalledWith(
+      {
+        parentSessionKey: session.key,
+        fork: true,
+        forkFrom: "last-completed",
+        agentId: "main",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:forked");
   });
 

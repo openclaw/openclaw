@@ -7,11 +7,7 @@ import type {
   RealtimeTalkTransportContext,
 } from "./shared.ts";
 
-type MockWebSocketEvent = {
-  data?: unknown;
-  code?: number;
-  reason?: string;
-};
+type MockWebSocketEvent = { data?: unknown };
 
 type MockWebSocketHandler = (event?: MockWebSocketEvent) => void;
 type MockWebSocketEventType = "close" | "error" | "message" | "open";
@@ -65,6 +61,22 @@ class MockGoogleLiveWebSocket {
     this.sent.push(data);
   }
 
+  emitJson(message: unknown) {
+    this.emitMessage(JSON.stringify(message));
+  }
+
+  emitContent(serverContent: unknown) {
+    this.emitMessage(encodeJsonFrame({ serverContent }));
+  }
+
+  emitCalls(...functionCalls: unknown[]) {
+    this.emitMessage(encodeJsonFrame({ toolCall: { functionCalls } }));
+  }
+
+  get messages(): unknown[] {
+    return this.sent.map((payload) => JSON.parse(payload));
+  }
+
   close() {
     this.readyState = 3;
   }
@@ -103,6 +115,10 @@ class MockAudioBufferSource {
   readonly stop = vi.fn();
 }
 
+function mockAudioNode() {
+  return { connect: vi.fn(), disconnect: vi.fn() };
+}
+
 class MockAudioContext {
   readonly currentTime = 0;
   readonly destination = {};
@@ -114,29 +130,16 @@ class MockAudioContext {
     audioContexts.push(this);
   }
 
-  createMediaStreamSource() {
-    return {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-    };
-  }
+  createMediaStreamSource = mockAudioNode;
 
   createScriptProcessor() {
-    const processor = {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      onaudioprocess: null,
-    };
+    const processor = { ...mockAudioNode(), onaudioprocess: null };
     inputProcessors.push(processor);
     return processor;
   }
 
   createGain() {
-    const sink = {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      gain: { value: 1 },
-    };
+    const sink = { ...mockAudioNode(), gain: { value: 1 } };
     inputSinks.push(sink);
     return sink;
   }
@@ -185,11 +188,10 @@ export function createSession(
 }
 
 export function createClient(): RealtimeTalkTransportContext["client"] {
-  const client = {
+  return {
     addEventListener: vi.fn(() => () => undefined),
     request: vi.fn(),
   } as unknown as RealtimeTalkTransportContext["client"];
-  return client;
 }
 
 export async function createTransport(
@@ -222,18 +224,13 @@ export function latestWebSocket(): MockGoogleLiveWebSocket {
   return ws;
 }
 
-export async function beginTransport(transport: GoogleLiveRealtimeTalkTransport): Promise<{
-  start: Promise<"ready" | "cancelled">;
-  ws: MockGoogleLiveWebSocket;
-}> {
+export async function beginTransport(transport: GoogleLiveRealtimeTalkTransport) {
   const start = transport.start();
   await waitForFast(() => expect(wsInstances).toHaveLength(1));
   return { start, ws: latestWebSocket() };
 }
 
-export async function startTransport(
-  transport: GoogleLiveRealtimeTalkTransport,
-): Promise<MockGoogleLiveWebSocket> {
+export async function startTransport(transport: GoogleLiveRealtimeTalkTransport) {
   const { start, ws } = await beginTransport(transport);
   ws.emitOpen();
   ws.emitMessage(encodeJsonFrame({ setupComplete: {} }));
@@ -250,41 +247,19 @@ export function pumpMicrophone(samples: Float32Array): void {
   processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => samples } });
 }
 
-export function requireFirstTalkEvent(
-  onTalkEvent: ReturnType<typeof vi.fn>,
-): Record<string, unknown> {
-  const [call] = onTalkEvent.mock.calls;
-  if (!call) {
-    throw new Error("expected talk event");
-  }
-  const [event] = call;
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    throw new Error("expected talk event record");
-  }
-  return event as Record<string, unknown>;
-}
-
-export function getGoogleLiveToolOwnerState(transport: GoogleLiveRealtimeTalkTransport): {
+type ToolOwnerState = {
   pendingCalls: Map<string, { name: string; cancelled: boolean }>;
   seenCallIds: Set<string>;
-} {
-  return (
-    transport as unknown as {
-      toolOwner: {
-        pendingCalls: Map<string, { name: string; cancelled: boolean }>;
-        seenCallIds: Set<string>;
-      };
-    }
-  ).toolOwner;
+};
+export function getGoogleLiveToolOwnerState(transport: GoogleLiveRealtimeTalkTransport) {
+  return (transport as unknown as { toolOwner: ToolOwnerState }).toolOwner;
 }
 
 export function installGoogleLiveTestFixture(): void {
   beforeEach(() => {
-    wsInstances.length = 0;
-    audioContexts.length = 0;
-    createdSources.length = 0;
-    inputProcessors.length = 0;
-    inputSinks.length = 0;
+    for (const list of [wsInstances, audioContexts, createdSources, inputProcessors, inputSinks]) {
+      list.length = 0;
+    }
     vi.stubGlobal("WebSocket", MockGoogleLiveWebSocket);
     vi.stubGlobal("AudioContext", MockAudioContext);
     googleLiveTestFixture.stopInputTrack = vi.fn();
@@ -295,13 +270,9 @@ export function installGoogleLiveTestFixture(): void {
       getTracks: () => [inputTrack],
     }));
     vi.stubGlobal("navigator", {
-      mediaDevices: {
-        getUserMedia: googleLiveTestFixture.getUserMedia,
-      },
+      mediaDevices: { getUserMedia: googleLiveTestFixture.getUserMedia },
     });
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => vi.unstubAllGlobals());
 }

@@ -90,7 +90,7 @@ type ChatPageElement = {
   sessionKey?: string;
   dispatchEvent: (event: Event) => boolean;
   getBoundingClientRect?: () => DOMRect;
-  querySelector: (selectors: string) => Element | null;
+  transcriptLoadingChanged?: () => void;
 };
 
 export function invalidateImageLightbox(state: ChatPageHost) {
@@ -266,16 +266,17 @@ export function createPageState(
     renderLifecycle,
     // Background warming gates on these edges. Session-event reloads never
     // re-render the page, so no update can carry the fact to it.
-    transcriptLoadingChanged: () =>
+    transcriptLoadingChanged: () => {
+      page.transcriptLoadingChanged?.();
       page.dispatchEvent(
         new CustomEvent(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, { bubbles: true, composed: true }),
-      ),
+      );
+    },
     historyRecoveryChanged: () =>
       page.dispatchEvent(
         new Event(CHAT_HISTORY_RECOVERY_CHANGED_EVENT, { bubbles: true, composed: true }),
       ),
     sessionWorkspaceState: undefined,
-    querySelector: page.querySelector.bind(page),
   }) as unknown as ChatPageHost;
 
   state.resetToolStream = () => resetToolStream(state);
@@ -392,7 +393,7 @@ export function createPageState(
       void resumeStoredChatOutboxes(state);
     }
   };
-  const transientResources = new Set<"desktop" | "browser">();
+  const transientResources = new Set<"desktop">();
   let transientResourceScope = "";
   state.updateSidebarLayout = (layout, options) => {
     const layoutKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
@@ -417,7 +418,7 @@ export function createPageState(
         .flatMap((column) => column.panels)
         .find((entry) => entry.slot === resource);
       // Explicit targets are saved choices, even when discovery first opened the tab.
-      if (!panel || (resource === "desktop" && panel.environmentId !== undefined)) {
+      if (!panel || panel.environmentId !== undefined) {
         transientResources.delete(resource);
       }
     }
@@ -483,7 +484,7 @@ export function createPageState(
     const selected = state.sidebarLayout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.id === normalizedPanelId)?.slot;
-    if ((selected === "desktop" || selected === "browser") && transientResources.has(selected)) {
+    if (selected === "desktop" && transientResources.has(selected)) {
       return;
     }
     state.settings = patchSettings({

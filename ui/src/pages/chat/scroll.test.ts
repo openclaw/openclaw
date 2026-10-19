@@ -59,12 +59,9 @@ function createScrollHost(
     chatReadingHistory: false,
     chatNewMessagesBelow: false,
     chatIsProgrammaticScroll: () => false,
-    chatScrollToEnd: vi.fn((options: ChatScrollToEndOptions) => {
-      if (typeof container.scrollTo === "function") {
-        container.scrollTo({ top: container.scrollHeight, behavior: options.behavior });
-      } else {
-        container.scrollTop = container.scrollHeight;
-      }
+    chatScrollToEnd: vi.fn<(options: ChatScrollToEndOptions) => boolean>(() => {
+      // Record the owner's requested end, independently of viewport clamping.
+      container.scrollTop = container.scrollHeight;
       return true;
     }),
   };

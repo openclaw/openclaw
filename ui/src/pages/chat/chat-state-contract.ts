@@ -19,7 +19,7 @@ import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
 import type {
   ChatReasoning,
-  LiveToolStreamState,
+  ToolStreamState,
   ProviderPolicyNotice,
   RunOutputUsage,
 } from "./tool-stream-contract.ts";
@@ -38,6 +38,7 @@ export type ChatState = StreamCausalBoundaryState & {
   connected: boolean;
   chatSubmissions?: ApplicationChatSubmissions;
   hasPendingInitialTurn?: (sessionKey: string) => boolean;
+  isRouteSessionPending?: () => boolean;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
   /** Config changes retire preview tickets even when session permissions stay inherited. */
@@ -103,4 +104,4 @@ export type ChatState = StreamCausalBoundaryState & {
   transcriptLoadingChanged?: () => void;
   /** Reports transient read recovery to the shell connection indicator. */
   historyRecoveryChanged?: () => void;
-} & LiveToolStreamState;
+} & ToolStreamState;

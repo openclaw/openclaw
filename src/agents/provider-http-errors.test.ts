@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   assertOkOrThrowProviderError as assertProviderOk,
@@ -11,6 +12,7 @@ import {
   ProviderHttpError,
   readProviderBinaryResponse as readBinary,
   readProviderJsonResponse as readJson,
+  readProviderJsonObjectResponse as readJsonObject,
   readProviderTextResponse as readText,
   readResponseTextLimited as readLimited,
 } from "./provider-http-errors.js";
@@ -273,6 +275,34 @@ it.each([
     expect((error as Error).cause).toEqual(expectedCause);
   },
 );
+
+it("preserves malformed JSON diagnostics when adapting the caller-facing message", async () => {
+  for (const requestHeaders of [undefined, { "X-Proxy-Auth": "synthetic-secret" }]) {
+    const error = await readJson(new Response("<html></html>"), "Video response", {
+      malformedResponseError: "Video response malformed",
+      requestHeaders,
+    }).catch((cause: unknown) => cause);
+    assert.ok(error instanceof Error);
+    expect(error).toMatchObject({
+      message: "Video response malformed",
+      cause: { message: "Video response: malformed JSON response" },
+    });
+    assert.ok(error.cause instanceof Error);
+    expect(error.cause.cause).toEqual(requestHeaders ? undefined : expect.any(SyntaxError));
+  }
+});
+
+it("adapts invalid JSON object shapes without rewriting body-read errors", async () => {
+  const options = { malformedResponseError: "Video response malformed", maxBytes: 4 };
+  const error = await readJsonObject(Response.json([]), "Video response", options).catch(
+    (cause: unknown) => cause,
+  );
+  expect(error).toMatchObject({ message: "Video response malformed" });
+  expect(error).not.toHaveProperty("cause");
+  await expect(
+    readJsonObject(new Response("oversized"), "Video response", options),
+  ).rejects.toThrow("Video response: JSON response exceeds 4 bytes");
+});
 
 it("caps successful text responses instead of buffering oversized bodies", async () => {
   let reads = 0;

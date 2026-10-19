@@ -26,7 +26,6 @@ const nativeTab = {
 describe("Browser panel hosted tabs", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("ResizeObserver", undefined);
   });
 
   afterEach(() => {

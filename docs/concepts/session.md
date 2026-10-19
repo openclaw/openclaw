@@ -20,6 +20,9 @@ retry it.
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
 
+For turn ownership, queueing, stopping, and lifecycle mutation rules, see
+[Session controller](/concepts/session-controller).
+
 For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
 [The main session](/concepts/main-session).
@@ -308,6 +311,12 @@ Older interrupted turns without a recorded authorization source remain restricte
 send a fresh authenticated message to continue privileged work. Session ownership
 or a saved display name never grants recovery permissions.
 
+The reserved device-less backend helper connection is a local control-plane path,
+not a durable operator identity. Use an identified operator client, such as the
+TUI or Control UI, for user-owned work that must resume automatically. Paired
+clients must retain the original device-token generation: reissuing that token
+under a different authentication path can prevent recovery even for the same user.
+
 This also covers parent turns started by subagent completion or pause notices.
 An interrupted parent continues independently of later child completions, and a
 retry of the same notice joins that recovery instead of starting the turn again.
@@ -323,16 +332,22 @@ available for a fresh authenticated message; recovery never substitutes system
 authority. Temporary startup, binding, or access-policy availability failures keep
 their recovery claims and retry.
 
-If a delegated turn's sender authority cannot be reconstructed, automatic recovery
-stops with a recorded reason and a visible notice in the transcript or original
-channel. The notice offers **Resume** in WebChat. The click supplies current operator
-authority and continues the saved task in the same session. A saved
-delegation alone does not authorize replay after restart.
+If a delegated turn's sender authority cannot be reconstructed and no pending
+reply, harness completion, or independent run remains owed, recovery ends only that
+turn. One local interruption notice and terminal source receipt prevent replay;
+the same session and transcript remain available for a fresh authenticated message.
+Recovery does not send the notice to an external channel. Saved delegation alone
+does not authorize replay after restart.
+
+Turns with remaining custody retain the existing recovery block. **Resume** in
+WebChat supplies current operator authority to continue the saved task in the same
+session after its outstanding delivery settles.
 
 Messages sent while restart recovery is waiting to start stay pending. Once
 recovery starts, they follow the session's normal message queue policy. You do
 not need to resend a message just because recovery is waiting for capacity.
-Stopping or replacing the session still cancels pending work.
+Stopping or replacing the session still cancels pending work. A recovery resend
+stopped during preparation stays canceled and is not replayed on the next startup.
 
 If subagent recovery changes session-protection facts while an incoming turn is
 being prepared, reply initialization refreshes those facts and retries within its
@@ -356,6 +371,11 @@ required restart-safe tools, WebChat offers **Resume in new session** instead.
 An unresolved final-delivery record must
 settle before an in-place continuation, and missing transcripts require repair.
 In other channels, `/new` or `/reset` still starts a replacement session.
+
+A canonical Main session archived specifically by restart recovery can also be
+reset. Reset retains its physical session identity and transcript while starting a
+fresh model context; it does not replay the interrupted task. Other archived
+sessions must be restored before reset.
 
 ## Where state lives
 

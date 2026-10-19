@@ -249,11 +249,9 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     this.isTransaction = result.inTransaction;
     this.readOnlyTransaction =
       this.isTransaction && (readOnly || /^\s*BEGIN\b[^;]*\bREAD\s+ONLY\b/i.test(sql));
-    if (/^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)) {
-      if (/^\s*COMMIT\b/i.test(sql) && result.command !== "COMMIT") {
-        this.finishWrite();
-        throw new Error("PostgreSQL transaction rolled back instead of committing");
-      }
+    if (/^\s*COMMIT\s*;?\s*$/i.test(sql) && result.command !== "COMMIT") {
+      this.finishWrite();
+      throw new Error("PostgreSQL transaction rolled back instead of committing");
     }
     const mutation =
       result.mutation === "unscoped" || hintedMutation === "unscoped"

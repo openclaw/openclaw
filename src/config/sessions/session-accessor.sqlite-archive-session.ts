@@ -55,7 +55,19 @@ export async function withSqliteTranscriptArchiveSession<T>(
   }
 }
 
+type SqliteArchiveResponseByOperation = {
+  materialize: Extract<SqliteArchiveSessionResponse, { type: "done" }>;
+  publish: Extract<SqliteArchiveSessionResponse, { type: "published" }>;
+  "read-page": Extract<SqliteArchiveSessionResponse, { type: "page-read" }>;
+  "read-final": Extract<SqliteArchiveSessionResponse, { type: "final-read" }>;
+};
+
 /** Queue selection stays with the existing archive owner, including unscoped/cold requests. */
+export function runScopedSqliteArchiveOperation<Request extends SqliteArchiveOperation>(
+  request: Request,
+  createWorker: (data: object) => Worker,
+  enqueue: <T>(run: () => Promise<T>) => Promise<T>,
+): Promise<SqliteArchiveResponseByOperation[Request["operation"]]> | undefined;
 export function runScopedSqliteArchiveOperation(
   request: SqliteArchiveOperation,
   createWorker: (data: object) => Worker,
@@ -96,11 +108,8 @@ class ArchiveSession {
     });
     try {
       this.unregisterState = registerOpenClawStateDatabaseAsyncResource({
-        close: async (identity) => {
-          if (!identity || identity.key === this.state.identity.key) {
-            await this.close();
-          }
-        },
+        admission: this.state,
+        close: () => this.close(),
       });
     } catch (error) {
       this.unregisterAgent();

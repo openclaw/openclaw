@@ -348,7 +348,7 @@ describe("anonymous public session HTTP boundary", () => {
     expect(response.res.statusCode).toBe(200);
     expect(response.getBody()).not.toContain('rel="canonical"');
     expect(response.getBody()).not.toContain('property="og:url"');
-    expect(response.getBody()).toContain(`href="${requestPath()}">Refresh now</a>`);
+    expect(response.getBody()).toContain(`data-public-refresh-now href="${requestPath()}"`);
   });
 
   it("rejects public bearer traffic over remote plaintext HTTP", async () => {
@@ -414,6 +414,18 @@ describe("anonymous public session HTTP boundary", () => {
     const revoked = await send(server, { headers: { "if-none-match": etag! } });
     expect(revoked.res.statusCode).toBe(404);
     expect(revoked.getBody()).not.toContain("The public viewer is ready");
+  });
+
+  it("serves a public transcript when its subagent completes during the read", async () => {
+    const server = createPublicGateway();
+    reader.mockImplementationOnce(async () => {
+      sessionChanges.emit({ sessionKey: LOCATOR.sessionKey, scope: "runtime" });
+      return PUBLIC_SESSION;
+    });
+    const response = await send(server);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain("The public viewer is ready.");
+    expect(reader).toHaveBeenCalledTimes(1);
   });
 
   it("rebuilds a cached public document after its committed session changes", async () => {

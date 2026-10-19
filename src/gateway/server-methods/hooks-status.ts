@@ -8,7 +8,6 @@ import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-/** Gateway handler for the live hook status report. */
 export const hooksStatusHandlers: GatewayRequestHandlers = {
   "hooks.status": ({ params, respond, context }) => {
     if (!assertValidParams(params, validateHooksStatusParams, "hooks.status", respond)) {

@@ -174,8 +174,8 @@ function inspectUpdateRunDriverAbandonment(
     return undefined;
   }
   const drivers = recordedUpdateRunDrivers(record);
-  // Explicit repair need not wait for dead drivers, but an unrecorded adopter may still be working.
-  const requiresInactivity = !input.explicit || !drivers.length || identityUnavailable;
+  // Confirmed driver death needs no grace; an unrecorded adopter may still be working.
+  const requiresInactivity = !drivers.length || identityUnavailable;
   if (requiresInactivity && Date.now() - updateRunLastActivity(record) <= ABANDONED_UPDATE_RUN_MS) {
     return undefined;
   }

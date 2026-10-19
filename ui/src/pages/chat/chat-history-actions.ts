@@ -1,6 +1,6 @@
 import { retireInitialChatSubmission } from "../../app/chat-submissions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentParamsForSession,
   visibleSessionMatches,
@@ -86,7 +86,7 @@ function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   }
   return Boolean(
     state.sessionsResult?.sessions.some(
-      (session) => session.key === state.sessionKey && isSessionRunActive(session),
+      (session) => session.key === state.sessionKey && isSessionRunStateActive(session),
     ),
   );
 }

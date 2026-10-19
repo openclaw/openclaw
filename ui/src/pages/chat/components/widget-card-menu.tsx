@@ -1,6 +1,6 @@
 import { createMemo, createSignal, createUniqueId, mapArray } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuHandle, type MenuItem } from "../../../components/solid/menu.tsx";
+import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 
 export type WidgetAction = "copy" | "download" | "raw-details";
@@ -11,10 +11,9 @@ export type WidgetRawDetailsLabel =
 export function WidgetCardMenu(props: {
   canExportImage: boolean;
   hasRawDetails: boolean;
-  onAction: (value: WidgetAction, menu: HTMLElement) => WidgetRawDetailsLabel | void;
+  onAction: (value: WidgetAction) => WidgetRawDetailsLabel | void;
 }) {
   const id = createUniqueId();
-  let handle: MenuHandle | undefined;
   const [rawDetailsLabel, setRawDetailsLabel] = createSignal<WidgetRawDetailsLabel>(
     "chat.toolCards.showRawDetails",
   );
@@ -56,7 +55,6 @@ export function WidgetCardMenu(props: {
       }),
     { lazy: true },
   );
-  const items = createMemo(() => entries()(), { lazy: true });
   return (
     <Menu
       lazy="while-open"
@@ -68,13 +66,10 @@ export function WidgetCardMenu(props: {
       triggerClass="btn btn--ghost btn--icon chat-tool-card__widget-actions-trigger"
       triggerAttributes={{ title: t("chat.toolCards.widgetActions") }}
       trigger={<Icon name="moreHorizontal" />}
-      items={items()}
-      ref={(next) => {
-        handle = next;
-      }}
+      items={entries()()}
       onSelect={(item) => {
-        if (handle && (item.id === "copy" || item.id === "download" || item.id === "raw-details")) {
-          const caption = props.onAction(item.id, handle.overlay.surface);
+        if (item.id === "copy" || item.id === "download" || item.id === "raw-details") {
+          const caption = props.onAction(item.id);
           if (caption) {
             setRawDetailsLabel(caption);
           }

@@ -214,7 +214,6 @@ async function applyChatSetting(
           setChatError(host, `Failed to set ${settingName}: ${formatUiError(error)}`);
         }
       },
-      reconcile: () => refreshCurrentChatSessionList(host),
     });
     synchronize?.();
     receipt = await pending;
@@ -533,7 +532,6 @@ export async function switchChatModel(
         expectedSessionId: selection.expectedSessionId,
         ownsModelOverride,
         canDispatch,
-        reconcile: () => refreshCurrentChatSessionList(host),
       });
       return patched !== null;
     } catch (err) {

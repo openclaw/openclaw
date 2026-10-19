@@ -127,6 +127,8 @@ export function registerCodexEventProjectorTestLifecycle(): void {
   });
 
   afterEach(async () => {
+    // Drain projected setImmediate hooks before a later test replaces their registry.
+    await flushDiagnosticEvents();
     resetAgentEventsForTest();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();

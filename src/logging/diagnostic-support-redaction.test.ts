@@ -158,6 +158,7 @@ describe("diagnostic support redaction", () => {
     ],
     ["SQLite WAL commit header is unavailable or changing", ": /private/example/a.sqlite"],
     ["SQLite WAL commit publication could not be verified", ": /private/example/a.sqlite"],
+    ["SQLite snapshot size mismatch", " for /private/example/a.sqlite: expected 4096, got 4112"],
     [
       "SQLite snapshot hash mismatch",
       ` for /private/example/a.sqlite-wal: expected ${"a".repeat(64)}, got ${"b".repeat(64)}`,

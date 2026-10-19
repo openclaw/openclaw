@@ -27,6 +27,7 @@ type MentionsSnapshot = {
 export type MentionsCapability = ReturnType<typeof createMentionsCapability>;
 
 type MentionConnection = {
+  retired: boolean;
   client: GatewayBrowserClient;
   hello: GatewayHelloOk;
   connectionRevision: number;
@@ -64,6 +65,7 @@ export function createMentionsCapability(
   const isCurrent = (owner: MentionConnection) =>
     !disposed &&
     connection === owner &&
+    !owner.retired &&
     canCallGatewayMethod(gateway.snapshot, "mentions.list", "operator.read") &&
     gateway.snapshot.client === owner.client &&
     gateway.snapshot.hello === owner.hello &&
@@ -172,6 +174,29 @@ export function createMentionsCapability(
       return;
     }
     clearTimeout(connection?.retryTimer);
+    if (connection) {
+      // Keep its display identity, but never revive pre-disconnect requests.
+      connection.retired = true;
+    }
+    const sameIdentity =
+      connection?.client === next.client &&
+      connection?.connectionRevision === gateway.connectionRevision &&
+      (!profileId || connection.profileId === profileId) &&
+      (!gatewayInstanceId || connection.gatewayInstanceId === gatewayInstanceId);
+    if (!disposed && next.phase !== "connected" && sameIdentity) {
+      publish({ phase: "unavailable", dismissing: [], error: null });
+      return;
+    }
+    if (
+      !disposed &&
+      sameIdentity &&
+      next.selfUser === undefined &&
+      canCallGatewayMethod(next, "mentions.list", "operator.read")
+    ) {
+      // A fresh hello precedes users.self; unresolved identity is not access loss.
+      publish({ phase: "loading", dismissing: [], error: null });
+      return;
+    }
     if (
       disposed ||
       next.phase !== "connected" ||
@@ -186,6 +211,7 @@ export function createMentionsCapability(
       return;
     }
     const owner: MentionConnection = {
+      retired: false,
       client: next.client,
       hello: next.hello,
       connectionRevision: gateway.connectionRevision,
@@ -199,7 +225,12 @@ export function createMentionsCapability(
       retryAttempt: 0,
     };
     connection = owner;
-    publish({ phase: "loading", items: [], dismissing: [], error: null });
+    publish({
+      phase: "loading",
+      ...(!sameIdentity ? { items: [] } : {}),
+      dismissing: [],
+      error: null,
+    });
     if (!isCurrent(owner)) {
       return;
     }

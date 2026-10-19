@@ -20,7 +20,7 @@ import { resolveGatewaySessionStoreTargetWithStoreAsync } from "../gateway/sessi
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import * as requesterTransfer from "./subagents/registry/subagent-registry-requester-wake-commit.js";
+import * as requesterTransfer from "./subagents/registry/subagent-registry-requester-yield.js";
 
 const { config, callGatewayMock, readAcpSessionMetaMock, readAcpSessionMetaForEntryMock } =
   vi.hoisted(() => ({
@@ -105,13 +105,17 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
+import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import {
   registerSessionsSendRequesterRetirementTests,
   type GatewayCall,
 } from "./openclaw-tools.sessions-send-requester-retirement.test-support.js";
+import {
+  createDurableSessionsSendTestRun,
+  createSessionsSendTestCaller,
+  setSessionsSendTestActiveRun,
+} from "./openclaw-tools.sessions-steering.test-support.js";
 import { announceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
 import { mutateSubagentRuns } from "./subagents/registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";
@@ -122,6 +126,7 @@ import {
   resetSubagentRegistryForTests,
   settleRequesterAfterSessionSpawns,
 } from "./subagents/registry/subagent-registry.test-helpers.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as sendDelivery from "./tools/sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
@@ -313,17 +318,7 @@ describe("sessions_send child coordination", () => {
         });
       await seed("steer-A", 1);
       const previous = () => getSubagentRunByRunId("steer-A")!;
-      const queueB = vi.fn(async () => {});
-      const handleB = createEmbeddedRunHandle({ runId: "steer-B", queueMessage: queueB });
-      handleB.messageInjectionV2 = {
-        version: 2,
-        isAvailable: () => true,
-        queueMessage: async (_text, options, assertCurrent) => {
-          assertCurrent();
-          await queueB();
-          options?.onQueueAccepted?.(true);
-        },
-      };
+      const { handle: handleB, queueMessage: queueB } = createDurableSessionsSendTestRun("steer-B");
       const completePrevious = async (delivered = false) => {
         await mutateSubagentRuns(["steer-A"], (rows) => {
           const current = rows.get("steer-A");
@@ -357,26 +352,31 @@ describe("sessions_send child coordination", () => {
       const replace = async () => {
         await completePrevious();
         await seed("steer-B", 2);
-        setActiveEmbeddedRun(sessionId, handleB, childSessionKey);
+        await setSessionsSendTestActiveRun(
+          sessionId,
+          handleB,
+          childSessionKey,
+          requesterSessionKey,
+          config,
+        );
       };
-      const queueA = vi.fn(async () => {
-        if (timing === "after completion") {
-          await completePrevious(true);
-        } else {
-          await replace();
-        }
-      });
-      const handleA = createEmbeddedRunHandle({ runId: "steer-A", queueMessage: queueA });
-      handleA.messageInjectionV2 = {
-        version: 2,
-        isAvailable: () => true,
-        queueMessage: async (_text, options, assertCurrent) => {
-          assertCurrent();
-          await queueA();
-          options?.onQueueAccepted?.(true);
+      const { handle: handleA, queueMessage: queueA } = createDurableSessionsSendTestRun(
+        "steer-A",
+        async () => {
+          if (timing === "after completion") {
+            await completePrevious(true);
+          } else {
+            await replace();
+          }
         },
-      };
-      setActiveEmbeddedRun(sessionId, handleA, childSessionKey);
+      );
+      await setSessionsSendTestActiveRun(
+        sessionId,
+        handleA,
+        childSessionKey,
+        requesterSessionKey,
+        config,
+      );
       const deliver = sendDelivery.trySessionsSendActiveRunDelivery;
       const admission = vi
         .spyOn(sendDelivery, "trySessionsSendActiveRunDelivery")
@@ -387,17 +387,21 @@ describe("sessions_send child coordination", () => {
           return deliver(...args);
         });
       try {
-        const sent = await createSessionsSendTool({
-          agentSessionKey: requesterSessionKey,
-          requesterTurnRunId,
-          config,
-          callGateway: callGatewayMock,
-        }).execute("watched-steer", {
-          sessionKey: childSessionKey,
-          message: "Continue this task",
-          mode: "steer",
-          watch: true,
-        });
+        const sent = await withGatewayToolCallerIdentity(
+          createSessionsSendTestCaller(requesterSessionKey),
+          () =>
+            createSessionsSendTool({
+              agentSessionKey: requesterSessionKey,
+              requesterTurnRunId,
+              config,
+              callGateway: callGatewayMock,
+            }).execute("watched-steer", {
+              sessionKey: childSessionKey,
+              message: "Continue this task",
+              mode: "steer",
+              watch: true,
+            }),
+        );
         if (timing !== "before admission") {
           expect(sent.details).toMatchObject({
             status: "error",
@@ -654,21 +658,25 @@ describe("sessions_send child coordination", () => {
     announceTesting.setDepsForTest({ callGateway: callGatewayMock });
     const enteredPreparation = createDeferredCore();
     const releasePreparation = createDeferredCore();
-    const commit = requesterTransfer.commitRequesterInitialTransfer;
+    const commit = requesterTransfer.commitRequesterTransfer;
     const barrier = vi
-      .spyOn(requesterTransfer, "commitRequesterInitialTransfer")
-      .mockImplementation((context, params) =>
-        commit(context, {
-          ...params,
-          prepare: async () => {
-            await params.prepare?.();
-            if (params.kind === "intent") {
-              enteredPreparation.resolve();
-              await releasePreparation.promise;
-            }
-          },
-        }),
-      );
+      .spyOn(requesterTransfer, "commitRequesterTransfer")
+      .mockImplementation((params, options) => {
+        const prepareYield = params.prepare;
+        return commit(
+          prepareYield
+            ? {
+                ...params,
+                prepare: async () => {
+                  await prepareYield();
+                  enteredPreparation.resolve();
+                  await releasePreparation.promise;
+                },
+              }
+            : params,
+          options,
+        );
+      });
     let stopObserving = () => {};
     try {
       const tool = createSessionsSendTool({

@@ -288,7 +288,8 @@ it.skipIf(process.platform === "win32").for([
           url: instance.url,
           token: instance.gatewayToken,
           clientName: "gateway-client",
-          mode: "backend",
+          // Recovery needs the original profiled operator; backend probes are unprofiled.
+          mode: "test",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
             path: instance.state.path("proof-device.sqlite"),
@@ -416,6 +417,8 @@ it.skipIf(process.platform === "win32").for([
               slots: { memory: "none" },
             },
             models: {
+              // Keep this synthetic restart fixture independent of remote catalog adoption.
+              catalogRefresh: { enabled: false },
               mode: "replace",
               providers: {
                 [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
@@ -488,6 +491,10 @@ it.skipIf(process.platform === "win32").for([
               if (!entry) {
                 throw new Error("Child registry row is missing");
               }
+              expect(entry.operatorRecoverySource).toMatchObject({
+                sessionKey: PARENT_KEY,
+                sourceRunId: originalRunId,
+              });
               return entry;
             },
             { timeout: 30_000 },

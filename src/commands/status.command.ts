@@ -1,4 +1,3 @@
-// Main `openclaw status` command orchestrator.
 // It routes all/json/deep modes, collects scan/runtime state, and delegates formatting to report builders.
 
 import {

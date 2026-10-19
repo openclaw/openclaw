@@ -33,6 +33,7 @@ function fixture(scrollHeight = 1600) {
     '<div class="chat-virtual-row" data-index="4"><div class="chat-bubble" data-message-id="visible"></div></div>';
   const row = scroller.firstElementChild as HTMLElement;
   const bubble = row.firstElementChild as HTMLElement;
+  const messageElements = new Map([["visible", bubble]]);
   bubble.getBoundingClientRect = () => rect(90, 180);
   const virtualizer = {
     scrollToOffset: vi.fn((offset: number) => {
@@ -46,7 +47,8 @@ function fixture(scrollHeight = 1600) {
     bubble,
     virtualizer,
     instance: virtualizer as unknown as Virtualizer<HTMLDivElement, HTMLElement>,
-    anchor: new TranscriptPrependAnchor(),
+    messageElements,
+    anchor: new TranscriptPrependAnchor(messageElements),
     measureRows: vi.fn(() => false),
   };
 }
@@ -56,12 +58,14 @@ afterEach(() => document.body.replaceChildren());
 
 describe("transcript prepend anchor", () => {
   it("preserves a partially visible retained message rather than overscan across measurement and DOM replacement", () => {
-    const { scroller, row, bubble, virtualizer, instance, anchor, measureRows } = fixture();
+    const { scroller, row, bubble, messageElements, virtualizer, instance, anchor, measureRows } =
+      fixture();
     const overscan = document.createElement("div");
     overscan.className = "chat-bubble";
     overscan.dataset.messageId = "above";
     overscan.getBoundingClientRect = () => rect(-200, 100);
     row.prepend(overscan);
+    messageElements.set("above", overscan);
     anchor.messageKeys = messages("above", "visible");
     anchor.capture(scroller, false);
     anchor.messageKeys = messages("older", "above", "visible");
@@ -74,6 +78,7 @@ describe("transcript prepend anchor", () => {
     let contentTop = 590;
     committed.getBoundingClientRect = () => rect(contentTop - scroller.scrollTop, 180);
     bubble.replaceWith(committed);
+    messageElements.set("visible", committed);
     expect(anchor.update(scroller, instance, measureRows)).toBe(true);
     expect(scroller.scrollTop).toBe(500);
     expect(virtualizer.scrollOffset).toBe(200);
@@ -86,6 +91,31 @@ describe("transcript prepend anchor", () => {
     expect(corrected).toBe(true);
     expect(anchor.update(scroller, instance, measureRows)).toBe(true);
     expect(anchor.update(scroller, instance, measureRows)).toBe(false);
+  });
+
+  it("anchors the first visible current message in DOM order after later refs prepend", () => {
+    const { scroller, row, messageElements, anchor, instance, measureRows } = fixture();
+    const first = document.createElement("div");
+    first.className = "chat-bubble";
+    first.dataset.messageId = "acknowledged";
+    let top = 110;
+    first.getBoundingClientRect = () => rect(top, 80);
+    row.prepend(first);
+    messageElements.set("optimistic", first);
+    const outside = document.createElement("div");
+    scroller.before(outside);
+    outside.dataset.messageId = "outside";
+    outside.getBoundingClientRect = () => rect(100, 80);
+    messageElements.set("outside", outside);
+    anchor.messageKeys = messages("outside", "acknowledged", "visible");
+    anchor.capture(scroller, false);
+    anchor.messageKeys = messages("older", "outside", "acknowledged", "visible");
+    anchor.capture(scroller, false);
+    expect(anchor.messageKey).toBe("acknowledged");
+    scroller.scrollTop = 200;
+    top = 150;
+    anchor.update(scroller, instance, measureRows);
+    expect(scroller.scrollTop).toBe(240);
   });
 
   it.each<[string, string[], string[], boolean, number?, number?, boolean?]>([

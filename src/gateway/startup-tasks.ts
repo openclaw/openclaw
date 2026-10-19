@@ -1,4 +1,3 @@
-// Ordered Gateway startup task runner.
 // Used for best-effort side effects that should not abort the server.
 import { formatErrorMessage } from "../infra/errors.js";
 
@@ -10,7 +9,6 @@ type StartupTaskResult =
   | { status: "ran" }
   | { status: "failed"; reason: string };
 
-/** Startup task descriptor used by gateway startup side-effect runners. */
 export type StartupTask = {
   source: string;
   agentId?: string;

@@ -1,4 +1,3 @@
-// Gateway node event dispatcher.
 // Handles device/node-originated events and routes them to sessions/channels.
 import { randomUUID } from "node:crypto";
 import {
@@ -969,14 +968,14 @@ async function handlePreparedNodeEvent(
         }
       }
 
-      enqueueNodeExecNotice({
-        cfg,
-        sessionKey,
-        agentId,
-        authorization: auth,
-        runId,
-        text,
-      });
+      const notify = () =>
+        enqueueNodeExecNotice({ cfg, sessionKey, agentId, authorization: auth, runId, text });
+      // A caller still waiting on this run gets its output inline; notify only if that fails.
+      if (typeof auth === "object" && auth.holdNotice) {
+        auth.holdNotice(notify);
+      } else {
+        notify();
+      }
       return undefined;
     }
     case "push.apns.register": {

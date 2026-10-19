@@ -69,9 +69,13 @@ export function NewSessionIncognitoControl(props: {
   );
 }
 
-export function NewSessionIncognitoNotice(props: { active: boolean }) {
+export function NewSessionIncognitoNotice(props: {
+  active: boolean;
+  ref?: (element: HTMLDivElement) => void;
+}) {
   return (
     <div
+      ref={(element) => props.ref?.(element)}
       class={[
         "new-session-page__incognito-notice",
         { "new-session-page__incognito-notice--visible": props.active },

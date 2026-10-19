@@ -7,7 +7,7 @@ import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "..
 import { t } from "../../i18n/index.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
 import type { ChatQueueItem, ChatReplyTarget } from "../../lib/chat/chat-types.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   reconcileSessionRunTerminal,
   scopedAgentParamsForSession,
@@ -29,6 +29,7 @@ import {
   type ChatAbortTargetState,
   type PendingChatAbort,
 } from "./chat-abort-request.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { mutateChatRunState, publishChatRunState } from "./chat-state-render.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -38,8 +39,8 @@ import {
   setChatRunOwner,
 } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
-import type { ToolStreamHost } from "./tool-stream-contract.ts";
-import { canResetToolStream, resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
+import type { ToolStreamHost, ToolStreamState } from "./tool-stream-contract.ts";
+import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
 const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
@@ -94,19 +95,20 @@ export type LocalTerminalReconcile = {
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
-type RunLifecycleHost = Omit<Partial<ToolStreamHost>, "sessions"> & {
-  sessionKey: string;
-  chatRunError?: ChatRunError | null;
-  chatRunLifecycleGeneration?: number;
-  chatRunSessionAbortable?: boolean;
-  compactionClearTimer?: TimerHandle | number | null;
-  fallbackClearTimer?: TimerHandle | number | null;
-  chatRunStatus?: ChatRunUiStatus | null;
-  chatRunStatusClearTimer?: TimerHandle | number | null;
-  sessionsResult?: SessionsListResult | null;
-  sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal">>;
-  lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
-};
+type RunLifecycleHost = ToolStreamState &
+  Omit<Partial<ToolStreamHost>, "sessions"> & {
+    sessionKey: string;
+    chatRunError?: ChatRunError | null;
+    chatRunLifecycleGeneration?: number;
+    chatRunSessionAbortable?: boolean;
+    compactionClearTimer?: TimerHandle | number | null;
+    fallbackClearTimer?: TimerHandle | number | null;
+    chatRunStatus?: ChatRunUiStatus | null;
+    chatRunStatusClearTimer?: TimerHandle | number | null;
+    sessionsResult?: SessionsListResult | null;
+    sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal">>;
+    lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
+  };
 
 type ReconcileOptions = {
   outcome?: ChatRunUiStatus["phase"];
@@ -230,7 +232,7 @@ function hasSessionRun(host: SessionRunHost, includeSubagents: boolean): boolean
     host.sessionsResult?.sessions.some(
       (session) =>
         normalizeDefaultMainSessionAliasForUi(session.key) === key &&
-        (isSessionRunActive(session) ||
+        (isSessionRunStateActive(session) ||
           (includeSubagents && session.hasActiveSubagentRun === true)),
     ),
   );
@@ -370,6 +372,10 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
 }
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions): Promise<void> {
+  chatOutboxOwner(host).admissions.cancelRequests(
+    host,
+    resolveUiConversationIdentity(host, host.sessionKey),
+  );
   const disconnectedIntent =
     !host.connected && host.client ? currentChatAbortIntent(host, host.client) : null;
   const pendingAbort =
@@ -536,12 +542,10 @@ function applyChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions
     host.chatRunId = null;
     host.chatRunSessionAbortable = undefined;
   }
-  if (canResetToolStream(host)) {
-    if (options.clearToolStream) {
-      resetToolStream(host);
-    } else if (options.clearToolStreamForRun && runId) {
-      resetToolStreamRun(host, runId);
-    }
+  if (options.clearToolStream) {
+    resetToolStream(host);
+  } else if (options.clearToolStreamForRun && runId) {
+    resetToolStreamRun(host, runId);
   }
   if (options.outcome) {
     const status: ChatRunUiStatus = {
@@ -607,7 +611,7 @@ function reconcileStaleSelectedSessionRunAfterLocalCompletion(host: RunLifecycle
     // run. Retain the identity so reconnect cannot revive the completed run.
     return false;
   }
-  if (!isSessionRunActive(row)) {
+  if (!isSessionRunStateActive(row)) {
     // This may be our own shared terminal projection rather than a Gateway
     // publication. Retain the identity so a duplicate stale event cannot
     // revive the completed run.
@@ -681,7 +685,7 @@ export function reconcileChatRunFromSessionRow(
     !uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId) ||
     (!host.chatRunId && host.chatStream == null) ||
     row.hasActiveRun === true ||
-    isSessionRunActive(row) ||
+    isSessionRunStateActive(row) ||
     (row.hasActiveRun !== false && row.status === undefined)
   ) {
     return false;

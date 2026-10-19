@@ -34,8 +34,7 @@ function formatError(error: unknown): string | undefined {
   const message =
     error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
   if (message !== undefined) {
-    const redacted = redactAgentDiagnosticPayload(message);
-    return typeof redacted === "string" ? redacted : message;
+    return redactAgentDiagnosticPayload(message);
   }
   if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
     return String(error);
@@ -56,13 +55,13 @@ function digest(value: unknown): string | undefined {
   return crypto.createHash("sha256").update(serialized).digest("hex");
 }
 
-function findLastAssistantUsage(messages: AgentMessage[]): Record<string, unknown> | null {
+function findLastAssistantUsage(messages: AgentMessage[]) {
   // Usage is attached to assistant messages after streaming; walk backwards to
   // avoid logging stale usage from an earlier assistant turn.
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const msg = messages[i] as { role?: unknown; usage?: unknown };
-    if (msg?.role === "assistant" && msg.usage && typeof msg.usage === "object") {
-      return msg.usage as Record<string, unknown>;
+    const msg = messages[i];
+    if (msg?.role === "assistant") {
+      return msg.usage;
     }
   }
   return null;
@@ -76,7 +75,6 @@ type AnthropicPayloadLogger = {
 export function createAnthropicPayloadLogger(
   params: AgentTraceBase & {
     env?: NodeJS.ProcessEnv;
-    writer?: QueuedFileWriter;
   },
 ): AnthropicPayloadLogger | null {
   const env = params.env ?? process.env;
@@ -89,7 +87,7 @@ export function createAnthropicPayloadLogger(
     return null;
   }
 
-  const writer = params.writer ?? getQueuedFileWriter(writers, filePath);
+  const writer = getQueuedFileWriter(writers, filePath);
   const base = buildAgentTraceBase(params);
 
   const record = (event: PayloadLogEvent) => {

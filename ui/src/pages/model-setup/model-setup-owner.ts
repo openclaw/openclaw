@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, onSettled, untrack } from "solid-js";
+import { createEffect, onCleanup, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupActivateParams,
@@ -39,7 +39,7 @@ import {
   mapActivationResult,
   type ModelSetupActivationState,
 } from "./state.ts";
-import type { ModelSetupViewProps } from "./view.tsx";
+import type { ModelSetupViewProps } from "./view-types.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
 
 export type ModelSetupPageProps = {
@@ -62,6 +62,7 @@ export function createModelSetup(
       for (const listener of listeners) {
         listener();
       }
+      onSettled(afterRender);
     }
   };
   const actionsDisabled = (): boolean =>
@@ -735,20 +736,16 @@ export function createModelSetup(
   createEffect(
     () => [props.routeData, agentSelection()],
     ([, selection]) => {
-      return untrack(() => {
-        // Selection receipts retire wizard ownership before another setup action can run.
-        const stop = selection.subscribe(() => {
-          synchronizeGateway(context.gateway.snapshot);
-          notify();
-        });
+      // Selection receipts retire wizard ownership before another setup action can run.
+      const stop = selection.subscribe(() => {
         synchronizeGateway(context.gateway.snapshot);
         notify();
-        return stop;
       });
+      synchronizeGateway(context.gateway.snapshot);
+      notify();
+      return stop;
     },
   );
-  // DOM settlement starts imperative first-run work; view() owns its dependencies.
-  createEffect(view, () => untrack(afterRender));
   onSettled(() => {
     connected = true;
     // Connection authority changes synchronously suspend or retire the admitted wizard.

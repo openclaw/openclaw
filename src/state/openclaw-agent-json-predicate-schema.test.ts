@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { constants, DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { deriveContextEngineTurnOutboxState } from "../agents/harness/context-engine-turn-outbox-state.js";
 import { deriveSessionPredicateColumns } from "../config/sessions/session-predicate-columns.js";
 import {
   prepareTranscriptPayload,
@@ -160,8 +159,14 @@ describe("agent JSON predicate migration", () => {
         payload.navigation_json,
       );
     }
-    const payloads = [{}, { state: "pending" }, { state: "ready" }, { state: null }, { state: 1 }];
-    for (const [index, payload] of payloads.entries()) {
+    const payloads = [
+      { payload: {}, state: null },
+      { payload: { state: "pending" }, state: "pending" },
+      { payload: { state: "ready" }, state: "ready" },
+      { payload: { state: null }, state: null },
+      { payload: { state: 1 }, state: null },
+    ];
+    for (const [index, { payload }] of payloads.entries()) {
       database
         .prepare(`INSERT INTO context_engine_turn_outbox
         (advancement_key, engine_id, session_id, payload_json, created_at) VALUES (?, 'engine', 'history', ?, 1)`)
@@ -236,7 +241,7 @@ describe("agent JSON predicate migration", () => {
         "SELECT event_json FROM transcript_events WHERE event_json IS NOT NULL ORDER BY seq",
       ),
     ).toEqual(events.map((event_json) => ({ event_json })));
-    for (const [index, payload] of payloads.entries()) {
+    for (const [index, { payload, state }] of payloads.entries()) {
       expect(
         readRow(
           database,
@@ -245,7 +250,7 @@ describe("agent JSON predicate migration", () => {
         ),
       ).toEqual({
         payload_json: JSON.stringify(payload),
-        payload_state: deriveContextEngineTurnOutboxState(payload),
+        payload_state: state,
       });
     }
   });

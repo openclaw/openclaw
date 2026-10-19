@@ -14,6 +14,7 @@ import {
   removeNotifyOnExit,
   getSession,
   listExecSessionsForCancellation,
+  markCancellationRequested,
   waitForExecSession,
   type ProcessSession,
 } from "./bash-process-registry.js";
@@ -37,7 +38,7 @@ export function cancelBackgroundExecSession(sessionId: string): boolean {
   }
   const supervisor = getProcessSupervisor();
   supervisor.cancel(sessionId, "manual-cancel");
-  session.cancellationRequested = true;
+  markCancellationRequested(session);
   return true;
 }
 
@@ -66,7 +67,7 @@ export async function drainAgentExecProcesses(
       accepted.push(session);
       session.requestCancelled = true;
       if (!session.exited && !session.finalizing) {
-        session.cancellationRequested = true;
+        markCancellationRequested(session);
         getProcessSupervisor().cancel(session.id, "manual-cancel");
       }
       removeNotifyOnExit(session);

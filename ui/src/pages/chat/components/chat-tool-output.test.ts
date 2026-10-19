@@ -449,4 +449,33 @@ describe("tool output inspection", () => {
       expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe("new selection");
     },
   );
+
+  it("keeps the preview visible while retrying a failed full-output read", async () => {
+    const retried = createDeferred<ReturnType<typeof result>>();
+    const load = vi
+      .fn<SidebarFullMessageLoader>()
+      .mockRejectedValueOnce(new Error("Read failed"))
+      .mockImplementationOnce(() => retried.promise);
+    const panel = mount(outputCard(), load);
+    await waitForSolid(() =>
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain(
+        t("chat.toolCards.outputLoadFailed"),
+      ),
+    );
+
+    button(panel, t("common.retry")).click();
+    await waitForSolid(() =>
+      expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("true"),
+    );
+    expect(panel.querySelector('[role="alert"]')).toBeNull();
+    expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe("preview");
+    expect(panel.querySelector(".chat-tool-output__actions")).toBeNull();
+
+    retried.resolve(result("complete output"));
+    await waitForSolid(() =>
+      expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe("complete output"),
+    );
+    expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false");
+    expect(panel.querySelector(".chat-tool-output__actions")).not.toBeNull();
+  });
 });

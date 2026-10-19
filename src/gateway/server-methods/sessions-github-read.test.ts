@@ -405,7 +405,7 @@ describe("publication receipt reads", () => {
           source: { owner: "owner", repo: "repo", branch: "feature" },
           assertCurrent: vi.fn(),
         };
-        vi.spyOn(prRead, "prepareControlUiSessionPrRead").mockResolvedValue(async () => target);
+        vi.spyOn(prRead, "createControlUiSessionPrRead").mockReturnValue(async () => target);
         const prs = [
           {
             owner: "owner",

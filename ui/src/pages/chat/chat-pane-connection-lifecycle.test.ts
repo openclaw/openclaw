@@ -413,21 +413,31 @@ describe("chat pane connection lifecycle", () => {
     const addVisibilityListener = vi.spyOn(document, "addEventListener");
     const removeVisibilityListener = vi.spyOn(document, "removeEventListener");
     visibilityState = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
     state.assistantName = "Disconnected hidden update";
     await Promise.resolve();
     Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
     lifecycle.disconnectedCallback();
-    expect(removeVisibilityListener).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+    expect(removeVisibilityListener).toHaveBeenCalledWith(
+      "visibilitychange",
+      expect.any(Function),
+      undefined,
+    );
 
     Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: true });
     connectPaneTestView(lifecycle);
     await lifecycle.updateComplete;
     // A disposed Solid root remounts once while hidden; measure the reveal independently.
+    flush();
     const remountedReads = performUpdate.mock.calls.length;
+    state.assistantName = "Latest remounted hidden update";
+    flush();
+    expect(performUpdate).toHaveBeenCalledTimes(remountedReads);
     visibilityState = "visible";
     document.dispatchEvent(new Event("visibilitychange"));
     await lifecycle.updateComplete;
     expect(performUpdate).toHaveBeenCalledTimes(remountedReads + 1);
+    expect(renderedNames.at(-1)).toBe("Latest remounted hidden update");
 
     Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
     lifecycle.disconnectedCallback();
@@ -437,6 +447,7 @@ describe("chat pane connection lifecycle", () => {
     expect(addVisibilityListener).not.toHaveBeenCalledWith(
       "visibilitychange",
       expect.any(Function),
+      undefined,
     );
   });
 

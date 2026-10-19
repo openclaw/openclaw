@@ -2,14 +2,14 @@ import {
   MessageInjectionAcceptedUnconfirmedError,
   withMessageInjectionAdmission,
 } from "../../auto-reply/reply/message-injection-authority.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import type { CliBackendMessageInjection } from "../../plugins/cli-backend.types.js";
 import type {
   ReplyBackendMessageInjectionV2,
   ReplyBackendQueueMessageOptions,
   ReplyBackendQueueMessageResult,
-} from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
-import type { CliBackendMessageInjection } from "../../plugins/cli-backend.types.js";
+} from "../../sessions/session-controller.contracts.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { cliBackendLog } from "./log.js";
 

@@ -8,11 +8,14 @@ import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/conf
 import * as sessions from "../../../config/sessions/session-accessor.js";
 import * as generations from "../../../config/sessions/session-delivery-generation.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
-import { runExclusiveSessionLifecycleMutation } from "../../../sessions/session-lifecycle-admission.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
+import { runSessionMutation } from "../../../sessions/session-controller.lifecycle.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import * as killScope from "./subagent-control-kill-scope.js";
+import {
+  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+} from "./subagent-control-native.test-support.js";
 import * as killSession from "./subagent-control-session.js";
 import {
   beginControlAdmission,
@@ -22,6 +25,7 @@ import {
   expectControlIdle,
 } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
+import type { KillScope } from "./subagent-control.types.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -86,7 +90,7 @@ it.for(["complete", "reject undefined"] as const)(
     }
     await register("root");
     const lane = new AsyncLocalStorage<string>();
-    const ready = createDeferred<killScope.KillScope>();
+    const ready = createDeferred<KillScope>();
     const finishRun = createDeferred();
     const runFinishing = createDeferred();
     const entered = Array.from({ length: 3 }, () => createDeferred());
@@ -224,7 +228,7 @@ it("retires queued refreshes after an escaping native failure and an undefined c
     controllerSessionKey: undefined,
     requesterDisplayKey: "main",
   });
-  const ready = createDeferred<killScope.KillScope>();
+  const ready = createDeferred<KillScope>();
   const entered = createDeferred();
   const finishRun = createDeferred();
   const releaseRead = createDeferred();
@@ -410,8 +414,8 @@ it.each([
     });
     const handleA = createEmbeddedRunHandle({ runId: "a", abort: abortA });
     const handleD = createEmbeddedRunHandle({ runId: "d", abort: abortD });
-    setActiveEmbeddedRun("a-session", handleA, aKey);
-    setActiveEmbeddedRun("d-session", handleD, dKey);
+    attachActiveEmbeddedRun("a-session", handleA, aKey);
+    attachActiveEmbeddedRun("d-session", handleD, dKey);
     const startG = vi.fn(async () => {
       expect(await startQueuedSubagentRun("g")).toBe(true);
     });
@@ -482,7 +486,7 @@ it.each([
         await awaitProgress(grandchildCancelled.promise, "grandchild cancellation publication");
         // Publication precedes G's abort-marker write. Join its mutation from
         // outside the observer's reentrant context before arming the next fault.
-        await runExclusiveSessionLifecycleMutation("subagent-kill", {
+        await runSessionMutation({
           scope: storePath,
           identities: [gKey, "g-session"],
           run: async () => {},
@@ -527,8 +531,8 @@ it.each([
         reader.mockRestore();
         releaseSwarmRun("d");
         releaseSwarmRun("g");
-        clearActiveEmbeddedRun("a-session", handleA, aKey);
-        clearActiveEmbeddedRun("d-session", handleD, dKey);
+        await detachActiveEmbeddedRun("a-session", handleA, aKey);
+        await detachActiveEmbeddedRun("d-session", handleD, dKey);
       }
       expectControlIdle();
     }

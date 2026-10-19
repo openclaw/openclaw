@@ -310,7 +310,7 @@ describe("memory wiki source sync state", () => {
         pruneImportedSourceEntries({ vaultRoot, group, activeKeys: new Set<string>(), state });
 
       await expect(prunePage()).resolves.toBe(0);
-      await expect(fs.readFile(pageAbsPath)).resolves.toEqual(invalidPage);
+      expect((await fs.readFile(pageAbsPath)).equals(invalidPage)).toBe(true);
       expect(state.entries["sync-key"]).toBe(entry);
       await expect(fs.access(path.join(vaultRoot, ".salvage"))).rejects.toMatchObject({
         code: "ENOENT",

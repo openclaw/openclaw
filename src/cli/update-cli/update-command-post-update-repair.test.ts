@@ -63,7 +63,14 @@ vi.mock("../../infra/update-repair-agent.js", async (importOriginal) => ({
   runUpdateRepairLoop: mocks.repair,
 }));
 vi.mock("./update-command-rollback.js", () => ({ rollbackFailedUpdate: mocks.rollback }));
-vi.mock("./progress.js", () => ({ printResult: mocks.print }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: mocks.print,
+  prepareResult:
+    async (...args: Parameters<typeof import("./progress.js").printResult>) =>
+    () =>
+      mocks.print(...args.slice(0, 3)),
+}));
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   tryWriteCompletionCache: async () => {},
@@ -143,7 +150,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const fixture = () => createPostUpdateRepairFixture(dirs.make("post-update-repair-"));
+const fixture = (profile?: string) =>
+  createPostUpdateRepairFixture(dirs.make("post-update-repair-"), profile);
 
 describe("post-activation failure settlement without inference", () => {
   beforeEach(async () => {
@@ -653,6 +661,7 @@ describe("post-activation failure settlement without inference", () => {
     "database-restored",
     "source-rollback-failed",
     "migration-required",
+    "migration-verified",
     "migration-incomplete",
     "migration-refused",
     "current-core-parked",
@@ -663,15 +672,20 @@ describe("post-activation failure settlement without inference", () => {
   ] as const)(
     "recovers the installed Gateway only for an owned stop and settled Doctor (%s)",
     async (receipt) => {
-      const params = fixture();
-      mocks.version = "2026.9.7";
-      const root = path.join(params.opts.run!.env!.OPENCLAW_STATE_DIR!, "candidate");
+      const params = fixture("work");
+      const swap =
+        receipt === "migration-verified"
+          ? await createRetainedPackageSwap(params.opts.run!.env!.OPENCLAW_STATE_DIR!)
+          : undefined;
+      mocks.version = swap ? "2.0.0" : "2026.9.7";
+      const root =
+        swap?.packageRoot ?? path.join(params.opts.run!.env!.OPENCLAW_STATE_DIR!, "candidate");
       await fs.mkdir(root, { recursive: true });
       await fs.writeFile(
         path.join(root, "package.json"),
         JSON.stringify({ name: "openclaw", version: mocks.version }),
       );
-      await fs.mkdir(path.join(root, "dist"));
+      await fs.mkdir(path.join(root, "dist"), { recursive: true });
       await fs.writeFile(path.join(root, "dist/index.js"), "export {};\n");
       const scratch = path.join(root, "tmp");
       await fs.mkdir(scratch);
@@ -682,9 +696,10 @@ describe("post-activation failure settlement without inference", () => {
       const recovered =
         receipt === "settled" ||
         receipt === "migration-required" ||
+        receipt === "migration-verified" ||
         receipt === "current-core-parked" ||
         receipt === "current-core-rollback-refused";
-      let agentVersion = 21;
+      let agentVersion = receipt === "migration-verified" ? 23 : 21;
       const doctor = vi.spyOn(freshDoctor, "runUpdateFinalizationDoctorInFreshProcess");
       if (migration) {
         params.candidateSchemaVersions = { state: 18, agent: 23 };
@@ -750,6 +765,18 @@ describe("post-activation failure settlement without inference", () => {
           },
         ],
       };
+      if (receipt === "migration-verified") {
+        params.packageTransaction = swap?.transaction;
+        params.result.steps = [
+          {
+            name: "verifying",
+            command: "gateway verification",
+            cwd: root,
+            durationMs: 1,
+            exitCode: null,
+          },
+        ];
+      }
       const settledStep = {
         name: "doctor process settlement",
         command: "settle doctor process groups",
@@ -765,7 +792,7 @@ describe("post-activation failure settlement without inference", () => {
                   "Doctor timed out; all tracked process groups stopped. Run `openclaw update repair`.",
               },
       };
-      if (receipt !== "missing") {
+      if (receipt !== "missing" && receipt !== "migration-verified") {
         params.result.steps.push(settledStep);
       }
       const unsettledReason =
@@ -938,7 +965,7 @@ describe("post-activation failure settlement without inference", () => {
         );
       }
       if (migration) {
-        expect(doctor).toHaveBeenCalledOnce();
+        expect(doctor).toHaveBeenCalledTimes(receipt === "migration-verified" ? 0 : 1);
       }
       const report = getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env });
       expect(report?.verification).toMatchObject({
@@ -948,17 +975,26 @@ describe("post-activation failure settlement without inference", () => {
       const rendered = renderUpdateRunReport(report!).lines.join("\n");
       if (migration) {
         expect(report?.status).toBe("failed");
-        expect(
-          report?.steps.find((step) => step.step === "post-install verification")?.failureFacts,
-        ).toContainEqual(expect.objectContaining({ code: "authority-check-failed" }));
+        if (receipt === "migration-verified") {
+          expect(report?.steps).toContainEqual(
+            expect.objectContaining({ step: "package-backup-retention", exitCode: 1 }),
+          );
+        } else {
+          expect(
+            report?.steps.find((step) => step.step === "post-install verification")?.failureFacts,
+          ).toContainEqual(expect.objectContaining({ code: "authority-check-failed" }));
+        }
       }
       if (migration && !recovered) {
-        expect(rendered).toContain("openclaw doctor --fix");
-        expect(rendered).toContain("openclaw gateway start");
+        expect(rendered).toContain("openclaw --profile work doctor --fix");
+        expect(rendered).toContain("openclaw --profile work gateway start");
       }
-      if (receipt === "settled") {
-        expect(rendered).toContain("openclaw update repair");
-        expect(report?.origin.nextAction).toContain("candidate Gateway is healthy");
+      if (recovered) {
+        expect(rendered).toContain("openclaw --profile work update repair");
+        expect(report?.origin.nextAction).toContain("installed Gateway is healthy");
+        expect(report?.origin.nextAction).toContain("running on the retained state");
+        expect(report?.origin.nextAction).toContain("openclaw --profile work gateway stop");
+        expect(report?.origin.nextAction).not.toContain("migrated state");
       }
       if (receipt === "unsettled") {
         expect(mocks.rollback).not.toHaveBeenCalled();

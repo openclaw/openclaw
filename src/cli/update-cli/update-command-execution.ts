@@ -53,18 +53,17 @@ import {
   runPackageInstallUpdate,
   type PackageInstallUpdateParams,
 } from "./update-command-package.js";
+import { readOriginalUpdateRecovery } from "./update-command-recovery.js";
 import {
-  assertUpdateCommandRecovery,
-  readOriginalUpdateRecovery,
-} from "./update-command-recovery.js";
-import {
-  collectServiceInspectionFailureFacts,
   recordServiceReconciliationWarning,
   resolveMutableUpdateFailure,
   type MutableUpdateExecutionResult,
 } from "./update-command-result.js";
 import { captureUpdateActivationSchemas } from "./update-command-schema.js";
-import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import {
+  collectServiceInspectionFailureFacts,
+  GatewayServiceUpdateOwnershipError,
+} from "./update-command-service-plan.js";
 import { assertManagedGatewayArtifactPublication } from "./update-command-service-revalidation.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
@@ -94,6 +93,7 @@ export async function executeMutableUpdate(
   const requesterAuthority = originalRun?.requesterAuthority;
   const {
     assertCurrent: assertExecutionCurrent,
+    waitForCurrent,
     assertBoundChildCurrent,
     onStateHandoff,
     admitExecutor,
@@ -121,7 +121,7 @@ export async function executeMutableUpdate(
       "Full-state checkpoint recovery is deferred.",
     );
   }
-  assertUpdateCommandRecovery(opts);
+  await waitForCurrent();
   const stagedPluginAdmission =
     params.updateInstallKind === "package" &&
     !canResolveRegistryVersionForPackageTarget(params.packageInstallSpec ?? params.tag);
@@ -240,6 +240,7 @@ export async function executeMutableUpdate(
           updateRun: originalRun,
           recordPhase,
           assertCurrent: assertExecutionCurrent,
+          waitForCurrent,
           recovery: opts.recovery,
           onStopped: (state) => {
             preManagedServiceStop = { ...state, ...(serviceIdentity ? { serviceIdentity } : {}) };
@@ -362,7 +363,7 @@ export async function executeMutableUpdate(
   let failure: MutableUpdateExecutionResult["failure"];
   let mutationStarted = false;
   const validateCandidate = async (root: string) => {
-    assertUpdateCommandRecovery(opts);
+    await waitForCurrent();
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
     await recordPhase("validating");
     assertExecutionCurrent();
@@ -435,7 +436,7 @@ export async function executeMutableUpdate(
   // Activation-window timing the install runners cannot observe.
   const activationSteps: UpdateStepResult[] = [];
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
-    assertExecutionCurrent();
+    await waitForCurrent();
     familyAdmission.assertAdmitted();
     if (params.switchToGit && !opts.run?.sourceArtifactLock) {
       await admitSourceUpdateArtifacts(resolveGitInstallDir(), opts.run);
@@ -508,12 +509,13 @@ export async function executeMutableUpdate(
       phase: "before-stop",
     });
     if (!servicePrepared) {
+      await waitForCurrent();
       await stopManagedServiceBeforeMutableUpdate(roots);
       // Preparation can hold Windows recovery custody without stopping a process.
       servicePrepared = true;
     }
     const postStopStartedAt = Date.now();
-    assertExecutionCurrent();
+    await waitForCurrent();
     await assertManagedGatewayArtifactPublication({
       ...publication,
       selected: preManagedServiceStop,
@@ -609,13 +611,14 @@ export async function executeMutableUpdate(
         channel: params.channel,
         devTarget: params.devTarget,
         inspectGitTarget: async (target, installTarget) => {
+          await waitForCurrent();
           await assertUpdateDatabaseEngineContexts(
             admission!.contexts,
             target.databaseEngines,
             target.postgresFamilies,
           );
           retentionInstallTarget = installTarget;
-          await recordInspectedGitTarget(target, recordPhase, assertExecutionCurrent);
+          await recordInspectedGitTarget(target, recordPhase, waitForCurrent);
           assertExecutionCurrent();
           admittedTargetSchemaVersions = target.schemaVersions;
           if (!gitContextPrepared && !deferredFamilyPreparation) {
@@ -644,6 +647,7 @@ export async function executeMutableUpdate(
           return steps;
         },
         beforeGitMutation: async (target) => {
+          await waitForCurrent();
           assertReadableGitMetadata(target.metadataUnreadable);
           await assertUpdateDatabaseEngineContexts(
             admission!.contexts,

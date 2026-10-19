@@ -390,7 +390,7 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
     expect((await build(steps.slice(0, 1))).exitCode).toBe(0);
     expect(readText(repoRoot, "extensions/external-cjs/asset-builds.txt")).toBe("built\nbuilt\n");
     copyMetadata(repoRoot);
-    expect(fs.readdirSync(path.join(repoRoot, "dist"))).toEqual(["extensions"]);
+    expect(fs.readdirSync(path.join(repoRoot, "dist")).toSorted()).toEqual(["extensions"]);
     for (const { id, runtimeFormat, bundledDist } of plugins) {
       const pluginRoot = path.join(repoRoot, "dist/extensions", id);
       const metadata = readJson(pluginRoot, "package.json");
@@ -404,7 +404,7 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
       const sourceRoot = path.join(repoRoot, "extensions", id);
       if (id === "external-only") {
         expect(readText(sourceRoot, browserEntry)).toBe(browserSource);
-        expect(fs.readdirSync(path.join(sourceRoot, "dist"))).toEqual([
+        expect(fs.readdirSync(path.join(sourceRoot, "dist")).toSorted()).toEqual([
           "control-ui",
           "openclaw.plugin.json",
         ]);

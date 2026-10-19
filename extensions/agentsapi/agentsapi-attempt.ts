@@ -212,9 +212,9 @@ export async function runAgentsApiAttempt(
     abort: () => cancellation.abortExplicitly(new Error("Agents API turn interrupted")),
     cancel: () => cancellation.abortExplicitly(new Error("Agents API turn interrupted")),
   } satisfies Parameters<typeof setActiveEmbeddedRun>[1];
+  let activeAttachment: ReturnType<typeof setActiveEmbeddedRun> | undefined;
   try {
-    params.replyOperation?.attachBackend(handle);
-    setActiveEmbeddedRun(
+    activeAttachment = setActiveEmbeddedRun(
       params.sessionId,
       handle,
       params.sessionKey,
@@ -373,10 +373,6 @@ export async function runAgentsApiAttempt(
     let connectEnvironment: ((environmentId: string) => Promise<void>) | undefined;
     if (environment.type === "self_hosted" && executorController) {
       const workspaceDirectory = environment.workspace_directory;
-      const selfHostedBinding = activeBinding;
-      if (!selfHostedBinding) {
-        throw new Error("Agents API self-hosted session is missing its saved binding");
-      }
       connectEnvironment = async (environmentId) => {
         const currentBinding = activeBinding;
         if (!currentBinding) {
@@ -640,7 +636,14 @@ export async function runAgentsApiAttempt(
         logFailure("Agents API tool cleanup failed", error);
       }
     }
-    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+    clearActiveEmbeddedRun(
+      params.sessionId,
+      handle,
+      params.sessionKey,
+      params.sessionFile,
+      undefined,
+      activeAttachment,
+    );
     lifecycle.emitLifecycleTerminal({ phase: terminal.kind === "failed" ? "error" : "end" });
   }
   if (terminal.kind === "failed") {

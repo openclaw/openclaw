@@ -129,6 +129,7 @@ describe("main session recovery store", () => {
 
   function admit(runId = "recovery-1") {
     return admitRecovery({
+      activeRunAbort: { controller: new AbortController() },
       lifecycleGeneration,
       runId,
       sessionId: "session-1",
@@ -681,6 +682,7 @@ describe("main session recovery store", () => {
         },
         gatewayRuntime: {
           prepareRestartRecovery: () => undefined,
+          resumeChatInput: dispatch,
           dispatchSessionMethod: dispatch,
           dispatchAgent: dispatch,
           waitForAgent: dispatch,

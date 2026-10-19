@@ -8,6 +8,10 @@ import {
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { validateSystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
+import {
+  McpSdkCompatibilityError,
+  toLegacyMcpCallToolResult,
+} from "../agents/mcp-sdk-compatibility.js";
 import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
 import {
   analyzeArgvCommand,
@@ -281,18 +285,10 @@ export async function handleInvoke(
     logWarn(
       `node host invoke failed (command=${frame.command ?? "unknown"}, id=${frame.id}): ${String(err)}`,
     );
-    try {
-      await createNodeInvokeResponder(invocationClient, frame).error(
-        "UNAVAILABLE",
-        "node invocation failed",
-      );
-    } catch (sendErr) {
-      // The caller intentionally detaches this promise. A failed result send is
-      // terminal for this request and must not surface as an unhandled rejection.
-      logWarn(
-        `node host invoke failure response could not be sent (id=${frame.id}): ${String(sendErr)}`,
-      );
-    }
+    await createNodeInvokeResponder(invocationClient, frame).error(
+      "UNAVAILABLE",
+      "node invocation failed",
+    );
   }
 }
 
@@ -682,9 +678,12 @@ async function handleMcpToolsCall(
       timeoutMs: frame.timeoutMs ?? undefined,
       ...(signal ? { signal } : {}),
     });
-    await response.send({ ok: true, payload: boundMcpToolResultPayload(result) });
+    await response.send({
+      ok: true,
+      payload: boundMcpToolResultPayload(toLegacyMcpCallToolResult(result)),
+    });
   } catch (error) {
-    if (error instanceof NodeHostMcpError) {
+    if (error instanceof NodeHostMcpError || error instanceof McpSdkCompatibilityError) {
       await response.error(error.code, error.message);
       return;
     }

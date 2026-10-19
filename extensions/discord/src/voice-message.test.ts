@@ -1,20 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { DiscordError, type RequestClient } from "./internal/discord.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
 import { hasDiscordMessageCreateAmbiguity, type DiscordRetryRunner } from "./retry.js";
-
-type VoiceMessageMetadata = Awaited<
-  ReturnType<typeof import("./voice-message.js").getVoiceMessageMetadata>
->;
+import { ensureOggOpus, sendDiscordVoiceMessage } from "./voice-message.js";
 
 const GUARDED_FETCH_TEST_TIMEOUT_MS = 250;
 
-const runFfprobeMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<string>>());
-const runFfmpegMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<void>>());
+const runFfprobeMock = vi.hoisted(() => vi.fn<(args: string[]) => Promise<string>>());
+const runFfmpegMock = vi.hoisted(() => vi.fn<(args: string[]) => Promise<void>>());
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
   vi.fn(
     async (params: {
@@ -41,43 +38,29 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
   ),
 );
 
-vi.mock("openclaw/plugin-sdk/temp-path", async () => {
-  return {
-    resolvePreferredOpenClawTmpDir: () => "/tmp",
-  };
-});
+// mock-isolation: Pin the temporary directory for exact staged-output path assertions.
+vi.mock("openclaw/plugin-sdk/temp-path", () => ({
+  resolvePreferredOpenClawTmpDir: () => "/tmp",
+}));
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
-  return {
-    runFfprobe: runFfprobeMock,
-    runFfmpeg: runFfmpegMock,
-    parseFfprobeCodecAndSampleRate: (stdout: string) => {
-      const [codec, sampleRate] = stdout.trim().split(",");
-      return {
-        codec,
-        sampleRateHz: Number(sampleRate),
-      };
-    },
-    MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS: 1200,
-    unlinkIfExists: vi.fn(async () => {}),
-  };
-});
+// mock-isolation: Keep ffprobe, ffmpeg, and unlink operations synthetic in upload tests.
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  runFfprobe: runFfprobeMock,
+  runFfmpeg: runFfmpegMock,
+  parseFfprobeCodecAndSampleRate: (stdout: string) => {
+    const [codec, sampleRate] = stdout.trim().split(",");
+    return { codec, sampleRateHz: Number(sampleRate) };
+  },
+  MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS: 1200,
+  unlinkIfExists: vi.fn(async () => {}),
+}));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  return {
-    ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
-    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-  };
-});
-
-let ensureOggOpus: typeof import("./voice-message.js").ensureOggOpus;
-let sendDiscordVoiceMessage: typeof import("./voice-message.js").sendDiscordVoiceMessage;
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
 
 describe("ensureOggOpus", () => {
-  beforeAll(async () => {
-    ({ ensureOggOpus, sendDiscordVoiceMessage } = await import("./voice-message.js"));
-  });
-
   beforeEach(() => {
     runFfprobeMock.mockReset();
     runFfmpegMock.mockReset();
@@ -92,18 +75,6 @@ describe("ensureOggOpus", () => {
     const stagedBase = path.basename(ffmpegOutputPath);
     expect(stagedBase.startsWith(".fs-safe-output-")).toBe(true);
     expect(stagedBase.endsWith(`-${path.basename(finalPath)}.part`)).toBe(true);
-  }
-
-  function readSingleCommandArgs(mock: typeof runFfprobeMock | typeof runFfmpegMock): string[] {
-    const [call] = mock.mock.calls;
-    if (!call) {
-      throw new Error("missing command call");
-    }
-    const [args] = call;
-    if (!Array.isArray(args) || !args.every((arg): arg is string => typeof arg === "string")) {
-      throw new Error("missing command args");
-    }
-    return args;
   }
 
   it("rejects URL/protocol input paths", async () => {
@@ -121,17 +92,11 @@ describe("ensureOggOpus", () => {
 
     expect(result).toEqual({ path: "/tmp/input.ogg", cleanup: false });
     expect(runFfprobeMock).toHaveBeenCalledTimes(1);
-    expect(readSingleCommandArgs(runFfprobeMock)).toEqual([
-      "-v",
-      "error",
-      "-select_streams",
-      "a:0",
-      "-show_entries",
-      "stream=codec_name,sample_rate",
-      "-of",
-      "csv=p=0",
-      "/tmp/input.ogg",
-    ]);
+    expect(runFfprobeMock.mock.calls[0]?.[0]).toEqual(
+      "-v error -select_streams a:0 -show_entries stream=codec_name,sample_rate -of csv=p=0 /tmp/input.ogg".split(
+        " ",
+      ),
+    );
     expect(runFfmpegMock).not.toHaveBeenCalled();
   });
 
@@ -144,8 +109,7 @@ describe("ensureOggOpus", () => {
       if (probeOutput) {
         runFfprobeMock.mockResolvedValueOnce(probeOutput);
       }
-      runFfmpegMock.mockImplementationOnce(async (...callArgs: unknown[]) => {
-        const args = callArgs[0] as string[];
+      runFfmpegMock.mockImplementationOnce(async (args) => {
         const outputPath = args.at(-1);
         if (typeof outputPath !== "string") {
           throw new Error("missing ffmpeg output path");
@@ -161,7 +125,7 @@ describe("ensureOggOpus", () => {
       expect(path.basename(result.path)).toMatch(/^voice-.*\.ogg$/);
       expect(runFfprobeMock).toHaveBeenCalledTimes(probeOutput ? 1 : 0);
       expect(runFfmpegMock).toHaveBeenCalledTimes(1);
-      const ffmpegArgs = readSingleCommandArgs(runFfmpegMock);
+      const ffmpegArgs = runFfmpegMock.mock.calls[0]?.[0] ?? [];
       expect(ffmpegArgs.slice(0, -1)).toEqual([
         "-y",
         "-i",
@@ -188,30 +152,25 @@ describe("ensureOggOpus", () => {
 });
 
 describe("sendDiscordVoiceMessage", () => {
-  const metadata: VoiceMessageMetadata = {
-    durationSecs: 1,
-    waveform: "waveform",
-  };
-
-  beforeAll(async () => {
-    ({ sendDiscordVoiceMessage } = await import("./voice-message.js"));
-  });
+  const post = vi.fn<(...args: unknown[]) => Promise<{ id: string; channel_id: string }>>();
+  const rest = {
+    options: { baseUrl: "https://discord.test/api/v10", timeout: 17 },
+    post,
+  } as unknown as RequestClient;
+  const metadata = { durationSecs: 1, waveform: "waveform" };
 
   beforeEach(() => {
     vi.restoreAllMocks();
     fetchWithSsrFGuardMock.mockClear();
+    post.mockReset().mockResolvedValue({ id: "msg-1", channel_id: "channel-1" });
   });
 
-  function createRest(post = vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" }))) {
-    return {
-      options: { baseUrl: "https://discord.test/api/v10", timeout: 17 },
-      post,
-    } as unknown as RequestClient;
-  }
-
-  function sendVoice(rest: RequestClient, request: DiscordRetryRunner = async (fn) => await fn()) {
+  function sendVoice(
+    client: RequestClient,
+    request: DiscordRetryRunner = async (fn) => await fn(),
+  ) {
     return sendDiscordVoiceMessage(
-      rest,
+      client,
       "channel-1",
       Buffer.from("ogg"),
       metadata,
@@ -222,26 +181,39 @@ describe("sendDiscordVoiceMessage", () => {
     );
   }
 
-  function mockSuccessfulVoiceUpload(uploadResponse = new Response(null, { status: 200 })) {
+  const uploadBody = (upload_url: string, upload_filename = "uploaded.ogg") => ({
+    attachments: [{ id: 0, upload_url, upload_filename }],
+  });
+  function uploadUrlResponse(upload_url: string, upload_filename: string) {
+    return new Response(JSON.stringify(uploadBody(upload_url, upload_filename)), { status: 200 });
+  }
+
+  const retryCreate: DiscordRetryRunner = async (fn, label) => {
+    if (label === "voice-message") {
+      await fn().catch(() => undefined);
+    }
+    return await fn();
+  };
+
+  function mockVoiceUpload(
+    uploads = [new Response(null, { status: 200 })],
+    negotiationError?: Response,
+  ) {
+    let attempt = 0;
     return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       const method = input instanceof Request ? input.method : (init?.method ?? "GET");
+      const suffix = () => (uploads.length > 1 ? `-${attempt}` : "");
       if (method === "POST" && url.endsWith("/channels/channel-1/attachments")) {
-        return new Response(
-          JSON.stringify({
-            attachments: [
-              {
-                id: 0,
-                upload_url: "https://cdn.test/upload",
-                upload_filename: "uploaded.ogg",
-              },
-            ],
-          }),
-          { status: 200 },
+        attempt += 1;
+        return (
+          negotiationError ??
+          uploadUrlResponse(`https://cdn.test/upload${suffix()}`, `uploaded${suffix()}.ogg`)
         );
       }
-      if (method === "PUT" && url === "https://cdn.test/upload") {
-        return uploadResponse;
+      const response = uploads[attempt - 1];
+      if (method === "PUT" && url === `https://cdn.test/upload${suffix()}` && response) {
+        return response;
       }
       throw new Error(`unexpected fetch ${method} ${url}`);
     });
@@ -263,77 +235,40 @@ describe("sendDiscordVoiceMessage", () => {
   }
 
   it("requests a fresh upload URL when rate limited and cancels the successful body", async () => {
-    const post = vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" }));
-    const rest = createRest(post);
-    let uploadUrlRequests = 0;
     const successfulUpload = cancelTrackedTextResponse("uploaded", { status: 200 });
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = input instanceof Request ? input.url : String(input);
-      const method = input instanceof Request ? input.method : (init?.method ?? "GET");
-      if (method === "POST" && url.endsWith("/channels/channel-1/attachments")) {
-        uploadUrlRequests += 1;
-        return new Response(
-          JSON.stringify({
-            attachments: [
-              {
-                id: 0,
-                upload_url: `https://cdn.test/upload-${uploadUrlRequests}`,
-                upload_filename: `uploaded-${uploadUrlRequests}.ogg`,
-              },
-            ],
-          }),
-          { status: 200 },
-        );
-      }
-      if (method === "PUT" && url === "https://cdn.test/upload-1") {
-        return new Response(
-          JSON.stringify({ message: "Slow down", retry_after: 0, global: false }),
-          { status: 429 },
-        );
-      }
-      if (method === "PUT" && url === "https://cdn.test/upload-2") {
-        return successfulUpload.response;
-      }
-      throw new Error(`unexpected fetch ${method} ${url}`);
-    });
+    const fetchMock = mockVoiceUpload([
+      new Response(JSON.stringify({ message: "Slow down", retry_after: 0, global: false }), {
+        status: 429,
+      }),
+      successfulUpload.response,
+    ]);
 
     await expect(sendVoice(rest, retryRateLimits)).resolves.toEqual({
       id: "msg-1",
       channel_id: "channel-1",
     });
 
-    expect(uploadUrlRequests).toBe(2);
+    expect(
+      fetchMock.mock.calls.filter(([input]) => {
+        const url = input instanceof Request ? input.url : input.toString();
+        return url.endsWith("/attachments");
+      }),
+    ).toHaveLength(2);
     expect(successfulUpload.wasCanceled()).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(4);
-    expect(
-      fetchWithSsrFGuardMock.mock.calls.map(([params]) => ({
-        auditContext: params.auditContext,
-        allowRfc2544BenchmarkRange: params.policy?.allowRfc2544BenchmarkRange,
-        allowIpv6UniqueLocalRange: params.policy?.allowIpv6UniqueLocalRange,
-      })),
-    ).toEqual([
-      {
-        auditContext: "discord.voice.upload-url",
-        allowRfc2544BenchmarkRange: true,
-        allowIpv6UniqueLocalRange: true,
-      },
-      {
-        auditContext: "discord.voice.attachment-upload",
-        allowRfc2544BenchmarkRange: true,
-        allowIpv6UniqueLocalRange: true,
-      },
-      {
-        auditContext: "discord.voice.upload-url",
-        allowRfc2544BenchmarkRange: true,
-        allowIpv6UniqueLocalRange: true,
-      },
-      {
-        auditContext: "discord.voice.attachment-upload",
-        allowRfc2544BenchmarkRange: true,
-        allowIpv6UniqueLocalRange: true,
-      },
+    expect(fetchWithSsrFGuardMock.mock.calls.map(([params]) => params.auditContext)).toEqual([
+      "discord.voice.upload-url",
+      "discord.voice.attachment-upload",
+      "discord.voice.upload-url",
+      "discord.voice.attachment-upload",
     ]);
+    for (const [params] of fetchWithSsrFGuardMock.mock.calls) {
+      expect(params.policy).toMatchObject({
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      });
+    }
     expect(post).toHaveBeenCalledWith("/channels/channel-1/messages", {
       body: {
         flags: 8192,
@@ -353,20 +288,12 @@ describe("sendDiscordVoiceMessage", () => {
   });
 
   it("reuses the voice-message nonce across an ambiguous create retry", async () => {
-    const post = vi
-      .fn()
+    post
       .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
       .mockResolvedValueOnce({ id: "msg-1", channel_id: "channel-1" });
-    const rest = createRest(post);
-    mockSuccessfulVoiceUpload();
-    const request = vi.fn(async <T>(fn: () => Promise<T>, label?: string): Promise<T> => {
-      if (label === "voice-message") {
-        await fn().catch(() => undefined);
-      }
-      return await fn();
-    }) as unknown as DiscordRetryRunner;
+    mockVoiceUpload();
 
-    await expect(sendVoice(rest, request)).resolves.toEqual({
+    await expect(sendVoice(rest, retryCreate)).resolves.toEqual({
       id: "msg-1",
       channel_id: "channel-1",
     });
@@ -383,11 +310,8 @@ describe("sendDiscordVoiceMessage", () => {
     const error = new DiscordError(new Response(null, { status: 503 }), {
       message: "voice message may have been accepted",
     });
-    const post = vi.fn(async () => {
-      throw error;
-    });
-    const rest = createRest(post);
-    mockSuccessfulVoiceUpload();
+    post.mockRejectedValue(error);
+    mockVoiceUpload();
 
     await expect(sendVoice(rest)).rejects.toBe(error);
 
@@ -400,40 +324,19 @@ describe("sendDiscordVoiceMessage", () => {
     const finalFailure = Object.assign(new Error("final create could not connect"), {
       code: "ECONNREFUSED",
     });
-    const post = vi.fn().mockRejectedValueOnce(ambiguous).mockRejectedValueOnce(finalFailure);
-    const rest = createRest(post);
-    mockSuccessfulVoiceUpload();
-    const request = vi.fn(async <T>(fn: () => Promise<T>, label?: string): Promise<T> => {
-      if (label === "voice-message") {
-        await fn().catch(() => undefined);
-      }
-      return await fn();
-    }) as unknown as DiscordRetryRunner;
+    post.mockRejectedValueOnce(ambiguous).mockRejectedValueOnce(finalFailure);
+    mockVoiceUpload();
 
-    await expect(sendVoice(rest, request)).rejects.toBe(finalFailure);
+    await expect(sendVoice(rest, retryCreate)).rejects.toBe(finalFailure);
 
     expect(post).toHaveBeenCalledTimes(2);
     expect(hasDiscordMessageCreateAmbiguity(finalFailure)).toBe(true);
   });
 
   it("does not mark an HTTP failure during upload-url negotiation", async () => {
-    const post = vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" }));
-    const rest = createRest(post);
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = input instanceof Request ? input.url : String(input);
-      const method = input instanceof Request ? input.method : (init?.method ?? "GET");
-      if (method === "POST" && url.endsWith("/channels/channel-1/attachments")) {
-        return new Response("voice attachment unavailable", { status: 503 });
-      }
-      throw new Error(`unexpected fetch ${method} ${url}`);
-    });
+    mockVoiceUpload([], new Response("voice attachment unavailable", { status: 503 }));
 
-    let caught: unknown;
-    try {
-      await sendVoice(rest);
-    } catch (error) {
-      caught = error;
-    }
+    const caught: unknown = await sendVoice(rest).catch((error: unknown) => error);
 
     expect(caught).toBeInstanceOf(Error);
     expect(hasDiscordMessageCreateAmbiguity(caught)).toBe(false);
@@ -442,20 +345,14 @@ describe("sendDiscordVoiceMessage", () => {
   });
 
   it("bounds voice upload error bodies without using response.text()", async () => {
-    const rest = createRest();
     const tracked = cancelTrackedTextResponse(`${"cdn unavailable ".repeat(1024)}tail`, {
       status: 503,
       headers: { "content-type": "text/plain" },
     });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
-    mockSuccessfulVoiceUpload(tracked.response);
+    mockVoiceUpload([tracked.response]);
 
-    let error: unknown;
-    try {
-      await sendVoice(rest);
-    } catch (caught) {
-      error = caught;
-    }
+    const error: unknown = await sendVoice(rest).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).name).toBe("DiscordError");
     expect((error as Error).message).toContain("cdn unavailable");
@@ -484,22 +381,16 @@ describe("sendDiscordVoiceMessage", () => {
           return;
         }
         res.setHeader("content-type", "application/json");
-        res.end(
-          JSON.stringify({
-            attachments: [
-              { id: 0, upload_url: `${baseUrl}/upload`, upload_filename: "uploaded.ogg" },
-            ],
-          }),
-        );
+        res.end(JSON.stringify(uploadBody(`${baseUrl}/upload`)));
       },
       async (url) => {
         baseUrl = url;
-        const rest = {
+        const timeoutClient = {
           options: { baseUrl: `${baseUrl}/api/v10`, timeout: 37 },
           post: vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" })),
         } as unknown as RequestClient;
 
-        await expect(sendVoice(rest)).rejects.toThrow(/timed out|abort/i);
+        await expect(sendVoice(timeoutClient)).rejects.toThrow(/timed out|abort/i);
 
         await vi.waitFor(() => expect(closedResponses).toHaveBeenCalledWith(hangingRoute));
         const guardedCall = fetchWithSsrFGuardMock.mock.calls.find(

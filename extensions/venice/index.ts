@@ -1,5 +1,6 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyModelCompatPatch } from "openclaw/plugin-sdk/provider-model-shared";
+import { resolveProviderUsageApiKeyAuth } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { VENICE_BASE_URL, VENICE_MODEL_DISCOVERY_OPTIONS } from "./models.js";
 import { applyVeniceConfig } from "./onboard.js";
@@ -61,14 +62,7 @@ export default defineSingleProviderPluginEntry({
         : normalized;
     },
     wrapStreamFn: (ctx) => createVeniceStreamWrapper(ctx.streamFn),
-    resolveUsageAuth: async (ctx) => {
-      const apiKey = (
-        await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
-          envDirect: [ctx.env.VENICE_API_KEY],
-        })
-      )?.[0];
-      return apiKey ? { token: apiKey } : null;
-    },
+    resolveUsageAuth: (ctx) => resolveProviderUsageApiKeyAuth(ctx, [ctx.env.VENICE_API_KEY]),
     fetchUsageSnapshot: async (ctx) =>
       await fetchVeniceUsage({
         token: ctx.token,

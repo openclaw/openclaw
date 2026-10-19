@@ -9,37 +9,34 @@ import {
   visibleWidth,
 } from "./ansi.js";
 
+function expectEverySplit(input: string, text: string, expected: string[]) {
+  for (let split = 0; split <= input.length; split += 1) {
+    const controls: string[] = [];
+    const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
+    expect(stripper.write(input.slice(0, split)) + stripper.write(input.slice(split))).toBe(text);
+    expect(controls).toEqual(expected);
+    expect(stripper.finish()).toBe("");
+  }
+}
+
 describe("terminal ansi helpers", () => {
   it.each([
     ["ESC OSC with ESC ST", ["A\u001B]0;title", "\u001B\\B"]],
     ["C1 OSC with C1 ST", ["A\u009D0;title", "\u009CB"]],
     ["ESC compatibility bracket prefix", ["A\u001B[", "[AB"]],
     ["ESC compatibility mixed prefixes", ["A\u001B(", "[31mB"]],
+    ["trailing ESC before OSC", ["A\u001B", "]0;title\u0007B"]],
+    ["OSC with stray ESC before BEL", ["A\u001B]0;title\u001B\u0007", "B"]],
   ])("strips chunked %s sequences incrementally", (_label, chunks) => {
     const stripper = new AnsiSequenceStripper();
-
-    const split = chunks.map((chunk) => stripper.write(chunk)).join("") + stripper.finish();
-    const joined = stripAnsiSequences(chunks.join(""));
-
-    expect(split).toBe("AB");
-    expect(split).toBe(joined);
+    expect(chunks.map((chunk) => stripper.write(chunk)).join("") + stripper.finish()).toBe("AB");
+    expect(stripAnsiSequences(chunks.join(""))).toBe("AB");
   });
 
-  it.each([["ESC [", "\u001B["]])(
-    "dispatches complete %s controls once across every split",
-    (_label, csi) => {
-      const input = `A${csi}6n${csi}?1hB${csi}?6n${csi}?1l${csi}31mC`;
-      for (let split = 0; split <= input.length; split += 1) {
-        const controls: string[] = [];
-        const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
-        expect(stripper.write(input.slice(0, split)) + stripper.write(input.slice(split))).toBe(
-          "ABC",
-        );
-        expect(controls).toEqual(["6n", "?1h", "?6n", "?1l", "31m"]);
-        expect(stripper.finish()).toBe("");
-      }
-    },
-  );
+  it("dispatches complete ESC controls once across every split", () => {
+    const expected = ["6n", "?1h", "?6n", "?1l", "31m"];
+    expectEverySplit("A\x1b[6n\x1b[?1hB\x1b[?6n\x1b[?1l\x1b[31mC", "ABC", expected);
+  });
 
   it.each([
     ["cancelled CSI", "\x1b[6\x18n\x1b[?1\x1ah", []],
@@ -53,21 +50,9 @@ describe("terminal ansi helpers", () => {
     expect(controls).toEqual(expected);
   });
 
-  it.each([["escape to C1 CSI", "\x1b", "\x9b6n", ["6n"]]])(
-    "restarts %s across every chunk boundary",
-    (_label, pending, restart, expected) => {
-      const input = `A${pending}${restart}B`;
-      for (let split = 0; split <= input.length; split += 1) {
-        const controls: string[] = [];
-        const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
-        expect(stripper.write(input.slice(0, split)) + stripper.write(input.slice(split))).toBe(
-          "AB",
-        );
-        expect(controls).toEqual(expected);
-        expect(stripper.finish()).toBe("");
-      }
-    },
-  );
+  it("restarts escape to C1 CSI across every chunk boundary", () => {
+    expectEverySplit("A\x1b\x9b6nB", "AB", ["6n"]);
+  });
 
   it("drops oversized and unfinished CSI metadata without dispatching partial controls", () => {
     const controls: string[] = [];
@@ -79,33 +64,11 @@ describe("terminal ansi helpers", () => {
     expect(controls).toEqual(["6n"]);
   });
 
-  it("keeps a trailing ESC pending until the next chunk can identify OSC", () => {
-    const chunks = ["A\u001B", "]0;title\u0007B"];
-    const stripper = new AnsiSequenceStripper();
-
-    const split = chunks.map((chunk) => stripper.write(chunk)).join("") + stripper.finish();
-    const joined = stripAnsiSequences(chunks.join(""));
-
-    expect(split).toBe("AB");
-    expect(split).toBe(joined);
-  });
-
   it("does not retain large unterminated OSC payloads", () => {
     const stripper = new AnsiSequenceStripper();
     const payload = "x".repeat(1024 * 1024);
-
     const split = stripper.write("safe\u001B]0;") + stripper.write(payload) + stripper.finish();
-
     expect(split).toBe("safe");
-  });
-
-  it.each([["BEL", "\u0007"]])("terminates OSC after stray ESC before %s", (_label, terminator) => {
-    const stripper = new AnsiSequenceStripper();
-    const input = `A\u001B]0;title\u001B${terminator}B`;
-    const split = stripper.write(input.slice(0, -1)) + stripper.write(input.slice(-1));
-
-    expect(stripAnsiSequences(input)).toBe("AB");
-    expect(split).toBe("AB");
   });
 
   it("strips the agent output escape grammar without changing text policy", () => {
@@ -116,42 +79,27 @@ describe("terminal ansi helpers", () => {
   });
 
   it("sanitizes control characters for log-safe interpolation", () => {
-    const input =
-      "\u001B[31mwarn\u001B[0m" +
-      "\r\n" +
-      "next" +
-      String.fromCharCode(0) +
-      "line" +
-      String.fromCharCode(127) +
-      String.fromCharCode(0x85) +
-      String.fromCharCode(0) +
-      "done";
+    const input = "\u001B[31mwarn\u001B[0m\r\nnext\x00line\x7f\x85\x00done";
     expect(sanitizeForLog(input)).toBe("warnnextlinedone");
     expect(sanitizeForLog("\u009B31mred\u009B0m")).toBe("red");
   });
 
-  it.each([["C1 CSI", "\u009B"]])(
-    "strips every no-argument %s final byte",
-    (_label, introducer) => {
-      for (let finalCode = 0x40; finalCode <= 0x7e; finalCode += 1) {
-        const sequence = introducer + String.fromCharCode(finalCode);
-        expect(stripAnsi(`before${sequence}after`)).toBe("beforeafter");
-        expect(stripAnsiSequences(`before${sequence}after`)).toBe("beforeafter");
-      }
-    },
-  );
+  it("strips every no-argument C1 CSI final byte", () => {
+    for (let finalCode = 0x40; finalCode <= 0x7e; finalCode += 1) {
+      const sequence = "\u009B" + String.fromCharCode(finalCode);
+      expect(stripAnsi(`before${sequence}after`)).toBe("beforeafter");
+      expect(stripAnsiSequences(`before${sequence}after`)).toBe("beforeafter");
+    }
+  });
 
-  it.each([["C1 CSI", "\u009B"]])(
-    "handles %s cancellation, restart, and EOF",
-    (_label, introducer) => {
-      for (const strip of [stripAnsi, stripAnsiSequences]) {
-        expect(strip(`before${introducer}31\u0018after`)).toBe("beforeafter");
-        expect(strip(`before${introducer}31\u001Aafter`)).toBe("beforeafter");
-        expect(strip(`before${introducer}31\u001B[0mafter`)).toBe("beforeafter");
-        expect(strip(`before${introducer}31;`)).toBe("before");
-      }
-    },
-  );
+  it("handles C1 CSI cancellation, restart, and EOF", () => {
+    for (const strip of [stripAnsi, stripAnsiSequences]) {
+      expect(strip("before\u009B31\u0018after")).toBe("beforeafter");
+      expect(strip("before\u009B31\u001Aafter")).toBe("beforeafter");
+      expect(strip("before\u009B31\u001B[0mafter")).toBe("beforeafter");
+      expect(strip("before\u009B31;")).toBe("before");
+    }
+  });
 
   it("does not reinterpret bytes joined by CSI removal as a new OSC", () => {
     const input = "\u001B\u001B[0m]visible\u0007after";
@@ -160,22 +108,17 @@ describe("terminal ansi helpers", () => {
     expect(sanitizeForLog(input)).toBe("]visibleafter");
   });
 
-  it.each([["ESC [", "\u001B["]])(
-    "can preserve pending %s at a stream chunk boundary",
-    (_label, introducer) => {
-      const input = `before${introducer}31;`;
-      expect(stripAnsiForStreamChunk(input)).toBe(input);
-      expect(stripAnsiForStreamChunk(input, { compatibilityGrammar: true })).toBe(input);
-    },
-  );
+  it("can preserve pending ESC CSI at a stream chunk boundary", () => {
+    const input = "before\u001B[31;";
+    expect(stripAnsiForStreamChunk(input)).toBe(input);
+    expect(stripAnsiForStreamChunk(input, { compatibilityGrammar: true })).toBe(input);
+  });
 
   it("truncates to a visible-width budget without splitting wide graphemes", () => {
     expect(truncateToVisibleWidth("abc", 2)).toBe("ab");
     expect(truncateToVisibleWidth("abc", 5)).toBe("abc");
     expect(truncateToVisibleWidth("anything", 0)).toBe("");
     expect(truncateToVisibleWidth("abc", Number.NaN)).toBe("");
-    // A wide grapheme that cannot fit the remaining budget is dropped whole,
-    // never emitted half-width, so the result never exceeds the budget.
     expect(truncateToVisibleWidth("表文", 2)).toBe("表");
     expect(truncateToVisibleWidth("表", 1)).toBe("");
     expect(truncateToVisibleWidth("ﾊﾞ", 1)).toBe("");
@@ -195,13 +138,9 @@ describe("terminal ansi helpers", () => {
     expect(visibleWidth(truncateToVisibleWidth("📸📸", 1))).toBeLessThanOrEqual(1);
   });
 
-  it.each([["表" + "\u200B".repeat(64) + "b", 1, ""]])(
-    "fits uneven and invisible grapheme runs (case %#)",
-    (input, width, expected) => {
-      expect(truncateToVisibleWidth(input, width)).toBe(expected);
-      expect(visibleWidth(expected)).toBeLessThanOrEqual(width);
-    },
-  );
+  it("fits uneven and invisible grapheme runs", () => {
+    expect(truncateToVisibleWidth("表" + "\u200B".repeat(64) + "b", 1)).toBe("");
+  });
 
   it("counts independently executed controls inside atomic CSI sequences", () => {
     const sequence = "\x1b[31\tm";

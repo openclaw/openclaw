@@ -428,7 +428,12 @@ export function createEmbeddedRunFailoverRetryController(input: {
         let remainingMs = delayMs;
         while (remainingMs > 0) {
           const chunkMs = Math.min(remainingMs, RETRY_SLEEP_CHUNK_MS);
-          await sleepWithAbort(chunkMs, params.abortSignal);
+          try {
+            await sleepWithAbort(chunkMs, params.abortSignal);
+          } catch (error) {
+            params.abortSignal?.throwIfAborted();
+            throw error;
+          }
           remainingMs -= chunkMs;
         }
         completed = true;

@@ -19,7 +19,7 @@ import {
 } from "./scenario-runtime-shared.js";
 import {
   rewriteMatrixSyncStoreCursor,
-  waitForMatrixInboundDedupeEntry,
+  waitForMatrixIngressCompletion,
   waitForMatrixSyncStoreWithCursor,
 } from "./scenario-runtime-state-files.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
@@ -155,9 +155,9 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
     tokenPrefix: "MATRIX_QA_STALE_SYNC_DEDUPE",
   });
 
-  await waitForMatrixInboundDedupeEntry({
+  await waitForMatrixIngressCompletion({
+    accountId: context.sutAccountId,
     eventId: replayDriverEventId,
-    roomId,
     stateDir,
     timeoutMs: Math.min(5_000, context.timeoutMs),
   });

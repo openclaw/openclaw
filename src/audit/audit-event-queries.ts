@@ -52,7 +52,7 @@ function createAuditEventQueries(db: EngineConnection) {
             message_ref: parameter((value) => value.message_ref),
             target_ref: parameter((value) => value.target_ref),
           })
-          .onConflict((conflict) => conflict.column("source_id").doNothing())
+          .onConflict((conflict) => conflict.doNothing())
           .returning((eb) => eb.cast<string>("sequence", "text").as("sequence")),
     ),
     read: prepareSqliteQueryTakeFirstSync<number, AuditEventRow>(db, (parameter) =>

@@ -135,6 +135,13 @@ export function createSessionPermissionProjection(
       }
       return row;
     }
+    // These list projections omit permissions; absence cannot supersede a known choice.
+    if (
+      (row.rowMode === "sidebar" || row.rowMode === "dashboard") &&
+      !Object.hasOwn(row, "permissionMode")
+    ) {
+      return row;
+    }
     const revision = readRevision(row);
     const fact = projection.fact;
     const older =

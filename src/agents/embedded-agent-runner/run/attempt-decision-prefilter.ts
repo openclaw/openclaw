@@ -1,6 +1,10 @@
 import { createRuntimeConfigReader } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { evaluateDecisionInRegistry } from "../../../decisions/runtime.js";
+import {
+  evaluateDecisionV2Operation,
+  completeDecisionEvaluation,
+} from "../../../decisions/runtime.js";
+import type { DecisionAnswerV2, DecisionOutcomeV2 } from "../../../decisions/types-v2.js";
 import { getPluginRegistryForContext } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isDecisionAssistanceEligible } from "../../decision-assistance.js";
 import { resolveDecisionModelSetting } from "../../decision-model-setting.js";
@@ -40,6 +44,15 @@ export type DecisionPrefilterResult = {
   context?: DecisionContextFacts;
 };
 
+function isStrongNo(answer: DecisionAnswerV2 | undefined): boolean {
+  return (
+    answer?.type === "boolean" &&
+    typeof answer.probabilityTrue === "number" &&
+    answer.probabilityTrue < 0.35 &&
+    (answer.answer === undefined || answer.answer === false)
+  );
+}
+
 /** Ordinary unavailability preserves tools; cancellation and contract errors remain terminal. */
 export async function evaluateAttemptDecisionToolPrefilter(
   params: EvaluateAttemptDecisionToolPrefilterParams,
@@ -76,10 +89,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
   }
   const promptBuildFields = params.promptBuildFields;
   const promptBuildChars = promptBuildFields
-    ? Object.values(promptBuildFields).reduce(
-        (total, value) => total + (typeof value === "string" ? value.length : 0),
-        0,
-      )
+    ? Object.values(promptBuildFields).reduce((total, value) => total + (value?.length ?? 0), 0)
     : 0;
   if (context.facts.contextChars + promptBuildChars > MAX_DECISION_TEXT_CHARS) {
     return skip("prompt-build-context-too-large", context.facts);
@@ -95,16 +105,19 @@ export async function evaluateAttemptDecisionToolPrefilter(
       currentSelection?.model === selection?.model
     );
   };
-  const outcome = await evaluateDecisionInRegistry(
+  const evaluation = await evaluateDecisionV2Operation(
     {
       state: {
-        latestRequest: context.latestRequest,
-        recentConversation: context.recentConversation,
-        omittedContext: {
-          olderConversation: context.facts.olderContextOmitted,
-          toolPayloads: context.facts.toolPayloadsOmitted,
+        type: "json",
+        value: {
+          latestRequest: context.latestRequest,
+          recentConversation: context.recentConversation,
+          omittedContext: {
+            olderConversation: context.facts.olderContextOmitted,
+            toolPayloads: context.facts.toolPayloadsOmitted,
+          },
+          ...(promptBuildFields ? { beforePromptBuild: promptBuildFields } : {}),
         },
-        ...(promptBuildFields ? { beforePromptBuild: promptBuildFields } : {}),
       },
       questions: {
         missing_request_context: {
@@ -145,8 +158,17 @@ export async function evaluateAttemptDecisionToolPrefilter(
   );
   params.signal.throwIfAborted();
   params.assertActive();
+  const result = projectPrefilterResult(evaluation.outcome, context.facts);
+  completeDecisionEvaluation(evaluation);
+  return result;
+}
+
+function projectPrefilterResult(
+  outcome: DecisionOutcomeV2,
+  context: DecisionContextFacts,
+): DecisionPrefilterResult {
   const facts = {
-    context: context.facts,
+    context,
   };
   if (outcome.status === "unavailable") {
     return { shouldPruneTools: false, status: "unavailable", reason: outcome.reason, ...facts };
@@ -156,7 +178,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
   const needsTools = answers?.next_response_needs_tools;
   // Independent yes/no probabilities, not degrees or an extra confidence score.
   // A strong no to both is required; absent, uncertain, or affirmative answers retain tools.
-  if (missingContext?.type !== "boolean" || !(missingContext.probabilityTrue < 0.35)) {
+  if (!isStrongNo(missingContext)) {
     return {
       shouldPruneTools: false,
       status: "retained",
@@ -164,7 +186,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
       ...facts,
     };
   }
-  return needsTools?.type === "boolean" && needsTools.probabilityTrue < 0.35
+  return isStrongNo(needsTools)
     ? { shouldPruneTools: true, status: "proposed", reason: "conversational", ...facts }
     : { shouldPruneTools: false, status: "retained", reason: "action-or-uncertain", ...facts };
 }

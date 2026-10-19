@@ -22,7 +22,7 @@ import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
 import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
-import { PluginInstallAction } from "./install-action.tsx";
+import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
@@ -54,6 +54,8 @@ type SharedProps = Omit<
   PluginSettingsEditorModel,
   "pluginId" | "configSchema" | "backHref" | "onBack"
 > & {
+  registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
+  registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
   registerIcon?: (readId: () => string) => () => void;
   loading: boolean;
   error: string | null;
@@ -337,6 +339,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
   return (
     <SettingsPage carapace={true}>
       <SettingsPageHeader
+        registerHeading={props.registerRemovalHeading}
         title={t("tabs.plugins")}
         subtitle={t("pluginsPage.settingsDescription")}
       />
@@ -505,6 +508,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
   return (
     <SettingsPage wide={true} carapace={true}>
       <PluginDetailShell
+        registerRemovalHeading={props.registerRemovalHeading}
         id={"plugin-installed-detail"}
         name={plugin().name}
         summary={plugin().description || catalog()?.plugin.catalog.summary}
@@ -541,6 +545,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
             )}
           >
             <PluginInstallAction
+              registerInstallAction={props.registerInstallAction}
               buttonClass="btn oc-action plugin-catalog-detail__install"
               primary={true}
               progress={props.installProgress}

@@ -41,7 +41,9 @@ async function startPanelWithPendingOpen(sessionKey?: string, hosted = false) {
     forceReconnect: () => {},
     request: <T>(method: string, params?: unknown) => {
       requests.push({ method, params });
-      return (method === "terminal.open" ? open.promise : Promise.resolve({})) as Promise<T>;
+      return (
+        method === "terminal.open" ? open.promise : Promise.resolve({ ok: true })
+      ) as Promise<T>;
     },
     addEventListener: () => () => {},
   };
@@ -157,7 +159,7 @@ describe("OpenClawTerminalPanel", () => {
       forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
-        return terminalOpenResult("session-1") as T;
+        return (method === "terminal.open" ? terminalOpenResult("session-1") : { ok: true }) as T;
       },
       addEventListener: () => () => {},
     };
@@ -209,7 +211,7 @@ describe("OpenClawTerminalPanel", () => {
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
       request: async <T>(method: string) =>
-        (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
+        (method === "terminal.open" ? terminalOpenResult("session-1") : { ok: true }) as T,
       addEventListener: () => () => {},
     };
     const panel = mountTerminalPanel(client);
@@ -250,7 +252,7 @@ describe("OpenClawTerminalPanel", () => {
       forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
-        return (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T;
+        return (method === "terminal.open" ? terminalOpenResult("session-1") : { ok: true }) as T;
       },
       addEventListener: (nextListener) => {
         listener = nextListener;
@@ -393,7 +395,11 @@ describe("OpenClawTerminalPanel", () => {
       forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
-        return terminalOpenResult("prepared-session") as T;
+        return (
+          method === "sessions.catalog.startTerminal"
+            ? terminalOpenResult("prepared-session")
+            : { ok: true }
+        ) as T;
       },
       addEventListener: () => () => {},
     };
@@ -445,7 +451,7 @@ describe("OpenClawTerminalPanel", () => {
         if (method === "terminal.open") {
           return terminalOpenResult("replacement-1") as T;
         }
-        return {} as T;
+        return { ok: true } as T;
       },
       addEventListener: () => () => {},
     };
@@ -465,10 +471,8 @@ describe("OpenClawTerminalPanel", () => {
 
   it("does not mark a live persisted session exited after a transient attach failure", async () => {
     sessionStorage.setItem("openclaw.terminal.sessions.v1", JSON.stringify(["live-1"]));
-    const controllers = [createTerminalController(), createTerminalController()] as const;
-    createGhosttyTerminalMock
-      .mockResolvedValueOnce(controllers[0])
-      .mockResolvedValueOnce(controllers[1]);
+    const controller = createTerminalController();
+    createGhosttyTerminalMock.mockResolvedValueOnce(controller);
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
@@ -485,7 +489,7 @@ describe("OpenClawTerminalPanel", () => {
         if (method === "terminal.open") {
           return terminalOpenResult("replacement-1") as T;
         }
-        return {} as T;
+        return { ok: true } as T;
       },
       addEventListener: () => () => {},
     };
@@ -494,14 +498,17 @@ describe("OpenClawTerminalPanel", () => {
     panel.toggle();
 
     await waitForFast(() => {
-      expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(1);
+      expect(panel.querySelector('.tp-error[role="alert"]')?.textContent).toContain(
+        "Could not attach terminal session",
+      );
     });
+    expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(0);
     expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(2);
     expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);
     expect(panel.querySelector(".tabstrip-tab__status")?.textContent).not.toBe("exited");
-    expect(controllers[0].write).not.toHaveBeenCalled();
+    expect(controller.write).not.toHaveBeenCalled();
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
-      JSON.stringify(["replacement-1"]),
+      JSON.stringify(["live-1"]),
     );
   });
 
@@ -522,7 +529,7 @@ describe("OpenClawTerminalPanel", () => {
             sessions: [{ ...terminalOpenResult("current-1"), attached: true, createdAtMs: 1 }],
           } as T;
         }
-        return {} as T;
+        return Promise.resolve({ ok: true }) as Promise<T>;
       },
       addEventListener: () => () => {},
     };
@@ -643,7 +650,7 @@ describe("OpenClawTerminalPanel", () => {
             sessions: [{ ...terminalOpenResult("expired-1"), attached: false, createdAtMs: 1 }],
           } as T;
         }
-        return {} as T;
+        return { ok: true } as T;
       },
       addEventListener: () => () => {},
     };
@@ -676,7 +683,7 @@ describe("OpenClawTerminalPanel", () => {
       forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
-        return terminalOpenResult("session-1") as T;
+        return (method === "terminal.open" ? terminalOpenResult("session-1") : { ok: true }) as T;
       },
       addEventListener: () => () => {},
     };
@@ -710,7 +717,7 @@ describe("OpenClawTerminalPanel", () => {
       forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
-        return terminalOpenResult("session-1") as T;
+        return (method === "terminal.open" ? terminalOpenResult("session-1") : { ok: true }) as T;
       },
       addEventListener: () => () => {},
     };
@@ -752,7 +759,7 @@ describe("OpenClawTerminalPanel", () => {
       forceReconnect: () => {},
       request: async <T>(method: string) => {
         oldRequests.push(method);
-        return (method === "terminal.open" ? terminalOpenResult("old-session") : {}) as T;
+        return (method === "terminal.open" ? terminalOpenResult("old-session") : { ok: true }) as T;
       },
       addEventListener: () => oldUnsubscribe,
     };
@@ -764,7 +771,7 @@ describe("OpenClawTerminalPanel", () => {
         if (method === "terminal.list") {
           return { sessions: [] } as T;
         }
-        return (method === "terminal.open" ? terminalOpenResult("new-session") : {}) as T;
+        return (method === "terminal.open" ? terminalOpenResult("new-session") : { ok: true }) as T;
       },
       addEventListener: () => () => {},
     };
@@ -802,7 +809,9 @@ describe("OpenClawTerminalPanel", () => {
       forceReconnect: () => {},
       request: async <T>(method: string) => {
         requests.push(method);
-        return (method === "terminal.open" ? terminalOpenResult("current-session") : {}) as T;
+        return (
+          method === "terminal.open" ? terminalOpenResult("current-session") : { ok: true }
+        ) as T;
       },
       addEventListener: () => () => {},
     };
@@ -841,7 +850,7 @@ describe("OpenClawTerminalPanel", () => {
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
       request: async <T>(method: string) =>
-        (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
+        (method === "terminal.open" ? terminalOpenResult("session-1") : { ok: true }) as T,
       addEventListener: () => () => {},
     };
     const panel = mountTerminalPanel(client);
@@ -869,7 +878,7 @@ describe("OpenClawTerminalPanel", () => {
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
       request: async <T>(method: string) =>
-        (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
+        (method === "terminal.open" ? terminalOpenResult("session-1") : { ok: true }) as T,
       addEventListener: (nextListener) => {
         listener = nextListener;
         return () => {

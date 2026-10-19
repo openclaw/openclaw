@@ -27,6 +27,7 @@ import {
   withUpdateCommandExecutor as withExecutor,
   withUpdateCommandExecutorChild as withChild,
   type UpdateCommandExecutor,
+  registerUpdateCommandTerminalPreparation,
 } from "./update-command-executor.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
@@ -534,3 +535,59 @@ it("preserves activation timeout provenance without a cause cycle after uncertai
   };
   visit(result);
 });
+
+it.each([
+  { kind: "direct", cleanupResult: "forced" },
+  { kind: "direct", cleanupResult: "uncertain" },
+  { kind: "delegated", cleanupResult: "forced" },
+  { kind: "delegated", cleanupResult: "uncertain" },
+] as const)(
+  "joins $kind terminal preparation before release ($cleanupResult)",
+  async ({ kind, cleanupResult }) => {
+    const entered = createDeferredCore();
+    const cleanup = createDeferredCore<"forced" | "uncertain">();
+    const operationJoined = createDeferredCore();
+    const original = new Error("original update failure");
+    const preparationFailure = new Error("report preparation failed");
+    let calls = 0;
+    let finished = false;
+    const work = runWithExecutorFence(kind, async (fence) => {
+      // A cleanup admitted by the operation must join before preparation starts.
+      retainCommandProcessCleanup(operationJoined.promise);
+      registerUpdateCommandTerminalPreparation(fence, "run", async (failure) => {
+        expect(failure).toBe(original);
+        calls++;
+        retainCommandProcessCleanup(cleanup.promise);
+        entered.resolve();
+        throw preparationFailure;
+      });
+      throw original;
+    })
+      .catch((error: unknown) => {
+        entered.reject(error);
+        return error;
+      })
+      .finally(() => {
+        finished = true;
+      });
+    try {
+      await setImmediate();
+      expect(calls).toBe(0);
+      operationJoined.resolve();
+      await entered.promise;
+      await setImmediate();
+      expect(finished).toBe(false);
+      expect(rows.has(root)).toBe(true);
+    } finally {
+      operationJoined.resolve();
+      cleanup.resolve(cleanupResult);
+      await work;
+    }
+    const error = await work;
+    expect(calls).toBe(1);
+    expect(collectNestedErrorCandidates(error)).toContain(original);
+    expect(collectNestedErrorCandidates(error)).toContain(preparationFailure);
+    expect(hasCleanupError(error)).toBe(cleanupResult === "uncertain");
+    expect(rows.size).toBe(kind === "delegated" ? 2 : cleanupResult === "uncertain" ? 1 : 0);
+  },
+);

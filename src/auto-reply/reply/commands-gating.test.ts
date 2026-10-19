@@ -42,7 +42,7 @@ vi.mock("../../agents/bash-tools.js", () => ({
 }));
 
 // mock-isolation: Exercise command authorization without sandbox backends or session storage.
-vi.mock("../../agents/sandbox.js", () => ({
+vi.mock("../../agents/sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatusAsync: vi.fn(async () => ({ sandboxed: false })),
 }));
 
@@ -126,11 +126,12 @@ vi.mock("../../config/runtime-overrides.js", () => ({
   unsetConfigOverride: vi.fn(() => ({ ok: true, value: true })),
 }));
 
+// mock-isolation: Use static hints without runtime config reads or plugin discovery in authorization tests.
 vi.mock("../../config/runtime-schema.js", async () => {
   const actual =
     await vi.importActual<typeof import("../../config/schema.js")>("../../config/schema.js");
   return {
-    loadGatewayRuntimeConfigSchema: () => actual.buildConfigSchemaCore(),
+    loadGatewayConfigRedactionHints: () => actual.buildConfigSchemaCore().uiHints,
   };
 });
 

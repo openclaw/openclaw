@@ -244,6 +244,7 @@ export async function prepareCanonicalCodexFork(params: {
   const developerInstructions = [
     buildDeveloperInstructions(promptContext, {
       dynamicTools,
+      nativeCodeModeEnabled: true,
       nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
     }),
     workspaceInstructions,

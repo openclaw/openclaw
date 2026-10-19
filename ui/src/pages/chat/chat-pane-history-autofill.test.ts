@@ -17,6 +17,7 @@ function setup(notifyOnObserve = false) {
   const { pane, thread } = fixture;
   const sentinel = thread.appendChild(document.createElement("div"));
   sentinel.className = "chat-history-sentinel";
+  pane.historySentinel = sentinel;
   let height = 400;
   Object.defineProperty(thread, "scrollHeight", { configurable: true, get: () => height });
   let notify: (() => void) | undefined;

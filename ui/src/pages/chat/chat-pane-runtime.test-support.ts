@@ -92,7 +92,8 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
       }
       if (key === "prepareRender") {
         return () => {
-          runtime.chatState.prepareRender();
+          runtime.chatState.publishPendingRunState();
+          runtime.chatState.captureRenderChanges();
           runtime.synchronizeInputs({});
         };
       }
@@ -115,6 +116,9 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
     set(_target, key, value) {
       const source = owner(key);
       const previous = Reflect.get(source, key);
+      if (inputs.has(String(key)) && !Object.is(previous, value)) {
+        runtime.chatState.publishPendingRunState();
+      }
       const applied = Reflect.set(source, key, value);
       if (applied && inputs.has(String(key)) && !Object.is(previous, value)) {
         if (runtime.isConnected) {

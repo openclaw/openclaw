@@ -64,7 +64,7 @@ export type WorkerProviderLifecycleInputOptions = {
   prepareNodeArtifacts?: (
     profileSnapshot: WorkerProfile,
     signal?: AbortSignal,
-  ) => Promise<{ artifacts: WorkerPreparationArtifacts; assertCurrent: () => void }>;
+  ) => Promise<{ artifacts: WorkerPreparationArtifacts }>;
   registerPreparedWorkspace?: (params: {
     record: WorkerEnvironmentRecord;
     deviceId: string;

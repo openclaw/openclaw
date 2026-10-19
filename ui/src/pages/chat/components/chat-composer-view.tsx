@@ -1,16 +1,21 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
-import { createMemo, createRenderEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
+import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../components/mcp-app-catalog.tsx";
 import "../../../components/solid/mcp-app-context-strip.tsx";
 import "../../../components/mcp-app-resources.tsx";
 import { clearCompositionEnd } from "../../../lib/ime.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
 import "../../../styles/chat/composer-context-strip.css";
+import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
@@ -19,9 +24,13 @@ import { ContextNotice } from "./chat-composer-context.tsx";
 import {
   renderChatAbortActionSolid,
   renderChatPrimaryActionsSolid as ChatPrimaryActions,
-  ComposerDictationStatus,
 } from "./chat-composer-controls.tsx";
-import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
+import {
+  focusComposerFromChrome,
+  handleTextareaOverflowInteraction,
+  handleTextareaOverflowScroll,
+  paneDomId,
+} from "./chat-composer-dom.ts";
 import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { GoalComposerMode } from "./chat-composer-goal-mode.tsx";
@@ -36,17 +45,22 @@ import { SkillMenu } from "./chat-composer-skill-menu.tsx";
 import { SlashMenu } from "./chat-composer-slash-menu.tsx";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
-import type { ChatComposerProps } from "./chat-composer-types.ts";
+import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
-import { ChatVoiceStatus } from "./chat-voice-activity.tsx";
+import { ChatVoiceStatus, ComposerDictationStatus } from "./chat-voice-activity.tsx";
 
 type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
 
 export function renderChatComposerView(
   context: () => ChatComposerViewContext,
   props: ChatComposerProps,
+  state: ChatComposerState,
 ) {
+  const footerControl = createFooterControlRef();
+  const ComposerTextarea = (view: ComposerTextareaProps) =>
+    renderComposerTextarea(context, props, state, view);
+  const inputHandle = createChatAttachmentInputHandle();
   const [capabilityOpen, setCapabilityOpen] = createSignal(false);
   const capabilityAvailable = createMemo(() => Boolean(props.capabilityMenu));
   const [capabilityView, setCapabilityView] = createSignal<ChatComposerPlusMenuView>(
@@ -56,7 +70,6 @@ export function renderChatComposerView(
     },
   );
 
-  const activeSession = createMemo(() => props.selectedSession);
   const resumeRecovery = createMemo(() => {
     const recovery = props.goalRecovery;
     return recovery?.action === "resume" &&
@@ -65,7 +78,6 @@ export function renderChatComposerView(
       ? recovery
       : undefined;
   });
-  const composerControls = createMemo(() => props.composerControls ?? undefined);
   const composerLeadControl = (
     <Show when={props.permissionPicker}>{(picker) => <ChatPermissionPicker {...picker()} />}</Show>
   );
@@ -81,9 +93,7 @@ export function renderChatComposerView(
       props.realtimeTalkVideoStream?.getVideoTracks?.()[0]?.getSettings?.().facingMode !==
       "environment",
   );
-  const slashMenuAnnouncementId = createMemo(() =>
-    paneDomId(props.paneId, "slash-active-announcement"),
-  );
+  const slashMenuAnnouncementId = () => paneDomId(props.paneId, "slash-active-announcement");
   // Owner refreshes replace the banner and callback values, not the focused action's DOM.
   const disabledBanner = (
     <Show when={props.disabledBanner?.presentation !== "hidden" ? props.disabledBanner : undefined}>
@@ -157,7 +167,7 @@ export function renderChatComposerView(
   const showComposerInput = createMemo(
     () => context().showComposer && props.disabledBanner?.kind !== "composer-replacement",
   );
-  const disabledReasonId = createMemo(() => paneDomId(props.paneId, "disabled-reason"));
+  const disabledReasonId = () => paneDomId(props.paneId, "disabled-reason");
   const composerAlerts = createMemo(() =>
     showComposerInput() ? (
       <>
@@ -179,11 +189,11 @@ export function renderChatComposerView(
       </>
     ) : undefined,
   );
-  const composerError = createMemo(() => context().mentionError || context().interaction.error());
-  const predictionAnnouncement = createMemo(() => {
+  const composerError = () => context().mentionError || context().interaction.error();
+  const predictionAnnouncement = () => {
     const text = context().predictionText;
     return text ? t("chat.composer.predictionAvailable", { text }) : "";
-  });
+  };
   const primaryComposerStatus = createMemo(() =>
     props.disabledReason
       ? {
@@ -225,7 +235,10 @@ export function renderChatComposerView(
   });
   const fallbackStatus = createMemo(() => renderFallbackIndicatorSolid(props.fallbackStatus));
   return (
-    <div class="agent-chat__composer-shell">
+    <div
+      class="agent-chat__composer-shell"
+      ref={[footerControl, elementRef(props.onComposerShellRef)]}
+    >
       <div class="chat-footer__context">
         {props.footerContent}
         <div class="agent-chat__composer-notices">
@@ -309,11 +322,16 @@ export function renderChatComposerView(
               context().state.mentionMenu.close();
               context().state.emojiMenu.dismiss(context().state.composerTextarea);
             }}
-            onClick={(event: MouseEvent) => focusComposerFromChrome(event, context().canCompose)}
-            onPointerDown={(event: PointerEvent) =>
-              focusComposerFromChrome(event, context().canCompose)
+            onClick={(event: MouseEvent) =>
+              focusComposerFromChrome(event, context().canCompose, state.composerTextarea)
             }
-            ref={context().state.composerInputRef ?? undefined}
+            onPointerDown={(event: PointerEvent) =>
+              focusComposerFromChrome(event, context().canCompose, state.composerTextarea)
+            }
+            ref={[
+              context().state.composerInputRef ?? undefined,
+              createBackgroundLayoutRef("composer"),
+            ]}
           >
             {context().menus.slashMenuVisible ? (
               <SlashMenu
@@ -398,6 +416,7 @@ export function renderChatComposerView(
               <ComposerDictationStatus readDictation={() => context().dictation} />
               <ChatAttachmentInputs
                 {...props}
+                inputHandle={inputHandle}
                 disabled={!context().canCompose}
                 cameraActive={context().showComposer && props.cameraActive !== false}
               />
@@ -444,7 +463,6 @@ export function renderChatComposerView(
                 <Show when={context().draftKey} keyed>
                   {(scopeKey) => (
                     <ComposerTextarea
-                      context={context}
                       scopeKey={scopeKey}
                       announcementId={slashMenuAnnouncementId()}
                       disabledReasonId={disabledReasonId()}
@@ -506,6 +524,7 @@ export function renderChatComposerView(
                 <ChatComposerPlusMenu
                   menu={{
                     attachments: props,
+                    inputHandle,
                     capabilityMenu: props.capabilityMenu,
                     disabled: !context().canCompose || props.suggestionComposer === true,
                     open: capabilityOpen(),
@@ -525,12 +544,12 @@ export function renderChatComposerView(
               <div class="agent-chat__composer-trail">
                 <div class="agent-chat__composer-meta agent-chat__composer-context">
                   <ContextNotice
-                    session={activeSession()}
+                    session={props.selectedSession}
                     messages={props.messages}
                     providerUsage={props.providerUsage}
                   />
                 </div>
-                <Show when={composerControls()}>
+                <Show when={props.composerControls}>
                   {(controls) => {
                     const Controls = dynamic(() => controls().component);
                     return (
@@ -559,16 +578,19 @@ export function renderChatComposerView(
   );
 }
 
-function ComposerTextarea(view: {
-  context: () => ChatComposerViewContext;
+type ComposerTextareaProps = {
   scopeKey: string;
   announcementId: string;
   disabledReasonId: string;
   placeholder: string;
-}) {
-  const context = untrack(() => view.context);
-  const composer = untrack(() => context().props);
-  const ownerState = untrack(() => context().state);
+};
+
+function renderComposerTextarea(
+  context: () => ChatComposerViewContext,
+  composer: ChatComposerProps,
+  ownerState: ChatComposerState,
+  view: ComposerTextareaProps,
+) {
   let element: HTMLTextAreaElement | undefined;
   const value = createMemo(() => {
     const state = context().state;
@@ -583,11 +605,10 @@ function ComposerTextarea(view: {
         ).value
       : draft;
   });
-  createRenderEffect(value, (next) => {
-    // Native edits own their value and undo history until the draft scope changes.
-    if (element && !ownerState.composerComposing && element.value !== next) {
-      element.value = next;
-    }
+  const valueRef = liveValue(() => {
+    const next = value();
+    // The native IME preview owns the field until composition commits.
+    return ownerState.composerComposing && element ? element.value : next;
   });
   onCleanup(() => {
     if (ownerState.composerTextarea === element) {
@@ -599,11 +620,8 @@ function ComposerTextarea(view: {
     <textarea
       ref={(node) => {
         element = node;
+        valueRef(node);
         ownerState.textareaRef?.(node);
-        const next = untrack(value);
-        if (node.value !== next) {
-          node.value = next;
-        }
       }}
 
       dir={detectTextDirection(value())}
@@ -617,9 +635,21 @@ function ComposerTextarea(view: {
         composer.disabledReason ? ` ${view.disabledReasonId}` : ""
       }`}
       aria-keyshortcuts={context().sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"}
-      onKeyDown={(event) => context().handleKeyDown(event)}
-      onBeforeInput={(event) => context().handleBeforeInput(event)}
-      onInput={(event) => context().handleInput(event)}
+      onKeyDown={(event) => {
+        handleTextareaOverflowInteraction(event);
+        context().handleKeyDown(event);
+      }}
+      onBeforeInput={(event) => {
+        handleTextareaOverflowInteraction(event);
+        context().handleBeforeInput(event);
+      }}
+      onInput={(event) => {
+        handleTextareaOverflowInteraction(event);
+        context().handleInput(event);
+      }}
+      onWheel={handleTextareaOverflowInteraction}
+      onPointerDown={handleTextareaOverflowInteraction}
+      onScroll={handleTextareaOverflowScroll}
       onSelect={(event) => context().handleSelect(event)}
       onFocus={(event) => context().handleSelect(event)}
       onPointerUp={(event) => context().handleSelect(event)}
@@ -630,7 +660,8 @@ function ComposerTextarea(view: {
           context().handleSelect(event);
         }
       }}
-      onCompositionStart={(event: CompositionEvent) => {
+      onCompositionStart={(event) => {
+        handleTextareaOverflowInteraction(event);
         if (
           event.target !== context().state.composerTextarea ||
           context().draftKey !== view.scopeKey
@@ -649,7 +680,10 @@ function ComposerTextarea(view: {
         });
       }}
       onCompositionEnd={(event) => context().handleCompositionEnd(event)}
-      onBlur={(event) => context().handleBlur(event)}
+      onBlur={(event) => {
+        handleTextareaOverflowInteraction(event);
+        context().handleBlur(event);
+      }}
       onPaste={(event: ClipboardEvent) => {
         if (context().canCompose && !composer.suggestionComposer) {
           handleChatAttachmentPaste(event, composer);

@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import {
@@ -7,7 +8,10 @@ import {
   resolveCurrentConversationSessionAsync,
 } from "./conversation-registry.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
-import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
+import {
+  isSessionIdSelectionPublished,
+  retainPreparedSessionEntryPredicate,
+} from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type {
@@ -18,12 +22,16 @@ import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
 } from "./session-entry-read-request.js";
-import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
+import {
+  withSessionEntriesFromStoreInWorker,
+  withSessionEntryReadOnlyInWorker,
+} from "./session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
 import type {
   PreparedSessionSourceAssertion,
   AsyncSessionSourceCheck,
 } from "./session-source-authority.js";
+import { composeSessionSourceAssertion } from "./session-source-authority.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import {
@@ -48,7 +56,6 @@ type ConversationCondition = {
 
 type SessionEntryCurrentCheckParams = {
   agentId: string;
-  sessionKey: string;
   storePath?: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -64,9 +71,15 @@ type SessionEntryCurrentCheckParams = {
     isActive?: () => boolean;
   }[];
   errorMessage?: string;
-};
+} & (
+  | { sessionKey: string; sessionId?: string }
+  /** When supplied, the ID selects the row even if a session key is also present. */
+  | { sessionKey?: string; sessionId: string }
+);
 
-async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentCheckParams) {
+async function prepareSessionEntryCurrentCheck(
+  inputParams: SessionEntryCurrentCheckParams & { sessionKey: string },
+) {
   const params = { ...inputParams };
   const incognito = captureMemoryExactSessionReader(params, () => {
     if (params.isActive?.() === false) {
@@ -468,11 +481,164 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
   });
 }
 
+/** ID selection retains published durable facts or a native memory owner, including absence. */
+async function prepareSessionIdCurrentCheck(
+  params: SessionEntryCurrentCheckParams & {
+    sessionId: string;
+  },
+) {
+  const memory = captureMemoryExactSessionReader(params);
+  const storePath =
+    memory?.path ?? params.storePath ?? resolveSessionStorePathForScope(params, params.config);
+  const candidates = memory ? [] : captureSessionStoreReadCandidates(storePath);
+  let selectedIdentity: ReturnType<typeof readDatabasePathIdentitySync> | undefined;
+  let selectionCurrent = true;
+  let active = true;
+  let unsubscribe: (() => void) | undefined;
+  let keyed: Awaited<ReturnType<typeof prepareSessionEntryCurrentCheck>> | undefined;
+  const release = () => {
+    active = false;
+    unsubscribe?.();
+    keyed?.release();
+  };
+  try {
+    const selected = memory
+      ? memory.readById(params.sessionId)
+      : await withSessionEntriesFromStoreInWorker(
+          {
+            agentId: params.agentId,
+            storePath,
+            env: params.env,
+            selection: { kind: "session-id", sessionId: params.sessionId },
+            projection: "full",
+          },
+          async ({ result, assertCurrent }) => {
+            assertCurrent();
+            return result.entries[0];
+          },
+          false,
+          (_database, identity) => {
+            selectedIdentity = identity;
+            // Join identity publication before the ID read can yield, including absence.
+            unsubscribe?.();
+            unsubscribe = onSessionIdentityMutation((change) => {
+              if (
+                identity.key.startsWith("file:") &&
+                change.databaseIdentity === identity.key.slice("file:".length) &&
+                [
+                  change.previous.sessionId,
+                  change.kind === "delete" ? undefined : change.current.sessionId,
+                ].some((id) => id?.trim() === params.sessionId.trim())
+              ) {
+                selectionCurrent = false;
+              }
+            });
+          },
+        );
+    if (selected) {
+      keyed = await prepareSessionEntryCurrentCheck({
+        ...params,
+        storePath: memory?.path ?? selectedIdentity?.canonicalPath ?? storePath,
+        sessionKey: selected.sessionKey,
+      });
+    }
+    const fields = [
+      ...(params.matchGeneration === false ? [] : (["sessionId", "lifecycleRevision"] as const)),
+      ...(params.fields ?? []),
+    ];
+    const refuse = (): never => {
+      throw new Error(
+        params.errorMessage ?? "The selected session changed before its operation committed.",
+      );
+    };
+    if (
+      (params.expected && !selected) ||
+      fields.some((field) => !isDeepStrictEqual(selected?.entry[field], keyed?.entry?.[field]))
+    ) {
+      refuse();
+    }
+    const isSelectionCurrent = () => {
+      if (!active || !selectionCurrent || params.isActive?.() === false) {
+        return false;
+      }
+      if (memory) {
+        memory.assertCurrent();
+        return memory.readById(params.sessionId)?.sessionKey === selected?.sessionKey;
+      }
+      try {
+        return (
+          selectedIdentity !== undefined &&
+          isSessionIdSelectionPublished({
+            databaseIdentity: selectedIdentity.key,
+            sessionId: params.sessionId,
+            sessionKey: selected?.sessionKey,
+          }) &&
+          candidates.every(isSessionStoreReadCandidateCurrent) &&
+          isDeepStrictEqual(
+            readDatabasePathIdentitySync(selectedIdentity.canonicalPath),
+            selectedIdentity,
+          )
+        );
+      } catch {
+        return false;
+      }
+    };
+    const assertSelectionCurrent = () => {
+      if (!isSelectionCurrent()) {
+        refuse();
+      }
+    };
+    const selectionSource = Object.assign(assertSelectionCurrent, {
+      nativeSource: Boolean(memory),
+      async prepareSessionSource() {
+        assertSelectionCurrent();
+        return { nativeSource: Boolean(memory), checks: [], assertCurrent: assertSelectionCurrent };
+      },
+    });
+    const source = Object.assign(composeSessionSourceAssertion([selectionSource, keyed?.source]), {
+      assertScopeCurrent: () => {
+        assertSelectionCurrent();
+        keyed?.source.assertScopeCurrent();
+      },
+    });
+    source();
+    const entryCurrent = keyed?.entryCurrent;
+    const isCurrentAsync: AsyncSessionSourceCheck = Object.assign(
+      async () => (!keyed || (await keyed.isCurrentAsync())) && isSelectionCurrent(),
+      { sessionSource: source },
+    );
+    return {
+      entry: selected?.entry,
+      isCurrentAsync,
+      assertCurrentAsync: async () => {
+        if (!(await isCurrentAsync())) {
+          refuse();
+        }
+      },
+      source,
+      entryCurrent: entryCurrent && {
+        source: { ...entryCurrent.source, sessionIdLookup: params.sessionId },
+        assertCurrent(current: SessionEntryCurrentFacts | undefined) {
+          assertSelectionCurrent();
+          entryCurrent.assertCurrent(current);
+        },
+      },
+      release,
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
 /** Current rows are read in the existing worker; mutations carry the prepared source. */
 export async function captureSessionEntryCurrentCheckAsyncInternal(
   params: SessionEntryCurrentCheckParams,
 ) {
-  const prepared = await prepareSessionEntryCurrentCheck(params);
+  const prepared =
+    params.sessionId !== undefined
+      ? await prepareSessionIdCurrentCheck({ ...params, sessionId: params.sessionId })
+      : await prepareSessionEntryCurrentCheck({ ...params, sessionKey: params.sessionKey! });
   return {
     entry: prepared.entry,
     isCurrent: prepared.isCurrentAsync,

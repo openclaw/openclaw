@@ -1,3 +1,4 @@
+import "./service-http-mock.test-support.js";
 import "./session-authority.test-support.js";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -40,7 +41,7 @@ describe("ClickClack discussion state persistence", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     const f = generationFixture();
-    const service = new ClickClackDiscussionService(f.runtime, { clientFactory: () => f.client });
+    const service = new ClickClackDiscussionService(f.runtime);
     f.createChannel.mockImplementationOnce(async (_workspaceId, input) => {
       const response = discussionChannel(input);
       Reflect.deleteProperty(response, "display_title");
@@ -76,9 +77,7 @@ describe("ClickClack discussion state persistence", () => {
     harness.runtime.state.openKeyedStoreV2 = () => {
       throw failure;
     };
-    const service = new ClickClackDiscussionService(harness.runtime, {
-      clientFactory: () => harness.client,
-    });
+    const service = new ClickClackDiscussionService(harness.runtime);
 
     await expect(service.open("agent:main:unpersisted-installation")).rejects.toBe(failure);
     expect(harness.createChannel).not.toHaveBeenCalled();
@@ -95,7 +94,7 @@ describe("ClickClack discussion state persistence", () => {
       registerIfAbsent: async () => true,
       lookup: async () => undefined,
     });
-    const service = new ClickClackDiscussionService(f.runtime, { clientFactory: () => f.client });
+    const service = new ClickClackDiscussionService(f.runtime);
 
     await expect(service.open("agent:main:missing-installation")).rejects.toThrow(
       "installation identity is unavailable",

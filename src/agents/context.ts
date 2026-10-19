@@ -74,7 +74,7 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
   if (!cfg) {
     return Promise.resolve();
   }
-  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = Promise.resolve()
+  const loadPromise = Promise.resolve()
     .then(async () => {
       let stagedTokenCache = new Map<string, number>();
       try {
@@ -90,13 +90,16 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
         // Static and discovered rows belong to one atomic generation. If its owner fails, keep
         // config overrides only instead of mixing in independently rediscovered static metadata.
       }
-      // A racing refresh may publish older passive metadata until the next refresh.
-      replaceDiscoveredContextTokenCache(stagedTokenCache);
+      // A refresh supersedes earlier discovery, including its best-effort failure result.
+      if (CONTEXT_WINDOW_RUNTIME_STATE.loadPromise === loadPromise) {
+        replaceDiscoveredContextTokenCache(stagedTokenCache);
+      }
     })
     .catch(() => {
       // Keep lookup best-effort.
     });
-  return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
+  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = loadPromise;
+  return loadPromise;
 }
 
 /**

@@ -65,9 +65,9 @@ Most skills configuration lives under `skills` in
 </ParamField>
 
 <ParamField path="skills.load.watch" type="boolean" default="true">
-  Enable passive automatic skill discovery. One background worker checks local
-  skill roots about once per minute, including nested files under grouped roots.
-  Set to `false` to disable passive rescans. Explicit OpenClaw skill changes,
+  Enable automatic skill discovery from filesystem events, including nested files
+  under grouped roots. A safety rescan every 30 minutes catches missed events.
+  Set to `false` to disable automatic observation. Explicit OpenClaw skill changes,
   relevant configuration changes, and Gateway startup still request an immediate
   rescan. Existing sessions use changed snapshots on their next agent turn.
 </ParamField>

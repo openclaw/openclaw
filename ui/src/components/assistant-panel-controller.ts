@@ -10,13 +10,13 @@ import {
 } from "../app/lazy-custom-element.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import {
   prepareSessionNavigationHandoff,
   runSessionNavigationIntent,
 } from "../lib/sessions/navigation-handoff.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
-  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   normalizeAgentId,
   resolveUiConfiguredMainKey,
@@ -25,15 +25,20 @@ import {
 } from "../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import {
+  CHAT_ROUTE_READY_EVENT,
+  CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
+} from "../pages/chat/chat-history-events.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
 import {
   consumePluginHelpAutoOpen,
   dismissPluginHelpAutoOpen,
+  subscribePluginHelp,
 } from "../pages/custodian/plugin-help-state.ts";
 import { createDockLayout } from "./dock-layout.ts";
 import { assistantPanelLayout } from "./dock-panel-layout.ts";
-import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "../styles/rail-header.css";
 import "../styles/assistant-panel.css";
 
@@ -59,20 +64,32 @@ export type AssistantPanelProps = {
   homeAvailable: boolean;
   custodianSuppressed: boolean;
   pageSessionKey: string;
+  getPrimaryChatPane?: (sessionKey: string) => ChatPaneElement | undefined;
   pageAgentId: string;
   pageRouteId: RouteId;
   pageRouteFailed: boolean;
   minimizeRequestId: number;
   store?: CustodianSessionStore;
 };
-export function createAssistantPanel(element: SolidBridgeElement<AssistantPanelProps>) {
+export function createAssistantPanel(
+  element: SolidBridgeElement<AssistantPanelProps>,
+  scheduleAfterRender: (callback: () => void | (() => void)) => void,
+) {
   const props = element;
   let application: ApplicationContext | undefined;
+  let mounted = false;
+  let initialized = false;
+  let pendingRefresh: (() => void) | undefined;
+  let stops: (() => void)[] = [];
+  let sourceStops: ((() => void) | undefined)[] = [];
+  let sources:
+    | { context: ApplicationContext | undefined; store: CustodianSessionStore | undefined }
+    | undefined;
   // Navigation and plugin actions read their own writes before Solid commits.
   let homeStarted = false;
   let destination: AssistantDestination = "custodian";
   let builtInDestination: "home" | "custodian" = "custodian";
-  let pendingPrimaryPane: ChatPaneElement | null = null;
+  let pendingPrimaryPane: { pane: ChatPaneElement } | null = null;
   let publishedSessionKey: string | null = null;
   let handledMinimizeRequestId = 0;
   let targetScope = "";
@@ -116,6 +133,9 @@ export function createAssistantPanel(element: SolidBridgeElement<AssistantPanelP
         builtInDestination = destination;
       }
       const context = getContext();
+      if (sources?.context !== context) {
+        pendingPrimaryPane = null;
+      }
       if (context?.gateway.snapshot.phase === "connected") {
         // Roster/hello disappear during reconnect; keep the captured Home identity with its outbox.
         homeDefaults = {
@@ -160,6 +180,9 @@ export function createAssistantPanel(element: SolidBridgeElement<AssistantPanelP
           (props.custodianAvailable && props.minimizeRequestId > handledMinimizeRequestId),
       );
       dockLayout.syncReservation();
+      if (mounted) {
+        subscribeSources();
+      }
       publishSessionKey();
     } finally {
       refreshing = false;
@@ -167,18 +190,77 @@ export function createAssistantPanel(element: SolidBridgeElement<AssistantPanelP
     notify();
   }
 
-  function primaryChatPane(): ChatPaneElement | undefined {
-    const root = element.closest("openclaw-app-shell") ?? element.parentElement;
-    return [
-      ...(root?.querySelectorAll<ChatPaneElement>(
-        "openclaw-chat-pane.chat-pane-cache__pane--active",
-      ) ?? []),
-    ].find(
-      (pane) =>
-        pane.presented !== false &&
-        pane.sessionKey &&
-        areUiSessionKeysEquivalent(pane.sessionKey, props.pageSessionKey),
-    );
+  function subscribeSources(): void {
+    const context = getContext();
+    const store = props.store;
+    if (sources && sources.context === context && sources.store === store) {
+      return;
+    }
+    sourceStops.forEach((stop) => stop?.());
+    sources = { context, store };
+    sourceStops = [
+      context?.assistantDock?.attach(owner),
+      context ? subscribePluginHelp(context, refresh) : undefined,
+      ...[store, context?.agentSelection, context?.agents, context?.theme, context?.gateway].map(
+        (source) => source?.subscribe(refresh),
+      ),
+    ];
+  }
+
+  function inputsChanged(): void {
+    if (!mounted || pendingRefresh) {
+      return;
+    }
+    const pending = () => {
+      if (pendingRefresh !== pending) {
+        return;
+      }
+      pendingRefresh = undefined;
+      refresh();
+    };
+    pendingRefresh = pending;
+    scheduleAfterRender(pending);
+  }
+
+  function attach(nextApplication?: ApplicationContext): void {
+    application = nextApplication;
+    scheduleAfterRender(() => {
+      // Restore geometry before route suppression; remounts retain explicit dock intent.
+      const open = dockLayout.open;
+      dockLayout.connect();
+      if (initialized) {
+        dockLayout.setOpen(open, false);
+      }
+      initialized = mounted = true;
+      stops = [
+        contentLoader.subscribe(notify),
+        listen(document, CHAT_ROUTE_READY_EVENT, refresh),
+        listen(document, CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, refresh),
+        listen(window, CUSTODIAN_PANEL_TOGGLE_EVENT, handleToggleRequest),
+        listen(window, HOME_PANEL_TOGGLE_EVENT, handleToggleRequest),
+      ];
+      refresh();
+      return detach;
+    });
+  }
+
+  function detach(): void {
+    mounted = false;
+    pendingRefresh = undefined;
+    pendingPrimaryPane = null;
+    sourceStops.forEach((stop) => stop?.());
+    sourceStops = [];
+    sources = undefined;
+    stops.forEach((stop) => stop());
+    stops = [];
+    dockLayout.dispose();
+    // A context-only remount retains activation-owned targets and input custody.
+    if (!element.isConnected) {
+      if (typeof destination !== "string") {
+        closeSession();
+      }
+      claimInput("page");
+    }
   }
 
   function startHomeAfterPrimaryChat(): void {
@@ -189,25 +271,26 @@ export function createAssistantPanel(element: SolidBridgeElement<AssistantPanelP
       homeStarted = true;
       return;
     }
-    const pane = primaryChatPane();
-    if (!pane?.transcriptReady || pendingPrimaryPane === pane) {
+    const pane = props.getPrimaryChatPane?.(props.pageSessionKey);
+    if (!pane?.transcriptReady || pendingPrimaryPane?.pane === pane) {
       return;
     }
-    pendingPrimaryPane = pane;
+    const pending = { pane };
+    pendingPrimaryPane = pending;
     const currentContext = getContext();
     // The loading edge precedes the pane's render invalidation. Wait for that
     // commit before a restored Home starts its competing transcript request.
     void Promise.resolve()
       .then(() => pane.updateComplete)
       .then(() => {
-        if (pendingPrimaryPane !== pane) {
+        if (pendingPrimaryPane !== pending) {
           return;
         }
         pendingPrimaryPane = null;
         if (
           element.isConnected &&
           getContext() === currentContext &&
-          primaryChatPane() === pane &&
+          props.getPrimaryChatPane?.(props.pageSessionKey) === pane &&
           pane.transcriptReady
         ) {
           homeStarted = true;
@@ -458,7 +541,7 @@ export function createAssistantPanel(element: SolidBridgeElement<AssistantPanelP
     }
   }
 
-  return {
+  const owner = {
     props,
     context: getContext,
     destination: () => destination,
@@ -483,23 +566,17 @@ export function createAssistantPanel(element: SolidBridgeElement<AssistantPanelP
     acceptStore,
     refresh,
     notify,
-    attach(nextApplication?: ApplicationContext) {
-      application = nextApplication;
-    },
+    attach,
+    detach,
+    inputsChanged,
     subscribe(listener: () => void) {
       listeners.add(listener);
       return () => {
         listeners.delete(listener);
       };
     },
-    detach() {
-      pendingPrimaryPane = null;
-      if (typeof destination !== "string") {
-        closeSession();
-      }
-      claimInput("page");
-    },
   };
+  return owner;
 }
 
 export type AssistantPanelOwner = ReturnType<typeof createAssistantPanel>;

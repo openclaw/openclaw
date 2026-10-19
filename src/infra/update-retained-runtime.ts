@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
-import { hasErrnoCode } from "./errno.js";
+import { hasErrnoCode, ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { withUserPathBaseDirectory } from "./home-dir.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
@@ -19,7 +19,6 @@ import {
   reportRetainedUpdateRuntime,
   resolveRetainedUpdateRuntimeParents,
 } from "./temp-artifact-cleanup.js";
-import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,
@@ -217,11 +216,14 @@ async function runWithRetainedUpdateRuntime<T>(
             onProgress: ({ phase }) => log.info(phase),
           });
           assertCurrent();
-          const { plan, inventoryMs, materializationMs, ...counts } =
-            parseUpdateStateInspectionWorker(retainedFiles, RetainedRuntimeFilesSchema);
+          const {
+            relocations: retainedRelocations,
+            files,
+            ...metrics
+          } = parseUpdateStateInspectionWorker(retainedFiles, RetainedRuntimeFilesSchema);
           const relocations = prepareRuntimeRelocations(
             [
-              ...plan.relocations,
+              ...retainedRelocations,
               ...(root === sourceRoot
                 ? []
                 : [{ sourceRoot: root, destinationRoot: candidateRoot }]),
@@ -232,18 +234,9 @@ async function runWithRetainedUpdateRuntime<T>(
           bind(resolve);
           // Workers and the parent must use the same generation after activation
           // replaces dist; preserving URLs also preserves already-loaded singletons.
-          retainUpdateRuntimeImports(
-            relocations.rules,
-            plan.entries.filter((entry) => entry.kind === "file").map((entry) => entry.path),
-          );
+          retainUpdateRuntimeImports(relocations.rules, files);
           prepared = true;
-          return {
-            inventoryMs,
-            materializationMs,
-            entries: plan.entries.length,
-            estimatedBytes: plan.bytes,
-            ...counts,
-          };
+          return metrics;
         })();
         return preparation;
       }),

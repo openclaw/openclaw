@@ -462,6 +462,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                 </div>
               )}
               <QuestionFreeText
+                getTranscriptElement={props.panel.getTranscriptElement}
                 question={item()}
                 value={draft()?.freeText ?? ""}
                 selected={Boolean(

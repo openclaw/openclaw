@@ -1,4 +1,3 @@
-// Operator commands for inspecting and resubmitting failed channel ingress events.
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
@@ -26,7 +25,6 @@ function resolveScope(options: ChannelsDeadLettersOptions) {
   return { channelId, accountId };
 }
 
-/** List retained ingress failures for one channel account. */
 export async function channelsDeadLettersListCommand(
   options: ChannelsDeadLettersOptions,
   runtime: RuntimeEnv = defaultRuntime,

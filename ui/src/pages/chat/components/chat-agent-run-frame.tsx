@@ -1,7 +1,7 @@
 import { insert, type JSX } from "@solidjs/web";
 import {
   createMemo,
-  createRenderEffect,
+  createEffect,
   createRoot,
   createSignal,
   For,
@@ -12,7 +12,6 @@ import {
   runWithOwner,
   Show,
   Switch,
-  untrack,
   type Accessor,
 } from "solid-js";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
@@ -70,6 +69,8 @@ function FrameBody(props: {
   options: AgentRunFrameOptions;
   children: (input: Accessor<PartInput>) => JSX.Element;
 }): JSX.Element {
+  // Canvas widgets move between these foreign-DOM ranges without disconnecting.
+  // Mount new ranges under the frame's owner, not the transient reconciliation effect.
   const owner = getOwner();
   const anchor = document.createComment("frame-body");
   const [readParent, setParent] = createSignal<HTMLElement | null>(null, { ownedWrite: true });
@@ -97,9 +98,14 @@ function FrameBody(props: {
     }
     setParent(committedParent);
   });
-  createRenderEffect(
-    () => ({ parent: readParent(), parts: props.parts, options: props.options }),
-    ({ parent, parts, options }) => {
+  createEffect(
+    () => ({
+      parent: readParent(),
+      parts: props.parts,
+      options: props.options,
+      render: props.children,
+    }),
+    ({ parent, parts, options, render }) => {
       if (!parent) {
         return;
       }
@@ -126,11 +132,7 @@ function FrameBody(props: {
           createRoot((dispose): PartRange => {
             // The headline's connection scope must change with its activity.
             const [readInput, write] = createSignal({ part: value, options }, { ownedWrite: true });
-            insert(
-              parent,
-              untrack(() => props.children(readInput)),
-              end,
-            );
+            insert(parent, render(readInput), end);
             return { start, end, write, dispose };
           }),
         );

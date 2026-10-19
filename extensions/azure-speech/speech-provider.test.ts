@@ -26,6 +26,8 @@ vi.mock("./tts.js", async (importOriginal) => {
 
 import { buildAzureSpeechProvider } from "./speech-provider.js";
 
+type Config = Record<string, unknown>;
+
 describe("buildAzureSpeechProvider", () => {
   const provider = buildAzureSpeechProvider();
   const synthesisRequest = {
@@ -34,6 +36,23 @@ describe("buildAzureSpeechProvider", () => {
     providerConfig: { apiKey: "key", region: "eastus", voice: "en-US-JennyNeural" },
     timeoutMs: 30_000,
   };
+  const context = { cfg: {}, timeoutMs: 30_000 };
+  const resolveConfig = (providers: Config) =>
+    provider.resolveConfig!({ ...context, rawConfig: { providers } });
+  const resolveTalk = (base: Config, talkProviderConfig: Config) =>
+    provider.resolveTalkConfig!({
+      ...context,
+      baseTtsConfig: { providers: { "azure-speech": base } },
+      talkProviderConfig,
+    });
+  const isConfigured = (providerConfig: Config) =>
+    provider.isConfiguredAsync!({ ...context, providerConfig });
+  const customUrl = "https://speech.example.com/custom";
+  const talkUrl = "https://talk.example.com/speech";
+  const customBase = { baseUrl: customUrl };
+  const talkEndpoint = { endpoint: `${talkUrl}/cognitiveservices/v1/` };
+  const westusUrl = "https://westus.tts.speech.microsoft.com";
+  const voiceOverrides = { voice: "en-US-AriaNeural", lang: "en-US" };
   const expectedTtsRequest = {
     text: "hello",
     apiKey: "key",
@@ -44,6 +63,10 @@ describe("buildAzureSpeechProvider", () => {
     timeoutMs: 30_000,
     maxBytes: 16 * 1024 * 1024,
   };
+  function expectAudio(result: unknown, lang: string, outputFormat: string, metadata: Config) {
+    expect(azureSpeechTTSMock).toHaveBeenCalledWith({ ...expectedTtsRequest, lang, outputFormat });
+    expect(result).toEqual({ audioBuffer: Buffer.from("audio-bytes"), outputFormat, ...metadata });
+  }
   const envKeys = [
     "AZURE_SPEECH_KEY",
     "AZURE_SPEECH_API_KEY",
@@ -74,86 +97,58 @@ describe("buildAzureSpeechProvider", () => {
   });
 
   it("reports configured only when key plus region or endpoint is available", async () => {
-    expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 30_000 })).toBe(
-      false,
-    );
-    expect(
-      await provider.isConfiguredAsync?.({ providerConfig: { apiKey: "key" }, timeoutMs: 30_000 }),
-    ).toBe(false);
-    expect(
-      await provider.isConfiguredAsync?.({
-        providerConfig: { apiKey: "key", region: "eastus" },
-        timeoutMs: 30_000,
-      }),
-    ).toBe(true);
-
+    expect(await isConfigured({})).toBe(false);
+    expect(await isConfigured({ apiKey: "key" })).toBe(false);
+    expect(await isConfigured({ apiKey: "key", region: "eastus" })).toBe(true);
     vi.stubEnv("AZURE_SPEECH_KEY", "env-key");
     vi.stubEnv("AZURE_SPEECH_REGION", "eastus");
-    expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 30_000 })).toBe(
-      true,
-    );
+    expect(await isConfigured({})).toBe(true);
   });
 
   it("normalizes provider-owned config under canonical and alias keys", () => {
-    const canonical = provider.resolveConfig?.({
-      cfg: {},
-      timeoutMs: 30_000,
-      rawConfig: {
-        providers: {
-          "azure-speech": {
-            apiKey: "key",
-            region: "eastus",
-            voice: "en-US-AriaNeural",
-            lang: "en-US",
-          },
-        },
+    const canonical = resolveConfig({
+      "azure-speech": {
+        apiKey: "key",
+        region: "eastus",
+        ...voiceOverrides,
       },
     });
-    const alias = provider.resolveConfig?.({
-      cfg: {},
-      timeoutMs: 30_000,
-      rawConfig: {
-        providers: {
-          azure: {
-            apiKey: "alias-key",
-            endpoint: "https://westus.tts.speech.microsoft.com/cognitiveservices/v1/",
-          },
-        },
+    const alias = resolveConfig({
+      azure: {
+        apiKey: "alias-key",
+        endpoint: "https://westus.tts.speech.microsoft.com/cognitiveservices/v1/",
       },
     });
-
+    const defaults = {
+      lang: "en-US",
+      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+      voiceNoteOutputFormat: "ogg-24khz-16bit-mono-opus",
+      timeoutMs: undefined,
+    };
     expect(canonical).toEqual({
+      ...defaults,
       apiKey: "key",
       region: "eastus",
       endpoint: undefined,
       baseUrl: "https://eastus.tts.speech.microsoft.com",
       voice: "en-US-AriaNeural",
-      lang: "en-US",
-      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-      voiceNoteOutputFormat: "ogg-24khz-16bit-mono-opus",
-      timeoutMs: undefined,
     });
     expect(alias).toEqual({
+      ...defaults,
       apiKey: "alias-key",
       region: undefined,
       endpoint: "https://westus.tts.speech.microsoft.com/cognitiveservices/v1/",
       baseUrl: "https://westus.tts.speech.microsoft.com",
       voice: "en-US-JennyNeural",
-      lang: "en-US",
-      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-      voiceNoteOutputFormat: "ogg-24khz-16bit-mono-opus",
-      timeoutMs: undefined,
     });
   });
 
   it("preserves inherited Talk settings when overrides are blank", () => {
     const params = { voiceId: " ", languageCode: " fr-FR ", outputFormat: " " };
-    const talk = provider.resolveTalkConfig?.({
-      cfg: {},
-      baseTtsConfig: { providers: { "azure-speech": { apiKey: "base-key", voice: "base-voice" } } },
-      talkProviderConfig: { ...params, apiKey: " " },
-      timeoutMs: 1000,
-    });
+    const talk = resolveTalk(
+      { apiKey: "base-key", voice: "base-voice" },
+      { ...params, apiKey: " " },
+    );
     expect(talk).toMatchObject({ apiKey: "base-key", voice: "base-voice", lang: "fr-FR" });
     expect(provider.resolveTalkOverrides?.({ talkProviderConfig: {}, params })).toStrictEqual({
       lang: "fr-FR",
@@ -161,68 +156,17 @@ describe("buildAzureSpeechProvider", () => {
   });
 
   it.each([
-    {
-      name: "endpoint without region",
-      base: { region: undefined, endpoint: "https://speech.example.com/custom" },
-      talk: {},
-      expected: "https://speech.example.com/custom",
-    },
-    {
-      name: "inherited region",
-      base: {},
-      talk: {},
-      expected: "https://eastus.tts.speech.microsoft.com",
-    },
-    {
-      name: "inherited endpoint",
-      base: { endpoint: "https://speech.example.com/custom/cognitiveservices/v1" },
-      talk: {},
-      expected: "https://speech.example.com/custom",
-    },
-    {
-      name: "inherited base URL",
-      base: { baseUrl: "https://speech.example.com/custom/" },
-      talk: {},
-      expected: "https://speech.example.com/custom",
-    },
-    {
-      name: "voice-only override",
-      base: { baseUrl: "https://speech.example.com/custom" },
-      talk: { voiceId: "en-US-AriaNeural" },
-      expected: "https://speech.example.com/custom",
-    },
-    {
-      name: "explicit Talk endpoint",
-      base: { baseUrl: "https://speech.example.com/custom" },
-      talk: { endpoint: "https://talk.example.com/speech/cognitiveservices/v1/" },
-      expected: "https://talk.example.com/speech",
-    },
-    {
-      name: "explicit Talk base URL",
-      base: { baseUrl: "https://speech.example.com/custom" },
-      talk: { baseUrl: "https://talk.example.com/speech/" },
-      expected: "https://talk.example.com/speech",
-    },
-    {
-      name: "explicit Talk region",
-      base: { baseUrl: "https://speech.example.com/custom" },
-      talk: { region: "westus" },
-      expected: "https://westus.tts.speech.microsoft.com",
-    },
-  ])("routes synthesis with $name", async ({ base, talk, expected }) => {
-    const resolved = provider.resolveTalkConfig!({
-      cfg: {},
-      baseTtsConfig: {
-        providers: { "azure-speech": { apiKey: "key", region: "eastus", ...base } },
-      },
-      talkProviderConfig: talk,
-      timeoutMs: 30_000,
-    });
-    const providerConfig = provider.resolveConfig!({
-      cfg: {},
-      rawConfig: { providers: { "azure-speech": resolved } },
-      timeoutMs: 30_000,
-    });
+    ["endpoint without region", { region: undefined, endpoint: customUrl }, {}, customUrl],
+    ["inherited region", {}, {}, "https://eastus.tts.speech.microsoft.com"],
+    ["inherited endpoint", { endpoint: `${customUrl}/cognitiveservices/v1` }, {}, customUrl],
+    ["inherited base URL", { baseUrl: `${customUrl}/` }, {}, customUrl],
+    ["voice-only override", customBase, { voiceId: "en-US-AriaNeural" }, customUrl],
+    ["explicit Talk endpoint", customBase, talkEndpoint, talkUrl],
+    ["explicit Talk base URL", customBase, { baseUrl: `${talkUrl}/` }, talkUrl],
+    ["explicit Talk region", customBase, { region: "westus" }, westusUrl],
+  ] as const)("routes synthesis with %s", async (_name, base, talk, expected) => {
+    const resolved = resolveTalk({ apiKey: "key", region: "eastus", ...base }, talk);
+    const providerConfig = resolveConfig({ "azure-speech": resolved });
     await provider.synthesize({ ...synthesisRequest, providerConfig, target: "audio-file" });
     expect(azureSpeechTTSMock).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: expected }));
   });
@@ -239,17 +183,11 @@ describe("buildAzureSpeechProvider", () => {
       allowSeed: true,
     };
 
-    expect(provider.parseDirectiveToken?.({ key: "azure_voice", value: "v", policy })).toEqual({
-      handled: true,
-      overrides: { voice: "v" },
-    });
-    expect(provider.parseDirectiveToken?.({ key: "azure_lang", value: "en-US", policy })).toEqual({
-      handled: true,
-      overrides: { lang: "en-US" },
-    });
-    expect(
-      provider.parseDirectiveToken?.({ key: "azure_output_format", value: "ogg", policy }),
-    ).toEqual({
+    const parse = (key: string, value: string) =>
+      provider.parseDirectiveToken?.({ key, value, policy });
+    expect(parse("azure_voice", "v")).toEqual({ handled: true, overrides: { voice: "v" } });
+    expect(parse("azure_lang", "en-US")).toEqual({ handled: true, overrides: { lang: "en-US" } });
+    expect(parse("azure_output_format", "ogg")).toEqual({
       handled: true,
       overrides: { outputFormat: "ogg" },
     });
@@ -258,21 +196,11 @@ describe("buildAzureSpeechProvider", () => {
   it("uses native Ogg/Opus for voice-note output", async () => {
     const result = await provider.synthesize({
       ...synthesisRequest,
-      providerOverrides: {
-        voice: "en-US-AriaNeural",
-        lang: "en-US",
-      },
+      providerOverrides: voiceOverrides,
       target: "voice-note",
     });
 
-    expect(azureSpeechTTSMock).toHaveBeenCalledWith({
-      ...expectedTtsRequest,
-      lang: "en-US",
-      outputFormat: "ogg-24khz-16bit-mono-opus",
-    });
-    expect(result).toEqual({
-      audioBuffer: Buffer.from("audio-bytes"),
-      outputFormat: "ogg-24khz-16bit-mono-opus",
+    expectAudio(result, "en-US", "ogg-24khz-16bit-mono-opus", {
       fileExtension: ".ogg",
       voiceCompatible: true,
     });
@@ -282,22 +210,10 @@ describe("buildAzureSpeechProvider", () => {
     const result = await provider.synthesizeTelephony?.({
       ...synthesisRequest,
       providerConfig: { ...synthesisRequest.providerConfig, lang: "en-US" },
-      providerOverrides: {
-        voice: "en-US-AriaNeural",
-        lang: "es-US",
-      },
+      providerOverrides: { ...voiceOverrides, lang: "es-US" },
     });
 
-    expect(azureSpeechTTSMock).toHaveBeenCalledWith({
-      ...expectedTtsRequest,
-      lang: "es-US",
-      outputFormat: "raw-8khz-8bit-mono-mulaw",
-    });
-    expect(result).toEqual({
-      audioBuffer: Buffer.from("audio-bytes"),
-      outputFormat: "raw-8khz-8bit-mono-mulaw",
-      sampleRate: 8_000,
-    });
+    expectAudio(result, "es-US", "raw-8khz-8bit-mono-mulaw", { sampleRate: 8_000 });
   });
 
   it("lists voices through config or explicit request auth", async () => {

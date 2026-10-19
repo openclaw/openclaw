@@ -234,12 +234,13 @@ function trackSchemaChanges(
     const newSnapshot = snapshot && snapshot !== owner.snapshot && !owner.capturing;
     if (newSnapshot) {
       if (
-        !owner.transactionCatalogBound &&
         database.isTransaction &&
-        owner.transactionRead &&
+        (owner.transactionRead || owner.transactionCatalogBound) &&
         owner.processRevision !== getSqliteDatabaseSchemaRevision(database)
       ) {
-        invalidate(owner);
+        if (!owner.transactionCatalogBound) {
+          invalidate(owner);
+        }
         owner.transactionalFacts = true;
       } else {
         // The pin marker precedes its first native step. Adopt committed facts now;
@@ -625,11 +626,13 @@ export function trackSqliteSchema(
     };
     owners.set(database, owner);
     trackSchemaChanges(database, owner, native, writable);
+    // Read the generation first so a concurrent publication cannot certify an older catalog.
+    const processRevision = getSqliteDatabaseSchemaRevision(database, { existingOnly: true });
     const retained = getSqliteDatabaseAdmission(database, schemaAdmission, { existingOnly: true });
     if (retained) {
       owner.admitted = true;
       owner.facts = { ...retained, revision: owner.revision };
-      owner.processRevision = getSqliteDatabaseSchemaRevision(database);
+      owner.processRevision = processRevision;
     }
   }
 }
@@ -694,10 +697,11 @@ export function getAdmittedSqliteSchemaFacts(
     return undefined;
   }
   const snapshot = getSqlitePinnedReadSnapshot(database);
+  // A bound catalog that predates a sibling's DDL is historical once its facts are
+  // invalidated: recapturing it must neither borrow nor publish shared facts.
   const unknownSnapshot =
     (database.isTransaction &&
-      owner.transactionRead &&
-      !owner.transactionCatalogBound &&
+      (owner.transactionRead || owner.transactionCatalogBound) &&
       owner.processRevision !== getSqliteDatabaseSchemaRevision(database)) ||
     owner.unmanagedSnapshots.size > 0;
   const scopeChanged = observeSchemaLifetime(database, owner, snapshot);

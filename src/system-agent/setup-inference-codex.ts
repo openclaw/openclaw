@@ -242,7 +242,7 @@ export async function stageCodexCandidate(
     }
     // The normal auth owner checks configured/env keys without native discovery or refresh.
     try {
-      const auth = await (ctx.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore)({
+      const auth = await resolveApiKeyForProviderCore({
         cfg: config,
         store,
         provider: "openai",

@@ -8,7 +8,7 @@ import {
   MODEL_SELECTION_LOCK_REMOVAL_MESSAGE,
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
-import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { collectSessionControllerTargets } from "../../sessions/session-controller.lifecycle.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   createOpenClawAgentDatabaseClaim,
@@ -79,6 +79,10 @@ import { applySessionResetInDatabase } from "./session-reset.kernel.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Single-target lifecycle owner: reset, guarded delete, and trusted rollback.
+
+function collectControllerIdentities(storePath: string): string[] {
+  return [...(collectSessionControllerTargets(undefined, storePath).get(storePath) ?? [])];
+}
 
 async function withCommittedHistoryMaintenance<T>(
   { agentId, env, storePath }: { agentId?: string; env?: NodeJS.ProcessEnv; storePath: string },
@@ -351,20 +355,13 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               input: {
                 deleteParams,
                 archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-                admissionIdentities: [
-                  ...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? []),
-                ],
+                admissionIdentities: collectControllerIdentities(params.storePath),
                 allowLockedEntryRemoval,
                 expectedPluginOwnerId,
               },
             },
             assertSourceCurrent,
           );
-      if (preparation.operation !== "entry") {
-        throw new Error(
-          `SQLite session deletion planning returned ${preparation.operation} for entry`,
-        );
-      }
       if (preparation.value.kind === "missing") {
         await publishSessionStateArchives(resolved, []);
         return { archivedTranscripts: [], deleted: false };
@@ -414,18 +411,11 @@ async function deleteSqliteSessionEntryLifecycleLocked(
                   sessionId,
                   archiveDirectory: prepared.archiveDirectory,
                   archiveTranscript: params.archiveTranscript,
-                  admissionIdentities: [
-                    ...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? []),
-                  ],
+                  admissionIdentities: collectControllerIdentities(params.storePath),
                 },
               },
               assertDeletionCurrent,
             );
-            if (planning.operation !== "history") {
-              throw new Error(
-                `SQLite session deletion planning returned ${planning.operation} for history`,
-              );
-            }
             if (planning.value.kind === "expected-entry-mismatch") {
               return expectedEntryMismatchResult(historicalArchivedTranscripts);
             }
@@ -444,19 +434,12 @@ async function deleteSqliteSessionEntryLifecycleLocked(
                   input: {
                     validation: generationValidation,
                     sessionId,
-                    admissionIdentities: [
-                      ...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? []),
-                    ],
+                    admissionIdentities: collectControllerIdentities(params.storePath),
                   },
                 },
                 assertDeletionCurrent,
                 diagnostics,
               );
-              if (checked.operation !== "check") {
-                throw new Error(
-                  `SQLite session deletion planning returned ${checked.operation} for check`,
-                );
-              }
               if (checked.value.kind === "expected-entry-mismatch") {
                 return DELETE_EXPECTED_ENTRY_MISMATCH;
               }
@@ -475,11 +458,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
                 onInProcessCommit: recordCommit,
                 plan: reclamationPlan,
               });
-              if (reclaimed.kind !== reclamationPlan.kind) {
-                throw new Error(
-                  `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
-                );
-              }
               return reclaimed.value;
             });
             if (archivedGeneration === DELETE_EXPECTED_ENTRY_MISMATCH) {
@@ -545,11 +523,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
                     onWorkerResult,
                     plan: reclamationPlan,
                   });
-            if (reclaimed.kind !== reclamationPlan.kind) {
-              throw new Error(
-                `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
-              );
-            }
             return reclaimed.value;
           });
           if (result.deleted) {

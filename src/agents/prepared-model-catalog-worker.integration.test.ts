@@ -348,7 +348,7 @@ describe("prepared model catalog worker boundary", () => {
       const catalog = (
         request === "auth"
           ? requestAuth(fixture.snapshot, [])
-          : fixture.snapshot.loadFullModelCatalog!()
+          : fixture.snapshot.loadFullModelCatalog!({ refresh: true, wait: true })
       ).finally(() => {
         settled = true;
       });

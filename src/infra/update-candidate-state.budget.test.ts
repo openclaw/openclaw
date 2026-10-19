@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as realSetTimeout } from "node:timers";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { z } from "zod";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -18,12 +19,18 @@ import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import { measureUpdateStateFiles } from "./update-candidate-io.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
+import {
+  parseUpdateStateInspectionWorker,
+  runUpdateStateInspectionWorker,
+} from "./update-candidate-state.inspection.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 import {
   captureUpdateCandidateDeadline,
   materializeUpdateCandidateStateWorker,
 } from "./update-candidate-state.test-support.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 
 let cleanupFixture: (() => Promise<void>) | undefined;
 const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
@@ -428,16 +435,19 @@ it.each(["stdout", "stderr"] as const)(
       controller.abort(new Error("test output deadline"));
     }, 10_000);
     try {
-      await expect(
-        prepareUpdateCandidateStateSnapshot({
-          config: {},
-          stateDir: path.join(root, "source"),
-          candidateRoot: root,
-          env: { TMPDIR: root },
-          workerEnv: () => ({ ...process.env }),
-          signal: controller.signal,
-        }),
-      ).rejects.toThrow(/^Update state snapshot failed \(output-limit\):/);
+      const failure = await prepareUpdateCandidateStateSnapshot({
+        config: {},
+        stateDir: path.join(root, "source"),
+        candidateRoot: root,
+        env: { TMPDIR: root },
+        workerEnv: () => ({ ...process.env }),
+        signal: controller.signal,
+      }).catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        code: "output-limit",
+        message: expect.stringMatching(/^Update state snapshot failed \(output-limit\):/),
+      });
+      expect(createUpdateErrorFact("candidate-state-snapshot", failure).code).toBe("output-limit");
       expect(deadlineReached).toBe(false);
       // Snapshot rejection follows the command owner's process-tree settlement.
       const pid = Number(await fs.readFile(pidPath, "utf8"));
@@ -451,6 +461,127 @@ it.each(["stdout", "stderr"] as const)(
     }
   },
 );
+
+it.for([false, true])(
+  "reports a real inspection output limit through the public report (warnings=%s)",
+  async (warnings, { signal }) => {
+    const root = await fs.realpath(tempDirs.make("inspection-output-limit-"));
+    const worker = path.join(
+      root,
+      "dist",
+      runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
+    );
+    await fs.mkdir(path.dirname(worker), { recursive: true });
+    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+    await fs.writeFile(
+      worker,
+      `
+    for await (const chunk of process.stdin) {}
+    setInterval(() => {}, 1000);
+    process.stdout.write("private-machine-payload".repeat(4));
+  `,
+    );
+    const result = await runUpdateStateInspectionWorker({
+      input: { mode: "runtime-retention", stateDir: root, config: {} },
+      root,
+      nodeRunner: process.execPath,
+      sourceEnv: {},
+      stagingRoot: root,
+      databases: [],
+      sources: [root],
+      maxOutputBytes: 64,
+      ioBudget: "deadline",
+      signal,
+    });
+    expect(result).toMatchObject({ termination: "signal", outputLimitExceeded: true });
+    if (process.platform !== "win32") {
+      expect(result.signal).toBe("SIGTERM");
+    }
+    let failure: unknown;
+    try {
+      // Separate pipes have no observation order. Keep the real process outcome,
+      // then supply captured warnings at the parser boundary deterministically.
+      parseUpdateStateInspectionWorker(
+        {
+          ...result,
+          stderr: warnings ? "ExperimentalWarning: private-customer warning\nSQLITE_BUSY\n" : "",
+        },
+        z.unknown(),
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "output-limit",
+      message: expect.stringContaining("Worker output exceeded its capture limit"),
+    });
+    expect(failure).toHaveProperty(
+      "message",
+      expect.not.stringMatching(/host crash|supervisor|free space|private-machine-payload/),
+    );
+    if (result.signal) {
+      expect(failure).toHaveProperty("message", expect.stringContaining(`signal ${result.signal}`));
+    }
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "inspection-output-limit",
+        result: {
+          status: "error",
+          mode: "git",
+          reason: "update-failed",
+          durationMs: 1,
+          steps: [
+            {
+              name: "updater-runtime-retention",
+              command: "inspection",
+              cwd: root,
+              durationMs: 1,
+              exitCode: 1,
+              failureFacts: [
+                createUpdateErrorFact("git update", failure, { OPENCLAW_STATE_DIR: root }),
+              ],
+            },
+          ],
+        },
+      },
+      { env: { OPENCLAW_STATE_DIR: root } },
+    );
+    expect(report.body).toContain("Failing check git update (output-limit)");
+    expect(report.body).not.toMatch(/private-customer|ExperimentalWarning|private-machine-payload/);
+    expect(report.body).not.toContain(root);
+  },
+);
+
+it("preserves an inventory worker output limit without blaming the process supervisor", async ({
+  signal,
+}) => {
+  const root = await fs.realpath(tempDirs.make("inventory-output-limit-"));
+  const file = path.join(root, "source.sqlite");
+  await fs.writeFile(file, "source");
+  const run = commands.runUtf8CommandWithTimeout;
+  vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
+    if (typeof options === "number") {
+      throw new Error("Expected inventory capture options");
+    }
+    // Exercise the real inventory child and runner without a megabyte of paths.
+    return run(argv, { ...options, maxOutputBytes: { stdout: 1, stderr: 20_000 } });
+  });
+  const failure = await readUpdateStateDatabaseSizes([file], {
+    nodeRunner: process.execPath,
+    sourceEnv: {},
+    stagingRoot: root,
+    signal,
+  }).catch((error: unknown) => error);
+  expect(failure).toMatchObject({
+    code: "output-limit",
+    message: expect.stringContaining("Worker output exceeded its capture limit"),
+  });
+  expect(failure).toHaveProperty(
+    "message",
+    expect.not.stringMatching(/host crash|supervisor|free space/),
+  );
+  expect(await fs.readFile(file, "utf8")).toBe("source");
+});
 
 it("refuses a grown WAL family at the post-inventory capacity gate", async () => {
   const root = await fs.realpath(tempDirs.make("rehearsal-wal-growth-"));

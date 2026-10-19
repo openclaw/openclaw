@@ -98,6 +98,7 @@ export function LazyViewError(props: {
   error: unknown;
   onClose?: (event: Event) => void;
   onRetry: (event: Event) => void;
+  retryRef?: (element: HTMLButtonElement) => void;
   render?: () => SolidJSX.Element;
   inline?: boolean;
   stale?: boolean;
@@ -114,7 +115,11 @@ export function LazyViewError(props: {
         }
         actions={
           <>
-            <button class="btn lazy-view-error__action" onClick={(event) => props.onRetry(event)}>
+            <button
+              ref={props.retryRef}
+              class="btn lazy-view-error__action"
+              onClick={(event) => props.onRetry(event)}
+            >
               {props.actionLabel ?? (props.stale ? t("common.reload") : t("lazyView.retry"))}
             </button>
             {props.onClose ? (

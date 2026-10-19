@@ -79,6 +79,12 @@ from a CLI connected to its Gateway and inspect `nodes[].version`.
 `openclaw --version` reports that CLI's installed version, which can differ
 after a node update.
 
+Installed node services must launch through `openclaw.mjs` (or `dist/entry.js`),
+which starts the update supervisor. If an older service points directly at
+`dist/index.js`, run `openclaw doctor --fix` on that node machine to repair its
+entrypoint while preserving the installed connection options. A node started
+through the old entrypoint logs a warning when automatic updates are enabled.
+
 Look in the foreground node's stderr or its service logs for update preparation,
 busy deferral, activation, and fallback messages. If an update is deferred for
 schema migration or repair, run `openclaw update` on the node machine. Then

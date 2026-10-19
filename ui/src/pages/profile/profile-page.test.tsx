@@ -729,7 +729,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
   flush();
   expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(false);
-  processing.resolve({ mime: "image/png", avatarBase64: "aA==", byteLength: 1 });
+  processing.resolve({ mime: "image/png", avatarBase64: "aA==" });
 });
 
 it("keeps model-account actions usable when identity refresh overlaps ChatGPT completion", async () => {
@@ -856,7 +856,7 @@ it("rechecks avatar upload policy after processing and rerenders on config updat
   );
   await config.refresh();
   await waitForFast(() => expect(page.querySelector('input[type="file"]')).toBeNull());
-  processed.resolve({ mime: "image/png", avatarBase64: "aA==", byteLength: 1 });
+  processed.resolve({ mime: "image/png", avatarBase64: "aA==" });
   await waitForFast(() =>
     expect(page.querySelector(".identity-error")?.textContent).toContain(uploadsDisabledMessage()),
   );

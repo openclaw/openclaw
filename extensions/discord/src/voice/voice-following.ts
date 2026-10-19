@@ -59,13 +59,12 @@ export class DiscordVoiceFollowing {
       scheduler: PluginServiceSchedulerV1;
       allowedChannels: VoiceChannelResidency[] | null;
       autoJoinChannels: VoiceChannelResidency[];
-      botUserId: () => string | undefined;
+      botUserId?: string;
       client: Client;
-      deleteRecoveryAttempt: (guildId: string) => void;
+      daveRecoveryAttempts: Map<string, number>;
       discordConfig: DiscordAccountConfig;
       stopTransport: (guildId: string) => Promise<void>;
-      getRecoveryAttempt: (guildId: string) => number | undefined;
-      getSession: (guildId: string) => VoiceSessionEntry | undefined;
+      sessions: ReadonlyMap<string, VoiceSessionEntry>;
       hasVoiceLifecycle: (guildId: string) => boolean;
       isAllowedVoiceChannel: (entry: VoiceChannelResidency) => boolean;
       join: (
@@ -76,7 +75,6 @@ export class DiscordVoiceFollowing {
         entry: { guildId: string },
         options?: { preserveFollowState?: boolean },
       ) => Promise<VoiceOperationResult>;
-      listSessions: () => Iterable<VoiceSessionEntry>;
       voiceEnabled: boolean;
     },
   ) {
@@ -118,7 +116,7 @@ export class DiscordVoiceFollowing {
     if (!channelId) {
       return;
     }
-    const existing = this.params.getSession(guildId);
+    const existing = this.params.sessions.get(guildId);
     if (this.params.isAllowedVoiceChannel({ guildId, channelId })) {
       if (existing && existing.channelId !== channelId) {
         logger.warn(
@@ -161,7 +159,7 @@ export class DiscordVoiceFollowing {
     const { guildId, channelId, userId } = params;
     const followKey = `${guildId}:${userId}`;
     const previousFollowedChannelId = this.followedUserChannels.get(followKey)?.channelId;
-    const existing = this.params.getSession(guildId);
+    const existing = this.params.sessions.get(guildId);
     const wasFollowedVoiceSession =
       this.followedUserChannels.has(followKey) || this.followedVoiceGuilds.has(guildId);
     if (!channelId || !this.params.isAllowedVoiceChannel({ guildId, channelId })) {
@@ -194,7 +192,7 @@ export class DiscordVoiceFollowing {
       this.followedVoiceGuilds.add(guildId);
       return;
     }
-    const recoveryAttemptAt = this.params.getRecoveryAttempt(guildId);
+    const recoveryAttemptAt = this.params.daveRecoveryAttempts.get(guildId);
     if (!existing && previousFollowedChannelId === channelId && recoveryAttemptAt !== undefined) {
       if (Date.now() - recoveryAttemptAt < DECRYPT_FAILURE_WINDOW_MS) {
         logger.warn(
@@ -202,7 +200,7 @@ export class DiscordVoiceFollowing {
         );
         return;
       }
-      this.params.deleteRecoveryAttempt(guildId);
+      this.params.daveRecoveryAttempts.delete(guildId);
     }
     logger.info(
       `discord voice: following user guild=${guildId} user=${userId} channel=${channelId}`,
@@ -212,7 +210,7 @@ export class DiscordVoiceFollowing {
       return;
     }
     if (!result.ok) {
-      const current = this.params.getSession(guildId);
+      const current = this.params.sessions.get(guildId);
       if (current?.channelId === channelId) {
         this.followedVoiceGuilds.add(guildId);
       } else {
@@ -258,7 +256,7 @@ export class DiscordVoiceFollowing {
     for (const entries of [
       this.params.autoJoinChannels,
       this.params.allowedChannels ?? [],
-      this.params.listSessions(),
+      this.params.sessions.values(),
     ]) {
       for (const entry of entries) {
         guildIds.add(entry.guildId);
@@ -292,7 +290,7 @@ export class DiscordVoiceFollowing {
       return;
     }
     const userIds = [...this.followUserIds];
-    const slotsPerGuild = userIds.length + (this.params.botUserId() ? 1 : 0);
+    const slotsPerGuild = userIds.length + (this.params.botUserId ? 1 : 0);
     const totalSlots = guildIds.length * slotsPerGuild;
     const start = this.reconcileCursor % totalSlots;
     const visitedGuilds = new Set<string>();
@@ -402,7 +400,7 @@ export class DiscordVoiceFollowing {
     if (Array.from(this.followedUserChannels.values()).some((entry) => entry.guildId === guildId)) {
       return;
     }
-    const existing = this.params.getSession(guildId);
+    const existing = this.params.sessions.get(guildId);
     if (existing) {
       if (this.followedVoiceGuilds.has(guildId)) {
         logger.info(
@@ -412,7 +410,7 @@ export class DiscordVoiceFollowing {
       }
       return;
     }
-    const botUserId = this.params.botUserId();
+    const botUserId = this.params.botUserId;
     if (!botUserId) {
       return;
     }

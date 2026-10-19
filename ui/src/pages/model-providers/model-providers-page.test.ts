@@ -219,11 +219,12 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it.each(["rejected", "not dispatched", "offline"] as const)(
-    "keeps defaults until acknowledged when the save is %s",
+    "preserves unsent defaults and restores saved defaults after rejection: %s",
     async (outcome) => {
       const { context, runtimeConfig, publishPhase } = createHarness("main");
       const page = appendPage(context);
       await waitForProviders(page);
+      const savedPrimary = page.view.props.defaultModels.primary;
       if (outcome === "rejected") {
         runtimeConfig.patch.mockRejectedValueOnce(new Error("Synthetic save failure"));
       } else if (outcome === "not dispatched") {
@@ -233,7 +234,9 @@ describe("ModelProvidersPage agent scope", () => {
       }
       page.view.props.onPrimaryChange("openai/draft-model");
       await drainPageUpdates(page);
-      expect(page.view.props.defaultModels.primary).toBe("openai/draft-model");
+      expect(page.view.props.defaultModels.primary).toBe(
+        outcome === "rejected" ? savedPrimary : "openai/draft-model",
+      );
       if (outcome === "offline") {
         expect(runtimeConfig.patch).not.toHaveBeenCalled();
       } else {
@@ -843,18 +846,24 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
       '.model-providers__defaults .settings-segmented[role="radiogroup"]',
     );
     expect(groups).toHaveLength(2);
-    const thinkingHigh = groups[0]!.querySelector<HTMLInputElement>(
-      '.settings-segmented__input[value="high"]',
+    expect(groups[0]!.querySelector('.settings-segmented__input[value="high"]')).toBeNull();
+    const savedThinking = groups[0]!.querySelector<HTMLInputElement>(
+      '.settings-segmented__input[value="low"]',
     )!;
-    expect(thinkingHigh.disabled).toBe(false);
-    thinkingHigh.click();
+    expect(savedThinking.checked).toBe(true);
+    expect(savedThinking.disabled).toBe(true);
+    const thinkingDefault = groups[0]!.querySelector<HTMLInputElement>(
+      '.settings-segmented__input[value=""]',
+    )!;
+    expect(thinkingDefault.disabled).toBe(false);
+    thinkingDefault.click();
     await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: {
         agents: {
           defaults: {
             fastModeDefault: "auto",
-            thinkingDefault: "high",
+            thinkingDefault: null,
             utilityModel: null,
           },
         },

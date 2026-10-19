@@ -1,9 +1,43 @@
+import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import { installMSTeamsTestRuntime } from "../monitor-handler.test-helpers.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
+import type { MSTeamsTurnContext } from "../sdk-types.js";
 
 export const channelConversationId = "19:general@thread.tacv2";
+
+export function createDebounceControl() {
+  let drain: () => Promise<void> = async () => {
+    throw new Error("Expected the handler to create its debouncer");
+  };
+  const createDebouncer: typeof createInboundDebouncer = (options) => {
+    const debouncer = createInboundDebouncer(options);
+    drain = debouncer.drain;
+    return debouncer;
+  };
+  return {
+    createDebouncer,
+    drain: () => drain(),
+    async flush(milliseconds: number) {
+      await vi.advanceTimersByTimeAsync(milliseconds);
+      await drain();
+    },
+  };
+}
+
+export function createTurnContext(
+  activity: MSTeamsTurnContext["activity"],
+  ids?: { sent: string; updated: string },
+): MSTeamsTurnContext {
+  return {
+    activity,
+    sendActivity: vi.fn(async () => ids && { id: ids.sent }),
+    sendActivities: vi.fn(async () => []),
+    updateActivity: vi.fn(async () => ids && { id: ids.updated }),
+    deleteActivity: vi.fn(async () => undefined),
+  };
+}
 
 type MessageHandlerDepsOptions = {
   accountId?: string;

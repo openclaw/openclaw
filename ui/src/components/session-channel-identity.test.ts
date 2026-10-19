@@ -1,210 +1,145 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
-describe("sidebar linked conversation identity", () => {
-  it.each([
-    {
-      name: "route-only email direct chat",
-      row: { key: "agent:main:email:direct:alex@example.com" },
-      expected: { channelLabel: "Email", kind: "direct", address: "alex@example.com" },
-    },
-    {
-      name: "route-only Matrix direct chat",
-      row: { key: "agent:main:matrix:direct:@alex:example.org" },
-      expected: { channelLabel: "Matrix", kind: "direct", address: "@alex:example.org" },
-    },
-    {
-      name: "current privacy identity instead of an older phone route",
-      row: {
-        key: "agent:main:whatsapp:direct:15555550123",
-        origin: {
-          provider: "whatsapp",
-          from: "100000000@lid",
-          to: "15555550999@s.whatsapp.net",
-          label: "100000000@lid",
-        },
-      },
-      expected: {
-        channelLabel: "WhatsApp",
-        kind: "direct",
-        address: undefined,
-        conversation: undefined,
-      },
-    },
-    {
-      name: "WhatsApp phone JID",
-      row: {
-        key: "agent:main:whatsapp:direct:15555550123",
-        channel: "whatsapp",
-        chatType: "direct",
-        origin: { provider: "whatsapp", from: "15555550123@s.whatsapp.net" },
-      },
-      expected: { channelLabel: "WhatsApp", kind: "direct", address: "+15555550123" },
-    },
-    {
-      name: "WhatsApp group with session contributors",
-      row: {
-        key: "agent:main:whatsapp:group:120000000@g.us",
-        channel: "whatsapp",
-        chatType: "group",
-        subject: "Weekend plans",
-        origin: { provider: "whatsapp", from: "120000000@g.us", label: "120000000@g.us" },
-        participantCount: 5,
-      },
-      expected: {
-        channelLabel: "WhatsApp",
-        kind: "group",
-        conversation: "Weekend plans",
-        address: undefined,
-      },
-    },
-    {
-      name: "Discord thread without redundant origin metadata",
-      row: {
-        key: "agent:main:discord:channel:123:thread:456",
-        channel: "discord",
-        chatType: "channel",
-      },
-      expected: { channelLabel: "Discord", kind: "thread" },
-    },
-    {
-      name: "Telegram topic without redundant origin metadata",
-      row: {
-        key: "agent:main:telegram:group:-123:topic:17",
-        channel: "telegram",
-        chatType: "group",
-      },
-      expected: { channelLabel: "Telegram", kind: "topic", topicId: "17" },
-    },
-    {
-      name: "iMessage recipient email instead of local chat ID",
-      row: {
-        key: "agent:main:imessage:direct:alex@example.com",
-        channel: "imessage",
-        chatType: "direct",
-        origin: {
-          provider: "imessage",
-          from: "imessage:alex@example.com",
-          to: "chat_id:12",
-          label: "Alex",
-        },
-      },
-      expected: { channelLabel: "iMessage", address: "alex@example.com", conversation: "Alex" },
-    },
-    {
-      name: "Signal phone number",
-      row: {
-        key: "agent:main:signal:direct:+15555550123",
-        channel: "signal",
-        origin: { provider: "signal", from: "signal:+15555550123", label: "Alex id:+15555550123" },
-      },
-      expected: { channelLabel: "Signal", address: "+15555550123", conversation: "Alex" },
-    },
-    {
-      name: "Matrix handle with homeserver",
-      row: {
-        key: "agent:main:matrix:direct:@alex:example.org",
-        channel: "matrix",
-        origin: { provider: "matrix", nativeDirectUserId: "@Alex:Example.org" },
-      },
-      expected: { channelLabel: "Matrix", address: "@Alex:Example.org" },
-    },
-    {
-      name: "Discord thread with server context",
-      row: {
-        key: "agent:main:discord:channel:123:thread:456",
-        channel: "discord",
-        chatType: "channel",
-        origin: { provider: "discord", label: "Example #releases channel id:123", threadId: "456" },
-        space: "999",
-        groupChannel: "#releases",
-      },
-      expected: { channelLabel: "Discord", kind: "thread", conversation: "Example #releases" },
-    },
-    {
-      name: "Telegram topic",
-      row: {
-        key: "agent:main:telegram:group:-123:topic:17",
-        channel: "telegram",
-        chatType: "group",
-        origin: { provider: "telegram", label: "Planning id:-123 topic:17", threadId: 17 },
-      },
-      expected: {
-        channelLabel: "Telegram",
-        kind: "topic",
-        conversation: "Planning",
-        topicId: "17",
-      },
-    },
-    {
-      name: "Teams group without a readable title",
-      row: {
-        key: "agent:main:msteams:group:19:example",
-        channel: "msteams",
-        chatType: "group",
-        subject: "groupChat",
-        space: "opaque-team-id",
-        origin: { provider: "msteams" },
-      },
-      expected: { channelLabel: "Microsoft Teams", kind: "group", conversation: undefined },
-    },
-    {
-      name: "custom channel",
-      row: {
-        key: "agent:main:custom:channel:example",
-        channel: "custom",
-        chatType: "channel",
-        subject: "Design room",
-        accountId: "work",
-      },
-      expected: {
-        channelLabel: "Custom",
-        kind: "channel",
-        conversation: "Design room",
-        account: "work",
-      },
-    },
-    {
-      name: "constructor channel from an explicit session key",
-      row: { key: "agent:main:constructor:direct:42" },
-      expected: { channelLabel: "Constructor", kind: "direct" },
-    },
-    {
-      name: "canonical peer instead of conflicting last-delivery metadata",
-      row: {
-        key: "agent:main:whatsapp:direct:15555550123",
-        channel: "telegram",
-        chatType: "group",
-        accountId: "telegram-bot",
-        subject: "Wrong room",
-        origin: { provider: "telegram", label: "Wrong person", from: "+15555550999" },
-      },
-      expected: {
-        channelLabel: "WhatsApp",
-        kind: "direct",
-        address: "+15555550123",
-        conversation: undefined,
-        account: undefined,
-      },
-    },
-  ] satisfies {
-    name: string;
-    row: Partial<GatewaySessionRow>;
-    expected: Partial<NonNullable<SidebarRecentSession["channelPresentation"]>>;
-  }[])("projects $name from recorded conversation facts", ({ row, expected }) => {
-    expect(projectSidebarSession(row).channelPresentation).toMatchObject(expected);
-  });
+type Expected = Partial<NonNullable<SidebarRecentSession["channelPresentation"]>>;
 
-  it("does not label a dashboard session as channel-linked because of its last delivery route", () => {
-    expect(
-      projectSidebarSession({
-        key: "agent:main:dashboard:chat",
-        channel: "whatsapp",
-        chatType: "direct",
-        origin: { provider: "whatsapp", from: "+15555550123" },
-      }).channelPresentation,
-    ).toBeUndefined();
-  });
+function linked(
+  channel: string,
+  chatType: GatewaySessionRow["chatType"],
+  peer: string,
+  origin?: Omit<NonNullable<GatewaySessionRow["origin"]>, "provider">,
+  extra: Partial<GatewaySessionRow> = {},
+): Partial<GatewaySessionRow> {
+  return {
+    key: `agent:main:${channel}:${chatType}:${peer}`,
+    channel,
+    chatType,
+    ...(origin ? { origin: { provider: channel, ...origin } } : {}),
+    ...extra,
+  };
+}
+
+const whatsappDirect = { channelLabel: "WhatsApp", kind: "direct" } as const;
+const discordThread = { channelLabel: "Discord", kind: "thread" } as const;
+const telegramTopic = { channelLabel: "Telegram", kind: "topic", topicId: "17" } as const;
+const whatsapp = "15555550123";
+const discord = "123:thread:456";
+const telegram = "-123:topic:17";
+
+it.each([
+  [
+    { key: "agent:main:email:direct:alex@example.com" },
+    { channelLabel: "Email", kind: "direct", address: "alex@example.com" },
+  ],
+  [
+    { key: "agent:main:matrix:direct:@alex:example.org" },
+    { channelLabel: "Matrix", kind: "direct", address: "@alex:example.org" },
+  ],
+  [
+    {
+      key: "agent:main:whatsapp:direct:15555550123",
+      origin: {
+        provider: "whatsapp",
+        from: "100000000@lid",
+        to: "15555550999@s.whatsapp.net",
+        label: "100000000@lid",
+      },
+    },
+    { ...whatsappDirect, address: undefined, conversation: undefined },
+  ],
+  [
+    linked("whatsapp", "direct", whatsapp, { from: "15555550123@s.whatsapp.net" }),
+    { ...whatsappDirect, address: "+15555550123" },
+  ],
+  [
+    linked(
+      "whatsapp",
+      "group",
+      "120000000@g.us",
+      { from: "120000000@g.us", label: "120000000@g.us" },
+      { subject: "Weekend plans" },
+    ),
+    { channelLabel: "WhatsApp", kind: "group", conversation: "Weekend plans", address: undefined },
+  ],
+  [linked("discord", "channel", discord), discordThread],
+  [linked("telegram", "group", telegram), telegramTopic],
+  [
+    linked("imessage", "direct", "alex@example.com", {
+      from: "imessage:alex@example.com",
+      to: "chat_id:12",
+      label: "Alex",
+    }),
+    { channelLabel: "iMessage", address: "alex@example.com", conversation: "Alex" },
+  ],
+  [
+    {
+      key: "agent:main:signal:direct:+15555550123",
+      channel: "signal",
+      origin: { provider: "signal", from: "signal:+15555550123", label: "Alex id:+15555550123" },
+    },
+    { channelLabel: "Signal", address: "+15555550123", conversation: "Alex" },
+  ],
+  [
+    {
+      key: "agent:main:matrix:direct:@alex:example.org",
+      channel: "matrix",
+      origin: { provider: "matrix", nativeDirectUserId: "@Alex:Example.org" },
+    },
+    { channelLabel: "Matrix", address: "@Alex:Example.org" },
+  ],
+  [
+    linked(
+      "discord",
+      "channel",
+      discord,
+      { label: "Example #releases channel id:123", threadId: "456" },
+      { space: "999", groupChannel: "#releases" },
+    ),
+    { ...discordThread, conversation: "Example #releases" },
+  ],
+  [
+    linked("telegram", "group", telegram, {
+      label: "Planning id:-123 topic:17",
+      threadId: 17,
+    }),
+    { ...telegramTopic, conversation: "Planning" },
+  ],
+  [
+    linked("msteams", "group", "19:example", {}, { subject: "groupChat", space: "opaque-team-id" }),
+    { channelLabel: "Microsoft Teams", kind: "group", conversation: undefined },
+  ],
+  [
+    linked("custom", "channel", "example", undefined, {
+      subject: "Design room",
+      accountId: "work",
+    }),
+    { channelLabel: "Custom", kind: "channel", conversation: "Design room", account: "work" },
+  ],
+  [{ key: "agent:main:constructor:direct:42" }, { channelLabel: "Constructor", kind: "direct" }],
+  [
+    {
+      key: "agent:main:whatsapp:direct:15555550123",
+      channel: "telegram",
+      chatType: "group",
+      accountId: "telegram-bot",
+      subject: "Wrong room",
+      origin: { provider: "telegram", label: "Wrong person", from: "+15555550999" },
+    },
+    { ...whatsappDirect, address: "+15555550123", conversation: undefined, account: undefined },
+  ],
+] satisfies [Partial<GatewaySessionRow>, Expected][])("projects %j", (row, expected) => {
+  expect(projectSidebarSession(row).channelPresentation).toMatchObject(expected);
+});
+
+it("does not label a dashboard session as channel-linked because of its last delivery route", () => {
+  expect(
+    projectSidebarSession({
+      key: "agent:main:dashboard:chat",
+      channel: "whatsapp",
+      chatType: "direct",
+      origin: { provider: "whatsapp", from: "+15555550123" },
+    }).channelPresentation,
+  ).toBeUndefined();
 });

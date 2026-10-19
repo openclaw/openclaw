@@ -11,12 +11,55 @@ import {
   deliverSpy,
   makeSettledChild,
   deliveredCallArg,
+  REQUESTER,
+  requesterSettleKey,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
 const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
 
 describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
+  it("wakes the requester once with a batch-stable idempotency key when the fan-out drains", async () => {
+    const quietChild = makeSettledChild({
+      runId: "run-quiet",
+      requesterTurnRunId: "quiet-cancellation-owner",
+      expectsCompletionMessage: false,
+      completion: { required: false },
+      delivery: { status: "not_required" },
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      quietChild,
+      makeSettledChild({
+        runId: "run-b",
+        completion: { required: true, resultText: "network findings" },
+      }),
+      makeSettledChild({
+        runId: "run-a",
+        completion: { required: true, resultText: "social findings" },
+      }),
+    ]);
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
+      wakeParams({ settledEntry: quietChild }),
+    );
+
+    expect(woke).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
+    const call = deliveredCallArg();
+    expect(call.targetRequesterSessionKey).toBe(REQUESTER);
+    expect(call.requesterIsSubagent).toBe(false);
+    expect(call.expectsCompletionMessage).toBe(false);
+    expect(call.requireVisibleReply).toBeUndefined();
+    expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-quiet"));
+    expect(quietChild.requesterTurnRunId).toBe("quiet-cancellation-owner");
+    const message = String(call.triggerMessage);
+    expect(message).toContain("settled");
+    expect(message).toContain("social findings");
+    expect(message).toContain("network findings");
+    expect(message).not.toContain("NO_REPLY");
+    expect(message).toContain("continue any unfinished work");
+  });
+
   it("includes all six child outcomes when a successful completion has no output", async () => {
     const children = (["ok", "timeout", "timeout", "ok", "timeout", "timeout"] as const).map(
       (status, index) =>

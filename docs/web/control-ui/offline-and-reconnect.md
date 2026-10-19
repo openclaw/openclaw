@@ -246,6 +246,19 @@ discarding your edits. Switching identities or losing access still clears the
 affected settings. These drafts are not persisted by this behavior: reloading
 or closing the tab can discard them, including entered credentials.
 
+Plugin Settings panels, including the Memory overview and memory search, stay open
+through the same kind of reconnect. Search results, the typed query, and opened
+memory files remain visible; searching waits for the connection, and replies to
+requests sent before the drop are discarded. Reopening a file whose read was
+interrupted retries it. Changing the Settings agent, account, or access starts a
+fresh panel.
+
+Rejected model-default saves return the pickers to the saved configuration.
+**Retry** keeps the rejected change with the configuration write owner. Model
+edits that have not been sent still survive a temporary disconnect. After
+reconnecting, defaults remain unavailable until the current configuration loads;
+a failed read does not present the previous connection's defaults as current.
+
 Unsent configuration form edits resume autosave after reconnect only when a
 fresh read confirms that their base revision is unchanged. If a submission was
 in flight or the revision changed, autosave stays paused for explicit recovery.
@@ -253,11 +266,21 @@ Raw configuration edits remain manual-save-only. Reconnect does not replay
 plugin installations, setup answers, or other arbitrary actions.
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
-stays visible, and one connection status in its sidebar footer explains whether the Gateway is
-suspending, suspended, restarting, reconnecting, or finishing recovery. Planned transitions and
-automatic reconnect use a calm presentation; authentication and other failures that need your
-attention keep their explanation and recovery action. The same status appears in the macOS app's
-embedded dashboard. Connection status does not replace the Gateway name in the account menu.
+stays visible. The sidebar avatar has a green connection dot when healthy, amber during recovery
+or suspension, and red when disconnected or a refresh is required. The sidebar footer
+explains the interruption without moving the page and briefly shows **Connected** after recovery.
+With the sidebar collapsed, a flag beside the avatar appears for four seconds on status changes.
+Hover or focus the avatar to reopen it. If the flag would cover a composer or other writing
+controls, the avatar tooltip carries the status instead. The tooltip is hidden while the flag is visible.
+On mobile, status replaces the header breadcrumb and badges the menu button; opening the drawer
+shows the full footer row. Brief disconnects keep the existing two-second grace.
+
+The status includes the number of queued messages and **Retry** when an immediate connection
+attempt is available. Hover or focus for the redacted connection error. Settings keeps its save feedback
+visible alongside connection status. One persistent shell region announces connection changes,
+even while the mobile drawer is closed. Native embedded views keep their own connection
+chrome, including the status in the embedded Settings header. Connection status does not replace
+the Gateway name in the account menu.
 
 The client retries ordinary connection loss automatically with randomized backoff: the first
 retry waits 800–960 ms, and sustained failures spread retries across 12.5–15 seconds.
@@ -372,10 +395,23 @@ one history notice offers **Retry**, which reloads the conversation and restores
 its live subscription, including approval updates. Permission and other terminal
 failures remain visible rather than being silently retried.
 
+After a Gateway restart, eligible accepted chat inputs resume on the server in
+order within each session, even while this browser is closed. Automatic recovery
+requires the original session and current operator access, and is limited to
+inputs accepted in the past 24 hours. Cancelled inputs never resume. Inputs that
+cannot resume stay visibly interrupted for review. The browser keeps the original
+submission ID when retrying, so reconnect cannot duplicate a recovered input.
+It does not resend interrupted inputs automatically: the server owns recovery order.
+If a saved input remains interrupted, copy it and send again to continue.
+
 When the Gateway confirms that it holds the same pending input, the Control UI clears the
 uncertain-delivery warning without sending the message again. The browser keeps its retry
 payload until consumption or cancellation is confirmed. If delivery is still unknown,
-the review warning remains.
+the review warning remains. Confirmed server custody does not block later browser-queued
+chat sends, including when the accepted input is too old for automatic recovery.
+Local commands such as `/compact` and `/reset` in the same browser outbox still wait
+behind that input. An independent authorized reset from another client can cancel
+pending work, as with other session resets.
 If the Gateway is holding that input for a later turn, it appears in the queue
 above the composer. Removing that row withdraws the exact queued message without
 stopping the active turn. Once cancellation is confirmed, the removed prompt and

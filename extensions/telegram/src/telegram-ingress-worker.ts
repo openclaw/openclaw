@@ -71,7 +71,7 @@ export type TelegramIngressWorkerOptions = {
 };
 
 type TelegramIngressWorkerHandle = {
-  onMessage(listener: (message: TelegramIngressWorkerMessage) => void): () => void;
+  onMessage?: (message: TelegramIngressWorkerMessage) => void;
   ackSpooledUpdate?(
     requestId: string,
     result: Extract<TelegramIngressWorkerCommand, { type: "spool-ack" }>["result"],
@@ -85,7 +85,6 @@ export type TelegramIngressWorkerFactory = (
 ) => TelegramIngressWorkerHandle;
 
 export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (options) => {
-  const listeners = new Set<(message: TelegramIngressWorkerMessage) => void>();
   const workerUrl = resolveRuntimeWorkerUrl({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "telegram-ingress-worker.runtime",
@@ -110,18 +109,10 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
     });
   });
   worker.on("message", (message: TelegramIngressWorkerMessage) => {
-    for (const listener of listeners) {
-      listener(message);
-    }
+    handle.onMessage?.(message);
   });
 
-  return {
-    onMessage(listener) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+  const handle: TelegramIngressWorkerHandle = {
     ackSpooledUpdate(requestId, result) {
       try {
         worker.postMessage(
@@ -152,4 +143,5 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
       return taskPromise;
     },
   };
+  return handle;
 };

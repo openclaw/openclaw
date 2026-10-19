@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -11,8 +9,6 @@ import {
 import type { CronJob } from "../api/types.ts";
 import { ciAutomationJobSpec, type CiAutomationOption } from "../lib/session-pr-automation-spec.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
@@ -23,6 +19,13 @@ const DETAILS_METHOD = "controlUi.sessionPullRequests.checks";
 const headSha = "a".repeat(40);
 const automationSessionKey = "agent:main:dashboard:ci-proof";
 const automationSessionId = "ci-proof-incarnation";
+const prTarget = { owner: "openclaw", repo: "openclaw", number: 123456 };
+const automationTarget = {
+  ...prTarget,
+  agentId: "main",
+  sessionKey: automationSessionKey,
+  sessionId: automationSessionId,
+};
 function automationInventory(jobs: CronJob[]) {
   return cronListResponseFixture({
     jobs,
@@ -36,17 +39,7 @@ function automationInventory(jobs: CronJob[]) {
 }
 function automationJob(option: CiAutomationOption, enabled = true): CronJob {
   return {
-    ...ciAutomationJobSpec(
-      {
-        sessionKey: automationSessionKey,
-        sessionId: automationSessionId,
-        agentId: "main",
-        owner: "openclaw",
-        repo: "openclaw",
-        number: 123456,
-      },
-      option,
-    ),
+    ...ciAutomationJobSpec(automationTarget, option),
     id: option,
     enabled,
     createdAtMs: 1,
@@ -56,9 +49,7 @@ function automationJob(option: CiAutomationOption, enabled = true): CronJob {
   };
 }
 const pullRequest: ControlUiSessionPullRequest = {
-  number: 123456,
-  owner: "openclaw",
-  repo: "openclaw",
+  ...prTarget,
   branch: "feature/ci-details",
   title: "Show CI jobs and steps in the chat popover",
   url: "https://github.com/openclaw/openclaw/pull/123456",
@@ -76,6 +67,19 @@ function detailFixture(
   const startedAtMs = Date.now() - (mode === "running" ? 139_000 : 142_000);
   const stamp = (seconds: number) => new Date(startedAtMs + seconds * 1000).toISOString();
   const completed = mode !== "running";
+  const check = (
+    id: number,
+    name: string,
+    overrides: Partial<ControlUiSessionPullRequestCheck>,
+  ): ControlUiSessionPullRequestCheck => ({
+    id,
+    name,
+    source: "actions",
+    status: "completed",
+    state: "passed",
+    conclusion: "success",
+    ...overrides,
+  });
   const steps = [
     { name: "Set up job", start: 0, end: 2 },
     { name: "Checkout repository", start: 2, end: 5 },
@@ -85,13 +89,11 @@ function detailFixture(
     { name: "Upload test results", start: 139, end: 141 },
     { name: "Post-job cleanup", start: 141, end: 142 },
   ];
-  const active: ControlUiSessionPullRequestCheck = {
-    id: 11,
-    name: "Tests — Linux",
+  const active = check(11, "Tests — Linux", {
     state: mode,
-    source: "actions",
     status: completed ? "completed" : "in_progress",
-    ...(completed ? { conclusion: "failure", completedAt: stamp(142) } : {}),
+    conclusion: completed ? "failure" : undefined,
+    completedAt: completed ? stamp(142) : undefined,
     startedAt: stamp(0),
     detailsUrl: "https://github.com/openclaw/openclaw/actions/runs/100/job/11",
     steps: steps.map(({ name, start, end }, index) => ({
@@ -107,7 +109,7 @@ function detailFixture(
       completedAt: completed || index < 4 ? stamp(end) : undefined,
       startedAt: completed || index <= 4 ? stamp(start) : undefined,
     })),
-  };
+  });
   const passed: ControlUiSessionPullRequestCheck[] = [
     "Lint",
     "Typecheck",
@@ -115,43 +117,36 @@ function detailFixture(
     "Tests — Windows",
     "Build",
     "Dependency review",
-  ].map((name, index) => ({
-    id: 20 + index,
-    name,
-    state: "passed",
-    source: index === 5 ? "check" : "actions",
-    status: "completed",
-    conclusion: "success",
-    startedAt: stamp(0),
-    completedAt: stamp(42 + index * 10),
-    detailsUrl: "https://github.com/openclaw/openclaw/actions/runs/100/job/" + (20 + index),
-    steps:
-      index === 5
-        ? undefined
-        : [
-            {
-              number: 1,
-              name: "Run " + name.toLowerCase(),
-              status: "completed",
-              conclusion: "success",
-              startedAt: stamp(0),
-              completedAt: stamp(42 + index * 10),
-            },
-          ],
-  }));
-  const skipped: ControlUiSessionPullRequestCheck[] = Array.from({ length: 17 }, (_, index) => ({
-    id: 40 + index,
-    name: index === 0 ? "Android build" : "Optional platform check " + (index + 1),
-    state: "skipped",
-    source: "actions",
-    status: "completed",
-    conclusion: "skipped",
-    steps: [],
-  }));
+  ].map((name, index) =>
+    check(20 + index, name, {
+      source: index === 5 ? "check" : "actions",
+      startedAt: stamp(0),
+      completedAt: stamp(42 + index * 10),
+      detailsUrl: "https://github.com/openclaw/openclaw/actions/runs/100/job/" + (20 + index),
+      steps:
+        index === 5
+          ? undefined
+          : [
+              {
+                number: 1,
+                name: "Run " + name.toLowerCase(),
+                status: "completed",
+                conclusion: "success",
+                startedAt: stamp(0),
+                completedAt: stamp(42 + index * 10),
+              },
+            ],
+    }),
+  );
+  const skipped = Array.from({ length: 17 }, (_, index) =>
+    check(40 + index, index === 0 ? "Android build" : `Optional platform check ${index + 1}`, {
+      state: "skipped",
+      conclusion: "skipped",
+      steps: [],
+    }),
+  );
   return {
-    owner: "openclaw",
-    repo: "openclaw",
-    number: pullRequest.number,
+    ...prTarget,
     headSha,
     checks: [...passed, active, ...skipped],
     status: "ready",
@@ -171,7 +166,6 @@ async function setup(
     mode?: "running" | "failed";
     defer?: boolean;
     automationJobs?: CronJob[];
-    schedulerEnabled?: boolean;
     readOnly?: boolean;
   } = {},
 ) {
@@ -208,7 +202,7 @@ async function setup(
       [DETAILS_METHOD]: detailFixture(options.mode),
       "cron.list": automationInventory(options.automationJobs ?? []),
       "cron.status": {
-        enabled: options.schedulerEnabled ?? true,
+        enabled: true,
         triggersEnabled: true,
         jobs: options.automationJobs?.length ?? 0,
       },
@@ -342,17 +336,7 @@ suite.define(() => {
     const add = await gateway.waitForRequest("cron.add");
     const merge = automationJob("autoMerge");
     expect(add.params).toEqual(
-      ciAutomationJobSpec(
-        {
-          agentId: "main",
-          sessionKey,
-          sessionId: automationSessionId,
-          owner: pullRequest.owner,
-          repo: pullRequest.repo,
-          number: pullRequest.number,
-        },
-        "autoMerge",
-      ),
+      ciAutomationJobSpec({ ...automationTarget, sessionKey }, "autoMerge"),
     );
     await gateway.setMethodResponse("cron.list", automationInventory([merge]));
     await gateway.resolveDeferred("cron.add", { job: merge });
@@ -413,7 +397,7 @@ suite.define(() => {
     { label: "desktop", width: 1180, height: 960, mode: "running" as const },
     { label: "mobile", width: 393, height: 960, mode: "failed" as const },
     { label: "landscape", width: 844, height: 390, mode: "failed" as const },
-  ])("keeps expanded steps usable on $label", async ({ label, width, height, mode }) => {
+  ])("keeps expanded steps usable on $label", async ({ width, height, mode }) => {
     const { page } = await setup({
       width,
       height,
@@ -445,37 +429,6 @@ suite.define(() => {
     const linuxJob = menu.locator('.chat-ci__job[data-check-id="11"]');
     const jobLink = linuxJob.locator(".chat-ci__job-link");
     await jobLink.click({ trial: true });
-    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-      const output = createControlUiE2eArtifactDir("ci-details-" + label);
-      await writeFile(
-        path.join(output, "after-" + label + ".png"),
-        await takeControlUiViewportScreenshot(page, menu, [
-          page.getByText("Install dependencies", { exact: true }),
-        ]),
-      );
-      const row = await page.locator(".chat-pr").first().boundingBox();
-      const bounds = await menu.boundingBox();
-      if (bounds && row) {
-        const x = Math.max(0, Math.floor(Math.min(bounds.x, row.x) - 14));
-        const y = Math.max(0, Math.floor(Math.min(bounds.y, row.y) - 14));
-        await page.screenshot({
-          path: path.join(output, "after-" + label + "-crop.png"),
-          animations: "disabled",
-          clip: {
-            x,
-            y,
-            width: Math.min(
-              width - x,
-              Math.ceil(Math.max(bounds.x + bounds.width, row.x + row.width) - x + 14),
-            ),
-            height: Math.min(
-              height - y,
-              Math.ceil(Math.max(bounds.y + bounds.height, row.y + row.height) - y + 14),
-            ),
-          },
-        });
-      }
-    }
     // Trial clicks leave focus on the CI pill, whose title hint can own the first Escape.
     await jobLink.focus();
     await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);

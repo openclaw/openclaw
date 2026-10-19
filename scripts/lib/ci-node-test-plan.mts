@@ -19,7 +19,10 @@ import {
   isGatewayServerTestFile,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
 import { startupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
-import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
+import {
+  autoReplyReplySubtreeTestInclude,
+  fullSuiteVitestShards,
+} from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { uiIsolatedTestFiles } from "../../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
@@ -1651,7 +1654,11 @@ const AUTO_REPLY_REPLY_SHARD_RULES = [
 ] as const;
 
 function createAutoReplyReplySplitShards(): NodeTestSplitShard[] {
-  const files = listTrackedTestFiles("src/auto-reply/reply");
+  const files = listScopedOwnerTestFiles({
+    root: "src/auto-reply/reply",
+    include: autoReplyReplySubtreeTestInclude,
+    exclude: databaseWorkerCoreTestFiles,
+  });
   const groups = {
     "auto-reply-reply-agent-runner": [] as string[],
     "auto-reply-reply-commands": [] as string[],
@@ -4327,6 +4334,17 @@ export function createSelectedNodeTestShardBundles(
     ...packSelectedNodeTestJobs(projected, options.runnerBackend, canonicalFamilies, groupSeconds),
   ];
   for (const job of selectedJobs) {
+    if (job.planConcurrency === 2 && job.groups.length === 1) {
+      // Packing is settled: no sibling can overlap this child. Keep the prior
+      // two-worker ceiling instead of unlocking the serial host's wider default.
+      job.planConcurrency = 1;
+      job.env = {
+        ...job.env,
+        OPENCLAW_VITEST_MAX_WORKERS: String(
+          Math.min(2, Number(job.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2)),
+        ),
+      };
+    }
     job.runner = resolveSelectedNodeTestRunner(job, options.runnerBackend);
   }
   return applyNativeSoloTimings(selectedJobs, options.runnerBackend);

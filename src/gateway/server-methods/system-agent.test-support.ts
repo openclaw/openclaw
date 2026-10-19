@@ -90,7 +90,19 @@ export function useSystemAgentGatewayTestFixture() {
   const requireFixture = () =>
     expectDefined(fixture, "verified inference fixture was not initialized");
   const requireVerifiedInferenceFixture = () => requireFixture().binding;
-  const requireVerifiedInferenceDeps = () => ({ ...requireFixture().deps });
+  const requireVerifiedInferenceDeps = () => ({
+    readConfigFileSnapshot: async () =>
+      ({
+        exists: true,
+        valid: true,
+        path: "/tmp/openclaw.json",
+        hash: "verified-config",
+        config: verifiedConfig,
+        runtimeConfig: verifiedConfig,
+        sourceConfig: verifiedConfig,
+        issues: [],
+      }) as never,
+  });
 
   function makeVerifiedEngine(): SystemAgentChatEngine {
     return new SystemAgentChatEngine({
@@ -109,30 +121,20 @@ export function useSystemAgentGatewayTestFixture() {
     };
   }
 
-  beforeAll(async () => {
+  beforeAll(() => {
     pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
-    fixture = await pluginMetadataSnapshot.run(() =>
-      createSystemAgentVerifiedInferenceTestFixture(verifiedConfig),
-    );
-    fixture.deps.readConfigFileSnapshot = async () =>
-      ({
-        exists: true,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        hash: "verified-config",
-        config: verifiedConfig,
-        runtimeConfig: verifiedConfig,
-        sourceConfig: verifiedConfig,
-        issues: [],
-      }) as never;
   });
 
   afterAll(() => {
     fixture = undefined;
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     previousAppliedHash = getRuntimeConfigAppliedHash();
+    fixture = await expectDefined(
+      pluginMetadataSnapshot,
+      "metadata fixture was not initialized",
+    ).run(() => createSystemAgentVerifiedInferenceTestFixture(verifiedConfig));
     const ready = {
       ok: true,
       modelRef: "openai/gpt-5.5",

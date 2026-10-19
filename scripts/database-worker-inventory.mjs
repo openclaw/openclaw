@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { format } from "oxfmt";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { inspectDatabaseWorkerBoundaries } from "./lib/database-worker-compat.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
@@ -2354,10 +2354,11 @@ const reviewedOperations = new Map([
           "listRegistryWorktreesInDatabase",
           "readProvisionedData",
           "listLiveRegistryWorktreeIdsInDatabase",
+          "listExistingLiveWorktreePathsInDatabase",
           "getRegistryWorktreeProvisionedChunkInDatabase",
         ],
         evidence:
-          "Runtime reads and exact-row predicates use worktrees/dispatch.worker.ts and registry-run-end.worker.ts through the shared-state worker registry. Cleanup inventory uses openclaw-state-read-registry.ts in the read worker. Native fixture readers live only in registry.test-support.ts; Doctor migration lists keep their separate registry.ts queries.",
+          "Runtime reads and exact-row predicates use worktrees/dispatch.worker.ts and registry-run-end.worker.ts through the shared-state worker registry. Cleanup inventory uses openclaw-state-read-registry.ts in the read worker. Live-path discovery is private to worktreeReadOperations, loaded by openclaw-state-read-operation-registry.ts and executed by openclaw-state-read.worker.ts. Native fixture readers live only in registry.test-support.ts; Doctor migration lists keep their separate registry.ts queries.",
       },
     ],
   ],
@@ -3379,6 +3380,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/state/openclaw-agent-execution-maintenance.ts", // Only openclaw-agent-execution.worker.ts constructs this owner; admission invokes its startup repair callback solely inside that worker.
   "src/config/sessions/session-accessor.sqlite-entry-identity.ts", // Only reaction (agent execution worker), suggestion (sharing/transcript workers), and sharing native (sharing worker; host imports are types) kernels call this reader.
   "extensions/memory-core/src/memory/manager-publication-postgres.ts", // Only manager-publication.worker.ts binds this adapter to the admitted agent execution worker connection.
   "src/infra/database-engine/postgres-vector.ts", // Accepts only an admitted PostgresSqlConnection; the shared executor dispatches through PostgresSyncConnection to postgres-sync/bridge.worker.ts, never native SQLite.

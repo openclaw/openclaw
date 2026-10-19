@@ -76,7 +76,7 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
   );
   const compact = () => props.surface === "thread" || props.surface === "file";
   const visible = () =>
-    catalog().available &&
+    catalog().visible &&
     !(props.surface === "file" && !rows().length) &&
     !(
       props.surface === "thread" &&
@@ -90,6 +90,9 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
     settings = false,
     quickAction = false,
   ) {
+    if (!catalog().available) {
+      return;
+    }
     setError(null);
     if (props.surface === "sidebar" || props.surface === "global") {
       const search = mcpAppRouteSearch({
@@ -119,7 +122,7 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
   }
   async function onboard(pluginId: string) {
     const client = context.gateway.snapshot.client;
-    if (!client || onboardingPending) {
+    if (!client || !catalog().available || onboardingPending) {
       return;
     }
     const selected = target();
@@ -184,7 +187,11 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
                 </Show>
                 <Show when={catalog().error}>
                   <p role="alert">{catalog().error}</p>
-                  <button class="btn" onClick={() => void catalog().refresh()}>
+                  <button
+                    class="btn"
+                    disabled={!catalog().available}
+                    onClick={() => void catalog().refresh()}
+                  >
                     {t("mcpApp.retry")}
                   </button>
                 </Show>
@@ -205,6 +212,7 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
                         <button
                           class="btn"
                           type="button"
+                          disabled={!catalog().available}
                           onClick={() => open(row().server, row().entry)}
                         >
                           <CatalogIcon server={row().server} entry={row().entry} />
@@ -218,6 +226,7 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
                             <button
                               class="btn btn--sm"
                               type="button"
+                              disabled={!catalog().available}
                               onClick={() => open(row().server, row().entry, false, true)}
                             >
                               {action().title}
@@ -228,6 +237,7 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
                           <button
                             type="button"
                             class="btn btn--sm"
+                            disabled={!catalog().available}
                             onClick={() => open(row().server, row().entry, true)}
                           >
                             {t("mcpApp.settings")}
@@ -247,6 +257,7 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
                       <button
                         class="btn"
                         type="button"
+                        disabled={!catalog().available}
                         onClick={() =>
                           open(
                             server,
@@ -270,7 +281,7 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
                     <button
                       class="btn"
                       type="button"
-                      disabled={onboardingBusy()}
+                      disabled={onboardingBusy() || !catalog().available}
                       onClick={() => void onboard(plugin.pluginId)}
                     >
                       {t("mcpApp.onboarding")} · {plugin.title}
@@ -298,6 +309,7 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
             <button
               type="button"
               class="nav-item"
+              disabled={!catalog().available}
               onClick={() => open(row().server, row().entry)}
               title={row().server.label}
             >

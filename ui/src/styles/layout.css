@@ -1153,9 +1153,7 @@ openclaw-settings-save-indicator:empty {
   padding-right: var(--sidebar-pad-x);
 }
 
-/* Chrome, not content: the strip bleeds past both shell gutters. Negating the
-   bottom one puts the divider on the settings takeover's line and lets the
-   symmetric block padding center the row in the band it leaves. */
+/* The footer bleeds past the sidebar gutters without moving the content frame. */
 .sidebar-shell__footer {
   flex-shrink: 0;
   min-height: var(--shell-sidebar-footer-height);
@@ -3331,6 +3329,43 @@ openclaw-sidebar-attention {
   font-size: 10px;
 }
 
+.sidebar-identity-card__avatar {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+
+.sidebar-identity-card__status,
+.gateway-status-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--bg);
+  border-radius: var(--radius-full);
+  background: var(--warn);
+}
+
+.sidebar-identity-card:not([data-connection-status]) .sidebar-identity-card__status {
+  display: none;
+}
+
+.sidebar-identity-card[data-connection-status="connected"] .sidebar-identity-card__status,
+[data-connection-status="connected"] > .gateway-status-dot {
+  background: var(--ok);
+}
+
+.sidebar-identity-card:is(
+    [data-connection-status="offline"],
+    [data-connection-status="reload-required"]
+  )
+  .sidebar-identity-card__status,
+:is([data-connection-status="offline"], [data-connection-status="reload-required"])
+  > .gateway-status-dot {
+  background: var(--danger);
+}
+
 .sidebar-identity-card__text,
 .sidebar-recent-session__text {
   display: flex;
@@ -3495,53 +3530,37 @@ openclaw-tooltip.sidebar-hover-tooltip {
   background: var(--ok);
 }
 
-/* One lifecycle label is shared by the identity subtitle, Settings, and collapsed navigation. */
+/* One presentation serves the footer, mobile breadcrumb, and native header. */
 .gateway-status-tooltip,
-.gateway-status {
+.gateway-status,
+.gateway-status__retry,
+.gateway-status__state {
   display: inline-flex;
+  align-items: center;
+  gap: 7px;
   min-width: 0;
   max-width: 100%;
 }
 
 .gateway-status {
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px 7px;
+  color: var(--warn);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+}
+
+.gateway-status__retry {
+  flex: none;
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--muted);
-  font-family: inherit;
-  font-size: var(--control-ui-text-xs);
-  font-weight: 400;
-  line-height: 1.4;
-  text-align: start;
-}
-
-button.gateway-status {
+  color: inherit;
+  font: inherit;
   cursor: var(--cursor-action);
 }
 
-button.gateway-status:hover {
-  color: var(--text);
-}
-
-button.gateway-status:focus-visible {
+.gateway-status__retry:focus-visible {
   border-radius: var(--radius-sm);
   box-shadow: var(--focus-ring);
-}
-
-.gateway-status__state {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-}
-
-.gateway-status__icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--warn);
 }
 
 .session-menu__color-swatch svg,
@@ -3552,37 +3571,53 @@ button.gateway-status:focus-visible {
   height: 12px;
 }
 
-.gateway-status--offline .gateway-status__icon {
+.gateway-status--offline,
+.gateway-status--reload-required {
   color: var(--danger);
 }
 
-.gateway-status--connecting .gateway-status__icon,
-.gateway-status--starting .gateway-status__icon,
-.gateway-status--restoring .gateway-status__icon {
-  color: var(--muted);
+.gateway-status--connected {
+  color: var(--ok);
 }
 
-.shell-connection-status {
-  grid-area: connection;
-  justify-self: start;
-  margin: 6px 12px;
-  max-width: calc(100% - 24px);
-  padding: 7px 10px;
+.gateway-status--row {
+  width: 100%;
+  height: 44px;
+  justify-content: space-between;
+}
+
+.sidebar-shell__footer > .gateway-status-tooltip,
+.sidebar-connection-flag > .gateway-status-tooltip {
+  display: flex;
+}
+
+.settings-sidebar__footer .sidebar-shell__footer {
+  all: unset;
+}
+
+.sidebar-identity-anchor,
+.topbar-nav-toggle,
+.chat-pane__nav-toggle {
+  position: relative;
+}
+
+.sidebar-connection-flag {
+  position: absolute;
+  inset: auto auto 0 100%;
+  width: 240px;
+  padding-inline: 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: var(--bg);
+  box-shadow: var(--shadow-sm);
+  visibility: hidden;
+  transform: translateX(-8px);
+  transition: transform 160ms ease;
 }
 
-.shell:not(.shell--mobile-nav).shell--connection-status {
-  grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr) auto;
-  grid-template-areas:
-    "nav topbar"
-    "nav content"
-    "nav connection";
-}
-
-.shell:not(.shell--mobile-nav) > .shell-connection-status {
-  margin-bottom: calc(6px + var(--shell-dock-reserve-bottom));
+.sidebar-connection-flag[data-open] {
+  visibility: visible;
+  transform: none;
 }
 
 .sidebar-session-group-running {
@@ -4097,11 +4132,6 @@ button.gateway-status:focus-visible {
   transition:
     margin-bottom 0.16s ease,
     margin-right 0.16s ease;
-}
-
-/* The separate status row owns bottom-dock clearance while navigation is hidden. */
-.shell:not(.shell--mobile-nav).shell--connection-status > .content {
-  margin-bottom: 0;
 }
 
 /* Programmatic focus anchor (tabindex="-1") used when collapsing the sidebar
