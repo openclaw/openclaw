@@ -206,7 +206,7 @@ describe("chat session sharing menu", () => {
     root.querySelector<HTMLButtonElement>('[aria-label="Search people…"]')!.click();
     flush();
     const search = root.querySelector<HTMLInputElement>("input[data-search]")!;
-    search.focus();
+    expect(document.activeElement).toBe(search);
     search.value = "Person 101";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
