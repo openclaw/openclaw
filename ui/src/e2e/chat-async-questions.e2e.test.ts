@@ -157,6 +157,9 @@ suite.define(() => {
             messageSeq: 4,
             message: nextRequest,
           });
+          if (recovery) {
+            await page.locator(".chat-system-events__summary").click();
+          }
           await expectBrowser(
             page
               .locator(".chat-thread-inner")

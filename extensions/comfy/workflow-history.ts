@@ -18,12 +18,15 @@ export function isTerminalComfyHistory(entry: ComfyHistoryEntry, headers: Header
   if (entry.status?.status_str === "error") {
     const messages = entry.status.messages;
     const executionError = Array.isArray(messages)
-      ? messages.findLast((message) => Array.isArray(message) && message[0] === "execution_error")
+      ? messages.findLast(
+          (message): message is unknown[] =>
+            Array.isArray(message) && message[0] === "execution_error",
+        )
       : undefined;
-    const detail =
-      Array.isArray(executionError) && isRecord(executionError[1])
-        ? normalizeOptionalString(executionError[1].exception_message)
-        : undefined;
+    const errorDetails = executionError?.[1];
+    const detail = isRecord(errorDetails)
+      ? normalizeOptionalString(errorDetails.exception_message)
+      : undefined;
     throw new Error(
       `Comfy workflow failed${detail ? `: ${redactProviderResponseErrorText(detail, headers)}` : ""}`,
     );

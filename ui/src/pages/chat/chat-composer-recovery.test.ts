@@ -13,7 +13,7 @@ import { findChatSendPayload, makeChatHost } from "./chat-host.test-support.ts";
 import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
 import { createInitializationContext } from "./chat-pane.test-support.ts";
 import { retryQueuedChatMessage } from "./chat-send-actions.ts";
-import { ChatStateController } from "./chat-state-controller.ts";
+import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
@@ -26,13 +26,10 @@ function mount(
   context = { ...createInitializationContext(), sessions: transport.sessions },
   sessionKey = "agent:main:source",
 ) {
-  const controller = new ChatStateController<ChatPageHost>({
-    addController: () => undefined,
-    removeController: () => undefined,
-    requestUpdate: () => undefined,
-    updateComplete: Promise.resolve(true),
+  const controller = createChatState<ChatPageHost>({
+    awaitDomCommit: async () => true,
   });
-  controller.hostConnected();
+  const dispose = controller.dispose;
   const state = createPageState(
     context,
     controller.createRenderLifecycle(),
@@ -50,8 +47,8 @@ function mount(
   controller.attach(state);
   controller.composerPersistence.restore();
   controller.composerPersistence.start();
-  disposals.push(() => controller.hostDisconnected());
-  return { state, controller, context };
+  disposals.push(dispose);
+  return { state, controller, context, dispose };
 }
 
 function stageCommand(state: ChatPageHost) {
@@ -137,7 +134,7 @@ describe("pending send composer ownership", () => {
     const reopen = () => mount(transport, source.context, source.state.sessionKey);
     if (lifecycle === "evicted" || lifecycle === "replaced") {
       source.controller.composerPersistence.persistForRouteSwitchResult();
-      source.controller.hostDisconnected();
+      source.dispose();
     }
     let replacement: typeof source | undefined;
     if (lifecycle === "replaced" || lifecycle === "handoff") {
@@ -195,7 +192,7 @@ describe("pending send composer ownership", () => {
       expect(transport.request.mock.calls.some(([method]) => method === "chat.send")).toBe(true),
     );
     source.controller.composerPersistence.persistForRouteSwitchResult();
-    source.controller.hostDisconnected();
+    source.dispose();
     acknowledgment.resolve({ status: "ok" });
     await send;
     const reopened = mount(transport, source.context);

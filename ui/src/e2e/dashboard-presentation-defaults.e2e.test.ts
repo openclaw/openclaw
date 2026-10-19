@@ -21,7 +21,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "shared dashboard presentation defaults" });
 const key = "agent:main:dashboard:9a1b2c3d-1234-4567-8901-234567890abc";
 const sessionId = "dashboard-presentation-session";
-const defaultAction = 'wa-dropdown-item[value="dashboard-default"]';
+const defaultAction = '[data-value="dashboard-default"]';
 const defaultStatus = '[data-menu-status="dashboard-default"]';
 
 function row(presentation: "split" | "expanded") {

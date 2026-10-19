@@ -8,9 +8,10 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import {
+  readUpdateDatabaseGenerationsIsolated,
   readUpdateStateSchemaVersions,
-  updateStateSchemaVersionsMatch,
 } from "./update-candidate-state.js";
+import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -70,6 +71,49 @@ it.each(["malformed", "nonregular-wal", "empty-worker"])(
     }
   },
 );
+
+it("reports a best-effort generation verification failure for its actual sources", async () => {
+  const stateDir = fs.realpathSync(dirs.make("update-generation-unstable-"));
+  const file = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  const missing = path.join(stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const db = openNodeSqliteDatabase(file);
+  db.exec("PRAGMA user_version=3;");
+  db.close();
+  const preload = path.join(stateDir, "write-between-reads.cjs");
+  // The WAL probe follows the first database fingerprint, so this write lands
+  // between the two generation reads exactly as an active Gateway commit would.
+  fs.writeFileSync(
+    preload,
+    `
+    const fs = require('node:fs');
+    const source = ${JSON.stringify(file)};
+    const open = fs.openSync;
+    let written = false;
+    fs.openSync = function(file, ...args) {
+      if (String(file) === source + '-wal' && !written) {
+        written = true;
+        fs.appendFileSync(source, 'concurrent write');
+      }
+      return open.call(this, file, ...args);
+    };
+  `,
+  );
+
+  const failure = await readUpdateDatabaseGenerationsIsolated([file, missing], {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir, ...sqliteWorkerPreloadEnv(preload) },
+    retryAdvice: false,
+  }).catch((error: unknown) => error);
+
+  assert(failure instanceof Error);
+  expect(failure.message).toContain(
+    `State schema inspection failed (exit): SQLite file generation changed while reading; after `,
+  );
+  expect(failure.message).toContain(
+    `during database generation verification for source scope [${file}, ${missing}] (scope: 2 source paths)`,
+  );
+  expect(failure.message).not.toMatch(/shared database discovery|retry the update|free space/);
+});
 
 it.skipIf(process.platform === "win32")(
   "refuses source replacement during pinned header inspection",

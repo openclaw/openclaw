@@ -23,9 +23,9 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 // The threaded projection fixture has no Gateway host broker; lease behavior has its own suite.
-vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
+vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-lifecycle-lease.js")>()),
   hasPluginLifecycleLease: () => false,
-  runOutsidePluginLifecycleLease: (run: () => unknown) => run(),
   withPluginLifecycleLease: async (
     _options: unknown,
     run: (lease: { assertOwned: () => void }) => Promise<unknown>,
@@ -132,6 +132,7 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
     try {
       await reloader.ready;
       await projection.ensureMaterialized();
+      await list();
       for (const [event, update, expected] of [
         ["channel streaming", { channels: { slack: { streaming: { mode: "partial" } } } }, 0],
         ["ui.prefs", { ui: { prefs: { sidebarEntries: ["sessions"] } } }, 0],

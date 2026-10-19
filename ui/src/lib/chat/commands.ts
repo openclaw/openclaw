@@ -12,7 +12,7 @@ import {
   isModelIndependentDirectiveCommand,
   resolveReplyDirectiveCommand,
 } from "../../../../src/auto-reply/reply/directive-handling.parse.js";
-import type { IconName } from "../../components/icons.ts";
+import type { IconName } from "../../components/icon-data.ts";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 

@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { performance } from "node:perf_hooks";
+import { stripVTControlCharacters } from "node:util";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../infra/diagnostic-events.js";
 import { setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -21,17 +26,16 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const notice =
-  "My session in this room ended during restart recovery. Use /reset or /new to start a replacement session.";
-const databaseIdentity = Symbol("restart-tombstone-database");
+  "My session in this room ended during restart recovery. Use Resume in WebChat, or /reset or /new to start a replacement session.";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
-let resetReplyRunRegistry: () => void;
+let resetSessionControllerForTest: () => void;
 beforeAll(async () => {
   ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-  const { testing } = await import("./reply-run-registry.test-support.js");
-  resetReplyRunRegistry = () => testing.resetReplyRunRegistry();
+  const { testing } = await import("../../sessions/session-controller.test-support.js");
+  resetSessionControllerForTest = () => testing.resetSessionControllerForTest();
 });
 
 describe("restart tombstone channel feedback", () => {
@@ -43,7 +47,7 @@ describe("restart tombstone channel feedback", () => {
 
   beforeEach(() => {
     clearAgentHarnesses();
-    resetReplyRunRegistry();
+    resetSessionControllerForTest();
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();
     setActivePluginRegistry(
@@ -80,12 +84,6 @@ describe("restart tombstone channel feedback", () => {
   });
 
   afterEach(() => {
-    emitSessionIdentityMutation({
-      kind: "delete",
-      agentId: "main",
-      databaseIdentity,
-      previous: { sessionId: "failed-session", sessionKeys: [sessionKey] },
-    });
     loggingState.rawConsole = null;
     setLoggerOverride(null);
   });
@@ -132,7 +130,23 @@ describe("restart tombstone channel feedback", () => {
   it.each(["message_tool"] as const)(
     "delivers one room notice under %s and warns for every rejected inbound",
     async (visibleReplies) => {
+      let elapsedMs = 0;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      const diagnosticsWereEnabled = areDiagnosticsEnabledForProcess();
+      setDiagnosticsEnabledForProcess(true);
+      onTestFinished(() => {
+        clock.mockRestore();
+        setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
+      });
+      sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
+        elapsedMs += 1_500;
+        return sessionStoreMocks.currentEntry;
+      });
+      // Slow lifecycle diagnostics must not count as duplicate rejection warnings.
+      const rejectionWarnings = () =>
+        warn.mock.calls.filter(([line]) => line.includes("[auto-reply/reply-turn-admission]"));
       await rejectInbound({ visibleReplies });
+      expect(rejectionWarnings()).toHaveLength(1);
       expect(deliver).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ text: notice }),
         expect.objectContaining({ kind: "final" }),
@@ -140,12 +154,15 @@ describe("restart tombstone channel feedback", () => {
       await rejectInbound({ visibleReplies });
       expect(deliver).toHaveBeenCalledOnce();
       expect(replyResolver).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledTimes(2);
-      for (const [line] of warn.mock.calls) {
+      expect(rejectionWarnings()).toHaveLength(2);
+      for (const [line] of rejectionWarnings()) {
         expect(line).toContain(sessionKey);
         expect(line).toContain("automatic recovery exhausted");
         expect(line).toContain("/reset");
       }
+      expect(warn.mock.calls.map(([line]) => stripVTControlCharacters(line))).toContainEqual(
+        expect.stringContaining("[sessions/lifecycle] slow session lifecycle operation"),
+      );
       expect(sessionStoreMocks.currentEntry).toMatchObject({
         sessionId: "failed-session",
         mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
@@ -153,16 +170,18 @@ describe("restart tombstone channel feedback", () => {
     },
   );
 
-  it("clears notice suppression on reset", async () => {
+  it.each(["session", "cycle"] as const)("notifies again for a new recovery %s", async (change) => {
     await rejectInbound();
-    const previous = { sessionId: "failed-session", sessionKeys: [sessionKey] };
-    emitSessionIdentityMutation({
-      kind: "reset",
-      agentId: "main",
-      databaseIdentity,
-      previous,
-      current: previous,
-    });
+    if (change === "session") {
+      sessionStoreMocks.currentEntry!.sessionId = "replacement-session";
+    } else {
+      sessionStoreMocks.currentEntry!.mainRestartRecovery = {
+        cycleId: "replacement-cycle",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      };
+    }
     await rejectInbound();
     expect(deliver).toHaveBeenCalledTimes(2);
   });
@@ -172,7 +191,7 @@ describe("restart tombstone channel feedback", () => {
     await rejectInbound();
     expect(deliver).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        text: expect.stringContaining("WebChat and use Resume in new session"),
+        text: expect.stringContaining("WebChat and use Resume."),
       }),
       expect.objectContaining({ kind: "final" }),
     );

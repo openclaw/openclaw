@@ -1,7 +1,8 @@
 import path from "node:path";
 import { normalizeJsonSchemaForTypeBox } from "openclaw/plugin-sdk/json-schema-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
+import { Compile } from "typebox/compile";
+import { readCodexNotificationScope } from "./notification-correlation.js";
 import rawDynamicToolCallParamsSchema from "./protocol-generated/json/DynamicToolCallParams.json" with { type: "json" };
 import sharedDefinitionsSchema from "./protocol-generated/json/v2/CodexAppServerProtocolDefinitions.json" with { type: "json" };
 import rawErrorNotificationSchema from "./protocol-generated/json/v2/ErrorNotification.json" with { type: "json" };
@@ -15,6 +16,8 @@ import {
   type CodexDynamicToolCallParams,
   type CodexErrorNotification,
   type CodexModelListResponse,
+  type CodexPreparedServerNotification,
+  type CodexServerNotification,
   type CodexThread,
   type CodexThreadForkResponse,
   type CodexThreadItem,
@@ -48,222 +51,62 @@ type ValidationError = {
 };
 
 type CodexValidator<T> = {
-  schema: unknown;
   check: (value: unknown) => value is T;
   errors: (value: unknown) => ValidationError[];
 };
 
-const externalDefinitionRefPrefix = "./CodexAppServerProtocolDefinitions.json#/definitions/";
-const rootExternalDefinitionRefPrefix = "./v2/CodexAppServerProtocolDefinitions.json#/definitions/";
-const localDefinitionRefPrefix = "#/definitions/";
+// Compilation-only resource IDs let TypeBox resolve the generated relative refs.
+const schemaBaseUrl = "https://openclaw.invalid/codex/";
+const sharedDefinitionsId = new URL("v2/CodexAppServerProtocolDefinitions.json", schemaBaseUrl)
+  .href;
+const schemaContext = {
+  [sharedDefinitionsId]: normalizeJsonSchemaForTypeBox({
+    ...sharedDefinitionsSchema,
+    $id: sharedDefinitionsId,
+  }),
+};
 
-function materializeCodexSchema(
-  schema: unknown,
-  externalRefPrefix = externalDefinitionRefPrefix,
-): unknown {
-  const sharedDefinitions: unknown = sharedDefinitionsSchema.definitions;
-  if (!isRecord(schema) || !isRecord(sharedDefinitions)) {
-    return schema;
-  }
-  const reachable = collectDefinitionRefs(schema, externalRefPrefix);
-  const pending = [...reachable];
-  while (pending.length > 0) {
-    const name = pending.pop();
-    if (name === undefined) {
-      continue;
-    }
-    const definition = sharedDefinitions[name];
-    if (definition === undefined) {
-      throw new Error(`Missing generated Codex schema definition: ${name}`);
-    }
-    for (const dependency of collectDefinitionRefs(definition, localDefinitionRefPrefix)) {
-      if (!reachable.has(dependency)) {
-        reachable.add(dependency);
-        pending.push(dependency);
-      }
-    }
-  }
-  if (reachable.size === 0) {
-    return schema;
-  }
-  const definitions = Object.fromEntries(
-    Object.entries(sharedDefinitions).filter(([name]) => reachable.has(name)),
+function compileCodexSchema<T>(
+  rawSchema: Record<string, unknown>,
+  name: string,
+): CodexValidator<T> {
+  const validator = Compile(
+    schemaContext,
+    normalizeJsonSchemaForTypeBox({ ...rawSchema, $id: new URL(name, schemaBaseUrl).href }),
   );
-  return rewriteDefinitionRefs({ ...schema, definitions }, externalRefPrefix);
-}
-
-function collectDefinitionRefs(
-  value: unknown,
-  prefix: string,
-  names = new Set<string>(),
-): Set<string> {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      collectDefinitionRefs(entry, prefix, names);
-    }
-  } else if (isRecord(value)) {
-    if (typeof value.$ref === "string" && value.$ref.startsWith(prefix)) {
-      const name = value.$ref.slice(prefix.length).split("/", 1)[0];
-      if (name) {
-        names.add(name.replaceAll("~1", "/").replaceAll("~0", "~"));
-      }
-    }
-    for (const entry of Object.values(value)) {
-      collectDefinitionRefs(entry, prefix, names);
-    }
-  }
-  return names;
-}
-
-function rewriteDefinitionRefs(value: unknown, externalRefPrefix: string): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => rewriteDefinitionRefs(entry, externalRefPrefix));
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [
-      key,
-      key === "$ref" && typeof entry === "string" && entry.startsWith(externalRefPrefix)
-        ? `${localDefinitionRefPrefix}${entry.slice(externalRefPrefix.length)}`
-        : rewriteDefinitionRefs(entry, externalRefPrefix),
-    ]),
-  );
-}
-
-function compileCodexSchema<T>(rawSchema: unknown, externalRefPrefix?: string): CodexValidator<T> {
-  const schema = materializeCodexSchema(rawSchema, externalRefPrefix);
-  if (typeof schema !== "boolean" && !isRecord(schema)) {
-    throw new TypeError("Generated Codex schema must be an object or boolean");
-  }
-  const validator = Compile(normalizeJsonSchemaForTypeBox(schema) as never) as TypeBoxValidator;
   return {
-    schema,
     check: (value): value is T => validator.Check(value),
-    errors: (value) => [...validator.Errors(value)] as ValidationError[],
+    errors: (value) => [...validator.Errors(value)],
   };
-}
-
-function schemaTypeIncludes(schema: Record<string, unknown>, type: string): boolean {
-  return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
-}
-
-function readDefault(schema: unknown): unknown {
-  if (!isRecord(schema) || !Object.hasOwn(schema, "default")) {
-    return undefined;
-  }
-  return structuredClone(schema.default);
-}
-
-function decodePointerSegment(segment: string): string {
-  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
-}
-
-function resolveLocalRef(root: unknown, ref: string): unknown {
-  if (ref === "#") {
-    return root;
-  }
-  if (!ref.startsWith("#/")) {
-    return undefined;
-  }
-  let current = root;
-  for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[segment];
-  }
-  return current;
-}
-
-function applySchemaDefaults(
-  schema: unknown,
-  value: unknown,
-  root = schema,
-  resolvingRefs = new Set<string>(),
-): unknown {
-  // Codex omits some fields that generated schemas default. Apply those defaults
-  // before validation so callers get stable normalized protocol shapes.
-  if (value === undefined) {
-    const defaultValue = readDefault(schema);
-    if (defaultValue !== undefined) {
-      return defaultValue;
-    }
-  }
-  if (!isRecord(schema)) {
-    return value;
-  }
-  let nextValue = value;
-  if (typeof schema.$ref === "string" && !resolvingRefs.has(schema.$ref)) {
-    const target = resolveLocalRef(root, schema.$ref);
-    if (target !== undefined) {
-      resolvingRefs.add(schema.$ref);
-      nextValue = applySchemaDefaults(target, nextValue, root, resolvingRefs);
-      resolvingRefs.delete(schema.$ref);
-    }
-  }
-  if (Array.isArray(schema.allOf)) {
-    for (const branch of schema.allOf) {
-      nextValue = applySchemaDefaults(branch, nextValue, root, resolvingRefs);
-    }
-  }
-  if (schemaTypeIncludes(schema, "object") && isRecord(nextValue) && isRecord(schema.properties)) {
-    for (const [key, propertySchema] of Object.entries(schema.properties)) {
-      const currentValue = nextValue[key];
-      const defaultedValue = applySchemaDefaults(propertySchema, currentValue, root, resolvingRefs);
-      if (defaultedValue !== undefined && defaultedValue !== currentValue) {
-        nextValue[key] = defaultedValue;
-      }
-    }
-    if (isRecord(schema.additionalProperties)) {
-      for (const key of Object.keys(nextValue)) {
-        if (Object.hasOwn(schema.properties, key)) {
-          continue;
-        }
-        nextValue[key] = applySchemaDefaults(
-          schema.additionalProperties,
-          nextValue[key],
-          root,
-          resolvingRefs,
-        );
-      }
-    }
-  }
-  if (schemaTypeIncludes(schema, "array") && Array.isArray(nextValue) && isRecord(schema.items)) {
-    return nextValue.map((entry) => applySchemaDefaults(schema.items, entry, root, resolvingRefs));
-  }
-  return nextValue;
-}
-
-function normalizeWithDefaults(schema: unknown, value: unknown): unknown {
-  if (value === undefined || value === null) {
-    return value;
-  }
-  return applySchemaDefaults(schema, structuredClone(value));
 }
 
 const validateDynamicToolCallParams = compileCodexSchema<CodexDynamicToolCallParams>(
   rawDynamicToolCallParamsSchema,
-  rootExternalDefinitionRefPrefix,
+  "DynamicToolCallParams.json",
 );
 const validateErrorNotification = compileCodexSchema<CodexErrorNotification>(
   rawErrorNotificationSchema,
+  "v2/ErrorNotification.json",
 );
 const validateModelListResponse = compileCodexSchema<CodexModelListResponse>(
   rawModelListResponseSchema,
+  "v2/ModelListResponse.json",
 );
 const validateThreadResumeResponse = compileCodexSchema<CodexThreadResumeResponse>(
   rawThreadResumeResponseSchema,
+  "v2/ThreadResumeResponse.json",
 );
 const validateThreadStartResponse = compileCodexSchema<CodexThreadStartResponse>(
   rawThreadStartResponseSchema,
+  "v2/ThreadStartResponse.json",
 );
 const validateTurnCompletedNotification = compileCodexSchema<CodexTurnCompletedNotification>(
   rawTurnCompletedNotificationSchema,
+  "v2/TurnCompletedNotification.json",
 );
 const validateTurnStartResponse = compileCodexSchema<CodexTurnStartResponse>(
   rawTurnStartResponseSchema,
+  "v2/TurnStartResponse.json",
 );
 
 export function assertCodexThreadStartResponse(value: unknown): CodexThreadStartResponse {
@@ -360,12 +203,27 @@ export function assertCodexModelListResponse(value: unknown): CodexModelListResp
   return assertCodexShape(validateModelListResponse, value, "model/list response");
 }
 
-export function readCodexTurnCompletedNotification(
+function readCodexTurnCompletedNotification(
   value: unknown,
 ): CodexTurnCompletedNotification | undefined {
   const notification = readCodexShape(validateTurnCompletedNotification, value);
   // Turn is shared with turn/start, but only terminal states belong in this notification.
   return notification?.turn.status === "inProgress" ? undefined : notification;
+}
+
+/** Normalize the native terminal snapshot once before receipt and queued projection fan-out. */
+export function prepareCodexServerNotification(
+  notification: CodexServerNotification,
+  scope = readCodexNotificationScope(notification.params),
+): CodexPreparedServerNotification {
+  return {
+    ...notification,
+    ...scope,
+    completedTurn:
+      notification.method === "turn/completed"
+        ? readCodexTurnCompletedNotification(notification.params)?.turn
+        : undefined,
+  };
 }
 
 export function assertExactSupervisionModelSelection(
@@ -381,18 +239,14 @@ export function assertExactSupervisionModelSelection(
 }
 
 function assertCodexShape<T>(validate: CodexValidator<T>, value: unknown, label: string): T {
-  const normalized = normalizeWithDefaults(validate.schema, value);
-  if (validate.check(normalized)) {
-    return normalized;
+  if (validate.check(value)) {
+    return value;
   }
-  throw new Error(
-    `Invalid Codex app-server ${label}: ${formatValidationErrors(validate, normalized)}`,
-  );
+  throw new Error(`Invalid Codex app-server ${label}: ${formatValidationErrors(validate, value)}`);
 }
 
 function readCodexShape<T>(validate: CodexValidator<T>, value: unknown): T | undefined {
-  const normalized = normalizeWithDefaults(validate.schema, value);
-  return validate.check(normalized) ? normalized : undefined;
+  return validate.check(value) ? value : undefined;
 }
 
 function formatValidationErrors(validate: CodexValidator<unknown>, value: unknown): string {

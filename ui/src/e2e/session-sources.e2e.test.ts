@@ -6,6 +6,7 @@ import {
   controlUiSessionPath,
   defaultControlUiFeatureMethods,
   installMockGateway,
+  waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -115,6 +116,32 @@ suite.define(() => {
     });
   });
 
+  it("finds source labels before opening Appearance and waits for the installed catalog", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods,
+        methodResponses,
+        deferredMethods: ["plugins.list"],
+      });
+      await page.goto(`${suite.server.baseUrl}settings/about`);
+      await waitForControlUiRoute(page, { pathname: "/settings/about", routeId: "about" });
+      const sidebar = page.locator(".settings-sidebar");
+      const search = sidebar.getByRole("searchbox", { name: "Search settings" });
+      for (const source of ["Claude", "Codex", "OpenCode", "Pi"]) {
+        await search.fill(`${source} sessions`);
+        await sidebar.getByRole("link", { name: /Session sources/ }).waitFor();
+      }
+      await sidebar.getByRole("link", { name: /Session sources/ }).click();
+      await gateway.waitForRequest("plugins.list");
+      const section = page.locator("#settings-session-sources");
+      await expect.poll(() => section.textContent()).toContain("Loading");
+      expect(await section.getByRole("switch").count()).toBe(0);
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
+      await gateway.resolveDeferred("plugins.list");
+      await expect.poll(() => section.getByRole("switch").count()).toBe(4);
+    });
+  });
+
   it("finds session sources from the sidebar and independently saves discovery preferences", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, { featureMethods, methodResponses });
@@ -133,6 +160,12 @@ suite.define(() => {
       await expect.poll(() => opencode.getByRole("switch").isChecked()).toBe(false);
       await expect.poll(() => pi.getByRole("switch").isChecked()).toBe(true);
       await expect.poll(() => codex.getByRole("switch").isDisabled()).toBe(false);
+      expect(await section.locator(".settings-row__title").allTextContents()).toEqual([
+        "Show Claude Code sessions",
+        "Show Codex sessions",
+        "Show OpenCode sessions",
+        "Show Pi sessions",
+      ]);
 
       const artifacts = createControlUiE2eArtifactDir("session-sources");
       await section.scrollIntoViewIfNeeded();

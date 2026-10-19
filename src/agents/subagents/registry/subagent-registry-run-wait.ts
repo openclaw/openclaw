@@ -375,7 +375,7 @@ export abstract class SubagentWaitManager {
       if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
         return;
       }
-      let current = this.options.runs.get(runId);
+      const current = this.options.runs.get(runId);
       if (!current || !isSameSubagentRunOwner(current, waitedEntry)) {
         return;
       }
@@ -385,13 +385,6 @@ export abstract class SubagentWaitManager {
         childSessionKey: current.childSessionKey,
         error,
       });
-      if (
-        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
-        !isSameSubagentRunOwner(this.options.runs.get(runId), current)
-      ) {
-        return;
-      }
-      current = currentEntry();
       if (
         typeof current.execution.endedAt === "number" &&
         !current.cleanupCompletedAt &&

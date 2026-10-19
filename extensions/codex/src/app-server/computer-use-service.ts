@@ -224,7 +224,6 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     ) {
       await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       await fs.rename(backupPath, operationTargetPath);
-      backupCreated = false;
     }
     throw error;
   } finally {

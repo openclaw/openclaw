@@ -4,7 +4,10 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasExactKeys } from "../../chrome-extension/modules/strict-json.js";
 import { readPrivateNativeHostFile } from "./extension-native-host-file.js";
-import { BROWSER_NATIVE_HOST_NAME } from "./extension-native-host.constants.js";
+import {
+  BROWSER_NATIVE_HOST_NAME,
+  NATIVE_HOST_MANIFEST_KEYS,
+} from "./extension-native-host.constants.js";
 import {
   type BrowserNativeBootstrapResponse,
   type BrowserNativeRelayEnsureStatus,
@@ -80,7 +83,7 @@ async function validateNativeManifest(params: {
   }
   const expectedOrigins = validateExpectedOrigins(params.expectedOrigins);
   if (
-    !hasExactKeys(manifest, ["name", "description", "path", "type", "allowed_origins"]) ||
+    !hasExactKeys(manifest, NATIVE_HOST_MANIFEST_KEYS) ||
     manifest.name !== BROWSER_NATIVE_HOST_NAME ||
     manifest.type !== "stdio" ||
     (process.platform === "win32"

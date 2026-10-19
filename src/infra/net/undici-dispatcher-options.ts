@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import net from "node:net";
+import { floorPositiveFiniteNumber as normalizedTimeout } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 import { withUndiciErrorDiagnostics } from "./undici-error-diagnostics.js";
@@ -19,11 +20,6 @@ export function setGlobalUndiciStreamTimeoutMs(timeoutMs: number | undefined): v
 type UndiciAgentOptions = ConstructorParameters<typeof import("undici").Agent>[0];
 type UndiciProxyAgentOptions = ConstructorParameters<typeof import("undici").ProxyAgent>[0];
 type UndiciProxyAgentOptionsRecord = Exclude<UndiciProxyAgentOptions, string | URL>;
-// Guarded fetch dispatchers intentionally stay on HTTP/1.1. Undici 8 enables
-// HTTP/2 ALPN by default, but dispatcher overrides are unreliable on that path.
-const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
-  allowH2: false as const,
-});
 
 export function loadUndiciModule(
   requiredExports: ReadonlyArray<keyof typeof import("undici")>,
@@ -82,7 +78,7 @@ export function buildProxyConnectOptions(
     timeout: options.connectTimeout,
     ...options.proxyTls,
     ...(timeout !== undefined ? { timeout } : {}),
-    ...HTTP1_ONLY_DISPATCHER_OPTIONS,
+    allowH2: false,
   };
 }
 
@@ -116,12 +112,6 @@ function createUndiciOriginDispatcher(
     : createUndiciPool(origin, options);
 }
 
-function normalizedTimeout(timeoutMs?: number): number | undefined {
-  return timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? Math.floor(timeoutMs)
-    : undefined;
-}
-
 export function buildHttp1AgentOptions(
   options: UndiciAgentOptions = {},
   timeoutMs?: number,
@@ -130,7 +120,8 @@ export function buildHttp1AgentOptions(
   return {
     factory: createUndiciOriginDispatcher,
     ...options,
-    ...HTTP1_ONLY_DISPATCHER_OPTIONS,
+    // Undici 8 defaults to HTTP/2, whose dispatcher overrides are unreliable.
+    allowH2: false,
     connect:
       typeof options.connect === "function"
         ? options.connect

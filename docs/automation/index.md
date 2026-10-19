@@ -130,6 +130,7 @@ schedule and instructions you choose; they do not restore inferred follow-ups.
 
 - [Automations](/automation/cron-jobs) — precise scheduling and one-shot reminders
 - [IMAP email trigger](/automation/imap) — sender-gated inbound email and isolated reader sessions
+- [MCP Events](/automation/mcp-events) — subscribed events, signed callbacks, and Automation runs
 - [Hooks](/automation/hooks) — event-driven lifecycle scripts
 - [Plugin hooks](/plugins/hooks) — in-process tool, prompt, message, and lifecycle hooks
 - [Standing Orders](/automation/standing-orders) — persistent agent instructions

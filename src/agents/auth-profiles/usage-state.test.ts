@@ -1,15 +1,41 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createAuthProfileUsageStore as makeStore } from "./credential-fixtures.test-support.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
   clearExpiredCooldowns,
+  resetAuthProfileFailureState,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntil,
   resolveProfileUnusableUntilForDisplay,
+  readAuthProfileUsageStats,
+  readInlineProviderApiKeyUsage,
 } from "./usage-state.js";
+
+it("preserves a sibling model cooldown until that model succeeds", () => {
+  const existing: ProfileUsageStats = {
+    cooldownReason: "rate_limit",
+    cooldownModel: "primary",
+    cooldownUntil: 31_000,
+    errorCount: 1,
+    failureCounts: { rate_limit: 1 },
+    lastFailureAt: 1_000,
+  };
+  const siblingSuccess = resetAuthProfileFailureState(existing, { lastUsed: 2_000 }, "fallback");
+  expect(siblingSuccess).toMatchObject({ ...existing, lastUsed: 2_000 });
+  const primarySuccess = resetAuthProfileFailureState(
+    siblingSuccess,
+    { lastUsed: 32_000 },
+    "primary",
+  );
+  expect(primarySuccess.cooldownUntil).toBeUndefined();
+  expect(primarySuccess.failureCounts).toBeUndefined();
+  expect(primarySuccess.lastUsed).toBe(32_000);
+});
 
 const now = 1_700_000_000_000;
 const until = now + 60_000;
@@ -29,6 +55,15 @@ const cooldown = (
 });
 
 describe("auth profile usage state", () => {
+  beforeEach(() =>
+    setCurrentPluginMetadataSnapshot(
+      createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "openrouter", providers: ["openrouter"], managesOwnAvailability: true }],
+      }),
+      { config: {} },
+    ),
+  );
+  afterEach(() => setCurrentPluginMetadataSnapshot(undefined));
   it("resolves valid account-wide timestamps and ignores model-scoped windows", () => {
     const cases: Array<[ProfileUsageStats, string | null | undefined, number | null]> = [
       [{}, undefined, null],
@@ -57,16 +92,78 @@ describe("auth profile usage state", () => {
     }
   });
 
-  it.each<[string, number | null]>([
-    ["openrouter:default", null],
-    [anthropic, until],
-  ])("displays the cooldown for %s as %s", (profileId, expected) => {
-    expect(
-      resolveProfileUnusableUntilForDisplay(
-        makeStore({ [profileId]: { cooldownUntil: until } }),
-        profileId,
-      ),
-    ).toBe(expected);
+  it.each(["rate_limit", "overloaded"] as const)(
+    "ignores only the managed %s cooldown window",
+    (reason) => {
+      const profileId = "openrouter:default";
+      const raw = { ...cooldown(reason), cooldownUntil: now + 120_000 };
+      const store = makeStore({ [profileId]: raw });
+      expect(isProfileInCooldown(store, profileId, now)).toBe(false);
+      expect(getSoonestCooldownExpiry(store, [profileId], { now })).toBeNull();
+      expect(resolveProfileUnusableUntilForDisplay(store, profileId)).toBeNull();
+      expect(resolveProfilesUnavailableReason({ store, profileIds: [profileId], now })).toBeNull();
+      expect(readAuthProfileUsageStats(store, profileId)?.cooldownUntil).toBeUndefined();
+      expect(store.usageStats?.[profileId]).toEqual(raw);
+
+      for (const permanent of [
+        { disabledUntil: until, disabledReason: "billing" },
+        { disabledUntil: until, disabledReason: "auth_permanent" },
+        { blockedUntil: until, blockedReason: "subscription_limit", blockedSource: "wham" },
+      ] satisfies Partial<ProfileUsageStats>[]) {
+        store.usageStats![profileId] = { ...raw, ...permanent };
+        expect(isProfileInCooldown(store, profileId, now)).toBe(true);
+        expect(getSoonestCooldownExpiry(store, [profileId], { now })).toBe(until);
+        expect(resolveProfileUnusableUntilForDisplay(store, profileId)).toBe(until);
+        expect(resolveProfilesUnavailableReason({ store, profileIds: [profileId], now })).toBe(
+          "disabledReason" in permanent ? permanent.disabledReason : "rate_limit",
+        );
+      }
+    },
+  );
+
+  it.each(["auth", undefined] as const)(
+    "keeps managed %s failures and inline credential health",
+    (reason) => {
+      const profileId = "openrouter:default";
+      const stats = cooldown(reason);
+      const store = makeStore({ [profileId]: stats, "inline-api-key:openrouter": stats });
+      expect(isProfileInCooldown(store, profileId, now)).toBe(true);
+      expect(resolveProfileUnusableUntilForDisplay(store, profileId)).toBe(until);
+      expect(readInlineProviderApiKeyUsage(store, "openrouter").unusableUntil).toBe(until);
+    },
+  );
+
+  it.each([
+    ["rate_limit", "target", false, false, false],
+    ["timeout", "target", true, false, false],
+    ["auth", "target", true, true, true],
+  ] as const)(
+    "preserves the managed %s model scope",
+    (reason, model, targetBlocked, siblingBlocked, accountBlocked) => {
+      const profileId = "openrouter:default";
+      const store = makeStore({ [profileId]: cooldown(reason, model) });
+      expect(isProfileInCooldown(store, profileId, now, model)).toBe(targetBlocked);
+      expect(isProfileInCooldown(store, profileId, now, "sibling")).toBe(siblingBlocked);
+      expect(isProfileInCooldown(store, profileId, now, null)).toBe(accountBlocked);
+    },
+  );
+
+  it("keeps model-scoped subscription blocks while ignoring managed transient cooldowns", () => {
+    const profileId = "openrouter:default";
+    const store = makeStore({
+      [profileId]: cooldown("rate_limit", "target", {
+        blockedUntil: until,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+        blockedScope: "model",
+        blockedModel: "target",
+      }),
+    });
+    expect(isProfileInCooldown(store, profileId, now, "target")).toBe(true);
+    expect(isProfileInCooldown(store, profileId, now, "sibling")).toBe(false);
+    expect(isProfileInCooldown(store, profileId, now, null)).toBe(false);
+    expect(getSoonestCooldownExpiry(store, [profileId], { now, forModel: "target" })).toBe(until);
+    expect(getSoonestCooldownExpiry(store, [profileId], { now, forModel: "sibling" })).toBeNull();
   });
 
   type CooldownCase = [
@@ -80,7 +177,6 @@ describe("auth profile usage state", () => {
     [sonnet, true],
     [undefined, true],
   ];
-  const disabled = { disabledUntil: until, disabledReason: "billing" } satisfies ProfileUsageStats;
   const cooldownCases: CooldownCase[] = [
     ["missing stats", anthropic, undefined, [[undefined, false]]],
     ["expired cooldown", anthropic, { cooldownUntil: now - 1_000 }, [[undefined, false]]],
@@ -89,18 +185,6 @@ describe("auth profile usage state", () => {
       anthropic,
       { cooldownUntil: now - 1_000, disabledUntil: until },
       [[undefined, true]],
-    ],
-    [
-      "OpenRouter bypass",
-      "openrouter:default",
-      cooldown(undefined, undefined, disabled),
-      [[undefined, false]],
-    ],
-    [
-      "Kilocode bypass",
-      "kilocode:default",
-      cooldown(undefined, undefined, disabled),
-      [[undefined, false]],
     ],
     ["model-scoped rate limit", copilot, cooldown("rate_limit", sonnet), copilotChecks],
     [
@@ -188,7 +272,6 @@ describe("auth profile usage state", () => {
       expected: ReturnType<typeof resolveProfilesUnavailableReason>,
     ]
   > = [
-    ["active disable", { primary: disabled }, "billing"],
     [
       "explicit cooldown beats stale counts",
       { primary: cooldown("auth", undefined, { failureCounts: { rate_limit: 99 } }) },
@@ -238,7 +321,6 @@ describe("auth profile usage state", () => {
 
   const unchangedCases: Array<[string, AuthProfileStore["usageStats"]]> = [
     ["missing stats", undefined],
-    ["no cooldowns", { primary: { lastUsed: now } }],
     [
       "non-finite cooldowns",
       {

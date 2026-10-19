@@ -137,9 +137,6 @@ export async function prepareInternalHooks(
       }
       registrations.push(...events.map((event) => ({ event, handler })));
       loadedCount++;
-      log.debug(
-        `Prepared hook: ${safeLogValue(entry.hook.name)} -> ${events.map((event) => safeLogValue(event)).join(", ")}${exportName !== "default" ? ` (export: ${safeLogValue(exportName)})` : ""}`,
-      );
     } catch (error) {
       const message = `Failed to load hook ${safeLogValue(entry.hook.name)}: ${safeLogValue(formatErrorMessage(error))}`;
       if (opts?.failureMode !== "best-effort") {

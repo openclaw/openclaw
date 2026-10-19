@@ -16,8 +16,6 @@ import {
 import { classifyAcpToolApproval } from "./approval-classifier.js";
 
 type PermissionResolverDeps = {
-  prompt?: (toolName: string | undefined, toolTitle?: string) => Promise<boolean>;
-  log?: (line: string) => void;
   cwd?: string;
   signal?: AbortSignal;
 };
@@ -78,12 +76,9 @@ export async function resolvePermissionRequest(
   params: RequestPermissionRequest,
   deps: PermissionResolverDeps = {},
 ): Promise<RequestPermissionResponse> {
-  const log = deps.log ?? ((line: string) => console.error(line));
   if (deps.signal?.aborted) {
     return { outcome: { outcome: "cancelled" } };
   }
-  const prompt =
-    deps.prompt ?? ((toolName, title) => promptUserPermission(toolName, title, deps.signal));
   const cwd = deps.cwd ?? process.cwd();
   const options = params.options ?? [];
   const toolTitle = sanitizeTerminalText(params.toolCall?.title ?? "tool");
@@ -95,7 +90,7 @@ export async function resolvePermissionRequest(
       : classification.approvalClass;
 
   if (options.length === 0) {
-    log(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
+    console.error(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
     return { outcome: { outcome: "cancelled" } };
   }
 
@@ -107,17 +102,17 @@ export async function resolvePermissionRequest(
     options.find((option) => option.kind === "reject_always");
   if (classification.autoApprove) {
     if (!allowOption) {
-      log(`[permission cancelled] ${toolName ?? "unknown"}: missing allow option`);
+      console.error(`[permission cancelled] ${toolName ?? "unknown"}: missing allow option`);
       return { outcome: { outcome: "cancelled" } };
     }
-    log(`[permission auto-approved] ${toolName} (${toolKind ?? "unknown"})`);
+    console.error(`[permission auto-approved] ${toolName} (${toolKind ?? "unknown"})`);
     return { outcome: { outcome: "selected", optionId: allowOption.optionId } };
   }
 
-  log(
+  console.error(
     `\n[permission requested] ${toolTitle}${toolName ? ` (${toolName})` : ""}${toolKind ? ` [${toolKind}]` : ""}`,
   );
-  const approved = await prompt(toolName, toolTitle);
+  const approved = await promptUserPermission(toolName, toolTitle, deps.signal);
   if (deps.signal?.aborted) {
     return { outcome: { outcome: "cancelled" } };
   }
@@ -129,7 +124,7 @@ export async function resolvePermissionRequest(
     return { outcome: { outcome: "selected", optionId: rejectOption.optionId } };
   }
 
-  log(
+  console.error(
     `[permission cancelled] ${toolName ?? "unknown"}: missing ${approved ? "allow" : "reject"} option`,
   );
   return { outcome: { outcome: "cancelled" } };

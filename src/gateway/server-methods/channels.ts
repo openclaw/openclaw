@@ -192,9 +192,6 @@ function channelStatusFailureMessage(value: unknown): string | null {
 }
 
 async function changeChannelAccount(params: ChannelAccountParams, action: "start" | "stop") {
-  if (action === "start" && !params.plugin.gateway?.startAccount) {
-    throw new Error(`Channel ${params.channelId} does not support runtime start`);
-  }
   const accountId = resolveChannelGatewayAccountId(params, () =>
     params.context.getRuntimeSnapshot({ channelId: params.channelId, inspectAccounts: false }),
   );

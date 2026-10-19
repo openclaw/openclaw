@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   executeExistingOpenClawStateRead,
@@ -23,8 +22,8 @@ import {
   readUserProfileVersion,
 } from "./user-profile-events.js";
 import {
-  getResidentUserProfileDisplay,
   isUserProfileCatalogReady,
+  prepareUserProfileCatalog,
   readResidentUserProfileIdentity,
 } from "./user-profile-list.js";
 import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
@@ -34,7 +33,6 @@ import type {
   UserChannelIdentityResult,
   UserChannelIdentitySelector,
   UserChannelIdentityWorkerOperations,
-  UserProfileAuthority,
 } from "./user-profiles.types.js";
 
 type IdentityOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
@@ -120,13 +118,23 @@ async function changeIdentity(
           context.admission.assertCurrent();
           assertCurrent?.();
           if (request.stage === "commit" && captured.action !== "authorize") {
-            fence ??= fenceUserProfileMutationAuthority(context.admission, {
-              profiles: request.facts.profiles,
-              identities: [],
-              channels: request.facts.channels,
-            });
+            const { profiles, channels } = request.facts;
+            if (
+              !grant(() => {
+                fence = fenceUserProfileMutationAuthority(context.admission, {
+                  profiles,
+                  identities: [],
+                  channels,
+                });
+              })
+            ) {
+              // An expired grant cannot commit; release its fence before another attempt.
+              fence?.settle(true);
+              fence = undefined;
+            }
+          } else {
+            grant();
           }
-          grant();
         });
         void operation.settled.then((settlement) => {
           const committed = admission.committed;
@@ -267,7 +275,7 @@ export async function prepareUserProfileRolePolicyAuthority(
 ) {
   return prepareUserProfileAuthorityRead(profileId, options, "authority", async (context) => {
     const source = { path: context.admission.databasePath };
-    if (isUserProfileCatalogReady(source)) {
+    if (isUserProfileCatalogReady(source.path)) {
       const profile = readResidentUserProfileIdentity(profileId, source);
       return (
         profile && {
@@ -304,35 +312,16 @@ async function prepareUserProfileAuthority(
     profileId,
     options,
     dependency,
-    async (
-      context,
-    ): Promise<(UserProfileAuthority & { listItem?: UserProfileListItem }) | undefined> => {
-      const source = { path: context.admission.databasePath };
-      if (!includeProfile && isUserProfileCatalogReady(source)) {
-        const profile = readResidentUserProfileIdentity(profileId, source);
-        return (
-          profile && {
-            ...profile,
-            aliases: [
-              profile.profileId,
-              ...[...profile.aliases].filter((id) => id !== profile.profileId).toSorted(),
-            ],
-            display: getResidentUserProfileDisplay(profile.profileId, source),
-          }
-        );
+    async (context) => {
+      const catalog = await prepareUserProfileCatalog({
+        ...options,
+        path: context.admission.databasePath,
+      });
+      try {
+        return catalog.readCurrentAuthority(profileId, includeProfile);
+      } finally {
+        catalog.release();
       }
-      const reply = await executeExistingOpenClawStateRead(
-        { path: context.admission.databasePath, env: context.environment },
-        {
-          type: "userProfiles.authority.resolve",
-          profileId,
-          ...(includeProfile ? { includeProfile } : {}),
-        },
-      );
-      if (!reply) {
-        return undefined;
-      }
-      return reply.profile;
     },
     includeProfile,
   );

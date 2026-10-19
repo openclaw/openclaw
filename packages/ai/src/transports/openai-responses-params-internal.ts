@@ -263,11 +263,13 @@ export function buildOpenAIResponsesParams(
       });
       const summary =
         effort !== "none" &&
-        (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary)
-          ? options.reasoningSummary || "auto"
+        (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary !== undefined)
+          ? options.reasoningSummary === undefined
+            ? "auto"
+            : options.reasoningSummary
           : undefined;
-      params.reasoning = { effort, ...(summary ? { summary } : {}) };
-      if (summary) {
+      params.reasoning = { effort, ...(summary !== undefined ? { summary } : {}) };
+      if (summary !== undefined) {
         params.include = ["reasoning.encrypted_content"];
       }
     }

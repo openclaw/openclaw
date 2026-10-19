@@ -1,4 +1,3 @@
-import { resolveInboundReplyDispatchCounts } from "openclaw/plugin-sdk/channel-inbound";
 import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig as ClawdbotConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -246,11 +245,7 @@ export async function handleFeishuCommentEvent(
   );
 
   try {
-    log(
-      `feishu[${account.accountId}]: dispatching drive comment to agent ` +
-        `(session=${commentSessionKey} comment=${turn.commentId} type=${turn.noticeType})`,
-    );
-    const turnResult = await core.channel.inbound.run({
+    await core.channel.inbound.run({
       channel: "feishu",
       accountId: route.accountId,
       raw: turn,
@@ -284,12 +279,6 @@ export async function handleFeishuCommentEvent(
         }),
       },
     });
-    const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
-    const counts = resolveInboundReplyDispatchCounts(dispatchResult);
-    log(
-      `feishu[${account.accountId}]: drive comment dispatch complete ` +
-        `(replies=${counts.final}, session=${commentSessionKey})`,
-    );
   } finally {
     void cleanupTypingReaction();
   }

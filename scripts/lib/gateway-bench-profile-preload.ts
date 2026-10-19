@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { availableParallelism } from "node:os";
 import { isMainThread } from "node:worker_threads";
+import { getWorkerMessageMetrics } from "../../src/infra/worker-message-metrics.ts";
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 import {
   GATEWAY_PROFILE_CHANNEL,
@@ -62,6 +63,10 @@ if (isMainThread) {
   const diagnosticCaptures = new Map<
     GatewayProfileCommand["kind"],
     ReturnType<typeof startGatewayBenchDiagnostics>
+  >();
+  const workerMessageStarts = new Map<
+    GatewayProfileCommand["kind"],
+    ReturnType<typeof getWorkerMessageMetrics>
   >();
   let busy = false;
   process.on("message", (message: GatewayBenchCommand) => {
@@ -132,12 +137,29 @@ if (isMainThread) {
           await workers.start(message.kind, message.profilePath);
         }
         diagnosticCaptures.set(message.kind, startGatewayBenchDiagnostics());
+        workerMessageStarts.set(message.kind, getWorkerMessageMetrics());
       } else if (message.action === "stop") {
         if (!active.has(message.kind)) {
           throw new Error(`Gateway ${message.kind} profile has not started`);
         }
         const diagnostics = diagnosticCaptures.get(message.kind)?.();
         diagnosticCaptures.delete(message.kind);
+        const beforeMessages = workerMessageStarts.get(message.kind) ?? [];
+        workerMessageStarts.delete(message.kind);
+        const workerMessages = getWorkerMessageMetrics()
+          .map((counter) => {
+            const before = beforeMessages.find(
+              (entry) => entry.kind === counter.kind && entry.direction === counter.direction,
+            );
+            return {
+              kind: counter.kind,
+              direction: counter.direction,
+              messages: counter.messages - (before?.messages ?? 0),
+              payloadBytes: counter.payloadBytes - (before?.payloadBytes ?? 0),
+              unmeasuredMessages: counter.unmeasuredMessages - (before?.unmeasuredMessages ?? 0),
+            };
+          })
+          .filter((counter) => counter.messages > 0);
         try {
           const { profile } =
             message.kind === "cpu"
@@ -145,6 +167,11 @@ if (isMainThread) {
               : await inspector.post("HeapProfiler.stopSampling");
           active.delete(message.kind);
           writeFileSync(message.profilePath, JSON.stringify(profile), { mode: 0o600 });
+          writeFileSync(
+            `${message.profilePath}.worker-messages.json`,
+            JSON.stringify(workerMessages),
+            { mode: 0o600 },
+          );
           if (diagnostics) {
             writeFileSync(`${message.profilePath}.diagnostics.json`, JSON.stringify(diagnostics), {
               mode: 0o600,

@@ -359,7 +359,7 @@ describe("install smoke no-push root image transport", () => {
 
     const upload = step(producer, "Upload root Dockerfile image artifact");
     expect(upload.if).toBeUndefined();
-    expect(upload.uses).toBe("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
+    expect(upload.uses).toBe("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9");
     expect(upload.with).toMatchObject({
       "compression-level": 0,
       "if-no-files-found": "error",
@@ -773,7 +773,7 @@ describe("install smoke no-push root image transport", () => {
     expect(bunVerify.run).toContain("install-smoke-candidate-payload.mts verify");
     expect(bunVerify.run).toContain('--run-id "$PRODUCER_RUN_ID"');
     expect(bunVerify.run).toContain('--run-attempt "$PRODUCER_RUN_ATTEMPT"');
-    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.2");
+    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.3");
     expect(step(bunConsumer, "Run Bun global install candidate-payload smoke")).toMatchObject({
       "working-directory": ".release-harness",
       env: {
@@ -805,7 +805,7 @@ describe("install smoke no-push root image transport", () => {
     expect(bunOnlyConsumer["timeout-minutes"]).toBe(20);
     const bunOnlyNode = step(bunOnlyConsumer, "Setup Node for payload verification");
     expect(bunOnlyNode).toMatchObject({
-      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      uses: "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
       with: { "node-version": "${{ env.NODE_VERSION }}", "package-manager-cache": false },
     });
     expect(step(bunOnlyConsumer, "Validate candidate payload artifact binding")).toBe(bunBinding);
@@ -832,7 +832,7 @@ describe("install smoke no-push root image transport", () => {
     const bunOnlyUpload = step(bunOnlyConsumer, "Upload Bun-only runtime smoke artifacts");
     expect(bunOnlyUpload).toMatchObject({
       if: "always()",
-      uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
       with: {
         name: "bun-only-runtime-smoke-${{ github.run_attempt }}",
         path: ["md", "json", "jsonl", "log"]

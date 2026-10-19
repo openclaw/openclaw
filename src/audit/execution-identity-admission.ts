@@ -383,7 +383,7 @@ function captureExecutionIdentityAdmissionEnvelope(
 }
 
 /** Revalidate a structured-cloned queue payload before any persistence work. */
-export function parseExecutionIdentityAdmissionEnvelope(
+function parseExecutionIdentityAdmissionEnvelope(
   value: unknown,
 ): ExecutionIdentityAdmissionEnvelope {
   const envelope = validateEnvelope(value);

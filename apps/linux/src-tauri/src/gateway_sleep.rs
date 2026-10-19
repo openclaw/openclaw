@@ -225,75 +225,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn busy_preparation_does_not_resume() {
-        let route = route_state(Some("ws://127.0.0.1:18789"));
-        let resumes = Arc::new(AtomicUsize::new(0));
-        let resumed = Arc::clone(&resumes);
-        let refreshes = Arc::new(AtomicUsize::new(0));
-        let refreshed = Arc::clone(&refreshes);
-        let logs = Arc::new(Mutex::new(Vec::new()));
-        let recorded_logs = Arc::clone(&logs);
-        let controller = GatewaySleepCycleController::new(
-            "linux-sleep-test-run".into(),
-            current_route(&route),
-            |_, _| async { Ok(SleepPrepareOutcome::Busy) },
-            move |_, _| {
-                resumed.fetch_add(1, Ordering::SeqCst);
-                async { Ok(()) }
-            },
-            move || {
-                refreshed.fetch_add(1, Ordering::SeqCst);
-                async {}
-            },
-            no_delay,
-            move |message| recorded_logs.lock().unwrap().push(message),
-        );
+    async fn unsuccessful_preparation_refreshes_without_resuming() {
+        for (outcome, expected_log) in [
+            (
+                Ok(SleepPrepareOutcome::Busy),
+                "gateway sleep preparation skipped because the gateway is busy",
+            ),
+            (
+                Err("prepare failed".to_string()),
+                "gateway sleep preparation failed: prepare failed",
+            ),
+        ] {
+            let route = route_state(Some("ws://127.0.0.1:18789"));
+            let resumes = Arc::new(AtomicUsize::new(0));
+            let resumed = Arc::clone(&resumes);
+            let refreshes = Arc::new(AtomicUsize::new(0));
+            let refreshed = Arc::clone(&refreshes);
+            let logs = Arc::new(Mutex::new(Vec::new()));
+            let recorded_logs = Arc::clone(&logs);
+            let controller = GatewaySleepCycleController::new(
+                "linux-sleep-test-run".into(),
+                current_route(&route),
+                move |_, _| {
+                    let outcome = outcome.clone();
+                    async move { outcome }
+                },
+                move |_, _| {
+                    resumed.fetch_add(1, Ordering::SeqCst);
+                    async { Ok(()) }
+                },
+                move || {
+                    refreshed.fetch_add(1, Ordering::SeqCst);
+                    async {}
+                },
+                no_delay,
+                move |message| recorded_logs.lock().unwrap().push(message),
+            );
 
-        controller.will_sleep().await;
-        controller.did_wake().await;
+            controller.will_sleep().await;
+            controller.did_wake().await;
 
-        assert_eq!(resumes.load(Ordering::SeqCst), 0);
-        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            *logs.lock().unwrap(),
-            ["gateway sleep preparation skipped because the gateway is busy"]
-        );
-    }
-
-    #[tokio::test]
-    async fn failed_preparation_does_not_resume() {
-        let route = route_state(Some("ws://127.0.0.1:18789"));
-        let resumes = Arc::new(AtomicUsize::new(0));
-        let resumed = Arc::clone(&resumes);
-        let refreshes = Arc::new(AtomicUsize::new(0));
-        let refreshed = Arc::clone(&refreshes);
-        let logs = Arc::new(Mutex::new(Vec::new()));
-        let recorded_logs = Arc::clone(&logs);
-        let controller = GatewaySleepCycleController::new(
-            "linux-sleep-test-run".into(),
-            current_route(&route),
-            |_, _| async { Err("prepare failed".into()) },
-            move |_, _| {
-                resumed.fetch_add(1, Ordering::SeqCst);
-                async { Ok(()) }
-            },
-            move || {
-                refreshed.fetch_add(1, Ordering::SeqCst);
-                async {}
-            },
-            no_delay,
-            move |message| recorded_logs.lock().unwrap().push(message),
-        );
-
-        controller.will_sleep().await;
-        controller.did_wake().await;
-
-        assert_eq!(resumes.load(Ordering::SeqCst), 0);
-        assert_eq!(refreshes.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            *logs.lock().unwrap(),
-            ["gateway sleep preparation failed: prepare failed"]
-        );
+            assert_eq!(resumes.load(Ordering::SeqCst), 0);
+            assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+            assert_eq!(*logs.lock().unwrap(), [expected_log]);
+        }
     }
 
     #[tokio::test]
@@ -430,7 +405,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_exhausts_three_attempts() {
+    async fn resume_exhausts_three_attempts_and_clears_the_lease() {
         let route = route_state(Some("ws://127.0.0.1:18789"));
         let attempts = Arc::new(AtomicUsize::new(0));
         let attempted = Arc::clone(&attempts);
@@ -462,34 +437,8 @@ mod tests {
             .unwrap()
             .iter()
             .any(|log| log.contains("giving up")));
-    }
 
-    #[tokio::test]
-    async fn wake_always_clears_the_held_lease() {
-        let route = route_state(Some("ws://127.0.0.1:18789"));
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let attempted = Arc::clone(&attempts);
-        let controller = GatewaySleepCycleController::new(
-            "linux-sleep-test-run".into(),
-            current_route(&route),
-            |_, _| async {
-                Ok(SleepPrepareOutcome::Ready {
-                    suspension_id: "suspension-failure".into(),
-                })
-            },
-            move |_, _| {
-                attempted.fetch_add(1, Ordering::SeqCst);
-                async { Err("transport failed".into()) }
-            },
-            || async {},
-            no_delay,
-            |_| {},
-        );
-
-        controller.will_sleep().await;
         controller.did_wake().await;
-        controller.did_wake().await;
-
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
     }
 }

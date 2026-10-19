@@ -15,7 +15,7 @@ import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-op
 const PREPARATION_CLEANUP_GUARD_MS = 5_000;
 
 export type AgentWorkerFixtureOperations = {
-  inspect: { input: undefined; output: number };
+  inspect: { input: undefined | "wal_autocheckpoint"; output: number };
   failWorker: { input: "crash" | "exit"; output: never };
   append: {
     input: {
@@ -124,6 +124,9 @@ export function bindSqliteWorkerBackend(
         throw new Error("Fixture failure must terminate the worker during preparation");
       }
       if (command.type === "inspect") {
+        if (command.input === "wal_autocheckpoint") {
+          return Number(db.prepare("PRAGMA wal_autocheckpoint").get()?.wal_autocheckpoint);
+        }
         const count = db.prepare("SELECT COUNT(*) AS count FROM worker_proof").get()?.count;
         if (typeof count !== "number") {
           throw new Error("Fixture count is unavailable");

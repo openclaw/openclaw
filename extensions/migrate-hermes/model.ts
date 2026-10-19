@@ -354,16 +354,6 @@ export async function applyModelItem(
       return markMigrationItemError(item, HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE);
     }
     const agentId = ctx.targetAgentId ?? resolveDefaultAgentId(ctx.config);
-    const currentModel = resolveAgentEffectiveModelPrimary(
-      configApi.current() as MigrationProviderContext["config"],
-      agentId,
-    );
-    if (currentModel === details.model) {
-      return markMigrationItemSkipped(item, HERMES_REASON_ALREADY_CONFIGURED);
-    }
-    if (currentModel && !ctx.overwrite) {
-      return markMigrationItemConflict(item, HERMES_REASON_DEFAULT_MODEL_CONFIGURED);
-    }
     await configApi.mutateConfigFile({
       base: "runtime",
       afterWrite: { mode: "auto" },

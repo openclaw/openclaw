@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import * as sessionEntryWriter from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
@@ -73,7 +74,6 @@ it.each([0, 2])(
       getLifecycleGeneration: () => generation,
       initialQueuedLifecycleGeneration: generation,
       globalLane: "normalization-stop-global",
-      sessionLane: "normalization-stop-session",
       setParams: vi.fn(),
       setLifecycleGeneration: vi.fn(),
     });
@@ -210,14 +210,15 @@ describe("fixed-store session bootstrap", () => {
           throw callerError;
         }
       };
-      sessionAccessorMocks.patchSessionEntryCore.mockImplementationOnce(
-        async (_scope, _update, options) => {
+      const applyOperation = vi
+        .spyOn(sessionEntryWriter, "applySessionEntryOperation")
+        .mockImplementationOnce(async (_scope, _operation, options) => {
           closed = closeBeforeCommit;
           options?.workerGuard?.source?.();
           commitGuardAccepted = true;
           return null;
-        },
-      );
+        });
+      onTestFinished(() => applyOperation.mockRestore());
 
       const reset = resetNoRealConversationTokenSnapshot({ sessionTarget, assertActive });
       if (closeBeforeCommit) {
@@ -225,9 +226,9 @@ describe("fixed-store session bootstrap", () => {
       } else {
         await reset;
       }
-      expect(sessionAccessorMocks.patchSessionEntryCore).toHaveBeenCalledWith(
+      expect(applyOperation).toHaveBeenCalledWith(
         sessionTarget,
-        expect.any(Function),
+        expect.any(Object),
         expect.objectContaining({
           skipMaintenance: true,
           workerGuard: expect.objectContaining({ source: assertActive }),

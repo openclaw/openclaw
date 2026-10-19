@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -81,6 +83,7 @@ describe("inherited auth-profile usage persistence", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     clearRuntimeAuthProfileStoreSnapshots();
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
@@ -103,6 +106,72 @@ describe("inherited auth-profile usage persistence", () => {
       assertCurrent() {},
     }).authProfileId;
   }
+
+  it.each(["shared", "inherited", "personal"] as const)(
+    "keeps a newer %s success over an older exhausted WHAM reply",
+    async (owner) => {
+      writeMainStore();
+      const credential = createMainStore().profiles[PRIMARY_ID]!;
+      const profileId =
+        owner === "personal"
+          ? connectUserModelAccount({
+              ownerProfileId: ensureProfileForEmail("quota@example.test").id,
+              credential,
+              assertCurrent() {},
+            }).authProfileId
+          : PRIMARY_ID;
+      const agentDir = owner === "shared" ? mainAgentDir : childAgentDir;
+      const store = ensureAuthProfileStore(agentDir, { profileId });
+      const readStats = () =>
+        owner === "personal"
+          ? readUserModelAuthProfile(profileId)?.usageStats
+          : loadPersistedAuthProfileStore(mainAgentDir)?.usageStats?.[profileId];
+      const exhausted = () =>
+        Response.json({
+          rate_limit: {
+            limit_reached: true,
+            primary_window: { used_percent: 100, reset_after_seconds: 3600 },
+          },
+        });
+      const arrived = createDeferredCore();
+      const reply = createDeferredCore<Response>();
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+        arrived.resolve();
+        return reply.promise;
+      });
+      const observedAt = Date.now() - 60_000;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(observedAt);
+      const olderFailure = markAuthProfileFailure({
+        store,
+        profileId,
+        reason: "rate_limit",
+        agentDir,
+      });
+      void olderFailure.catch(() => {});
+      try {
+        await awaitGateBeforeSettlement(arrived.promise, olderFailure, "WHAM probe did not start");
+        clock.mockRestore();
+        await markAuthProfileSuccess({ store, profileId, provider: "openai", agentDir });
+        const success = readStats();
+        expect(success?.lastProbeAt).toBeGreaterThan(observedAt);
+        reply.resolve(exhausted());
+        await olderFailure;
+        expect(readStats()).toEqual(success);
+        expect(store.usageStats?.[profileId]).toEqual(success);
+
+        fetch.mockResolvedValueOnce(exhausted());
+        await markAuthProfileFailure({ store, profileId, reason: "rate_limit", agentDir });
+        expect(readStats()).toMatchObject({
+          blockedReason: "subscription_limit",
+          blockedSource: "wham",
+        });
+      } finally {
+        clock.mockRestore();
+        reply.resolve(exhausted());
+        await olderFailure;
+      }
+    },
+  );
 
   it("keeps selected personal health in its owner without publishing credentials or selection", async () => {
     writeMainStore();

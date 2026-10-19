@@ -15,7 +15,8 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { prepareReplyToolAuthority, type ReplyToolAuthorityInput } from "./reply-tool-authority.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
 const route = { provider: "openai", model: "test-model" };
 const overlay = { senderIsOwner: true, disableTools: false, traceAuthorized: false };

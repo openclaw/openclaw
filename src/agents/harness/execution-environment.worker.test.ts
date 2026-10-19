@@ -57,3 +57,56 @@ it("reads native consent in the worker and observes a committed revocation", asy
     }
   });
 });
+
+it("evaluates agent-scoped remembered consent each turn without copying it into the session", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const config = {
+      agents: {
+        defaults: { sandbox: { mode: "all" as const } },
+        entries: { main: { nativeRuntimeConsent: ["fixture"] } },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    const scope = { agentId: "main", sessionKey: "agent:main:remembered-native" };
+    const harness: AgentHarness = {
+      id: "fixture",
+      label: "Fixture",
+      executionEnvironment: "host-only",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+    };
+    const params = {
+      ...scope,
+      sessionId: "remembered-native",
+      permissionMode: "full" as const,
+      config,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: params.sessionId,
+      updatedAt: 1,
+      sandboxMode: "off",
+      permissionMode: "full",
+    });
+    await expect(assertAgentHarnessExecutionEnvironment(harness, params)).resolves.toBe(true);
+    for (const overrides of [{ toolsAllow: ["read"] }, { disableTools: true }]) {
+      await expect(
+        assertAgentHarnessExecutionEnvironment(harness, { ...params, ...overrides }),
+      ).resolves.not.toBe(true);
+    }
+    await expect(
+      assertAgentHarnessExecutionEnvironment(harness, {
+        ...params,
+        permissionMode: "guarded",
+      }),
+    ).rejects.toThrow("requires Full access");
+    await upsertSessionEntryCore(scope, { sandboxMode: undefined });
+    await expect(assertAgentHarnessExecutionEnvironment(harness, params)).rejects.toThrow(
+      "outside the sandbox",
+    );
+    await upsertSessionEntryCore(scope, { sandboxMode: "off" });
+    config.agents.entries.main.nativeRuntimeConsent = [];
+    await expect(assertAgentHarnessExecutionEnvironment(harness, params)).resolves.toBe(false);
+  });
+});

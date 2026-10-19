@@ -168,6 +168,13 @@ esac
     return { ...result, output: result.stdout + result.stderr };
   };
   const readCalls = () => readFileSync(calls, "utf8").trim().split("\n");
+  const expectedCalls = (...extra: string[]) => [
+    `${owner}\tbrowse`,
+    `${owner}\tapi --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0`,
+    ...extra,
+  ];
+  const refs = (repoPath: string, prefix: string) =>
+    git(repoPath, ["for-each-ref", "--format=%(refname)", prefix]);
   return {
     root,
     owner,
@@ -182,6 +189,8 @@ esac
     git,
     run,
     readCalls,
+    expectedCalls,
+    refs,
   };
 }
 
@@ -213,17 +222,8 @@ describePosix("native PR wrapper repository ownership", () => {
       f.git(f.owner, ["merge-base", "--is-ancestor", f.intent, outcomeRef]);
       expect(readFileSync(f.capture, "utf8")).toBe("retained capture\n");
       expect(f.git(f.caller, ["show-ref"])).toBe(callerRefs);
-      expect(f.git(f.owner, ["for-each-ref", "--format=%(refname)", lockRef])).toBe("");
-      expect(f.readCalls()).toEqual([
-        `${f.owner}\tbrowse`,
-        `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0`,
-        f.snapshotCall,
-        f.snapshotCall,
-      ]);
-      expect(f.readCalls().every((call) => call.startsWith(`${f.owner}\t`))).toBe(true);
-      expect(f.readCalls().some((call) => call.includes("pr merge") || call.includes("POST"))).toBe(
-        false,
-      );
+      expect(f.refs(f.owner, lockRef)).toBe("");
+      expect(f.readCalls()).toEqual(f.expectedCalls(f.snapshotCall, f.snapshotCall));
     },
   );
 
@@ -234,7 +234,7 @@ describePosix("native PR wrapper repository ownership", () => {
     expect(result.status, result.output).toBe(0);
     expect(result.output).toContain("completion pending");
     expect(existsSync(f.worktree)).toBe(false);
-    expect(f.git(f.caller, ["for-each-ref", "--format=%(refname)", "refs/openclaw"])).toBe("");
+    expect(f.refs(f.caller, "refs/openclaw")).toBe("");
   });
 
   it("rejects corrupt owner evidence even when the caller has a valid retained intent", () => {
@@ -247,10 +247,7 @@ describePosix("native PR wrapper repository ownership", () => {
     expect(f.git(f.owner, ["rev-parse", outcomeRef])).toBe(f.head);
     expect(f.git(f.caller, ["rev-parse", outcomeRef])).toBe(f.intent);
     expect(readFileSync(f.capture, "utf8")).toBe("retained capture\n");
-    expect(f.readCalls()).toEqual([
-      `${f.owner}\tbrowse`,
-      `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0`,
-    ]);
+    expect(f.readCalls()).toEqual(f.expectedCalls());
   });
 
   it.each(["prepare-run", "merge-recover", "ci-dispatch", "review-init"])(
@@ -277,18 +274,16 @@ describePosix("native PR wrapper repository ownership", () => {
             ? "did not include a head SHA"
             : "targets owner-release",
       );
-      expect(f.readCalls()).toEqual([
-        `${f.owner}\tbrowse`,
-        `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0`,
-        ...(command === "review-init"
-          ? [
-              `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123/files?per_page=100 --paginate --slurp -H Cache-Control: max-age=0`,
-            ]
-          : []),
-      ]);
+      const calls = f.expectedCalls();
+      if (command === "review-init") {
+        calls.push(
+          `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123/files?per_page=100 --paginate --slurp -H Cache-Control: max-age=0`,
+        );
+      }
+      expect(f.readCalls()).toEqual(calls);
       expect(f.git(f.owner, ["rev-parse", outcomeRef])).toBe(f.intent);
-      expect(f.git(f.owner, ["for-each-ref", "--format=%(refname)", lockRef])).toBe("");
-      expect(f.git(f.caller, ["for-each-ref", "--format=%(refname)", "refs/openclaw"])).toBe("");
+      expect(f.refs(f.owner, lockRef)).toBe("");
+      expect(f.refs(f.caller, "refs/openclaw")).toBe("");
     },
   );
 });

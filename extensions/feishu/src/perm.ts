@@ -1,7 +1,6 @@
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
 import { FeishuPermSchema } from "./perm-schema.js";
-import { createFeishuToolClient } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as jsonResult, unknownToolActionResult } from "./tool-result.js";
 
@@ -12,15 +11,9 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
     label: "Feishu Perm",
     description: "Feishu permission management. Actions: list, add, remove",
     parameters: FeishuPermSchema,
-    createExecute(ctx, cfg) {
-      const defaultAccountId = ctx.agentAccountId;
+    createExecute(_ctx, _cfg, createClient) {
       return async (p) => {
-        const client = createFeishuToolClient({
-          cfg,
-          executeParams: p,
-          defaultAccountId,
-          requiredTool: { family: "perm", label: "Perm" },
-        });
+        const client = createClient(p, "Perm");
         switch (p.action) {
           case "list": {
             const res = await client.drive.permissionMember.list({

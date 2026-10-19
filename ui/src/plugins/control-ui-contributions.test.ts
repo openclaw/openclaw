@@ -14,9 +14,11 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
+import { PluginManager } from "./control-ui-manager.solid.tsx";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
-import "./control-ui-manager.solid.tsx";
 import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
 
@@ -59,13 +61,12 @@ it("renders customization inline and retains pending reload state", async () => 
   };
   const navigate = vi.fn();
   // SAFETY: this fixture supplies the application services consumed by the manager.
-  const provider = createApplicationContextProvider({
+  const provider = createSolidApplicationContextProvider({
     plugins,
     basePath: "/console",
     navigate,
   } as unknown as ApplicationContext);
-  // The compatibility entry registers the Solid-backed custom element.
-  const manager = document.createElement("openclaw-plugin-manager");
+  const { container: manager } = mountSolid(PluginManager, { wrapper: provider.wrapper });
   const button = (label: string) => {
     const found = [...manager.querySelectorAll("button")].find(
       (element) => element.textContent?.trim() === label,
@@ -75,10 +76,7 @@ it("renders customization inline and retains pending reload state", async () => 
     }
     return found;
   };
-  provider.append(manager);
-  document.body.append(provider);
   try {
-    await manager.updateComplete;
     expect(manager.querySelector("openclaw-modal-dialog")).toBeNull();
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
     expect(manager.querySelector('[role="alert"]')).toBeNull();
@@ -258,6 +256,23 @@ async function mountActions(
 }
 
 describe("native plugin session actions", () => {
+  it("replaces placement subscriptions and resumes current session presentation", async () => {
+    const { element, sessions } = await mountActions();
+    expect(element.querySelector("button")?.textContent).toBe("Review Ready");
+
+    element.kind = "composer";
+    await element.updateComplete;
+    expect(element.querySelector("button")).toBeNull();
+    sessions.patchRowLocal(sessionKey, { label: "Updated while hidden" });
+
+    element.kind = "header";
+    await element.updateComplete;
+    expect(element.querySelector("button")?.textContent).toBe("Review Updated while hidden");
+    sessions.patchRowLocal(sessionKey, { label: "Live again" });
+    await element.updateComplete;
+    expect(element.querySelector("button")?.textContent).toBe("Review Live again");
+  });
+
   it("keeps header metadata scoped to its pane agent when the global key is shared", async () => {
     const { element, sessions, run, resolve, request } = await mountActions({
       placement: "header",

@@ -606,41 +606,21 @@ async function consumeChatStream(
 }
 
 function toFunctionTools(tools: Tool[]): Array<FunctionTool & { type: "function" }> {
-  const converted = tools.flatMap((tool) => {
-    try {
-      const name = tool.name;
-      const description = tool.description;
-      const value = {
-        type: "function",
-        function: {
-          name,
-          description,
-          parameters: stripSymbolKeys(tool.parameters) as Record<string, unknown>,
-          strict: false,
-        },
-      } satisfies FunctionTool & { type: "function" };
-      return { name, description, value };
-    } catch {
-      return [];
-    }
+  const converted = tools.map((tool) => {
+    const name = tool.name;
+    const description = tool.description;
+    const value = {
+      type: "function",
+      function: {
+        name,
+        description,
+        parameters: structuredClone(tool.parameters),
+        strict: false,
+      },
+    } satisfies FunctionTool & { type: "function" };
+    return { name, description, value };
   });
   return sortPromptCacheToolsByName(converted).map(({ value }) => value);
-}
-
-function stripSymbolKeys(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => stripSymbolKeys(item));
-  }
-
-  if (value && typeof value === "object") {
-    const result: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) {
-      result[key] = stripSymbolKeys(entry);
-    }
-    return result;
-  }
-
-  return value;
 }
 
 function toChatMessages(
@@ -790,5 +770,3 @@ function mapToolChoice(
     function: { name: toolName },
   };
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

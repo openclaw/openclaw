@@ -172,7 +172,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("caps retries at MAX_EMPTY_ERROR_RETRIES and surfaces incomplete-turn error", async () => {
+  it("records a private incomplete-turn failure after exhausting retries", async () => {
     // 1 initial + 3 retries = 4 attempts, all returning empty-error.
     for (let i = 0; i < 4; i += 1) {
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(emptyErrorAttempt("ollama", "glm-5.1:cloud"));
@@ -186,7 +186,12 @@ describe("runEmbeddedAgent silent-error retry", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
-    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      message: "No answer was returned. Ask again if you still need one.",
+      fallbackSafe: true,
+    });
   });
 
   it("does not mark incomplete turns fallback-safe after a terminal heartbeat response", async () => {

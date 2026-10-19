@@ -114,7 +114,6 @@
   padding-block: 3px;
   list-style: none;
   appearance: none;
-  -webkit-appearance: none;
 }
 
 .chat-tool-disclosure__content {
@@ -325,10 +324,6 @@
   color: var(--text);
 }
 
-.chat-tool-row__cmd {
-  color: inherit;
-}
-
 .chat-tool-row__verb {
   flex-shrink: 0;
 }
@@ -363,7 +358,6 @@
       var(--text) 100%
     );
     background-size: 200% 100%;
-    -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
     animation: text-shimmer 2.2s ease-in-out infinite;
@@ -428,6 +422,16 @@
 
 .chat-diff__row--del .chat-diff__sign {
   color: var(--destructive);
+}
+
+.chat-diff__change--add {
+  background: color-mix(in srgb, var(--ok) 28%, transparent);
+  border-radius: 2px;
+}
+
+.chat-diff__change--del {
+  background: color-mix(in srgb, var(--destructive) 25%, transparent);
+  border-radius: 2px;
 }
 
 .chat-diff__row--file {

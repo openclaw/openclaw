@@ -42,6 +42,16 @@ permissions below the explanation, then updates its action after the capability
 is enabled. Each click dispatches only the current step's capabilities; later
 permission grants and relaunches require their own card actions.
 
+Location uses the same capability for its OpenClaw mode and macOS grant. If
+Location is off and macOS has already denied or restricted access, or system-wide
+Location Services is off, the card offers **Open System Settings** for Location
+Services first, without asking to enable Location. This also applies when the app
+still has a grant but Location Services is off. After access is restored,
+**Enable Location** turns on While Using access
+with the native confirmation.
+If macOS has not asked yet, enabling Location requests access once; the mode
+stays off if you deny it.
+
 The card refreshes permission status after every native grant attempt, including
 cancelled or failed requests. Denying a Screen Recording prompt changes the next
 action to **Open System Settings**; macOS does not show the prompt again. Returning

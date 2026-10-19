@@ -12,7 +12,7 @@ import {
   filterProviderNormalizableTools,
   type RuntimeToolSchemaDiagnostic,
 } from "../tool-schema-projection.js";
-import type { AnyAgentTool } from "../tools/common.js";
+import type { AgentToolWithMeta } from "../tools/common.js";
 import type { AgentRuntimePlan } from "./types.js";
 
 type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
@@ -51,16 +51,32 @@ function runtimePlanToolContext(params: {
 
 // Normalizers may return cloned tool definitions. Preserve owner and private
 // execution metadata so downstream dispatch keeps the same policy and result contract.
-function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
+function copyRuntimeToolMetadata<TSchemaType extends TSchema, TResult>(
+  source: AgentToolWithMeta<TSchemaType, TResult>,
+  target: AgentToolWithMeta<TSchemaType, TResult>,
+): void {
   if (source === target) {
     return;
   }
-  const { catalogMode, outputSchema, hideFromChannelProgress } = source as AnyAgentTool;
-  Object.assign(target, {
-    ...(catalogMode ? { catalogMode } : {}),
-    ...(outputSchema !== undefined ? { outputSchema } : {}),
-    ...(hideFromChannelProgress === true ? { hideFromChannelProgress } : {}),
-  });
+  const { catalogMode, outputSchema, hideFromChannelProgress } = source;
+  if (
+    catalogMode &&
+    Object.getOwnPropertyDescriptor(target, "catalogMode")?.value !== catalogMode
+  ) {
+    target.catalogMode = catalogMode;
+  }
+  if (
+    outputSchema !== undefined &&
+    Object.getOwnPropertyDescriptor(target, "outputSchema")?.value !== outputSchema
+  ) {
+    target.outputSchema = outputSchema;
+  }
+  if (
+    hideFromChannelProgress === true &&
+    Object.getOwnPropertyDescriptor(target, "hideFromChannelProgress")?.value !== true
+  ) {
+    target.hideFromChannelProgress = true;
+  }
   copyAgentToolMetadata(source as never, target as never);
 }
 
@@ -131,7 +147,7 @@ export function normalizeAgentRuntimeTools<
         }));
   // Provider collection views wrap the results of map, including host-owned tool wrappers.
   // Own the assembly array so later wrapping keeps its metadata; retain fenced tool elements.
-  const normalizedTools = Array.isArray(normalized) ? Array.from(normalized) : normalizableTools;
+  const normalizedTools = Array.from(normalized);
   return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
 }
 

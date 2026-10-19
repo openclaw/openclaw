@@ -64,19 +64,24 @@ describe("Reef worker outbound composition", () => {
   afterAll(resetFlowStoresForTests);
 
   function recordDispatches() {
-    const sends = vi.spyOn(Worker.prototype, "postMessage");
-    return () =>
-      sends.mock.calls.flatMap(([message]) => {
-        if (
-          !isRecord(message) ||
-          message.type !== "execute" ||
-          !(message.input instanceof Uint8Array)
-        ) {
-          return [];
-        }
-        const command: unknown = deserialize(Buffer.from(message.input));
-        return [isRecord(command) ? command.type : "invalid command"];
-      });
+    const dispatched: unknown[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- call supplies the intercepted worker receiver.
+    const nativePost = Worker.prototype.postMessage;
+    vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      message: unknown,
+      transferList,
+    ) {
+      const commands: unknown[] = [];
+      // Decode before the native transfer detaches the sender's command buffer.
+      if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
+        const command: unknown = deserialize(message.input);
+        commands.push(isRecord(command) ? command.type : "invalid command");
+      }
+      nativePost.call(this, message, transferList);
+      dispatched.push(...commands);
+    });
+    return () => dispatched;
   }
 
   it("persists proposal, verdict, envelope and exact delivery in two worker commands without host SQL", async () => {

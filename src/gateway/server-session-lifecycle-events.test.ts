@@ -6,6 +6,7 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   createActiveRun,
@@ -16,18 +17,16 @@ import {
   loadGatewaySessionEntryReadOnlyMock,
   loadGatewaySessionRowMock,
   ownerGoal,
-  resolveEmbeddedAgentSessionProgressStateMock,
   runtimeConfigState,
   sessionRow,
   subscribePluginSessionsChanged,
 } from "./server-session-events.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
-import type { SessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
 describe("createLifecycleEventBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveEmbeddedAgentSessionProgressStateMock.mockReturnValue(undefined);
     loadGatewaySessionRowMock.mockReturnValue(sessionRow);
     runtimeConfigState.value = {};
     sessionRow.key = "agent:main:main";
@@ -46,7 +45,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
-      chatAbortControllers: new Map(),
     });
     await handler({
       sessionKey: sessionRow.key,
@@ -66,74 +64,130 @@ describe("createLifecycleEventBroadcastHandler", () => {
   });
   it.each([
     {
-      name: "missing capture followed by a successor",
+      name: "missing capture",
       captured: false,
       projection: true,
+      replace: true,
+      delivered: true,
+    },
+    {
+      name: "current capture",
+      captured: true,
+      projection: true,
+      replace: false,
+      delivered: true,
+    },
+    {
+      name: "replaced capture",
+      captured: true,
+      projection: true,
+      replace: true,
       delivered: false,
     },
-    { name: "current capture", captured: true, projection: true, delivered: true },
-    { name: "no-projection fallback", captured: false, projection: false, delivered: true },
-  ])("keeps lifecycle publication identity for $name", async (scenario) => {
+    {
+      name: "no-projection fallback",
+      captured: false,
+      projection: false,
+      replace: false,
+      delivered: true,
+    },
+  ])("keeps lifecycle publication data bound for $name", async (scenario) => {
     const prepared = createDeferred();
+    const entered = createDeferred();
     const query = { key: "agent:main:late-successor", agentId: "main" };
-    const original = { ...query, entry: { sessionId: "original", lifecycleRevision: "first" } };
-    let current = scenario.captured ? original : undefined;
-    let generation = 0;
-    const snapshot = vi.fn(() => ({
-      row: current ? { ...current.entry, key: query.key, kind: "direct" } : null,
-    }));
-    const projection = {
-      state: { rowContext: { projectedAgentRuns: undefined } },
-      capture: () => current,
-      ensureMaterialized: async () => {},
-      ancestorRows: () => [],
-      withPreparedExactRows: (async (queries, consume) => {
-        queries({});
-        await prepared.promise;
-        return consume(projection);
-      }) satisfies SessionRowProjection["withPreparedExactRows"],
-      isCurrent: (record: typeof original) => record === current,
-      observeGeneration: (() => {
-        const observed = generation;
-        return { isCurrent: () => generation === observed, dispose() {} };
-      }) satisfies SessionRowProjection["observeGeneration"],
-      snapshot,
-      describe: () => {
-        const row = snapshot().row;
-        return row ? { materialized: { row } } : undefined;
-      },
-      present: (record: Parameters<SessionRowProjection["present"]>[0]) => record.materialized.row,
-    } as unknown as SessionRowProjection;
+    const projection = createSessionRowProjectionFixture({
+      cfg: {},
+      agentId: query.agentId,
+      store: scenario.captured
+        ? {
+            [query.key]: {
+              sessionId: "original",
+              updatedAt: 1,
+              lifecycleRevision: "first",
+              label: "Original row",
+            },
+          }
+        : {},
+    });
+    const prepareRows = projection.withPreparedExactRows.bind(projection);
+    vi.spyOn(projection, "withPreparedExactRows").mockImplementation(async (...args) => {
+      entered.resolve();
+      await prepared.promise;
+      return prepareRows(...args);
+    });
     const broadcastToConnIds = vi.fn();
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
-      chatAbortControllers: new Map(),
       getSessionRowProjection: () => (scenario.projection ? projection : undefined),
     });
-    const pending = handler({ sessionKey: query.key, agentId: query.agentId, reason: "updated" });
-    if (scenario.projection) {
-      expect(broadcastToConnIds).not.toHaveBeenCalled();
-    }
-    if (!scenario.captured) {
-      generation += 1;
-      current = { ...query, entry: { sessionId: "successor", lifecycleRevision: "next" } };
-    }
-    prepared.resolve();
-    await pending;
-    if (!scenario.delivered) {
-      expect(broadcastToConnIds).not.toHaveBeenCalled();
-    } else {
+    const pending = handler({
+      agentId: query.agentId,
+      sessionKey: query.key,
+      reason: "swarm-note",
+      swarmGroupId: "original-swarm",
+      kind: "log",
+      text: "Original private note",
+      label: "Old event label",
+      displayName: "Old event display",
+      parentSessionKey: "agent:main:old-parent",
+      catalogChanged: true,
+    });
+    try {
+      if (scenario.projection) {
+        await entered.promise;
+        expect(broadcastToConnIds).not.toHaveBeenCalled();
+      }
+      if (scenario.replace) {
+        projection.setEntry(query.key, {
+          sessionId: "successor",
+          updatedAt: 2,
+          lifecycleRevision: "next",
+          label: "Successor row",
+        });
+      }
+      prepared.resolve();
+      await pending;
+      if (!scenario.delivered) {
+        expect(broadcastToConnIds).not.toHaveBeenCalled();
+        return;
+      }
       expect(broadcastToConnIds).toHaveBeenCalledOnce();
       const payload = broadcastToConnIds.mock.calls[0]?.[1];
-      expect(payload).toMatchObject({ sessionKey: query.key, reason: "updated" });
-      if (scenario.projection) {
+      expect(payload).toMatchObject({ sessionKey: query.key, catalogChanged: true });
+      if (scenario.projection && !scenario.captured) {
         expect(payload).toMatchObject({
-          session: { sessionId: "original", lifecycleRevision: "first" },
+          reason: "updated",
+          label: "Successor row",
+          session: { sessionId: "successor", lifecycleRevision: "next", label: "Successor row" },
         });
+        expect(JSON.stringify(payload)).not.toContain('"swarmGroupId":');
+        expect(payload).toHaveProperty("kind", "direct");
+        expect(payload).not.toHaveProperty("text");
+        expect(payload.displayName).not.toBe("Old event display");
+        expect(payload.parentSessionKey).not.toBe("agent:main:old-parent");
       } else {
-        expect(payload).not.toHaveProperty("session");
+        expect(payload).toMatchObject({
+          reason: "swarm-note",
+          swarmGroupId: "original-swarm",
+          kind: "log",
+          text: "Original private note",
+          label: "Old event label",
+          displayName: "Old event display",
+          parentSessionKey: "agent:main:old-parent",
+        });
+        if (scenario.projection) {
+          expect(payload).toMatchObject({
+            session: { sessionId: "original", lifecycleRevision: "first" },
+          });
+        } else {
+          expect(payload).not.toHaveProperty("session");
+        }
       }
+    } finally {
+      prepared.resolve();
+      await Promise.allSettled([pending]);
+      projection.dispose();
     }
   });
 
@@ -142,7 +196,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
-      chatAbortControllers: new Map(),
     });
     await handler({ sessionKey: sessionRow.key, reason: "delete" });
     expect(broadcastToConnIds).toHaveBeenCalledWith(
@@ -165,7 +218,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
       const handler = createLifecycleEventBroadcastHandler({
         broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
-        chatAbortControllers: new Map(),
       });
 
       await handler({ sessionKey: sessionRow.key, agentId: "main", reason });
@@ -183,7 +235,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
-      chatAbortControllers: new Map(),
     });
 
     await handler({
@@ -202,7 +253,11 @@ describe("createLifecycleEventBroadcastHandler", () => {
         text: "Research",
       }),
       new Set(["conn-1"]),
-      { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
+      {
+        dropIfSlow: true,
+        sessionEventSubscriptionKeys: ["agent:main:main"],
+        prepareSessionProjection: expect.any(Function),
+      },
     );
   });
 
@@ -215,7 +270,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set() },
-      chatAbortControllers: new Map(),
     });
 
     try {
@@ -244,16 +298,16 @@ describe("createLifecycleEventBroadcastHandler", () => {
     sessionRow.key = "global";
     const goal = { ...ownerGoal };
     loadGatewaySessionRowMock.mockReturnValue({ ...sessionRow, goal });
-    const activeRun = {
-      ...createActiveRun(true),
+    const activeRun = createActiveRun(true, true, {
       agentId: "ops",
       sessionKey: "global",
-    };
+      sessionId: sessionRow.sessionId,
+    });
     const broadcastToConnIds = vi.fn();
+    rpcSourceTesting.reset([["run-before-finalize", activeRun]]);
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
-      chatAbortControllers: new Map([["run-before-finalize", activeRun]]),
     });
 
     await handler({ sessionKey: "global", ...(agentId ? { agentId } : {}), reason: "updated" });
@@ -267,7 +321,11 @@ describe("createLifecycleEventBroadcastHandler", () => {
         activeRunIds: ["run-before-finalize"],
       }),
       new Set(["conn-1"]),
-      { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
+      {
+        dropIfSlow: true,
+        sessionEventSubscriptionKeys: ["agent:ops:global", "global"],
+        prepareSessionProjection: expect.any(Function),
+      },
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     if (agentId) {
@@ -311,7 +369,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["conn-events"]) },
-      chatAbortControllers: new Map(),
     });
 
     await handler({ sessionKey: "global", reason: "patch", catalogChanged: true });
@@ -324,6 +381,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       {
         agentId: "ops",
         dropIfSlow: true,
+        sessionEventSubscriptionKeys: ["agent:ops:global"],
         sessionKeys: ["agent:ops:global"],
       },
     );

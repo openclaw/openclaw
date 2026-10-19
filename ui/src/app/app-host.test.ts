@@ -22,7 +22,7 @@ import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
-import { createShellOwner } from "./app-host-solid.test-support.ts";
+import { connectShellEvents, createShellOwner } from "./app-host-solid.test-support.ts";
 import {
   committedRouterState,
   createLazyElementSpec,
@@ -44,10 +44,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import {
-  COMMAND_PALETTE_ELEMENT,
-  type LazyCustomElementRequestController,
-} from "./lazy-custom-element.ts";
+import { COMMAND_PALETTE_ELEMENT, type LazyCustomElementRequests } from "./lazy-custom-element.ts";
 import {
   persistLazyShellAction,
   readLazyShellAction,
@@ -102,8 +99,9 @@ type ShellLifecycle = Pick<ShellChromeEventState, "connect" | "disconnect">;
 
 type ShellLazySurfaceState = ShellKeyboardState &
   ShellLifecycle & {
+    elements: object;
     commandPaletteElement: TestOptionalCustomElement;
-    lazyCustomElements: LazyCustomElementRequestController;
+    lazyCustomElements: LazyCustomElementRequests;
     openPalette: () => void;
     restorePendingLazyAction: () => void;
   };
@@ -117,9 +115,9 @@ function roster(defaultId: string, agents: GatewayAgentRow[]): AgentsListResult 
 }
 
 type ShellChromeEventState = {
+  elements: object;
   runtime: { context: ApplicationContext };
   navDrawerOpen: boolean;
-  handleShellNavDrawerToggle: (event: Event) => void;
   openPalette: () => void;
   connect: () => void;
   disconnect: () => void;
@@ -129,7 +127,6 @@ type ShellNavDrawerCloseState = { element: HTMLElement } & ShellChromeEventState
     desktopNavigationExpanded: boolean;
     navDrawerTrigger: HTMLElement | null;
     closeNavDrawer: (options?: { restoreFocus?: boolean }) => void;
-    handleWindowResize: () => void;
     toggleNavigationSurface: () => void;
   };
 
@@ -157,11 +154,11 @@ function configureLazyPaletteShell(
     configurable: true,
     get: () => Promise.resolve(true),
   });
-  Object.defineProperty(shell, "commandPalette", {
+  Object.defineProperty(shell.elements, "commandPalette", {
     configurable: true,
     get: () =>
       customElements.get(element.tagName)
-        ? { isOpen: false, openPalette, togglePalette: vi.fn() }
+        ? { isConnected: true, isOpen: false, openPalette, togglePalette: vi.fn() }
         : undefined,
   });
   return shell;
@@ -535,22 +532,6 @@ describe("OpenClaw shell server preferences", () => {
 });
 
 describe("OpenClaw shell settings search", () => {
-  it("loads config and schema for a non-empty query", async () => {
-    const runtimeConfig = {
-      ensureLoaded: vi.fn(() => Promise.resolve()),
-      ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
-    } as unknown as ApplicationContext["runtimeConfig"];
-    const shell = createShellOwner() as unknown as ShellSettingsSearchLoadState;
-    shell.runtime = {
-      context: { runtimeConfig } as unknown as ApplicationContext,
-    };
-
-    await shell.handleSettingsSearchQueryChange("browser");
-
-    expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
-    expect(runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledOnce();
-  });
-
   it("does not load schema through a replaced runtime config capability", async () => {
     const loadGate = createDeferred();
     const firstRuntimeConfig = {
@@ -702,7 +683,8 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     shell.navDrawerOpen = true;
     shell.navDrawerTrigger = trigger;
 
-    shell.handleWindowResize();
+    connectShellEvents(shell);
+    window.dispatchEvent(new Event("resize"));
 
     expect(closeNavDrawer).toHaveBeenCalledExactlyOnceWith({ restoreFocus: false });
     expect(dismissTransientMenus).toHaveBeenCalledOnce();
@@ -730,24 +712,17 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
       } as unknown as ApplicationContext,
     };
-    Object.defineProperty(shell, "commandPalette", {
+    Object.defineProperty(shell.elements, "commandPalette", {
       configurable: true,
-      value: { isOpen: false, openPalette, togglePalette: vi.fn() },
+      value: { isConnected: true, isOpen: false, openPalette, togglePalette: vi.fn() },
     });
 
-    const handlePaletteOpen = () => openPalette();
-    window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, handlePaletteOpen);
-    try {
-      shell.handleShellNavDrawerToggle(
-        new CustomEvent(SHELL_NAV_DRAWER_TOGGLE_EVENT, { detail: { trigger } }),
-      );
-      shell.openPalette();
+    connectShellEvents(shell);
+    window.dispatchEvent(new CustomEvent(SHELL_NAV_DRAWER_TOGGLE_EVENT, { detail: { trigger } }));
+    window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT));
 
-      expect(shell.navDrawerOpen).toBe(true);
-      expect(openPalette).toHaveBeenCalledOnce();
-    } finally {
-      window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, handlePaletteOpen);
-    }
+    expect(shell.navDrawerOpen).toBe(true);
+    expect(openPalette).toHaveBeenCalledOnce();
   });
 
   it.each(["MacIntel"])(
@@ -758,6 +733,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       const openPalette = vi.fn();
       const shell = configureLazyPaletteShell(element, openPalette);
       stubRenderedWhenDefined(shell);
+      connectShellEvents(shell);
       const chord = (metaKey: boolean) =>
         new KeyboardEvent("keydown", {
           key: "л",
@@ -767,12 +743,12 @@ describe("OpenClaw shell keyboard shortcuts", () => {
           cancelable: true,
         });
       const other = chord(platform !== "MacIntel");
-      shell.handleDocumentKeydown(other);
+      document.dispatchEvent(other);
       expect(other.defaultPrevented).toBe(false);
       expect(openPalette).not.toHaveBeenCalled();
 
       const primary = chord(platform === "MacIntel");
-      shell.handleDocumentKeydown(primary);
+      document.dispatchEvent(primary);
       expect(primary.defaultPrevented).toBe(true);
       await vi.waitFor(() => expect(openPalette).toHaveBeenCalledOnce());
     },
@@ -975,26 +951,6 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     expect(harness.setSelection).toHaveBeenCalledExactlyOnceWith("main", { background: true });
   });
 
-  it("keeps caches intact when a config.changed refresh returns the same roster", async () => {
-    vi.useFakeTimers();
-    const unchanged = roster("main", [{ id: "main", name: "Main" }, { id: "writer" }]);
-    const harness = createRosterRefreshContext({
-      previous: unchanged,
-      next: structuredClone(unchanged),
-      selectedId: "main",
-    });
-    const shell = createShellOwner() as unknown as ShellUiCommandState;
-    shell.runtime = { context: harness.context };
-
-    shell.handleGatewayEvent({ event: "config.changed", payload: {} });
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(harness.refreshList).toHaveBeenCalledOnce();
-    expect(harness.invalidateFiles).not.toHaveBeenCalled();
-    expect(harness.invalidateIdentity).not.toHaveBeenCalled();
-    expect(harness.ensureIdentity).not.toHaveBeenCalled();
-  });
-
   it("coalesces config.changed bursts into one roster refresh", async () => {
     vi.useFakeTimers();
     const unchanged = roster("main", [{ id: "main" }]);
@@ -1014,5 +970,8 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(harness.refreshList).toHaveBeenCalledOnce();
+    expect(harness.invalidateFiles).not.toHaveBeenCalled();
+    expect(harness.invalidateIdentity).not.toHaveBeenCalled();
+    expect(harness.ensureIdentity).not.toHaveBeenCalled();
   });
 });

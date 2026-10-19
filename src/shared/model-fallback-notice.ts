@@ -40,6 +40,6 @@ export function readModelFallbackNotice(message: unknown): ModelFallbackNotice |
     ...(marker.phase === "restored" ? { phase: "restored" as const } : {}),
     fromModel: marker.fromModel,
     toModel: marker.toModel,
-    ...(typeof marker.reason === "string" && marker.reason ? { reason: marker.reason } : {}),
+    ...(marker.reason ? { reason: marker.reason } : {}),
   };
 }

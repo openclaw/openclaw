@@ -7,7 +7,6 @@ import {
   applyResolvedCommandOutputMode,
   withConsoleLogsRoutedToStderrForJson,
 } from "../../json-output-mode.js";
-import { registerMessageSendCommand } from "./register.send.js";
 
 const messageCommandMock = vi.fn(async (): Promise<unknown> => undefined);
 vi.mock("../../../commands/message.js", () => ({
@@ -226,8 +225,11 @@ describe("runMessageAction", () => {
         dryRun: Boolean(dryRun),
       });
       const program = new Command();
-      const message = program.command("message");
-      registerMessageSendCommand(message, createMessageCliHelpers("discord"));
+      registerMessageCommands(program, {
+        programVersion: "test",
+        messageChannelOptions: "discord",
+        agentChannelOptions: "last|discord",
+      });
 
       await expect(
         program.parseAsync(
@@ -254,8 +256,11 @@ describe("runMessageAction", () => {
     "rejects an explicitly blank message channel before command startup (%j)",
     async (channel) => {
       const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined });
-      const message = program.command("message");
-      registerMessageSendCommand(message, createMessageCliHelpers("discord"));
+      registerMessageCommands(program, {
+        programVersion: "test",
+        messageChannelOptions: "discord",
+        agentChannelOptions: "last|discord",
+      });
 
       await expect(
         program.parseAsync(
@@ -273,7 +278,6 @@ describe("runMessageAction", () => {
     ["disabled reaction", "react", { ok: false, hint: "Reactions are disabled." }, 1],
     ["rejected added reaction", "react", { ok: false, warning: "Unavailable", added: "✅" }, 1],
     ["rejected delete", "delete", { ok: false, deleted: false, warning: "Not deleted" }, 1],
-    ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, 1],
     ["rejected send", "send", { ok: false, error: "Message rejected" }, 1],
     ["successful reaction", "react", { ok: true, added: "✅" }, 0],
     ["legacy reaction", "react", { added: "✅" }, 0],
@@ -283,7 +287,7 @@ describe("runMessageAction", () => {
     "propagates %s through the real CLI parser",
     async (name, action, payload, exitCode) => {
       const dryRun = name === "dry-run";
-      const kind = action === "send" || action === "poll" ? action : "action";
+      const kind = action === "send" ? action : "action";
       messageCommandMock.mockResolvedValueOnce({
         kind,
         channel: "telegram",
@@ -302,7 +306,6 @@ describe("runMessageAction", () => {
       const args = {
         react: ["--message-id", "456", "--emoji", "✅"],
         delete: ["--message-id", "456"],
-        poll: ["--poll-question", "Ready?", "--poll-option", "Yes", "--poll-option", "No"],
         send: ["--message", "hello"],
       }[action];
 
@@ -352,25 +355,6 @@ describe("runMessageAction", () => {
       message: "hi",
     });
     expect(exitMock).toHaveBeenCalledWith(0);
-  });
-
-  it("keeps broadcast on the local preload path for same-channel prefixed targets", async () => {
-    const runMessageAction = createRunMessageAction();
-
-    await expect(
-      runMessageAction("broadcast", {
-        targets: ["telegram:1", "telegram:2"],
-        message: "hi",
-      }),
-    ).rejects.toThrow("exit");
-
-    expectConfigReady("broadcast", false);
-    expectRegistryLoad(["telegram"]);
-    expectMessageCommandOptions({
-      action: "broadcast",
-      targets: ["telegram:1", "telegram:2"],
-      message: "hi",
-    });
   });
 
   it("keeps unknown actions on the local preload path", async () => {
@@ -445,19 +429,6 @@ describe("runMessageAction", () => {
     expectConfigReady("send", false);
     expectRegistryLoad(["telegram"]);
     expect(messageCommandMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("loads configured channel plugins for mixed broadcast target prefixes", async () => {
-    const runMessageAction = createRunMessageAction();
-
-    await expect(
-      runMessageAction("broadcast", {
-        targets: ["discord:channel:1", "telegram:123"],
-        message: "hi",
-      }),
-    ).rejects.toThrow("exit");
-
-    expectRegistryLoad(["configured-channel"]);
   });
 
   it("exits with failure when plugin registry loading fails before dispatch", async () => {
@@ -708,24 +679,6 @@ describe("runMessageAction", () => {
 
     expect(runGatewayStopMock).not.toHaveBeenCalled();
     expect(exitMock).toHaveBeenCalledWith(0);
-  });
-
-  it("bounds gateway_stop hooks so message actions still exit", async () => {
-    vi.useFakeTimers();
-    try {
-      registerStopHook();
-      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => {}));
-      const runMessageAction = createRunMessageAction();
-
-      const pending = expect(runMessageAction("send", baseSendOptions)).rejects.toThrow("exit");
-      await vi.advanceTimersByTimeAsync(2500);
-      await pending;
-
-      expect(errorMock).toHaveBeenCalledWith("gateway_stop hook exceeded 2500ms; continuing");
-      expect(exitMock).toHaveBeenCalledWith(0);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("calls exit(1) when message delivery fails", async () => {

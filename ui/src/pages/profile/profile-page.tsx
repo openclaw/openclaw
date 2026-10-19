@@ -6,13 +6,14 @@ import type {
   UsersSetDisplayNameResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import {
+  GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,
   isGitCoauthorCreditEnabled,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
-import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { hasOperatorSelfReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { invalidateUserPreferences, saveUserPreferences } from "../../app/user-prefs-cache.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
@@ -35,8 +36,8 @@ import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import "../../styles/profile.css";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
@@ -67,10 +68,13 @@ class ProfileState {
 
   client: GatewayBrowserClient | null = null;
   connected = false;
+  identityReady = false;
   connecting = false;
+  canRead = false;
   canWrite = false;
   connectionScopes: readonly string[] | null = null;
   identityRequestId = 0;
+  hello: ApplicationGatewaySnapshot["hello"] | undefined;
 
   constructor(
     readonly context: ApplicationContext,
@@ -80,42 +84,65 @@ class ProfileState {
     this.identityRequestId += 1;
     this.client = null;
     this.connected = false;
+    this.identityReady = false;
   }
   applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
     const nextConnected = snapshot.phase === "connected";
+    // Hello can precede users.self; unresolved identity is not a sign-out.
+    const identityReady = nextConnected && snapshot.selfUser !== undefined;
+    const nextCanRead = hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null);
     const nextCanWrite = nextConnected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
-    const writeAccessChanged = nextCanWrite !== this.canWrite;
-    const connectionChanged = nextConnected !== this.connected;
-    const nextSelfUser = nextConnected
+    const connectionChanged =
+      nextConnected !== this.connected ||
+      identityReady !== this.identityReady ||
+      (nextConnected && this.hello !== snapshot.hello);
+    const nextSelfUser = identityReady
       ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
-      : null;
+      : clientChanged
+        ? null
+        : this.selfUser;
     const selfProfileChanged =
       nextSelfUser?.id !== this.selfUser?.id ||
       nextSelfUser?.identity?.id !== this.selfUser?.identity?.id;
+    const writeAccessLost =
+      nextConnected &&
+      !nextCanWrite &&
+      this.connectionScopes?.some(
+        (scope) => scope === "operator.write" || scope === "operator.admin",
+      );
+    const readAccessLost = nextConnected && this.canRead && !nextCanRead;
     const identitySourceChanged =
-      clientChanged || connectionChanged || selfProfileChanged || writeAccessChanged;
+      clientChanged || selfProfileChanged || writeAccessLost || readAccessLost;
     this.client = snapshot.client;
     this.connected = nextConnected;
+    this.identityReady = identityReady;
+    this.hello = snapshot.hello;
     this.connecting = snapshot.phase === "connecting" || snapshot.phase === "reconnecting";
-    this.canWrite = nextCanWrite;
+    this.canRead = nextConnected ? nextCanRead : clientChanged ? false : this.canRead;
+    this.canWrite = nextCanWrite && identityReady;
     // Hello records this connection's negotiated grants, not the profile's role ceiling.
-    this.connectionScopes = nextConnected ? (snapshot.hello?.auth?.scopes ?? null) : null;
+    this.connectionScopes =
+      nextConnected || clientChanged
+        ? (snapshot.hello?.auth?.scopes ?? null)
+        : this.connectionScopes;
     this.selfUser = nextSelfUser;
-    if (identitySourceChanged) {
+    if (identitySourceChanged || connectionChanged) {
       this.identityRequestId += 1;
-      this.ownProfile = null;
-      this.displayName = "";
-      this.gitCoauthorEnabled = true;
       this.identityLoading = false;
       this.identityBusy = null;
       this.identityError = null;
     }
+    if (identitySourceChanged) {
+      this.ownProfile = null;
+      this.displayName = "";
+      this.gitCoauthorEnabled = true;
+    }
     this.publish();
-    if (!nextConnected || !snapshot.client) {
+    if (!identityReady || !snapshot.client) {
       return;
     }
-    if (identitySourceChanged) {
+    if (identitySourceChanged || connectionChanged) {
       void this.loadIdentity();
     }
     void this.context.agents.ensureList().then((list) => {
@@ -127,7 +154,7 @@ class ProfileState {
 
   async loadIdentity() {
     const client = this.client;
-    if (!client || !this.connected || this.identityLoading) {
+    if (!client || !this.identityReady || !this.canRead || this.identityLoading) {
       return;
     }
     const requestId = ++this.identityRequestId;
@@ -150,7 +177,8 @@ class ProfileState {
       this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
       this.gitCoauthorEnabled = true;
       this.publish();
-      if (profile.githubIdentity) {
+      // Consent belongs to the person, not to a display-primary GitHub account.
+      if (profile.id !== GATEWAY_OWNER_PROFILE_ID) {
         const { loadUserPreferences } = await import("../../app/user-prefs-request.ts");
         if (requestId !== this.identityRequestId) {
           return;
@@ -186,7 +214,7 @@ class ProfileState {
       !this.canWrite ||
       this.identityBusy ||
       this.identityLoading ||
-      (change.kind === "git-coauthor" && !profile.githubIdentity)
+      (change.kind === "git-coauthor" && profile.id === GATEWAY_OWNER_PROFILE_ID)
     ) {
       return;
     }
@@ -287,7 +315,7 @@ class ProfileState {
   }
 
   refreshManually() {
-    if (this.connected && !this.identityBusy && !this.identityLoading) {
+    if (this.identityReady && !this.identityBusy && !this.identityLoading) {
       if (this.client) {
         invalidateUserPreferences(this.client);
       }
@@ -316,39 +344,40 @@ function accessSummary(scopes: readonly string[] | null) {
   );
 }
 
-function ProfilePageContent() {
+export function ProfilePage() {
   const context = useApplication();
+  const agents = projectOwner(context.agents, (source) => source.state.agentsList);
+  const identities = projectOwner(context.agentIdentity, (source) => source);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const state = new ProfileState(context, () => setRevision((value) => value + 1));
   const view = () => {
     revision();
     return state;
   };
-  const stops = [
-    context.gateway.subscribe((snapshot) => state.applyGatewaySnapshot(snapshot)),
-    context.agents.subscribe(state.publish),
-    context.agentIdentity.subscribe(state.publish),
-    context.gateway.subscribeEvents((event) => {
-      if (
-        !state.identityBusy &&
-        event.event === "sessions.changed" &&
-        asOptionalRecord(event.payload)?.reason === "profile-identity"
-      ) {
-        state.identityRequestId += 1;
-        state.identityLoading = false;
-        void state.loadIdentity();
-      }
-    }),
-  ];
+  // Retire identity requests synchronously when connection authority changes.
+  const stopGateway = context.gateway.subscribe((snapshot) => state.applyGatewaySnapshot(snapshot));
+  const stopEvents = context.gateway.subscribeEvents((event) => {
+    if (
+      !state.identityBusy &&
+      event.event === "sessions.changed" &&
+      asOptionalRecord(event.payload)?.reason === "profile-identity"
+    ) {
+      state.identityRequestId += 1;
+      state.identityLoading = false;
+      void state.loadIdentity();
+    }
+  });
   state.applyGatewaySnapshot(context.gateway.snapshot);
   onCleanup(() => {
-    stops.forEach((stop) => stop());
+    stopGateway();
+    stopEvents();
     state.dispose();
   });
   const connected = () => view().connected && view().client !== null;
+  const hasPresentation = () =>
+    connected() || view().connectionScopes !== null || view().selfUser !== null;
   const agent = () => {
-    revision();
-    const list = context.agents.state.agentsList;
+    const list = agents.read();
     const id = list?.defaultId ?? "main";
     return list?.agents.find((row) => row.id === id) ?? { id };
   };
@@ -368,7 +397,7 @@ function ProfilePageContent() {
   };
 
   return (
-    <>
+    <openclaw-profile-page>
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header">
           <div>
@@ -380,7 +409,9 @@ function ProfilePageContent() {
           <Show when={view().connected}>
             <button
               class="btn profile-refresh"
-              disabled={view().identityLoading || view().identityBusy !== null}
+              disabled={
+                !view().identityReady || view().identityLoading || view().identityBusy !== null
+              }
               onClick={() => state.refreshManually()}
             >
               {view().identityLoading ? t("common.refreshing") : t("common.refresh")}
@@ -391,7 +422,7 @@ function ProfilePageContent() {
       <SettingsWorkspace>
         <SettingsPage>
           <Show
-            when={connected()}
+            when={hasPresentation()}
             fallback={
               <SettingsGroup>
                 {view().connecting ? (
@@ -407,7 +438,7 @@ function ProfilePageContent() {
             <ProfileHero
               row={agent()}
               user={view().selfUser}
-              identity={context.agentIdentity.get(agent().id)}
+              identity={identities.read().get(agent().id)}
             />
             <div id="settings-profile-access">
               <SettingsSection title={t("profilePage.access.title")}>
@@ -459,7 +490,7 @@ function ProfilePageContent() {
               fallback={
                 <div id={PROFILE_SETTINGS_TARGET_IDS.identity}>
                   <SettingsSection title={t("profilePage.identity.title")}>
-                    {view().identityLoading ? (
+                    {view().identityLoading || (view().connected && !view().identityReady) ? (
                       <SettingsLoadingSkeleton label={t("profilePage.identity.loading")} rows={2} />
                     ) : (
                       <SettingsEmpty
@@ -481,6 +512,7 @@ function ProfilePageContent() {
                 config={context.config}
                 profile={view().ownProfile!}
                 canWrite={view().canWrite}
+                connected={view().identityReady}
                 avatarUrl={avatarUrl()}
                 displayName={view().displayName}
                 gitCoauthorEnabled={view().gitCoauthorEnabled}
@@ -500,12 +532,12 @@ function ProfilePageContent() {
           </Show>
           <PersonalInstructions
             hidden={
-              !connected() ||
+              !hasPresentation() ||
               view().context.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities !==
                 true
             }
           />
-          <Show when={connected()}>
+          <Show when={hasPresentation()}>
             <ModelAccounts
               identityId={view().selfUser?.id ?? null}
               profileId={view().ownProfile?.id ?? null}
@@ -528,10 +560,6 @@ function ProfilePageContent() {
           </Show>
         </SettingsPage>
       </SettingsWorkspace>
-    </>
+    </openclaw-profile-page>
   );
 }
-
-export const ProfilePage = defineSolidBridge("openclaw-profile-page", ProfilePageContent, {
-  properties: {},
-});

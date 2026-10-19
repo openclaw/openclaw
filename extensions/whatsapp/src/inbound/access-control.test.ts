@@ -11,50 +11,33 @@ import {
   setupAccessControlTestHarness,
   upsertPairingRequestMock,
 } from "./access-control.test-harness.js";
+import { normalizeTestWhatsAppMessage } from "./message-normalization.test-helper.js";
 import { createTestWebInboundMessage } from "./test-message.test-helper.js";
 
 setupAccessControlTestHarness();
-let checkInboundAccessControl: typeof import("./access-control.js").checkInboundAccessControl;
 let resolveWhatsAppCommandAuthorized: typeof import("../inbound-policy.js").resolveWhatsAppCommandAuthorized;
 
 beforeAll(async () => {
-  ({ checkInboundAccessControl } = await import("./access-control.js"));
   ({ resolveWhatsAppCommandAuthorized } = await import("../inbound-policy.js"));
 });
 
-function checkAccess(overrides: Partial<Parameters<typeof checkInboundAccessControl>[0]> = {}) {
-  return checkInboundAccessControl({
+async function checkAccess(
+  overrides: Partial<Parameters<typeof normalizeTestWhatsAppMessage>[0]> = {},
+) {
+  const normalized = await normalizeTestWhatsAppMessage({
     cfg: getAccessControlTestConfig() as never,
-    accountId: "default",
-    from: "+15550001111",
-    selfE164: "+15550009999",
-    senderE164: "+15550001111",
-    group: false,
-    pushName: "Sam",
-    isFromMe: false,
-    sock: { sendMessage: sendMessageMock },
-    remoteJid: "15550001111@s.whatsapp.net",
+    sendMessage: sendMessageMock,
     ...overrides,
   });
+  return normalized?.access ?? null;
 }
 
 async function checkUnauthorizedWorkDmSender() {
-  return checkInboundAccessControl({
-    cfg: getAccessControlTestConfig() as never,
-    accountId: "work",
-    from: "+15550001111",
-    selfE164: "+15550009999",
-    senderE164: "+15550001111",
-    group: false,
-    pushName: "Stranger",
-    isFromMe: false,
-    sock: { sendMessage: sendMessageMock },
-    remoteJid: "15550001111@s.whatsapp.net",
-  });
+  return checkAccess({ accountId: "work", pushName: "Stranger" });
 }
 
-function expectSilentlyBlocked(result: { allowed: boolean }) {
-  expect(result.allowed).toBe(false);
+function expectSilentlyBlocked(result: Awaited<ReturnType<typeof checkAccess>>) {
+  expect(result).toBeNull();
   expect(upsertPairingRequestMock).not.toHaveBeenCalled();
   expect(sendMessageMock).not.toHaveBeenCalled();
 }
@@ -126,7 +109,7 @@ async function checkCommandAuthorizedForGroup(params: {
   });
 }
 
-describe("checkInboundAccessControl admission contract", () => {
+describe("WhatsApp inbound normalization admission contract", () => {
   it("does not authorize unresolved group participant JIDs as phone allowlist entries", async () => {
     const groupJid = "120363401234567890@g.us";
     const cfg = {
@@ -147,12 +130,12 @@ describe("checkInboundAccessControl admission contract", () => {
       remoteJid: groupJid,
     });
 
-    expect(result.allowed).toBe(false);
-    expect("admission" in result).toBe(false);
+    expect(result).toBeNull();
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
   });
 });
 
-describe("checkInboundAccessControl pairing grace", () => {
+describe("WhatsApp inbound normalization pairing grace", () => {
   async function runPairingGraceCase(messageTimestampMs: number) {
     const connectedAtMs = 1_000_000;
     return await checkAccess({
@@ -164,7 +147,7 @@ describe("checkInboundAccessControl pairing grace", () => {
   it("suppresses pairing replies for historical DMs on connect", async () => {
     const result = await runPairingGraceCase(1_000_000 - 31_000);
 
-    expect(result.allowed).toBe(false);
+    expect(result).toBeNull();
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
@@ -172,8 +155,7 @@ describe("checkInboundAccessControl pairing grace", () => {
   it("sends pairing replies for live DMs", async () => {
     const result = await runPairingGraceCase(1_000_000 - 10_000);
 
-    expect(result.allowed).toBe(false);
-    expect(result.isSelfChat).toBe(false);
+    expect(result).toBeNull();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMessageMock).toHaveBeenCalled();
   });
@@ -258,7 +240,7 @@ describe("WhatsApp dmPolicy precedence", () => {
         selfE164: "+15550009999",
       });
 
-      expect(result.allowed).toBe(true);
+      expect(result).not.toBeNull();
       expect(commandAuthorized).toBe(true);
       expect(upsertPairingRequestMock).not.toHaveBeenCalled();
       expect(sendMessageMock).not.toHaveBeenCalled();
@@ -293,9 +275,6 @@ describe("WhatsApp dmPolicy precedence", () => {
     });
 
     expectSilentlyBlocked(result);
-    expect(result.shouldMarkRead).toBe(false);
-    expect(result.isSelfChat).toBe(false);
-    expect(result.resolvedAccountId).toBe(accountId);
   });
 
   it("does not implicitly allow the linked phone when self-chat is disabled", async () => {
@@ -378,7 +357,7 @@ describe("WhatsApp dmPolicy precedence", () => {
     });
     const commandAuthorized = await checkCommandAuthorizedForDm({ cfg });
 
-    expect(result.allowed).toBe(true);
+    expect(result).not.toBeNull();
     expect(commandAuthorized).toBe(true);
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(sendMessageMock).not.toHaveBeenCalled();
@@ -417,7 +396,7 @@ describe("WhatsApp dmPolicy precedence", () => {
     });
     const commandAuthorized = await checkCommandAuthorizedForGroup({ cfg });
 
-    expect(result.allowed).toBe(true);
+    expect(result).not.toBeNull();
     expect(commandAuthorized).toBe(true);
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(sendMessageMock).not.toHaveBeenCalled();
@@ -446,7 +425,7 @@ describe("WhatsApp dmPolicy precedence", () => {
       accountId: "default",
     });
 
-    expect(result.allowed).toBe(true);
+    expect(result).not.toBeNull();
     expect(commandAuthorized).toBe(true);
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(sendMessageMock).not.toHaveBeenCalled();
@@ -518,7 +497,7 @@ describe("WhatsApp dmPolicy precedence", () => {
       remoteJid: "15550009999@s.whatsapp.net",
     });
 
-    expect(result.allowed).toBe(true);
-    expect(result.isSelfChat).toBe(true);
+    expect(result).not.toBeNull();
+    expect(result?.isSelfChat).toBe(true);
   });
 });

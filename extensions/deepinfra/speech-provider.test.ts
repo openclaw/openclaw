@@ -36,6 +36,7 @@ describe("deepinfra speech provider", () => {
 
   it("normalizes provider-owned speech config", () => {
     const provider = buildDeepInfraSpeechProvider();
+    expect(provider.defaultTimeoutMs).toBe(120_000);
     const resolved = provider.resolveConfig?.({
       cfg: {} as never,
       timeoutMs: 30_000,

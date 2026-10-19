@@ -3,7 +3,6 @@ import {
   formatMigrationWarningSummary,
   MIGRATION_WARNING_EXAMPLE_LIMIT,
 } from "../infra/migration-warning-summary.js";
-import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
 import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
@@ -17,7 +16,7 @@ export function formatSessionSqliteMigrationWarnings(
   return targets.flatMap((target) => {
     let historicalCount = 0;
     // Bound presentation only: raw reports and recovery receipts keep every claim.
-    const warnings = target.issues.filter(isSessionSqliteMigrationWarning).flatMap((issue) => {
+    const warnings = target.issues.flatMap((issue) => {
       if (
         issue.code === "historical_transcript_deferred" &&
         ++historicalCount > MIGRATION_WARNING_EXAMPLE_LIMIT

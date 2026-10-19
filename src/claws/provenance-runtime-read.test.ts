@@ -2,19 +2,23 @@ import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import {
   prepareClawInstallSchemaVersions,
   readCachedClawInstallSchemaVersions,
 } from "./provenance-runtime-read.js";
-import { deleteClawInstallRecord, persistClawInstallRecord } from "./provenance.js";
-import { makeProvenancePlan } from "./provenance.test-helpers.js";
+import { makeProvenancePlan, seedLegacyClawInstall } from "./provenance.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -31,7 +35,7 @@ describe("Claw runtime provenance cache", () => {
     });
   });
 
-  it("reuses committed install and deletion facts until the database closes", async () => {
+  it("reloads legacy ownership after closure and fails closed when the database disappears", async () => {
     const root = tempDirs.make("openclaw-claw-runtime-provenance-");
     const options = { env: { OPENCLAW_STATE_DIR: root } };
     const database = openOpenClawStateDatabase(options);
@@ -43,7 +47,8 @@ describe("Claw runtime provenance cache", () => {
     });
 
     const { plan } = await makeProvenancePlan(root, { schemaVersion: 1, agent: { id: "worker" } });
-    const record = persistClawInstallRecord(plan, options);
+    const record = seedLegacyClawInstall(plan, options);
+    await closeOpenClawStateDatabaseAsync();
     (await prepareClawInstallSchemaVersions(options)).publish();
     const refreshed = readCachedClawInstallSchemaVersions(options);
     expect(refreshed.kind).toBe("ready");
@@ -56,16 +61,27 @@ describe("Claw runtime provenance cache", () => {
       agentConfigDigest: record.agentConfigDigest,
     });
 
-    deleteClawInstallRecord("worker", options);
+    runOpenClawStateWriteTransaction(({ db }) => {
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "claw_installs">>(db)
+          .deleteFrom("claw_installs")
+          .where("agent_id", "=", "worker"),
+      );
+    }, options);
+    await closeOpenClawStateDatabaseAsync();
     (await prepareClawInstallSchemaVersions(options)).publish();
     expect(readCachedClawInstallSchemaVersions(options)).toEqual({
       kind: "ready",
       schemaVersions: new Map(),
     });
 
-    persistClawInstallRecord(plan, options);
+    seedLegacyClawInstall(plan, options);
+    await closeOpenClawStateDatabaseAsync();
+    (await prepareClawInstallSchemaVersions(options)).publish();
 
-    closeOpenClawStateDatabaseForTest();
+    openOpenClawStateDatabase(options);
+    await closeOpenClawStateDatabaseAsync();
     rmSync(database.path);
     (await prepareClawInstallSchemaVersions(options)).publish();
     expect(readCachedClawInstallSchemaVersions(options)).toMatchObject({
@@ -90,6 +106,7 @@ describe("Claw runtime provenance cache", () => {
     expect(existsSync(join(stateDir, "openclaw.sqlite-wal"))).toBe(false);
     expect(existsSync(join(stateDir, "openclaw.sqlite-shm"))).toBe(false);
 
+    await closeOpenClawStateDatabaseAsync();
     rmSync(database.path);
   });
 });

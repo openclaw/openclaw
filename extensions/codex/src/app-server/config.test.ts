@@ -7,9 +7,7 @@ import { codexAppServerStartOptionsKey } from "./config-runtime.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexSandboxPolicyForTurn,
-  isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
-  resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
   resolveCodexSupervisionAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
@@ -17,7 +15,6 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexPluginsPolicy,
   shouldAutoApproveCodexAppServerApprovals,
-  withMcpElicitationsApprovalPolicy,
 } from "./config.js";
 import { expectFields, expectRuntimePolicy, resolveRuntimeForTest } from "./config.test-support.js";
 
@@ -35,20 +32,6 @@ const userReviewPolicy = { ...autoReviewPolicy, approvalsReviewer: "user" };
 const readOnlyAutoReviewPolicy = { ...autoReviewPolicy, sandbox: "read-only" };
 const readOnlyUserReviewPolicy = { ...userReviewPolicy, sandbox: "read-only" };
 const perCommandPolicy = { ...fullAccessPolicy, approvalPolicy: "untrusted" };
-
-describe("withMcpElicitationsApprovalPolicy", () => {
-  it("returns every field required by Codex granular approval policy", () => {
-    expect(withMcpElicitationsApprovalPolicy("never")).toEqual({
-      granular: {
-        mcp_elicitations: true,
-        request_permissions: false,
-        rules: false,
-        sandbox_approval: false,
-        skill_approval: false,
-      },
-    });
-  });
-});
 
 function resolveAppServer(
   appServer: unknown,
@@ -122,8 +105,152 @@ describe("Codex app-server config", () => {
       },
       readOnlyUserReviewPolicy,
     ],
+    [
+      "forces prompting when explicit no-prompt config cannot use model-backed review",
+      {
+        pluginConfig: {
+          appServer: {
+            mode: "guardian",
+            approvalPolicy: "never",
+            sandbox: "danger-full-access",
+            approvalsReviewer: "auto_review",
+          },
+        },
+        modelProvider: "lmstudio",
+        model: "local-model",
+      },
+      userReviewPolicy,
+    ],
+    [
+      "preserves explicit read-only app-server sandbox for auto mode",
+      {
+        pluginConfig: {
+          appServer: {
+            mode: "yolo",
+            approvalPolicy: "never",
+            sandbox: "read-only",
+            approvalsReviewer: "user",
+          },
+        },
+        execMode: "auto",
+        modelProvider: "openai",
+        env: {},
+      },
+      readOnlyAutoReviewPolicy,
+    ],
+    [
+      "preserves explicit read-only app-server sandbox for ask mode",
+      {
+        pluginConfig: {},
+        execMode: "ask",
+        env: {
+          OPENCLAW_CODEX_APP_SERVER_MODE: "yolo",
+          OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY: "never",
+          OPENCLAW_CODEX_APP_SERVER_SANDBOX: "read-only",
+        },
+      },
+      readOnlyUserReviewPolicy,
+    ],
+    [
+      "honors managed prompting approvals for auto mode",
+      {
+        execMode: "auto",
+        modelProvider: "openai",
+        requirementsToml: 'allowed_approval_policies = ["untrusted", "never"]',
+      },
+      { ...autoReviewPolicy, approvalPolicy: "untrusted" },
+    ],
+    [
+      "honors managed policy that permits mandatory per-command approvals",
+      {
+        execPolicy: resolveExecPolicy({ security: "full", ask: "always" }),
+        requirementsToml: 'allowed_approval_policies = ["on-request", "untrusted"]',
+      },
+      perCommandPolicy,
+    ],
+    [
+      "clamps legacy full exec with ask when an OpenClaw sandbox is active",
+      {
+        execPolicy: resolveExecPolicy({ security: "full", ask: "always" }),
+        openClawSandboxActive: true,
+        requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
+      },
+      { approvalPolicy: "untrusted", sandbox: "workspace-write", approvalsReviewer: "user" },
+    ],
   ])("%s", (_name, params, policy) => {
-    expectRuntimePolicy(resolveRuntimeForTest(params), policy);
+    const runtime = resolveRuntimeForTest(params);
+    expectRuntimePolicy(runtime, policy);
+    expect(shouldAutoApproveCodexAppServerApprovals(runtime)).toBe(false);
+  });
+
+  it.each<[string, NonNullable<Parameters<typeof resolveRuntimeForTest>[0]>, string]>([
+    [
+      "rejects additional session homes for websocket app servers",
+      {
+        pluginConfig: {
+          appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
+          sessionCatalog: { homes: ["/srv/codex-extra"] },
+        },
+        env: {},
+      },
+      "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",
+    ],
+    [
+      "rejects remote websocket app-servers without identity-bearing auth",
+      {
+        pluginConfig: {
+          appServer: { transport: "websocket", url: "wss://codex-app-server.example.internal/ws" },
+        },
+      },
+      "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
+    ],
+    [
+      "rejects Unix app-server connections outside the shared user home",
+      { pluginConfig: { appServer: { transport: "unix", homeScope: "agent" } } },
+      "plugins.entries.codex.config.appServer.transport=unix requires appServer.homeScope=user",
+    ],
+    [
+      "rejects non-Unix URLs for Unix app-server connections",
+      {
+        pluginConfig: {
+          appServer: { transport: "unix", homeScope: "user", url: "ws://127.0.0.1:39175" },
+        },
+      },
+      "plugins.entries.codex.config.appServer.url must use unix:// when appServer.transport is unix",
+    ],
+    [
+      "fails closed when Guardian local-model fallback needs user approvals but requirements disallow them",
+      {
+        pluginConfig: { appServer: { mode: "guardian" } },
+        modelProvider: "lmstudio",
+        model: "local-model",
+        requirementsToml: 'allowed_approvals_reviewers = ["auto_review"]\n',
+      },
+      "tools.exec.mode=ask requires Codex app-server user approvals",
+    ],
+    [
+      "fails closed when ask mode can only use never approvals",
+      { execMode: "ask", requirementsToml: 'allowed_approval_policies = ["never"]' },
+      "tools.exec.mode=ask requires Codex app-server prompting approvals",
+    ],
+    [
+      "fails closed when legacy full exec with ask cannot use full Codex sandbox",
+      {
+        execPolicy: resolveExecPolicy({ security: "full", ask: "always" }),
+        requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
+      },
+      "legacy full exec security with ask requires Codex app-server danger-full-access",
+    ],
+    [
+      "fails closed when managed policy forbids mandatory per-command approvals",
+      {
+        execPolicy: resolveExecPolicy({ security: "full", ask: "always" }),
+        requirementsToml: 'allowed_approval_policies = ["on-request", "never"]',
+      },
+      "tools.exec.ask=always requires Codex app-server per-command approvals",
+    ],
+  ])("%s", (_name, params, error) => {
+    expect(() => resolveRuntimeForTest(params)).toThrow(error);
   });
 
   it("only auto-approves app-server approvals for full yolo runtime policy", () => {
@@ -275,32 +402,8 @@ describe("Codex app-server config", () => {
     expect(runtime.start.clearEnv).toEqual(["OPENAI_API_KEY"]);
   });
 
-  it.each([{ enableUltrafast: undefined, expected: true }])(
-    "resolves the Ultrafast disable switch $enableUltrafast",
-    ({ enableUltrafast, expected }) => {
-      const runtime = resolveCodexAppServerRuntimeOptions({
-        pluginConfig: { appServer: { serviceTier: "fast", enableUltrafast } },
-        env: {},
-      });
-      expect(runtime.enableUltrafast).toBe(expected);
-      expect(runtime.serviceTier).toBe("priority");
-    },
-  );
-
   it("preserves future service tier values", () => {
     expect(resolveAppServer({ serviceTier: "batch-preview" }).serviceTier).toBe("batch-preview");
-  });
-
-  it("rejects additional session homes for websocket app servers", () => {
-    const appServer = { transport: "websocket", url: "ws://127.0.0.1:39175" };
-    expect(() =>
-      resolveRuntimeForTest({
-        pluginConfig: { appServer, sessionCatalog: { homes: ["/srv/codex-extra"] } },
-        env: {},
-      }),
-    ).toThrow(
-      "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",
-    );
   });
 
   it("passes resolved app-server SecretInput strings through to auth token and headers", () => {
@@ -326,37 +429,6 @@ describe("Codex app-server config", () => {
       connectionClass: "remote",
       remoteWorkspaceRoot: "/srv/workspaces",
     });
-  });
-
-  it("rejects remote websocket app-servers without identity-bearing auth", () => {
-    expect(() =>
-      resolveAppServer({
-        transport: "websocket",
-        url: "wss://codex-app-server.example.internal/ws",
-      }),
-    ).toThrow(
-      "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
-    );
-  });
-
-  it("does not let private-QA environment flags override native sandbox policy", () => {
-    const privateQaCodexEnv = {
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "codex",
-    };
-    const runtime = resolveAppServer(
-      {
-        mode: "yolo",
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-      },
-      { env: privateQaCodexEnv },
-    );
-
-    expectRuntimePolicy(runtime, fullAccessPolicy);
-    expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", runtime.start.args)).toEqual(
-      { type: "dangerFullAccess" },
-    );
   });
 
   it("honors explicitly configured native workspace temporary-root exclusions", () => {
@@ -427,24 +499,6 @@ describe("Codex app-server config", () => {
 
     expect(runtime.start).toMatchObject({ transport: "stdio", homeScope: "user" });
     expect(runtime.start).not.toHaveProperty("url");
-  });
-
-  it("rejects Unix app-server connections outside the shared user home", () => {
-    expect(() => resolveAppServer({ transport: "unix", homeScope: "agent" })).toThrow(
-      "plugins.entries.codex.config.appServer.transport=unix requires appServer.homeScope=user",
-    );
-  });
-
-  it("rejects non-Unix URLs for Unix app-server connections", () => {
-    expect(() =>
-      resolveAppServer({
-        transport: "unix",
-        homeScope: "user",
-        url: "ws://127.0.0.1:39175",
-      }),
-    ).toThrow(
-      "plugins.entries.codex.config.appServer.url must use unix:// when appServer.transport is unix",
-    );
   });
 
   it("resolves opt-in user-home coexistence only for local stdio", () => {
@@ -574,27 +628,6 @@ describe("Codex app-server config", () => {
     expect(
       canUseReviewer({ env: { OPENAI_BASE_URL: "", OPENAI_API_BASE: "http://localhost:8080/v1" } }),
     ).toBe(false);
-  });
-
-  it("forces prompting when explicit no-prompt config cannot use model-backed review", () => {
-    const runtime = resolveAppServer(
-      {
-        mode: "guardian",
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-        approvalsReviewer: "auto_review",
-      },
-      { modelProvider: "lmstudio", model: "local-model" },
-    );
-
-    expectRuntimePolicy(runtime, userReviewPolicy);
-    expect(shouldAutoApproveCodexAppServerApprovals(runtime)).toBe(false);
-  });
-
-  it("enables sandbox execution for remote placement", () => {
-    expect(
-      isCodexSandboxExecServerEnabled(undefined, { placementExecutionMode: "remote-exec" }),
-    ).toBe(true);
   });
 
   it("parses auto native Codex plugin destructive policy", () => {
@@ -794,19 +827,6 @@ describe("Codex app-server config", () => {
     }
   });
 
-  it("preserves explicit read-only app-server sandbox for auto mode", () => {
-    const configRuntime = resolveAppServer(
-      {
-        mode: "yolo",
-        approvalPolicy: "never",
-        sandbox: "read-only",
-        approvalsReviewer: "user",
-      },
-      { execMode: "auto", modelProvider: "openai", env: {} },
-    );
-    expectRuntimePolicy(configRuntime, readOnlyAutoReviewPolicy);
-  });
-
   it.each(["allowlist"] as const)(
     "blocks Codex app-server local execution for normalized OpenClaw %s exec mode",
     (execMode) => {
@@ -815,53 +835,6 @@ describe("Codex app-server config", () => {
       );
     },
   );
-
-  it("preserves explicit read-only app-server sandbox for ask mode", () => {
-    const envRuntime = resolveRuntimeForTest({
-      pluginConfig: {},
-      execMode: "ask",
-      env: {
-        OPENCLAW_CODEX_APP_SERVER_MODE: "yolo",
-        OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY: "never",
-        OPENCLAW_CODEX_APP_SERVER_SANDBOX: "read-only",
-      },
-    });
-
-    expectRuntimePolicy(envRuntime, readOnlyUserReviewPolicy);
-  });
-
-  it("fails closed when Guardian local-model fallback needs user approvals but requirements disallow them", () => {
-    expect(() =>
-      resolveAppServer(
-        { mode: "guardian" },
-        {
-          modelProvider: "lmstudio",
-          model: "local-model",
-          requirementsToml: 'allowed_approvals_reviewers = ["auto_review"]\n',
-        },
-      ),
-    ).toThrow("tools.exec.mode=ask requires Codex app-server user approvals");
-  });
-
-  it("fails closed when ask mode can only use never approvals", () => {
-    expect(() =>
-      resolveRuntimeForTest({
-        execMode: "ask",
-        requirementsToml: 'allowed_approval_policies = ["never"]',
-      }),
-    ).toThrow("tools.exec.mode=ask requires Codex app-server prompting approvals");
-  });
-
-  it("honors managed prompting approvals for auto mode", () => {
-    expectRuntimePolicy(
-      resolveRuntimeForTest({
-        execMode: "auto",
-        modelProvider: "openai",
-        requirementsToml: 'allowed_approval_policies = ["untrusted", "never"]',
-      }),
-      { ...autoReviewPolicy, approvalPolicy: "untrusted" },
-    );
-  });
 
   it("enforces canonical per-agent exec deny before starting Codex app-server", () => {
     const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
@@ -875,49 +848,6 @@ describe("Codex app-server config", () => {
     expect(execPolicy.mode).toBe("deny");
     expect(() => resolveRuntimeForTest({ execPolicy })).toThrow(
       "Codex app-server local execution is unavailable because effective tools.exec.mode=deny",
-    );
-  });
-
-  it("fails closed when legacy full exec with ask cannot use full Codex sandbox", () => {
-    expect(() =>
-      resolveRuntimeForTest({
-        execPolicy: resolveExecPolicy({ security: "full", ask: "always" }),
-        requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
-      }),
-    ).toThrow("legacy full exec security with ask requires Codex app-server danger-full-access");
-  });
-
-  it("fails closed when managed policy forbids mandatory per-command approvals", () => {
-    expect(() =>
-      resolveRuntimeForTest({
-        execPolicy: resolveExecPolicy({ security: "full", ask: "always" }),
-        requirementsToml: 'allowed_approval_policies = ["on-request", "never"]',
-      }),
-    ).toThrow("tools.exec.ask=always requires Codex app-server per-command approvals");
-  });
-
-  it("honors managed policy that permits mandatory per-command approvals", () => {
-    expectRuntimePolicy(
-      resolveRuntimeForTest({
-        execPolicy: resolveExecPolicy({ security: "full", ask: "always" }),
-        requirementsToml: 'allowed_approval_policies = ["on-request", "untrusted"]',
-      }),
-      perCommandPolicy,
-    );
-  });
-
-  it("clamps legacy full exec with ask when an OpenClaw sandbox is active", () => {
-    expectRuntimePolicy(
-      resolveRuntimeForTest({
-        execPolicy: resolveExecPolicy({ security: "full", ask: "always" }),
-        openClawSandboxActive: true,
-        requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
-      }),
-      {
-        approvalPolicy: "untrusted",
-        sandbox: "workspace-write",
-        approvalsReviewer: "user",
-      },
     );
   });
 
@@ -973,37 +903,6 @@ describe("Codex app-server config", () => {
     expect(execPolicy).toMatchObject({ mode: "full", security: "full", ask: "off" });
   });
 
-  it("preserves explicit read-only sandbox for host exec approval ask floors", () => {
-    const execPolicy = resolveExecPolicy(
-      { mode: "full" },
-      {
-        approvals: {
-          version: 1,
-          defaults: { ask: "always" },
-          agents: {},
-        },
-      },
-    );
-
-    expect(execPolicy.mode).toBe("ask");
-    expectRuntimePolicy(
-      resolveAppServer(
-        {
-          mode: "yolo",
-          approvalPolicy: "never",
-          sandbox: "read-only",
-          approvalsReviewer: "auto_review",
-        },
-        { execPolicy },
-      ),
-      {
-        approvalPolicy: "untrusted",
-        sandbox: "read-only",
-        approvalsReviewer: "user",
-      },
-    );
-  });
-
   it("applies agent-scoped exec approval security floors before starting Codex app-server", () => {
     const execPolicy = resolveExecPolicy(
       { mode: "full" },
@@ -1034,35 +933,47 @@ describe("Codex app-server config", () => {
     );
   });
 
-  it("applies agent-scoped exec approval ask floors before starting Codex app-server", () => {
-    const execPolicy = resolveExecPolicy(
-      { mode: "full" },
-      {
+  it.each<{
+    name: string;
+    options: Parameters<typeof resolveExecPolicy>[1];
+    sandbox: "read-only" | "workspace-write";
+    policy: Parameters<typeof expectRuntimePolicy>[1];
+  }>([
+    {
+      name: "host",
+      options: {
+        approvals: { version: 1 as const, defaults: { ask: "always" as const }, agents: {} },
+      },
+      sandbox: "read-only",
+      policy: { approvalPolicy: "untrusted", sandbox: "read-only", approvalsReviewer: "user" },
+    },
+    {
+      name: "agent",
+      options: {
         agentId: "codex-agent",
         approvals: {
-          version: 1,
-          defaults: { ask: "off" },
-          agents: {
-            "codex-agent": { ask: "always" },
-          },
+          version: 1 as const,
+          defaults: { ask: "off" as const },
+          agents: { "codex-agent": { ask: "always" as const } },
         },
       },
-    );
-
-    expect(execPolicy.mode).toBe("ask");
-    expectRuntimePolicy(
-      resolveAppServer(
-        {
-          mode: "yolo",
-          approvalPolicy: "never",
-          sandbox: "workspace-write",
-          approvalsReviewer: "auto_review",
-        },
-        { execPolicy },
-      ),
-      perCommandPolicy,
-    );
-  });
+      sandbox: "workspace-write",
+      policy: perCommandPolicy,
+    },
+  ])(
+    "applies $name exec approval ask floors before starting Codex app-server",
+    ({ options, sandbox, policy }) => {
+      const execPolicy = resolveExecPolicy({ mode: "full" }, options);
+      expect(execPolicy.mode).toBe("ask");
+      expectRuntimePolicy(
+        resolveAppServer(
+          { mode: "yolo", approvalPolicy: "never", sandbox, approvalsReviewer: "auto_review" },
+          { execPolicy },
+        ),
+        policy,
+      );
+    },
+  );
 
   it("rejects the retired untrusted approval policy at runtime", () => {
     expect(() =>

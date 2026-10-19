@@ -8,6 +8,7 @@ import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import * as sqliteWorkerStore from "../../infra/sqlite-worker-store.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -15,8 +16,10 @@ import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcript-index.js";
 import * as projectionWriter from "./session-transcript-projection-writer.js";
 import { createSessionTranscriptWorkerLanes } from "./session-transcript-read-pools.js";
 import {
@@ -131,6 +134,115 @@ it("keeps a warmed search reader through discovery and retires it through its ca
       await closeOpenClawAgentDatabaseByPathAsync(aliasPath, "main");
       await expect(search()).rejects.toThrow("revoked");
     } finally {
+      reader.release();
+    }
+  });
+});
+
+it("reuses completed readiness after idle writer eviction and observes a later transcript write", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const seed = (name: string, count: number) => {
+      const database = { agentId: "main", path: state.statePath(`${name}.sqlite`), env: state.env };
+      runOpenClawAgentWriteTransaction((connection) => {
+        for (let index = 0; index < count; index++) {
+          const sessionId = `session-${index}`;
+          replaceSqliteTranscriptEventsInTransaction(
+            connection,
+            { ...database, sessionKey: `agent:main:${sessionId}`, sessionId },
+            [
+              { type: "session", id: sessionId, version: 3 },
+              {
+                type: "message",
+                id: `message-${index}`,
+                parentId: null,
+                timestamp: index + 1,
+                message: {
+                  role: "assistant",
+                  content: index === 0 ? "Original needle" : `Unrelated fixture ${index}`,
+                },
+              },
+            ],
+            { scheduleProjectionReconcile: false },
+          );
+        }
+      }, database);
+      return {
+        database,
+        request: {
+          agentId: database.agentId,
+          storePath: database.path,
+          env: state.env,
+          query: "needle",
+          sessionKeys: ["agent:main:session-0"],
+        },
+      };
+    };
+    const primary = seed("search-retirement", 129);
+    const peers = Array.from({ length: 4 }, (_, index) => seed(`search-peer-${index}`, 1));
+    for (const { database } of [primary, ...peers]) {
+      await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+    }
+    const reader = retainSessionHistoryWorkerDatabase(primary.database);
+    const openWriter = vi.spyOn(sqliteWorkerStore, "openAgentDatabaseSqliteWorkerStore");
+    try {
+      const original = await searchSessionTranscripts(primary.request, primary.database);
+      expect(original).toMatchObject({
+        hits: [{ messageId: "message-0", snippet: "Original needle" }],
+        indexing: false,
+      });
+      expect(openWriter.mock.calls[0]?.[0].databasePath).toBe(primary.database.path);
+      const nativeWriter = await openWriter.mock.results[0]!.value;
+      expect(nativeWriter).toBeDefined();
+      const closeWriter = vi.spyOn(nativeWriter!, "close");
+      try {
+        // Five stores exceed the idle writer limit; the first store retains only its reader.
+        for (const peer of peers) {
+          expect((await searchSessionTranscripts(peer.request, peer.database)).indexing).toBe(
+            false,
+          );
+        }
+        expect(closeWriter).toHaveBeenCalledOnce();
+        await closeWriter.mock.results[0]!.value;
+        expect(sqliteWorkerStore.isSqliteWorkerStoreAvailable(nativeWriter!)).toBe(false);
+        openWriter.mockClear();
+        expect(
+          JSON.stringify(await searchSessionTranscripts(primary.request, primary.database)),
+        ).toBe(JSON.stringify(original));
+        expect(openWriter).not.toHaveBeenCalled();
+      } finally {
+        closeWriter.mockRestore();
+      }
+
+      runOpenClawAgentWriteTransaction((connection) => {
+        replaceSqliteTranscriptEventsInTransaction(
+          connection,
+          { ...primary.database, sessionKey: "agent:main:session-0", sessionId: "session-0" },
+          [
+            { type: "session", id: "session-0", version: 3 },
+            {
+              type: "message",
+              id: "replacement",
+              parentId: null,
+              timestamp: 2,
+              message: { role: "assistant", content: "Replacement needle" },
+            },
+          ],
+          { scheduleProjectionReconcile: false },
+        );
+        markSessionTranscriptIndexDirtyInTransaction(connection.db, "session-0");
+      }, primary.database);
+      expect((await searchSessionTranscripts(primary.request, primary.database)).indexing).toBe(
+        true,
+      );
+      await waitForSessionTranscriptIndexReconcile(primary.database);
+      const rebuilt = await searchSessionTranscripts(primary.request, primary.database);
+      expect(rebuilt.indexing).toBe(false);
+      expect(rebuilt.hits).toMatchObject([
+        { messageId: "replacement", snippet: "Replacement needle" },
+      ]);
+      expect(rebuilt.hits).toHaveLength(1);
+    } finally {
+      openWriter.mockRestore();
       reader.release();
     }
   });
@@ -267,6 +379,15 @@ it("cancels a search status callback queued behind a stuck writer at its deadlin
     await waitForSessionTranscriptIndexReconcile(database);
     const request = { ...scope, query: "needle", sessionKeys: [sessionKey] };
     const committed = await searchSessionTranscripts(request, database);
+    runOpenClawAgentWriteTransaction(({ db }) => {
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<DB>(db)
+          .updateTable("session_windows")
+          .set({ updated_at: 2 })
+          .where("session_id", "=", "search-cancellation"),
+      );
+    }, database);
     const releaseWriter = createDeferred();
     const writerEntered = createDeferred();
     const writer = runOpenClawAgentWorkerWrite(database, async () => {

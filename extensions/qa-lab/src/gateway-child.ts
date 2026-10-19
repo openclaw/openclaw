@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { writeSync } from "node:fs";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
@@ -101,6 +102,11 @@ async function startOwnedGatewayChild(
       ? await lifetime.controller.prepare({ args: gatewayArgs, cwd: gatewayCwd, env: launch.env })
       : null;
     lifetime.assertOpen();
+    try {
+      writeSync(2, '[qa-bootstrap] {"command":"gateway","event":"spawn"}\n');
+    } catch {
+      // A diagnostic sink failure must not prevent the owned Gateway spawn.
+    }
     const child = spawn(nodeExecPath, gatewayArgs, {
       cwd: gatewayCwd,
       env: prepared?.env ?? launch.env,

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { expressionBuilder } from "kysely";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
@@ -7,16 +6,21 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "./kysely-sync.js";
-import type { UsageCostPartition } from "./session-cost-usage-partitions.js";
 import {
+  USAGE_COST_PARTITION_SCOPE,
+  usageCostPartitionKey,
+  type UsageCostPartition,
+} from "./session-cost-usage-partitions.js";
+import {
+  deleteSessionCostUsagePartitionsInDatabase,
   pruneSessionCostUsagePartitionsInDatabase,
-  writeSessionCostUsagePartitionsInDatabase,
 } from "./session-cost-usage-partitions.worker.js";
 import {
   decodeUsageCostRollupEnvelope,
   USAGE_COST_ROLLUP_SCOPE as ROLLUP_SCOPE,
   type UsageCostFreshnessCheckpoint,
 } from "./session-cost-usage-rollup-codec.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { withSqliteDatabaseWriteScope } from "./sqlite-database-admission.js";
 
 const LEGACY_CACHE_SCOPE = "session-cost-usage";
@@ -65,17 +69,17 @@ type RollupReadOptions = {
 };
 
 export function readSessionCostUsageRollupRowsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filePaths: readonly string[] | undefined,
   options: RollupReadOptions & { includeBody: true },
 ): Array<SessionCostUsageRollupRow & { blob: Uint8Array | null }>;
 export function readSessionCostUsageRollupRowsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filePaths?: readonly string[],
   options?: RollupReadOptions & { includeBody?: false },
 ): SessionCostUsageRollupRow[];
 export function readSessionCostUsageRollupRowsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filePaths?: readonly string[],
   options?: RollupReadOptions,
 ): Array<SessionCostUsageRollupRow & { blob?: Uint8Array | null }> {
@@ -93,7 +97,7 @@ export function readSessionCostUsageRollupRowsInDatabase(
         (budget
           ? eb
               .case()
-              .when(eb.fn<number>("length", [eb.cast("value_json", "blob")]), "<=", 64 * 1024)
+              .when(eb.fn<number>("octet_length", ["value_json"]), "<=", 64 * 1024)
               .then(eb.ref("value_json"))
               .else(null)
               .end()
@@ -115,7 +119,7 @@ export function readSessionCostUsageRollupRowsInDatabase(
           : eb.val(null)
         ).as("blob"),
         eb.fn<number>("coalesce", [eb.fn<number>("length", ["blob"]), eb.val(0)]).as("body_bytes"),
-        eb.fn<number>("length", [eb.cast("value_json", "blob")]).as("header_bytes"),
+        eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
       ])
       .where("scope", "=", ROLLUP_SCOPE);
     for (const row of iterateSqliteQuerySync(db, keys ? query.where("key", "in", keys) : query)) {
@@ -186,7 +190,7 @@ export function readSessionCostUsageRollupRowsInDatabase(
 }
 
 export function writeSessionCostUsageRollupInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     rollupId: string;
     valueJson: Uint8Array;
@@ -199,30 +203,51 @@ export function writeSessionCostUsageRollupInDatabase(
 ): boolean {
   return withSqliteDatabaseWriteScope(db, [ROLLUP_SCOPE], () => {
     const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-    const values = {
-      value_json: cacheJsonText(params.valueJson),
-      blob: params.blob,
-      expires_at: null,
-      updated_at: params.updatedAt,
-    };
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .insertInto("cache_entries")
-        .values({ scope: ROLLUP_SCOPE, key: params.rollupId, ...values })
-        .onConflict((conflict) => conflict.columns(["scope", "key"]).doUpdateSet(values)),
-    );
     if (params.partitions || params.removedDates || params.replacePartitions) {
-      writeSessionCostUsagePartitionsInDatabase(db, params);
+      deleteSessionCostUsagePartitionsInDatabase(db, params);
+    }
+    const rows = [
+      {
+        scope: ROLLUP_SCOPE,
+        key: params.rollupId,
+        value_json: cacheJsonText(params.valueJson),
+        blob: params.blob,
+        expires_at: null,
+        updated_at: params.updatedAt,
+      },
+      ...(params.partitions ?? []).map((partition) => ({
+        scope: USAGE_COST_PARTITION_SCOPE,
+        key: usageCostPartitionKey(params.rollupId, partition.date),
+        value_json: partition.valueJson,
+        blob: partition.blob,
+        expires_at: null,
+        updated_at: params.updatedAt,
+      })),
+    ];
+    for (const batch of chunkItems(rows, 100)) {
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .insertInto("cache_entries")
+          .values(batch)
+          .onConflict((conflict) =>
+            conflict.columns(["scope", "key"]).doUpdateSet((eb) => ({
+              value_json: eb.ref("excluded.value_json"),
+              blob: eb.ref("excluded.blob"),
+              expires_at: eb.ref("excluded.expires_at"),
+              updated_at: eb.ref("excluded.updated_at"),
+            })),
+          ),
+      );
     }
     return true;
   });
 }
 
-/** Read one body only while its exact metadata snapshot still owns the row. */
+/** The refresh lease owns the checkpoint while its body is loaded. */
 export function readSessionCostUsageRollupBodyInDatabase(
-  db: DatabaseSync,
-  row: SessionCostUsageRollupSnapshot,
+  db: EngineConnection,
+  key: string,
 ): { blob: Uint8Array | null } | undefined {
   return executeSqliteQuerySync(
     db,
@@ -230,14 +255,12 @@ export function readSessionCostUsageRollupBodyInDatabase(
       .selectFrom("cache_entries")
       .select("blob")
       .where("scope", "=", ROLLUP_SCOPE)
-      .where("key", "=", row.key)
-      .where("updated_at", "=", row.updatedAt)
-      .where("value_json", "=", cacheJsonText(row.valueJson)),
+      .where("key", "=", key),
   ).rows[0];
 }
 
 export function pruneSessionCostUsageRollupsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   existing: readonly SessionCostUsageRollupSnapshot[],
 ): void {
   return withSqliteDatabaseWriteScope(db, [ROLLUP_SCOPE], () => {
@@ -270,6 +293,13 @@ export function pruneSessionCostUsageRollupsInDatabase(
           ),
       );
     }
+  });
+}
+
+/** Doctor owns retired scopes; ordinary refreshes only prune observed stale rows. */
+export function retireLegacySessionCostUsageCacheInDatabase(db: EngineConnection): void {
+  return withSqliteDatabaseWriteScope(db, [], () => {
+    const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
     executeSqliteQuerySync(
       db,
       kysely

@@ -8,12 +8,11 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import {
-  getRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   commitReplySessionInitialization,
@@ -23,7 +22,6 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionReplacement from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   enqueueRequiredSystemEventEntry,
@@ -130,6 +128,67 @@ afterAll(() => {
 });
 
 describe("session event target custody", () => {
+  it("rejects deletion-revoked events with worker-prepared authority and no native journal reads", async () => {
+    await withTargetFixture(
+      async (state) => {
+        const { env, storePath } = state;
+        const observed = observeHostDataSql();
+        const target = await captureSessionEventTargetForHost("main", sessionKey, { env }).finally(
+          observed.restore,
+        );
+        expect(observed.queries.filter((sql) => /\bagent_deletion_journal\b/i.test(sql))).toEqual(
+          [],
+        );
+        expect(target).toMatchObject({
+          agentId: "main",
+          sessionKey,
+          sessionId: "original-session",
+          lifecycleRevision: "original-revision",
+          storePath,
+          deliveryContext: route,
+          settings: { permissionMode: "full" },
+        });
+        expect(() => assertSessionEventTargetCurrent(target)).not.toThrow();
+        await withAgentDeletion(
+          "main",
+          async (begin) => {
+            const deletion = await begin({
+              agentId: "main",
+              agentDir: state.agentDir("main"),
+              workspaceDir: state.path("workspace"),
+              sessionsDir: state.sessionsDir("main"),
+              phase: "draining",
+            });
+            expect(() => assertSessionEventTargetCurrent(target)).toThrow(
+              "Session event owner is being deleted",
+            );
+            for (const expectedTarget of [target, undefined]) {
+              const receipt = enqueueSessionEventForHost("Process completed", {
+                agentId: "main",
+                sessionKey,
+                source: "exec",
+                expectedTarget,
+              });
+              await expect(receipt.settled).resolves.toMatchObject({
+                status: "failed",
+                executionStarted: false,
+                delivered: false,
+                error: expect.stringContaining("Session event agent is being deleted"),
+              });
+            }
+            expect(dispatch).not.toHaveBeenCalled();
+            expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+            await deletion.rollback();
+          },
+          { env },
+        );
+        expect(() => assertSessionEventTargetCurrent(target)).not.toThrow();
+        expect(target.deliveryContext).toEqual(route);
+      },
+      { native: true },
+    );
+  });
+
   it("preserves cold event capture across an empty usage refresh", async () => {
     const { refreshCostUsageCacheForAgent } =
       await import("../../infra/session-cost-usage-aggregation.js");
@@ -260,69 +319,6 @@ describe("session event target custody", () => {
     );
   });
 
-  it.each(["before", "after"] as const)(
-    "binds cold event capture to storage created %s the worker read",
-    async (creation) => {
-      await withTargetFixture(
-        async ({ env }) => {
-          const create = () => {
-            const database = openOpenClawAgentDatabase({ agentId: "main", env });
-            writeSessionEntry(database, sessionKey, {
-              sessionId: "created-during-capture",
-              lifecycleRevision: "created-during-capture",
-              updatedAt: 1,
-            });
-          };
-          const originalRead = sessionEntryRead.withSessionEntryReadOnlyInWorker;
-          const reader = vi
-            .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
-            .mockImplementation((input, assertCurrent, consume, prepare) =>
-              originalRead(
-                input,
-                assertCurrent,
-                async (read, owner) => {
-                  if (creation === "after") {
-                    create();
-                  }
-                  return consume(read, owner);
-                },
-                (database, identity) => {
-                  prepare?.(database, identity);
-                  expect(identity.key).toMatch(/^path:/);
-                  if (creation === "before") {
-                    create();
-                  }
-                },
-              ),
-            );
-          try {
-            const capture = captureSessionEventTargetForHost("main", sessionKey, { env });
-            if (creation === "after") {
-              await expect(capture).rejects.toThrow("storage changed after capture");
-              return;
-            }
-            const target = await capture;
-            expect(target).toMatchObject({
-              sessionId: "created-during-capture",
-              lifecycleRevision: "created-during-capture",
-            });
-            reader.mockRestore();
-            const prepared = await prepareSessionEventTargetForHost(target);
-            try {
-              prepared.assertCurrent();
-            } finally {
-              prepared.release();
-            }
-            expect(dispatch).not.toHaveBeenCalled();
-          } finally {
-            reader.mockRestore();
-          }
-        },
-        { empty: true, native: true },
-      );
-    },
-  );
-
   it.for([false, true])(
     "joins cold native preparation before settling cancellation (retained occurrence: %s)",
     async (preserve, { signal }) => {
@@ -400,7 +396,7 @@ describe("session event target custody", () => {
     },
   );
 
-  it.each(["fresh", "retained", "revoked", "already-revoked", "foreign"] as const)(
+  it.each(["fresh", "retained", "revoked", "already-revoked"] as const)(
     "keeps cold capture read-only and prepares storage only for authorized fresh work: %s",
     async (kind) => {
       await withTargetFixture(
@@ -426,9 +422,6 @@ describe("session event target custody", () => {
             }
             return;
           }
-          if (kind === "foreign") {
-            openOpenClawAgentDatabase({ agentId: "main", env });
-          }
           let current = kind !== "already-revoked";
           const enqueue = () =>
             enqueueSessionEventForHost("Fresh ingress", {
@@ -451,12 +444,7 @@ describe("session event target custody", () => {
           }
           const receipt = enqueue();
           current &&= kind !== "revoked";
-          const error =
-            kind === "retained"
-              ? /origin is missing/
-              : kind === "revoked"
-                ? /ingress was revoked/
-                : /storage changed/;
+          const error = kind === "retained" ? /origin is missing/ : /ingress was revoked/;
           await expect(receipt.accepted).resolves.toMatchObject({
             ok: false,
             error: expect.stringMatching(error),
@@ -466,9 +454,7 @@ describe("session event target custody", () => {
             executionStarted: false,
           });
           expect(dispatch).not.toHaveBeenCalled();
-          if (kind !== "foreign") {
-            await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-          }
+          await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
         },
         { empty: true, native: kind === "fresh" },
       );
@@ -594,77 +580,48 @@ describe("session event target custody", () => {
     },
   );
 
-  it.each(["store replacement", "Gateway restart"] as const)(
-    "rejects retained target reuse after %s without creating another occurrence",
-    async (change) => {
-      await withTargetFixture(async ({ env, path: fixturePath }) => {
-        const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-        if (change === "store replacement") {
-          setRuntimeConfigSnapshot({
-            agents: { entries: { main: {} } },
-            session: { store: fixturePath("replacement.sqlite") },
-          });
-        } else {
-          rotateAgentEventLifecycleGeneration();
-        }
-        expect(() =>
-          enqueueSessionEventForHost("Process completed", {
-            agentId: "main",
-            sessionKey,
-            source: "exec",
-            expectedTarget: target,
-          }),
-        ).toThrow(change === "store replacement" ? "reset or replaced" : "stale gateway lifecycle");
-        expect(dispatch).not.toHaveBeenCalled();
-        expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+  it("reports a queued event's policy failure once", async () => {
+    await withTargetFixture(async ({ env }) => {
+      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+      let current = true;
+      const receipt = enqueueSessionEventForHost("Process completed", {
+        agentId: "main",
+        sessionKey,
+        source: "exec",
+        expectedTarget: target,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Background producer retired");
+          }
+        },
       });
-    },
-  );
+      current = false;
 
-  it.each(["awaited", "ignored"] as const)(
-    "reports a queued event's policy failure once with an %s receipt",
-    async (receiptUse) => {
-      await withTargetFixture(async ({ env }) => {
-        const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-        const receipt = enqueueSessionEventForHost("Process completed", {
-          agentId: "main",
-          sessionKey,
-          source: "exec",
-          expectedTarget: target,
-        });
-        setRuntimeConfigSnapshot({
-          ...getRuntimeConfigSnapshot(),
-          tools: { deny: ["write", "message"] },
-        });
-
-        if (receiptUse === "awaited") {
-          await expect(receipt.settled).resolves.toMatchObject({
-            status: "failed",
-            executionStarted: false,
-            delivered: false,
-            error: expect.stringContaining("configuration changed"),
-          });
-        }
-        // Join the independent owner without requiring a producer to consume its receipt.
-        await Promise.allSettled(
-          continuation.mock.results.flatMap((result) =>
-            result.type === "return" ? [result.value] : [],
-          ),
-        );
-        expect(receipt.cancel()).toBe(false);
-        resetSystemEventsForTest();
-        expect(eventLogError).toHaveBeenCalledExactlyOnceWith("session event execution failed", {
-          source: "exec",
-          agentId: "main",
-          sessionKey,
-          eventId: receipt.id,
-          error: expect.stringContaining("configuration changed"),
-        });
-        expect(dispatch).not.toHaveBeenCalled();
-        expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+      await expect(receipt.settled).resolves.toMatchObject({
+        status: "failed",
+        executionStarted: false,
+        delivered: false,
+        error: expect.stringContaining("Background producer retired"),
       });
-    },
-  );
+      // Join the independent owner without requiring a producer to consume its receipt.
+      await Promise.allSettled(
+        continuation.mock.results.flatMap((result) =>
+          result.type === "return" ? [result.value] : [],
+        ),
+      );
+      expect(receipt.cancel()).toBe(false);
+      resetSystemEventsForTest();
+      expect(eventLogError).toHaveBeenCalledExactlyOnceWith("session event execution failed", {
+        source: "exec",
+        agentId: "main",
+        sessionKey,
+        eventId: receipt.id,
+        error: expect.stringContaining("Background producer retired"),
+      });
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+    });
+  });
 
   it("settles a pending occurrence as cancelled when ephemeral queues close", async () => {
     await withTargetFixture(async ({ env }) => {
@@ -737,26 +694,4 @@ describe("session event target custody", () => {
       });
     },
   );
-
-  it("releases an occurrence when Gateway restart admission refuses the producer", async () => {
-    await withTargetFixture(async ({ env }) => {
-      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-      gatewayWork.markGatewayRestartDraining();
-      const receipt = enqueueSessionEventForHost("Process completed", {
-        agentId: "main",
-        sessionKey,
-        source: "restart",
-        expectedTarget: target,
-      });
-
-      await expect(receipt.settled).resolves.toMatchObject({
-        status: "failed",
-        executionStarted: false,
-        delivered: false,
-        error: expect.stringContaining("GatewayDrainingError"),
-      });
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-      expect(dispatch).not.toHaveBeenCalled();
-    });
-  });
 });

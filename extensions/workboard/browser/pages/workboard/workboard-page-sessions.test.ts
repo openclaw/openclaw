@@ -311,6 +311,44 @@ function button(page: ReturnType<typeof mountPage>, label: string) {
   );
 }
 
+it("loads the next Sessions board page and refreshes the loaded window after a write receipt", async () => {
+  const page = sessionsPage();
+  const all = [...page.result.sessions];
+  const first = expectDefined(all[0], "first session");
+  const request = expectDefined(page.request.getMockImplementation(), "request");
+  page.request.mockImplementation(async (method, params) => {
+    if (method === "workboard.sessionsBoard.read") {
+      // SAFETY: this fixture handles the documented Sessions board request contract.
+      const input = params as { after?: string };
+      return {
+        ...page.result,
+        sessions: input.after ? all.slice(1) : all.slice(0, 1),
+        total: 2,
+        nextCursor: input.after ? undefined : first.key,
+      };
+    }
+    return request(method, params);
+  });
+  await page.connect();
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(1);
+  expect(page.container.textContent).toContain("1 of 2 sessions loaded");
+  button(page, "Load more sessions").click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true },
+    after: first.key,
+  });
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(page.container.textContent).not.toContain("Load more sessions");
+  first.label = "Updated retries";
+  page.fixture.emit("plugin.workboard.changed", { epoch: "facts", revision: 2 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(page.container.textContent).toContain("Updated retries");
+  page.dispose();
+});
+
 it("recovers empty-board facts through one plugin refresh of the selected people view", async () => {
   const page = sessionsPage();
   const sessions = page.result.sessions.splice(0);

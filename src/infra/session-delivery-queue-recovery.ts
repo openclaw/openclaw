@@ -153,6 +153,10 @@ async function processPendingSessionDelivery(opts: {
     result = "recovered";
   } catch (err) {
     if (err instanceof SessionDeliveryDeadLetteredError) {
+      // Terminal receipts retain no error, and settlement can fail; record the decision first.
+      context.log.warn(
+        `${context.logLabel}: dead-letter decision for entry ${entry.id}: ${formatErrorMessage(err)}`,
+      );
       try {
         await markSessionDeliverySettlement(entry, "moved-to-failed", context.queueContext);
       } catch (markError) {
@@ -269,9 +273,9 @@ export async function recoverPendingSessionDeliveries(opts: {
     }
     return "continue" as const;
   };
-  const onFailed = (_failedEntry: QueuedSessionDelivery, errMsg: string) => {
+  const onFailed = (failedEntry: QueuedSessionDelivery, errMsg: string) => {
     summary.failed += 1;
-    opts.log.warn(`Session delivery retry failed: ${errMsg}`);
+    opts.log.warn(`Session delivery retry failed for entry ${failedEntry.id}: ${errMsg}`);
   };
   await recoveryCoordinator.scan({
     entries: pending,

@@ -1,6 +1,6 @@
 import { createMemo, Show } from "solid-js";
-import "../../components/agent-row-chip.tsx";
-import { handleCopyButton } from "../../components/copy-button.ts";
+import { AgentRowChip } from "../../components/agent-row-chip.tsx";
+import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
 export function SessionBarRow(props: {
@@ -35,7 +35,7 @@ export function SessionBarRow(props: {
       >
         <span class="session-bar-label">
           <span class="session-bar-title">{props.displayLabel}</span>
-          {props.agentId ? <openclaw-agent-row-chip prop:agentId={props.agentId} /> : undefined}
+          {props.agentId ? <AgentRowChip agentId={props.agentId} /> : undefined}
           {props.meta.length > 0 ? (
             <>
               {" "}
@@ -46,21 +46,28 @@ export function SessionBarRow(props: {
       </button>
       <div class="session-bar-actions">
         <Show when={copyIdentity()} keyed>
-          {(_identity) => (
-            <>
-              {" "}
-              <button
-                type="button"
-                class="btn btn--sm btn--ghost"
-                onClick={(event: MouseEvent) => {
-                  event.stopPropagation();
-                  void handleCopyButton(event, props.displayLabel, t("usage.sessions.copy"));
-                }}
-              >
-                <span data-copy-label>{t("usage.sessions.copy")}</span>
-              </button>{" "}
-            </>
-          )}
+          {(_identity) => {
+            let label!: HTMLSpanElement;
+            return (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  class="btn btn--sm btn--ghost"
+                  onClick={(event: MouseEvent) => {
+                    event.stopPropagation();
+                    void handleCopyButton(event, props.displayLabel, t("usage.sessions.copy"), {
+                      label,
+                    });
+                  }}
+                >
+                  <span ref={(element) => (label = element)} data-copy-label>
+                    {t("usage.sessions.copy")}
+                  </span>
+                </button>{" "}
+              </>
+            );
+          }}
         </Show>
         <div class="session-bar-value">{props.valueLabel}</div>
       </div>

@@ -28,7 +28,7 @@ export async function loadControlUiPluginCatalogs(repoRoot: string) {
   // regardless of the caller's selected Docker/build subset.
   const plugins = collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env: {} });
   for (const plugin of plugins) {
-    const entry = plugin.packageJson && controlUiSource(plugin.packageJson);
+    const entry = isRecord(plugin.packageJson) && controlUiSource(plugin.packageJson);
     if (!entry) {
       continue;
     }

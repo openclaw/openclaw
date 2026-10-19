@@ -1,11 +1,12 @@
-import { createSignal, flush } from "solid-js";
+import { createSignal, flush, Show } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import "./app-topbar.ts";
-import { MacosTitlebarControls } from "./macos-titlebar-controls.runtime.ts";
-import { renderNewSessionLink } from "./new-session-link.ts";
+import "./app-topbar-solid.tsx";
+import type { GatewayStatusProps } from "./gateway-status.ts";
+import { MacosTitlebarControls } from "./macos-titlebar-controls.runtime-solid.tsx";
+import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 
 afterEach(() => {
   cleanupSolid();
@@ -16,7 +17,9 @@ describe("Solid shell chrome", () => {
   it("updates the topbar's environment and drawer state while retaining its action target", async () => {
     const [environment, setEnvironment] = createSignal<ControlUiEnvironment | null>(null);
     const [open, setOpen] = createSignal(false);
-    const [newSessionAction, setNewSessionAction] = createSignal<unknown>(undefined);
+    const [showNewSessionAction, setShowNewSessionAction] = createSignal(false);
+    const [gatewayStatus, setGatewayStatus] = createSignal<GatewayStatusProps | null>(null);
+    const retry = vi.fn();
     const toggle = vi.fn();
     const palette = vi.fn();
     const openSession = vi.fn();
@@ -24,7 +27,18 @@ describe("Solid shell chrome", () => {
       <openclaw-app-topbar
         prop:environment={environment()}
         prop:navDrawerOpen={open()}
-        prop:newSessionAction={newSessionAction()}
+        prop:gatewayStatus={gatewayStatus()}
+        prop:newSessionAction={() => (
+          <Show when={showNewSessionAction()}>
+            <NewSessionLink
+              basePath="/control"
+              agentId="writer"
+              class="header-new-session"
+              label="New conversation"
+              onOpen={openSession}
+            />
+          </Show>
+        )}
         prop:resourceBasePath="/control"
         prop:onToggleDrawer={toggle}
         prop:onOpenPalette={palette}
@@ -47,15 +61,36 @@ describe("Solid shell chrome", () => {
     search.click();
     expect(palette).toHaveBeenCalledOnce();
 
-    setNewSessionAction(
-      renderNewSessionLink({
-        basePath: "/control",
-        agentId: "writer",
-        className: "header-new-session",
-        label: "New conversation",
-        onOpen: openSession,
-      }),
-    );
+    setGatewayStatus({ kind: "offline", queuedCount: 2, onRetry: retry });
+    flush();
+    await topbar.updateComplete;
+    const statusLine = view.container.querySelector(".mobile-connection-status")!;
+    expect(statusLine.textContent).toBe("Disconnected · 2 queued");
+    expect(statusLine.querySelector('[role="status"]')).toBeNull();
+    expect(drawer.dataset.connectionStatus).toBe("offline");
+    expect(drawer.querySelector(".gateway-status-dot")).not.toBeNull();
+    statusLine.querySelector<HTMLButtonElement>("button")!.click();
+    expect(retry).toHaveBeenCalledOnce();
+
+    setGatewayStatus({ kind: "suspended", lastError: "Unavailable?token=mobile-secret" });
+    flush();
+    await topbar.updateComplete;
+    const status = statusLine.querySelector<HTMLElement>(".gateway-status")!;
+    expect(status.tabIndex).toBe(0);
+    status.focus();
+    expect(document.activeElement).toBe(status);
+    expect(
+      statusLine.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")
+        ?.content,
+    ).toBe("Unavailable?[redacted-credential]");
+
+    setGatewayStatus({ kind: "connected" });
+    flush();
+    await topbar.updateComplete;
+    expect(view.container.querySelector(".mobile-connection-status")).toBeNull();
+    expect(drawer.dataset.connectionStatus).toBe("connected");
+
+    setShowNewSessionAction(true);
     flush();
     await topbar.updateComplete;
     const newSession = view.container.querySelector<HTMLAnchorElement>(
@@ -64,8 +99,14 @@ describe("Solid shell chrome", () => {
     expect(newSession.getAttribute("href")).toBe("/control/new?agent=writer");
     newSession.click();
     expect(openSession).toHaveBeenCalledWith("writer", undefined);
+    newSession.focus();
+    setEnvironment({ label: "edge", color: "amber" });
+    flush();
+    await topbar.updateComplete;
+    expect(view.container.querySelector(".header-new-session")).toBe(newSession);
+    expect(document.activeElement).toBe(newSession);
 
-    setNewSessionAction(undefined);
+    setShowNewSessionAction(false);
     flush();
     await topbar.updateComplete;
     expect(view.container.querySelector(".header-new-session")).toBeNull();

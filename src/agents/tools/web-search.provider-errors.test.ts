@@ -7,6 +7,7 @@ import type {
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { executeWebSearchCandidates } from "../../web-search/runtime-execution.js";
 import type { RunWebSearchParams } from "../../web-search/runtime-types.js";
+import { OAuthRefreshFailureError } from "../auth-profiles/oauth-refresh-failure.js";
 import { createWebSearchTool } from "./web-search.js";
 
 const mocks = vi.hoisted(() => ({ runWebSearch: vi.fn(), endpoint: vi.fn() }));
@@ -102,3 +103,35 @@ it("web_search keeps connection failures distinct from deadline expiry", async (
   });
   expect(JSON.stringify(result)).not.toContain("Search timed out");
 });
+
+it.each([
+  { reason: "invalid_grant" as const, state: "expired and could not be refreshed" },
+  { reason: null, state: "could not be refreshed" },
+])(
+  "web_search names a dead search sign-in and its fix without account details ($reason)",
+  async ({ reason, state }) => {
+    mocks.endpoint.mockRejectedValueOnce(
+      new OAuthRefreshFailureError({
+        provider: "xai",
+        profileId: "xai:owner@example.test",
+        message: `OAuth token refresh failed for xai: ${BODY}`,
+        reason,
+      }),
+    );
+    const result = await createWebSearchTool({ config })?.execute("search-auth-expired", {
+      query: "synthetic query",
+    });
+
+    expect(result?.details).toMatchObject({
+      kind: "error",
+      provider: "perplexity",
+      message: expect.stringContaining(
+        `Search failed: this search provider's xai sign-in ${state}. The Gateway owner can fix it by sending \`/login xai\` in a private chat or Control UI session, or by running \`openclaw models auth login --provider xai\`. Other routes, such as web_fetch, may still work.`,
+      ),
+    });
+    expect(JSON.stringify(result)).not.toContain("configuration and connection");
+    expect(JSON.stringify(result)).not.toContain("tell the user");
+    expect(JSON.stringify(result)).not.toContain("owner@example.test");
+    expect(JSON.stringify(result)).not.toContain(BODY);
+  },
+);

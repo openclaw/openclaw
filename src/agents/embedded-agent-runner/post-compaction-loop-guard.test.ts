@@ -13,10 +13,7 @@ vi.mock("../../logging/subsystem.js", () => ({
   })),
 }));
 
-import {
-  createPostCompactionLoopGuard,
-  PostCompactionLoopPersistedError,
-} from "./post-compaction-loop-guard.js";
+import { createPostCompactionLoopGuard } from "./post-compaction-loop-guard.js";
 
 function callOutcome(toolName: string, args: unknown, result: string) {
   // The guard compares stable hashes instead of full payloads to keep runtime
@@ -182,27 +179,5 @@ describe("post-compaction re-read instrumentation", () => {
       .find((message) => message.includes("post-compaction window closed"));
     expect(summary).toContain("toolCalls=3");
     expect(summary).toContain("preCompactionRepeats=1");
-  });
-});
-
-describe("PostCompactionLoopPersistedError", () => {
-  it("can be built from a guard verdict via fromVerdict", () => {
-    const guard = createPostCompactionLoopGuard();
-    guard.armPostCompaction();
-    guard.observe(callOutcome("read", { path: "/x" }, "r1"));
-    guard.observe(callOutcome("read", { path: "/x" }, "r1"));
-    const verdict = guard.observe(callOutcome("read", { path: "/x" }, "r1"));
-    expect(verdict.shouldAbort).toBe(true);
-    if (!verdict.shouldAbort) {
-      throw new Error("verdict was expected to abort");
-    }
-    const err = PostCompactionLoopPersistedError.fromVerdict(verdict);
-    expect(err).toBeInstanceOf(Error);
-    expect(err).toBeInstanceOf(PostCompactionLoopPersistedError);
-    expect(err.name).toBe("PostCompactionLoopPersistedError");
-    expect(err.detector).toBe(verdict.detector);
-    expect(err.count).toBe(verdict.count);
-    expect(err.toolName).toBe(verdict.toolName);
-    expect(err.message).toBe(verdict.message);
   });
 });

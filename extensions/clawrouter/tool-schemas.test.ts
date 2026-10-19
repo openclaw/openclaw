@@ -29,8 +29,8 @@ describe("ClawRouter Perplexity tool schemas", () => {
       properties: {
         env: {
           type: "object",
-          patternProperties: { "^.*$": { type: "string" } },
-          additionalProperties: { type: "string" },
+          patternProperties: { "^.*$": { type: "object" } },
+          additionalProperties: { type: "object" },
         },
       },
       additionalProperties: false,

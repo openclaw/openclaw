@@ -1,4 +1,5 @@
 import { createApiRegistry, createLlmRuntime, getAiTransportHost } from "@openclaw/ai";
+import { getEventStreamCompletion } from "@openclaw/ai/internal/runtime";
 import type {
   AssistantMessage,
   AssistantMessageEventStreamContract,
@@ -6,12 +7,15 @@ import type {
   Model,
   SimpleStreamOptions,
 } from "@openclaw/llm-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { bindModelLlmRuntime } from "./model-runtime-binding.js";
-import { complete, completeSimple } from "./stream.js";
+import { withModelTransportContext } from "./model-transport-context.js";
+import { complete, completeSimple, streamSimple } from "./stream.js";
 import { createAssistantMessageEventStream } from "./utils/event-stream.js";
+
+afterEach(() => vi.useRealTimers());
 
 function createCompletionRuntime(
   onDispatch?: (model: Model, context: Context, options?: SimpleStreamOptions) => void,
@@ -193,4 +197,251 @@ describe("LLM completion transport host", () => {
       expect(controller.signal.aborted).toBe(authority === "aborted");
     },
   );
+  it("paces 30 shared-account sessions once per request and admits interactive work first", async () => {
+    const { model, runtime, message, providerStream } = createCompletionRuntime();
+    await completeSimple(model, { messages: [] });
+    const { resolveEmbeddedAgentStream } =
+      await import("../agents/embedded-agent-runner/stream-resolution.js");
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const calls: string[] = [];
+    let limited = true;
+    providerStream.mockImplementation((_model, _context, options) => {
+      calls.push(options?.sessionId ?? "seed");
+      const output = createAssistantMessageEventStream();
+      if (limited) {
+        output.push({
+          type: "error",
+          reason: "error",
+          error: {
+            ...message,
+            stopReason: "error",
+            errorCode: "rate_limit_exceeded",
+            errorMessage:
+              "Rate limit reached for test in organization org-synthetic-priority on tokens per min (TPM).",
+            retryAfterMs: 1000,
+          },
+        });
+      } else {
+        output.push({ type: "done", reason: "stop", message });
+      }
+      output.end();
+      return output;
+    });
+    const embedded = resolveEmbeddedAgentStream({
+      model,
+      llmRuntime: runtime,
+      currentStreamFn: streamSimple,
+      providerStreamFn: streamSimple,
+      sessionId: "seed",
+      resolvedApiKey: "synthetic-priority-key",
+    }).streamFn;
+    const seed = await embedded(model, { messages: [] });
+    await expect(getEventStreamCompletion(seed)).resolves.toMatchObject({ stopReason: "error" });
+    for await (const event of seed) {
+      expect(event.type).toBe("error");
+    }
+    await seed.result();
+    limited = false;
+    await completeSimple(
+      model,
+      { messages: [] },
+      {
+        apiKey: "unrelated-account-key",
+        sessionId: "other-account",
+      },
+    );
+    const background = Array.from({ length: 20 }, (_, index) =>
+      completeSimple(
+        model,
+        { messages: [] },
+        { apiKey: "synthetic-priority-key", sessionId: `background-${index}` },
+      ),
+    );
+    const waits: number[] = [];
+    const stoppedWaiting = vi.fn();
+    const interactive = Array.from({ length: 10 }, (_, index) =>
+      withModelTransportContext(
+        {
+          requestId: `interactive-${index}`,
+          priority: "interactive",
+          onRateLimitWait: (retryAt) => {
+            waits.push(retryAt);
+            return stoppedWaiting;
+          },
+        },
+        async () =>
+          (
+            await embedded(
+              bindModelLlmRuntime({ ...model, id: "fallback-sibling" }, runtime),
+              { messages: [] },
+              { apiKey: "synthetic-priority-key", sessionId: `interactive-${index}` },
+            )
+          ).result(),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(999);
+    expect(calls).toEqual(["seed", "other-account"]);
+    expect(waits).toHaveLength(10);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual(["seed", "other-account", "interactive-0"]);
+    expect(stoppedWaiting).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(7500);
+    await expect(Promise.all([...background, ...interactive])).resolves.toEqual(
+      Array.from({ length: 30 }, () => message),
+    );
+    expect(calls.slice(2)).toEqual([
+      ...Array.from({ length: 10 }, (_, index) => `interactive-${index}`),
+      ...Array.from({ length: 20 }, (_, index) => `background-${index}`),
+    ]);
+    expect(stoppedWaiting).toHaveBeenCalledTimes(10);
+
+    // Ongoing successful traffic must not keep the recovery gate alive forever.
+    await vi.advanceTimersByTimeAsync(60_000 - Date.now());
+    const active = completeSimple(model, { messages: [] }, { apiKey: "synthetic-priority-key" });
+    await vi.advanceTimersByTimeAsync(0);
+    await active;
+    await vi.advanceTimersByTimeAsync(1001);
+    const recovered = [0, 1].map(() =>
+      completeSimple(model, { messages: [] }, { apiKey: "synthetic-priority-key" }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(35);
+    await Promise.all(recovered);
+  });
+
+  it("merges credentials identified by the same organization and extends queued waits", async () => {
+    const { model, message, providerStream } = createCompletionRuntime();
+    await completeSimple(model, { messages: [] });
+    vi.useFakeTimers();
+    const limited = (retryAfterMs: number) => {
+      const output = createAssistantMessageEventStream();
+      output.end({
+        ...message,
+        stopReason: "error",
+        retryAfterMs,
+        errorMessage:
+          "Rate limit reached in organization org-synthetic-merge on tokens per min (TPM).",
+      });
+      return output;
+    };
+    providerStream.mockImplementationOnce(() => limited(1000));
+    await completeSimple(model, { messages: [] }, { apiKey: "merge-first-key" });
+    const first = completeSimple(model, { messages: [] }, { apiKey: "merge-first-key" });
+    await vi.advanceTimersByTimeAsync(100);
+    providerStream.mockImplementationOnce(() => limited(2000));
+    await completeSimple(model, { messages: [] }, { apiKey: "merge-second-key" });
+    const second = completeSimple(model, { messages: [] }, { apiKey: "merge-second-key" });
+    providerStream.mockClear();
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(providerStream).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(providerStream).toHaveBeenCalledOnce();
+    expect(providerStream.mock.calls[0]?.[2]?.apiKey).toBe("merge-first-key");
+    await vi.advanceTimersByTimeAsync(250);
+    await expect(Promise.all([first, second])).resolves.toEqual([message, message]);
+    await vi.advanceTimersByTimeAsync(60_000);
+  });
+
+  it("returns excessive shared floors to failover, including a floor extended while queued", async () => {
+    const { model, message, providerStream } = createCompletionRuntime();
+    await completeSimple(model, { messages: [] });
+    vi.useFakeTimers();
+    const limited = (retryAfterMs: number) => {
+      const output = createAssistantMessageEventStream();
+      output.end({
+        ...message,
+        stopReason: "error",
+        retryAfterMs,
+        errorMessage:
+          "Rate limit reached in organization org-synthetic-cap on tokens per min (TPM).",
+      });
+      return output;
+    };
+    const options = { apiKey: "synthetic-cap-key", maxRetryDelayMs: 1500 };
+    providerStream.mockImplementationOnce(() => limited(1000));
+    await completeSimple(model, { messages: [] }, options);
+    const queued = completeSimple(model, { messages: [] }, options);
+    const queuedProof = expect(queued).rejects.toMatchObject({ reason: "rate_limit", status: 429 });
+    await vi.advanceTimersByTimeAsync(1);
+    providerStream.mockImplementationOnce(() => limited(90_000));
+    await completeSimple(model, { messages: [] }, { apiKey: "synthetic-cap-second-key" });
+    await queuedProof;
+    providerStream.mockClear();
+
+    await expect(
+      completeSimple(model, { messages: [] }, { apiKey: options.apiKey }),
+    ).rejects.toMatchObject({
+      reason: "rate_limit",
+      status: 429,
+      message: expect.stringContaining("Retry-After: 90 seconds"),
+    });
+    await expect(streamSimple(model, { messages: [] }, options).result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: expect.stringContaining("Retry-After: 90 seconds"),
+    });
+    expect(providerStream).not.toHaveBeenCalled();
+    const uncapped = completeSimple(model, { messages: [] }, { ...options, maxRetryDelayMs: 0 });
+    await vi.advanceTimersByTimeAsync(89_999);
+    expect(providerStream).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(uncapped).resolves.toEqual(message);
+    expect(providerStream).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(60_000);
+  });
+
+  it("cancels admission and rechecks authority without sending queued requests", async () => {
+    const { model, runtime, message, providerStream } = createCompletionRuntime();
+    await completeSimple(model, { messages: [] });
+    const { resolveEmbeddedAgentStream } =
+      await import("../agents/embedded-agent-runner/stream-resolution.js");
+    vi.useFakeTimers();
+    providerStream.mockImplementationOnce(() => {
+      const output = createAssistantMessageEventStream();
+      output.end({
+        ...message,
+        stopReason: "error",
+        errorMessage:
+          "Rate limit reached for test in organization org-synthetic-cancel on tokens per min (TPM).",
+        retryAfterMs: 1000,
+      });
+      return output;
+    });
+    const options = { apiKey: "synthetic-cancel-key" };
+    await completeSimple(model, { messages: [] }, options);
+    providerStream.mockClear();
+    const controller = new AbortController();
+    const aborted = completeSimple(
+      model,
+      { messages: [] },
+      { ...options, signal: controller.signal },
+    );
+    const abortProof = expect(aborted).rejects.toThrow("stopped");
+    const embedded = resolveEmbeddedAgentStream({
+      model,
+      llmRuntime: runtime,
+      currentStreamFn: providerStream,
+      providerStreamFn: providerStream,
+      sessionId: "cancel-run-signal",
+      resolvedApiKey: options.apiKey,
+      signal: controller.signal,
+    }).streamFn;
+    const embeddedAbortProof = expect(
+      Promise.resolve(embedded(model, { messages: [] })),
+    ).rejects.toThrow("stopped");
+    let current = true;
+    const retired = completeSimple(model, { messages: [] }, options, () => {
+      if (!current) {
+        throw new Error("retired");
+      }
+    });
+    const retiredProof = expect(retired).rejects.toThrow("retired");
+    await vi.advanceTimersByTimeAsync(1);
+    controller.abort(new Error("stopped"));
+    current = false;
+    await vi.advanceTimersByTimeAsync(1250);
+    await Promise.all([abortProof, embeddedAbortProof, retiredProof]);
+    expect(providerStream).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60_000);
+  });
 });

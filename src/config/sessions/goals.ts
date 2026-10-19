@@ -98,7 +98,7 @@ function resolveGoalCommandHint(status: SessionGoalStatus): string {
     case "budget_limited":
       return "/goal resume, /goal edit <objective>, /goal clear";
     case "complete":
-      return "/goal clear";
+      return "/goal resume, /goal clear";
   }
   return "/goal";
 }

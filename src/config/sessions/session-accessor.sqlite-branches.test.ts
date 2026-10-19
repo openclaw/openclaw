@@ -10,6 +10,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -57,10 +58,13 @@ afterEach(() => {
 
 function trackFullTranscriptLoads(env: NodeJS.ProcessEnv): () => number {
   const database = openOpenClawAgentDatabase({ agentId, env });
-  const { counts } = trackSqliteStatementExecutions(database.db, ["loads"], (sqlText) =>
-    sqlText.includes('from "transcript_events"') && sqlText.includes('order by "seq" asc')
-      ? "loads"
-      : null,
+  const { counts } = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["loads"],
+    (sqlText) =>
+      sqlText.includes('from "transcript_events"') && sqlText.includes('order by "seq" asc')
+        ? "loads"
+        : null,
   );
   return () => counts.loads;
 }
@@ -342,7 +346,11 @@ describe("SQLite session branches", () => {
     });
     await waitForSessionTranscriptIndexReconcilesInStateDir(env.OPENCLAW_STATE_DIR);
     const database = openOpenClawAgentDatabase({ agentId, env });
-    const tracked = trackSqliteStatementExecutions(database.db, ["statements"], () => "statements");
+    const tracked = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["statements"],
+      () => "statements",
+    );
     diagnosticCleanups.push(tracked.restore);
     const nativeOpen = vi.spyOn(sqliteRuntime, "openNodeSqliteDatabase");
     const branchReads = trackBranchSummaryReads();

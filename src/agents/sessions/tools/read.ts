@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
+import { getKeybindings, type Keybinding } from "@earendil-works/pi-tui";
 import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
@@ -13,10 +14,10 @@ import {
 } from "../../../media/media-reference.js";
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
-import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
 import {
   getLanguageFromPath,
   highlightCode,
+  interactiveAgentTheme,
   type Theme,
 } from "../../modes/interactive/theme/theme.js";
 import { getReadmePath } from "../../package-metadata.js";
@@ -40,7 +41,6 @@ import {
 } from "./path-utils.js";
 import { readLocalFile } from "./read-file.js";
 import { createBoundedReadTextPage } from "./read-page.js";
-import { createReadToolDetails } from "./read-tool-contract.js";
 import {
   getTextOutput,
   invalidArgText,
@@ -54,6 +54,37 @@ import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { readToolInputSchema, readToolOutputSchema } from "./tool-schemas.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
+
+function keyText(keybinding: Keybinding): string {
+  return getKeybindings()
+    .getKeys(keybinding)
+    .join("/")
+    .replace(/[^+/]+/g, (part) =>
+      process.platform === "darwin" && part.toLowerCase() === "alt" ? "option" : part,
+    );
+}
+
+function keyHint(keybinding: Keybinding, description: string): string {
+  return (
+    interactiveAgentTheme.fg("dim", keyText(keybinding)) +
+    interactiveAgentTheme.fg("muted", ` ${description}`)
+  );
+}
+
+function createReadToolDetails(
+  content: (TextContent | ImageContent)[],
+  textDetails?: Extract<ReadToolDetails, { kind: "text" | "truncated" }>,
+): ReadToolDetails {
+  const text = content.find((part): part is TextContent => part.type === "text")?.text ?? "";
+  const image = content.find((part): part is ImageContent => part.type === "image");
+  if (image) {
+    return { kind: "image", content: text, mimeType: image.mimeType };
+  }
+  if (textDetails) {
+    return textDetails;
+  }
+  return { kind: "text", content: text };
+}
 
 function normalizeReadError(error: unknown, filePath: string): Error {
   if (hasErrnoCode(error, "EISDIR")) {
@@ -613,6 +644,6 @@ export function createReadToolDefinition(
 export function createReadTool(
   cwd: string,
   options?: ReadToolOptions,
-): AgentTool<typeof readToolInputSchema> {
+): AgentTool<typeof readToolInputSchema, ReadToolDetails> {
   return wrapToolDefinition(createReadToolDefinition(cwd, options));
 }

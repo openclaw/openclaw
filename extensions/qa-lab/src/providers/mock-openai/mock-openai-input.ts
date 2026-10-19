@@ -31,7 +31,7 @@ function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
   return (
     QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE.test(trimmed) ||
-    trimmed.startsWith(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)
+    trimmed.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)
   );
 }
 
@@ -162,8 +162,8 @@ function isSubagentRecoveryText(text: string): boolean {
     /^(?:continue|keep going|resume|retry|carry on)[.!?]?$/iu.test(text) ||
     [
       "The previous assistant turn recorded reasoning but did not produce a user-visible answer.",
-      "The previous attempt did not produce a user-visible answer.",
-      "The previous assistant turn completed its tool calls but did not produce a user-visible answer.",
+      "Your turn ended without a final reply.",
+      "Your turn ended without a final result.",
       "The previous attempt compacted the conversation context before producing a final user-visible answer.",
     ].some((prefix) => text.startsWith(prefix))
   );
@@ -196,7 +196,7 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
         kind: settled ? "settled" : "completion",
         text: event,
         caseName:
-          /^task:\s*qa-terminal-(visible|silent|empty|restart|fallback|private)(?:-(?:first|second))?\s*$/imu
+          /^task:\s*qa-terminal-(visible|silent|empty|restart|fallback|race|private)(?:-(?:first|second))?\s*$/imu
             .exec(event)?.[1]
             ?.toLowerCase(),
       };

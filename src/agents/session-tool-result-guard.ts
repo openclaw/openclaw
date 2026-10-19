@@ -3,6 +3,7 @@ import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js"
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindAgentAssistantSource, readAgentAssistantSource } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
@@ -17,6 +18,7 @@ import {
 } from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
+import { prepareCodeModeCheckpoint } from "./code-mode-checkpoint.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import {
@@ -49,6 +51,7 @@ import {
   rewriteToolResultIds,
 } from "./tool-call-id.js";
 type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
+const log = createSubsystemLogger("agents/transcript");
 export type NextUserMessagePersistence = "normal" | "suppress" | "runtime";
 type AsyncMessageCallback<T extends AgentMessage> = (message: T) => void | Promise<void>;
 type UserMessagePersistedCallback = (
@@ -180,19 +183,13 @@ export function installSessionToolResultGuard(
   const pending = new Map<string, string | undefined>();
   // Response that most recently added pending tool calls; see clearsPendingToolCalls.
   let pendingResponseIds: readonly string[] = [];
-  const persistMessage = (message: AgentMessage) => {
-    const transformer = opts?.transformMessageForPersistence;
-    const persisted = transformer ? transformer(message) : message;
-    return persisted;
-  };
+  const persistMessage = (message: AgentMessage) =>
+    opts?.transformMessageForPersistence?.(message) ?? message;
 
   const persistToolResult = (
     message: AgentMessage,
     meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
-  ) => {
-    const transformer = opts?.transformToolResultForPersistence;
-    return transformer ? transformer(message, meta) : message;
-  };
+  ) => opts?.transformToolResultForPersistence?.(message, meta) ?? message;
 
   const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
   const missingToolResultText = opts?.missingToolResultText;
@@ -306,7 +303,10 @@ export function installSessionToolResultGuard(
     AppendReceipt
   > {
     const assistantSource = readAgentAssistantSource(acknowledgementSource);
-    const runOwnedMessage = attachSessionTranscriptRunId(message, transcriptRunId);
+    const runOwnedMessage = prepareCodeModeCheckpoint(
+      attachSessionTranscriptRunId(message, transcriptRunId),
+      acknowledgementSource,
+    );
     const parentEntryId = sessionManager.getLeafId();
     const originalTarget = sessionManager.getSessionTarget();
     const {
@@ -328,16 +328,23 @@ export function installSessionToolResultGuard(
     if (viewWasSuperseded) {
       transcriptSeqByEntryId.clear();
     }
-    const persistedEntry = sessionManager.getEntry(entryId);
+    const committedMessageSeq =
+      anchor && !viewWasSuperseded ? anchor.activeMessagePosition + 1 : undefined;
+    const persistedEntry =
+      committedMessageSeq === undefined ? sessionManager.getEntry(entryId) : undefined;
     const messageSeq =
       appended && sessionTarget && (!viewWasSuperseded || persistedEntry)
-        ? resolveAppendedMessageSeq({
+        ? (committedMessageSeq ??
+          resolveAppendedMessageSeq({
             sessionManager,
             entryId,
             parentEntryId: persistedEntry ? persistedEntry.parentId : parentEntryId,
             seqByEntryId: transcriptSeqByEntryId,
-          })
+          }))
         : undefined;
+    if (committedMessageSeq !== undefined) {
+      transcriptSeqByEntryId.set(entryId, committedMessageSeq);
+    }
     // Destructive tool-side state commits only after this exact result is durable.
     acknowledgeInternalToolResult(acknowledgementSource);
     if (assistantSource && appended) {
@@ -443,13 +450,16 @@ export function installSessionToolResultGuard(
     callerOptions?: AppendMessageOptions,
   ): Generator<AppendRequest, string | undefined, AppendReceipt> {
     const callerInvalidatesCache = callerOptions?.invalidateSerializedPrefixCache === true;
+    // Publish the owning run before storage clones the message or hooks project it.
+    // Already-admitted immutable replay messages retain their recorded envelope.
+    if (
+      (message.role === "assistant" || message.role === "toolResult") &&
+      !Object.isFrozen(message)
+    ) {
+      Object.assign(message, attachSessionTranscriptRunId(message, transcriptRunId));
+    }
     let nextMessage = message;
     if (message.role === "assistant") {
-      // Publish the owning run before storage clones the message or hooks project it.
-      // Already-admitted immutable replay messages retain their recorded envelope.
-      if (!Object.isFrozen(message)) {
-        Object.assign(message, attachSessionTranscriptRunId(message, transcriptRunId));
-      }
       const sanitized = sanitizeToolCallInputs([message], {
         allowedToolNames: opts?.allowedToolNames,
       });
@@ -556,10 +566,7 @@ export function installSessionToolResultGuard(
       finalMessage,
       {
         invalidateSerializedPrefixCache:
-          callerInvalidatesCache ||
-          transformedMessage !== nextMessage ||
-          finalWrite.changed ||
-          finalMessage !== finalWrite.message,
+          callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
       },
       message,
     );
@@ -568,10 +575,15 @@ export function installSessionToolResultGuard(
       void publishTranscriptUpdate(sessionTarget, {
         lifecycleRevision,
         message: persistedMessage,
-        messageId: typeof result === "string" ? result : undefined,
+        messageId: result,
         ...(messageSeq !== undefined ? { messageSeq } : {}),
         ...(runId ? { runId } : {}),
-      });
+      }).catch(() =>
+        log.warn(
+          "Transcript update publication failed after append; reload the session to refresh its transcript.",
+          { sessionId: sessionTarget.sessionId, messageId: result },
+        ),
+      );
     }
 
     if (finalMessage.role === "user" && persistedMessage.role === "user") {

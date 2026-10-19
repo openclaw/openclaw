@@ -107,17 +107,19 @@ function aggregateHistory(params: {
           continue;
         }
         const requests = parseProviderUsageNonNegativeInteger(result.num_model_requests);
-        const textInputTokens = parseProviderUsageNonNegativeInteger(result.input_tokens);
-        const audioInputTokens = parseProviderUsageNonNegativeInteger(result.input_audio_tokens);
+        // Organization usage totals already include text, audio, images, and cache writes.
+        const totalInputTokens = parseProviderUsageNonNegativeInteger(result.input_tokens);
         const cacheReadTokens = parseProviderUsageNonNegativeInteger(result.input_cached_tokens);
-        const inputTokens = Math.max(0, textInputTokens - cacheReadTokens) + audioInputTokens;
-        const outputTokens =
-          parseProviderUsageNonNegativeInteger(result.output_tokens) +
-          parseProviderUsageNonNegativeInteger(result.output_audio_tokens);
-        const totalTokens = textInputTokens + audioInputTokens + outputTokens;
+        const cacheWriteTokens =
+          parseProviderUsageNonNegativeInteger(result.input_cache_write_tokens) +
+          parseProviderUsageNonNegativeInteger(result.input_cache_write_12h_tokens);
+        const inputTokens = Math.max(0, totalInputTokens - cacheReadTokens - cacheWriteTokens);
+        const outputTokens = parseProviderUsageNonNegativeInteger(result.output_tokens);
+        const totalTokens = totalInputTokens + outputTokens;
         accumulator.requests = (accumulator.requests ?? 0) + requests;
         accumulator.inputTokens += inputTokens;
         accumulator.cacheReadTokens += cacheReadTokens;
+        accumulator.cacheWriteTokens += cacheWriteTokens;
         accumulator.outputTokens += outputTokens;
         accumulator.totalTokens += totalTokens;
         addProviderUsageModel(
@@ -127,7 +129,7 @@ function aggregateHistory(params: {
             requests,
             inputTokens,
             cacheReadTokens,
-            cacheWriteTokens: 0,
+            cacheWriteTokens,
             outputTokens,
             totalTokens,
           },
@@ -143,7 +145,7 @@ function aggregateHistory(params: {
     periodDays: params.periodDays,
     unit: "USD",
     ...(params.projectId ? { scope: `Project ${params.projectId}` } : {}),
-    daily: [...daily.entries()].toSorted(([a], [b]) => a - b).map(([, entry]) => entry),
+    daily: daily.values(),
     formatSummary: ({ requests, totalTokens }) =>
       `${requests.toLocaleString("en-US")} requests · ${totalTokens.toLocaleString("en-US")} tokens`,
   });

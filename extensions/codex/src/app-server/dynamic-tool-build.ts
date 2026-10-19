@@ -25,11 +25,7 @@ import {
 } from "openclaw/plugin-sdk/time-runtime";
 import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "../../native-tool-policy.js";
 import type { CodexComputerContextEpoch } from "./computer-context.js";
-import {
-  isCodexRemoteExecPlacementSandbox,
-  readCodexPluginConfig,
-  type CodexPluginConfig,
-} from "./config.js";
+import { isCodexRemoteExecPlacementSandbox, type CodexPluginConfig } from "./config.js";
 import {
   createCodexHostToolSurface,
   resolveCodexToolConstructionPlan,
@@ -251,10 +247,7 @@ export async function buildDynamicTools(
       emitBeforeToolCallDiagnostics: false,
       modelProvider: params.model.provider,
       modelId: params.modelId,
-      modelCompat:
-        params.model.compat && typeof params.model.compat === "object"
-          ? (params.model.compat as OpenClawCodingToolsOptions["modelCompat"])
-          : undefined,
+      modelCompat: params.model.compat,
       modelApi: params.model.api,
       modelContextWindowTokens: params.model.contextWindow,
       delegationCapability: params.delegationCapability,
@@ -369,9 +362,10 @@ export async function buildDynamicTools(
       !webSearchPresent &&
       persistentCodexWebSearchSurface
     ) {
-      const webSearchPolicy = (
+      // Restart recovery can run before the Gateway projection serves this row.
+      const webSearchPolicy = await (
         await import("openclaw/plugin-sdk/agent-harness")
-      ).resolveWebSearchToolPolicy({
+      ).resolveWebSearchToolPolicyAsync({
         config: params.config,
         modelProvider: params.model.provider,
         modelId: params.modelId,
@@ -517,7 +511,13 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     params.requireWorkspaceOnly === true ||
     params.pluginHarnessToolPolicyRestricted === true ||
     isCodexMemoryFlushRun(params) ||
-    params.disableTools
+    params.disableTools ||
+    // Strict one-shots need the host tool owner's joined process cleanup.
+    // Native command completion cannot certify retired descendant settlement.
+    params.oneShotCliRun === true ||
+    // Codex's environment policy is a serialized overlay, not a launch binding.
+    // Let the common host tools own credentials, approvals, and process lifetime.
+    params.hostCapabilities.preparedEnvironment?.().hostExecutionRequired === true
   ) {
     return false;
   }
@@ -603,8 +603,7 @@ export function resolveCodexExternalSandboxPolicyForOpenClawSandbox(
     networkAccess: !dockerNetwork || (network && network !== "none") ? "enabled" : "restricted",
   };
 }
-export function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPluginConfig {
-  const config = readCodexPluginConfig(pluginConfig);
+export function disableCodexPluginThreadConfig(config: CodexPluginConfig = {}): CodexPluginConfig {
   return {
     ...config,
     codexPlugins: {

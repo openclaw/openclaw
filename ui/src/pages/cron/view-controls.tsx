@@ -47,12 +47,16 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
       trigger={<Icon name="moreHorizontal" />}
       placement="bottom-end"
       items={[
-        {
-          id: "run-if-due",
-          label: t("cron.actions.runIfDue"),
-          class: "cron-job-menu__item",
-          disabled: props.busy || !props.canManage,
-        },
+        ...(props.job.schedule.kind === "event"
+          ? []
+          : [
+              {
+                id: "run-if-due",
+                label: t("cron.actions.runIfDue"),
+                class: "cron-job-menu__item",
+                disabled: props.busy || !props.canManage,
+              },
+            ]),
         ...(systemOwned()
           ? []
           : [
@@ -86,7 +90,7 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
             break;
           case "remove":
             if (!systemOwned()) {
-              props.onRemove(props.job);
+              void props.onRemove(props.job);
             }
             break;
         }

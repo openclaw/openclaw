@@ -1,3 +1,4 @@
+import { flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
@@ -251,4 +252,30 @@ it("keeps a decode failure on its fallback across rerenders until the revision c
   await Promise.resolve();
   expect(avatarImage(view)?.getAttribute("src")).toBe("blob:settings-avatar-2");
   expect(fetchAvatar).toHaveBeenCalledTimes(2);
+});
+
+it("keeps a reopened picker preview pending until the authenticated avatar resolves", async () => {
+  const response = createDeferred<Response>();
+  fetchAvatar.mockReturnValue(response.promise);
+  const view = createView();
+  const chooser = view.container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Edit avatar"]',
+  );
+  if (!chooser) {
+    throw new Error("Missing avatar chooser");
+  }
+  chooser.click();
+  flush();
+  view.container.querySelector<HTMLButtonElement>(".avatar-picker__tab:nth-child(2)")?.click();
+  flush();
+  const preview = view.container.querySelector(".avatar-picker__preview .identity-avatar--agent");
+  const image = preview?.querySelector("img");
+  expect(preview?.classList).toContain("is-pending");
+  expect(image?.getAttribute("src")).toBeNull();
+  expect(fetchAvatar).toHaveBeenCalledOnce();
+  response.resolve(avatarResponse());
+  await waitForFast(() => expect(image?.getAttribute("src")).toBe("blob:settings-avatar-1"));
+  image?.dispatchEvent(new Event("load"));
+  expect(preview?.classList).not.toContain("is-pending");
+  expect(fetchAvatar).toHaveBeenCalledOnce();
 });

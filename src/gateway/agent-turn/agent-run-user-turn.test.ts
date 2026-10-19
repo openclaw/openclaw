@@ -163,50 +163,54 @@ describe("prepareAgentRunUserTurn", () => {
     },
   );
 
-  it("does not stage the user turn when delegated runtime authority closes at commit", async () => {
-    const sessionKey = "agent:main:worker-child";
-    const admittedSessionId = "worker-child-session";
-    const sessionEntry: SessionEntry = { sessionId: admittedSessionId, updatedAt: 1 };
-    mocks.loadSessionEntry.mockResolvedValue({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      canonicalKey: sessionKey,
-      entry: sessionEntry,
-      store: { [sessionKey]: sessionEntry },
-    });
-    let authorityActive = true;
-    mocks.beforeTranscriptCommit = () => {
-      authorityActive = false;
-    };
-
-    await expect(
-      prepareAgentRunUserTurn({
-        onUserTurnMediaPersisted: vi.fn(),
-        request: { message: "must not outlive the worker turn", idempotencyKey: "closed-run" },
+  it.each([false, true])(
+    "does not stage input after authority closes (fresh child=%s)",
+    async (freshChild) => {
+      const sessionKey = "agent:main:worker-child";
+      const admittedSessionId = "worker-child-session";
+      const sessionEntry: SessionEntry = { sessionId: admittedSessionId, updatedAt: 1 };
+      mocks.loadSessionEntry.mockResolvedValue({
         cfg: {},
-        sessionEntry,
-        resolvedSessionKey: sessionKey,
-        admittedSessionId,
-        activeSessionAgentId: "main",
-        suppressVisibleSessionEffects: false,
-        requestedPromptPersistenceSuppression: false,
-        canUseInternalRuntimeHandoff: false,
-        message: "must not outlive the worker turn",
-        effectiveTranscriptInputText: "must not outlive the worker turn",
-        images: [],
-        offloadedRefs: [],
-        runId: "closed-run",
-        client: null,
-        context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
-        assertCurrent: () => {
-          if (!authorityActive) {
-            throw new TypeError("agent runtime authority is no longer active");
-          }
-        },
-      }),
-    ).rejects.toThrow("agent runtime authority is no longer active");
-    expect(mocks.persistedMessages).toEqual([]);
-  });
+        storePath: "/tmp/sessions.json",
+        canonicalKey: sessionKey,
+        entry: sessionEntry,
+        store: { [sessionKey]: sessionEntry },
+      });
+      let authorityActive = true;
+      mocks.beforeTranscriptCommit = () => {
+        authorityActive = false;
+      };
+
+      await expect(
+        prepareAgentRunUserTurn({
+          onUserTurnMediaPersisted: vi.fn(),
+          request: { message: "must not outlive the worker turn", idempotencyKey: "closed-run" },
+          cfg: {},
+          sessionEntry,
+          freshChildStorePath: freshChild ? "/tmp/sessions.json" : undefined,
+          resolvedSessionKey: sessionKey,
+          admittedSessionId,
+          activeSessionAgentId: "main",
+          suppressVisibleSessionEffects: false,
+          requestedPromptPersistenceSuppression: false,
+          canUseInternalRuntimeHandoff: false,
+          message: "must not outlive the worker turn",
+          effectiveTranscriptInputText: "must not outlive the worker turn",
+          images: [],
+          offloadedRefs: [],
+          runId: "closed-run",
+          client: null,
+          context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
+          assertCurrent: () => {
+            if (!authorityActive) {
+              throw new TypeError("agent runtime authority is no longer active");
+            }
+          },
+        }),
+      ).rejects.toThrow("agent runtime authority is no longer active");
+      expect(mocks.persistedMessages).toEqual([]);
+    },
+  );
 
   it("deletes persisted media when delegated runtime authority closes during persistence", async () => {
     const sessionKey = "agent:main:worker-child";

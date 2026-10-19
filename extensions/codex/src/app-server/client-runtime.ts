@@ -301,11 +301,7 @@ async function releaseRetainedThread(
     retainedOwnerToken: retained.ownerToken,
     completion: Promise.resolve().then(() => {
       assertCurrent?.();
-      return withCurrent
-        ? retained.release(threadId, assertCurrent, withCurrent)
-        : assertCurrent
-          ? retained.release(threadId, assertCurrent)
-          : retained.release(threadId);
+      return retained.release(threadId, assertCurrent, withCurrent);
     }),
   };
   runtime.releasingThreads.set(threadId, transition);
@@ -568,11 +564,7 @@ function claimCodexAppServerThreadOwnership(
           return;
         }
         assertReleaseCurrent?.();
-        await (withCurrent
-          ? retained.release(releasedThreadId, assertReleaseCurrent, withCurrent)
-          : assertReleaseCurrent
-            ? retained.release(releasedThreadId, assertReleaseCurrent)
-            : retained.release(releasedThreadId));
+        await retained.release(releasedThreadId, assertReleaseCurrent, withCurrent);
       }),
     };
     runtime.releasingThreads.set(threadId, transition);

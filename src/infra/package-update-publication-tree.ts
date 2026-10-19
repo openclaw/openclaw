@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { root as openRoot } from "@openclaw/fs-safe/root";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
@@ -15,6 +14,8 @@ import {
 import {
   createPackageIntegrityReader,
   packageIntegrityDifferences,
+  packageIntegrityMatches,
+  repairPackageIntegrityPermissions,
   type PackageIntegrityFingerprint,
   PackageIntegrityMismatchError,
 } from "./package-update-integrity.js";
@@ -115,9 +116,11 @@ export function createPackagePublicationTreeMatcher(
   descriptor: Pick<PackageActivationDescriptor, "candidate" | "previous" | "helperDigest">,
   onWarning: (message: string) => void,
   privateCandidate: () => boolean = () => false,
+  assertCurrent: () => void = () => {},
 ) {
   let candidateWarningRecorded = false;
   const verified = new WeakMap<PackageIntegrityFingerprint, PackageIntegrityFingerprint>();
+  const permissionsWarned = new Set<string>();
   let legacyWarning: string | undefined;
   const legacy = descriptor.helperDigest === LEGACY_PACKAGE_RECOVERY_HELPER;
   const matches = async (
@@ -147,10 +150,24 @@ export function createPackagePublicationTreeMatcher(
         verified.get(expected) ?? expected,
         legacy,
       );
-      if (!isDeepStrictEqual(observed, expected)) {
+      if (!packageIntegrityMatches(expected, observed)) {
         throw new PackageIntegrityMismatchError(
           `Package publication object changed: ${file}`,
           packageIntegrityDifferences(expected, observed),
+        );
+      }
+      const warnPermissions = (message: string) => {
+        if (!permissionsWarned.has(expected.identity)) {
+          onWarning(message);
+          permissionsWarned.add(expected.identity);
+        }
+      };
+      if (observed.digest === expected.digest) {
+        repairPackageIntegrityPermissions(observed, assertCurrent, warnPermissions);
+      } else {
+        // Tightening a full-mode-only match would invalidate this unchanged old receipt.
+        warnPermissions(
+          "Retained package matched its original full-mode fingerprint; existing group/other permissions were preserved for recovery compatibility.",
         );
       }
       // A fresh preparation read may predate digest reuse eligibility. Keep

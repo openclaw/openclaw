@@ -1,8 +1,7 @@
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { expectSharedTooltipSkin } from "./tooltip.test-support.ts";
-import type { TooltipElement } from "./tooltip.ts";
-import "./tooltip.ts";
+import { focusWithoutTooltip, type TooltipElement } from "./tooltip.ts";
 import "../styles/base.css";
 
 afterEach(() => document.body.replaceChildren());
@@ -144,13 +143,6 @@ function withoutTooltipMotion(f: Fixture) {
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("tooltip pointer ownership", () => {
-  it("skins the body and removes the arrow through shared overlay tokens", async () => {
-    const f = await fixture();
-    expect(getComputedStyle(f.tooltip).display).toBe("contents");
-    await openTooltip(f);
-    expectSharedTooltipSkin(f.tooltip);
-  });
-
   async function mountOpenTooltip(rich: boolean) {
     const f = await fixture();
     let link: HTMLAnchorElement | undefined;
@@ -202,9 +194,41 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip pointer ownership", 
     },
   );
 
+  it("lets pointer input reach actions covered by a read-only rich tip", async () => {
+    const { page } = await import("vitest/browser");
+    const f = await fixture();
+    f.tooltip.pointerThrough = true;
+    const card = document.createElement("div");
+    card.slot = "content";
+    card.innerHTML = "<strong>CPU usage</strong><dl><dt>Main thread</dt><dd>12%</dd></dl>";
+    f.tooltip.append(card);
+    await commitTooltip(f.tooltip);
+    await openTooltip(f);
+    const body = tooltipBody(f.tooltip);
+    const bounds = body.getBoundingClientRect();
+    const action = document.createElement("button");
+    action.textContent = "Minimize diagnostics";
+    action.style.cssText = `position: fixed; left: ${bounds.left}px; top: ${bounds.top}px; width: ${bounds.width}px; height: ${bounds.height}px`;
+    document.body.append(action);
+    expect(
+      document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2),
+    ).toBe(action);
+    let activated = false;
+    action.addEventListener("click", () => {
+      activated = true;
+    });
+    const hidden = afterPhase(f.tooltip, "closed");
+    await page.elementLocator(action).click();
+    expect(activated).toBe(true);
+    await hidden;
+    await expectVisibility(f, false);
+  });
+
   it("keeps rich tooltip links pointer-accessible", async () => {
     const { page } = await import("vitest/browser");
-    const { link } = await mountOpenTooltip(true);
+    const { link, tooltip } = await mountOpenTooltip(true);
+    expect(getComputedStyle(tooltip).display).toBe("contents");
+    expectSharedTooltipSkin(tooltip);
     const bounds = link!.getBoundingClientRect();
     expect(
       document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2),
@@ -220,6 +244,70 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip pointer ownership", 
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("tooltip transition ownership", () => {
+  it("waits for the real opening transition before publishing completion, then hides on blur", async () => {
+    const { page } = await import("vitest/browser");
+    const f = await fixture();
+    const body = tooltipBody(f.tooltip);
+    body.style.setProperty("--control-ui-transition-fast", "200ms");
+    const outside = document.createElement("button");
+    outside.textContent = "Outside";
+    f.host.append(outside);
+    await page.elementLocator(outside).hover();
+    expect(f.trigger.matches(":hover")).toBe(false);
+    await expect.element(body).not.toBeVisible();
+    const shown = afterPhase(f.tooltip, "opened");
+    requestVisibility(f, "show");
+    let animation: Animation | undefined;
+    let rate = 1;
+    try {
+      await expect
+        .poll(() => {
+          if (!animation) {
+            animation = body
+              .getAnimations()
+              .find(
+                (candidate) =>
+                  candidate instanceof CSSTransition && candidate.playState === "running",
+              );
+            if (animation) {
+              rate = animation.playbackRate;
+              animation.playbackRate = 0;
+            }
+          }
+          return animation;
+        })
+        .toBeDefined();
+      const active = animation!;
+      await active.ready;
+      const { activeDuration } = active.effect!.getComputedTiming();
+      expect(activeDuration).toBeGreaterThan(0);
+      expect(Number.isFinite(activeDuration)).toBe(true);
+      active.currentTime = Number(activeDuration) / 2;
+      await frame();
+      expect(active.playState).toBe("running");
+      const { progress } = active.effect!.getComputedTiming();
+      expect(progress).toBeGreaterThan(0);
+      expect(progress).toBeLessThan(1);
+      expect(body.dataset.phase).toBe("opening");
+      expect(f.events).toEqual(["opening"]);
+    } finally {
+      if (animation) {
+        animation.playbackRate = rate;
+      }
+    }
+    await shown;
+    expect(f.events).toEqual(["opening", "opened"]);
+    expect(f.trigger.matches(":hover")).toBe(false);
+    expect(body.matches(":hover")).toBe(false);
+    expect(document.activeElement).toBe(f.trigger);
+    const hidden = afterPhase(f.tooltip, "closed");
+    f.trigger.blur();
+    expect(document.activeElement).not.toBe(f.trigger);
+    await hidden;
+    expect(f.events).toEqual(["opening", "opened", "closing", "closed"]);
+    await expectVisibility(f, false);
+  });
+
   it.each([false, true])(
     "keeps a keyboard-reopened tooltip visible after an interrupted hide (zero duration=%s)",
     async (zeroDuration) => {
@@ -267,6 +355,29 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip transition ownership
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("tooltip public lifecycle", () => {
+  it.each([false, true])(
+    "preserves scroll during tooltip-safe focus (wrapped=%s)",
+    async (wrapped) => {
+      const f = await fixture();
+      f.trigger.style.cssText = "display: block";
+      f.host.style.cssText = "height: 80px; overflow: auto";
+      const spacer = document.createElement("div");
+      spacer.style.height = "400px";
+      f.host.append(spacer);
+      if (!wrapped) {
+        f.host.prepend(f.trigger);
+        f.tooltip.remove();
+      }
+      f.host.scrollTop = 200;
+      focusWithoutTooltip(f.trigger, { preventScroll: true });
+      await commitTooltip(f.tooltip);
+      expect(document.activeElement).toBe(f.trigger);
+      expect(f.host.scrollTop).toBe(200);
+      expect(f.tooltip.hasAttribute("open")).toBe(false);
+      expect(f.events).toEqual([]);
+    },
+  );
+
   it.each(["trigger", "ancestor"] as const)(
     "does not open a duplicate label or capture Escape during a %s entrance fade",
     async (target) => {
@@ -322,20 +433,15 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip public lifecycle", (
     expect(f.events).toEqual([]);
   });
 
-  it.each([false, true])("honors immediate focus input when disabled=%s", async (disabled) => {
-    const f = await fixture(disabled);
-    if (disabled) {
-      f.trigger.focus();
-      await frame();
-    } else {
-      await openTooltip(f);
-    }
-    await expectVisibility(f, !disabled);
+  it("does not reveal a disabled tooltip on focus", async () => {
+    const f = await fixture(true);
+    f.trigger.focus();
+    await frame();
+    await expectVisibility(f, false);
   });
 
   it.each([
     { input: "click", dismissal: "trigger" },
-    { input: "focus", dismissal: "trigger" },
     { input: "click", dismissal: "outside" },
     { input: "hover", dismissal: "outside" },
   ] as const)(
@@ -359,8 +465,6 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip public lifecycle", (
         await page.elementLocator(f.trigger).hover();
       } else if (input === "click") {
         await page.elementLocator(f.trigger).click();
-      } else {
-        f.trigger.focus();
       }
       await shown;
       await expectVisibility(f, true);
@@ -428,19 +532,6 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip public lifecycle", (
     await hidden;
     await expectVisibility(f, false);
     expect(f.events).toEqual(["opening", "closing", "closed"]);
-  });
-
-  it("keeps a reconnected tooltip closed until fresh focus input", async () => {
-    const f = await fixture();
-    await openTooltip(f);
-    f.host.remove();
-    f.events.length = 0;
-    document.body.append(f.host);
-    await commitTooltip(f.tooltip);
-    await expectVisibility(f, false);
-    expect(f.events).toEqual([]);
-    await openTooltip(f);
-    await expectVisibility(f, true);
   });
 
   it("moves focus listeners and preserves other descriptions when replacing the anchor", async () => {

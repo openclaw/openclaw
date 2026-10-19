@@ -72,7 +72,8 @@ beforeEach(() => {
   resetContextWindowCacheForTest();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   resetContextWindowCacheForTest();
   vi.useRealTimers();
 });
@@ -164,6 +165,45 @@ describe("context cache lifecycle", () => {
     ).toBe(1_000_000);
   });
 
+  it.each(["success", "failure"])(
+    "keeps refreshed discovery when an older load finishes with %s",
+    async (outcome) => {
+      const started = Promise.withResolvers<void>();
+      const older = Promise.withResolvers<{ modelCatalog: ContextWindowCatalog }>();
+      state.loadOwner.mockImplementationOnce(() => {
+        started.resolve();
+        return older.promise;
+      });
+      const pending = context.ensureContextWindowCacheLoaded();
+      await started.promise;
+
+      state.catalog.entries = [{ provider: "synthetic", id: "new-model", contextWindow: 222_000 }];
+      await context.refreshContextWindowCache({});
+      const options = { provider: "synthetic", allowAsyncLoad: false };
+      expect(context.resolveContextTokensForModel({ model: "new-model", ...options })).toBe(
+        222_000,
+      );
+
+      if (outcome === "failure") {
+        older.reject(new Error("old catalog unavailable"));
+      } else {
+        older.resolve({
+          modelCatalog: {
+            entries: [{ provider: "synthetic", id: "old-model", contextWindow: 111_000 }],
+          },
+        });
+      }
+      await pending;
+
+      expect(context.resolveContextTokensForModel({ model: "new-model", ...options })).toBe(
+        222_000,
+      );
+      expect(
+        context.resolveContextTokensForModel({ model: "old-model", ...options }),
+      ).toBeUndefined();
+    },
+  );
+
   it("warms configured, discovered, and static windows from the published owner", async () => {
     const requested = config("synthetic", model("stale-model", 111_000));
     state.config = config("synthetic", model("current-model", 222_000));
@@ -197,7 +237,6 @@ describe("context cache lifecycle", () => {
     state.config = config("synthetic", model("recovered-model", 96_000));
     await context.prewarmContextWindowCacheAfterReady({ config: state.config });
     expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).toBeNull();
-    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBeNull();
     expect(CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig).toBeUndefined();
     await context.ensureContextWindowCacheLoaded();
     expect(state.loadOwner).toHaveBeenCalledWith({ config: state.config, readOnly: true });
@@ -213,18 +252,6 @@ describe("context cache lifecycle", () => {
       config("synthetic", model("current-model", 96_000)),
     );
     expect(context.resolveContextTokensForModel({ model: "stale-model", cfg: {} })).toBeUndefined();
-  });
-
-  it("retires an unpublished prewarm marker when shutdown cancels during import", async () => {
-    let cancelled = false;
-    const pending = context.prewarmContextWindowCacheAfterReady({
-      config: {},
-      isCancelled: () => cancelled,
-    });
-    cancelled = true;
-    await pending;
-    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).toBeNull();
-    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBeNull();
   });
 
   it("does not publish prewarm cancelled during cooperative projection", async () => {

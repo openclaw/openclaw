@@ -51,6 +51,7 @@ describe("provider overflow messages", () => {
     "Input validation error: `inputs` tokens + `max_new_tokens` must be <= 32768. Given: 28897 `inputs` tokens and 3872 `max_new_tokens`",
     "Input validation error: `inputs` must have less than 32768 tokens. Given: 40000",
     "Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input.",
+    "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
   ])("detects %s", (text) => {
     expect(isContextOverflow(errorMessage(text), 262_144)).toBe(true);
   });

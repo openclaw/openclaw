@@ -31,3 +31,11 @@ export const PLUGIN_MANIFEST_CONTRACT_KEYS = [
   "gatewayMethodDispatch",
   "tools",
 ] as const;
+
+/** Static transcript setup metadata; runtime registration does not gate configuration. */
+export const TRANSCRIPT_SOURCE_LOCATOR_FIELDS = [
+  "accountId",
+  "guildId",
+  "channelId",
+  "meetingUrl",
+] as const;

@@ -1,4 +1,3 @@
-// Gateway Protocol schema module defines OpenClaw chat payloads.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import {
@@ -16,6 +15,8 @@ import {
   SetupInferenceFailureStatusSchema,
 } from "./setup-inference.js";
 import { withSince } from "./since.js";
+// Gateway Protocol schema module defines OpenClaw chat payloads.
+import { stringLiteralUnion } from "./string-literal-union.js";
 import { WizardAnswerSchema, WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
 
 export {
@@ -53,9 +54,7 @@ export const SystemAgentChatParamsSchema = closedObject({
   /** Direct client control for cancelling the currently rendered hosted wizard. */
   wizardCancel: Type.Optional(SystemAgentWizardCancelSchema),
   /** Seeds a purpose-specific first greeting for a fresh conversation. */
-  welcomeVariant: Type.Optional(
-    Type.Union([Type.Literal("onboarding"), Type.Literal("new-agent")]),
-  ),
+  welcomeVariant: Type.Optional(stringLiteralUnion(["onboarding", "new-agent"])),
   /** Drop any in-flight approval/wizard state and start the session over. */
   reset: Type.Optional(Type.Boolean()),
   /** Ephemeral Control UI location hint for interpreting the current user turn. */
@@ -175,7 +174,7 @@ export const SystemAgentChatHistoryParamsSchema = closedObject({
 });
 
 export const SystemAgentChatHistoryTurnSchema = closedObject({
-  role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
+  role: stringLiteralUnion(["user", "assistant"]),
   text: Type.String(),
   at: Type.Number(),
 });
@@ -184,20 +183,20 @@ export const SystemAgentChatHistoryResultSchema = closedObject({
   turns: Type.Array(SystemAgentChatHistoryTurnSchema),
 });
 
-export const SystemChangeKindSchema = Type.Union([
-  Type.Literal("operation"),
-  Type.Literal("config-write"),
-  Type.Literal("external-edit"),
+export const SystemChangeKindSchema = stringLiteralUnion([
+  "operation",
+  "config-write",
+  "external-edit",
 ]);
 
-export const SystemChangeSourceSchema = Type.Union([
-  Type.Literal("system-agent"),
-  Type.Literal("doctor"),
-  Type.Literal("config-rpc"),
-  Type.Literal("cli"),
-  Type.Literal("plugin-install"),
-  Type.Literal("external"),
-  Type.Literal("unknown"),
+export const SystemChangeSourceSchema = stringLiteralUnion([
+  "system-agent",
+  "doctor",
+  "config-rpc",
+  "cli",
+  "plugin-install",
+  "external",
+  "unknown",
 ]);
 
 export const SystemChangeEntrySchema = closedObject({
@@ -324,12 +323,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
         groupLabel: Type.Optional(Type.String()),
         icon: Type.Optional(SetupInferenceHttpsUrl),
         website: Type.Optional(SetupInferenceHttpsUrl),
-        kind: Type.Union([
-          Type.Literal("oauth"),
-          Type.Literal("device-code"),
-          Type.Literal("install"),
-          Type.Literal("custom"),
-        ]),
+        kind: stringLiteralUnion(["oauth", "device-code", "install", "custom"]),
         featured: Type.Boolean(),
       }),
     ),
@@ -463,6 +457,15 @@ export const SystemAgentSetupAuthStartParamsSchema = closedObject({
 
 export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;
 
+/** Enable a runtime with agent-scoped consent in the same config write. */
+export const SystemAgentSetupRuntimeStartParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+  agentId: NonEmptyString,
+  runtimeId: NonEmptyString,
+  configPatch: Type.Record(Type.String(), Type.Unknown()),
+});
+export const SystemAgentSetupRuntimeStartResultSchema = WizardStartResultSchema;
+
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type SystemAgentChatParams = Static<typeof SystemAgentChatParamsSchema>;
@@ -491,4 +494,11 @@ export type SystemAgentSetupActivateStartParams = Static<
 >;
 export type SystemAgentSetupActivateStartResult = Static<
   typeof SystemAgentSetupActivateStartResultSchema
+>;
+
+export type SystemAgentSetupRuntimeStartParams = Static<
+  typeof SystemAgentSetupRuntimeStartParamsSchema
+>;
+export type SystemAgentSetupRuntimeStartResult = Static<
+  typeof SystemAgentSetupRuntimeStartResultSchema
 >;

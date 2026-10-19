@@ -148,11 +148,24 @@ describe("block HTML islands", () => {
     });
   });
 
-  it("maps bare img, video, and audio islands", () => {
-    const blocks = blocksFor(
+  it.each([
+    [
+      "ordinary media",
       '<img src="https://example.com/a.png"/>\n\n<video src="https://example.com/a.mp4"></video>\n\n<audio src="https://example.com/a.mp3"></audio>',
-    );
-    expect(blocks.map((block) => block.type)).toEqual(["photo", "video", "audio"]);
+      ["photo", "video", "audio"],
+    ],
+    [
+      "GIF animations",
+      '<img src="https://example.com/a.gif"/>\n\n<video src="https://example.com/b.gif"></video>',
+      ["animation", "animation"],
+    ],
+    [
+      "voice notes",
+      '<audio src="https://example.com/a.opus"></audio>\n\n<audio src="https://example.com/b.ogg"></audio>',
+      ["voice_note", "voice_note"],
+    ],
+  ] as const)("maps %s islands", (_name, markdown, types) => {
+    expect(blocksFor(markdown).map((block) => block.type)).toEqual(types);
   });
 
   it("maps tg-math-block, tg-map, hr, aside, and anchor islands", () => {
@@ -213,13 +226,6 @@ describe("block HTML islands", () => {
     const { blocks, plainText } = markdownToTelegramRichBlocks("<table><tr><td>Unclosed</table>");
     expect(blocks.every((block) => block.type === "paragraph")).toBe(true);
     expect(plainText).toContain("<tr><td>Unclosed");
-  });
-
-  it("keeps unclosed inline tags literal instead of restyling trailing text", () => {
-    const blocks = blocksFor("value is <sup>oops and more text");
-    const serialized = JSON.stringify(blocks);
-    expect(serialized).toContain("<sup>oops");
-    expect(serialized).not.toContain('"superscript"');
   });
 
   it("keeps prototype-named HTML literal (</constructor>)", () => {
@@ -288,21 +294,6 @@ describe("block HTML islands", () => {
     expect(new Set(lines.map((line) => stringWidth(line))).size).toBe(1);
   });
 
-  it("emits anchor_link nodes for fragment hrefs", () => {
-    const blocks = blocksFor('go <a href="#top">back</a> and [also](#top)');
-    const serialized = JSON.stringify(blocks);
-    expect(serialized).toContain('"anchor_link"');
-    expect(serialized).toContain('"anchor_name":"top"');
-    expect(serialized).not.toContain('"url":"#top"');
-  });
-
-  it("degrades non-numeric custom emoji ids to alternative text", () => {
-    const blocks = blocksFor('<tg-emoji emoji-id="not-numeric">😀</tg-emoji> hi');
-    const serialized = JSON.stringify(blocks);
-    expect(serialized).not.toContain('"custom_emoji"');
-    expect(serialized).toContain("😀");
-  });
-
   it("splits oversized credited blockquotes with the credit on the last piece", () => {
     const { blocks } = markdownToTelegramRichBlocks(
       `<blockquote>${"q".repeat(50)} ${"r".repeat(50)}<cite>Author</cite></blockquote>`,
@@ -318,13 +309,6 @@ describe("block HTML islands", () => {
     }
   });
 
-  it("maps gif sources to animation blocks", () => {
-    const blocks = blocksFor(
-      '<img src="https://example.com/a.gif"/>\n\n<video src="https://example.com/b.gif"></video>',
-    );
-    expect(blocks.map((block) => block.type)).toEqual(["animation", "animation"]);
-  });
-
   it("keeps rowspan tables atomic when splitting", () => {
     const block = single(
       `<table><tr><td rowspan="2">${"a".repeat(40)}</td><td>${"b".repeat(40)}</td></tr><tr><td>${"c".repeat(40)}</td></tr></table>`,
@@ -333,26 +317,12 @@ describe("block HTML islands", () => {
     expect(pieces.flat().filter((piece) => piece.type === "table")).toHaveLength(1);
   });
 
-  it("maps ogg and opus audio to voice-note blocks", () => {
-    const blocks = blocksFor(
-      '<audio src="https://example.com/a.opus"></audio>\n\n<audio src="https://example.com/b.ogg"></audio>',
-    );
-    expect(blocks.map((block) => block.type)).toEqual(["voice_note", "voice_note"]);
-  });
-
-  it("rejects malformed map coordinates instead of accepting numeric prefixes", () => {
-    expectLiteral('<tg-map lat="48.8north" long="2.3east" zoom="10"/>');
-  });
-
-  it("rejects duplicate captions in figures and tables", () => {
-    expectLiteral(
-      '<figure><img src="https://example.com/a.jpg"/><figcaption>one</figcaption><figcaption>two</figcaption></figure>\n\n<table><caption>x</caption><caption>y</caption><tr><td>a</td></tr></table>',
-      "two",
-      "y",
-    );
-  });
-
   it.each<[string, string[]]>([
+    ['<tg-map lat="48.8north" long="2.3east" zoom="10"/>', []],
+    [
+      '<figure><img src="https://example.com/a.jpg"/><figcaption>one</figcaption><figcaption>two</figcaption></figure>\n\n<table><caption>x</caption><caption>y</caption><tr><td>a</td></tr></table>',
+      ["two", "y"],
+    ],
     ["<table><tr>warning<td>x</td></tr></table>", ["warning"]],
     [
       '<tg-collage>warning<img src="https://example.com/a.png"/></tg-collage>\n\n<ul>stray<li>item</li></ul>',
@@ -387,17 +357,46 @@ describe("block HTML islands", () => {
 });
 
 describe("inline HTML islands", () => {
-  it("maps sup/sub/mark/tg-spoiler/tg-math/tg-emoji inside paragraphs", () => {
-    const blocks = blocksFor(
+  it.each<[string, string, string[], string[]]>([
+    [
+      "supported inline tags",
       'H<sub>2</sub>O E=mc<sup>2</sup> <mark>note</mark> <tg-spoiler>secret</tg-spoiler> <tg-math>E=mc^2</tg-math> <tg-emoji emoji-id="5368324170671202286">😀</tg-emoji>',
-    );
-    const serialized = JSON.stringify(blocks);
-    expect(serialized).toContain('"subscript"');
-    expect(serialized).toContain('"superscript"');
-    expect(serialized).toContain('"marked"');
-    expect(serialized).toContain('"spoiler"');
-    expect(serialized).toContain('"mathematical_expression"');
-    expect(serialized).toContain('"custom_emoji"');
-    expect(serialized).toContain("5368324170671202286");
+      [
+        '"subscript"',
+        '"superscript"',
+        '"marked"',
+        '"spoiler"',
+        '"mathematical_expression"',
+        '"custom_emoji"',
+        "5368324170671202286",
+      ],
+      [],
+    ],
+    [
+      "fragment hrefs as anchor links",
+      'go <a href="#top">back</a> and [also](#top)',
+      ['"anchor_link"', '"anchor_name":"top"'],
+      ['"url":"#top"'],
+    ],
+    [
+      "non-numeric emoji ids as alternative text",
+      '<tg-emoji emoji-id="not-numeric">😀</tg-emoji> hi',
+      ["😀"],
+      ['"custom_emoji"'],
+    ],
+    [
+      "unclosed tags as literal text",
+      "value is <sup>oops and more text",
+      ["<sup>oops"],
+      ['"superscript"'],
+    ],
+  ])("preserves %s", (_name, markdown, contains, excludes) => {
+    const serialized = JSON.stringify(blocksFor(markdown));
+    for (const text of contains) {
+      expect(serialized).toContain(text);
+    }
+    for (const text of excludes) {
+      expect(serialized).not.toContain(text);
+    }
   });
 });

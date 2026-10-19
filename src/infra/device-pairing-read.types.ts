@@ -17,6 +17,7 @@ export type DevicePairingReadCommand =
 export type DevicePairingBinding = { identity: string; generation?: string };
 export type DevicePairingBindingFact = {
   deviceId: string;
+  device: PairedDevice | null;
   binding: DevicePairingBinding | null;
 };
 export type DevicePairingNodeSnapshot = {

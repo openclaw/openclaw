@@ -75,14 +75,13 @@ export class WorkerInferenceProxyClient {
     if (this.disposed) {
       return Promise.reject(new Error("worker inference client disposed"));
     }
-    const snapshot = structuredClone(params);
-    const key = inferenceKey(snapshot);
+    const key = inferenceKey(params);
     if (this.operations.has(key)) {
       return Promise.reject(new Error("worker inference turn already active"));
     }
     return new Promise((resolve, reject) => {
       const operation: InferenceOperation = {
-        params: snapshot,
+        params,
         handlers,
         lastSeq: 0,
         resumeRequested: false,

@@ -17,6 +17,7 @@ import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { nodeHostConfigRuntimeEntrypoint } from "./config-runtime.test-support.js";
@@ -108,37 +109,21 @@ describe("node-host SQLite config", () => {
     await fixture.cleanup();
   });
 
-  function makeTestEnv(): { env: NodeJS.ProcessEnv; stateDir: string } {
+  function makeTestEnv() {
     const stateDir = fixture.createTempDir("openclaw-node-host-config-");
-    return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, stateDir };
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    return {
+      env,
+      stateDir,
+      configure: (overrides: Partial<Parameters<typeof configureNodeHost>[0]> = {}) =>
+        configureNodeHost({ fallbackDisplayName: "node", gateway: {}, env, ...overrides }),
+      load: () => loadNodeHostConfig(env),
+    };
   }
 
   it("round-trips the complete gateway snapshot across database reopen", async () => {
-    const { env, stateDir } = makeTestEnv();
-    const configured = await configureNodeHost({
-      nodeId: "node-custom",
-      displayName: "Build Node",
-      fallbackDisplayName: "fallback",
-      gateway: {
-        host: "gateway.local",
-        port: 18443,
-        tls: false,
-        tlsFingerprint: fixtureDigest,
-        contextPath: "/openclaw-gw",
-        cloudflareAccess: {
-          clientId: { source: "env", provider: "default", id: "CF_ACCESS_CLIENT_ID" },
-          clientSecret: {
-            source: "env",
-            provider: "default",
-            id: "CF_ACCESS_CLIENT_SECRET",
-          },
-        },
-      },
-      env,
-      nowMs: 1_234,
-    });
-
-    expect(configured).toEqual({
+    const { env, stateDir, configure, load } = makeTestEnv();
+    const expected = {
       version: 1,
       nodeId: "node-custom",
       displayName: "Build Node",
@@ -158,7 +143,15 @@ describe("node-host SQLite config", () => {
           },
         },
       },
+    } satisfies NodeHostConfig;
+    const configured = await configure({
+      nodeId: expected.nodeId,
+      displayName: expected.displayName,
+      gateway: structuredClone(expected.gateway),
+      fallbackDisplayName: "fallback",
+      nowMs: 1_234,
     });
+    expect(configured).toEqual(expected);
     expect(readConfigMachineState<NodeHostConfig>(NODE_HOST_CONFIG_KEY, { env })).toEqual(
       configured,
     );
@@ -167,67 +160,50 @@ describe("node-host SQLite config", () => {
     );
     expect(readConfigMachineState(NODE_HOST_CONFIG_KEY, { env })).not.toHaveProperty("token");
     await closeOpenClawStateDatabaseAsync();
-    await expect(loadNodeHostConfig(env)).resolves.toEqual(configured);
+    await expect(load()).resolves.toEqual(configured);
     await expect(fs.stat(path.join(stateDir, "node.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
 
   it("keeps installed-app sharing disabled by default and persists an explicit enable", async () => {
-    const { env } = makeTestEnv();
-    const initial = await configureNodeHost({
-      fallbackDisplayName: "node",
-      gateway: {},
-      env,
-      nowMs: 1,
-    });
+    const { configure, load } = makeTestEnv();
+    const initial = await configure({ nowMs: 1 });
     expect(initial.installedAppsSharing).toBe(false);
 
-    const enabled = await configureNodeHost({
-      fallbackDisplayName: "node",
-      gateway: {},
-      installedAppsSharing: true,
-      env,
-      nowMs: 2,
-    });
+    const enabled = await configure({ installedAppsSharing: true, nowMs: 2 });
     expect(enabled.installedAppsSharing).toBe(true);
     await closeOpenClawStateDatabaseAsync();
-    await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ installedAppsSharing: true });
+    await expect(load()).resolves.toMatchObject({ installedAppsSharing: true });
   });
 
   it("normalizes command restrictions and preserves them across reopen and endpoint updates", async () => {
-    const { env } = makeTestEnv();
-    await configureNodeHost({
-      fallbackDisplayName: "node",
-      gateway: {},
-      commands: [" fixture.read ", "fixture.list", "fixture.read"],
-      env,
-    });
+    const { configure, load } = makeTestEnv();
+    await configure({ commands: [" fixture.read ", "fixture.list", "fixture.read"] });
     await closeOpenClawStateDatabaseAsync();
-    await expect(loadNodeHostConfig(env)).resolves.toMatchObject({
+    await expect(load()).resolves.toMatchObject({
       commands: ["fixture.list", "fixture.read"],
     });
-    await expect(
-      configureNodeHost({ fallbackDisplayName: "node", gateway: { host: "new.example" }, env }),
-    ).resolves.toMatchObject({ commands: ["fixture.list", "fixture.read"] });
-    await configureNodeHost({ fallbackDisplayName: "node", gateway: {}, commands: [], env });
+    await expect(configure({ gateway: { host: "new.example" } })).resolves.toMatchObject({
+      commands: ["fixture.list", "fixture.read"],
+    });
+    await configure({ commands: [] });
     await closeOpenClawStateDatabaseAsync();
-    await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ commands: [] });
+    await expect(load()).resolves.toMatchObject({ commands: [] });
   });
 
   it("removes a saved command allowlist durably when all commands are selected", async () => {
     vi.mocked(logInfo).mockClear();
-    const { env } = makeTestEnv();
-    const params = { fallbackDisplayName: "node", gateway: {}, env };
-    const restricted = await configureNodeHost({ ...params, commands: ["fixture.read"] });
-    const cleared = await configureNodeHost({ ...params, allCommands: true });
+    const { env, configure, load } = makeTestEnv();
+    const restricted = await configure({ commands: ["fixture.read"] });
+    const cleared = await configure({ allCommands: true });
     expect(cleared).not.toHaveProperty("commands");
     expect(cleared.nodeId).toBe(restricted.nodeId);
     await closeOpenClawStateDatabaseAsync();
     expect(readConfigMachineState(NODE_HOST_CONFIG_KEY, { env })).not.toHaveProperty("commands");
-    await expect(loadNodeHostConfig(env)).resolves.not.toHaveProperty("commands");
-    await expect(configureNodeHost(params)).resolves.not.toHaveProperty("commands");
-    await configureNodeHost({ ...params, allCommands: true });
+    await expect(load()).resolves.not.toHaveProperty("commands");
+    await expect(configure()).resolves.not.toHaveProperty("commands");
+    await configure({ allCommands: true });
     expect(logInfo).toHaveBeenCalledExactlyOnceWith(
       "node-host: cleared saved command allowlist; advertising the full default command surface",
     );
@@ -248,6 +224,10 @@ describe("node-host SQLite config", () => {
 
   it("keeps the first committed implicit node id across processes", async ({ signal }) => {
     const { env, stateDir } = makeTestEnv();
+    // Finish exclusive schema initialization before racing the first node-config writes.
+    openOpenClawStateDatabase({ env });
+    expect(readConfigMachineState(NODE_HOST_CONFIG_KEY, { env })).toBeUndefined();
+    await closeOpenClawStateDatabaseAsync();
     const [first, second] = await fixture.run(() =>
       runConcurrentImplicitConfigures(stateDir, signal),
     );
@@ -292,19 +272,17 @@ describe("node-host SQLite config", () => {
   });
 
   it("rejects corrupt canonical rows instead of rotating identity", async () => {
-    const { env } = makeTestEnv();
+    const { env, configure, load } = makeTestEnv();
     writeConfigMachineState(NODE_HOST_CONFIG_KEY, { version: 2, nodeId: "stale-node" }, { env });
 
-    await expect(loadNodeHostConfig(env)).rejects.toThrow("unsupported version 2");
-    await expect(
-      configureNodeHost({ fallbackDisplayName: "node", gateway: {}, env }),
-    ).rejects.toThrow("unsupported version 2");
+    await expect(load()).rejects.toThrow("unsupported version 2");
+    await expect(configure()).rejects.toThrow("unsupported version 2");
   });
 
   it.each(["source", "claim", "dangling-source-symlink"] as const)(
     "blocks runtime while retired state remains: %s",
     async (kind) => {
-      const { env, stateDir } = makeTestEnv();
+      const { stateDir, configure, load } = makeTestEnv();
       const sourcePath = path.join(stateDir, "node.json");
       const claimPath = `${sourcePath}.doctor-importing`;
       if (kind === "source") {
@@ -315,10 +293,8 @@ describe("node-host SQLite config", () => {
         await fs.symlink(path.join(stateDir, "missing-node.json"), sourcePath);
       }
 
-      await expect(loadNodeHostConfig(env)).rejects.toThrow("openclaw doctor --fix");
-      await expect(
-        configureNodeHost({ fallbackDisplayName: "node", gateway: {}, env }),
-      ).rejects.toThrow("openclaw doctor --fix");
+      await expect(load()).rejects.toThrow("openclaw doctor --fix");
+      await expect(configure()).rejects.toThrow("openclaw doctor --fix");
     },
   );
 });

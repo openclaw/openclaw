@@ -10,7 +10,11 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const verifiedAt = Date.parse("2026-10-11T12:00:00Z");
-const proof = { verifiedAt, facts: { readiness: true, schemaVersion: 20 } };
+const proof = {
+  schemaIdentity: "state:20",
+  verifiedAt,
+  facts: { readiness: true, schemaVersion: 20 },
+};
 
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(verifiedAt);
@@ -24,8 +28,7 @@ function fixture() {
   // The seal's file-state contract does not require a native SQLite connection.
   fs.writeFileSync(pathname, "synthetic database bytes");
   const stat = () => fs.statSync(pathname, { bigint: true });
-  const read = (schemaIdentity = "state:20") =>
-    readSqliteCleanCloseSeal(pathname, schemaIdentity, stat());
+  const read = () => readSqliteCleanCloseSeal(pathname, stat());
   expect(writeSqliteCleanCloseSeal(pathname, "state:20", stat(), proof)).toBe(true);
   return { pathname, stat, read };
 }
@@ -80,9 +83,9 @@ describe("SQLite clean-close seals", () => {
     expect(fs.existsSync(`${pathname}.seal`)).toBe(false);
   });
 
-  it("requires the current schema identity and periodic full verification", () => {
+  it("returns the identity for admission and requires periodic full verification", () => {
     const { read } = fixture();
-    expect(read("state:21")).toBeUndefined();
+    expect(read()?.schemaIdentity).toBe("state:20");
     vi.mocked(Date.now).mockReturnValue(verifiedAt + 7 * 24 * 60 * 60 * 1_000);
     expect(read()).toEqual(proof);
     vi.mocked(Date.now).mockReturnValue(verifiedAt + 7 * 24 * 60 * 60 * 1_000 + 1);

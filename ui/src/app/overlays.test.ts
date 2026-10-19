@@ -13,6 +13,7 @@ import {
   approval,
   client,
   createGatewayHarness,
+  createOverlayHarness,
   flushMicrotasks,
   registerOverlayPairingAccessTests,
   type RequestFn,
@@ -137,6 +138,9 @@ describe("Control UI refresh nudge", () => {
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
 
     harness.update({ phase: "reconnecting", hello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+    harness.update({ phase: "offline", hello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
     harness.update({ client: null, phase: "stopped", hello: null });
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
 
@@ -149,9 +153,7 @@ describe("application approval overlays", () => {
     const request = vi.fn<RequestFn>((method) =>
       Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
     );
-    const harness = createGatewayHarness(client(request));
-    harness.update({ hello: null });
-    const overlays = createApplicationOverlays(harness.gateway);
+    const { harness, overlays } = createOverlayHarness(request, null);
     await flushMicrotasks();
 
     harness.emitApproval("approval-review-only", 1_000);
@@ -178,13 +180,7 @@ describe("application approval overlays", () => {
     const request = vi.fn<RequestFn>((method) =>
       Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
     );
-    const harness = createGatewayHarness(client(request));
-    harness.update({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.approvals"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    const overlays = createApplicationOverlays(harness.gateway);
+    const { harness, overlays } = createOverlayHarness(request, ["operator.approvals"]);
     await flushMicrotasks();
     harness.emitApproval("approval-stale-action", 1_000);
 
@@ -287,21 +283,11 @@ describe("application approval overlays", () => {
     const request = vi.fn<RequestFn>((method) =>
       Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
     );
-    const harness = createGatewayHarness(client(request));
-    harness.update({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.approvals"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    const overlays = createApplicationOverlays(harness.gateway);
+    const { harness, overlays } = createOverlayHarness(request, ["operator.approvals"]);
     await flushMicrotasks();
     harness.emitApproval("approval-retired", 1_000);
 
-    harness.update({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.read"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
+    harness.setScopes(["operator.read"]);
     await overlays.decideApproval("allow-once", "approval-retired");
 
     expect(overlays.snapshot.approvalQueue).toEqual([]);
@@ -320,27 +306,13 @@ describe("application approval overlays", () => {
       resolutionCount += 1;
       return resolutionCount === 1 ? staleResolution.promise : currentResolution.promise;
     });
-    const harness = createGatewayHarness(client(request));
-    harness.update({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.approvals"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    const overlays = createApplicationOverlays(harness.gateway);
+    const { harness, overlays } = createOverlayHarness(request, ["operator.approvals"]);
     await flushMicrotasks();
     harness.emitApproval("approval-stale", 1_000);
     const staleDecision = overlays.decideApproval("allow-once");
 
-    harness.update({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.read"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    harness.update({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.approvals"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
+    harness.setScopes(["operator.read"]);
+    harness.setScopes(["operator.approvals"]);
     await flushMicrotasks();
     harness.emitApproval("approval-current", 2_000);
     const currentDecision = overlays.decideApproval("deny");
@@ -368,13 +340,7 @@ describe("application approval overlays", () => {
       resolutionCount += 1;
       return resolutionCount === 1 ? staleResolution.promise : currentResolution.promise;
     });
-    const harness = createGatewayHarness(client(request));
-    harness.update({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.approvals"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    const overlays = createApplicationOverlays(harness.gateway);
+    const { harness, overlays } = createOverlayHarness(request, ["operator.approvals"]);
     await flushMicrotasks();
     harness.emitApproval("approval-stale-grant", 1_000);
     const staleDecision = overlays.decideApproval("allow-once", "approval-stale-grant");
@@ -388,11 +354,7 @@ describe("application approval overlays", () => {
     expect(overlays.snapshot.approvalErrors.get("approval-stale-grant")).toBe(
       "Review only. Sign in with approval access to record a decision.",
     );
-    harness.update({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.approvals"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
+    harness.setScopes(["operator.approvals"]);
     harness.emitApproval("approval-current-grant", 2_000);
     const currentDecision = overlays.decideApproval("deny", "approval-current-grant");
     expect(overlays.snapshot.approvalCanGrant).toBe(true);
@@ -421,8 +383,7 @@ describe("application approval overlays", () => {
     const request = vi.fn<RequestFn>(async (method) =>
       method.endsWith(".list") ? [] : { ok: true },
     );
-    const harness = createGatewayHarness(client(request));
-    const overlays = createApplicationOverlays(harness.gateway);
+    const { harness, overlays } = createOverlayHarness(request);
 
     harness.emitSystemApproval("system-agent:1", 1_000);
     await overlays.decideApproval("allow-once");
@@ -518,8 +479,7 @@ describe("application approval overlays", () => {
         ? Promise.reject(new Error("gateway unavailable"))
         : Promise.resolve({ ok: true });
     });
-    const harness = createGatewayHarness(client(request));
-    const overlays = createApplicationOverlays(harness.gateway);
+    const { overlays } = createOverlayHarness(request);
     const projectedApproval = {
       ...approval("approval-projected", 1_000),
       kind: "exec" as const,
@@ -542,8 +502,7 @@ describe("application approval overlays", () => {
     const request = vi.fn<RequestFn>((method) =>
       Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
     );
-    const harness = createGatewayHarness(client(request));
-    const overlays = createApplicationOverlays(harness.gateway);
+    const { harness, overlays } = createOverlayHarness(request);
     harness.emitApproval("approval-disconnected", 1_000);
 
     // The rendered modal can dispatch its click before Lit consumes the
@@ -569,8 +528,7 @@ describe("application approval overlays", () => {
       resolveCalls += 1;
       return resolveCalls === 1 ? firstResolve.promise : secondResolve.promise;
     });
-    const harness = createGatewayHarness(client(request));
-    const overlays = createApplicationOverlays(harness.gateway);
+    const { harness, overlays } = createOverlayHarness(request);
 
     harness.emitApproval("approval-a", 1_000);
     harness.emitApproval("approval-b", 2_000);
@@ -655,8 +613,7 @@ describe("application approval overlays", () => {
     const request = vi.fn<RequestFn>((method) =>
       method.endsWith(".list") ? Promise.resolve([]) : resolveAttempt.promise,
     );
-    const harness = createGatewayHarness(client(request));
-    const overlays = createApplicationOverlays(harness.gateway);
+    const { harness, overlays } = createOverlayHarness(request);
 
     harness.emitApproval("approval-active", 1_000);
     const decision = overlays.decideApproval("allow-once");
@@ -677,9 +634,7 @@ describe("application update overlays", () => {
       const request = vi.fn<RequestFn>(() => Promise.resolve({ ok: true }));
       const drainConfigWrites = vi.fn(async () => undefined);
       const harness = createGatewayHarness(client(request));
-      harness.update({
-        hello: { auth: { role: "operator", scopes } } as ApplicationGatewaySnapshot["hello"],
-      });
+      harness.setScopes(scopes);
       const overlays = createApplicationOverlays(harness.gateway, { drainConfigWrites });
 
       await overlays.runUpdate();

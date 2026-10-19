@@ -52,7 +52,6 @@ export async function editForumTopicTelegram(
         ...(trimmedIconCustomEmojiId ? { icon_custom_emoji_id: trimmedIconCustomEmojiId } : {}),
       };
       await request(() => api.editForumTopic(chatId, messageThreadId, payload), "editForumTopic");
-      logVerbose(`[telegram] Edited forum topic ${messageThreadId} in chat ${chatId}`);
       return {
         ok: true as const,
         chatId,

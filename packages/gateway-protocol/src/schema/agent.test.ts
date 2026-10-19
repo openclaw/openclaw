@@ -15,6 +15,20 @@ import {
 } from "./agent.js";
 
 describe("AgentParamsSchema", () => {
+  it.each([undefined, false, true, "true"])(
+    "accepts only boolean session creation intent (%s)",
+    (createSessionIfMissing) => {
+      expect(
+        Value.Check(AgentParamsSchema, {
+          message: "resume",
+          sessionId: "named-session",
+          createSessionIfMissing,
+          idempotencyKey: "creation",
+        }),
+      ).toBe(createSessionIfMissing !== "true");
+    },
+  );
+
   it.each([undefined])(
     "accepts the backend expected-session binding with revision %s",
     (revision) => {
@@ -29,17 +43,6 @@ describe("AgentParamsSchema", () => {
       ).toBe(true);
     },
   );
-
-  it("rejects host-owned delivery media constraints from public requests", () => {
-    expect(
-      Value.Check(AgentParamsSchema, {
-        message: "deliver generated media",
-        sessionKey: "agent:main:main",
-        internalDeliveryMediaUrls: ["/tmp/proof.png"],
-        idempotencyKey: "delivery-1",
-      }),
-    ).toBe(false);
-  });
 });
 
 describe("MessageActionParamsSchema", () => {

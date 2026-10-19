@@ -11,11 +11,11 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
+import { projectGateway, projectAgentSelection } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../../pages/config/settings-targets.ts";
-import { GitHubIdentityController } from "./github-identity-controller.ts";
 import {
   GitHubConnectionError,
   GitHubConnectionSetup,
@@ -23,42 +23,59 @@ import {
   GitHubHealth,
   GitHubUnloadedStatus,
 } from "./github-identity-view.tsx";
+import { createGitHubIdentity } from "./github-identity.ts";
+
+function access(snapshot: ApplicationGatewaySnapshot) {
+  const profileId = snapshot.phase === "connected" ? (snapshot.selfUser?.id ?? null) : null;
+  // Access comes from the authenticated connection, never a status RPC error.
+  const canRead =
+    snapshot.phase === "connected" &&
+    Boolean(snapshot.hello?.auth) &&
+    hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+  return {
+    profileId,
+    canRead,
+    canAdmin: canRead && hasOperatorAdminAccess(snapshot.hello?.auth ?? null),
+  };
+}
 
 /** Profile credentials have their own read-scoped lifecycle, independent of users.self edits. */
-function GitHubConnectionsContent() {
+export function GitHubConnections() {
   const context = useApplication();
-  const [revision, setRevision] = createSignal(0);
+  const gateway = projectGateway(context.gateway);
+  const agents = projectAgents(context.agents);
+  const selection = projectAgentSelection(context.settingsAgentSelection);
   const [purpose, setPurpose] = createSignal<"personal" | "system">("personal");
   const [setupOpen, setSetupOpen] = createSignal(false);
   let snapshot: ApplicationGatewaySnapshot | null = null;
   let clientRevision = 0;
   let canRead = false;
   let canAdmin = false;
-  let profileId: string | null = null;
-  const requestUpdate = () => setRevision((value) => value + 1);
+  // Gateway snapshots may mutate in place; retain the previous profile transition fact.
+  let observedProfileId: string | null = null;
   const authorizationSucceeded = () => setSetupOpen(false);
-  const personal = new GitHubIdentityController({ requestUpdate, authorizationSucceeded });
-  const system = new GitHubIdentityController({
-    requestUpdate,
+  const personal = createGitHubIdentity({ authorizationSucceeded });
+  const system = createGitHubIdentity({
     authorizationSucceeded,
     runExternalMutation: (task, options) =>
       context.runtimeConfig.runExternalMutation(task, options),
   });
 
-  const syncControllers = () => {
+  const syncIdentities = () => {
     if (!snapshot) {
       return;
     }
     const common = {
       client: snapshot.client,
-      connected: snapshot.phase === "connected",
+      connected: snapshot.phase === "connected" && snapshot.selfUser !== undefined,
+      permissionsReady: snapshot.phase === "connected" && Boolean(snapshot.hello),
       clientRevision,
     };
     personal.sync({
       ...common,
-      target: profileId ? { kind: "personal", profileId } : null,
-      statusReadable: canRead && profileId !== null,
-      authorizable: canRead && profileId !== null,
+      target: observedProfileId ? { kind: "personal", profileId: observedProfileId } : null,
+      statusReadable: canRead && observedProfileId !== null,
+      authorizable: canRead && observedProfileId !== null,
       configurable: false,
     });
     const agentId = context.settingsAgentSelection.state.selectedId;
@@ -68,6 +85,7 @@ function GitHubConnectionsContent() {
         ? {
             kind: "shared",
             scope: "system",
+            profileId: observedProfileId,
             agentId,
             config: currentConfigObject(context.runtimeConfig.state),
           }
@@ -76,35 +94,45 @@ function GitHubConnectionsContent() {
       authorizable: canAdmin,
       configurable: canAdmin,
     });
-    if (personal.statusReadable && !personal.personal && !personal.loading && !personal.error) {
-      void personal.verify();
-    }
-    if (agentId && canAdmin && !system.status && !system.loading && !system.error) {
-      void system.verify();
-    }
-    requestUpdate();
+    personal.ensureVerified();
+    system.ensureVerified();
   };
   const applySnapshot = (next: ApplicationGatewaySnapshot) => {
+    const identityChanged =
+      !snapshot ||
+      snapshot.client !== next.client ||
+      (next.phase === "connected" &&
+        next.selfUser !== undefined &&
+        observedProfileId !== (next.selfUser?.id ?? null));
     const changed =
       !snapshot ||
       snapshot.client !== next.client ||
       snapshot.phase !== next.phase ||
       snapshot.hello !== next.hello ||
-      profileId !== (next.selfUser?.id ?? null);
+      (snapshot.selfUser === undefined) !== (next.selfUser === undefined) ||
+      (next.selfUser !== undefined && observedProfileId !== (next.selfUser?.id ?? null));
     snapshot = next;
-    profileId = next.phase === "connected" ? (next.selfUser?.id ?? null) : null;
+    observedProfileId =
+      (next.phase === "connected" && next.selfUser !== undefined) || identityChanged
+        ? (next.selfUser?.id ?? null)
+        : observedProfileId;
     // Access comes from the authenticated connection, never an error from users.github.status.
-    canRead =
-      next.phase === "connected" &&
-      Boolean(next.hello?.auth) &&
-      hasOperatorReadAccess(next.hello?.auth ?? null);
-    canAdmin = canRead && hasOperatorAdminAccess(next.hello?.auth ?? null);
+    const previousCanRead = canRead;
+    const previousCanAdmin = canAdmin;
+    if (next.phase === "connected" || identityChanged) {
+      canRead = Boolean(next.hello?.auth) && hasOperatorReadAccess(next.hello?.auth ?? null);
+      canAdmin = canRead && hasOperatorAdminAccess(next.hello?.auth ?? null);
+    }
     if (changed) {
       clientRevision += 1;
-      setSetupOpen(false);
-      setPurpose(profileId ? "personal" : "system");
     }
-    syncControllers();
+    const readAccessLost = previousCanRead && !canRead;
+    const adminAccessLost = previousCanAdmin && !canAdmin;
+    if (identityChanged || readAccessLost || adminAccessLost) {
+      setSetupOpen(false);
+      setPurpose(observedProfileId ? "personal" : "system");
+    }
+    syncIdentities();
     if (canAdmin) {
       void context.runtimeConfig.ensureLoaded();
     }
@@ -112,25 +140,21 @@ function GitHubConnectionsContent() {
   onSettled(() => {
     const subscriptions = [
       context.gateway.subscribe(applySnapshot),
-      context.agents.subscribe(syncControllers),
-      context.settingsAgentSelection.subscribe(syncControllers),
-      context.runtimeConfig.subscribe(syncControllers),
+      context.agents.subscribe(syncIdentities),
+      context.settingsAgentSelection.subscribe(syncIdentities),
+      context.runtimeConfig.subscribe(syncIdentities),
     ];
     applySnapshot(context.gateway.snapshot);
-    return () => {
-      for (const unsubscribe of subscriptions) {
-        unsubscribe();
-      }
-      personal.dispose();
-      system.dispose();
-    };
+    return () => subscriptions.forEach((unsubscribe) => unsubscribe());
   });
 
   const view = createMemo(() => {
-    revision();
-    const account = personal.personal;
-    const agentId = context.settingsAgentSelection.state.selectedId;
-    const agent = context.agents.state.agentsList?.agents?.find((entry) => entry.id === agentId);
+    const current = gateway.read().snapshot;
+    const personalState = personal.read();
+    const systemState = system.read();
+    const account = personalState.personal;
+    const agentId = selection.read().state.selectedId;
+    const agent = agents.read().agentsList?.agents?.find((entry) => entry.id === agentId);
     const connected = account?.state === "connected";
     const reconnectRequired =
       account?.state === "unavailable" ||
@@ -142,20 +166,23 @@ function GitHubConnectionsContent() {
       agent,
       connected,
       reconnectRequired,
-      profileId,
+      profileId: observedProfileId,
       canRead,
       canAdmin,
-      systemIdentity: system.status?.selected.identity ?? personal.system,
-      effective: system.status?.effective ?? null,
+      systemIdentity: systemState.status?.selected.identity ?? personalState.system,
+      effective: systemState.status?.effective ?? null,
       locked:
-        personal.loading ||
-        system.loading ||
-        personal.authorizationActive ||
-        system.authorizationActive ||
-        personal.busy ||
-        system.busy,
-      showSetup: setupOpen() || personal.authorizationActive || system.authorizationActive,
-      personalLabel: !profileId
+        current.phase !== "connected" ||
+        current.selfUser === undefined ||
+        personalState.loading ||
+        systemState.loading ||
+        personalState.authorizationActive ||
+        systemState.authorizationActive ||
+        personalState.busy ||
+        systemState.busy,
+      showSetup:
+        setupOpen() || personalState.authorizationActive || systemState.authorizationActive,
+      personalLabel: !observedProfileId
         ? t("githubConnections.signInRequired")
         : reconnectRequired
           ? t("githubConnections.reconnectRequired")
@@ -164,20 +191,17 @@ function GitHubConnectionsContent() {
             : t("githubConnections.disconnected"),
     };
   });
-  const personalView = () => {
-    revision();
-    return personal;
-  };
-  const systemView = () => {
-    revision();
-    return system;
-  };
-  const active = () => {
-    revision();
-    return purpose() === "personal" ? personal : system;
-  };
+  const personalView = personal.read;
+  const systemView = system.read;
+  const active = () => (purpose() === "personal" ? personal : system);
   const openSetup = (next: "personal" | "system") => {
-    if (view().locked || (next === "personal" ? !profileId || !canRead : !canAdmin)) {
+    const currentAccess = access(context.gateway.snapshot);
+    if (
+      view().locked ||
+      (next === "personal"
+        ? !currentAccess.profileId || !currentAccess.canRead
+        : !currentAccess.canAdmin)
+    ) {
       return;
     }
     setPurpose(next);
@@ -188,244 +212,246 @@ function GitHubConnectionsContent() {
     void system.verify();
   };
   return (
-    <div id={PROFILE_SETTINGS_TARGET_IDS.githubConnections}>
-      <SettingsSection
-        title={t("githubConnections.title")}
-        description={t("githubConnections.description")}
-        actions={
-          view().canRead && (view().profileId || view().canAdmin) ? (
-            <>
-              <button
-                class="btn btn--sm"
-                disabled={view().locked || (!view().profileId && !systemView().status)}
-                onClick={() => openSetup(profileId ? "personal" : "system")}
-              >
-                {t("githubConnections.manage")}
-              </button>
-              <button class="btn btn--sm" disabled={view().locked} onClick={verify}>
-                {t("agentTools.githubVerify")}
-              </button>
-            </>
-          ) : undefined
-        }
-      >
-        <div data-github-connection="personal">
-          <SettingsRow
-            title={t("githubConnections.mine")}
-            description={
-              view().profileId ? (
-                <>
-                  {view().account?.account ? `@${view().account?.account?.login} · ` : ""}
-                  {t("githubConnections.personalDescription")}
-                </>
-              ) : (
-                t("githubConnections.unboundDescription")
-              )
-            }
-            control={
+    <openclaw-github-connections>
+      <div id={PROFILE_SETTINGS_TARGET_IDS.githubConnections}>
+        <SettingsSection
+          title={t("githubConnections.title")}
+          description={t("githubConnections.description")}
+          actions={
+            view().canRead && (view().profileId || view().canAdmin) ? (
               <>
-                {view().profileId && !view().account ? (
-                  <GitHubUnloadedStatus request={personalView()} />
-                ) : (
-                  <SettingsStatus
-                    kind={view().reconnectRequired ? "warn" : view().connected ? "ok" : "muted"}
-                    label={view().personalLabel}
-                  />
-                )}
-                {view().profileId && view().canRead && view().account ? (
-                  <button
-                    class="btn btn--sm"
-                    disabled={view().locked}
-                    onClick={() => openSetup("personal")}
-                  >
-                    {t(
-                      view().connected
-                        ? "githubConnections.changeMine"
-                        : "githubConnections.connectMine",
-                    )}
-                  </button>
-                ) : undefined}
+                <button
+                  class="btn btn--sm"
+                  disabled={view().locked || (!view().profileId && !systemView().status)}
+                  onClick={() => openSetup(view().profileId ? "personal" : "system")}
+                >
+                  {t("githubConnections.manage")}
+                </button>
+                <button class="btn btn--sm" disabled={view().locked} onClick={verify}>
+                  {t("agentTools.githubVerify")}
+                </button>
               </>
-            }
-          />
-        </div>
-        <div data-github-connection="system">
-          <SettingsRow
-            title={t("githubConnections.system")}
-            description={
-              <>
-                {view().systemIdentity?.account
-                  ? `@${view().systemIdentity?.account?.login} · `
-                  : ""}
-                {t("githubConnections.systemDescription")}
-              </>
-            }
-            control={
-              <>
-                <GitHubHealth
-                  identity={view().systemIdentity}
-                  request={{
-                    loading: systemView().loading || personalView().loading,
-                    error: systemView().error ?? personalView().error,
-                  }}
-                />
-                {view().canAdmin ? (
-                  <button
-                    class="btn btn--sm"
-                    disabled={view().locked || !systemView().status}
-                    onClick={() => openSetup("system")}
-                  >
-                    {t("githubConnections.changeSystem")}
-                  </button>
-                ) : (
-                  <SettingsValue value={t("githubConnections.adminManaged")} />
-                )}
-              </>
-            }
-          />
-        </div>
-        {view().canAdmin && view().agentId ? (
-          <div data-github-connection="agent">
-            <SettingsRow
-              title={t("githubConnections.agentFor", {
-                agent: view().agent?.identity?.name ?? view().agent?.name ?? view().agentId!,
-              })}
-              description={
-                <>
-                  {view().effective?.account ? `@${view().effective?.account?.login} · ` : ""}
-                  {view().effective
-                    ? t(
-                        view().effective?.source === "agent-override"
-                          ? "githubConnections.agentOverride"
-                          : "githubConnections.system",
-                      )
-                    : ""}
-                  <br />
-                  {t("githubConnections.agentDescription")}
-                </>
-              }
-              control={
-                <>
-                  <GitHubHealth identity={view().effective} request={systemView()} />
-                  <button
-                    class="btn btn--sm"
-                    onClick={() =>
-                      context.navigate("agents", {
-                        pathname: pathForAgentPanel(view().agentId!, "tools", context.basePath),
-                      })
-                    }
-                  >
-                    {t("githubConnections.viewAgent")}
-                  </button>
-                </>
-              }
-            />
-          </div>
-        ) : undefined}
-        <GitHubConnectionError
-          error={personalView().error ?? systemView().error}
-          control={
-            <button class="btn btn--sm" disabled={view().locked} onClick={verify}>
-              {t("common.retry")}
-            </button>
+            ) : undefined
           }
-        />
-        {view().showSetup ? (
-          <div class="settings-subrows" data-github-setup>
+        >
+          <div data-github-connection="personal">
             <SettingsRow
-              title={t("githubConnections.purpose")}
-              control={
-                view().profileId && view().canAdmin && systemView().status ? (
-                  <SettingsSegmented
-                    value={purpose()}
-                    options={[
-                      { value: "personal", label: t("githubConnections.forMe") },
-                      { value: "system", label: t("githubConnections.forSystem") },
-                    ]}
-                    disabled={view().locked}
-                    ariaLabel={t("githubConnections.purpose")}
-                    onChange={openSetup}
-                  />
+              title={t("githubConnections.mine")}
+              description={
+                view().profileId ? (
+                  <>
+                    {view().account?.account ? `@${view().account?.account?.login} · ` : ""}
+                    {t("githubConnections.personalDescription")}
+                  </>
                 ) : (
-                  <SettingsValue
-                    value={t(
-                      purpose() === "personal"
-                        ? "githubConnections.forMe"
-                        : "githubConnections.forSystem",
-                    )}
-                  />
+                  t("githubConnections.unboundDescription")
                 )
               }
+              control={
+                <>
+                  {view().profileId && !view().account ? (
+                    <GitHubUnloadedStatus request={personalView()} />
+                  ) : (
+                    <SettingsStatus
+                      kind={view().reconnectRequired ? "warn" : view().connected ? "ok" : "muted"}
+                      label={view().personalLabel}
+                    />
+                  )}
+                  {view().profileId && view().canRead && view().account ? (
+                    <button
+                      class="btn btn--sm"
+                      disabled={view().locked}
+                      onClick={() => openSetup("personal")}
+                    >
+                      {t(
+                        view().connected
+                          ? "githubConnections.changeMine"
+                          : "githubConnections.connectMine",
+                      )}
+                    </button>
+                  ) : undefined}
+                </>
+              }
             />
-            <GitHubConnectionSetup controller={active()} />
-            {!view().locked ? (
-              <SettingsRow
-                title={t("githubConnections.purposeHint")}
-                control={
-                  <button
-                    class="btn btn--sm"
-                    onClick={() => {
-                      setSetupOpen(false);
-                      active().hidePatFallback();
+          </div>
+          <div data-github-connection="system">
+            <SettingsRow
+              title={t("githubConnections.system")}
+              description={
+                <>
+                  {view().systemIdentity?.account
+                    ? `@${view().systemIdentity?.account?.login} · `
+                    : ""}
+                  {t("githubConnections.systemDescription")}
+                </>
+              }
+              control={
+                <>
+                  <GitHubHealth
+                    identity={view().systemIdentity}
+                    request={{
+                      loading: systemView().loading || personalView().loading,
+                      error: systemView().error ?? personalView().error,
                     }}
-                  >
-                    {t("common.close")}
-                  </button>
+                  />
+                  {view().canAdmin ? (
+                    <button
+                      class="btn btn--sm"
+                      disabled={view().locked || !systemView().status}
+                      onClick={() => openSetup("system")}
+                    >
+                      {t("githubConnections.changeSystem")}
+                    </button>
+                  ) : (
+                    <SettingsValue value={t("githubConnections.adminManaged")} />
+                  )}
+                </>
+              }
+            />
+          </div>
+          {view().canAdmin && view().agentId ? (
+            <div data-github-connection="agent">
+              <SettingsRow
+                title={t("githubConnections.agentFor", {
+                  agent: view().agent?.identity?.name ?? view().agent?.name ?? view().agentId!,
+                })}
+                description={
+                  <>
+                    {view().effective?.account ? `@${view().effective?.account?.login} · ` : ""}
+                    {view().effective
+                      ? t(
+                          view().effective?.source === "agent-override"
+                            ? "githubConnections.agentOverride"
+                            : "githubConnections.system",
+                        )
+                      : ""}
+                    <br />
+                    {t("githubConnections.agentDescription")}
+                  </>
+                }
+                control={
+                  <>
+                    <GitHubHealth identity={view().effective} request={systemView()} />
+                    <button
+                      class="btn btn--sm"
+                      onClick={() =>
+                        context.navigate("agents", {
+                          pathname: pathForAgentPanel(view().agentId!, "tools", context.basePath),
+                        })
+                      }
+                    >
+                      {t("githubConnections.viewAgent")}
+                    </button>
+                  </>
                 }
               />
-            ) : undefined}
-          </div>
-        ) : undefined}
-        <details class="settings-row settings-row--stacked">
-          <summary class="settings-row__title">{t("githubConnections.usage")}</summary>
-          <div class="settings-row__desc">{t("githubConnections.usageDescription")}</div>
-          <GitHubDetails identity={view().systemIdentity} />
-        </details>
-        {view().canAdmin && systemView().status?.selected.configured ? (
-          <SettingsRow
-            title={t("agentTools.githubUseNativeNewRuns")}
-            description={t("agentTools.githubSystemMutationHint")}
+            </div>
+          ) : undefined}
+          <GitHubConnectionError
+            error={personalView().error ?? systemView().error}
             control={
-              <button
-                class="btn btn--sm"
-                disabled={view().locked}
-                onClick={() => void system.inherit()}
-              >
-                {t("agentTools.githubUseNativeNewRuns")}
+              <button class="btn btn--sm" disabled={view().locked} onClick={verify}>
+                {t("common.retry")}
               </button>
             }
           />
-        ) : undefined}
-      </SettingsSection>
-      {view().profileId &&
-      view().canRead &&
-      view().account &&
-      view().account?.state !== "disconnected" ? (
-        <SettingsSection danger>
-          <SettingsRow
-            title={t("githubConnections.disconnectMine")}
-            description={t("githubConnections.disconnectDescription")}
-            control={
-              <button
-                class="btn btn--sm"
-                disabled={view().locked}
-                onClick={() => void personal.disconnect()}
-              >
-                {t("githubConnections.disconnectMine")}
-              </button>
-            }
-          />
+          {view().showSetup ? (
+            <div class="settings-subrows" data-github-setup>
+              <SettingsRow
+                title={t("githubConnections.purpose")}
+                control={
+                  view().profileId && view().canAdmin && systemView().status ? (
+                    <SettingsSegmented
+                      value={purpose()}
+                      options={[
+                        { value: "personal", label: t("githubConnections.forMe") },
+                        { value: "system", label: t("githubConnections.forSystem") },
+                      ]}
+                      disabled={view().locked}
+                      ariaLabel={t("githubConnections.purpose")}
+                      onChange={openSetup}
+                    />
+                  ) : (
+                    <SettingsValue
+                      value={t(
+                        purpose() === "personal"
+                          ? "githubConnections.forMe"
+                          : "githubConnections.forSystem",
+                      )}
+                    />
+                  )
+                }
+              />
+              <GitHubConnectionSetup identity={active()} />
+              {!view().locked ? (
+                <SettingsRow
+                  title={t("githubConnections.purposeHint")}
+                  control={
+                    <button
+                      class="btn btn--sm"
+                      onClick={() => {
+                        setSetupOpen(false);
+                        active().hidePatFallback();
+                      }}
+                    >
+                      {t("common.close")}
+                    </button>
+                  }
+                />
+              ) : undefined}
+            </div>
+          ) : undefined}
+          <details class="settings-row settings-row--stacked">
+            <summary class="settings-row__title">{t("githubConnections.usage")}</summary>
+            <div class="settings-row__desc">{t("githubConnections.usageDescription")}</div>
+            <GitHubDetails identity={view().systemIdentity} />
+          </details>
+          {view().canAdmin && systemView().status?.selected.configured ? (
+            <SettingsRow
+              title={t("agentTools.githubUseNativeNewRuns")}
+              description={t("agentTools.githubSystemMutationHint")}
+              control={
+                <button
+                  class="btn btn--sm"
+                  disabled={view().locked}
+                  onClick={() => void system.inherit()}
+                >
+                  {t("agentTools.githubUseNativeNewRuns")}
+                </button>
+              }
+            />
+          ) : undefined}
         </SettingsSection>
-      ) : undefined}
-    </div>
+        {view().profileId &&
+        view().canRead &&
+        view().account &&
+        view().account?.state !== "disconnected" ? (
+          <SettingsSection danger>
+            <SettingsRow
+              title={t("githubConnections.disconnectMine")}
+              description={t("githubConnections.disconnectDescription")}
+              control={
+                <button
+                  class="btn btn--sm"
+                  disabled={view().locked}
+                  onClick={() => void personal.disconnect()}
+                >
+                  {t("githubConnections.disconnectMine")}
+                </button>
+              }
+            />
+          </SettingsSection>
+        ) : undefined}
+      </div>
+    </openclaw-github-connections>
   );
 }
 
-export const GitHubConnections = defineSolidBridge(
-  "openclaw-github-connections",
-  () => <GitHubConnectionsContent />,
-  {
-    properties: {},
-  },
-);
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-github-connections": HTMLAttributes<HTMLElement>;
+    }
+  }
+}
 registerGitHubEnglish();

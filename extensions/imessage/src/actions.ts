@@ -32,8 +32,11 @@ import {
   rememberIMessageReplyCache,
   type IMessageChatContext,
 } from "./monitor-reply-cache.js";
-import { imessageRpcSupportsMethod } from "./private-api-status.js";
-import { getCachedIMessagePrivateApiStatus, probeIMessagePrivateApi } from "./probe.js";
+import {
+  getCachedIMessagePrivateApiStatus,
+  imessageRpcSupportsMethod,
+} from "./private-api-status.js";
+import { probeIMessagePrivateApi } from "./probe.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
 import { parseIMessageTarget, type IMessageService, type IMessageTarget } from "./targets.js";
 
@@ -254,7 +257,7 @@ function decodeBase64Buffer(params: Record<string, unknown>, action: string): Ui
   if (!canonical) {
     throw new Error(`iMessage ${action} buffer must be valid base64.`);
   }
-  return Uint8Array.from(Buffer.from(canonical, "base64"));
+  return Buffer.from(canonical, "base64");
 }
 
 // Hydration must admit raw paths before this adapter receives attachment bytes.

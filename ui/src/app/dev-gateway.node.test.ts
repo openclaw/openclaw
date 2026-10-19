@@ -358,9 +358,15 @@ describe("configured UI development Gateway", () => {
 
   it("does not enable the transport in bundled builds or unconfigured development", () => {
     vi.stubEnv("OPENCLAW_UI_DEV_GATEWAY_URL", "http://localhost:18789");
-    expect(controlUiViteConfig({ command: "build" }).server?.proxy).toBeUndefined();
+    vi.stubEnv("NODE_ENV", "development");
+    const bundled = controlUiViteConfig({ command: "build" });
+    expect(bundled.server?.proxy).toBeUndefined();
+    expect(bundled.define?.["globalThis.OPENCLAW_UI_DEV_SERVER"]).toBe("false");
     vi.stubEnv("OPENCLAW_UI_DEV_GATEWAY_URL", "");
-    expect(controlUiViteConfig({ command: "serve" }).server?.proxy).toBeUndefined();
+    vi.stubEnv("NODE_ENV", "production");
+    const development = controlUiViteConfig({ command: "serve" });
+    expect(development.server?.proxy).toBeUndefined();
+    expect(development.define?.["globalThis.OPENCLAW_UI_DEV_SERVER"]).toBe("true");
     vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", undefined);
     expect(gatewayWebSocketTransportUrl("ws://localhost:18789")).toBe("ws://localhost:18789");
     expect(uiDevGatewayResourceUrl("/avatar/main")).toBe("/avatar/main");

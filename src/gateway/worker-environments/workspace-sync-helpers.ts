@@ -21,11 +21,9 @@ import type { WorkerWorkspaceCommand, WorkerLocalWorkspaceSyncRequest } from "./
 import { boundedWorkerError } from "./worker-error.js";
 import {
   parseRemoteWorkspaceManifestEnvelope,
-  recordRemoteWorkspaceHashMetrics,
   replaceWorkerWorkspaceHashMemoEntries,
   serializeRemoteWorkspaceHashMemo,
   type WorkspaceHashMemo,
-  type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
 import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
 import {
@@ -189,31 +187,24 @@ export async function captureRemoteWorkspaceManifest(params: {
   baseCommit: string | null;
   priorManifestDigests: readonly string[];
   hashMemo: WorkspaceHashMemo;
-  metrics: WorkspaceReconcileMetrics;
   maxHashMemoBytes?: number;
 }): Promise<string> {
-  params.metrics.remoteManifestCalls += 1;
-  const startedAt = performance.now();
-  const captured = await params
-    .runWorkspaceCommand({
-      transportRetry: "idempotent",
-      argv: [
-        "node",
-        "-e",
-        params.maxHashMemoBytes === undefined
-          ? REMOTE_WORKSPACE_MANIFEST_JS
-          : createRemoteWorkspaceManifestScript(params.maxHashMemoBytes),
-        params.remoteWorkspaceDir,
-        params.baseCommit ?? "",
-        params.baseCommit ? "eligible" : "all",
-        ...params.priorManifestDigests,
-        "memo-v1",
-      ],
-      input: serializeRemoteWorkspaceHashMemo(params.hashMemo, params.maxHashMemoBytes),
-    })
-    .finally(() => {
-      params.metrics.remoteManifestWallDurationMs += performance.now() - startedAt;
-    });
+  const captured = await params.runWorkspaceCommand({
+    transportRetry: "idempotent",
+    argv: [
+      "node",
+      "-e",
+      params.maxHashMemoBytes === undefined
+        ? REMOTE_WORKSPACE_MANIFEST_JS
+        : createRemoteWorkspaceManifestScript(params.maxHashMemoBytes),
+      params.remoteWorkspaceDir,
+      params.baseCommit ?? "",
+      params.baseCommit ? "eligible" : "all",
+      ...params.priorManifestDigests,
+      "memo-v1",
+    ],
+    input: serializeRemoteWorkspaceHashMemo(params.hashMemo, params.maxHashMemoBytes),
+  });
   if (!workerWorkspaceCommandSucceeded(captured)) {
     throw new Error(
       `Worker workspace manifest capture failed: ${boundedWorkerError(
@@ -231,7 +222,6 @@ export async function captureRemoteWorkspaceManifest(params: {
     });
   }
   replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, response.memo);
-  recordRemoteWorkspaceHashMetrics(params.metrics, response.metrics);
   return response.manifestRef;
 }
 

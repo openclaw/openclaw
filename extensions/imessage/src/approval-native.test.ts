@@ -11,10 +11,13 @@ import {
 const fixture = createNativeApprovalTestFixture({
   channel: "imessage",
   capability: imessageApprovalCapability,
-  buildConfig: ({ channel, approvals } = {}) => ({
-    channels: { imessage: { enabled: true, ...channel } },
-    approvals,
-  }),
+  buildConfig: (options = {}) => {
+    const { channel, approvals } = options;
+    return {
+      channels: { imessage: { enabled: true, ...channel } },
+      approvals,
+    };
+  },
 });
 const {
   buildConfig,
@@ -80,8 +83,13 @@ describe("imessage approval capability", () => {
     expect(text.indexOf("React with:")).toBeLessThan(text.indexOf("/approve exec-1 allow-once"));
   });
 
-  it("allows group-origin tapback approvals only after exec forwarding and approvers are configured", async () => {
-    const request = buildExecRequest(GROUP_TARGET);
+  it.each([
+    GROUP_TARGET,
+    "chat_id:42",
+    "chat_identifier:chat42",
+    "chat_guid:iMessage;-;+15551230000",
+  ])("requires explicit approvers for selector %s", async (target) => {
+    const request = buildExecRequest(target);
     const withoutApprovers = buildConfig({ approvals: { exec: { enabled: true } } });
     const withApprovers = buildConfig({
       channel: { allowFrom: ["+15551230000"] },
@@ -90,7 +98,7 @@ describe("imessage approval capability", () => {
 
     expect(await resolveExecOrigin(withoutApprovers, request)).toBeNull();
     expect(await resolveExecOrigin(withApprovers, request)).toEqual({
-      to: GROUP_TARGET,
+      to: target,
       accountId: DEFAULT_ACCOUNT_ID,
     });
   });
@@ -123,7 +131,9 @@ describe("shouldSuppressLocalIMessageExecApprovalPrompt", () => {
 
     for (const [sessionKey, accountId] of [
       ["agent:main:imessage:group:test-group", undefined],
+      ["agent:main:imessage:chat_id:42", undefined],
       ["agent:main:imessage:chat_guid:iMessage;+;chat42", undefined],
+      ["agent:main:imessage:chat_guid:iMessage;-;+15551230000", undefined],
       ["agent:main:slack:C123", undefined],
       ["agent:main:imessage:default:direct:+15551230000", "work"],
     ] as const) {

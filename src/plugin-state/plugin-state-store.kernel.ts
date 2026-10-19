@@ -1,5 +1,6 @@
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { Selectable } from "kysely";
+import { jsonPathValue } from "../infra/database-engine/json-values.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -14,7 +15,11 @@ import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqli
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { createPluginStateError, parseStoredJson } from "./plugin-state-error.js";
 import { pluginStatePublication } from "./plugin-state-publication.js";
-import type { PluginStateEntry, PluginStateStoreOperation } from "./plugin-state-store.types.js";
+import type {
+  PluginStateEntry,
+  PluginStateKeyRangeParams,
+  PluginStateStoreOperation,
+} from "./plugin-state-store.types.js";
 
 export { createPluginStateError, parseStoredJson } from "./plugin-state-error.js";
 
@@ -257,31 +262,26 @@ export function iteratePluginStateEntries(
 
 export function selectPluginStateEntriesInKeyRange(
   db: EngineConnection,
-  params: {
-    pluginId: string;
-    namespace: string;
-    keyStartInclusive: string;
-    keyEndExclusive: string;
-    limit: number;
-    order: "asc" | "desc";
-    now: number;
-  },
+  params: PluginStateKeyRangeParams & { order: "asc" | "desc"; now: number },
 ): PluginStateReadRow[] {
   assertPluginStateKey(db, params.keyStartInclusive, "entries");
   assertPluginStateKey(db, params.keyEndExclusive, "entries");
-  return executeSqliteQuerySync(
-    db,
-    getPluginStateKysely(db)
-      .selectFrom("plugin_state_entries")
-      .select(["entry_key", "value_json", "created_at", "expires_at"])
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("entry_key", ">=", params.keyStartInclusive)
-      .where("entry_key", "<", params.keyEndExclusive)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
-      .orderBy("entry_key", params.order)
-      .limit(params.limit),
-  ).rows;
+  let query = getPluginStateKysely(db)
+    .selectFrom("plugin_state_entries")
+    .select(["entry_key", "value_json", "created_at", "expires_at"])
+    .where("plugin_id", "=", params.pluginId)
+    .where("namespace", "=", params.namespace)
+    .where("entry_key", ">=", params.keyStartInclusive)
+    .where("entry_key", "<", params.keyEndExclusive)
+    .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]));
+  const filter = params.valueFilter;
+  if (filter) {
+    query = query.where((eb) =>
+      eb(jsonPathValue(db, eb.ref("value_json"), eb.val(filter.path)), "=", filter.equals),
+    );
+  }
+  return executeSqliteQuerySync(db, query.orderBy("entry_key", params.order).limit(params.limit))
+    .rows;
 }
 
 export function deletePluginStateEntry(

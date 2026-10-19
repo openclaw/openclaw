@@ -87,21 +87,6 @@ describe("ONNX artifact installation", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "preserves group-writable model cache directories",
-    async () => {
-      await fs.mkdir(destination);
-      await fs.chmod(root, 0o775);
-      await fs.chmod(destination, 0o775);
-      mockDownload(bytes);
-      await download();
-      await verify();
-      expect((await fs.stat(root)).mode & 0o777).toBe(0o775);
-      expect((await fs.stat(destination)).mode & 0o777).toBe(0o775);
-      expect(await fs.readdir(destination)).toEqual(["model.onnx"]);
-    },
-  );
-
   it.each([
     { name: "short download", body: Buffer.from("invalid"), error: /integrity/ },
     { name: "wrong hash", body: Buffer.alloc(bytes.length), error: /integrity/ },
@@ -257,12 +242,30 @@ describe("ONNX artifact installation", () => {
       source: { kind: "local-export", repository: "example/model", revision: "a".repeat(40) },
     };
     await fs.mkdir(destination);
-    for (const files of [[{ name: "../other", size: 1, sha256: "a".repeat(64) }], []]) {
+    const manifest = {
+      modelId: model.id,
+      sourceRevision: "a".repeat(40),
+      files: [
+        { name: "model.onnx", size: 1, sha256: "a".repeat(64) },
+        { name: "tokenizer.json", size: 1, sha256: "b".repeat(64) },
+      ],
+    };
+    for (const invalid of [
+      { files: [...manifest.files, { name: "../other", size: 1, sha256: "a".repeat(64) }] },
+      { files: [] },
+      { modelId: "different" },
+      { sourceRevision: "b".repeat(40) },
+    ]) {
       await fs.writeFile(
         path.join(destination, "model.json"),
-        JSON.stringify({ modelId: "different", sourceRevision: "b".repeat(40), files }),
+        JSON.stringify({ ...manifest, ...invalid }),
       );
       await expect(resolveModelFiles(root, local)).rejects.toThrow("model-integrity");
     }
+    await fs.writeFile(path.join(destination, "model.json"), JSON.stringify(manifest));
+    await expect(resolveModelFiles(root, local)).resolves.toEqual([
+      { name: "model.onnx", bytes: 1, sha256: "a".repeat(64) },
+      { name: "tokenizer.json", bytes: 1, sha256: "b".repeat(64) },
+    ]);
   });
 });

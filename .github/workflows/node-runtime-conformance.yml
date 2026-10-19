@@ -38,11 +38,18 @@ on:
       - "pnpm-lock.yaml"
       - "src/infra/node-commands.ts"
       - "packages/normalization-core/**"
+      - "!crates/openclaw-node-host/SIDECAR_PROTOCOL.md"
+      - "!patches/README.md"
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths: *validation_paths
 
 concurrency:
-  group: node-runtime-conformance-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  # Passive draft events must not cancel useful validation; conversion intentionally does.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || format('node-runtime-conformance-{0}-{1}', github.event_name, github.event.pull_request.number || github.sha) }}
   cancel-in-progress: true
 
 permissions:
@@ -96,7 +103,7 @@ jobs:
 
   typescript:
     needs: scope
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     name: TypeScript contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -124,7 +131,7 @@ jobs:
 
   rust:
     needs: scope
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'schedule' || needs.scope.outputs.changed == 'true') && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     name: Rust workspace
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -141,15 +148,14 @@ jobs:
         run: rustup toolchain install 1.93.0 --profile minimal --component clippy,rustfmt
 
       - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            crates/target
-          key: node-runtime-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock') }}
-          restore-keys: |
-            node-runtime-${{ runner.os }}-
+          # Keep reusable dependencies, not stale workspace binaries or incremental state.
+          prefix-key: node-runtime
+          workspaces: crates -> target
+          cache-bin: "false"
+          cache-workspace-crates: "false"
+          cmd-format: rustup run 1.93.0 {0}
 
       - name: Check formatting
         run: cargo +1.93.0 fmt --manifest-path crates/Cargo.toml --all -- --check

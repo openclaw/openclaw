@@ -1,10 +1,12 @@
+import type {
+  SessionFileEntry,
+  SessionFileState,
+  SessionTranscriptCorpusEntry,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
-  type SessionFileEntry,
-  type SessionFileState,
-  type SessionTranscriptCorpusEntry,
-} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+} from "openclaw/plugin-sdk/session-key-runtime";
 import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 
 export type MemorySessionStartupFileState = SessionFileState;
@@ -80,7 +82,6 @@ export function resolveMemorySessionSyncPlan(params: {
   return {
     activePaths,
     existingRows,
-    existingHashes: existingRows ? new Map(existingRows.map((row) => [row.path, row.hash])) : null,
     indexAll: params.needsFullReindex || Boolean(params.targetSessionFiles),
   };
 }

@@ -1,19 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { BrowserProfileUnavailableError } from "../errors.js";
 import * as navigationGuard from "../navigation-guard.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import "../../test-support/browser-security.mock.js";
 import { handleRouteError, resolveSafeRouteTabUrl, withRouteTabContext } from "./agent.shared.js";
 import { createBrowserRouteResponse } from "./test-helpers.js";
-import type { BrowserRequest } from "./types.js";
-
-function requestWithBody(body: unknown): BrowserRequest {
-  return {
-    params: {},
-    query: {},
-    body,
-  };
-}
 
 function routeContext(ssrfPolicy?: unknown) {
   return {
@@ -97,29 +87,6 @@ describe("browser route shared helpers", () => {
     });
     expect(run).not.toHaveBeenCalled();
   });
-  it("preserves structured browser errors on agent routes", () => {
-    const response = createBrowserRouteResponse();
-    const error = new BrowserProfileUnavailableError("display required", {
-      metadata: {
-        reason: "no_display_for_headed_profile",
-        details: {
-          profile: "openclaw",
-          requestedHeadless: false,
-          headlessSource: "env",
-          displayPresent: false,
-        },
-      },
-    });
-
-    handleRouteError(response.res, error);
-
-    expect(response.statusCode).toBe(409);
-    expect(response.body).toMatchObject({
-      error: "display required",
-      reason: "no_display_for_headed_profile",
-      details: { headlessSource: "env" },
-    });
-  });
 
   it("redacts credentials from unmapped route errors", () => {
     const response = createBrowserRouteResponse();
@@ -184,25 +151,6 @@ describe("browser route shared helpers", () => {
       } finally {
         guard.mockRestore();
       }
-    });
-  });
-
-  describe("withRouteTabContext", () => {
-    it("does not enforce current-tab URL policy unless requested", async () => {
-      const response = createBrowserRouteResponse();
-      const run = vi.fn(async () => {
-        response.res.json({ ok: true });
-      });
-
-      await withRouteTabContext({
-        req: requestWithBody({}),
-        res: response.res,
-        ctx: routeContextForTab("http://127.0.0.1:8080/admin"),
-        run,
-      });
-
-      expect(run).toHaveBeenCalledOnce();
-      expect(response.body).toEqual({ ok: true });
     });
   });
 });

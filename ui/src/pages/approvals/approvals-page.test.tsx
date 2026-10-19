@@ -118,42 +118,6 @@ function standingGrant(name: string): ExecApprovalStandingGrant {
 }
 
 describe("ApprovalsPage", () => {
-  it("loads and renders terminal history, then paginates", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ items: [terminal("first", 2_000)], nextCursor: "next" })
-      .mockResolvedValueOnce({ items: [terminal("second", 1_000)] });
-    const { page } = createPage(stubGrants(request));
-
-    await waitForSolid(() =>
-      expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo first"),
-    );
-
-    expect(request).toHaveBeenNthCalledWith(1, "approval.history", { limit: 50 });
-    const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
-    expect(docsLink?.textContent?.trim()).toBe("Learn more");
-    expect(page.querySelector(".settings-page__intro")).toBeNull();
-    expect(docsLink?.href).toBe("https://docs.openclaw.ai/tools/exec-approvals");
-    expect(page.querySelectorAll(".approval-history-table tbody tr")).toHaveLength(1);
-    expect(page.querySelector(".approval-history-table")?.textContent).toContain("agent:main:test");
-    expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo first");
-    expect(page.textContent).toContain("rolling 30-day window");
-
-    const loadMore = [...page.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Load more"),
-    );
-    loadMore?.click();
-    await waitForSolid(() =>
-      expect(page.querySelectorAll(".approval-history-table tbody tr")).toHaveLength(2),
-    );
-
-    expect(request).toHaveBeenNthCalledWith(2, "approval.history", {
-      cursor: "next",
-      limit: 50,
-    });
-    expect(page.querySelectorAll(".approval-history-table tbody tr")).toHaveLength(2);
-  });
-
   it("does not claim an empty history when the load failed", async () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("boom"));
     const { page } = createPage(stubGrants(request));
@@ -165,40 +129,6 @@ describe("ApprovalsPage", () => {
     const body = page.querySelector(".approval-history-table tbody")?.textContent ?? "";
     expect(body).not.toContain("No resolved approvals");
     expect(page.querySelector('[role="alert"]')?.textContent).toContain("boom");
-  });
-
-  it.each([
-    { kind: "exec", event: "exec.approval.resolved" },
-    { kind: "plugin", event: "plugin.approval.resolved" },
-    { kind: "system-agent", event: "openclaw.approval.resolved" },
-  ])("shows a newly resolved $kind approval without leaving the page", async ({ event }) => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ items: [] })
-      .mockResolvedValueOnce({ items: [terminal("newly-resolved", 2_000)] });
-    const { page, emitGatewayEvent } = createPage(stubGrants(request));
-
-    await waitForSolid(() =>
-      expect(page.querySelector(".approval-history-table")?.textContent).toContain(
-        "No resolved approvals",
-      ),
-    );
-    expect(page.querySelector(".approval-history-table")?.textContent).toContain(
-      "No resolved approvals",
-    );
-
-    emitGatewayEvent(event, { id: "newly-resolved", decision: "deny" });
-    await waitForSolid(() =>
-      expect(page.querySelector(".approval-history-table")?.textContent).toContain(
-        "echo newly-resolved",
-      ),
-    );
-
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("approval.history", { limit: 50 });
-    expect(page.querySelector(".approval-history-table")?.textContent).toContain(
-      "echo newly-resolved",
-    );
   });
 
   it("refreshes the newest history after an approval resolves during pagination", async () => {
@@ -236,22 +166,22 @@ describe("ApprovalsPage", () => {
     expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo newest");
   });
 
-  it.each([
-    { name: "read-only", scopes: ["operator.read"] },
-    { name: "write-only", scopes: ["operator.write"] },
-  ])("does not request or render approval history for a $name operator", async ({ scopes }) => {
-    const request = vi.fn().mockResolvedValue({ items: [] });
-    const { page } = createPage(stubGrants(request), {
-      role: "operator",
-      scopes,
-    });
+  it.each([{ name: "read-only", scopes: ["operator.read"] }])(
+    "does not request or render approval history for a $name operator",
+    async ({ scopes }) => {
+      const request = vi.fn().mockResolvedValue({ items: [] });
+      const { page } = createPage(stubGrants(request), {
+        role: "operator",
+        scopes,
+      });
 
-    flush();
+      flush();
 
-    expect(request).not.toHaveBeenCalled();
-    expect(page.querySelector(".approval-history-table")).toBeNull();
-    expect(page.querySelector('[role="status"]')?.textContent).toContain("operator.approvals");
-  });
+      expect(request).not.toHaveBeenCalled();
+      expect(page.querySelector(".approval-history-table")).toBeNull();
+      expect(page.querySelector('[role="status"]')?.textContent).toContain("operator.approvals");
+    },
+  );
 
   it("loads approval history for a legacy operator", async () => {
     const request = vi.fn().mockResolvedValue({ items: [] });

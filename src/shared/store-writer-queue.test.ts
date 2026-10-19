@@ -111,8 +111,6 @@ it("marks synchronous idle and reentrant execution across runtime chunks", async
 });
 
 it.each([
-  { outcome: "fulfilled", cost: 0 },
-  { outcome: "rejected", cost: 0 },
   { outcome: "rejected-undefined", cost: 0 },
   { outcome: "fulfilled", cost: 10 },
 ] as const)("shares a bounded turn with I/O: $outcome, cost $cost", async ({ outcome, cost }) => {

@@ -25,18 +25,13 @@ import { discordApprovalMessageUpdates } from "./approval-message-updates.js";
 import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import {
-  Button,
-  Container,
   createChannelMessage,
-  createUserDmChannel,
   deleteChannelMessage,
   editChannelMessage,
-  Row,
-  Separator,
-  TextDisplay,
-  serializePayload,
-  type MessagePayloadObject,
-} from "./internal/discord.js";
+} from "./internal/api.messages.js";
+import { createUserDmChannel } from "./internal/api.users.js";
+import { Button, Container, Row, Separator, TextDisplay } from "./internal/components.message.js";
+import { serializePayload, type MessagePayloadObject } from "./internal/payload.js";
 import {
   createDiscordClient,
   createDiscordMessageNonce,

@@ -144,8 +144,8 @@ describe("DraftSubmissionFlow native terminal", () => {
       expect(context.navigateAndWait).not.toHaveBeenCalled();
       expect(flow.message).toBe("");
       await terminal.panel.updateComplete;
-      expect(terminal.panel.renderRoot.textContent).toContain(exitLabel);
-      expect(terminal.panel.renderRoot.textContent).not.toContain("Could not attach");
+      expect(terminal.panel.textContent).toContain(exitLabel);
+      expect(terminal.panel.textContent).not.toContain("Could not attach");
       expect(request.mock.calls.some(([method]) => method === "terminal.attach")).toBe(false);
       expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBeNull();
       expect(sessionStorage.getItem("openclaw.terminal.actions.v1")).toBeNull();

@@ -1,4 +1,4 @@
-import { isRich } from "../../packages/terminal-core/src/theme.js";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
 import { withProgress } from "../cli/progress.js";
@@ -6,15 +6,24 @@ import { readBestEffortConfig } from "../config/config.js";
 import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../gateway/call.js";
 import { resolveGatewaySshRemotePort } from "../gateway/connection-details.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { inferSshTargetFromRemoteUrl, resolveSshTarget } from "./gateway-status/discovery.js";
-import { buildNetworkHints, resolveTargets, sanitizeSshTarget } from "./gateway-status/helpers.js";
+import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import {
-  buildGatewayStatusWarnings,
-  pickPrimaryProbedTarget,
-  writeGatewayStatusJson,
-  writeGatewayStatusText,
-} from "./gateway-status/output.js";
+  inferSshTargetFromRemoteUrl,
+  resolveSshTarget,
+  serializeGatewayDiscoveryBeacon,
+} from "./gateway-status/discovery.js";
+import {
+  buildNetworkHints,
+  resolveTargets,
+  sanitizeSshTarget,
+  isProbeReachable,
+  isPostConnectProbeFailure,
+  isScopeLimitedProbeFailure,
+  summarizeGatewayProbeCapability,
+  renderProbeSummaryLine,
+  renderTargetHeader,
+} from "./gateway-status/helpers.js";
+import { buildGatewayStatusWarnings, pickPrimaryProbedTarget } from "./gateway-status/output.js";
 import { runGatewayStatusProbePass } from "./gateway-status/probe-run.js";
 
 export async function gatewayStatusCommand(
@@ -148,28 +157,119 @@ export async function gatewayStatusCommand(
   });
   const primary = pickPrimaryProbedTarget(probePass.probed);
 
+  const reachable = probePass.probed.filter((entry) => isProbeReachable(entry.probe));
+  const capability = summarizeGatewayProbeCapability(reachable.map((entry) => entry.probe));
+
   if (opts.json) {
-    writeGatewayStatusJson({
-      runtime,
-      startedAt,
-      overallTimeoutMs,
-      discoveryTimeoutMs,
-      network,
-      discovery: probePass.discovery,
-      probed: probePass.probed,
-      warnings,
+    const degraded = probePass.probed.some((entry) => isPostConnectProbeFailure(entry.probe));
+    writeRuntimeJson(runtime, {
+      ok: reachable.length > 0,
+      degraded,
+      capability,
+      ts: Date.now(),
+      durationMs: Date.now() - startedAt,
+      timeoutMs: overallTimeoutMs,
       primaryTargetId: primary?.target.id ?? null,
+      warnings,
+      network,
+      discovery: {
+        timeoutMs: discoveryTimeoutMs,
+        count: probePass.discovery.length,
+        beacons: probePass.discovery.map(serializeGatewayDiscoveryBeacon),
+      },
+      targets: probePass.probed.map((entry) => ({
+        id: entry.target.id,
+        kind: entry.target.kind,
+        url: entry.target.url,
+        active: entry.target.active,
+        tunnel: entry.target.tunnel ?? null,
+        connect: {
+          ok: isProbeReachable(entry.probe),
+          rpcOk: entry.probe.ok,
+          scopeLimited: isScopeLimitedProbeFailure(entry.probe),
+          latencyMs: entry.probe.connectLatencyMs,
+          error: entry.probe.error,
+          close: entry.probe.close,
+        },
+        auth: entry.probe.auth,
+        server: entry.probe.server,
+        self: entry.self,
+        config: entry.configSummary,
+        health: entry.probe.health,
+        summary: entry.probe.status,
+        presence: entry.probe.presence,
+      })),
     });
+    if (reachable.length === 0) {
+      runtime.exit(1);
+    }
     return;
   }
 
-  writeGatewayStatusText({
-    runtime,
-    rich,
-    overallTimeoutMs,
-    wideAreaDomain,
-    discovery: probePass.discovery,
-    probed: probePass.probed,
-    warnings,
-  });
+  const ok = reachable.length > 0;
+  runtime.log(colorize(rich, theme.heading, "Gateway Status"));
+  runtime.log(
+    ok
+      ? `${colorize(rich, theme.success, "Reachable")}: yes`
+      : `${colorize(rich, theme.error, "Reachable")}: no`,
+  );
+  runtime.log(`${colorize(rich, theme.info, "Capability")}: ${capability.replaceAll("_", "-")}`);
+  runtime.log(colorize(rich, theme.muted, `Check budget: ${overallTimeoutMs}ms`));
+
+  if (warnings.length > 0) {
+    runtime.log("");
+    runtime.log(colorize(rich, theme.warn, "Warning:"));
+    for (const warning of warnings) {
+      runtime.log(`- ${warning.message}`);
+    }
+  }
+
+  runtime.log("");
+  runtime.log(colorize(rich, theme.heading, "Discovery (this machine)"));
+  const discoveryDomains = wideAreaDomain ? `local. + ${wideAreaDomain}` : "local.";
+  runtime.log(
+    `Found ${probePass.discovery.length} ${probePass.discovery.length > 0 ? "gateway(s)" : "gateways"} via Bonjour (${discoveryDomains})`,
+  );
+  if (probePass.discovery.length === 0) {
+    runtime.log(
+      colorize(
+        rich,
+        theme.muted,
+        "Tip: if the gateway is remote, mDNS won’t cross networks; use Wide-Area Bonjour (split DNS) or SSH tunnels.",
+      ),
+    );
+  }
+
+  runtime.log("");
+  runtime.log(colorize(rich, theme.heading, "Targets"));
+  for (const result of probePass.probed) {
+    runtime.log(renderTargetHeader(result.target, rich));
+    runtime.log(`  ${renderProbeSummaryLine(result.probe, rich)}`);
+    if (result.target.tunnel?.kind === "ssh") {
+      runtime.log(
+        `  ${colorize(rich, theme.muted, "ssh")}: ${colorize(rich, theme.command, result.target.tunnel.target)}`,
+      );
+    }
+    if (result.probe.ok && result.self) {
+      const host = result.self.host ?? "unknown";
+      const ip = result.self.ip ? ` (${result.self.ip})` : "";
+      const platform = result.self.platform ? ` · ${result.self.platform}` : "";
+      const version = result.self.version ? ` · app ${result.self.version}` : "";
+      runtime.log(`  ${colorize(rich, theme.info, "Gateway")}: ${host}${ip}${platform}${version}`);
+    }
+    if (result.configSummary) {
+      const wideArea =
+        result.configSummary.discovery.wideAreaEnabled === true
+          ? "enabled"
+          : result.configSummary.discovery.wideAreaEnabled === false
+            ? "disabled"
+            : "unknown";
+      runtime.log(`  ${colorize(rich, theme.info, "Wide-area discovery")}: ${wideArea}`);
+    }
+    runtime.log("");
+  }
+
+  if (!ok) {
+    runtime.exit(1);
+  }
 }

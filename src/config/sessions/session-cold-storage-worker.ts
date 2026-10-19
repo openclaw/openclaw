@@ -78,7 +78,11 @@ import {
   sqliteSessionTranscriptTurnRebound,
 } from "./session-turn.kernel.js";
 import { resolveSessionWorkStartError } from "./session-work-start.js";
-import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
+import {
+  prepareTranscriptPayload,
+  TRANSCRIPT_INSERT_BATCH_SIZE,
+  transcriptEventJsonSql,
+} from "./transcript-payload.js";
 
 export type SessionColdPreparationWorkerData = {
   type: "sqlite-transcript-archive-v2";
@@ -605,6 +609,7 @@ export function mutateSessionColdTranscriptInWorker(
         }
         const session_id = plan.sessionId;
         const insertFts = createSessionTranscriptFtsInserter(database.db, session_id);
+        const ftsRows: Parameters<typeof insertFts>[0][number][] = [];
         withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(session_id)], () => {
           for (const record of records) {
             switch (record.kind) {
@@ -646,15 +651,20 @@ export function mutateSessionColdTranscriptInWorker(
                 );
                 break;
               case "fts":
-                insertFts({
+                ftsRows.push({
                   messageId: record.row.message_id,
                   text: record.row.text,
                   role: record.row.role,
                   timestamp: record.row.timestamp,
                 });
+                if (ftsRows.length === TRANSCRIPT_INSERT_BATCH_SIZE) {
+                  insertFts(ftsRows);
+                  ftsRows.length = 0;
+                }
                 break;
             }
           }
+          insertFts(ftsRows);
           executeSqliteQuerySync(
             database.db,
             db.deleteFrom("session_transcript_cold_archives").where("session_id", "=", session_id),

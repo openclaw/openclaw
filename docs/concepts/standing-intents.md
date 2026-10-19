@@ -49,6 +49,11 @@ Defaults are intentionally conservative:
 - maximum fires: 3
 - expiry: 90 days
 
+The `intent` tool accepts integers or numeric strings for `maxFires` and
+`cooldownSeconds`. `maxFires` must be positive; `cooldownSeconds` may be zero.
+Fractions, negative values, and nonnumeric strings are rejected with an integer
+type error.
+
 For a clock time, the agent should use the existing scheduled-task path instead of creating a standing intent.
 
 ## How matching works

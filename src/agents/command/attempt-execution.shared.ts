@@ -1,4 +1,3 @@
-/** Shared session persistence for agent attempt execution. */
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";

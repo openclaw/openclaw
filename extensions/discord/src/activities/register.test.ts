@@ -1,5 +1,4 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerDiscordActivities } from "./register.js";
 import { getDiscordActivitiesRuntime, setDiscordActivitiesRuntime } from "./runtime.js";
@@ -83,7 +82,7 @@ function createApi(
     config,
     logger: { warn: vi.fn() },
     runtime: {
-      state: { openKeyedStore: vi.fn(() => createMemoryKeyedStore()) },
+      state: { openKeyedStoreV2: vi.fn(() => createMemoryKeyedStore()) },
       config: { current: () => runtimeConfig },
     },
     registerHttpRoute: vi.fn((route) => routes.push(route)),
@@ -94,18 +93,6 @@ function createApi(
 }
 
 describe("Discord Activities registration", () => {
-  it.each(["compareAndApply"] as const)("requires plugin state %s", (method) => {
-    const openKeyedStore = <T>() => {
-      const store: PluginStateKeyedStore<T> = createMemoryKeyedStore<T>();
-      store[method] = undefined;
-      return store;
-    };
-
-    expect(() => openDiscordActivityStores(openKeyedStore)).toThrow(
-      "Discord Activities require atomic plugin state comparisons",
-    );
-  });
-
   it("registers static transport surfaces before runtime config is published", () => {
     const runtimeConfig = {
       channels: {

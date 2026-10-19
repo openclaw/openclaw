@@ -90,7 +90,6 @@ type InlineActionResult =
       kind: "continue";
       directives: InlineDirectives;
       abortedLastRun: boolean;
-      cleanedBody: string;
       queueModeOverride?: QueueMode;
       explicitSkillSelections?: ExplicitSkillSelection[];
     };
@@ -131,35 +130,8 @@ export async function handleInlineActions(
     skillFilter?: string[];
   },
 ): Promise<InlineActionResult> {
-  const commandParams = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    command: params.command,
-    initialSessionEntry: params.initialSessionEntry,
-    allowCreateSessionEntry: params.allowCreateSessionEntry,
-    previousSessionEntry: params.previousSessionEntry,
-    previousSessionMemory: params.previousSessionMemory,
-    previousSessionResetMessages: params.previousSessionResetMessages,
-    sessionStore: params.sessionStore,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    sessionScope: params.sessionScope,
-    workspaceDir: params.workspaceDir,
-    opts: params.opts,
-    thinkingCatalog: params.thinkingCatalog,
-    resolveModelLevels: params.resolveModelLevels,
-    resolvedElevatedLevel: params.resolvedElevatedLevel,
-    blockReplyChunking: params.blockReplyChunking,
-    resolvedBlockStreamingBreak: params.resolvedBlockStreamingBreak,
-    resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
-    provider: params.provider,
-    model: params.model,
-    contextTokens: params.contextTokens,
-    contextTokenProjection: params.contextTokenProjection,
-    isGroup: params.isGroup,
-    typing: params.typing,
-  };
+  // Native directive results also carry turn-local fast mode; commands resolve their own status.
+  const commandParams = { ...params, resolvedFastMode: undefined };
   const {
     ctx,
     sessionCtx,
@@ -601,19 +573,9 @@ export async function handleInlineActions(
       return finishCommand();
     }
 
-    const commandBodyBeforeRun = command.commandBodyNormalized;
-    const bodyBeforeRun = sessionCtx.agentText;
     const commandResult = await runCommands(command);
     if (!commandResult.shouldContinue) {
       return finishCommand(commandResult.reply);
-    }
-    if (command.commandBodyNormalized !== commandBodyBeforeRun) {
-      cleanedBody = command.commandBodyNormalized;
-    } else {
-      const bodyAfterRun = sessionCtx.agentText;
-      if (bodyAfterRun !== undefined && bodyAfterRun !== bodyBeforeRun) {
-        cleanedBody = bodyAfterRun;
-      }
     }
   }
 
@@ -621,7 +583,6 @@ export async function handleInlineActions(
     kind: "continue",
     directives,
     abortedLastRun,
-    cleanedBody,
     ...(queueModeOverride ? { queueModeOverride } : {}),
     ...(skillSelections ? { explicitSkillSelections: skillSelections } : {}),
   };

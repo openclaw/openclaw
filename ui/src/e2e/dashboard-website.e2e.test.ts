@@ -182,7 +182,15 @@ suite.define(() => {
         await page.screenshot({ path: `${suite.artifactDir}/website-mobile.png` });
         expect(await gateway.getRequests("board.data.read")).toHaveLength(0);
         await selectChatLayoutAction(page, "Restore split");
+        const chat = page
+          .locator(".chat-pane__header")
+          .getByRole("button", { name: "Chat", exact: true });
+        await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
+        await frame.waitFor({ state: "hidden" });
+        expect(await chat.getAttribute("aria-pressed")).toBe("true");
+        await chat.click();
         await content.getByRole("textbox", { name: "Status note" }).waitFor();
+        expect(await chat.getAttribute("aria-pressed")).toBe("false");
         expect(await content.getByRole("textbox", { name: "Status note" }).inputValue()).toBe(
           "Keep this note",
         );
@@ -192,7 +200,11 @@ suite.define(() => {
         expect((await files.boundingBox())!.width).toBeGreaterThanOrEqual(390 - 24);
         expect(await frame.isVisible()).toBe(false);
         await page.getByRole("button", { name: "Close Files", exact: true }).click();
+        await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
+        expect(await chat.getAttribute("aria-pressed")).toBe("true");
+        await chat.click();
         await frame.waitFor();
+        expect(await chat.getAttribute("aria-pressed")).toBe("false");
         expect(
           await frame.evaluate((element, previous) => element === previous, originalFrame),
         ).toBe(true);

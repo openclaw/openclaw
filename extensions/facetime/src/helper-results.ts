@@ -1,18 +1,18 @@
-export type HelperActionResult = Record<string, unknown>;
+export type FaceTimeHelperPeer = {
+  bundleIdentifier: string;
+  processId: number;
+  processStartedAtMs: number;
+  connectionGeneration: number;
+};
 
-type FaceTimeNativeActionOutcome =
-  | { status: "answered-muted" }
-  | { status: "safe-muted" }
-  | { status: "media-active" }
-  | { status: "termination-requested" }
-  | { status: "absent" };
-
-export class FaceTimeHelperActionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "FaceTimeHelperActionError";
-  }
-}
+export type HelperActionResult = Record<string, unknown> & {
+  helperBundleIdentifier?: string;
+  helperPeer?: FaceTimeHelperPeer;
+  helperResults?: HelperActionResult[];
+  helpersContacted?: number;
+  topologyGeneration?: number;
+  topologyComplete?: boolean;
+};
 
 export class FaceTimeHelperAmbiguousError extends Error {
   constructor(
@@ -32,29 +32,21 @@ export class FaceTimeHelperUnavailableError extends Error {
 }
 
 export function readHelperResults(result: HelperActionResult): HelperActionResult[] {
-  return Array.isArray(result.helperResults)
-    ? result.helperResults.filter((entry): entry is HelperActionResult =>
-        Boolean(entry && typeof entry === "object"),
-      )
-    : [result];
+  return result.helperResults ?? [result];
 }
 
 function requireCompleteTopology(result: HelperActionResult): HelperActionResult[] {
   const results = readHelperResults(result);
-  if (
-    result.topologyComplete !== true ||
-    typeof result.helpersContacted !== "number" ||
-    results.length !== result.helpersContacted
-  ) {
+  if (result.topologyComplete !== true || results.length !== result.helpersContacted) {
     throw new FaceTimeHelperAmbiguousError("FaceTime helper topology was incomplete", result);
   }
   return results;
 }
 
-export function projectFaceTimeNativeAction(
+export function assertFaceTimeNativeAction(
   action: "answer" | "safe-mute" | "unmute" | "activate" | "terminate",
   result: HelperActionResult,
-): FaceTimeNativeActionOutcome {
+): void {
   const results = requireCompleteTopology(result);
   const present = results.filter((entry) => entry.outcome !== "absent");
   // FaceTime and Phone can both proxy the same system TUCall. Accept shared
@@ -73,7 +65,7 @@ export function projectFaceTimeNativeAction(
           (observed.is_sending_audio === true && observed.is_sending_transmission === true)),
     )
   ) {
-    return { status: "media-active" };
+    return;
   }
   if (
     (action === "answer" || action === "safe-mute") &&
@@ -86,15 +78,15 @@ export function projectFaceTimeNativeAction(
           : observed.downlink_muted === true),
     )
   ) {
-    return { status: action === "answer" ? "answered-muted" : "safe-muted" };
+    return;
   }
   if (
     action === "terminate" &&
     present.every((observed) => observed.outcome === "termination-requested")
   ) {
-    return { status: "termination-requested" };
+    return;
   }
-  throw new FaceTimeHelperActionError(`FaceTime ${action} postcondition was not observed`);
+  throw new Error(`FaceTime ${action} postcondition was not observed`);
 }
 
 export function projectCompleteFaceTimeAbsence(result: HelperActionResult): {
@@ -105,7 +97,7 @@ export function projectCompleteFaceTimeAbsence(result: HelperActionResult): {
   if (!results.every((entry) => entry.outcome === "absent" && entry.found === false)) {
     throw new FaceTimeHelperAmbiguousError("FaceTime carrier is still present", result);
   }
-  if (typeof result.topologyGeneration !== "number") {
+  if (result.topologyGeneration === undefined) {
     throw new FaceTimeHelperAmbiguousError("FaceTime topology generation is missing", result);
   }
   return { status: "absent", topologyGeneration: result.topologyGeneration };

@@ -81,6 +81,21 @@ async function createSource(fileName: string, contents = "source") {
   };
 }
 
+function createGatedFfmpegJob(output: string) {
+  const started = createDeferred();
+  const gate = createDeferred();
+  return {
+    started: started.promise,
+    release: gate.resolve,
+    run: async (args: string[]) => {
+      started.resolve();
+      await gate.promise;
+      await fs.writeFile(args.at(-1) ?? "", output);
+      return "";
+    },
+  };
+}
+
 function createCacheKey(source: {
   path: string;
   size: number;
@@ -357,8 +372,7 @@ describe("resolvePlaybackTranscode", () => {
 
   it("does not cache an inconclusive native codec probe", async () => {
     const source = await createSource("probe-retry.mp4");
-    const transcodeStarted = createDeferred();
-    const transcodeGate = createDeferred();
+    const transcode = createGatedFfmpegJob("normalized-video");
     probePlaybackMediaFileDescriptor.mockResolvedValueOnce(null).mockResolvedValueOnce({
       durationMs: 1000,
       videoCodec: "hevc",
@@ -366,12 +380,7 @@ describe("resolvePlaybackTranscode", () => {
       audioCodec: "aac",
       audioStreamIndex: 1,
     });
-    runFfmpeg.mockImplementationOnce(async (args: string[]) => {
-      transcodeStarted.resolve();
-      await transcodeGate.promise;
-      await fs.writeFile(args.at(-1) ?? "", "normalized-video");
-      return "";
-    });
+    runFfmpeg.mockImplementationOnce(transcode.run);
     const params = {
       ...source,
       mimeType: "video/mp4",
@@ -385,17 +394,17 @@ describe("resolvePlaybackTranscode", () => {
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
         kind: "preparing",
       });
-      await transcodeStarted.promise;
+      await transcode.started;
       expect(runFfmpeg).toHaveBeenCalledOnce();
       expect(probePlaybackMediaFileDescriptor).toHaveBeenCalledTimes(2);
       const finished = waitForPlaybackTranscodeJobsForTest("all");
-      transcodeGate.resolve();
+      transcode.release();
       await finished;
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toMatchObject({
         kind: "transcoded",
       });
     } finally {
-      transcodeGate.resolve();
+      transcode.release();
       await settlePlaybackTranscodeJobsForTest();
     }
   });
@@ -473,8 +482,7 @@ describe("resolvePlaybackTranscode", () => {
 
   it("transcodes HEVC-in-MP4 and reuses its cached codec classification", async () => {
     const source = await createSource("hevc.mp4");
-    const transcodeStarted = createDeferred();
-    const transcodeGate = createDeferred();
+    const transcode = createGatedFfmpegJob("normalized-video");
     probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
       durationMs: 1000,
       videoCodec: "hevc",
@@ -482,12 +490,7 @@ describe("resolvePlaybackTranscode", () => {
       audioCodec: "aac",
       audioStreamIndex: 3,
     });
-    runFfmpeg.mockImplementationOnce(async (args: string[]) => {
-      transcodeStarted.resolve();
-      await transcodeGate.promise;
-      await fs.writeFile(args.at(-1) ?? "", "normalized-video");
-      return "";
-    });
+    runFfmpeg.mockImplementationOnce(transcode.run);
     const params = {
       ...source,
       mimeType: "video/mp4",
@@ -498,14 +501,14 @@ describe("resolvePlaybackTranscode", () => {
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
         kind: "preparing",
       });
-      await transcodeStarted.promise;
+      await transcode.started;
       expect(runFfmpeg).toHaveBeenCalledOnce();
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
         kind: "preparing",
       });
       expect(probePlaybackMediaFileDescriptor).toHaveBeenCalledOnce();
       const finished = waitForPlaybackTranscodeJobsForTest("all");
-      transcodeGate.resolve();
+      transcode.release();
       await finished;
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toMatchObject({
         kind: "transcoded",
@@ -514,26 +517,20 @@ describe("resolvePlaybackTranscode", () => {
         expect.arrayContaining(["-f", "mov", "-map", "0:2", "-map", "0:3", "-c:v", "libx264"]),
       );
     } finally {
-      transcodeGate.resolve();
+      transcode.release();
       await settlePlaybackTranscodeJobsForTest();
     }
   });
 
   it("single-flights MIME aliases that target the same cached rendition", async () => {
     const source = await createSource("alias-audio.mp4");
-    const transcodeStarted = createDeferred();
-    const transcodeGate = createDeferred();
+    const transcode = createGatedFfmpegJob("normalized-audio");
     probePlaybackMediaFileDescriptor.mockResolvedValue({
       durationMs: 1000,
       audioCodec: "opus",
       audioStreamIndex: 0,
     });
-    runFfmpeg.mockImplementationOnce(async (args: string[]) => {
-      transcodeStarted.resolve();
-      await transcodeGate.promise;
-      await fs.writeFile(args.at(-1) ?? "", "normalized-audio");
-      return "";
-    });
+    runFfmpeg.mockImplementationOnce(transcode.run);
     const base = {
       ...source,
       kind: "audio" as const,
@@ -546,10 +543,10 @@ describe("resolvePlaybackTranscode", () => {
           playback.resolvePlaybackTranscode({ ...base, mimeType: "audio/x-m4a" }),
         ]),
       ).resolves.toEqual([{ kind: "preparing" }, { kind: "preparing" }]);
-      await transcodeStarted.promise;
+      await transcode.started;
       expect(runFfmpeg).toHaveBeenCalledOnce();
       const finished = waitForPlaybackTranscodeJobsForTest("all");
-      transcodeGate.resolve();
+      transcode.release();
       await finished;
       await expect(
         playback.resolvePlaybackTranscode({ ...base, mimeType: "audio/mp4" }),
@@ -559,21 +556,15 @@ describe("resolvePlaybackTranscode", () => {
         extension: ".m4a",
       });
     } finally {
-      transcodeGate.resolve();
+      transcode.release();
       await settlePlaybackTranscodeJobsForTest();
     }
   });
 
   it("single-flights concurrent requests and reuses the deterministic store entry", async () => {
     const source = await createSource("single-flight.mkv");
-    const transcodeStarted = createDeferred();
-    const transcodeGate = createDeferred();
-    runFfmpeg.mockImplementation(async (args: string[]) => {
-      transcodeStarted.resolve();
-      await transcodeGate.promise;
-      await fs.writeFile(args.at(-1) ?? "", "normalized-video");
-      return "";
-    });
+    const transcode = createGatedFfmpegJob("normalized-video");
+    runFfmpeg.mockImplementation(transcode.run);
 
     const params = {
       ...source,
@@ -587,10 +578,10 @@ describe("resolvePlaybackTranscode", () => {
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
         kind: "preparing",
       });
-      await transcodeStarted.promise;
+      await transcode.started;
       expect(runFfmpeg).toHaveBeenCalledOnce();
       const finished = waitForPlaybackTranscodeJobsForTest("all");
-      transcodeGate.resolve();
+      transcode.release();
       await finished;
 
       const resolved = await playback.resolvePlaybackTranscode(params);
@@ -637,10 +628,69 @@ describe("resolvePlaybackTranscode", () => {
         ]),
       );
     } finally {
-      transcodeGate.resolve();
+      transcode.release();
       await settlePlaybackTranscodeJobsForTest();
     }
   });
+
+  it.each([false, true])(
+    "reports output close failures without replacing the probe outcome (probe fails=%s)",
+    async (probeFails) => {
+      const source = await createSource(`output-close-${probeFails}.mkv`);
+      const closeError = new Error("output close failed");
+      const probeError = new Error("output probe failed");
+      const closeOutput = vi.fn<() => Promise<void>>();
+      const openFile = fs.open;
+      let interceptedOutput = false;
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (pathname, ...args) => {
+        const handle = await openFile(pathname, ...args);
+        if (!interceptedOutput && path.basename(String(pathname)) === "output.mp4") {
+          interceptedOutput = true;
+          const close = handle.close.bind(handle);
+          closeOutput.mockImplementation(async () => {
+            await close();
+            throw closeError;
+          });
+          vi.spyOn(handle, "close").mockImplementation(closeOutput);
+        }
+        return handle;
+      });
+      if (probeFails) {
+        probePlaybackMediaFileDescriptor
+          .mockResolvedValueOnce({ durationMs: 1000, videoCodec: "hevc", videoStreamIndex: 0 })
+          .mockRejectedValueOnce(probeError);
+      }
+      runFfmpeg.mockImplementationOnce(async (args: string[]) => {
+        await fs.writeFile(args.at(-1) ?? "", "normalized-video");
+        return "";
+      });
+      const params = { ...source, mimeType: "video/x-matroska", kind: "video" as const };
+      try {
+        await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+          kind: "preparing",
+        });
+        const completed = waitForPlaybackTranscodeJobsForTest("all");
+        if (probeFails) {
+          await expect(completed).rejects.toBe(probeError);
+        } else {
+          await completed;
+          const result = await playback.resolvePlaybackTranscode(params);
+          expect(result.kind).toBe("transcoded");
+          if (result.kind !== "transcoded") {
+            throw new Error("Expected cached playback output");
+          }
+          expect(await fs.readFile(result.path, "utf8")).toBe("normalized-video");
+        }
+        expect(closeOutput).toHaveBeenCalledOnce();
+        expect(playbackWarn).toHaveBeenCalledWith("Failed to close playback probe output", {
+          error: closeError,
+        });
+      } finally {
+        await settlePlaybackTranscodeJobsForTest();
+        openSpy.mockRestore();
+      }
+    },
+  );
 
   it("retries failed ffmpeg jobs after the bounded cooldown", async () => {
     const source = await createSource("failed.caf", "caff-source");
@@ -787,16 +837,9 @@ describe("resolvePlaybackTranscode", () => {
       createSource("pool-second.mkv"),
       createSource("pool-third.mkv"),
     ]);
-    const starts = sources.map(() => createDeferred());
-    const releases = sources.map(() => createDeferred());
+    const transcodes = sources.map(() => createGatedFfmpegJob("normalized-video"));
     let nextJobIndex = 0;
-    runFfmpeg.mockImplementation(async (args: string[]) => {
-      const index = nextJobIndex++;
-      starts[index]!.resolve();
-      await releases[index]!.promise;
-      await fs.writeFile(args.at(-1) ?? "", "normalized-video");
-      return "";
-    });
+    runFfmpeg.mockImplementation((args: string[]) => transcodes[nextJobIndex++]!.run(args));
     const params = sources.map(({ sourcePath, sourceStat }) => ({
       sourcePath,
       sourceStat,
@@ -811,7 +854,7 @@ describe("resolvePlaybackTranscode", () => {
       await expect(playback.resolvePlaybackTranscode(params[1]!)).resolves.toEqual({
         kind: "preparing",
       });
-      await Promise.all(starts.slice(0, 2).map(async ({ promise }) => await promise));
+      await Promise.all(transcodes.slice(0, 2).map((transcode) => transcode.started));
       expect(runFfmpeg).toHaveBeenCalledTimes(2);
       await expect(playback.resolvePlaybackTranscode(params[2]!)).resolves.toEqual({
         kind: "preparing",
@@ -819,16 +862,16 @@ describe("resolvePlaybackTranscode", () => {
       expect(runFfmpeg).toHaveBeenCalledTimes(2);
 
       const capacityAvailable = waitForPlaybackTranscodeJobsForTest("next");
-      releases[0]!.resolve();
+      transcodes[0]!.release();
       await expect(capacityAvailable).resolves.toBe(2);
       await expect(playback.resolvePlaybackTranscode(params[2]!)).resolves.toEqual({
         kind: "preparing",
       });
-      await starts[2]!.promise;
+      await transcodes[2]!.started;
       expect(runFfmpeg).toHaveBeenCalledTimes(3);
       const remainingJobs = waitForPlaybackTranscodeJobsForTest("all");
-      for (const release of releases.slice(1)) {
-        release.resolve();
+      for (const transcode of transcodes.slice(1)) {
+        transcode.release();
       }
       await expect(remainingJobs).resolves.toBe(2);
       await expect(
@@ -839,8 +882,8 @@ describe("resolvePlaybackTranscode", () => {
         expect.objectContaining({ kind: "transcoded" }),
       ]);
     } finally {
-      for (const release of releases) {
-        release.resolve();
+      for (const transcode of transcodes) {
+        transcode.release();
       }
       await settlePlaybackTranscodeJobsForTest();
     }

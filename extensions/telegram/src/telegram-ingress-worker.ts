@@ -36,9 +36,9 @@ export type TelegramIngressWorkerMessage =
       queued: number;
     }
   | {
-      type: "update";
+      type: "updates";
       requestId: string;
-      update: unknown;
+      updates: unknown[];
       queued: number;
     };
 
@@ -137,7 +137,7 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
       }
     },
     async stop() {
-      // Forced termination is replay-safe: the parent commits each update before its ACK.
+      // Forced termination is replay-safe: the parent commits each batch before its ACK.
       await raceWithTimeout(
         () => {
           worker.postMessage({ type: "stop" } satisfies TelegramIngressWorkerCommand, []);

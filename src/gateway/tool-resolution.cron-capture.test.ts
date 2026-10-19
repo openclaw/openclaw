@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
+import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { resolveExecTarget } from "../agents/bash-tools.exec-runtime.js";
 import * as pluginTools from "../agents/openclaw-plugin-tools.js";
 import { resolveScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
@@ -114,7 +115,10 @@ describe("MCP automation creator capture", () => {
       const root = tempDirs.make("openclaw-cli-cron-capture-");
       const storePath = path.join(root, "cron", "jobs.json");
       const cfg: OpenClawConfig = {
-        agents: { entries: { main: {} }, defaults: { sandbox: { mode: "non-main" } } },
+        agents: {
+          entries: { main: {} },
+          defaults: { model: "openai/gpt-4.1", sandbox: { mode: "non-main" } },
+        },
         tools: {
           allow: [
             "automations",
@@ -128,6 +132,19 @@ describe("MCP automation creator capture", () => {
         plugins: { enabled: false },
       };
       vi.stubEnv("OPENCLAW_STATE_DIR", root);
+      await persistAuthProfileBatch({
+        stateDir: root,
+        profiles: [
+          {
+            profileId: "openai:creator-fixture",
+            credential: {
+              type: "api_key",
+              provider: "openai",
+              key: "synthetic-creator-inference-key",
+            },
+          },
+        ],
+      });
       setRuntimeConfigSnapshot(cfg);
       if (unreadableSchema) {
         // Plugin admission accepts this schema object; MCP cannot serialize it.

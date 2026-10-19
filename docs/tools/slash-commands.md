@@ -443,6 +443,8 @@ use the Control UI Tools panel or config surfaces.
 
 `/loop` is owner-only because it uses the cron control-plane tool. `/loop 5m check deploy status` asks the agent to create a fixed-cadence cron job in the current conversation. Without an interval, `/loop watch for new issues` creates a self-paced loop that checks more often while active and backs off toward 1 hour while quiet. `/loop status` lists the conversation's loop jobs. `/loop stop [name]` removes them.
 
+Multiline prompts retain their line breaks and indentation. Generated loop names collapse whitespace onto one line; the recurring prompt keeps the complete text.
+
 ## `/model`: model selection
 
 Use `-s` to change only the current session, `-a` to also update the agent default, or `-g` to also update the shared global default. The long forms are `--session`, `--agent`, and `--global`. An explicit scope overrides `agents.defaults.modelSelectionScope`.
@@ -550,7 +552,7 @@ the command asks the owner to retry from a direct chat.
 /plugin show context7
 /plugins enable context7
 /plugins disable context7
-/plugins install clawhub:<package>
+/plugins install <package>
 /plugins install npm:@openclaw/<official-package>
 /plugins install npm:<package> --force
 /plugins install git:<repository>@<ref> --force
@@ -561,6 +563,8 @@ plugin lifecycle and report the runtime application result without restarting it
 New agent turns use the updated plugin runtime. See
 [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
+Package specs default to ClawHub. Bare plugin ids without a version or tag
+retain the CLI's bundled and official catalog shortcuts. Use `npm:<package>` to select npm explicitly.
 Trusted ClawHub and official-catalog installs do not need a provenance acknowledgement. Arbitrary npm,
 git, archive, `npm-pack:`, and local path sources show a provenance warning and
 require a trailing `--force` after you review the source. This flag acknowledges
@@ -576,7 +580,7 @@ returns the plugin's declared capabilities and an exact retry command. Review
 that reply, then rerun with `--accept-capabilities`:
 
 ```text
-/plugins install clawhub:<package> --accept-capabilities
+/plugins install <package> --accept-capabilities
 /plugins enable <plugin-id> --accept-capabilities
 ```
 
@@ -599,6 +603,8 @@ tool output).
 ## `/btw`: side questions
 
 `/btw` is a quick side question about the current session context. Alias: `/side`.
+
+Questions can span multiple lines or start on the line after `/btw` or `/side`. Pasted errors, blank lines, and indentation are preserved in the question.
 
 ```text
 /btw what are we doing right now?

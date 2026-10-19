@@ -9,7 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { hasErrnoCode } from "../../infra/errno.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
-import { spawnWithFallback } from "../spawn-utils.js";
+import { spawnAndWait } from "../spawn-utils.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
@@ -296,7 +296,7 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
           ? [process.platform === "darwin" ? "/usr/bin/true" : "/bin/true"]
           : [process.execPath, "-e", "setTimeout(()=>process.exit(0),50)"];
       const starting = runWithSpawnBroker(host, () =>
-        spawnWithFallback({ argv, options: { stdio: "ignore" } }),
+        spawnAndWait({ argv, options: { stdio: "ignore" } }),
       );
       await Promise.resolve();
       if (timing === "coalesced") {
@@ -305,7 +305,7 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
           /* Batch the broker's native lifecycle messages. */
         }
       }
-      const { child } = await starting;
+      const child = await starting;
       await Promise.resolve();
       await Promise.resolve();
       const events: string[] = [];

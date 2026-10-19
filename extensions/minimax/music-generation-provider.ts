@@ -6,7 +6,6 @@ import {
   type MusicGenerationProvider,
 } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -236,29 +235,20 @@ export function buildMinimaxMusicGenerationProvider(
         throw new Error("MiniMax music generation currently supports mp3 output only.");
       }
 
-      const auth = await resolveApiKeyForProvider({
-        provider: providerId,
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("MiniMax API key missing");
-      }
-
       const fetchFn = fetch;
       const operationTimeoutMs = req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS;
+      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+        await resolveMinimaxMediaRequestConfig({
+          cfg: req.cfg,
+          providerId,
+          agentDir: req.agentDir,
+          authStore: req.authStore,
+          capability: "audio",
+        });
       const deadline = createProviderOperationDeadline({
         timeoutMs: operationTimeoutMs,
         label: "MiniMax music generation",
       });
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveMinimaxMediaRequestConfig({
-          cfg: req.cfg,
-          providerId,
-          apiKey: auth.apiKey,
-          capability: "audio",
-        });
       const requestPolicy: MinimaxRequestPolicy = { allowPrivateNetwork, dispatcherPolicy };
       const jsonHeaders = new Headers(headers);
       jsonHeaders.set("Content-Type", "application/json");

@@ -186,6 +186,28 @@ it.each([
   },
 );
 
+it("retains the failed native probe when it exhausts the inspection deadline", async () => {
+  const home = dirs.make("openclaw-deadline-cause-");
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  vi.mocked(execFileUtf8).mockImplementation(async () => {
+    now = 1000;
+    return { ...missing, code: 7 };
+  });
+  await expect(
+    resolveSystemdUserTransport(
+      { HOME: home, XDG_RUNTIME_DIR: home, DBUS_SESSION_BUS_ADDRESS: `unix:path=${home}/bus` },
+      1000,
+    ),
+  ).rejects.toMatchObject({
+    reason: "systemd-inspection-deadline-exceeded",
+    message: expect.stringContaining(
+      "busctl --user session-bus Manager.Version: exit 7; Failed to connect to bus",
+    ),
+  });
+  expect(execFileUtf8).toHaveBeenCalledOnce();
+});
+
 it("stops discovery when its caller retires between probes", async () => {
   const home = dirs.make("openclaw-retired-transport-");
   await fs.writeFile(path.join(home, "bus"), "");

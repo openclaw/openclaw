@@ -1,9 +1,7 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type TestContext } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import type {
-  PluginApprovalRequest,
-  PluginApprovalRequestPayload,
-} from "../infra/plugin-approvals.js";
+import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestApprovalFixture } from "./exec-approval-manager.test-support.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
@@ -20,76 +18,83 @@ import {
   setDangerousDemoCommandRegistry,
 } from "./node-invoke-plugin-policy.test-helpers.js";
 
+function deliveryFixture(test: TestContext, delegated = false) {
+  const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(test, {
+    approvalKind: "plugin",
+    ...(delegated ? { validateAgentRuntimeDelegatedAuthority: () => true } : {}),
+  });
+  setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+  const { context } = createContext({
+    pluginApprovalManager: fixture.manager,
+    getApprovalClientConnIds: vi.fn(() => new Set<string>()),
+    hasExecApprovalClients: vi.fn(() => false),
+  });
+  const delivered = createDeferredCore();
+  const handleRequested = vi.fn<
+    NonNullable<NonNullable<typeof context.pluginApprovalIosPushDelivery>["handleRequested"]>
+  >(async () => {
+    delivered.resolve();
+    return true;
+  });
+  return {
+    ...fixture,
+    context,
+    handleRequested,
+    async request(start = () => invokeDemoPolicy(context, createOperatorClient())) {
+      const result = await expectSinglePendingApproval(fixture.manager, context, () =>
+        fixture.track(start()),
+      );
+      await awaitGateBeforeSettlement(
+        delivered.promise,
+        result.pending,
+        "Approval request ended before delivery",
+      );
+      return result;
+    },
+  };
+}
+
 export function registerNodePolicyApprovalDeliveryTests() {
   it("forwards plugin policy approvals to the originating turn source", async (testContext) => {
-    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
-      approvalKind: "plugin",
-      validateAgentRuntimeDelegatedAuthority: () => true,
-    });
-    const { manager } = fixture;
+    const fixture = deliveryFixture(testContext, true);
+    const { manager, context, handleRequested } = fixture;
     await fixture.run(async () => {
-      const getApprovalClientConnIds = vi.fn(() => new Set<string>());
-      const delivered = createDeferredCore();
-      const handlePluginApprovalRequested = vi.fn(async () => {
-        delivered.resolve();
-        return true;
-      });
-      setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
-      const { context } = createContext({
-        pluginApprovalManager: manager,
-        getApprovalClientConnIds,
-        hasExecApprovalClients: vi.fn(() => false),
-        forwardPluginApprovalRequest: handlePluginApprovalRequested,
-        validateAgentRuntimeApprovalAuthority: () => true,
-      });
+      context.forwardPluginApprovalRequest = handleRequested;
+      context.validateAgentRuntimeApprovalAuthority = () => true;
       const operationalRunInstance = createOperationalRunInstanceRef("run-node-policy");
-      const { record, pending: resultPromise } = await expectSinglePendingApproval(
-        manager,
-        context,
-        () =>
-          fixture.track(
-            applyPluginNodeInvokePolicy({
-              context,
-              client: {
-                ...createOperatorClient(),
-                internal: {
-                  agentRuntimeIdentity: {
-                    kind: "agentRuntime",
-                    agentId: "main",
-                    sessionKey: "agent:main:telegram:direct:alice",
-                    operationalRunInstance,
-                    delegatedAuthority: {
-                      kind: "local",
-                      operationalRunInstance,
-                      lifecycleGeneration: "test-generation",
-                      claimId: "test-claim",
-                    },
-                  },
+      const { record, pending: resultPromise } = await fixture.request(() =>
+        applyPluginNodeInvokePolicy({
+          context,
+          client: {
+            ...createOperatorClient(),
+            internal: {
+              agentRuntimeIdentity: {
+                kind: "agentRuntime",
+                agentId: "main",
+                sessionKey: "agent:main:telegram:direct:alice",
+                operationalRunInstance,
+                delegatedAuthority: {
+                  kind: "local",
+                  operationalRunInstance,
+                  lifecycleGeneration: "test-generation",
+                  claimId: "test-claim",
                 },
               },
-              nodeSession: createNodeSession(),
-              command: DEMO_COMMAND,
-              params: DEMO_PARAMS,
-              sessionKey: "agent:main:spoofed",
-              turnSource: {
-                channel: "tui",
-                to: "terminal",
-                accountId: "default",
-                threadId: 7,
-              },
-            }),
-          ),
-      );
-      await Promise.race([
-        delivered.promise,
-        resultPromise.then(() => {
-          throw new Error("Approval request ended before delivery");
+            },
+          },
+          nodeSession: createNodeSession(),
+          command: DEMO_COMMAND,
+          params: DEMO_PARAMS,
+          sessionKey: "agent:main:spoofed",
+          turnSource: { channel: "tui", to: "terminal", accountId: "default", threadId: 7 },
         }),
-      ]);
-      expect(record.request.turnSourceChannel).toBe("tui");
-      expect(record.request.turnSourceTo).toBe("terminal");
-      expect(record.request.turnSourceAccountId).toBe("default");
-      expect(record.request.turnSourceThreadId).toBe(7);
+      );
+      expect(record.request).toMatchObject({
+        turnSourceChannel: "tui",
+        turnSourceTo: "terminal",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: 7,
+      });
       expect(context.broadcast).not.toHaveBeenCalled();
       expect(context.broadcastToConnIds).toHaveBeenCalledWith(
         "plugin.approval.requested",
@@ -97,7 +102,7 @@ export function registerNodePolicyApprovalDeliveryTests() {
         new Set<string>(),
         { dropIfSlow: true },
       );
-      expect(handlePluginApprovalRequested).toHaveBeenCalledWith(
+      expect(handleRequested).toHaveBeenCalledWith(
         expect.objectContaining({
           id: record.id,
           request: expect.objectContaining({
@@ -116,95 +121,32 @@ export function registerNodePolicyApprovalDeliveryTests() {
   });
 
   it("delivers plugin policy approvals to visible iOS reviewers", async (testContext) => {
-    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
-      approvalKind: "plugin",
-    });
-    const { manager } = fixture;
+    const fixture = deliveryFixture(testContext);
+    const { manager, context, handleRequested } = fixture;
     await fixture.run(async () => {
-      const delivered = createDeferredCore();
-      const handleRequested = vi.fn(
-        async (
-          _request: PluginApprovalRequest,
-          _opts?: {
-            isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-          },
-        ) => {
-          delivered.resolve();
-          return true;
-        },
-      );
-      setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
-      const { context } = createContext({
-        pluginApprovalManager: manager,
-        getApprovalClientConnIds: vi.fn(() => new Set<string>()),
-        hasExecApprovalClients: vi.fn(() => false),
-        pluginApprovalIosPushDelivery: { handleRequested },
-      });
-
-      const { record, pending: resultPromise } = await expectSinglePendingApproval(
-        manager,
-        context,
-        () => fixture.track(invokeDemoPolicy(context, createOperatorClient())),
-      );
-      await Promise.race([
-        delivered.promise,
-        resultPromise.then(() => {
-          throw new Error("Approval request ended before delivery");
-        }),
-      ]);
+      context.pluginApprovalIosPushDelivery = { handleRequested };
+      const { record, pending: resultPromise } = await fixture.request();
 
       expect(handleRequested).toHaveBeenCalledTimes(1);
       const deliveryOptions = handleRequested.mock.calls[0]?.[1];
-      expect(
+      const visible = (deviceId: string) =>
         deliveryOptions?.isTargetVisible?.({
-          deviceId: "device-owner",
+          deviceId,
           scopes: ["operator.approvals", "operator.read"],
-        }),
-      ).toBe(true);
-      expect(
-        deliveryOptions?.isTargetVisible?.({
-          deviceId: "device-other",
-          scopes: ["operator.approvals", "operator.read"],
-        }),
-      ).toBe(false);
+        });
+      expect([visible("device-owner"), visible("device-other")]).toEqual([true, false]);
 
       await expectApprovalResolution(resultPromise, manager, record);
     });
   });
 
   it("sends an iOS cleanup wake through the current delivery owner", async (testContext) => {
-    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
-      approvalKind: "plugin",
-    });
-    const { manager } = fixture;
+    const fixture = deliveryFixture(testContext);
+    const { manager, context, handleRequested } = fixture;
     await fixture.run(async () => {
-      const delivered = createDeferredCore();
       const handleExpired = vi.fn(async () => {});
-      setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
-      const { context } = createContext({
-        pluginApprovalManager: manager,
-        getApprovalClientConnIds: vi.fn(() => new Set<string>()),
-        hasExecApprovalClients: vi.fn(() => false),
-        pluginApprovalIosPushDelivery: {
-          handleRequested: vi.fn(async () => {
-            delivered.resolve();
-            return true;
-          }),
-          handleExpired,
-        },
-      });
-
-      const { record, pending: resultPromise } = await expectSinglePendingApproval(
-        manager,
-        context,
-        () => fixture.track(invokeDemoPolicy(context, createOperatorClient())),
-      );
-      await Promise.race([
-        delivered.promise,
-        resultPromise.then(() => {
-          throw new Error("Approval request ended before delivery");
-        }),
-      ]);
+      context.pluginApprovalIosPushDelivery = { handleRequested, handleExpired };
+      const { record, pending: resultPromise } = await fixture.request();
       const replacementExpired = vi.fn(async () => {});
       context.pluginApprovalIosPushDelivery = { handleExpired: replacementExpired };
       await manager.expire(record.id, "timeout");

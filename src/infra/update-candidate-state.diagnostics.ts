@@ -29,7 +29,6 @@ export function formatUpdateStateInspectionError(error: unknown): string {
 const ProgressSchema = z.object({
   phase: z.string(),
   path: z.string().optional(),
-  completedIo: z.number().int().positive().optional(),
   snapshot: z
     .object({
       status: z.enum(["copying", "completed"]),
@@ -41,25 +40,6 @@ const ProgressSchema = z.object({
     .optional(),
 });
 export type UpdateStateInspectionProgress = z.infer<typeof ProgressSchema>;
-
-/** Report completed filesystem work, not timer heartbeats or distinct file counts. */
-export function createUpdateStateIoReporter(
-  path: string,
-  phase: string,
-  onProgress?: (progress: UpdateStateInspectionProgress) => void,
-) {
-  let completedIo = 0;
-  let emittedAt = -Infinity;
-  return () => {
-    completedIo++;
-    const now = performance.now();
-    if (!onProgress || now - emittedAt < 500) {
-      return;
-    }
-    emittedAt = now;
-    onProgress({ phase, path, completedIo });
-  };
-}
 
 export function createUpdateStateSnapshotReporter(
   path: string,
@@ -98,14 +78,10 @@ export function createUpdateStateSnapshotReporter(
 }
 
 /** Stderr leaves the released worker's stdout JSON contract unchanged. */
-export function createUpdateStateInspectionReporter(legacy = false, entryProgress = false) {
+export function createUpdateStateInspectionReporter(legacy = false) {
   let emittedBytes = 0;
   let exhausted = false;
   return (progress: UpdateStateInspectionProgress) => {
-    // Released parents did not opt into potentially long entry-progress streams.
-    if (progress.completedIo !== undefined && !entryProgress) {
-      return;
-    }
     if (exhausted) {
       return;
     }
@@ -136,6 +112,7 @@ export function createUpdateStateInspectionDiagnostics(params: {
   paths: readonly string[];
   onProgress?: (progress: UpdateStateInspectionProgress) => void;
   stderrLimit?: { bytes: number; onExceeded: () => void };
+  retryAdvice?: boolean;
 }) {
   const startedAt = Date.now();
   const decoder = new StringDecoder("utf8");
@@ -187,23 +164,39 @@ export function createUpdateStateInspectionDiagnostics(params: {
     stderr: () => `${tail}${pending}`.trim(),
     failure(reason: unknown, termination?: string) {
       const detail = formatErrorMessageWithCode(reason ?? "").trim();
+      const outputLimited =
+        termination === "output-limit" || termination?.startsWith("output-limit,");
       // Worker causes may follow warnings or a generic first line. Promote only closed public facts.
-      const summary = detail
-        ? redactPublicSupportDiagnosticLine(detail, { env: {}, stateDir: "" })
-        : "Worker exited without diagnostic output";
+      const summary = outputLimited
+        ? "Worker output exceeded its capture limit"
+        : detail
+          ? redactPublicSupportDiagnosticLine(detail, { env: {}, stateDir: "" })
+          : "Worker exited without diagnostic output";
       const elapsed = Math.max(0, Date.now() - startedAt) / 1000;
       const scope = params.paths.slice(0, 3).join(", ");
       const source =
         progress.path ?? `source scope [${scope}${params.paths.length > 3 ? ", …" : ""}]`;
-      const advice =
-        termination === "signal" || termination?.startsWith("signal,")
-          ? "The worker was terminated by a signal during the reported step. Check the host crash report or process supervisor, then retry the update."
-          : "Check access to the reported source, free space, and storage performance, then retry the update.";
+      const signaled = termination === "signal" || termination?.startsWith("signal,");
+      // Storage remediation and retries are next steps only for callers that stop on failure.
+      const advice = outputLimited
+        ? params.retryAdvice === false
+          ? ""
+          : " Report this update failure with its run ID."
+        : params.retryAdvice === false
+          ? signaled
+            ? " The worker was terminated by a signal during the reported step."
+            : ""
+          : signaled
+            ? " The worker was terminated by a signal during the reported step. Check the host crash report or process supervisor, then retry the update."
+            : " Check access to the reported source, free space, and storage performance, then retry the update.";
       // Path redaction discards raw detail; only the closed summary precedes source context.
-      return new Error(
-        `${params.operation} failed${termination ? ` (${termination})` : ""}: ${summary}; after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}. ${advice}`,
+      const error = new Error(
+        `${params.operation} failed${termination ? ` (${termination})` : ""}: ${summary}; after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}.${advice}`,
         reason instanceof Error ? { cause: reason } : undefined,
       );
+      // The supervisor's SIGTERM is a consequence of this recorded stop reason.
+      // Keep the public code even when warning text and private paths are redacted.
+      return outputLimited ? Object.assign(error, { code: "output-limit" }) : error;
     },
   };
 }

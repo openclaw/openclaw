@@ -45,6 +45,13 @@ export const overflowCases = [
       },
     ],
     [
+      "billing-context-dashscope-range",
+      {
+        message:
+          "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
+      },
+    ],
+    [
       "billing-context-kimi-status",
       {
         message:

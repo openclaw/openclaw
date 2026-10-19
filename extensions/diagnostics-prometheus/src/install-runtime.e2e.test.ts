@@ -419,9 +419,10 @@ describe("diagnostics-prometheus managed install runtime", () => {
       authenticated.headers.get("content-length"),
     );
     expect(await restrictedHead.text()).toBe("");
-    const scrapeEventLoopMetrics = async () => {
+    const scrapeEventLoopMetrics = async (scrapeSignal = signal) => {
       const response = await fetch(url, {
         headers: { authorization: `Bearer ${gatewayPassword}` },
+        signal: scrapeSignal,
       });
       expect(response.status).toBe(200);
       const lines = (await response.text())
@@ -441,40 +442,51 @@ describe("diagnostics-prometheus managed install runtime", () => {
         observed: value("openclaw_gateway_event_loop_observed_seconds_total"),
       };
     };
-    const readCompletedWindow = async () => {
-      // Healthy monitor windows complete after one second; readiness owns this read.
-      await delay(1_100);
-      const response = await fetch(`http://127.0.0.1:${gatewayPort}/readyz`, {
-        headers: { authorization: `Bearer ${gatewayPassword}` },
-      });
-      expect(response.status).toBe(200);
-      const readiness = (await response.json()) as {
-        ready: boolean;
-        eventLoop?: { intervalMs: number; delayMaxMs: number };
-      };
-      expect(readiness.ready).toBe(true);
-      expect(readiness.eventLoop?.intervalMs).toBeGreaterThanOrEqual(1_000);
-      expect(readiness.eventLoop?.delayMaxMs).toBeGreaterThanOrEqual(0);
-      return readiness.eventLoop!;
+    const waitForExportedWindow = async (afterCount: number) => {
+      const controller = new AbortController();
+      const waitSignal = AbortSignal.any([signal, controller.signal]);
+      const pending = (async () => {
+        for (;;) {
+          const current = await scrapeEventLoopMetrics(waitSignal);
+          if (current.count > afterCount) {
+            return current;
+          }
+          await delay(100, undefined, { signal: waitSignal });
+        }
+      })();
+      try {
+        return await withinTest(
+          awaitGateBeforeSettlement(
+            pending,
+            gatewayClosed,
+            "Gateway exited before exporting another event-loop window",
+          ),
+          signal,
+        );
+      } finally {
+        // A settlement race does not cancel its work. Stop the request/timer and
+        // settle the loop before Gateway and temporary-state cleanup can begin.
+        controller.abort();
+        await pending.catch(() => {});
+      }
     };
 
-    await readCompletedWindow();
-    // Sampling readiness owns the wait; an HTTP scrape must not race a polling deadline.
-    const firstWindow = await scrapeEventLoopMetrics();
+    // Readiness retains a sampler snapshot; diagnostics reach the exporter asynchronously.
+    // Exact per-window arithmetic belongs to the controlled producer in service.event-loop.test.
+    const firstWindow = await waitForExportedWindow(0);
     expect(firstWindow.count).toBeGreaterThan(0);
+    expect(Number.isFinite(firstWindow.sum)).toBe(true);
+    expect(firstWindow.sum).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(firstWindow.observed)).toBe(true);
     expect(firstWindow.observed).toBeGreaterThan(0);
-    const nextWindow = await readCompletedWindow();
-    const retainedWindows = await scrapeEventLoopMetrics();
+    const retainedWindows = await waitForExportedWindow(firstWindow.count);
     expect(retainedWindows.count).toBeGreaterThan(firstWindow.count);
-    // Prometheus renders 12 significant digits; tolerate only serialization rounding.
-    expect(retainedWindows.observed).toBeGreaterThanOrEqual(
-      firstWindow.observed + nextWindow.intervalMs / 1_000 - 1e-9,
-    );
-    expect(retainedWindows.sum).toBeGreaterThanOrEqual(
-      firstWindow.sum + nextWindow.delayMaxMs / 1_000 - 1e-9,
-    );
+    expect(Number.isFinite(retainedWindows.sum)).toBe(true);
+    expect(retainedWindows.sum).toBeGreaterThanOrEqual(firstWindow.sum);
+    expect(Number.isFinite(retainedWindows.observed)).toBe(true);
+    expect(retainedWindows.observed).toBeGreaterThan(firstWindow.observed);
     expect(retainedWindows.lines.join("\n")).not.toMatch(/\{(?!le=)/u);
-    // Background health readers may complete windows between full-Gateway scrapes.
+    // Background sampling may publish windows between full-Gateway scrapes.
     let previous = retainedWindows;
     for (let scrape = 0; scrape < 2; scrape++) {
       const current = await scrapeEventLoopMetrics();

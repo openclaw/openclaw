@@ -6,6 +6,12 @@ import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { getBeforeToolCallHookContext } from "./before-tool-call-metadata.js";
+import {
+  clearToolSearchCatalog,
+  createToolSearchCatalogRef,
+  createToolSearchTools,
+  registerHeadlessToolSearchCatalog,
+} from "./tool-search.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
 type Options = Partial<Parameters<typeof finalizeAgentTools>[0]>;
@@ -54,6 +60,54 @@ const schema = () => ({ type: "object", properties: { query: { type: "string" } 
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
 describe("finalized tool descriptor snapshots", () => {
+  it("reuses Tool Search schemas while binding the current catalog and configured limit", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = { tools: { toolSearch: { searchDefaultLimit: 1 } } };
+    const controls = () => createToolSearchTools({ catalogRef, config });
+    const names = ["lookup_one", "lookup_two", "lookup_three"];
+    try {
+      registerHeadlessToolSearchCatalog({
+        catalogRef,
+        tools: names.map((name) => tool(schema(), { name })),
+      });
+      const cold = attempt(controls(), { config });
+      const coldBytes = JSON.stringify([0, 1, 2].map((index) => cold.tool(index).parameters));
+      await cold.settle();
+      const warm = attempt(controls(), { config });
+      expect(JSON.stringify([0, 1, 2].map((index) => warm.tool(index).parameters))).toBe(coldBytes);
+      await warm.settle();
+
+      const current = tool(schema(), {
+        name: names[0],
+        execute: vi.fn(async () => ({ content: [], details: { marker: "current" } })),
+      });
+      registerHeadlessToolSearchCatalog({
+        catalogRef,
+        tools: [current, ...names.slice(1).map((name) => tool(schema(), { name }))],
+      });
+      const next = attempt(controls(), { config });
+      for (const index of [0, 1, 2]) {
+        expect(getPublishedRuntimeToolInputSchema(next.tool(index).parameters)).toBeDefined();
+        expect(next.tool(index).parameters).toBe(warm.tool(index).parameters);
+      }
+      expect((await next.tool().execute("search", { query: "lookup" })).details).toHaveLength(1);
+      await next.tool(2).execute("dispatch", { id: names[0], args: { query: "current" } });
+      expect(current.execute).toHaveBeenCalledOnce();
+      await next.settle();
+
+      const changedConfig = { tools: { toolSearch: { searchDefaultLimit: 2 } } };
+      const changed = attempt(createToolSearchTools({ catalogRef, config: changedConfig }), {
+        config: changedConfig,
+      });
+      expect(JSON.stringify(changed.tool().parameters)).toContain("Defaults to 2 when omitted.");
+      expect(
+        (await changed.tool().execute("search-changed", { query: "lookup" })).details,
+      ).toHaveLength(2);
+    } finally {
+      clearToolSearchCatalog({ catalogRef });
+    }
+  });
+
   it("prepares detached immutable descriptors at settlement and keeps execution per attempt", async () => {
     const parameters = schema();
     const outputSchema = schema();
@@ -84,6 +138,30 @@ describe("finalized tool descriptor snapshots", () => {
     const next = attempt([tool(parameters, { outputSchema })]);
     expect(next.tool().parameters).toBe(descriptor.parameters);
     expect(next.tool().outputSchema).toBe(descriptor.outputSchema);
+  });
+
+  it("reuses another session's descriptors only for identical source schemas", async () => {
+    const parameters = schema();
+    await attempt([tool(parameters)]).settle();
+    const published = attempt([tool(parameters)]).tool().parameters;
+    expect(getPublishedRuntimeToolInputSchema(published)).toBeDefined();
+
+    const otherSession = { hookContext: { sessionId: "other-session" } };
+    expect(attempt([tool(parameters)], otherSession).tool().parameters).toBe(published);
+    expect(attempt([tool(schema())], otherSession).tool().parameters).not.toBe(published);
+  });
+
+  it("shares one publication between concurrent cold sessions", async () => {
+    const parameters = schema();
+    const otherSession = { hookContext: { sessionId: "other-session" } };
+    const first = attempt([tool(parameters)]);
+    const second = attempt([tool(parameters)], otherSession);
+    await first.settle();
+    await second.settle();
+
+    const published = attempt([tool(parameters)]).tool().parameters;
+    expect(getPublishedRuntimeToolInputSchema(published)).toBeDefined();
+    expect(attempt([tool(parameters)], otherSession).tool().parameters).toBe(published);
   });
 
   it("retains a prepared output schema when another descriptor changes", async () => {

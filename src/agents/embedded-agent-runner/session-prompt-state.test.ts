@@ -120,6 +120,19 @@ describe("system prompt series", () => {
     expect(project(base).update?.content).toContain("## Added\n(removed)");
   });
 
+  it("preserves large prompt revisions, including distinct lone surrogates", () => {
+    const stable = "## Stable\n" + "Keep these instructions.\n".repeat(100);
+    const first = `${stable}## Changed\n\ud800`;
+    const second = `${stable}## Changed\n\ud801`;
+    expect(project(first).systemPrompt).toBe(first);
+    const updated = project(second);
+    expect(updated.systemPrompt).toBe(first);
+    expect(updated.update?.content).toBe(
+      "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n## Changed\n\ud801",
+    );
+    expect(project(second, [], "other-route").systemPrompt).toBe(second);
+  });
+
   it("keeps both prompt digests stable across disposed turns with skill, memory, and date changes", async () => {
     const entries: SessionEntry[] = [];
     let first: string | undefined;

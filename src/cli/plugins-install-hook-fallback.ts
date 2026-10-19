@@ -15,7 +15,6 @@ import {
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
-import { findBundledPluginSource } from "../plugins/bundled-sources.js";
 import {
   loadConfigForInstall,
   resolvePluginInstallRequestContext,
@@ -23,7 +22,6 @@ import {
   resolveFullyBlockedConfigMutationReason,
   type ConfigSnapshotForInstallExecution,
 } from "../plugins/install-config.js";
-import { resolveBundledInstallPlanForNpmFailure } from "../plugins/install-source-plan.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
 import { installManagedPlugin } from "../plugins/management-mutations.js";
@@ -42,7 +40,6 @@ type HookCompatibleSource = Extract<PluginsInstallParams, { source: "local" | "n
 type InstallParams = Parameters<typeof installManagedPlugin>[0] & {
   snapshot: ConfigSnapshotForInstallExecution;
   install?: typeof installManagedPlugin;
-  allowBundledFallback?: boolean;
   runtime?: RuntimeEnv;
 };
 type InstallResult =
@@ -123,6 +120,7 @@ async function installHookPackLocal(
   return await withPluginLifecycleLease({ signal: params.signal }, async (lease) => {
     const request = resolvePluginInstallRequestContext({
       rawSpec: source.source === "local" ? source.path : source.spec,
+      source: source.source,
     });
     if (!request.ok) {
       return request;
@@ -347,21 +345,6 @@ export async function installPluginWithHookFallback(params: InstallParams): Prom
     ].some((code) => code === result.code)
   ) {
     return result;
-  }
-  if (request.source === "npm" && params.allowBundledFallback) {
-    const fallback = resolveBundledInstallPlanForNpmFailure({
-      rawSpec: request.spec,
-      code: result.code,
-      findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
-    });
-    if (fallback) {
-      (params.runtime ?? defaultRuntime).log(theme.warn(fallback.warning));
-      return await install({
-        source: "bundled",
-        pluginId: fallback.bundledSource.pluginId,
-        ...(request.enable === false ? { enable: false } : {}),
-      });
-    }
   }
   const hook = await installHookPack(hookSource, params);
   return hook.ok

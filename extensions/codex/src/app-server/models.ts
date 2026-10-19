@@ -1,3 +1,4 @@
+import { floorPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
@@ -58,7 +59,7 @@ export async function listCodexAppServerModels(
 export async function listAllCodexAppServerModels(
   options: CodexAppServerListModelsOptions & { maxPages?: number } = {},
 ): Promise<CodexAppServerModelListResult> {
-  const maxPages = normalizeMaxPages(options.maxPages);
+  const maxPages = floorPositiveFiniteNumber(options.maxPages) ?? 20;
   return await withCodexAppServerModelRequest(options, async (request) => {
     const models: CodexAppServerModel[] = [];
     let nextCursor: string | undefined;
@@ -125,7 +126,7 @@ async function requestModelListPage(
 export function readModelListResult(value: unknown): CodexAppServerModelListResult {
   const response = assertCodexModelListResponse(value);
   const models = response.data.map(readCodexModel);
-  const nextCursor = response.nextCursor ?? undefined;
+  const nextCursor = response.nextCursor;
   return { models, ...(nextCursor ? { nextCursor } : {}) };
 }
 
@@ -147,7 +148,7 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     ...(description ? { description } : {}),
     hidden: value.hidden,
     isDefault: value.isDefault,
-    inputModalities: value.inputModalities,
+    inputModalities: value.inputModalities ?? ["text", "image"],
     serviceTiers: normalizeUniqueTrimmedStringList(
       (value.serviceTiers ?? []).map((tier) => tier.id),
     ),
@@ -159,8 +160,4 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
       ? { multiAgentVersion: value.multiAgentVersion }
       : {}),
   };
-}
-
-function normalizeMaxPages(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 20;
 }

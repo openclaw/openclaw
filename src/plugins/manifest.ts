@@ -1,16 +1,17 @@
 /** Loads and normalizes OpenClaw plugin manifests, including contracts and config schemas. */
 import path from "node:path";
-import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { validatePluginUiCapabilities } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
+import { loadPluginControlUiDeclaration } from "./control-ui-build-manifest.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
 import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
 import { normalizeConfigGroups } from "./manifest-config-groups.js";
+import { normalizeManifestModelCatalog } from "./manifest-decision-catalog.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
@@ -100,22 +101,30 @@ function parseManifestBackupResources(
   for (const [index, entry] of raw.entries()) {
     if (
       !isRecord(entry) ||
-      Object.keys(entry).length !== 3 ||
+      Object.keys(entry).some(
+        (key) => !["disposition", "scope", "relativePath", "databaseFamily"].includes(key),
+      ) ||
       !("disposition" in entry) ||
       !("scope" in entry) ||
       !("relativePath" in entry)
     ) {
       return {
         ok: false,
-        error: `backupResources[${index}] must contain only disposition, scope, and relativePath`,
+        error: `backupResources[${index}] requires disposition, scope, relativePath, and optional databaseFamily`,
       };
     }
-    const { disposition, scope, relativePath } = entry;
+    const { disposition, scope, relativePath, databaseFamily } = entry;
     if (disposition !== "include" && disposition !== "regenerable") {
       return { ok: false, error: `backupResources[${index}].disposition is invalid` };
     }
     if (scope !== "state" && scope !== "agent") {
       return { ok: false, error: `backupResources[${index}].scope is invalid` };
+    }
+    if (
+      databaseFamily !== undefined &&
+      (disposition !== "include" || scope !== "state" || databaseFamily !== "state")
+    ) {
+      return { ok: false, error: `backupResources[${index}].databaseFamily is invalid` };
     }
     if (
       typeof relativePath !== "string" ||
@@ -132,8 +141,13 @@ function parseManifestBackupResources(
         error: `backupResources[${index}].relativePath must be a strict relative POSIX path`,
       };
     }
-    const resource: PluginManifestBackupResource = { disposition, scope, relativePath };
-    resources.set(`${scope}\0${relativePath}\0${disposition}`, resource);
+    const resource: PluginManifestBackupResource = {
+      disposition,
+      scope,
+      relativePath,
+      ...(databaseFamily !== undefined ? { databaseFamily } : {}),
+    };
+    resources.set(`${scope}\0${relativePath}\0${disposition}\0${databaseFamily ?? ""}`, resource);
   }
   return {
     ok: true,
@@ -236,6 +250,22 @@ export function loadPluginManifest(
         ...(stateMigrations !== undefined ? { stateMigrations } : {}),
       } as PluginManifestDoctorContract)
     : undefined;
+  let modelCatalog: ReturnType<typeof normalizeManifestModelCatalog>;
+  try {
+    modelCatalog = normalizeManifestModelCatalog({
+      modelCatalog: raw.modelCatalog,
+      decisionModels: raw.decisionModels,
+      providers,
+      cliBackends,
+      decisionProviders: contracts?.decisionProviders,
+    });
+  } catch {
+    return cacheResult({
+      ok: false,
+      error: "invalid plugin manifest modelCatalog ownership metadata",
+      manifestPath,
+    });
+  }
   const manifestBeforeDashboard = {
     id,
     configSchema,
@@ -255,17 +285,17 @@ export function loadPluginManifest(
       channels,
     ),
     providers,
+    ...(raw.managesOwnAvailability === true ? { managesOwnAvailability: true } : {}),
     providerCatalogEntry: normalizeOptionalString(raw.providerCatalogEntry),
     capabilityCatalogEntry:
       raw.capabilityCatalogEntry === undefined
         ? undefined
         : (normalizeOptionalString(raw.capabilityCatalogEntry) ?? ""),
     modelSupport: modelProviderNormalizers.normalizeManifestModelSupport(raw.modelSupport),
-    modelCatalog: normalizeModelCatalog(raw.modelCatalog, {
-      ownedProviders: new Set([...providers, ...cliBackends]),
-    }),
+    modelCatalog,
+    // CLI backends own pricing policies as they own catalog rows: their usage needs an estimate too.
     modelPricing: modelProviderNormalizers.normalizeManifestModelPricing(raw.modelPricing, {
-      ownedProviders: new Set(providers),
+      ownedProviders: new Set([...providers, ...cliBackends]),
     }),
     modelIdNormalization: modelProviderNormalizers.normalizeManifestModelIdNormalization(
       raw.modelIdNormalization,
@@ -309,7 +339,13 @@ export function loadPluginManifest(
     return fail(`invalid plugin manifest dashboard: ${dashboardResult.error}`);
   }
   const uiCapabilities = validatePluginUiCapabilities(raw.uiCapabilities);
-  const controlUiResult = setupNormalizers.normalizeManifestControlUi(raw.controlUi);
+  const controlUiResult = loadPluginControlUiDeclaration({
+    rootDir,
+    controlUi: raw.controlUi,
+    channels,
+    rejectHardlinks,
+    rootRealPath,
+  });
   if (!controlUiResult.ok) {
     return fail(`invalid plugin manifest controlUi: ${controlUiResult.error}`);
   }

@@ -264,7 +264,7 @@ it.each([
     authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
     settingsManagerMock.load.mockResolvedValueOnce(settings);
 
-    await withMonitor(async () => {
+    await withMonitor(async (runtime) => {
       const chatSubscription = getSubscription("chat", "/v3");
       sseClientMock.poke.mockClear();
       ingressMock.receive
@@ -272,8 +272,12 @@ it.each([
         .mockResolvedValueOnce({ kind: "ignored" });
 
       const inviteEvent = [{ ship }];
-      sseClientMock.poke.mockRejectedValueOnce(new Error("DM invite write failed"));
-      await expect(chatSubscription.event(inviteEvent)).rejects.toThrow("DM invite write failed");
+      const failure = new Error("DM invite write failed");
+      sseClientMock.poke.mockRejectedValueOnce(failure);
+      await expect(chatSubscription.event(inviteEvent)).rejects.toBe(failure);
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        "[tlon] Error handling chat firehose event: DM invite write failed",
+      );
       await chatSubscription.event(inviteEvent);
 
       expect(sseClientMock.poke).toHaveBeenCalledTimes(2);

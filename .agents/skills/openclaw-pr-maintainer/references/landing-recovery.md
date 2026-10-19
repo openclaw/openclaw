@@ -34,7 +34,7 @@
 
 - Active prior-CI admission permits unrelated forward main movement from both captured anchors with conflict-free, nonempty merge. Exact PR/policy + final authority checks remain; intent/landing-parent audit keep original main anchor.
 - Selected REST: final observation + main materialization before final authority verification. GraphQL: post-authority local-only reread, including late REST fallback; newly unavailable main refuses pre-dispatch. Neither fetches after final authority.
-- Crabbox admission checks forward main ancestry + candidate tree. Newer main in final proof → discard authority decision before materialization/settlement; repeat full live verification within same three-round admin limit. Tested proof base pinned; live PR base forward ancestry checked; active org membership last live authority read.
+- Crabbox admission checks forward main ancestry + candidate tree. Newer main in final proof → discard authority decision before materialization/settlement; repeat live verification within the same 15-minute, 32-round admin limit. Tested proof base pinned; live PR base forward ancestry checked; active org membership last live authority read.
 - `OPENCLAW_PR_STRICT_DRIFT=1`: strict main stability every route. Retained-outcome reconciliation keeps strict main binding.
 - Same-name Security Review commit status = separate gate. Bind successful protected-main publisher attempt + exact PR/head enforcement step; verify publisher checkout against current owner; read complete current statuses.
 - Security owner interprets CI-only failure/success/waiting projection; current independent guard clearance when rollout applies, approval + PR/rollout identity revalidated. Historical green alone insufficient. Missing/stale/foreign/failed/changed clearance blocks. Only identified combined status may be excused with attributed Actions gate. Live facts, no operator security waiver; ordinary merge unchanged.
@@ -92,15 +92,15 @@ scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
 
 - Records `recovery.providerRejection`; successor CAS retains qualified captures/prior intent; repeats current review/security/admin/evidence/head checks. Exact-head `github_pending` stays pending.
 - Admission-mutated/extra captures, symlinks, other 405, timeouts, 5xx, mixed/truncated output block. Accepted/queue/Crabbox/replacement-head recovery excluded. Further explicit recovery needs new OID + independently qualified response; no automatic retry. PR merged meanwhile → reconcile, no new merge.
-- Unaccepted uncertain prior-CI REST admin request: different current head fences exact `sha`. Fresh review + exact-head `github_pending` → ordinary current-head auto request:
+- Unaccepted uncertain prior-CI REST admin request: different current head fences exact `sha`. Fresh review + exact-head `github_pending` → ordinary current-head request:
 
 ```bash
 scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
   --replacement-head <HEAD_SHA> --auto-merge
 ```
 
-- No `--admin-evidence`. Replacement must differ; PR OPEN + `MERGEABLE/BLOCKED` or `MERGEABLE/BEHIND`. Normal required checks/review/security/owner gates apply.
-- CAS route `auto` + `recovery.staleHeadRetirement`; preserve ancestry + exact regular capture bytes, no interpretation; empty valid. Missing/symlink/extra/mutated captures, same-head/stale evidence, lifecycle/head drift, queue state, failed gates block.
+- No `--admin-evidence`. Replacement must differ; PR OPEN; `MERGEABLE/BLOCKED` or `MERGEABLE/BEHIND` selects auto. `MERGEABLE/CLEAN` selects immediate only with passing current required checks and strict CLEAN final revalidation. Normal review/security/owner gates apply.
+- CAS route `auto` or `immediate` + `recovery.staleHeadRetirement`; preserve ancestry + exact regular capture bytes, no interpretation; empty valid. Missing/symlink/extra/mutated captures, same-head/stale evidence, lifecycle/head drift, queue state, failed gates block.
 - Two identical pre-dispatch failures without new evidence → stop same route. Inspect; choose already-authorized supported route with exact reviewed head, or report missing capability. Transport change never waives admission or permits accepted/uncertain replay.
 - Failed/timed-out merge response may mean merged. Reconcile remote state + ancestry before retry. Verify commit on current main; draft/pending/local summary ≠ landed.
 - Closeout only from persistent checkout after owning session exits/releases cwd. Child cwd change never moves parent agent/shell. Never remove any live-cwd worktree/subdirectory. Native cleanup refuses observed holders; never bypass with raw `git worktree remove`, `rm`, custom script. Own session holds cwd → report retained path, defer closeout.

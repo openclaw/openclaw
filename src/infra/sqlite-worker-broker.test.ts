@@ -48,6 +48,7 @@ const { databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-broker
 
 const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
+const queueRows = Array.from({ length: 128 }, (_, index) => String(index));
 
 async function openWithRetainedAccess(pathname: string) {
   const capture = stateOwner.captureStateDatabaseAccess;
@@ -79,41 +80,111 @@ function holdDatabaseAdmission(
   });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   return {
-    sleeping: sleeping.promise,
     pending,
     release: () => {
       held = false;
     },
+    expectWaiting: (operation: Promise<unknown>) =>
+      expect(
+        Promise.race([sleeping.promise.then(() => "waiting"), operation.then(() => "settled")]),
+      ).resolves.toBe("waiting"),
+    async finish(operation: Promise<unknown>) {
+      held = false;
+      await vi.advanceTimersByTimeAsync(10);
+      vi.useRealTimers();
+      await operation;
+    },
   };
+}
+
+function collectRequests(include: (event: DiagnosticWorkerRequestFields) => boolean) {
+  const requests: DiagnosticWorkerRequestFields[] = [];
+  onTestFinished(
+    onInternalDiagnosticEvent(
+      (event) => {
+        if (event.type === "worker.request" && include(event)) {
+          requests.push(event);
+        }
+      },
+      { include: ["worker.request"] },
+    ),
+  );
+  return requests;
+}
+
+function holdReply(matches: (worker: Worker, reply: unknown) => boolean) {
+  const held = createDeferredCore();
+  let publish: (() => void) | undefined;
+  const messages = vi.spyOn(Worker.prototype, "emit");
+  messages.mockImplementation(function (this: Worker, event: string | symbol, ...args: unknown[]) {
+    if (event === "message" && matches(this, args[0])) {
+      messages.mockRestore();
+      publish = () => EventEmitter.prototype.emit.call(this, event, ...args);
+      held.resolve();
+      return true;
+    }
+    return EventEmitter.prototype.emit.call(this, event, ...args);
+  });
+  return {
+    held: held.promise,
+    restore: () => messages.mockRestore(),
+    release() {
+      const reply = publish;
+      publish = undefined;
+      reply?.();
+    },
+  };
+}
+
+function holdOpenReply(pathname: string) {
+  const requests = vi.spyOn(Worker.prototype, "postMessage");
+  const hold = holdReply(
+    (worker, reply) =>
+      isRecord(reply) &&
+      typeof reply.ok === "boolean" &&
+      requests.mock.calls.some(
+        ([request], index) =>
+          requests.mock.contexts[index] === worker &&
+          isRecord(request) &&
+          request.type === "open" &&
+          request.databasePath === pathname &&
+          request.id === reply.id,
+      ),
+  );
+  return {
+    ...hold,
+    restore() {
+      requests.mockRestore();
+      hold.restore();
+    },
+  };
+}
+
+function openBroker(broker: SqliteWorkerBroker, pathname: string, cancel?: AbortController) {
+  return broker.open<FixtureOperations>(
+    {
+      moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+      databasePath: pathname,
+      input: undefined,
+    },
+    undefined,
+    undefined,
+    { signal: cancel?.signal },
+  );
 }
 
 it("waits for schema publication after opening, then dispatches queued writes once in order", async () => {
   const file = databasePath();
   const { store, access } = await openWithRetainedAccess(file);
   await waitForDiagnosticEventsDrained();
-  const completed: DiagnosticWorkerRequestFields[] = [];
-  onTestFinished(
-    onInternalDiagnosticEvent(
-      (event) => {
-        if (event.type === "worker.request" && event.phase === "completed") {
-          completed.push(event);
-        }
-      },
-      { include: ["worker.request"] },
-    ),
-  );
+  const completed = collectRequests((event) => event.phase === "completed");
   const admission = holdDatabaseAdmission(file, access);
   const requests = vi.spyOn(Worker.prototype, "postMessage");
   const first = append(store, "first");
   const second = append(store, "second");
   const outcomes = Promise.allSettled([first, second]);
   try {
-    expect(
-      await Promise.race([
-        admission.sleeping.then(() => "waiting"),
-        outcomes.then(() => "settled"),
-      ]),
-    ).toBe("waiting");
+    await admission.expectWaiting(outcomes);
     expect(requests).not.toHaveBeenCalled();
     admission.release();
     await vi.advanceTimersByTimeAsync(10);
@@ -145,10 +216,7 @@ it("waits for schema publication after opening, then dispatches queued writes on
       expect(timing?.postFinished).toBeGreaterThanOrEqual(timing!.posted!);
     }
   } finally {
-    admission.release();
-    await vi.advanceTimersByTimeAsync(10);
-    vi.useRealTimers();
-    await outcomes;
+    await admission.finish(outcomes);
   }
 });
 
@@ -177,12 +245,7 @@ it.each(["cancellation", "revocation", "deadline"] as const)(
     );
     const outcome = Promise.allSettled([pending]);
     try {
-      expect(
-        await Promise.race([
-          admission.sleeping.then(() => "waiting"),
-          outcome.then(() => "settled"),
-        ]),
-      ).toBe("waiting");
+      await admission.expectWaiting(outcome);
       const canceled = new Error("Write canceled");
       if (ending === "cancellation") {
         cancel.abort(canceled);
@@ -207,10 +270,7 @@ it.each(["cancellation", "revocation", "deadline"] as const)(
       expect(await append(store, "successor")).toMatchObject({ writes: 1 });
       expect(await read(store)).toEqual(["successor"]);
     } finally {
-      admission.release();
-      await vi.advanceTimersByTimeAsync(10);
-      vi.useRealTimers();
-      await outcome;
+      await admission.finish(outcome);
     }
   },
 );
@@ -236,6 +296,41 @@ it("does not wait on permanent refusal or another database's admission", async (
   expect(await read(store)).toEqual([]);
 });
 
+it("borrows an open database while an unrelated cold open awaits its reply", async ({ signal }) => {
+  const broker = new SqliteWorkerBroker();
+  const warmPath = databasePath();
+  const coldPath = databasePath();
+  const openStore = (pathname: string) => openBroker(broker, pathname);
+  const pending: Promise<unknown>[] = [];
+  const hold = holdOpenReply(coldPath);
+  try {
+    const warm = await openStore(warmPath);
+    assert(warm, "Warm store missing");
+    const seed = await append(warm, "seed");
+    const cold = openStore(coldPath);
+    pending.push(cold);
+    await withinTest(hold.held, signal);
+    expect(await withinTest(read(warm), signal)).toEqual(["seed"]);
+
+    const borrowing = openStore(warmPath);
+    pending.push(borrowing);
+    const borrowed = await withinTest(borrowing, signal);
+    assert(borrowed, "Borrowed store missing");
+    expect(await withinTest(append(borrowed, "borrowed"), signal)).toEqual({
+      ...seed,
+      writes: 2,
+    });
+    await borrowed.close();
+    expect(await append(warm, "original survives")).toEqual({ ...seed, writes: 3 });
+    expect(await read(warm)).toEqual(["seed", "borrowed", "original survives"]);
+  } finally {
+    hold.restore();
+    hold.release();
+    await Promise.allSettled(pending);
+    await broker.close();
+  }
+});
+
 it("cancels queued opens without overtaking an accepted open or abandoning its settlement", async ({
   signal,
 }) => {
@@ -245,48 +340,14 @@ it("cancels queued opens without overtaking an accepted open or abandoning its s
   const acceptedPath = databasePath();
   const queuedPath = databasePath();
   const successorPath = databasePath();
-  const held = createDeferredCore();
-  let release: (() => void) | undefined;
-  const requests = vi.spyOn(Worker.prototype, "postMessage");
-  const messages = vi.spyOn(Worker.prototype, "emit");
-  messages.mockImplementation(function (this: Worker, event: string | symbol, ...args: unknown[]) {
-    const reply = args[0];
-    if (
-      event === "message" &&
-      isRecord(reply) &&
-      typeof reply.ok === "boolean" &&
-      requests.mock.calls.some(
-        ([request], index) =>
-          requests.mock.contexts[index] === this &&
-          isRecord(request) &&
-          request.type === "open" &&
-          request.databasePath === acceptedPath &&
-          request.id === reply.id,
-      )
-    ) {
-      messages.mockRestore();
-      release = () => EventEmitter.prototype.emit.call(this, event, ...args);
-      held.resolve();
-      return true;
-    }
-    return EventEmitter.prototype.emit.call(this, event, ...args);
-  });
+  const hold = holdOpenReply(acceptedPath);
   const openStore = (pathname: string, cancel?: AbortController) =>
-    broker.open<FixtureOperations>(
-      {
-        moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-        databasePath: pathname,
-        input: undefined,
-      },
-      undefined,
-      undefined,
-      { signal: cancel?.signal },
-    );
+    openBroker(broker, pathname, cancel);
   const accepted = openStore(acceptedPath, acceptedCancel);
   const acceptedOutcome = Promise.allSettled([accepted]);
   const pending: Promise<unknown>[] = [accepted];
   try {
-    await withinTest(held.promise, signal);
+    await withinTest(hold.held, signal);
     const queued = openStore(queuedPath, queuedCancel);
     const successor = openStore(successorPath);
     pending.push(queued, successor);
@@ -297,17 +358,15 @@ it("cancels queued opens without overtaking an accepted open or abandoning its s
     await withinTest(rejected, signal);
     expect(existsSync(queuedPath)).toBe(false);
     expect(existsSync(successorPath)).toBe(false);
-    release?.();
-    release = undefined;
+    hold.release();
     await expect(acceptedOutcome).resolves.toMatchObject([{ status: "fulfilled" }]);
     const next = await withinTest(successor, signal);
     assert(next, "Successor store missing");
     expect(await append(next, "survived canceled open")).toMatchObject({ writes: 1 });
     expect(existsSync(queuedPath)).toBe(false);
   } finally {
-    requests.mockRestore();
-    messages.mockRestore();
-    release?.();
+    hold.restore();
+    hold.release();
     await Promise.allSettled(pending);
     await broker.close();
   }
@@ -318,39 +377,16 @@ poolIt("keeps an independent database responsive while another worker is at capa
   const independent = await open(databasePath());
   const busyThread = (await append(busy, "before saturation")).threadId;
   await waitForDiagnosticEventsDrained();
-  const requests: DiagnosticWorkerRequestFields[] = [];
-  onTestFinished(
-    onInternalDiagnosticEvent(
-      (event) => {
-        if (event.type === "worker.request" && event.kind === "sqlite_writer") {
-          requests.push(event);
-        }
-      },
-      { include: ["worker.request"] },
-    ),
-  );
+  const requests = collectRequests((event) => event.kind === "sqlite_writer");
   let now = 0;
   vi.spyOn(performance, "now").mockImplementation(() => now);
-  const held = createDeferredCore();
-  let release: (() => void) | undefined;
-  const messages = vi.spyOn(Worker.prototype, "emit");
-  messages.mockImplementation(function (this: Worker, event: string | symbol, ...args: unknown[]) {
-    if (event === "message" && this.threadId === busyThread) {
-      messages.mockRestore();
-      release = () => EventEmitter.prototype.emit.call(this, event, ...args);
-      held.resolve();
-      return true;
-    }
-    return EventEmitter.prototype.emit.call(this, event, ...args);
-  });
-  const accepted = Promise.allSettled(
-    Array.from({ length: 128 }, (_, index) => append(busy, String(index))),
-  );
+  const hold = holdReply((worker) => worker.threadId === busyThread);
+  const accepted = Promise.allSettled(queueRows.map((value) => append(busy, value)));
   const canceled = new Error("Waiting command canceled");
   const revoked = new Error("Waiting command authority revoked");
   let waiting: Promise<PromiseSettledResult<unknown>[]> | undefined;
   try {
-    await held.promise;
+    await hold.held;
     now = 10;
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const completed = expect(append(independent, "independent write")).resolves.toMatchObject({
@@ -364,7 +400,7 @@ poolIt("keeps an independent database responsive while another worker is at capa
     const cancel = new AbortController();
     let current = true;
     waiting = Promise.allSettled([
-      busy.execute({ type: "append", input: { value: "canceled" } }, { signal: cancel.signal }),
+      append(busy, "canceled", cancel.signal),
       runSqliteWorkerStoreOperation(
         busy,
         (scope) => scope.execute({ type: "append", input: { value: "revoked" } }),
@@ -385,8 +421,8 @@ poolIt("keeps an independent database responsive while another worker is at capa
     expect(requests.at(-1)).toMatchObject({ phase: "completed", queueDepth: 130 });
   } finally {
     vi.useRealTimers();
-    messages.mockRestore();
-    release?.();
+    hold.restore();
+    hold.release();
     expect((await accepted).every((outcome) => outcome.status === "fulfilled")).toBe(true);
   }
   expect(await waiting).toMatchObject([
@@ -397,7 +433,7 @@ poolIt("keeps an independent database responsive while another worker is at capa
   ]);
   expect(await read(busy)).toEqual([
     "before saturation",
-    ...Array.from({ length: 128 }, (_, index) => String(index)),
+    ...queueRows,
     "oldest surviving waiter",
     "later arrival",
   ]);
@@ -467,23 +503,15 @@ it.each(["drain", "timeout"] as const)(
   async (action) => {
     const file = databasePath();
     const store = await open(file);
-    const accepted = Promise.allSettled(
-      Array.from({ length: 128 }, (_, index) => append(store, String(index))),
-    );
+    const accepted = Promise.allSettled(queueRows.map((value) => append(store, value)));
     const cancel = new AbortController();
-    const reason = new Error("waiting caller canceled");
     const logger = logging.getChildLogger();
     const warn = vi.spyOn(logger, "warn");
-    const logs = vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
+    vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     vi.setSystemTime(Date.now() + 60_000);
     const waiters = Promise.allSettled(
-      Array.from({ length: 2 }, () =>
-        store.execute(
-          { type: "append", input: { value: "never dispatched" } },
-          { signal: cancel.signal },
-        ),
-      ),
+      Array.from({ length: 2 }, () => append(store, "never dispatched", cancel.signal)),
     );
     let settled = false;
     void waiters.then(() => {
@@ -508,22 +536,19 @@ it.each(["drain", "timeout"] as const)(
         });
       }
       if (action === "timeout") {
-        expect(warn).toHaveBeenCalledTimes(1);
-        expect(warn).toHaveBeenCalledWith("SQLite worker admission delayed", {
+        expect(warn).toHaveBeenCalledExactlyOnceWith("SQLite worker admission delayed", {
           queueDepth: 2,
           waitMs: 10_000,
         });
       }
     } finally {
       vi.useRealTimers();
-      logs.mockRestore();
-      warn.mockRestore();
-      cancel.abort(reason);
+      cancel.abort();
       expect((await accepted).every((outcome) => outcome.status === "fulfilled")).toBe(true);
       await closing;
     }
     const reader = action === "drain" ? await open(file) : store;
-    expect(await read(reader)).toEqual(Array.from({ length: 128 }, (_, index) => String(index)));
+    expect(await read(reader)).toEqual(queueRows);
     expect(await append(reader, "capacity returned")).toMatchObject({
       writes: action === "drain" ? 1 : 129,
     });
@@ -538,10 +563,7 @@ it("charges admission waiters to the byte budget and releases canceled reservati
   );
   const accepted = Promise.allSettled(Array.from({ length: 128 }, () => read(store)));
   const cancel = new AbortController();
-  const waiting = store.execute(
-    { type: "append", input: { value: "x".repeat(40 * 1024 * 1024) } },
-    { signal: cancel.signal },
-  );
+  const waiting = append(store, "x".repeat(40 * 1024 * 1024), cancel.signal);
   const outcome = Promise.allSettled([waiting]);
   try {
     await expect(append(independent, "x".repeat(30 * 1024 * 1024))).rejects.toMatchObject({
@@ -553,10 +575,7 @@ it("charges admission waiters to the byte budget and releases canceled reservati
     ]);
     const replacement = new AbortController();
     const replacementOutcome = Promise.allSettled([
-      store.execute(
-        { type: "append", input: { value: "x".repeat(40 * 1024 * 1024) } },
-        { signal: replacement.signal },
-      ),
+      append(store, "x".repeat(40 * 1024 * 1024), replacement.signal),
     ]);
     replacement.abort(new Error("replacement admitted"));
     expect(await replacementOutcome).toMatchObject([
@@ -573,26 +592,19 @@ it("charges admission waiters to the byte budget and releases canceled reservati
   expect(await read(store)).toEqual([]);
 });
 
-poolIt.each([
-  { cores: 1, workers: 2 },
-  { cores: 128, workers: 2 },
-])("uses $workers worker threads for $cores available CPUs", async ({ cores, workers }) => {
-  const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(cores);
+poolIt.each([1, 128])("uses two worker threads for %i available CPUs", async (cores) => {
+  const workers = 2;
+  vi.spyOn(os, "availableParallelism").mockReturnValue(cores);
   const broker = new SqliteWorkerBroker();
   try {
     const threads = new Set<number>();
     for (let index = 0; index <= workers; index++) {
-      const store = await broker.open<FixtureOperations>({
-        moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-        databasePath: databasePath(),
-        input: undefined,
-      });
+      const store = await openBroker(broker, databasePath());
       assert(store, "Fixture store missing");
       threads.add((await append(store, "thread count")).threadId);
     }
     expect(threads.size).toBe(workers);
   } finally {
     await broker.close();
-    parallelism.mockRestore();
   }
 });

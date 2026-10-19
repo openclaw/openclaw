@@ -1,5 +1,3 @@
-// MCP loopback runtime scope cache.
-// Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import {
   readAdmittedRunOperatorAuthority,
@@ -11,20 +9,21 @@ import {
   loadPairedComputerUseAvailabilityForSurface,
   type PairedComputerUseAvailability,
 } from "../agents/computer-use-node-capabilities.js";
-import {
-  isCoreCodingSurfaceToolName,
-  listCoreToolFactoryDescriptors,
-} from "../agents/core-tool-factory-descriptors.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { prepareSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
+import {
+  isCoreCodingSurfaceToolName,
+  listCoreToolFactoryDescriptors,
+} from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../agents/tool-policy.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
+import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
@@ -72,6 +71,8 @@ type McpLoopbackScopeParams = {
   /** Host-selected coding owners for pre-grant projection only. */
   defaultMediatedToolNames?: readonly string[];
   messageActionTurnCapability?: string;
+  /** Memory audience of the authenticating run-bound grant; cached per grant token. */
+  memoryAudience?: MemoryAudience;
   grantToken?: string;
   /**
    * Liveness of the authenticating client grant. Deliberately absent from the
@@ -337,6 +338,7 @@ async function constructMcpLoopbackTools(
   const scopeOptions: Parameters<typeof resolveGatewayScopedTools>[0] = {
     ...context,
     messageActionTurnCapability: params.messageActionTurnCapability,
+    memoryAudience: params.memoryAudience,
     cfg: params.cfg,
     authProfileStore: params.authProfileStore,
     onYield: params.onYield,
@@ -460,7 +462,7 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
       requireExplicitMessageTarget: context.requireExplicitMessageTarget === true,
       nodeExecAllowed: context.nodeExecAllowed === true,
       delegationCapability:
-        context.delegationCapability === "report_only" ? "report_only" : undefined,
+        context.delegationCapability === "full" ? undefined : context.delegationCapability,
     },
     admittedRunInstance: params.admittedRunContext?.operationalRunInstance,
     defaultMediatedToolNames: params.defaultMediatedToolNames,

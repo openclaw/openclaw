@@ -172,7 +172,58 @@ describe("release candidate checklist", () => {
       flags: ["--tag", "v2026.9.1", "--workflow-sha", "b".repeat(12)],
       message: "--workflow-sha must be a full lowercase commit SHA",
     },
-  ])("rejects invalid tooling SHA selection: $message", ({ flags, message }) => {
+    {
+      flags: ["--tag", "v2026.7.1-beta.4", "--target-sha", "not-a-sha"],
+      message: "--target-sha must be a full lowercase commit SHA",
+    },
+    {
+      flags: ["--tag", "v2026.8.2-beta.1", "--publish-workflow-ref", "main"],
+      message: "protected release-publish tag",
+    },
+    {
+      flags: ["--tag", "v2026.5.14-beta.3", "--run-parallels", "--skip-parallels"],
+      message: "--run-parallels and --skip-parallels cannot be combined",
+    },
+    {
+      flags: ["--tag", "v2026.5.14-beta.3", "--skip-dispatch"],
+      message: "--skip-dispatch requires --full-release-run",
+    },
+    {
+      flags: ["--tag", "v2026.5.14-beta.3", "--workflow-ref", "release/2026.5.14"],
+      message: "--workflow-ref must be main",
+    },
+    {
+      flags: ["--tag", "v2026.7.1-alpha.3"],
+      message: "Alpha releases are retired;",
+    },
+    {
+      flags: ["--tag", "v2026.5.14-beta.3", "--tag", "v2026.5.14-beta.4"],
+      message: "--tag was provided more than once",
+    },
+    {
+      flags: ["--tag", "v2026.5.14-beta.3", "--plugin-sdk-api-acknowledgement", "ABC"],
+      message: "8-character lowercase digest",
+    },
+    {
+      flags: ["--tag", "v2026.5.14", "--windows-node-tag", "latest"],
+      message: "--windows-node-tag must be an explicit version tag, not latest",
+    },
+    {
+      flags: ["--tag", "v2026.5.14-beta.3", "--plugin-publish-scope", "selected"],
+      message: "--plugin-publish-scope selected requires --plugins",
+    },
+    {
+      flags: [
+        "--tag",
+        "v2026.5.14-beta.3",
+        "--plugin-publish-scope",
+        "selected",
+        "--plugins",
+        "@openclaw/diffs",
+      ],
+      message: "release candidates publish OpenClaw with --plugin-publish-scope all-publishable",
+    },
+  ])("rejects invalid candidate options: $message", ({ flags, message }) => {
     expect(() => parseArgs(flags)).toThrow(message);
   });
 
@@ -1238,12 +1289,6 @@ describe("release candidate checklist", () => {
     );
   });
 
-  it.each(["main"])("rejects an unprotected publisher selector %s", (ref) => {
-    expect(() => parseArgs(["--tag", "v2026.8.2-beta.1", "--publish-workflow-ref", ref])).toThrow(
-      "protected release-publish tag",
-    );
-  });
-
   it.each(["v2026.9.1"])("refuses to print a main-sourced publish command for %s", (tag) => {
     const options = parseArgs(["--tag", tag]);
     const producer = { status: "passed", headSha: "a".repeat(40), workflowRef: "main" };
@@ -1272,13 +1317,82 @@ describe("release candidate checklist", () => {
     );
   });
 
-  it("treats the release tag as a planned post-validation identity", () => {
-    const options = parseArgs(["--tag", "v2026.7.1-beta.4", "--target-sha", "a".repeat(40)]);
-
-    expect(options.targetSha).toBe("a".repeat(40));
-    expect(() => parseArgs(["--tag", "v2026.7.1-beta.4", "--target-sha", "not-a-sha"])).toThrow(
-      "--target-sha must be a full lowercase commit SHA",
-    );
+  it.each([
+    {
+      name: "treats the release tag as a planned post-validation identity",
+      flags: ["--tag", "v2026.7.1-beta.4", "--target-sha", "a".repeat(40)],
+      expected: { targetSha: "a".repeat(40) },
+    },
+    {
+      name: "uses trusted main for regular release workflow tooling",
+      flags: ["--tag", "v2026.5.14-beta.3"],
+      expected: { workflowRef: "main" },
+    },
+    {
+      name: "runs explicitly requested beta Parallels checks",
+      flags: ["--tag", "v2026.5.14-beta.3", "--run-parallels"],
+      expected: { parallelsMode: "run", parallelsSkipReason: "", skipParallels: false },
+    },
+    {
+      name: "runs Parallels by default for stable candidates",
+      flags: ["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"],
+      expected: { parallelsMode: "auto", parallelsSkipReason: "", skipParallels: false },
+    },
+    {
+      name: "runs Parallels by default for full qualification",
+      flags: ["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3", "--release-profile", "full"],
+      expected: { parallelsMode: "auto", parallelsSkipReason: "", skipParallels: false },
+    },
+    {
+      name: "accepts repeatable candidate registry package artifacts",
+      flags: [
+        "--tag",
+        "v2026.7.1-beta.3",
+        "--parallels-registry-package-artifact",
+        "/tmp/codex-artifact",
+        "--parallels-registry-package-artifact",
+        "/tmp/matrix-artifact",
+      ],
+      expected: {
+        parallelsRegistryPackageArtifactDirs: ["/tmp/codex-artifact", "/tmp/matrix-artifact"],
+      },
+    },
+    {
+      name: "stops parsing options after the argument terminator",
+      flags: [
+        "--tag",
+        "v2026.5.14-beta.3",
+        "--full-release-run",
+        "111",
+        "--npm-preflight-run",
+        "222",
+        "--skip-dispatch",
+        "--",
+        "--plugin-publish-scope",
+        "selected",
+      ],
+      expected: { pluginPublishScope: "all-publishable" },
+    },
+    {
+      name: "accepts package-manager argument separators before script options",
+      flags: [
+        "--",
+        "--tag",
+        "v2026.5.14-beta.3",
+        "--full-release-run",
+        "111",
+        "--npm-preflight-run",
+        "222",
+        "--skip-dispatch",
+        "--skip-parallels",
+      ],
+      expected: { tag: "v2026.5.14-beta.3", skipParallels: true },
+    },
+  ])("$name", ({ flags, expected }) => {
+    const options = parseArgs(flags);
+    for (const [key, value] of Object.entries(expected)) {
+      expect(options).toHaveProperty(key, value);
+    }
   });
 
   it("accepts absent and exact lightweight or annotated tags, rejecting mismatches and lookup errors", () => {
@@ -1380,24 +1494,26 @@ describe("release candidate checklist", () => {
     },
   );
 
-  it("captures changelogs larger than the Node spawnSync default buffer", () => {
-    const output = run(
-      process.execPath,
-      ["-e", "process.stdout.write('x'.repeat(2 * 1024 * 1024))"],
-      { capture: true },
-    );
-
-    expect(output).toHaveLength(2 * 1024 * 1024);
-  });
-
-  it("passes scoped environment overrides to release child commands", () => {
-    const output = run(
-      process.execPath,
-      ["-e", "process.stdout.write(process.env.OPENCLAW_RELEASE_TEST_VALUE ?? '')"],
-      { capture: true, env: { OPENCLAW_RELEASE_TEST_VALUE: "passed" } },
-    );
-
-    expect(output).toBe("passed");
+  it.each([
+    {
+      name: "captures changelogs larger than the Node spawnSync default buffer",
+      script: "process.stdout.write('x'.repeat(2 * 1024 * 1024))",
+      env: undefined,
+      expectedLength: 2 * 1024 * 1024,
+    },
+    {
+      name: "passes scoped environment overrides to release child commands",
+      script: "process.stdout.write(process.env.OPENCLAW_RELEASE_TEST_VALUE ?? '')",
+      env: { OPENCLAW_RELEASE_TEST_VALUE: "passed" },
+      expected: "passed",
+    },
+  ])("$name", ({ script, env, expected, expectedLength }) => {
+    const output = run(process.execPath, ["-e", script], { capture: true, env });
+    if (expectedLength !== undefined) {
+      expect(output).toHaveLength(expectedLength);
+    } else {
+      expect(output).toBe(expected);
+    }
   });
 
   it("keeps the frozen release target separate from clean trusted workflow tooling", () => {
@@ -1537,11 +1653,24 @@ describe("release candidate checklist", () => {
     expect(reachable).toHaveBeenCalledWith(recordedTarget, targetSha);
   });
 
-  it("rejects duplicate contribution record rows even when the declared count matches", () => {
+  it.each([
+    {
+      name: "duplicate contribution rows even when the declared count matches",
+      count: "1 merged PR.",
+      rows: ["- **PR #123** fix: example.", "- **PR #123** fix: duplicate."],
+      error: "duplicate contribution record PR #123",
+    },
+    {
+      name: "canonical provenance whose unique total does not match the PR rows",
+      count: "1 in-range PR + 1 retained seed-only PR = 2 unique PRs.",
+      rows: ["- **PR #123** fix: example."],
+      error: "contribution record row count 1 != 2",
+    },
+  ])("rejects $name", ({ count, rows, error }) => {
     const targetSha = "b".repeat(40);
     const changelog = candidateChangelog(
-      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
-      ["- **PR #123** fix: example.", "- **PR #123** fix: duplicate."],
+      `This audited record covers the complete base..${targetSha} history: ${count}`,
+      rows,
     );
 
     expect(() =>
@@ -1552,25 +1681,7 @@ describe("release candidate checklist", () => {
         targetSha,
         isAncestor: () => true,
       }),
-    ).toThrow("duplicate contribution record PR #123");
-  });
-
-  it("rejects canonical provenance whose unique total does not match the PR rows", () => {
-    const targetSha = "b".repeat(40);
-    const changelog = candidateChangelog(
-      `This audited record covers the complete base..${targetSha} history: 1 in-range PR + 1 retained seed-only PR = 2 unique PRs.`,
-      ["- **PR #123** fix: example."],
-    );
-
-    expect(() =>
-      validateCandidateChangelogProvenance({
-        changelog,
-        version: "2026.7.1",
-        tag: "v2026.7.1-beta.3",
-        targetSha,
-        isAncestor: () => true,
-      }),
-    ).toThrow("contribution record row count 1 != 2");
+    ).toThrow(error);
   });
 
   it("uses numbered historical record rows and skips Unreleased baseline rows", () => {
@@ -1699,36 +1810,6 @@ describe("release candidate checklist", () => {
     });
   });
 
-  it("supports explicit and profile-default Parallels execution", () => {
-    const beta = parseArgs(["--tag", "v2026.5.14-beta.3", "--run-parallels"]);
-    const stable = parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]);
-    const full = parseArgs([
-      "--tag",
-      "v2026.5.14",
-      "--windows-node-tag",
-      "v0.6.3",
-      "--release-profile",
-      "full",
-    ]);
-
-    expect(beta).toMatchObject({
-      parallelsMode: "run",
-      parallelsSkipReason: "",
-      skipParallels: false,
-    });
-    for (const options of [stable, full]) {
-      expect(options.parallelsMode).toBe("auto");
-      expect(options.skipParallels).toBe(false);
-      expect(options.parallelsSkipReason).toBe("");
-    }
-  });
-
-  it("rejects conflicting Parallels modes", () => {
-    expect(() =>
-      parseArgs(["--tag", "v2026.5.14-beta.3", "--run-parallels", "--skip-parallels"]),
-    ).toThrow("--run-parallels and --skip-parallels cannot be combined");
-  });
-
   it("runs Parallels against the exact prepared candidate tarball with the candidate harness", async () => {
     expect(candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [], "/trusted")).toEqual([
       "exec",
@@ -1806,19 +1887,6 @@ describe("release candidate checklist", () => {
         env: { OPENCLAW_PARALLELS_ARTIFACT_ROOT: "/candidate/.artifacts/parallels" },
       },
     );
-  });
-
-  it("accepts repeatable candidate registry package artifacts", () => {
-    expect(
-      parseArgs([
-        "--tag",
-        "v2026.7.1-beta.3",
-        "--parallels-registry-package-artifact",
-        "/tmp/codex-artifact",
-        "--parallels-registry-package-artifact",
-        "/tmp/matrix-artifact",
-      ]).parallelsRegistryPackageArtifactDirs,
-    ).toEqual(["/tmp/codex-artifact", "/tmp/matrix-artifact"]);
   });
 
   it("binds Parallels registry packages to plugin preflight manifests", () => {
@@ -2073,10 +2141,26 @@ describe("release candidate checklist", () => {
     });
 
     it.each([
-      ["moved", { ...tagRef, object: { type: "commit", sha: "b".repeat(40) } }],
-      ["annotated", { ...tagRef, object: { type: "tag", sha: headSha } }],
-      ["missing", null],
-    ])("rejects a %s protected npm preflight tag", async (_label, tag) => {
+      {
+        name: "moved tag",
+        tag: { ...tagRef, object: { type: "commit", sha: "b".repeat(40) } },
+        error: "protected release tooling tag",
+      },
+      {
+        name: "annotated tag",
+        tag: { ...tagRef, object: { type: "tag", sha: headSha } },
+        error: "protected release tooling tag",
+      },
+      { name: "missing tag", tag: null, error: "protected release tooling tag" },
+      {
+        name: "same-name branch",
+        tag: tagRef,
+        branches: [{ ref: `refs/heads/${protectedRef}` }],
+        error: "ambiguous",
+      },
+      { name: "non-array branch lookup", tag: tagRef, branches: {}, error: "ambiguous" },
+      { name: "malformed branch entry", tag: tagRef, branches: [{}], error: "ambiguous" },
+    ])("rejects npm preflight provenance: $name", async ({ tag, branches, error }) => {
       await expect(
         Promise.resolve().then(() =>
           validateNpmPreflightRunSource(
@@ -2084,36 +2168,10 @@ describe("release candidate checklist", () => {
               ...source,
               workflowRun: { ...workflowRun, headBranch: protectedRef },
             },
-            api(tag),
+            api(tag, branches),
           ),
         ),
-      ).rejects.toThrow("protected release tooling tag");
-    });
-
-    it("rejects a same-name branch instead of inferring tag provenance", async () => {
-      await expect(
-        Promise.resolve().then(() =>
-          validateNpmPreflightRunSource(
-            {
-              ...source,
-              workflowRun: { ...workflowRun, headBranch: protectedRef },
-            },
-            api(tagRef, [{ ref: `refs/heads/${protectedRef}` }]),
-          ),
-        ),
-      ).rejects.toThrow("ambiguous");
-    });
-
-    it.each([{}, [{}]])("rejects malformed branch lookup data %j", async (branches) => {
-      await expect(
-        validateNpmPreflightRunSource(
-          {
-            ...source,
-            workflowRun: { ...workflowRun, headBranch: protectedRef },
-          },
-          api(tagRef, branches),
-        ),
-      ).rejects.toThrow("ambiguous");
+      ).rejects.toThrow(error);
     });
 
     it.each([503])("rejects unreadable tag provenance with HTTP %s", async (status) => {
@@ -2168,37 +2226,11 @@ describe("release candidate checklist", () => {
     });
   });
 
-  it("requires run ids when dispatch is disabled", () => {
-    expect(() => parseArgs(["--tag", "v2026.5.14-beta.3", "--skip-dispatch"])).toThrow(
-      "--skip-dispatch requires --full-release-run",
-    );
-  });
-
-  it("uses trusted main for regular release workflow tooling", () => {
-    expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).workflowRef).toBe("main");
-    expect(() =>
-      parseArgs(["--tag", "v2026.5.14-beta.3", "--workflow-ref", "release/2026.5.14"]),
-    ).toThrow("--workflow-ref must be main");
-  });
-
   it("keeps release validation context on the canonical release branch", () => {
     expect(releaseBranchForTag("v2026.7.1-beta.4")).toBe("release/2026.7.1");
     expect(releaseBranchForTag("v2026.7.1")).toBe("release/2026.7.1");
     expect(releaseBranchForTag("v2026.7.1-1")).toBe("release/2026.7.1-1");
     expect(releaseBranchForTag("v2026.7.1-alpha.4")).toBe("");
-  });
-
-  it.each([["--tag", "v2026.7.1-alpha.3"]])(
-    "rejects retired alpha candidate inputs %j",
-    (...flags) => {
-      expect(() => parseArgs(flags)).toThrow("Alpha releases are retired;");
-    },
-  );
-
-  it("rejects duplicate release candidate CLI options", () => {
-    expect(() => parseArgs(["--tag", "v2026.5.14-beta.3", "--tag", "v2026.5.14-beta.4"])).toThrow(
-      "--tag was provided more than once",
-    );
   });
 
   it("requires stable validation evidence to include soak", () => {
@@ -2461,40 +2493,6 @@ describe("release candidate checklist", () => {
     );
   });
 
-  it("stops parsing options after the argument terminator", () => {
-    const options = parseArgs([
-      "--tag",
-      "v2026.5.14-beta.3",
-      "--full-release-run",
-      "111",
-      "--npm-preflight-run",
-      "222",
-      "--skip-dispatch",
-      "--",
-      "--plugin-publish-scope",
-      "selected",
-    ]);
-
-    expect(options.pluginPublishScope).toBe("all-publishable");
-  });
-
-  it("accepts package-manager argument separators before script options", () => {
-    const options = parseArgs([
-      "--",
-      "--tag",
-      "v2026.5.14-beta.3",
-      "--full-release-run",
-      "111",
-      "--npm-preflight-run",
-      "222",
-      "--skip-dispatch",
-      "--skip-parallels",
-    ]);
-
-    expect(options.tag).toBe("v2026.5.14-beta.3");
-    expect(options.skipParallels).toBe(true);
-  });
-
   it("round-trips the prepared command into the full release button contract", () => {
     const preparedWorkflowRef = "release-publish/bbbbbbbbbbbb-123";
     const windowsNodeInstallerDigests = JSON.stringify({
@@ -2571,29 +2569,8 @@ describe("release candidate checklist", () => {
     }
   });
 
-  it("validates Plugin SDK acknowledgement digests", () => {
-    expect(() =>
-      parseArgs(["--tag", "v2026.5.14-beta.3", "--plugin-sdk-api-acknowledgement", "ABC"]),
-    ).toThrow("8-character lowercase digest");
-  });
-
-  it("rejects an unpinned Windows source release", () => {
-    expect(() => parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "latest"])).toThrow(
-      "--windows-node-tag must be an explicit version tag, not latest",
-    );
-  });
-
-  it("validates the stable Windows source release and immutable installer digests", async () => {
-    await expect(
-      validateWindowsSourceRelease("v0.6.3", {
-        fetchImpl: async () => windowsReleaseResponse(),
-        token: "test-token",
-        timeoutMs: 1234,
-      }),
-    ).resolves.toEqual({ tag: "v0.6.3", url: windowsReleaseUrl, assets: windowsAssets });
-  });
-
   it.each([
+    [{}, undefined],
     [{ draft: true }, "must be published"],
     [{ prerelease: true }, "must not be a prerelease"],
     [{ tag_name: "v0.6.4" }, "Windows source release tag mismatch: expected v0.6.3, got v0.6.4"],
@@ -2610,33 +2587,21 @@ describe("release candidate checklist", () => {
       },
       "asset OpenClawCompanion-Setup-x64.exe is missing its SHA-256 digest",
     ],
-  ])("rejects an invalid stable Windows source release", async (override, message) => {
-    await expect(
-      validateWindowsSourceRelease("v0.6.3", {
-        fetchImpl: async () => windowsReleaseResponse(override),
-        timeoutMs: 1234,
-        token: "test-token",
-      }),
-    ).rejects.toThrow(message);
-  });
-
-  it("requires explicit plugin names for selected plugin publish scope", () => {
-    expect(() =>
-      parseArgs(["--tag", "v2026.5.14-beta.3", "--plugin-publish-scope", "selected"]),
-    ).toThrow("--plugin-publish-scope selected requires --plugins");
-  });
-
-  it("rejects selected plugin publish scope for release candidates", () => {
-    expect(() =>
-      parseArgs([
-        "--tag",
-        "v2026.5.14-beta.3",
-        "--plugin-publish-scope",
-        "selected",
-        "--plugins",
-        "@openclaw/diffs",
-      ]),
-    ).toThrow("release candidates publish OpenClaw with --plugin-publish-scope all-publishable");
+  ])("validates stable Windows source release %j", async (override, message) => {
+    const result = validateWindowsSourceRelease("v0.6.3", {
+      fetchImpl: async () => windowsReleaseResponse(override),
+      timeoutMs: 1234,
+      token: "test-token",
+    });
+    if (message === undefined) {
+      await expect(result).resolves.toEqual({
+        tag: "v0.6.3",
+        url: windowsReleaseUrl,
+        assets: windowsAssets,
+      });
+    } else {
+      await expect(result).rejects.toThrow(message);
+    }
   });
 
   it("fails closed when gh dispatch output does not include the run url", () => {
@@ -2791,6 +2756,103 @@ describe("GitHub API public fallback", () => {
       expect(fetchImpl).toHaveBeenCalledTimes(2);
       expect(fetchImpl.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer x" });
       expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
+    },
+  );
+});
+
+describe("release run environment approval diagnostics", () => {
+  it.each([
+    { capability: true, unavailable: false, empty: false },
+    { capability: false, unavailable: false, empty: false },
+    { capability: undefined, unavailable: false, empty: false },
+    { capability: undefined, unavailable: true, empty: false },
+    { capability: undefined, unavailable: false, empty: true },
+  ])(
+    "reports approval capability $capability (unavailable=$unavailable, empty=$empty)",
+    async ({ capability, unavailable, empty }) => {
+      const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
+      const owners = [
+        "runInfo",
+        "pendingDeployments",
+        "summarizePendingDeployments",
+        "summarizeFailedRun",
+        "waitForSuccessfulRun",
+      ]
+        .map(
+          (name) =>
+            source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?^\\}`, "mu"))?.[0],
+        )
+        .join("\n");
+      const log = vi.fn();
+      let reads = 0;
+      const fetchImpl = vi.fn(async (path: string, init?: RequestInit) => {
+        if (path.endsWith("/pending_deployments")) {
+          if (unavailable && new Headers(init?.headers).has("Authorization")) {
+            return jsonResponse(
+              { message: "API rate limit exceeded; credential-private fixture error" },
+              { status: 403 },
+            );
+          }
+          return jsonResponse(
+            empty || reads > 1
+              ? []
+              : [
+                  {
+                    environment: { id: 7, name: "npm-release" },
+                    current_user_can_approve: unavailable ? false : capability,
+                  },
+                ],
+          );
+        }
+        if (path.includes("/jobs?")) {
+          return jsonResponse({ jobs: [] });
+        }
+        reads++;
+        return jsonResponse({
+          id: 123,
+          name: "Release",
+          head_branch: "main",
+          status: reads === 1 ? "waiting" : "completed",
+          conclusion: reads === 1 ? null : "success",
+          html_url: "https://github.com/fixture/repo/actions/runs/123",
+        });
+      });
+      await runInNewContext(
+        stripNodeTypeScriptTypes(
+          `${owners}\nwaitForSuccessfulRun("fixture/repo", "123", { workflowName: "Release", workflowRef: "main" });`,
+        ),
+        {
+          githubApi: (path: string, options: Parameters<typeof githubApi>[1]) =>
+            githubApi(path, { ...options, token: "test-token", fetchImpl }),
+          isRecord,
+          formatJsonValue: JSON.stringify,
+          console: { log },
+          wait: async () => {},
+        },
+      );
+      const output = log.mock.calls.map(([line]) => line).join("\n");
+      if (unavailable) {
+        expect(output).toContain("environment approval status unavailable");
+        expect(output).toContain("not proof that no approval is pending");
+        expect(output).not.toContain("credential-private");
+      } else if (empty) {
+        expect(output).not.toContain("pending approval");
+        expect(output).not.toContain("approval status unavailable");
+      } else {
+        expect(output).toContain('pending approval: env="npm-release"');
+        expect(output).toContain(
+          "Environment approval is separate from repository write, organization membership, branch-policy read, CI bypass, and production deployment authority",
+        );
+        expect(output.includes("approve: gh api -X POST")).toBe(capability === true);
+        if (capability !== true) {
+          expect(output).toContain("ask an eligible environment reviewer");
+          expect(output).toContain(
+            capability === false
+              ? "authenticated caller cannot approve"
+              : "Caller approval capability is unknown",
+          );
+        }
+      }
     },
   );
 });

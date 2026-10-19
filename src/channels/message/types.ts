@@ -90,6 +90,8 @@ export type MessageReceipt = {
   deleteToken?: string;
   sentAt: number;
   raw?: readonly MessageReceiptSourceResult[];
+  /** Normalized physical send evidence, retained even when a source has no platform ID. */
+  sourceResults?: readonly MessageReceiptSourceResult[];
 };
 
 export type RenderedMessageBatchPlanKind =

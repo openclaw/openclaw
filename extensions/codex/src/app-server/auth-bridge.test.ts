@@ -14,7 +14,6 @@ import {
   applyCodexAppServerAuthProfile as applyAuth,
   bridgeCodexAppServerStartOptions as bridgeStart,
   refreshCodexAppServerAuthTokens as refreshTokens,
-  reconcileCodexComputerUseStartArtifacts as reconcileArtifacts,
   resolveCodexAppServerAuthAccountCacheKey as authCacheKey,
   resolveCodexAppServerHomeDir as codexHomeDir,
   resolveCodexAppServerPreparedAuthHandoff as prepareHandoff,
@@ -29,6 +28,7 @@ import {
   ensureCodexAppServerClientRuntime,
   recordCodexAppServerAuthHandoff,
 } from "./client-runtime.js";
+import { reconcileCodexComputerUseStartArtifacts } from "./computer-use-artifacts.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
 import { createClientHarness } from "./test-support.js";
@@ -276,7 +276,13 @@ function createStartOptions(
   };
 }
 
-const EPHEMERAL_AUTH_ARGS = ["-c", 'cli_auth_credentials_store="ephemeral"', "app-server"];
+const MANAGED_AUTH_ARGS = [
+  "-c",
+  'cli_auth_credentials_store="ephemeral"',
+  "-c",
+  "thread_unload_delay_secs=0",
+  "app-server",
+];
 
 async function expectPathMissing(filePath: string): Promise<void> {
   try {
@@ -446,7 +452,7 @@ describe("Codex auth bridge", () => {
       authRequirement: "api-key",
     });
     expect(startOptions).toMatchObject({
-      args: EPHEMERAL_AUTH_ARGS,
+      args: MANAGED_AUTH_ARGS,
       env: { CODEX_HOME: codexHomeDir(agentDir) },
     });
 
@@ -467,7 +473,7 @@ describe("Codex auth bridge", () => {
       desktop.marketplaceSource.mockResolvedValueOnce(undefined);
 
       await expect(
-        reconcileArtifacts({
+        reconcileCodexComputerUseStartArtifacts({
           startOptions: createStartOptions({
             command: "/Applications/ChatGPT.app/Contents/Resources/codex",
           }),
@@ -489,7 +495,7 @@ describe("Codex auth bridge", () => {
   ])("keeps an exact desktop candidate with configured marketplace selection", async (selector) => {
     await withTempDir("openclaw-codex-computer-use-custom-source-", async (agentDir) => {
       await expect(
-        reconcileArtifacts({
+        reconcileCodexComputerUseStartArtifacts({
           startOptions: createStartOptions({
             command: "/Applications/ChatGPT.app/Contents/Resources/codex",
           }),
@@ -509,7 +515,7 @@ describe("Codex auth bridge", () => {
     desktop.service.mockRejectedValueOnce(new Error("copy failed"));
 
     await expect(
-      reconcileArtifacts({
+      reconcileCodexComputerUseStartArtifacts({
         startOptions: createStartOptions(),
         agentDir: "/tmp/openclaw-codex-computer-use-failed",
         pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
@@ -530,19 +536,19 @@ describe("Codex auth bridge", () => {
       },
     };
 
-    await reconcileArtifacts({
+    await reconcileCodexComputerUseStartArtifacts({
       startOptions,
       agentDir,
       pluginConfig,
       desktopGeneration: { epoch: 1, fingerprint: "desktop-x" },
     });
-    await reconcileArtifacts({
+    await reconcileCodexComputerUseStartArtifacts({
       startOptions,
       agentDir,
       pluginConfig,
       desktopGeneration: { epoch: 1, fingerprint: "desktop-x" },
     });
-    await reconcileArtifacts({
+    await reconcileCodexComputerUseStartArtifacts({
       startOptions,
       agentDir,
       pluginConfig,
@@ -583,7 +589,7 @@ describe("Codex auth bridge", () => {
       });
     let callerCurrent = true;
     const startOptions = createStartOptions();
-    const first = reconcileArtifacts({
+    const first = reconcileCodexComputerUseStartArtifacts({
       startOptions,
       agentDir,
       pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
@@ -596,7 +602,7 @@ describe("Codex auth bridge", () => {
     });
     await firstMarketplaceStarted.promise;
     callerCurrent = false;
-    const second = reconcileArtifacts({
+    const second = reconcileCodexComputerUseStartArtifacts({
       startOptions,
       agentDir,
       pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
@@ -610,6 +616,31 @@ describe("Codex auth bridge", () => {
     expect(desktop.service).toHaveBeenCalledTimes(1);
   });
 
+  baseIt.each([
+    { transport: "stdio" as const, homeScope: "agent" as const, proxy: false, managed: true },
+    { transport: "stdio" as const, homeScope: "user" as const, proxy: false, managed: false },
+    { transport: "stdio" as const, homeScope: "agent" as const, proxy: true, managed: false },
+    { transport: "websocket" as const, homeScope: "agent" as const, proxy: false, managed: false },
+    { transport: "unix" as const, homeScope: "agent" as const, proxy: false, managed: false },
+  ])(
+    "owns unload retention only for managed local starts: $transport/$homeScope/proxy=$proxy",
+    async ({ transport, homeScope, proxy, managed }) => {
+      const agentDir = agentDirs.make();
+      vi.stubEnv("CODEX_HOME", path.join(agentDir, "native-home"));
+      const startOptions = createStartOptions({
+        transport,
+        homeScope,
+        args: ["-c", "thread_unload_delay_secs=25", "app-server", ...(proxy ? ["proxy"] : [])],
+      });
+      const bridged = await bridgeStart({ startOptions, agentDir, authProfileId: null });
+      expect(bridged.args).toEqual(
+        managed
+          ? ["-c", "thread_unload_delay_secs=25", "-c", "thread_unload_delay_secs=0", "app-server"]
+          : startOptions.args,
+      );
+    },
+  );
+
   it("uses the native user Codex home for coexistence mode", async ({ agentDir: root }) => {
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(root, "user-codex-home");
@@ -621,7 +652,7 @@ describe("Codex auth bridge", () => {
     });
     await fs.access(codexHome);
     await expectPathMissing(codexHomeDir(agentDir));
-    await reconcileArtifacts({
+    await reconcileCodexComputerUseStartArtifacts({
       startOptions,
       agentDir,
       pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
@@ -645,7 +676,7 @@ describe("Codex auth bridge", () => {
       }),
     ).resolves.toEqual({
       ...startOptions,
-      args: EPHEMERAL_AUTH_ARGS,
+      args: MANAGED_AUTH_ARGS,
       env: {
         CODEX_HOME: codexHome,
         HOME: nativeHome,
@@ -656,7 +687,7 @@ describe("Codex auth bridge", () => {
     await fs.access(codexHome);
     await fs.access(nativeHome);
     expect(startOptions.clearEnv).toEqual(["CODEX_HOME", "HOME", "FOO"]);
-    await reconcileArtifacts({
+    await reconcileCodexComputerUseStartArtifacts({
       startOptions,
       agentDir,
       pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
@@ -690,7 +721,7 @@ describe("Codex auth bridge", () => {
       }),
     ).resolves.toEqual({
       ...startOptions,
-      args: EPHEMERAL_AUTH_ARGS,
+      args: MANAGED_AUTH_ARGS,
       env: {
         EXISTING: "1",
         CODEX_HOME: codexHomeDir(agentDir),
@@ -721,7 +752,7 @@ describe("Codex auth bridge", () => {
         });
         expect(bridged).toEqual({
           ...startOptions,
-          args: EPHEMERAL_AUTH_ARGS,
+          args: MANAGED_AUTH_ARGS,
           env: { CODEX_HOME: codexHomeDir(agentDir) },
           clearEnv: ["FOO", "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
         });
@@ -834,7 +865,7 @@ describe("Codex auth bridge", () => {
       }),
     ).resolves.toEqual({
       ...startOptions,
-      args: EPHEMERAL_AUTH_ARGS,
+      args: MANAGED_AUTH_ARGS,
       env: {
         CODEX_HOME: codexHomeDir(agentDir),
       },

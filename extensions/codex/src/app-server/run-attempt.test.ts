@@ -9,10 +9,7 @@ import {
   resolveActiveEmbeddedRunSessionId,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  replaceRuntimeAuthProfileStoreSnapshots,
-  saveAuthProfileStore,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
@@ -77,7 +74,6 @@ import {
   type v2,
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
-import { readCodexRateLimitsRevision, rememberCodexRateLimitsRead } from "./rate-limit-cache.js";
 import { registerCodexFastModeTests } from "./run-attempt-fast-mode.test-support.js";
 import {
   expectRetainedSuccessfulThread,
@@ -101,7 +97,6 @@ import {
   mockCall,
   mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
-  rateLimitsUpdated,
   runCodexAppServerAttempt,
   setCodexTestModelSupportsTools,
   setCodexAppServerClientFactoryForTest,
@@ -115,6 +110,8 @@ import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import * as attemptTurnState from "./run-attempt-turn-state.js";
 import { setAgentWorkspaceForTest } from "./run-attempt-workspace.test-support.js";
 import { registerSettledFinalizationTests } from "./run-attempt.settled-finalization.test-support.js";
+import { registerCodexUsageLimitTests } from "./run-attempt.usage-limits.test-support.js";
+import { registerCodexWorkspacePolicyTests } from "./run-attempt.workspace-policy.test-support.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -657,6 +654,7 @@ async function runSettledFailureClientReplacementTest(
   const requests = options.requests ?? [];
   const clients: Array<ReturnType<typeof createCodexLifecycleHarness>> = [];
   const turnStarted = createDeferred<ReturnType<typeof createCodexLifecycleHarness>>();
+  const failedThreadRead = createDeferred<void>();
   onTestFinished(async () => {
     await Promise.all(clients.map(({ client }) => client.closeAndWait()));
   });
@@ -700,7 +698,11 @@ async function runSettledFailureClientReplacementTest(
       if (method !== "initialize") {
         methods.push(method);
       }
-      return nativeRequest(method, params, requestOptions);
+      const response = nativeRequest(method, params, requestOptions);
+      if (startIndex === 0 && method === "thread/read") {
+        void response.then(() => failedThreadRead.resolve());
+      }
+      return response;
     });
     clients.push(wire);
     return wire.client;
@@ -723,6 +725,8 @@ async function runSettledFailureClientReplacementTest(
       }),
   );
   const { run, started } = startClockControlledAttempt(createParams(sessionFile, workspaceDir));
+  await failedThreadRead.promise;
+  await vi.advanceTimersByTimeAsync(2_000);
   const [readyClient] = await Promise.all([turnStarted.promise, started]);
   readyClient.notify({
     method: "turn/completed",
@@ -1627,10 +1631,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(registeredToolNames).toContain("message");
     expect(registeredToolNames).toContain("heartbeat_respond");
     expect(normalInstructions).not.toContain(
-      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
+      "Deferred searchable OpenClaw dynamic tools available: openclaw.heartbeat_respond",
     );
     expect(heartbeatInstructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond.",
+      "Deferred searchable OpenClaw dynamic tools available: openclaw.heartbeat_respond.",
     );
     for (const bridge of [normalBridge, heartbeatBridge, nextNormalBridge]) {
       const heartbeat = flattenSpecsWithNamespace(bridge.specs).find(
@@ -2195,9 +2199,6 @@ describe("runCodexAppServerAttempt", () => {
         if (kind === "heartbeat") {
           params.trigger = "heartbeat";
         }
-        if (kind === "authorized") {
-          params.toolAuthorityFingerprint = "synthetic-authority";
-        }
         const run = runCodexAppServerAttempt(params);
         await awaitGateBeforeSettlement(
           harness.waitForMethod("turn/start"),
@@ -2306,7 +2307,6 @@ describe("runCodexAppServerAttempt", () => {
     );
     const { sessionFile, workspaceDir } = createRunPaths();
     const params = createParams(sessionFile, workspaceDir);
-    params.toolAuthorityFingerprint = "restrictive-turn-authority";
 
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
       "Codex app-server cannot enforce before_prompt_build toolsAllow",
@@ -2325,7 +2325,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     const { sessionFile, workspaceDir } = createRunPaths();
     openRunSession(sessionFile).appendMessage(userMessage("previous request", Date.now()));
-    const { closeAndWait, events, retireSpy, state } = installCleanupTrackingClient();
+    const { closeAndWait, events, retireSpy } = installCleanupTrackingClient();
     const abortController = new AbortController();
     const removeAbortListener = vi.spyOn(abortController.signal, "removeEventListener");
     const params = createParams(sessionFile, workspaceDir);
@@ -2339,13 +2339,12 @@ describe("runCodexAppServerAttempt", () => {
     expect(beforePromptBuild).toHaveBeenCalledTimes(2);
     expect(events).toContain("request:thread/start");
     expect(events).not.toContain("request:turn/start");
-    expect(retireSpy).toHaveBeenCalledOnce();
-    expect(retireSpy).toHaveBeenCalledWith(state.client);
-    expect(closeAndWait).toHaveBeenCalledOnce();
+    expect(retireSpy).not.toHaveBeenCalled();
+    expect(closeAndWait).not.toHaveBeenCalled();
     expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
   });
 
-  it("preserves binding retention errors while releasing fundamental resources", async () => {
+  it("preserves binding retention errors while releasing the shared thread subscription", async () => {
     const bindingStore = createCodexTestBindingStore();
     const originalWithLease = bindingStore.withLease.bind(bindingStore);
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -2362,7 +2361,6 @@ describe("runCodexAppServerAttempt", () => {
           return await originalWithLease(identity, run);
         }
         bindingCleanupFailures += 1;
-        params.cleanupBundleMcpOnRunEnd = true;
         throw new Error("binding retention cleanup failed");
       },
     };
@@ -2382,12 +2380,11 @@ describe("runCodexAppServerAttempt", () => {
     await expect(run).rejects.toThrow("binding retention cleanup failed");
 
     expect(bindingCleanupFailures).toBe(1);
-    expect(params.cleanupBundleMcpOnRunEnd).toBe(true);
     expect(events).toContain("request:turn/start");
-    expect(events).toContain("closeAndWait");
-    expect(retireSpy).toHaveBeenCalledOnce();
-    expect(retireSpy).toHaveBeenCalledWith(state.client);
-    expect(closeAndWait).toHaveBeenCalledOnce();
+    expect(events).toContain("request:thread/unsubscribe");
+    expect(events).not.toContain("closeAndWait");
+    expect(retireSpy).not.toHaveBeenCalled();
+    expect(closeAndWait).not.toHaveBeenCalled();
     expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
     expect(queueActiveRunMessageForTest("session-1", "after cleanup")).toBe(false);
   });
@@ -2493,12 +2490,11 @@ describe("runCodexAppServerAttempt", () => {
       expect(inputText).toContain("[Subagent Task]");
       expect(inputText).not.toContain("private-input-fixture.txt");
       expect(inputText.includes("sk-1234567890abcdef")).toBe(preserve);
+      expect(inputText).not.toContain("[content omitted]");
       if (preserve) {
         expect(inputText).toContain("COBALT-ORCHID-7429");
-        expect(inputText).not.toContain("[content omitted]");
       } else {
         expect(inputText).not.toContain("COBALT-ORCHID-7429");
-        expect(inputText).toContain("[content omitted]");
       }
     },
   );
@@ -3545,39 +3541,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.toolMetas.filter((meta) => meta.isError === true)).toHaveLength(2);
   });
 
-  it("applies the session permission mode and root to resumed harness turns", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const nestedCwd = path.join(workspaceDir, "packages", "app");
-    await fs.mkdir(nestedCwd, { recursive: true });
-    await writeExistingBinding(sessionFile, workspaceDir);
-    const harness = createResumeHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.cwd = nestedCwd;
-    params.permissionMode = "full";
-    params.sessionRoot = workspaceDir;
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { mode: "guardian" } },
-    });
-    await awaitGateBeforeSettlement(
-      harness.waitForMethod("turn/start"),
-      run,
-      "Codex attempt settled before turn/start",
-    );
-    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
-    await run;
-    const resumeParams = harness.requests.find((request) => request.method === "thread/resume")
-      ?.params as Record<string, unknown> | undefined;
-    const turnParams = harness.requests.find((request) => request.method === "turn/start")
-      ?.params as Record<string, unknown> | undefined;
-    expect(resumeParams?.cwd).toBe(nestedCwd);
-    expect(resumeParams?.runtimeWorkspaceRoots).toEqual([workspaceDir]);
-    expect(resumeParams?.approvalPolicy).toBe("never");
-    expect(resumeParams?.sandbox).toBe("danger-full-access");
-    expect(turnParams?.cwd).toBe(nestedCwd);
-    expect(turnParams?.runtimeWorkspaceRoots).toEqual([workspaceDir]);
-    expect(turnParams?.approvalPolicy).toBe("never");
-    expect(turnParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
-  });
+  registerCodexWorkspacePolicyTests({ createRunPaths, writeExistingBinding });
+
   it("preserves a healthy binding when invalid image cleanup hits a transient thread", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, {
@@ -3874,9 +3839,8 @@ describe("runCodexAppServerAttempt", () => {
     const settled = vi.fn();
     const settledRun = run.then(settled, settled);
     try {
-      await vi.waitFor(() => {
-        expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBe(params.sessionId);
-      }, fastWait);
+      // The controller reports the session active from admission; native events need the turn.
+      await run.waitForTurnAccepted();
       await harness.notify(
         itemNotification("item/started", {
           id: "msg-1",
@@ -4178,6 +4142,33 @@ describe("runCodexAppServerAttempt", () => {
       }
     },
   );
+
+  it("preserves on-request approval policy for native plugin threads and turns", async () => {
+    const { sessionFile, workspaceDir, agentDir } = createRunPaths();
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(
+      createGoogleCalendarRequest((method) =>
+        codexAppInventoryResponse(method, [googleCalendarAppInfo(true)]),
+      ),
+    );
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        ...GOOGLE_CALENDAR_PLUGIN_CONFIG,
+        appServer: { approvalPolicy: "on-request" },
+      },
+    });
+    await completeStartedRun(run, waitForMethod, completeTurn);
+
+    const threadStart = requests.find((request) => request.method === "thread/start");
+    expect(threadStart?.params).toMatchObject({
+      approvalPolicy: "on-request",
+      config: { apps: { "google-calendar-app": { enabled: true } } },
+    });
+    expect(requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
+      approvalPolicy: "on-request",
+    });
+  });
 
   it.each([
     {
@@ -5432,246 +5423,4 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
   });
 });
 
-function expectUsageLimitPromptError(value: unknown): Error & { status: 429 } {
-  expect(value).toBeInstanceOf(Error);
-  const error = value as Error & { status?: unknown };
-  expect(error.status).toBe(429);
-  return error as Error & { status: 429 };
-}
-
-function createUsageParams(agentDirectory?: string) {
-  return Object.assign(
-    createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-    {
-      ...(agentDirectory ? { agentDir: path.join(tempDir, agentDirectory) } : {}),
-      authProfileId: "openai:work",
-      authProfileStore: {
-        version: 1,
-        profiles: {
-          "openai:work": {
-            type: "oauth",
-            provider: "openai",
-            access: "placeholder",
-            refresh: "placeholder",
-            expires: Date.now() + 60_000,
-          },
-        },
-      },
-    } satisfies Partial<ReturnType<typeof createParams>>,
-  );
-}
-
-describe("runCodexAppServerAttempt usage limits", () => {
-  it("preserves Codex usage-limit reset details when turn/start fails", async () => {
-    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    const harnessRef: { current?: ReturnType<typeof createStartedThreadHarness> } = {};
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "turn/start") {
-        if (!harnessRef.current) {
-          throw new Error("Expected Codex app-server harness to be initialized");
-        }
-        const revisionBeforeUpdate = readCodexRateLimitsRevision(harnessRef.current.client);
-        await harnessRef.current.notify(rateLimitsUpdated(resetsAt));
-        expect(readCodexRateLimitsRevision(harnessRef.current.client)).toBe(
-          revisionBeforeUpdate + 1,
-        );
-        throw Object.assign(new Error("You've reached your usage limit."), {
-          data: { codexErrorInfo: "usageLimitExceeded" },
-        });
-      }
-      return undefined;
-    });
-    harnessRef.current = harness;
-
-    const params = createUsageParams("agent");
-
-    const result = await runCodexAppServerAttempt(params);
-    expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
-    const promptError = expectUsageLimitPromptError(readAttemptTerminal(result).promptError);
-    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
-    expect(promptError.message).toContain("Next reset in");
-  });
-
-  it("does not trust an unrelated in-turn rate-limit update for profile blocking", async () => {
-    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    const authProfileId = "openai:work";
-    const harnessRef: { current?: ReturnType<typeof createStartedThreadHarness> } = {};
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "turn/start") {
-        if (!harnessRef.current) {
-          throw new Error("Expected Codex app-server harness to be initialized");
-        }
-        await harnessRef.current.notify({
-          method: "account/rateLimits/updated",
-          params: {
-            rateLimits: {
-              limitId: "codex_other",
-              primary: { usedPercent: 100, windowDurationMins: 60, resetsAt: resetsAt + 60 },
-              rateLimitReachedType: "rate_limit_reached",
-            },
-          },
-        });
-        throw Object.assign(new Error("You've reached your usage limit."), {
-          data: { codexErrorInfo: "usageLimitExceeded" },
-        });
-      }
-      return undefined;
-    });
-    harnessRef.current = harness;
-    rememberCodexRateLimitsRead(harness.client, {
-      rateLimits: {
-        limitId: "codex",
-        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
-        rateLimitReachedType: "rate_limit_reached",
-      },
-    });
-    const params = createUsageParams();
-
-    const result = await runCodexAppServerAttempt(params);
-
-    expect(expectUsageLimitPromptError(readAttemptTerminal(result).promptError).message).toContain(
-      "Next reset in",
-    );
-    expect(params.authProfileStore.usageStats?.[authProfileId]?.blockedUntil).toBeUndefined();
-  });
-
-  it.each([
-    { ordinaryUsageAllowed: true, usedPercent: 100 },
-    { ordinaryUsageAllowed: null, usedPercent: 100 },
-  ])(
-    "does not block a refreshed account with ordinary permission $ordinaryUsageAllowed and $usedPercent% usage",
-    async ({ ordinaryUsageAllowed, usedPercent }) => {
-      const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-      const authProfileId = "openai:work";
-      const harness = createStartedThreadHarness(async (method) => {
-        if (method === "turn/start") {
-          throw Object.assign(new Error("You've reached your usage limit."), {
-            data: { codexErrorInfo: "usageLimitExceeded" },
-          });
-        }
-        if (method === "account/rateLimits/read") {
-          return {
-            ...(ordinaryUsageAllowed === undefined ? {} : { ordinaryUsageAllowed }),
-            rateLimits: {
-              limitId: "codex",
-              primary: { usedPercent, windowDurationMins: 300, resetsAt },
-              secondary: null,
-              rateLimitReachedType: null,
-            },
-          };
-        }
-        return undefined;
-      });
-      const params = createUsageParams("available-usage-limit-agent");
-      saveAuthProfileStore(params.authProfileStore, params.agentDir);
-
-      const run = runCodexAppServerAttempt(params);
-      await awaitGateBeforeSettlement(
-        harness.waitForMethod("account/rateLimits/read"),
-        run,
-        "Codex attempt settled before account/rateLimits/read",
-      );
-
-      const result = await run;
-      expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
-      const promptError = expectUsageLimitPromptError(readAttemptTerminal(result).promptError);
-      if (ordinaryUsageAllowed === null) {
-        expect(promptError.message).toContain("could not determine a reset time");
-        expect(promptError.message).not.toContain("Next reset");
-        expect(promptError.message).not.toContain("does not report an exhausted limit");
-      } else {
-        expect(promptError.message).toContain(
-          "current account usage does not report an exhausted limit",
-        );
-        expect(promptError.message).not.toContain("subscription usage limit");
-        expect(promptError.message).not.toContain("could not determine a reset time");
-      }
-      expect(params.authProfileStore.usageStats?.[authProfileId]?.blockedUntil).toBeUndefined();
-    },
-  );
-
-  it("refreshes Codex account rate limits when a failed turn omits reset details", async () => {
-    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    const authProfileId = "openai:work";
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "account/rateLimits/read") {
-        return rateLimitsUpdated(resetsAt).params;
-      }
-      return undefined;
-    });
-
-    const params = createUsageParams("streamed-usage-limit-agent");
-    saveAuthProfileStore(params.authProfileStore, params.agentDir);
-    const run = runCodexAppServerAttempt(params);
-    await awaitGateBeforeSettlement(
-      harness.waitForMethod("turn/start"),
-      run,
-      "Codex attempt settled before turn/start",
-    );
-    await harness.notify(
-      turnCompleted({
-        id: "turn-1",
-        status: "failed",
-        error: {
-          message: "You've reached your usage limit.",
-          codexErrorInfo: "usageLimitExceeded",
-        },
-      }),
-    );
-
-    const result = await run;
-
-    const promptError = expectUsageLimitPromptError(readAttemptTerminal(result).promptError);
-    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
-    expect(promptError.message).toContain("Next reset in");
-    expect(promptError.message).not.toContain("Codex did not return a reset time");
-    expect(params.authProfileStore.usageStats?.[authProfileId]?.blockedUntil).toBe(resetsAt * 1000);
-    expect(harness.requests.some((request) => request.method === "account/rateLimits/read")).toBe(
-      true,
-    );
-  });
-
-  it.each([
-    {
-      error: { message: "You've reached your usage limit.", codexErrorInfo: "usageLimitExceeded" },
-      blocked: true,
-    },
-    {
-      error: {
-        message: "Too many requests; please retry later.",
-        codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
-      },
-      blocked: false,
-    },
-  ])(
-    "blocks only native usage exhaustion with trusted in-turn limits: $blocked",
-    async ({ error, blocked }) => {
-      const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-      const authProfileId = "openai:work";
-      const harness = createStartedThreadHarness(async () => undefined);
-      const params = createUsageParams("trusted-streamed-usage-limit-agent");
-      saveAuthProfileStore(params.authProfileStore, params.agentDir);
-
-      const run = runCodexAppServerAttempt(params);
-      await awaitGateBeforeSettlement(
-        harness.waitForMethod("turn/start"),
-        run,
-        "Codex attempt settled before turn/start",
-      );
-      await harness.notify(rateLimitsUpdated(resetsAt));
-      await harness.notify(turnCompleted({ id: "turn-1", status: "failed", error }));
-
-      const result = await run;
-
-      expect(
-        expectUsageLimitPromptError(readAttemptTerminal(result).promptError).message,
-      ).toContain(blocked ? "Next reset in" : error.message);
-      expect(params.authProfileStore.usageStats?.[authProfileId]?.blockedUntil).toBe(
-        blocked ? resetsAt * 1000 : undefined,
-      );
-      expect(harness.requests.some((request) => request.method === "account/rateLimits/read")).toBe(
-        false,
-      );
-    },
-  );
-});
+registerCodexUsageLimitTests();

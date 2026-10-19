@@ -11,7 +11,7 @@ import type {
 } from "./cli-output-contracts.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
 
-function isClaudeCliProvider(providerId: string): boolean {
+export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
 }
 
@@ -142,11 +142,10 @@ function normalizeCliUsageRecord(raw: unknown): CliUsage | undefined {
     output: usage.output || undefined,
     cacheRead: usage.cacheRead || undefined,
     cacheWrite: usage.cacheWrite || undefined,
+    cacheWrite1h: usage.cacheWrite1h || undefined,
     total: usage.total || undefined,
   };
-  return Object.values(cliUsage).some((value) => typeof value === "number" && value > 0)
-    ? cliUsage
-    : undefined;
+  return Object.values(cliUsage).some((value) => (value ?? 0) > 0) ? cliUsage : undefined;
 }
 
 export function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefined {
@@ -378,6 +377,15 @@ export function pickCliSessionId(
 // Agent tool result, so parent-lane consumers must skip these records.
 export function isClaudeSubagentRecord(parsed: Record<string, unknown>): boolean {
   return parsed.parent_tool_use_id != null;
+}
+
+// User text can be replayed stdin; only the hook's rejection notification is a boundary.
+export function isClaudeStopHookFeedbackRecord(parsed: Record<string, unknown>): boolean {
+  return (
+    parsed.type === "system" &&
+    parsed.subtype === "notification" &&
+    parsed.key === "stop-hook-error"
+  );
 }
 
 const CLAUDE_FOREGROUND_AGENT_TOOL_NAMES = new Set(["Agent", "Task"]);

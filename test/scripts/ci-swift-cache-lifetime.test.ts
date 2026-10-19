@@ -120,7 +120,13 @@ describe("macOS optional Swift cache lifetime", () => {
       expect(required["continue-on-error"]).not.toBe(true);
     }
     expect(budget.env?.CACHE_STARTED).toBe("${{ steps.swift-cache-clock.outputs.started }}");
-    expect(job["timeout-minutes"]).toBe(30);
+    const jobTimeout = runInNewContext(job["timeout-minutes"].replace(/^\$\{\{\s*|\s*\}\}$/g, ""), {
+      github: { event_name: "pull_request" },
+      needs: { preflight: { outputs: { validation_tier: "main" } } },
+      inputs: {},
+      matrix: { phase: "tests" },
+    });
+    expect(jobTimeout).toBe(30);
     const tail = [budget, packageSave, metadata, buildSave];
     expect(steps.slice(steps.indexOf(budget))).toEqual(tail);
     let minutes = 0;
@@ -130,7 +136,7 @@ describe("macOS optional Swift cache lifetime", () => {
       minutes += owner["timeout-minutes"]!;
     }
     expect(minutes).toBe(5);
-    expect(20 + minutes).toBeLessThanOrEqual(job["timeout-minutes"] - 5);
+    expect(20 + minutes).toBeLessThanOrEqual(jobTimeout - 5);
   });
 
   it.each([

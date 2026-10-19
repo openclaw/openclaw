@@ -17,6 +17,7 @@ import {
   findPlanEventWithSteps,
   type ProjectorNotification,
 } from "./event-projector.test-harness.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
 
 registerCodexEventProjectorTestLifecycle();
 
@@ -441,7 +442,10 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
   }
 
   function guardianWarning(message: string, threadId = THREAD_ID): ProjectorNotification {
-    return { method: "guardianWarning", params: { threadId, message } } as ProjectorNotification;
+    return prepareCodexServerNotification({
+      method: "guardianWarning",
+      params: { threadId, message },
+    });
   }
 
   function guardianReview(params: {
@@ -658,28 +662,20 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     ]);
   });
 
-  it("projects thread-scoped guardian warnings", async () => {
-    const { send, projector, onAgentEvent } = await observeProjector();
-    const message = "Guardian rejection limit reached; ending turn as interrupted.";
-    await send(guardianWarning("Wrong thread.", "thread-other"), guardianWarning(message));
-    projector.buildResult(buildEmptyToolTelemetry());
-    expect(onAgentEvent.mock.calls.map(([event]) => event.data.message)).toEqual([message]);
-  });
-
   it("surfaces configuration warnings and ignores another thread", async () => {
     const { send, onAgentEvent } = await observeProjector();
     await send(
-      {
+      prepareCodexServerNotification({
         method: "configWarning",
         params: {
           summary: "Error parsing rules; custom rules not applied.",
           details: "rules.toml: unexpected token",
         },
-      },
-      {
+      }),
+      prepareCodexServerNotification({
         method: "warning",
         params: { threadId: "another-thread", message: "Other session warning." },
-      },
+      }),
     );
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
       {

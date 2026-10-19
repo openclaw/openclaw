@@ -4,7 +4,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
-import { isSessionRunActive } from "../../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 
 type SwarmDotStatus = "queued" | "running" | "done" | "failed";
@@ -15,12 +15,12 @@ type SwarmDot = {
   duration: string;
 };
 
-const SWARM_STATUS_LABEL_KEYS: Record<SwarmDotStatus, string> = {
-  queued: "common.queued",
-  running: "common.running",
-  done: "common.completed",
-  failed: "labsPage.swarm.failedOrStopped",
-};
+const SWARM_STATUS_PRESENTATION = {
+  queued: ["common.queued", "clock"],
+  running: ["common.running", "loader"],
+  done: ["common.completed", "check"],
+  failed: ["labsPage.swarm.failedOrStopped", "alertTriangle"],
+} as const;
 
 function swarmDuration(row: GatewaySessionRow, status: SwarmDotStatus): string {
   if (status === "queued") {
@@ -93,7 +93,7 @@ export function ChatSwarmProgress(props: ChatSwarmProgressProps) {
   const details = createMemo(() => collectSwarmTasks(props.sessions, summary()?.groups ?? []));
   const outcome = () =>
     t(
-      parent() && isSessionRunActive(parent()!)
+      parent() && isSessionRunStateActive(parent()!)
         ? "labsPage.swarm.childOutcomeProcessing"
         : "labsPage.swarm.childOutcome",
     );
@@ -159,7 +159,7 @@ export function ChatSwarmProgress(props: ChatSwarmProgressProps) {
                           <For each={markers()}>
                             {(status) => (
                               <span
-                                class={`chat-swarm__marker chat-swarm__marker--${status}`}
+                                class={["chat-swarm__marker", `chat-swarm__marker--${status}`]}
                                 aria-hidden="true"
                               />
                             )}
@@ -207,21 +207,11 @@ export function ChatSwarmProgress(props: ChatSwarmProgressProps) {
                     {(task) => (
                       <div class="chat-swarm__task" role="listitem">
                         <span
-                          class={`chat-swarm__task-icon chat-swarm__task-icon--${task.status}`}
+                          class={["chat-swarm__task-icon", `chat-swarm__task-icon--${task.status}`]}
                           role="img"
-                          aria-label={t(SWARM_STATUS_LABEL_KEYS[task.status])}
+                          aria-label={t(SWARM_STATUS_PRESENTATION[task.status][0])}
                         >
-                          <Icon
-                            name={
-                              task.status === "done"
-                                ? "check"
-                                : task.status === "failed"
-                                  ? "alertTriangle"
-                                  : task.status === "running"
-                                    ? "loader"
-                                    : "clock"
-                            }
-                          />
+                          <Icon name={SWARM_STATUS_PRESENTATION[task.status][1]} />
                         </span>
                         <span class="chat-swarm__task-name">{task.label}</span>
                         <span class="chat-swarm__task-duration">{task.duration}</span>

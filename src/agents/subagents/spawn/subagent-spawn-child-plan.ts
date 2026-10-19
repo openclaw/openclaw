@@ -6,7 +6,10 @@ import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
-import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
+import {
+  resolveRequesterOriginForChild,
+  resolveSpawnRequesterConversationTarget,
+} from "../../spawn-requester-origin.js";
 import {
   mapToolContextToSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
@@ -67,13 +70,11 @@ export async function resolveSubagentChildPlan(params: {
     targetAgentId: params.targetAgentId,
     explicitWorkspaceDir: inheritedWorkspaceDir,
   });
+  const requesterConversation = resolveSpawnRequesterConversationTarget(params.ctx);
   const requesterOrigin = normalizeDeliveryContext({
     channel: params.ctx.agentChannel,
     accountId: params.ctx.agentAccountId,
-    to: params.ctx.agentTo,
-    ...(params.ctx.agentThreadId != null && params.ctx.agentThreadId !== ""
-      ? { threadId: params.ctx.agentThreadId }
-      : {}),
+    ...requesterConversation,
   });
   const childSessionOrigin = resolveRequesterOriginForChild({
     cfg: params.cfg,
@@ -81,8 +82,8 @@ export async function resolveSubagentChildPlan(params: {
     requesterAgentId: params.requesterAgentId,
     requesterChannel: params.ctx.agentChannel,
     requesterAccountId: params.ctx.agentAccountId,
-    requesterTo: params.ctx.agentTo,
-    requesterThreadId: params.ctx.agentThreadId,
+    requesterTo: requesterConversation.to,
+    requesterThreadId: requesterConversation.threadId,
     requesterGroupSpace: params.ctx.agentGroupSpace,
     requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
   });
@@ -142,6 +143,10 @@ export async function resolveSubagentChildPlan(params: {
   const targetAgentDir = resolveAgentDir(params.cfg, params.targetAgentId);
   const requesterAgentConfig = resolveAgentConfig(params.cfg, params.requesterAgentId);
   const targetAgentConfig = resolveAgentConfig(params.cfg, params.targetAgentId);
+  const requesterThinkingExplicit =
+    // SAFETY: Host tool construction adds this optional bit without changing the public context.
+    (params.ctx as SpawnSubagentContext & { requesterThinkingExplicit?: boolean })
+      .requesterThinkingExplicit;
   const requesterPreferences =
     params.ctx.requesterThinkingLevel === undefined ||
     (params.targetAgentId === params.requesterAgentId && !params.ctx.requesterModel)
@@ -152,6 +157,10 @@ export async function resolveSubagentChildPlan(params: {
   // a later turn and cannot represent one-shot overrides.
   const callerThinkingRaw =
     params.ctx.requesterThinkingLevel ?? requesterPreferences?.thinkingLevel;
+  const callerThinkingExplicit =
+    params.ctx.requesterThinkingLevel !== undefined
+      ? requesterThinkingExplicit
+      : requesterPreferences?.thinkingExplicit;
   const modelPlan = await resolveSubagentModelAndThinkingPlan({
     cfg: params.cfg,
     targetAgentId: params.targetAgentId,
@@ -160,6 +169,7 @@ export async function resolveSubagentChildPlan(params: {
     modelOverride: params.request.model,
     thinkingOverrideRaw: params.request.thinking,
     callerThinkingRaw,
+    callerThinkingExplicit,
     inheritedModel:
       params.targetAgentId === params.requesterAgentId
         ? (params.ctx.requesterModel ?? requesterPreferences?.model)

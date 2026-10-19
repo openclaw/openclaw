@@ -12,8 +12,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { RequestClient } from "../internal/rest.js";
-import * as discordRequestClient from "../proxy-request-client.js";
+import * as discordRest from "../internal/rest.js";
 import { getDiscordRuntime } from "../runtime.js";
 import * as discordSend from "../send.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
@@ -27,12 +26,14 @@ const PARENT_ID = "222222222222222222";
 const CREATED_THREAD_ID = "333333333333333333";
 
 function createRestFixture() {
-  const rest = new RequestClient("synthetic-token", {
+  const rest = new discordRest.RequestClient("synthetic-token", {
     fetch: async () => {
       throw new Error("Unexpected Discord network request");
     },
   });
-  vi.spyOn(discordRequestClient, "createDiscordRequestClient").mockReturnValue(rest);
+  vi.spyOn(discordRest, "RequestClient").mockImplementation(function () {
+    return rest;
+  });
   return {
     restGet: vi.spyOn(rest, "get").mockResolvedValue({
       id: THREAD_ID,

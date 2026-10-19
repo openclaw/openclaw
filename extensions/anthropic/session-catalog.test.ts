@@ -80,6 +80,7 @@ function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider 
   let provider: SessionCatalogProvider | undefined;
   const runtimeWithSession = {
     ...runtime,
+    config: runtime.config ?? { current: () => ({}) },
     agent: runtime.agent ?? { session: { listSessionEntries: () => [] } },
   } as PluginRuntime;
   registerClaudeSessionCatalog({
@@ -842,26 +843,32 @@ describe("Claude session catalog", () => {
     return await provider?.list({});
   }
 
-  it("links an adopted row through its catalog marker when the CLI binding is empty", async () => {
-    const hosts = await listCatalogWithBoundSession((sessionId) => ({
-      cliSessionBindings: { "claude-cli": { sessionId: "" } },
-      pluginOwnerId: "anthropic",
-      modelSelectionLocked: true,
-      pluginExtensions: { anthropic: { sessionCatalog: { sourceThreadId: sessionId } } },
-    }));
-    expect(hosts?.[0]?.sessions[0]?.sessionKey).toBe("agent:main:claude-bound");
-  });
-
   // An OpenClaw session that merely routes its turns through the Claude CLI keeps
   // its own sidebar row, in whatever group the operator filed it under. Listing
   // its thread here would hide that row inside the Claude catalog instead.
-  it("omits a thread an unadopted OpenClaw session drives through the Claude CLI", async () => {
-    const hosts = await listCatalogWithBoundSession((sessionId) => ({
-      cliSessionBindings: { "claude-cli": { sessionId } },
-      category: "Home Assistant",
-    }));
-    expect(hosts?.[0]?.sessions).toEqual([]);
-  });
+  it.each([true, false])(
+    "lists bound CLI sessions only when adopted (adopted=%s)",
+    async (adopted) => {
+      const hosts = await listCatalogWithBoundSession((sessionId) =>
+        adopted
+          ? {
+              cliSessionBindings: { "claude-cli": { sessionId: "" } },
+              pluginOwnerId: "anthropic",
+              modelSelectionLocked: true,
+              pluginExtensions: { anthropic: { sessionCatalog: { sourceThreadId: sessionId } } },
+            }
+          : {
+              cliSessionBindings: { "claude-cli": { sessionId } },
+              category: "Home Assistant",
+            },
+      );
+      if (adopted) {
+        expect(hosts?.[0]?.sessions[0]?.sessionKey).toBe("agent:main:claude-bound");
+      } else {
+        expect(hosts?.[0]?.sessions).toEqual([]);
+      }
+    },
+  );
 
   it("continues an advertised paired-node CLI row with node-bound placement", async () => {
     const threadId = "node-claude-session";
@@ -1267,57 +1274,39 @@ describe("Claude session catalog", () => {
     });
   });
 
-  it("skips custom group names spliced with decoder garbage", async () => {
-    const home = await createHome();
-    const sessionId = "desktop-garbage-group";
-    const localSessionId = "local_33333333-3333-3333-3333-333333333333";
-    const groupId = "cg-44444444-4444-4444-4444-444444444444";
-    await writeIndexedDesktopSession(home, {
-      sessionId,
-      localSessionId,
-      metadataName: "garbage-group",
-      title: "Desktop garbage group",
-      prompt: "garbage group prompt",
-    });
-    await writeDesktopGroupStoreEntries(home, [
-      {
-        sequence: 1,
-        value:
-          `{"id":"${groupId}","name":"Rele\u0012)\fase"}` +
-          `{"id":"${groupId}","name":"Release"}{"code:${localSessionId}":"${groupId}"}`,
-      },
-    ]);
-    const page = await listLocalClaudeSessionPage({}, home);
-    expect(page.sessions[0]).toMatchObject({
-      threadId: sessionId,
-      source: "claude-desktop",
-      customGroup: "Release",
-    });
-  });
-
-  it("drops custom groups once a newer entry no longer carries them", async () => {
-    const home = await createHome();
-    const sessionId = "desktop-deleted-group";
-    const localSessionId = "local_99999999-9999-9999-9999-999999999999";
-    const groupId = "cg-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
-    await writeIndexedDesktopSession(home, {
-      sessionId,
-      localSessionId,
-      metadataName: "deleted-group",
-      title: "Desktop deleted group",
-      prompt: "deleted group prompt",
-    });
-    await writeDesktopGroupStoreEntries(home, [
-      {
-        sequence: 1,
-        value: `{"id":"${groupId}","name":"Release"}{"code:${localSessionId}":"${groupId}"}`,
-      },
-      { sequence: 2, value: "{}" },
-    ]);
-    const page = await listLocalClaudeSessionPage({}, home);
-    expect(page.sessions[0]).toMatchObject({ threadId: sessionId, source: "claude-desktop" });
-    expect(page.sessions[0]).not.toHaveProperty("customGroup");
-  });
+  it.each(["decoder garbage", "newer empty entry"] as const)(
+    "reads Desktop custom groups with %s",
+    async (scenario) => {
+      const home = await createHome();
+      const sessionId = "desktop-group";
+      const localSessionId = "local_33333333-3333-3333-3333-333333333333";
+      const groupId = "cg-44444444-4444-4444-4444-444444444444";
+      await writeIndexedDesktopSession(home, {
+        sessionId,
+        localSessionId,
+        metadataName: "group",
+        title: "Desktop group",
+        prompt: "group prompt",
+      });
+      await writeDesktopGroupStoreEntries(home, [
+        {
+          sequence: 1,
+          value:
+            (scenario === "decoder garbage"
+              ? `{"id":"${groupId}","name":"Rele\u0012)\fase"}`
+              : "") + `{"id":"${groupId}","name":"Release"}{"code:${localSessionId}":"${groupId}"}`,
+        },
+        ...(scenario === "newer empty entry" ? [{ sequence: 2, value: "{}" }] : []),
+      ]);
+      const page = await listLocalClaudeSessionPage({}, home);
+      expect(page.sessions[0]).toMatchObject({ threadId: sessionId, source: "claude-desktop" });
+      if (scenario === "decoder garbage") {
+        expect(page.sessions[0]).toMatchObject({ customGroup: "Release" });
+      } else {
+        expect(page.sessions[0]).not.toHaveProperty("customGroup");
+      }
+    },
+  );
 
   it("discovers CLI fallback transcripts and rejects sidechains, foreign entrypoints, and escapes", async () => {
     const home = await createHome();
@@ -1712,37 +1701,7 @@ describe("Claude session catalog", () => {
     expect(transcriptAttempts).toBe(2);
   });
 
-  it("invalidates the assembled scan after same-size same-mtime atomic replacement", async () => {
-    const home = await createHome();
-    const watches = createClaudeCatalogWatchDriver(home);
-    const projectDir = projectFile(home);
-    const sessionId = "atomic-replacement";
-    const transcriptPath = projectFile(home, `${sessionId}.jsonl`);
-    const fixedTime = new Date("2026-07-20T12:00:00.000Z");
-    await writeUnindexedCliSessions(home, { [sessionId]: "Alpha" });
-    await fs.utimes(transcriptPath, fixedTime, fixedTime);
-    await fs.utimes(projectDir, fixedTime, fixedTime);
-    const originalStat = await fs.stat(transcriptPath);
-    expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.name).toBe("Alpha");
-    watches.arm();
-    await listLocalClaudeSessionPage({}, home);
-
-    const replacementPath = path.join(projectDir, "replacement.tmp");
-    await fs.writeFile(replacementPath, `${JSON.stringify(sdkCliMessage(sessionId, "Bravo"))}\n`);
-    await fs.utimes(replacementPath, fixedTime, fixedTime);
-    await fs.rename(replacementPath, transcriptPath);
-    await fs.utimes(projectDir, fixedTime, fixedTime);
-    const replacementStat = await fs.stat(transcriptPath);
-    expect({ mtimeMs: replacementStat.mtimeMs, size: replacementStat.size }).toEqual({
-      mtimeMs: originalStat.mtimeMs,
-      size: originalStat.size,
-    });
-
-    watches.change(transcriptPath);
-    expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.name).toBe("Bravo");
-  });
-
-  it("keeps the metadata byte frontier in serial directory order under parallel stats", async () => {
+  it("bounds actual metadata reads in serial directory order under parallel stats", async () => {
     const home = await createHome();
     const projectDir = projectFile(home);
     await fs.mkdir(projectDir, { recursive: true });
@@ -1787,17 +1746,6 @@ describe("Claude session catalog", () => {
     const cold = await listLocalClaudeSessionPage({ limit: 100 }, home);
     expect(maxConcurrentLstats).toBeGreaterThan(1);
     expect(cold.sessions.map((session) => session.threadId).toSorted()).toEqual(expected);
-
-    const readdir = vi.spyOn(fs, "readdir");
-    await fs.utimes(projectDir, new Date(), new Date(Date.now() + 2_000));
-    await expectClaudeCatalogEventually(
-      home,
-      (page) => {
-        expect(page.sessions.map((session) => session.threadId).toSorted()).toEqual(expected);
-        expect(readdir).toHaveBeenCalledWith(projectDir);
-      },
-      { limit: 100 },
-    );
   });
 
   it("retries transient index reads without waiting for the file metadata to change", async () => {

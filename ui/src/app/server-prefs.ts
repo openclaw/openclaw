@@ -2,6 +2,7 @@
 // the approval gate and other devices pick them up. The localStorage mirror gives instant boot and
 // stays authoritative when this client cannot write config (viewer scope, offline). Pending local
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
 import {
@@ -38,7 +39,7 @@ import {
 import type {
   ServerUiPrefsWriter,
   ServerUiPrefsCommit,
-  ServerUiPrefsSync,
+  ConfirmedPrefsFallback,
 } from "./server-prefs-sync-contract.ts";
 import type { UiSettings } from "./settings-contract.ts";
 import { patchSettings } from "./settings.ts";
@@ -61,25 +62,29 @@ function publishPreferenceWrites(): void {
     listener();
   }
 }
-class ServerUiPrefsOutbox implements ServerUiPrefsSync {
+class ServerUiPrefsOutbox {
   applyingServerPrefs = false;
   pendingScope = "";
   pendingPrefs: ServerUiPrefs | null = null;
   pendingPersistedKeys = new Set<string>();
-  composeSidebar: ServerUiPrefsSync["composeSidebar"] = null;
+  // The active pin operation alone can observe local successors; foreign adoption detaches it.
+  composeSidebar: ((pending: ServerUiPrefs | null, next: ServerUiPrefs) => void) | null = null;
   pushWriter: ServerUiPrefsWriter | null = null;
   pushScope = "";
-  pushClient: ServerUiPrefsSync["pushClient"] = null;
+  pushClient: GatewayBrowserClient | null = null;
   pushProfileId: string | null = null;
   pushCanWrite = false;
   pushAfterCommit: ((commit: ServerUiPrefsCommit) => void) | undefined;
   pushDraining = false;
   drainRequested = false;
   pushEpoch = 0;
-  confirmedPrefsFallback: ServerUiPrefsSync["confirmedPrefsFallback"] = null;
+  confirmedPrefsFallback: ConfirmedPrefsFallback | null = null;
   lastReconciledScope: string | null = null;
   lastReconciledConfigObject: unknown = null;
-  preferenceWriteFailures: ServerUiPrefsSync["preferenceWriteFailures"] = new Map();
+  preferenceWriteFailures: Map<
+    string,
+    Map<SyncedPrefKey, { value: unknown; error: string; retained: boolean }>
+  > = new Map();
   writePendingStorage = writePendingStorage;
   recordPreferenceWriteFailures = recordPreferenceWriteFailures;
   reconcilePersistedPendingPrefs = reconcilePersistedPendingPrefs;

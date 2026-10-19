@@ -1,3 +1,4 @@
+import { constants as zlibConstants, deflateRawSync } from "node:zlib";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import { readLegacyCompactionMetrics } from "../../config/sessions/legacy-compaction-history.js";
@@ -300,6 +301,7 @@ export function encodeChatHistoryResponsePage(
     return page;
   }
   const response = prepareChatHistoryResponsePage(page, params);
+  const messages = new TextEncoder().encode(JSON.stringify(response.messages));
   return {
     ...page,
     messages: [],
@@ -307,9 +309,16 @@ export function encodeChatHistoryResponsePage(
     // Paging maps have already become response cursors; do not clone them onto the host.
     pagination: undefined,
     anchor: undefined,
+    // Own an exact ArrayBuffer so worker transfer never clones a pooled Buffer.
+    encodedMessagesDeflate:
+      params.deflateResponse && messages.byteLength >= 4 * 1024
+        ? new Uint8Array(
+            deflateRawSync(messages, { level: 1, finishFlush: zlibConstants.Z_SYNC_FLUSH }),
+          )
+        : undefined,
     encodedResponse: {
       ...response,
-      messages: new TextEncoder().encode(JSON.stringify(response.messages)),
+      messages,
     },
   };
 }

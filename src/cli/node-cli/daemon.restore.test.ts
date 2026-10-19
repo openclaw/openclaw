@@ -9,6 +9,7 @@ import { registerNodeCli } from "./register.js";
 const mocks = vi.hoisted(() => ({
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn(), writeJson: vi.fn() },
   pin: vi.fn(),
+  pending: vi.fn(),
   probe: vi.fn(),
 }));
 const service = createMockGatewayService();
@@ -26,8 +27,10 @@ vi.mock("../../daemon/node-service.js", async (importOriginal) => ({
 }));
 vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-pin-state.js")>()),
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, run: () => T) => run(),
   readDaemonRuntimePinForInstall: mocks.pin,
   readDaemonRuntimePin: mocks.pin,
+  readDaemonRuntimePinMigrationPending: mocks.pending,
 }));
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
@@ -53,10 +56,11 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_WRAPPER", undefined);
   vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
   mocks.pin.mockReturnValue(observed);
+  mocks.pending.mockReturnValue(false);
   mocks.probe.mockImplementation(async (executable: string) => ({
     stdout: JSON.stringify({
       nodeVersion: "26.8.1",
-      bunVersion: path.basename(executable) === "bun" ? "1.4.2" : null,
+      bunVersion: path.basename(executable) === "bun" ? "1.4.3" : null,
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
     }),
@@ -75,12 +79,13 @@ afterEach(() => {
 });
 
 it.each([
-  { runtime: "node", pinned: false, changed: false },
-  { runtime: "bun", pinned: true, changed: false },
-  { runtime: "node", pinned: false, changed: true },
+  { runtime: "node", pinned: false, changed: false, launcher: "openclaw.mjs" },
+  { runtime: "bun", pinned: true, changed: false, launcher: "openclaw.mjs" },
+  { runtime: "node", pinned: false, changed: false, launcher: "dist/entry.js" },
+  { runtime: "node", pinned: false, changed: true, launcher: "openclaw.mjs" },
 ] as const)(
-  "restores a retained $runtime CLI with pin=$pinned and changed custody=$changed",
-  async ({ runtime, pinned, changed }) => {
+  "restores a retained $runtime CLI through $launcher with pin=$pinned and changed custody=$changed",
+  async ({ runtime, pinned, changed, launcher }) => {
     const root = tempDirs.make("openclaw-node-restore-");
     const cli = {
       executable: path.join(
@@ -90,8 +95,9 @@ it.each([
       entrypoint: path.join(root, "dist", "index.js"),
       sqliteLibrary: pinned ? path.join(root, "libsqlite3.dylib") : null,
     };
+    const launcherPath = path.join(root, launcher);
     fs.mkdirSync(path.dirname(cli.entrypoint));
-    for (const file of [cli.executable, cli.entrypoint, cli.sqliteLibrary]) {
+    for (const file of [cli.executable, cli.entrypoint, launcherPath, cli.sqliteLibrary]) {
       if (file) {
         fs.writeFileSync(file, "", { mode: 0o755 });
       }
@@ -139,7 +145,7 @@ it.each([
     expect(installed?.programArguments.slice(0, 4 + runtimeArgs.length)).toEqual([
       cli.executable,
       ...runtimeArgs,
-      cli.entrypoint,
+      launcherPath,
       "node",
       "run",
     ]);
@@ -180,3 +186,16 @@ it.each([true, false])(
     }
   },
 );
+
+it("reports pending node runtime migration without claiming unpinned custody", async () => {
+  mocks.pending.mockReturnValue(true);
+  const program = new Command().exitOverride();
+  registerNodeCli(program);
+  await program.parseAsync(["node", "openclaw", "node", "status", "--json"]);
+  expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
+    service: expect.objectContaining({
+      runtimeIntent: { status: "migrationPending", nextStep: "run openclaw doctor" },
+    }),
+  });
+  expect(mocks.pin).not.toHaveBeenCalled();
+});

@@ -10,17 +10,17 @@ import { createOperatorClient } from "../../gateway/server-plugin-in-process-dis
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import type { GatewayAccessGrantRef } from "../../plugins/gateway-access-policy.types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
+import type { ReplyBackendQueueMessageOptions } from "../../sessions/session-controller.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";
-import type { ReplyBackendQueueMessageOptions } from "./reply-run-registry.js";
 import {
   createTestReplyOperation,
   queueCurrentReplyRunMessage,
 } from "./reply-run-registry.test-helpers.js";
-import { testing } from "./reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { resolveFollowupRunToolAuthorityFingerprintAsync } from "./reply-tool-authority.test-support.js";
 
@@ -52,6 +52,8 @@ function toolAuthorityOverlay(
     runtimePluginToolGrant: run.run.runtimePluginToolGrant,
     toolsAllow: run.toolsAllow,
     disableTools: run.disableTools === true,
+    forceRestartSafeTools: run.forceRestartSafeTools,
+    forceCodeModeTools: run.forceCodeModeTools,
     traceAuthorized: run.run.traceAuthorized === true,
     approvalReviewerDeviceId: run.run.approvalReviewerDeviceId,
     clientCaps: run.run.clientCaps,
@@ -62,7 +64,7 @@ function toolAuthorityOverlay(
 
 describe("reply tool authority", () => {
   afterEach(() => {
-    testing.resetReplyRunRegistry();
+    testing.resetSessionControllerForTest();
     resetCommandQueueStateForTest();
     resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
@@ -608,6 +610,8 @@ describe("reply tool authority", () => {
       { gatewayUiCommandTarget: undefined },
       { toolBindings: { browser: { clientId: "different-browser" } } },
       { permissionMode: "guarded" },
+      { forceRestartSafeTools: true },
+      { forceCodeModeTools: true },
     ] satisfies Partial<ReplyToolAuthorityOverlay>[]) {
       await expect(
         queueCurrentReplyRunMessage("session-projected-authority", "changed authority", {

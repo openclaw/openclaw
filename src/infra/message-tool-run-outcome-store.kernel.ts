@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Insertable } from "kysely";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 const MESSAGE_TOOL_RUN_OUTCOME_MAX_ROWS = 10_000;
 type MessageToolRunOutcomeDatabase = Pick<OpenClawAgentKyselyDatabase, "message_tool_run_outcomes">;
@@ -11,7 +11,7 @@ export type MessageToolRunOutcomeInsert = Insertable<
 
 /** Shared by the durable worker and the process-held incognito owner. */
 export function recordMessageToolRunOutcomeInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   values: MessageToolRunOutcomeInsert,
 ): void {
   const agentDb = getNodeSqliteKysely<MessageToolRunOutcomeDatabase>(db);

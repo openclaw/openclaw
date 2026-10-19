@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { onSettled } from "solid-js";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import panelStyles from "../../styles/panel-empty-state.css?inline";
 
 export type PanelEmptyStateProps = {
@@ -13,53 +13,20 @@ export type PanelEmptyStateProps = {
 export type PanelEmptyStateElement = SolidBridgeElement<PanelEmptyStateProps>;
 
 export function PanelEmptyStateContent(props: PanelEmptyStateProps & { children?: JSX.Element }) {
-  let outlet: HTMLDivElement | undefined;
+  let outlet!: HTMLDivElement;
   // Keep the caller's Lit range intact; only its direct unnamed elements are decorative.
   onSettled(() => {
-    if (!outlet) {
-      return undefined;
-    }
-    const content = outlet;
-    const hidden = new Map<Element, string | null>();
-    const restore = (element: Element, value: string | null) => {
-      if (element.getAttribute("aria-hidden") === "true") {
-        if (value === null) {
-          element.removeAttribute("aria-hidden");
-        } else {
-          element.setAttribute("aria-hidden", value);
-        }
-      }
-    };
     const update = () => {
-      for (const [element, value] of hidden) {
-        if (element.parentElement !== content || element.getAttribute("slot") === "action") {
-          restore(element, value);
-          hidden.delete(element);
-        }
-      }
-      for (const element of content.children) {
+      for (const element of outlet.children) {
         if (element.getAttribute("slot") !== "action") {
-          if (!hidden.has(element)) {
-            hidden.set(element, element.getAttribute("aria-hidden"));
-          }
           element.setAttribute("aria-hidden", "true");
         }
       }
     };
     update();
     const observer = new MutationObserver(update);
-    observer.observe(content, {
-      childList: true,
-      attributes: true,
-      attributeFilter: ["slot"],
-      subtree: true,
-    });
-    return () => {
-      observer.disconnect();
-      for (const [element, value] of hidden) {
-        restore(element, value);
-      }
-    };
+    observer.observe(outlet, { childList: true });
+    return () => observer.disconnect();
   });
   return (
     <div class="empty-state" role="status">

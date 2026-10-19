@@ -149,39 +149,34 @@ describe("creation-owned follow-up input", () => {
     ).toBeUndefined();
   });
 
-  it.each([false, true])(
-    "hands local input to the current client before recovery readiness (replacement: %s)",
-    (replacement) => {
-      const { context, composer, request } = fixture(true);
-      composer.setMessage("accepted private draft");
-      composer.accept({ key: "agent:main:canonical", initialRun: { status: "idle" } });
-      retainCreatedComposer(context, "agent:main:canonical", composer);
-      const original = context.gateway.snapshot.client!;
-      if (replacement) {
-        const next = createTestGatewayClient(request);
-        vi.spyOn(next, "recoveryScope", "get").mockReturnValue(original.recoveryScope);
-        context.gateway.snapshot.client = next;
-      }
-      Object.defineProperty(context.gateway.snapshot.client!, "recoveryScopeReady", {
-        value: false,
-        configurable: true,
-      });
-      const transferred = takeCreatedComposer(
-        context,
-        "agent:main:canonical",
-        context.gateway.snapshot.client,
-      );
-      expect(transferred?.draft).toBe("accepted private draft");
-      expect(transferred?.isCurrent()).toBe(true);
-      expect(
-        takeCreatedComposer(context, "agent:main:canonical", context.gateway.snapshot.client),
-      ).toBe(transferred);
-      transferred?.complete();
-      expect(
-        takeCreatedComposer(context, "agent:main:canonical", context.gateway.snapshot.client),
-      ).toBeUndefined();
-    },
-  );
+  it("hands local input to the replacement client before recovery readiness", () => {
+    const { context, composer, request } = fixture(true);
+    composer.setMessage("accepted private draft");
+    composer.accept({ key: "agent:main:canonical", initialRun: { status: "idle" } });
+    retainCreatedComposer(context, "agent:main:canonical", composer);
+    const original = context.gateway.snapshot.client!;
+    const next = createTestGatewayClient(request);
+    vi.spyOn(next, "recoveryScope", "get").mockReturnValue(original.recoveryScope);
+    context.gateway.snapshot.client = next;
+    Object.defineProperty(context.gateway.snapshot.client!, "recoveryScopeReady", {
+      value: false,
+      configurable: true,
+    });
+    const transferred = takeCreatedComposer(
+      context,
+      "agent:main:canonical",
+      context.gateway.snapshot.client,
+    );
+    expect(transferred?.draft).toBe("accepted private draft");
+    expect(transferred?.isCurrent()).toBe(true);
+    expect(
+      takeCreatedComposer(context, "agent:main:canonical", context.gateway.snapshot.client),
+    ).toBe(transferred);
+    transferred?.complete();
+    expect(
+      takeCreatedComposer(context, "agent:main:canonical", context.gateway.snapshot.client),
+    ).toBeUndefined();
+  });
 
   it("preserves queued input across reconnect but never reveals it to another owner", () => {
     const { context, composer } = fixture(true);

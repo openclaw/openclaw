@@ -65,7 +65,10 @@ describe("Control UI relay tunnel", () => {
   it("streams HTTP chunks in both directions with unchanged paths, safe headers and read cookies", async () => {
     const f = setup();
     const upload = Buffer.alloc(512 * 1024, 3);
-    const download = Buffer.alloc(512 * 1024 + 9, 7);
+    const download = Buffer.alloc(512 * 1024 + 9);
+    for (let index = 0; index < download.length; index++) {
+      download[index] = index % 251;
+    }
     vi.mocked(f.handle.request).mockImplementation(async (input) => {
       expect(input.pathAndQuery).toBe("/control/?x=1");
       expect(input.headers).toEqual([
@@ -149,12 +152,13 @@ describe("Control UI relay tunnel", () => {
       cookies: [{ name: "asset", value: "signed", path: "/", maxAgeSeconds: 300 }],
     });
     const bodies = f.frames.values.filter((frame) => frame.type === "ui.http.body");
-    expect(bodies.map((frame) => Buffer.from(String(frame.b64), "base64").length)).toEqual([
-      512 * 1024,
-      9,
-      0,
-    ]);
-    expect(bodies.map((frame) => frame.more)).toEqual([true, true, false]);
+    for (const frame of bodies.slice(0, -1)) {
+      const bytes = Buffer.from(String(frame.b64), "base64");
+      expect(bytes.length).toBeGreaterThan(0);
+      expect(bytes.length).toBeLessThanOrEqual(512 * 1024);
+      expect(frame.more).toBe(true);
+    }
+    expect(bodies.at(-1)).toEqual({ type: "ui.http.body", sid: HTTP.sid, b64: "", more: false });
     expect(f.open).toHaveBeenCalledWith("gr_one", {
       ...ORIGINS,
       frameAncestors: ["https://chatgpt.com"],
@@ -218,6 +222,99 @@ describe("Control UI relay tunnel", () => {
       reason: "done",
     });
   });
+
+  it("copies fragmented messages linearly instead of concatenating every prefix", async () => {
+    const f = setup();
+    const socket = await opened(f);
+    const chunk = Buffer.alloc(1024, 7);
+    const b64 = chunk.toString("base64");
+    let copiedBytes = 0;
+    const concat = Buffer.concat.bind(Buffer);
+    const copy = Buffer.prototype.copy;
+    const concatSpy = vi.spyOn(Buffer, "concat").mockImplementation((list, totalLength) => {
+      copiedBytes += totalLength ?? list.reduce((sum, bytes) => sum + bytes.byteLength, 0);
+      return concat(list, totalLength);
+    });
+    const copySpy = vi.spyOn(Buffer.prototype, "copy").mockImplementation(function (
+      this: Buffer,
+      target,
+      targetStart,
+      sourceStart,
+      sourceEnd,
+    ) {
+      const copied = copy.call(this, target, targetStart, sourceStart, sourceEnd);
+      copiedBytes += copied;
+      return copied;
+    });
+    try {
+      for (let i = 0; i < 64; i++) {
+        await f.receive({ type: "ui.ws.msg", sid: WS.sid, b64, more: i < 63 });
+      }
+    } finally {
+      concatSpy.mockRestore();
+      copySpy.mockRestore();
+    }
+    expect(await socket.sent.next()).toEqual({
+      kind: "binary",
+      bytes: Buffer.alloc(64 * 1024, 7),
+    });
+    expect(copiedBytes).toBeLessThanOrEqual(3 * 64 * 1024);
+  });
+
+  it("keeps logical length and earlier binary messages across assembly reuse", async () => {
+    const f = setup();
+    const socket = await opened(f);
+    for (const b64 of ["", "AQ==", "", "Ag=="]) {
+      await f.receive({ type: "ui.ws.msg", sid: WS.sid, b64, more: true });
+    }
+    await f.receive({ type: "ui.ws.msg", sid: WS.sid, b64: "Aw==", more: false });
+    const first = await socket.sent.next();
+    expect(first).toEqual({ kind: "binary", bytes: Buffer.from([1, 2, 3]) });
+    await f.receive({ type: "ui.ws.msg", sid: WS.sid, b64: "BAU=", more: true });
+    await f.receive({ type: "ui.ws.msg", sid: WS.sid, b64: "Bg==", more: false });
+    expect(await socket.sent.next()).toEqual({ kind: "binary", bytes: Buffer.from([4, 5, 6]) });
+    expect(first).toEqual({ kind: "binary", bytes: Buffer.from([1, 2, 3]) });
+    await f.receive({ type: "ui.ws.msg", sid: WS.sid, b64: "", more: false });
+    expect(await socket.sent.next()).toEqual({ kind: "binary", bytes: Buffer.alloc(0) });
+  });
+
+  it("discards partial bytes on socket close before reusing the stream ID", async () => {
+    const f = setup();
+    const socket = await opened(f);
+    await f.receive({ type: "ui.ws.msg", sid: WS.sid, b64: "AQI=", more: true });
+    await f.receive({ type: "ui.ws.close", sid: WS.sid, code: 1000, reason: "browser left" });
+    expect(socket.closes[0]).toEqual({ code: 1000, reason: "browser left" });
+    expect(socket.sent.values).toHaveLength(0);
+    await f.receive(WS);
+    expect(await f.frames.next()).toEqual({ type: "ui.ws.opened", sid: WS.sid });
+    await f.receive({ type: "ui.ws.msg", sid: WS.sid, b64: "Aw==", more: false });
+    expect(await f.sockets[1]!.sent.next()).toEqual({ kind: "binary", bytes: Buffer.from([3]) });
+  });
+
+  it("assembles complete Unicode and empty fragments without exposing spare capacity", async () => {
+    const f = setup();
+    const socket = await opened(f);
+    for (const text of ["", "😀", "é", "", "z"]) {
+      await f.receive({ type: "ui.ws.msg", sid: WS.sid, text, more: true });
+    }
+    await f.receive({ type: "ui.ws.msg", sid: WS.sid, text: "", more: false });
+    expect(await socket.sent.next()).toEqual({ kind: "text", text: "😀éz" });
+  });
+
+  it.each([{ b64: "AQ==" }, { text: "\ud800" }])(
+    "rejects invalid text continuation %j and leaves other streams available",
+    async (fragment) => {
+      const f = setup();
+      const socket = await opened(f);
+      await f.receive({ type: "ui.ws.msg", sid: WS.sid, text: "prefix", more: true });
+      await f.receive({ type: "ui.ws.msg", sid: WS.sid, ...fragment, more: false });
+      expect(await f.frames.next()).toMatchObject({ type: "ui.error", code: "invalid" });
+      expect(socket.sent.values).toHaveLength(0);
+      expect(socket.closes[0]?.code).toBe(1011);
+      await f.receive(HTTP);
+      expect((await response(f)).head.status).toBe(200);
+    },
+  );
 
   it("splits escaped Unicode text into bounded JSON frames without breaking surrogate pairs", async () => {
     const f = setup();

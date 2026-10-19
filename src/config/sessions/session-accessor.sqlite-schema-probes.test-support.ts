@@ -2,6 +2,7 @@ import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { publishSqliteDatabaseAdmission } from "../../infra/sqlite-database-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
@@ -15,9 +16,13 @@ import { readCanonicalSessionMainKey } from "./session-canonical-key.js";
 const key = "agent:main:probe";
 
 export function measureSessionSchemaProbes(
-  database: { agentId: string; db: DatabaseSync },
+  database: { agentId: string; db: EngineConnection },
   label?: string,
 ) {
+  const native = database.db;
+  if (isPostgresSqlConnection(native)) {
+    throw new Error("SQLite schema probe measurement requires a native SQLite handle");
+  }
   const reads = {
     cache: () => {
       const entry = readSessionEntryCache(database, {
@@ -33,10 +38,7 @@ export function measureSessionSchemaProbes(
     owner: () => hasSqliteSessionOwnerColumns(database.db),
   };
   return Object.fromEntries(
-    Object.entries(reads).map(([name, read]) => [
-      name,
-      measureSqliteSchemaProbes(database.db, read),
-    ]),
+    Object.entries(reads).map(([name, read]) => [name, measureSqliteSchemaProbes(native, read)]),
   );
 }
 

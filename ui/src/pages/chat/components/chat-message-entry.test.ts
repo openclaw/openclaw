@@ -1,14 +1,13 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
+import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
 import { toggleTranscriptSearch } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -27,6 +26,19 @@ function pendingSend(id: string): ChatQueueItem {
   };
 }
 
+function saved(
+  role: string,
+  content: string,
+  timestamp: number,
+  __openclaw: Record<string, unknown>,
+) {
+  return { role, content, timestamp, __openclaw };
+}
+
+function required(parent: ParentNode, selector: string) {
+  return expectDefined(parent.querySelector<HTMLElement>(selector), selector);
+}
+
 function setupEntryTranscript(messages: unknown[] = []) {
   const transcript = createTestTranscript();
   const props = {
@@ -38,14 +50,16 @@ function setupEntryTranscript(messages: unknown[] = []) {
     runWorking: false,
   };
   let container = document.body.appendChild(document.createElement("div"));
+  let view = createChatThreadHarness(container, transcript);
+  onTestFinished(() => view.unmount());
   const update = () => {
-    render(renderChatThread(props, transcript), container);
+    view.render(props);
     flush();
-    transcript.hostUpdated();
+    transcript.update();
     flush();
   };
   update();
-  transcript.hostConnected();
+  transcript.start();
   update();
   return {
     props,
@@ -55,8 +69,9 @@ function setupEntryTranscript(messages: unknown[] = []) {
       return container;
     },
     remount() {
-      render(null, container);
+      view.unmount();
       container = document.body.appendChild(document.createElement("div"));
+      view = createChatThreadHarness(container, transcript);
       update();
     },
   };
@@ -88,7 +103,7 @@ describe("chat transcript entry lifecycle", () => {
       expect(entering(view.container)).toEqual([submitted]);
 
       if (eventType === "disconnect") {
-        view.transcript.hostDisconnected();
+        view.transcript.dispose();
         expect(entering(view.container)).toHaveLength(0);
         return;
       }
@@ -104,12 +119,11 @@ describe("chat transcript entry lifecycle", () => {
 
       view.props.messages = [
         ...view.props.messages,
-        {
-          role: "user",
-          content: "new-prompt",
-          timestamp: Date.now(),
-          __openclaw: { id: "persisted-prompt", idempotencyKey: "new-prompt", seq: 1 },
-        },
+        saved("user", "new-prompt", Date.now(), {
+          id: "persisted-prompt",
+          idempotencyKey: "new-prompt",
+          seq: 1,
+        }),
       ];
       view.props.queue = [];
       view.update();
@@ -118,7 +132,7 @@ describe("chat transcript entry lifecycle", () => {
       view.remount();
       expect(bubbles(view.container)).toHaveLength(2);
       expect(entering(view.container)).toHaveLength(0);
-      view.transcript.hostDisconnected();
+      view.transcript.dispose();
     },
   );
 
@@ -152,7 +166,7 @@ describe("chat transcript entry lifecycle", () => {
       expect(settledBubbles[0]).toBe(firstBubble);
       expect(settledBubbles[1]).toBe(pendingBubbles[1]);
     } finally {
-      view.transcript.hostDisconnected();
+      view.transcript.dispose();
     }
   });
 
@@ -173,7 +187,7 @@ describe("chat transcript entry lifecycle", () => {
     expect(entering(view.container).map((bubble) => bubble.dataset.messageText)).toEqual([
       "later-prompt",
     ]);
-    view.transcript.hostDisconnected();
+    view.transcript.dispose();
   });
 
   it("keeps asynchronous reply text out of entry animation through terminal and history handoff", () => {
@@ -181,30 +195,24 @@ describe("chat transcript entry lifecycle", () => {
     const prefix = "The first paragraph stays visible.\n\n";
     const completedText = prefix + "A new reply with more tokens";
     const history = [
-      {
-        role: "user",
-        content: "Earlier question",
-        timestamp: 1_000,
-        __openclaw: { id: "earlier-question", idempotencyKey: "earlier-run:user", seq: 1 },
-      },
-      {
-        role: "assistant",
-        content: completedText,
-        timestamp: 1_500,
-        __openclaw: { id: "earlier-answer", runId: "earlier-run", seq: 2 },
-      },
-      {
-        role: "user",
-        content: "Current question",
-        timestamp: 2_000,
-        __openclaw: { id: "question", idempotencyKey: `${runId}:user`, seq: 3 },
-      },
+      saved("user", "Earlier question", 1_000, {
+        id: "earlier-question",
+        idempotencyKey: "earlier-run:user",
+        seq: 1,
+      }),
+      saved("assistant", completedText, 1_500, {
+        id: "earlier-answer",
+        runId: "earlier-run",
+        seq: 2,
+      }),
+      saved("user", "Current question", 2_000, {
+        id: "question",
+        idempotencyKey: `${runId}:user`,
+        seq: 3,
+      }),
     ];
     const view = setupEntryTranscript(history);
-    const earlierReply = expectDefined(
-      view.container.querySelector<HTMLElement>('[data-entry-id="earlier-answer"]'),
-      "unrelated earlier answer with identical text",
-    );
+    const earlierReply = required(view.container, '[data-entry-id="earlier-answer"]');
     try {
       view.props.runId = runId;
       view.props.runWorking = true;
@@ -215,11 +223,8 @@ describe("chat transcript entry lifecycle", () => {
       expect(entering(view.container)).toHaveLength(0);
       view.props.stream = prefix + "A new reply";
       view.update();
-      const reply = expectDefined(
-        view.container.querySelector<HTMLElement>(".chat-bubble.streaming"),
-        "live answer",
-      );
-      const paragraph = expectDefined(reply.querySelector(".chat-text p"), "stable paragraph");
+      const reply = required(view.container, ".chat-bubble.streaming");
+      const paragraph = required(reply, ".chat-text p");
       const row = expectDefined(reply.closest(".chat-virtual-row"), "causal run frame");
       expect(reply).not.toBe(earlierReply);
       expect(entering(view.container)).toHaveLength(0);
@@ -266,18 +271,17 @@ describe("chat transcript entry lifecycle", () => {
       view.remount();
       expect(entering(view.container)).toHaveLength(0);
     } finally {
-      view.transcript.hostDisconnected();
+      view.transcript.dispose();
     }
   });
 
   it("retains the later live body and code choice when preceding commentary persists", async () => {
     const runId = "commentary-run";
-    const prompt = {
-      role: "user",
-      content: "Show the code",
-      timestamp: 1_000,
-      __openclaw: { id: "code-question", idempotencyKey: `${runId}:user`, seq: 1 },
-    };
+    const prompt = saved("user", "Show the code", 1_000, {
+      id: "code-question",
+      idempotencyKey: `${runId}:user`,
+      seq: 1,
+    });
     const view = setupEntryTranscript([prompt]);
     const commentary = "Checking the existing implementation.";
     const code = Array.from({ length: 10 }, (_, index) => `const value${index} = ${index};`).join(
@@ -293,14 +297,11 @@ describe("chat transcript entry lifecycle", () => {
       view.props.stream = answer;
       view.update();
       await Promise.resolve();
-      const reply = expectDefined(
-        view.container.querySelector<HTMLElement>(".chat-bubble.streaming"),
-        "later live answer",
-      );
-      const paragraph = expectDefined(reply.querySelector(".chat-text p"), "answer paragraph");
+      const reply = required(view.container, ".chat-bubble.streaming");
+      const paragraph = required(reply, ".chat-text p");
       const expand = expectDefined(
         reply.querySelector<HTMLButtonElement>(".code-block-expand"),
-        "code disclosure",
+        ".code-block-expand",
       );
       expand.click();
       expect(expand.getAttribute("aria-expanded")).toBe("true");
@@ -320,33 +321,24 @@ describe("chat transcript entry lifecycle", () => {
       view.props.streamSegments = [];
       view.update();
       await Promise.resolve();
-      const retained = expectDefined(
-        view.container.querySelector<HTMLElement>(".chat-bubble.streaming"),
-        "later answer after commentary handoff",
-      );
+      const retained = required(view.container, ".chat-bubble.streaming");
       expect(
         bubbles(view.container).filter((bubble) => bubble.dataset.messageText === commentary),
       ).toHaveLength(1);
       expect(
         bubbles(view.container).filter((bubble) => bubble.dataset.messageText === answer),
       ).toHaveLength(1);
-      expect
-        .soft(retained, "preceding frame-part adoption must not replace the later body")
-        .toBe(reply);
-      expect
-        .soft(retained.querySelector(".chat-text p"), "retained answer paragraph")
-        .toBe(paragraph);
-      expect
-        .soft(retained.querySelector(".code-block-expand"), "retained reader control")
-        .toBe(expand);
+      expect.soft(retained, "retained body").toBe(reply);
+      expect.soft(retained.querySelector(".chat-text p"), "retained paragraph").toBe(paragraph);
+      expect.soft(retained.querySelector(".code-block-expand"), "retained control").toBe(expand);
       expect
         .soft(
           retained.querySelector(".code-block-expand")?.getAttribute("aria-expanded"),
-          "reader choice survives",
+          "retained choice",
         )
         .toBe("true");
     } finally {
-      view.transcript.hostDisconnected();
+      view.transcript.dispose();
     }
   });
 
@@ -361,13 +353,13 @@ describe("chat transcript entry lifecycle", () => {
     ];
     view.update();
     expect(entering(view.container)).toHaveLength(0);
-    toggleTranscriptSearch(view.props.paneId, () => {});
+    toggleTranscriptSearch(view.props.paneId);
     view.props.messages = [
       ...view.props.messages,
       { role: "user", content: "while searching", timestamp: 3_000 },
     ];
     view.update();
-    toggleTranscriptSearch(view.props.paneId, () => {});
+    toggleTranscriptSearch(view.props.paneId);
     view.update();
     expect(entering(view.container)).toHaveLength(0);
     view.props.sessionKey = "agent:main:other";
@@ -376,6 +368,6 @@ describe("chat transcript entry lifecycle", () => {
     expect(entering(view.container)).toHaveLength(0);
     // The retired pending-only animation must not bypass session initialization.
     expect(view.container.querySelector(".chat-bubble--user-turn-enter")).toBeNull();
-    view.transcript.hostDisconnected();
+    view.transcript.dispose();
   });
 });

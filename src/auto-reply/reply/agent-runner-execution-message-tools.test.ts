@@ -86,9 +86,9 @@ describe("executeAgentTurn: message tool progress", () => {
       releaseItemEvent?.();
       await itemEventPromise;
       return {
-        payloads: [{ text: "NO_REPLY" }],
+        payloads: [],
         didDeliverSourceReplyViaMessageTool: true,
-        meta: {},
+        meta: { terminalReply: { disposition: "silent" } },
       };
     });
 
@@ -237,7 +237,7 @@ describe("executeAgentTurn: message tool progress", () => {
             exitCode: 0,
           },
         });
-        return { payloads: [{ text: "NO_REPLY" }], meta: {} };
+        return { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
       });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       await params.run("anthropic", "primary", initialFallbackAttemptOptions(params));
@@ -307,7 +307,7 @@ describe("executeAgentTurn: message tool progress", () => {
           exitCode: 1,
         },
       });
-      return { payloads: [{ text: "NO_REPLY" }], meta: {} };
+      return { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
     });
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();

@@ -10,7 +10,7 @@ import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-h
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.native.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as maintenanceReads from "../config/sessions/session-entry-read-maintenance.js";
 import * as sessionEntryReader from "../config/sessions/session-entry-read-runtime.js";
@@ -25,7 +25,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { initializeSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import {
   listOpenClawRegisteredAgentDatabases,
   unregisterOpenClawAgentDatabase,
@@ -590,7 +590,7 @@ describe("sweepCronRunSessions", () => {
       nowMs: now,
       log,
     });
-    const admissionPromise = beginSessionWorkAdmission({
+    const admissionPromise = beginSessionEffect({
       scope: storePath,
       identities: ["active-run"],
       assertAllowed: () => {
@@ -599,7 +599,7 @@ describe("sweepCronRunSessions", () => {
     });
     await firstValidation.promise;
 
-    let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
     try {
       releaseWriter.resolve();
       const result = await sweep;
@@ -632,7 +632,7 @@ describe("sweepCronRunSessions", () => {
       },
     });
 
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: ["busy-run"],
       assertAllowed: () => {},

@@ -171,6 +171,75 @@ function createRestorer(
   });
 }
 
+it.each(["restartRecovery", "killIntent", "killReconciliation"] as const)(
+  "activates healthy siblings without reading a child owned by %s",
+  async (owner) => {
+    const { manager } = createRegistrationFixture();
+    for (const runId of ["owned-child", "healthy-child"]) {
+      await manager.registerSubagentRun({
+        runId,
+        childSessionKey: `agent:main:subagent:${runId}`,
+        childAgentId: "main",
+        sessionEntry: fixture,
+        requesterSessionKey: "agent:main:main",
+        requesterAgentId: "main",
+        requesterDisplayKey: "main",
+        task: "Resume independent children after restart",
+        cleanup: "keep",
+      });
+    }
+    await mutateSubagentRuns(["owned-child"], (rows) => {
+      const entry = expectDefined(rows.get("owned-child"), "owned child");
+      const postimage: SubagentRunRecord = { ...entry };
+      if (owner === "restartRecovery") {
+        postimage.execution = {
+          ...entry.execution,
+          restartRecovery: {
+            sessionId: fixture.sessionId,
+            sessionMarker: "saved-recovery",
+            idempotencyKey: "saved-recovery",
+            phase: "reserved",
+          },
+        };
+      } else if (owner === "killIntent") {
+        postimage.killIntent = { requestedAt: 1, reason: "operator stop" };
+      } else {
+        postimage.killReconciliation = { killedAt: 1 };
+      }
+      return { value: undefined, postimages: new Map([[entry.runId, postimage]]) };
+    });
+    subagentRuns.clear();
+    const gateway = sessionSharingTestContext(vi.fn());
+    const resolver = () => gateway;
+    const resumeRun = vi.fn();
+    const recoverInterruptedRuns = vi.fn(async () => {});
+    const restorer = createRestorer({
+      getGatewayContextResolver: () => resolver,
+      resumeRun,
+      recoverInterruptedRuns,
+    });
+    try {
+      await restorer.restoreOnce();
+      await vi.mocked(loadSubagentSessionEntry).withImplementation(
+        async ({ childSessionKey }) => {
+          if (childSessionKey === "agent:main:subagent:owned-child") {
+            throw new Error("Owned child database is unavailable");
+          }
+          return { ...fixture, updatedAt: 1 };
+        },
+        async () => {
+          await restorer.activate();
+        },
+      );
+      expect(resumeRun).toHaveBeenCalledExactlyOnceWith("healthy-child");
+      expect(recoverInterruptedRuns).toHaveBeenCalledOnce();
+      expect(subagentRuns.get("owned-child")).toBeDefined();
+    } finally {
+      restorer.reset();
+    }
+  },
+);
+
 it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
   "reconciles a retained descriptorless registration through %s",
   async (recovery) => {

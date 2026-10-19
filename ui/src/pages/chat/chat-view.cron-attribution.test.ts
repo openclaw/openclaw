@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
-import { renderChat } from "./chat-view-render.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps, renderChatPropsInto } from "./chat-view.test-helpers.ts";
+import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
+import type { ChatProps } from "./chat-view.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -14,13 +13,13 @@ import {
 
 beforeEach(installTranscriptDomMocks);
 
-function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]>) {
+function renderChatView(overrides: Partial<ChatProps>) {
   const container = createComposerContainer();
   const props = createChatProps(overrides);
   onTestFinished(async () => {
     await vi.dynamicImportSettled();
-    props.transcript.hostDisconnected();
-    render(null, container);
+    props.transcript.dispose();
+    disposeChatView(container);
     resetChatViewState();
     resetTranscriptTestDom();
   });

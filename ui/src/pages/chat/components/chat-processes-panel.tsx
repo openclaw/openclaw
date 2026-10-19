@@ -1,8 +1,8 @@
-import { Show, createEffect, createMemo, createSignal } from "solid-js";
+import { Show, createMemo, createSignal } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ProcessesPanelData } from "../processes-panel-data.ts";
 import {
   SessionPanelGroups,
@@ -13,23 +13,17 @@ import "../../../components/elapsed-time.tsx";
 import "./chat-session-panels.css";
 import "./chat-processes-panel.css";
 
-type Methods = { refresh(): Promise<void> };
-export type ChatProcessesPanel = SolidBridgeElement<SessionPanelProps, Methods>;
+export type ChatProcessesPanel = SolidBridgeElement<SessionPanelProps>;
 
-export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps, Methods>(
+export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
   "openclaw-chat-processes-panel",
-  (props, host) => {
-    const [selected, setSelected] = createSignal<string | null>(null);
+  (props) => {
     const [finishedOpen, setFinishedOpen] = createSignal(false);
-    const data = useSessionPanel(props, ProcessesPanelData, () => setSelected(null));
-    host.refresh = () => data().refresh();
-    createEffect(
-      () => Boolean(data().error && !data().rows.length),
-      (denied) => {
-        if (denied) {
-          setSelected(null);
-        }
-      },
+    const panel = useSessionPanel(props, ProcessesPanelData, () => setSelected(null));
+    const data = () => panel().snapshot;
+    // Missing retained rows keep their detail state; access loss closes private output.
+    const [selected, setSelected] = createSignal<string | null>((previous) =>
+      data().error && !data().rows.length ? null : (previous ?? null),
     );
     const selectedRow = createMemo(() => data().rows.find((row) => row.instanceId === selected()));
     const running = createMemo(() => data().rows.filter((row) => row.status === "running"));
@@ -53,7 +47,7 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps, Methods>(
           aria-label={t("chat.processesPanel.stop", { name: row.name })}
           title={t("chat.processesPanel.stop", { name: row.name })}
           disabled={data().stopping.has(row.instanceId)}
-          onClick={() => void data().stop(row)}
+          onClick={() => void panel().stop(row)}
         >
           <Icon name="square" />
           {detail &&
@@ -68,7 +62,7 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps, Methods>(
       data().error && (
         <div class="chat-processes__error" role="alert">
           {data().error}
-          <button class="btn btn--sm" type="button" onClick={() => void data().refresh()}>
+          <button class="btn btn--sm" type="button" onClick={() => void panel().refresh()}>
             {t("common.retry")}
           </button>
         </div>
@@ -119,7 +113,7 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps, Methods>(
                       {stopButton(row())}
                     </div>
                     <div class="chat-processes__metadata">
-                      <span class={row().status === "failed" ? "chat-processes__failure" : ""}>
+                      <span class={{ "chat-processes__failure": row().status === "failed" }}>
                         {status(row())}
                         {row().exitCode != null &&
                           ` · ${t("chat.processesPanel.exitCode", { code: String(row().exitCode) })}`}
@@ -199,7 +193,6 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps, Methods>(
       agentId: { default: "main", attribute: false },
       presented: { default: true, type: Boolean },
     },
-    methods: { refresh: () => Promise.resolve() },
   },
 );
 

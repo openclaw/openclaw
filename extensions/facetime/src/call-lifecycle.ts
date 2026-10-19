@@ -124,7 +124,6 @@ export class FaceTimeCallInstance {
 
 export class FaceTimeCallRegistry<T extends FaceTimeCallInstance> {
   #active: T | undefined;
-  readonly #aliases = new Map<string, T>();
 
   get active(): T | undefined {
     return this.#active;
@@ -141,7 +140,7 @@ export class FaceTimeCallRegistry<T extends FaceTimeCallInstance> {
   }
 
   get(identity: string): T | undefined {
-    return this.#aliases.get(normalizeCallIdentity(identity));
+    return this.#active?.aliases.has(normalizeCallIdentity(identity)) ? this.#active : undefined;
   }
 
   has(identity: string): boolean {
@@ -153,22 +152,13 @@ export class FaceTimeCallRegistry<T extends FaceTimeCallInstance> {
       throw new Error("another FaceTime call lifecycle is already active");
     }
     this.#active = call;
-    for (const alias of call.aliases) {
-      this.#aliases.set(alias, call);
-    }
   }
 
   retainAlias(call: T, identity: string): void {
     if (this.#active !== call || call.phase === "closed") {
       throw new Error("cannot retain an alias for an inactive FaceTime call");
     }
-    const alias = normalizeCallIdentity(identity);
-    const existing = this.#aliases.get(alias);
-    if (existing && existing !== call) {
-      throw new Error("FaceTime call alias already belongs to another lifecycle");
-    }
-    call.aliases.add(alias);
-    this.#aliases.set(alias, call);
+    call.aliases.add(normalizeCallIdentity(identity));
   }
 
   close(call: T): void {
@@ -176,11 +166,6 @@ export class FaceTimeCallRegistry<T extends FaceTimeCallInstance> {
       return;
     }
     call.markClosed();
-    for (const alias of call.aliases) {
-      if (this.#aliases.get(alias) === call) {
-        this.#aliases.delete(alias);
-      }
-    }
     this.#active = undefined;
   }
 }

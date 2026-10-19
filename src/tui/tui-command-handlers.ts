@@ -953,8 +953,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         if (terminalAckFailure) {
           chatLog.addSystem(`send failed: ${TERMINAL_CHAT_SEND_FAILURE_MESSAGE}`);
           setActivityStatus("error");
-        } else {
-          setActivityStatus("idle");
+        } else if (!state.activeChatRunId && !hasPendingSubmit(state)) {
+          setActivityStatus("idle", "completed");
         }
         tui.requestRender();
         return;
@@ -962,7 +962,18 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (hasPendingSubmit(state)) {
         if (acceptedRunAlreadyCompleted) {
           clearPendingSubmit(state, acceptedRunId);
-          setActivityStatus("idle");
+          if (!state.activeChatRunId && !hasPendingSubmit(state)) {
+            const outcome = state.sessionProjection?.runs[acceptedRunId]?.status;
+            if (outcome === "error" || outcome === "timeout") {
+              setActivityStatus("error");
+            } else if (outcome === "completed" || outcome === "yielded") {
+              setActivityStatus("idle", "completed");
+            } else if (outcome === "aborted") {
+              setActivityStatus("idle", "aborted");
+            } else {
+              setActivityStatus("idle");
+            }
+          }
           flushPendingHistoryRefreshIfIdle?.();
         } else {
           setActivityStatus("waiting");

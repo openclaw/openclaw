@@ -143,7 +143,7 @@ If you already manage Node yourself:
 
     <Note>
     `--trust` allows OpenClaw's package lifecycle scripts for this install. Bun
-    1.4 or newer can also run OpenClaw's CLI, local agent, and Gateway. Node
+    1.4.3 or newer can also run OpenClaw's CLI, local agent, and Gateway. Node
     remains the primary runtime, so the plain `openclaw` executable keeps its
     Node shebang. `bun run --bun` forces the Bun runtime, while
     `--daemon-runtime bun` installs the managed Gateway under Bun.
@@ -184,6 +184,13 @@ The `+` suffix records Corepack's integrity hash and is not part of the npm pack
 Keep npm install scripts and optional dependencies enabled so pnpm can provision its native executable.
 
 Or skip the global install and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
+
+### Standalone builds
+
+For application packaging or a deployment without a separate Node or Bun
+installation, build an executable and companion runtime directory from source.
+See [Standalone builds](/install/standalone) for modes, output files, signing,
+and the update boundary.
 
 ### Install from the GitHub main checkout
 

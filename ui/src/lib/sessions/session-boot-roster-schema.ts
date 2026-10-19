@@ -1,14 +1,18 @@
-import { z } from "zod";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.js";
+import * as json from "../snapshot-json.ts";
 
-const text = z.string().optional();
-const actor = z.object({ type: z.enum(["human", "agent", "system"]), id: text, label: text });
+const text = json.optional(json.text);
+const actor = json.object({
+  type: json.enumeration(["human", "agent", "system"]),
+  id: text,
+  label: text,
+});
 // Routing and the first header need stable row facts, never live activity or permissions.
-const row = z.object({
-  key: z.string().refine((key) => !isIncognitoSessionKey(key)),
-  kind: z.enum(["direct", "group", "global", "unknown"]),
-  incognito: z.never().optional(),
+const row = json.object({
+  key: json.refine(json.text, (key) => !isIncognitoSessionKey(key)),
+  kind: json.enumeration(["direct", "group", "global", "unknown"]),
+  incognito: json.optional(json.never),
   sessionId: text,
   agentId: text,
   label: text,
@@ -19,40 +23,40 @@ const row = z.object({
   displayName: text,
   derivedTitle: text,
   lastMessagePreview: text,
-  updatedAt: z.number().nullable().optional(),
+  updatedAt: json.optional(json.nullable(json.number)),
   category: text,
-  pinned: z.boolean().optional(),
-  archived: z.boolean().optional(),
-  hasBoard: z.boolean().optional(),
-  boardFace: z.enum(["chat", "dashboard"]).optional(),
-  boardPresentation: z.enum(["split", "expanded"]).optional(),
+  pinned: json.optional(json.boolean),
+  archived: json.optional(json.boolean),
+  hasBoard: json.optional(json.boolean),
+  boardFace: json.optional(json.enumeration(["chat", "dashboard"])),
+  boardPresentation: json.optional(json.enumeration(["split", "expanded"])),
   workspaceDir: text,
   spawnedWorkspaceDir: text,
   spawnedCwd: text,
   execNode: text,
   execCwd: text,
-  deviceFolder: z.object({ deviceId: z.string(), path: z.string() }).optional(),
-  worktree: z.object({ id: z.string(), branch: z.string(), repoRoot: z.string() }).optional(),
-  repository: z.object({ url: z.string(), ref: text, branch: z.string() }).optional(),
+  deviceFolder: json.optional(json.object({ deviceId: json.text, path: json.text })),
+  worktree: json.optional(json.object({ id: json.text, branch: json.text, repoRoot: json.text })),
+  repository: json.optional(json.object({ url: json.text, ref: text, branch: json.text })),
   thinkingLevel: text,
   model: text,
   modelProvider: text,
-  owner: z.object({ actor }).optional(),
+  owner: json.optional(json.object({ actor })),
 });
-export const bootRosterSchema = z.object({
-  agentId: z.string().nullable(),
-  result: z.object({
-    ts: z.number(),
-    path: z.string(),
-    count: z.number(),
-    defaults: z.object({
-      model: z.string().nullable(),
-      modelProvider: z.string().nullable(),
-      contextTokens: z.number().nullable(),
+export const bootRosterSchema = json.object({
+  agentId: json.nullable(json.text),
+  result: json.object({
+    ts: json.number,
+    path: json.text,
+    count: json.number,
+    defaults: json.object({
+      model: json.nullable(json.text),
+      modelProvider: json.nullable(json.text),
+      contextTokens: json.nullable(json.number),
     }),
-    sessions: row.array().max(SIDEBAR_SESSION_ROSTER_LIMIT),
+    sessions: json.array(row, SIDEBAR_SESSION_ROSTER_LIMIT),
   }),
-  groups: z.string().array(),
-  groupSettings: z.object({ name: z.string(), position: z.number() }).array(),
-  sectionOrder: z.string().array(),
+  groups: json.array(json.text),
+  groupSettings: json.array(json.object({ name: json.text, position: json.number })),
+  sectionOrder: json.array(json.text),
 });

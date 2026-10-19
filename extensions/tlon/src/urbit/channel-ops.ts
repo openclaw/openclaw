@@ -49,7 +49,14 @@ const TLON_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
 
 export async function pokeUrbitChannel(
   deps: UrbitChannelDeps,
-  params: { app: string; mark: string; json: unknown; auditContext: string },
+  params: {
+    app: string;
+    mark: string;
+    json: unknown;
+    auditContext: string;
+    beforeRequest?: () => void;
+    timeoutMs?: number;
+  },
 ): Promise<number> {
   const pokeId = Date.now();
   const pokeData = {
@@ -64,7 +71,8 @@ export async function pokeUrbitChannel(
   const { response, release } = await putUrbitChannel(deps, {
     body: [pokeData],
     auditContext: params.auditContext,
-    timeoutMs: 30_000,
+    timeoutMs: params.timeoutMs,
+    beforeRequest: params.beforeRequest,
   });
 
   try {

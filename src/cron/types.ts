@@ -5,6 +5,7 @@ import type {
   CronRunLogEntry as CronRunLogWireEntry,
   CronUpdateParams as CronUpdateParamsWire,
 } from "../../packages/gateway-protocol/src/schema/cron.types.js";
+import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
@@ -176,6 +177,8 @@ export type CronRunOutcome = {
   /** Transient internal detail; never project into persisted or public cron events. */
   failureNotificationDetail?: CronFailureNotificationDetail;
   summary?: string;
+  /** Producer-authored terminal reply fact without exposing reply text. */
+  replyDisposition?: AgentRunTerminalReplySnapshot["disposition"];
   sessionId?: string;
   sessionKey?: string;
   diagnostics?: CronRunDiagnostics;
@@ -208,7 +211,7 @@ export type CronJobExecutionResult = CronRunOutcome &
     triggerEval?: CronTriggerEvalOutcome;
   };
 
-/** One run's requested delay before the same paced job runs again. */
+/** One run's requested delay before the same paced job or one-shot continuation runs again. */
 export type CronNextCheckProposal = {
   delayMs: number;
 };
@@ -404,6 +407,13 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = CronJob & {
+  /** Original authenticated source for a same-conversation continuation, never a public grant. */
+  operatorSource?: {
+    source: import("../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
+    executionRevision: string;
+  };
+  /** Captured inference owner; private and independent of scheduled tool authority. */
+  inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
   /** Creation-bound destination for isolated results when no external route exists. */
   sourceConversation?: {
     sessionKey: string;
@@ -436,6 +446,7 @@ type CronJobStateInput = Partial<
     | "autoDisabled"
     | "scheduleActivatedAtMs"
     | "streamSourceIdentity"
+    | "sourceIdentity"
     | "runningReceiptId"
     | "runningScheduleChangeId"
   >

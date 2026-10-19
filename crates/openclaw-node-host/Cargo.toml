@@ -18,7 +18,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 thiserror = "2.0.21"
-tokio = { version = "1.53.1", features = [
+tokio = { version = "1.53.2", features = [
   "io-util",
   "macros",
   "net",
@@ -27,7 +27,7 @@ tokio = { version = "1.53.1", features = [
   "sync",
   "time",
 ] }
-zeroize = "1.9.0"
+zeroize = "1.9.1"
 
 [lints.rust]
 unsafe_code = "forbid"

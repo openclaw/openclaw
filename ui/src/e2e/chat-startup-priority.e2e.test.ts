@@ -6,7 +6,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -237,7 +237,7 @@ suite.define(() => {
           .getByRole("region", { name: "Progress note", exact: true })
           .getByText("Current rollout progress", { exact: true })
           .waitFor();
-        await details.getByRole("button", { name: "Close details", exact: true }).click();
+        await closeChatDetails(activePane);
         await page.getByText(suggestion.title, { exact: true }).waitFor();
         const composer = page.locator(
           ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",

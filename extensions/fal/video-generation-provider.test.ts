@@ -31,6 +31,14 @@ function generateVideo(request: Partial<VideoGenerationRequest> = {}) {
 }
 
 describe("fal video generation provider", () => {
+  it("rejects a duration that rounds to zero before submission", async () => {
+    mockFalProviderRuntime();
+    await expect(
+      generateVideo({ model: "bytedance/seedance-2.0/fast/text-to-video", durationSeconds: 0.4 }),
+    ).rejects.toThrow("durationSeconds must be a positive duration");
+    expect(fetchGuardMock).not.toHaveBeenCalled();
+  });
+
   function mockFalProviderRuntime() {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-key",

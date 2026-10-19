@@ -289,9 +289,20 @@ describe("cron tool creator cap", () => {
     expect(resolveCronCreatorExecToolTarget(target)).toBeUndefined();
   });
 
+  it("captures native question authority without requiring an OpenClaw tool object", () => {
+    const target: CronCreatorToolAllowlistEntry[] = [];
+
+    replaceWithEffectiveCronCreatorToolAllowlist(target, [testTool("read")], undefined, {
+      canonicalToolNames: ["read", "ask_user"],
+    });
+
+    expect(target).toEqual([{ name: "read" }, { name: "ask_user" }]);
+  });
+
   it("rejects a backend-projected name outside the native capability vocabulary", () => {
     for (const rejected of [
       "Bash",
+      "AskUserQuestion",
       "READ",
       " exec ",
       "apply-patch",

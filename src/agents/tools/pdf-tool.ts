@@ -1,5 +1,6 @@
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -574,10 +575,7 @@ export function createPdfTool(options?: {
     description,
     parameters: PdfToolSchema,
     execute: async (_toolCallId, args, signal) => {
-      const record: Record<string, unknown> = args && typeof args === "object" ? { ...args } : {};
-      if (Array.isArray(record.pdfs)) {
-        record.pdfs = [...record.pdfs];
-      }
+      const record = asRecord(args);
       return runWithAsyncWorkResources(async (onAcquired) => {
         const runtimeResources = new AsyncDisposableStack();
         const capturedOperator = await captureAmbientGatewayOperatorAuthority({

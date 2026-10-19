@@ -267,6 +267,9 @@ async function setupUnderOwner(
   const { resolveSessionTranscriptsDirForAgent } = await import("../config/sessions.js");
   const sessionsDir = resolveSessionTranscriptsDirForAgent(selectedAgentId);
   await fs.mkdir(sessionsDir, { recursive: true });
+  const { initializeFreshDaemonRuntimePinMigration } =
+    await import("../infra/state-migrations.daemon-runtime-pins.js");
+  initializeFreshDaemonRuntimePinMigration(process.env);
   if (opts?.json) {
     writeRuntimeJson(runtime, {
       ok: true,

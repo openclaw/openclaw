@@ -5,7 +5,6 @@ import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { downloadBlobFile } from "../../../lib/download.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { getChatAttachmentBlob } from "../attachment-payload-store.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
 
 type PrivateComposerDraft = {
   text: string;
@@ -87,14 +86,14 @@ function PrivateComposerRecoveryDialog(
           )}
         </For>
         {error() && <p role="alert">{t(`chat.privateDraftReload.${error()}`)}</p>}
-        <div class="exec-approval-actions">
+        <openclaw-modal-actions class="exec-approval-actions">
           <button type="button" class="btn danger" onClick={() => props.finish(current())}>
             {t("chat.privateDraftReload.discard")}
           </button>
           <button type="button" class="btn" autofocus onClick={() => props.finish(false)}>
             {t("chat.privateDraftReload.keep")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </section>
     </openclaw-modal-dialog>
   );
@@ -102,6 +101,6 @@ function PrivateComposerRecoveryDialog(
 
 export function reviewPrivateComposerDraft(params: PrivateComposerDraft): Promise<boolean> {
   return withPromiseModalHost({ signal: params.signal, value: false }, ({ render, finish }) => {
-    render(() => solidTemplate(PrivateComposerRecoveryDialog, { ...params, finish }));
+    render(() => <PrivateComposerRecoveryDialog {...params} finish={finish} />);
   });
 }

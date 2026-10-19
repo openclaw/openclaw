@@ -1,6 +1,3 @@
-/**
- * Handles lifecycle and compaction events from subscribed embedded-agent sessions.
- */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -12,13 +9,12 @@ import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
-  shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
+import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
 import {
-  classifyAssistantFailoverReason,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
-} from "./embedded-agent-helpers.js";
+} from "./embedded-agent-helpers/error-text.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import {
   hasAttemptTerminalState,
@@ -89,7 +85,6 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
   ctx.state.deferBlockReplyDelivery =
     typeof ctx.params.onBeforeTerminalDelivery === "function" &&
     ctx.params.deferTerminalDelivery !== false;
-  ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
   emitLifecycleAgentEvent(ctx, { phase: "start", startedAt: Date.now() });
 }
 
@@ -114,9 +109,9 @@ export function handleAgentEnd(
   // reasons keep the streamed-only view because their raw text can describe an
   // interrupted generation rather than a reply (mirrors
   // resolveTerminalAssistantTexts).
-  const hasStreamedAssistantVisibleText =
-    Array.isArray(ctx.state.assistantTexts) &&
-    ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
+  const hasStreamedAssistantVisibleText = ctx.state.assistantTexts.some((text) =>
+    hasAssistantVisibleReply({ text }),
+  );
   const completedAssistantFallbackText =
     isAssistantMessage(lastAssistant) &&
     lastAssistant.stopReason !== "error" &&
@@ -211,26 +206,22 @@ export function handleAgentEnd(
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
-    const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
-    const rawErrorConsoleSuffix =
-      safeRawErrorPreview &&
-      !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)
-        ? ` rawError=${safeRawErrorPreview}`
-        : "";
     ctx.log.warn("embedded run agent end", {
       event: "embedded_run_agent_end",
       tags: ["error_handling", "lifecycle", "agent_end", "assistant_error"],
       runId: ctx.params.runId,
       isError: true,
-      error: safeErrorText,
       failoverReason,
       model: lastAssistant.model,
       provider: lastAssistant.provider,
-      ...observedError,
-      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
+      rawErrorHash: observedError.rawErrorHash,
+      rawErrorFingerprint: observedError.rawErrorFingerprint,
+      httpCode: observedError.httpCode,
+      providerRuntimeFailureKind: observedError.providerRuntimeFailureKind,
+      providerErrorType: observedError.providerErrorType,
+      requestIdHash: observedError.requestIdHash,
+      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} failoverReason=${failoverReason ?? "unknown"}`,
     });
-  } else {
-    ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
   }
 
   const emitLifecycleTerminal = () => {
@@ -239,10 +230,7 @@ export function handleAgentEnd(
       ctx.params.resolveTerminalStopReason?.() ??
       ctx.state.terminalStopReason ??
       (!isError && isAssistantMessage(lastAssistant) ? lastAssistant.stopReason : undefined);
-    const terminalAborted =
-      typeof ctx.state.terminalAborted === "boolean"
-        ? ctx.state.terminalAborted
-        : ctx.params.isTerminalAborted?.();
+    const terminalAborted = ctx.state.terminalAborted ?? ctx.params.isTerminalAborted?.();
     // Aborted validation loops lose their final tool result. Preserve only the
     // argument-free validator summary; arbitrary tool errors can contain secrets.
     const toolErrorSummary =
@@ -257,10 +245,10 @@ export function handleAgentEnd(
       ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
       ...(ctx.state.timeoutPhase ? { timeoutPhase: ctx.state.timeoutPhase } : {}),
-      ...(typeof ctx.state.providerStarted === "boolean"
+      ...(ctx.state.providerStarted !== undefined
         ? { providerStarted: ctx.state.providerStarted }
         : {}),
-      ...(typeof terminalAborted === "boolean" ? { aborted: terminalAborted } : {}),
+      ...(terminalAborted !== undefined ? { aborted: terminalAborted } : {}),
       ...(toolErrorSummary ? { toolErrorSummary } : {}),
       ...(livenessState ? { livenessState } : {}),
       ...(replayInvalid ? { replayInvalid } : {}),

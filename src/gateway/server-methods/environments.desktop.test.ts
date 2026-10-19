@@ -187,7 +187,7 @@ describe("desktop gateway methods", () => {
           server.close(() => resolve());
         }),
     );
-    const registry = createDesktopSessionRegistry({ lingerMs: 10 });
+    const registry = createDesktopSessionRegistry();
     cleanups.push(async () => registry.stopAll());
     const config = { enabled: true, port: address.port };
     const [ok, result] = await invoke(

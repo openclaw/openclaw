@@ -1,6 +1,8 @@
 import { createMemo, For } from "solid-js";
+import { registryFor } from "../../components/overlay-registry.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
@@ -18,8 +20,13 @@ export type SessionsAdvancedFiltersProps = {
   limit: string;
   includeGlobal: boolean;
   includeUnknown: boolean;
+  searchQuery: string;
+  sessionMenu: { key: string } | null;
   statusFilter: SessionArchivedFilter;
   groupBy: SessionsGroupBy;
+  loading: boolean;
+  archivedCount: number;
+  deleteArchivedDisabledReason?: string;
   /** Multi-identity gateways only; hides the Person mode elsewhere. */
   personGroupingAvailable: boolean;
   groupWriteDisabledReason?: string;
@@ -29,6 +36,9 @@ export type SessionsAdvancedFiltersProps = {
     includeGlobal: boolean;
     includeUnknown: boolean;
   }) => void;
+  onSearchChange: (query: string) => void;
+  onStatusFilterChange: (statusFilter: SessionArchivedFilter) => void;
+  onDeleteAllArchived: () => void;
   onGroupByChange: (mode: SessionsGroupBy) => void;
   onRequestNewCategory: (sessionKey?: string) => void;
 };
@@ -45,6 +55,7 @@ const SESSION_GROUP_MODE_LABELS = {
 
 export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JSX.Element {
   let trigger!: HTMLButtonElement;
+  let searchInput!: HTMLInputElement;
   let popover: PopoverHandle | undefined;
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
   const filterInputs = [
@@ -75,6 +86,8 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
       props.limit.trim() !== String(SESSIONS_PAGE_DEFAULT_LIMIT) ||
       !props.includeGlobal ||
       props.includeUnknown ||
+      props.searchQuery.trim() !== "" ||
+      props.statusFilter !== "active" ||
       props.groupBy !== "none",
   );
   return (
@@ -85,8 +98,10 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
         }}
         id="sessions-filter-popover-trigger"
         type="button"
-        class={["btn btn--sm sessions-filter-popover__trigger", { active: active() }]}
-        title={t("sessionsView.filters")}
+        class={[
+          "btn btn--xs btn--icon sessions-toolbar__icon sessions-filter-popover__trigger",
+          { active: active() },
+        ]}
         aria-label={t("sessionsView.filters")}
         aria-haspopup="dialog"
         aria-controls="sessions-filter-popover"
@@ -111,6 +126,46 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
         }}
       >
         <div class="sessions-filter-popover__panel">
+          <div class="data-table-search sessions-filter-popover__search">
+            <Icon name="search" />
+            <input
+              ref={(element) => (searchInput = element)}
+              type="text"
+              aria-label={t("sessionsView.searchPlaceholder")}
+              placeholder={t("sessionsView.searchPlaceholder")}
+              value={props.searchQuery}
+              onInput={(event) => props.onSearchChange(event.currentTarget.value)}
+              onKeyDown={(event: KeyboardEvent) => handleSessionsSearchKeydown(event, props)}
+            />
+            <button
+              type="button"
+              class="sessions-filter-popover__clear"
+              aria-label={t("sessionsView.clearSearch")}
+              hidden={!props.searchQuery}
+              disabled={!props.searchQuery}
+              onClick={() => {
+                searchInput.focus({ preventScroll: true });
+                props.onSearchChange("");
+              }}
+            >
+              <Icon name="x" />
+            </button>
+          </div>
+          <SettingsSegmented<SessionArchivedFilter>
+            value={props.statusFilter}
+            ariaLabel={t("sessionsView.sessionState")}
+            class="sessions-view-segment"
+            options={[
+              { value: "active", label: t("common.active") },
+              {
+                value: "archived",
+                label: t("sessionsView.archived"),
+                title: t("sessionsView.archivedOnlyTooltip"),
+              },
+              { value: "all", label: t("sessionsView.all") },
+            ]}
+            onChange={(value) => props.onStatusFilterChange(value)}
+          />
           <div class="sessions-filter-popover__fields">
             <For each={filterInputs}>
               {([key, suffix, labelKey]) => {
@@ -126,7 +181,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
                     <label class="session-filter-field">
                       <span class="session-filter-label">{t(labelKey)}</span>
                       <input
-                        class={`session-filter-input session-filter-input--${suffix}`}
+                        class={["session-filter-input", `session-filter-input--${suffix}`]}
                         placeholder={
                           key === "activeMinutes" ? t("sessionsView.minutesPlaceholder") : undefined
                         }
@@ -201,13 +256,27 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
               <Icon name="plus" /> {t("sessionsView.newGroup")}
             </button>
           ) : undefined}
+          {props.statusFilter === "archived" ? (
+            <button
+              class="btn btn--sm danger"
+              disabled={
+                props.loading ||
+                props.archivedCount === 0 ||
+                Boolean(props.deleteArchivedDisabledReason)
+              }
+              title={props.deleteArchivedDisabledReason}
+              onClick={props.onDeleteAllArchived}
+            >
+              <Icon name="trash" /> {t("sessionsView.deleteAllArchived")}
+            </button>
+          ) : undefined}
         </div>
       </Popover>
     </>
   );
 }
 
-export function handleSessionsSearchKeydown(
+function handleSessionsSearchKeydown(
   event: KeyboardEvent,
   props: {
     sessionMenu: { key: string } | null;
@@ -230,22 +299,16 @@ export function handleSessionsSearchKeydown(
     !input.value ||
     props.sessionMenu ||
     document.openClawModalLayers?.size ||
-    document.querySelector(
-      "dialog[open], [aria-modal='true'], openclaw-menu-surface, wa-dropdown[open], wa-popover[open], wa-select[open]",
-    )
+    registryFor(document).stack.some(
+      (overlay) => overlay.open && overlay.id !== "sessions-filter-popover",
+    ) ||
+    document.querySelector("dialog[open], [aria-modal='true'], openclaw-menu-surface")
   ) {
     return;
   }
   event.preventDefault();
   event.stopPropagation();
   props.onSearchChange("");
-}
-
-export function clearSessionsSearch(event: MouseEvent, onSearchChange: (query: string) => void) {
-  // SAFETY: This listener is bound directly to the clear button.
-  const input = (event.currentTarget as HTMLElement).parentElement?.querySelector("input");
-  input?.focus({ preventScroll: true });
-  onSearchChange("");
 }
 
 // Drag-over highlighting toggles a class directly on the target row instead of

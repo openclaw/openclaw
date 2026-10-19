@@ -11,10 +11,9 @@ import type {
   CliUsage,
 } from "./cli-output-contracts.js";
 import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
-import type { CliEventProjectionState } from "./cli-output-events.js";
+import type { CliEventProjectionState, ThinkingTracker } from "./cli-output-events.js";
 import {
   createLeadingTaggedReasoningRouter,
-  createThinkingTracker,
   createToolUseTracker,
   dispatchClaudeCliStreamingToolEvent,
   dispatchClaudeCliThinking,
@@ -26,6 +25,7 @@ import {
 import * as cliOutputLifecycle from "./cli-output-lifecycle.js";
 import {
   decodeCliRecords,
+  isClaudeStopHookFeedbackRecord,
   isClaudeStreamJsonDialect,
   isClaudeSyntheticNoResponse,
   isClaudeSubagentRecord,
@@ -96,7 +96,13 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   // always has a destination; a separate enable flag let it be dropped (#92092).
   const classifyClaudeCommentary =
     Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
-  const thinkingTracker = createThinkingTracker();
+  const thinkingTracker: ThinkingTracker = {
+    streamedByIndex: new Map(),
+    highestStreamedIndex: Number.NEGATIVE_INFINITY,
+    emittedText: "",
+    nextSyntheticBlockIndex: 0,
+    progressTokens: 0,
+  };
   const claudeStreamJson = isClaudeStreamJsonDialect(params);
   let taggedReasoningRouter = createLeadingTaggedReasoningRouter();
   let currentTaggedReasoningText = "";
@@ -304,6 +310,17 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     return true;
   };
 
+  // Committed or rejected text cannot join the next reply through a tool split.
+  const resetReplySegment = () => {
+    segmentStart = assistantText.length;
+    currentMessageStart = segmentStart;
+    preserveFrom = segmentStart;
+    pendingMessageSeparator = false;
+    sawToolUseSinceText = false;
+    currentMessageHadToolUse = false;
+    previousMessageHadToolUse = false;
+  };
+
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
     if (parseErrorText) {
       return;
@@ -389,11 +406,17 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return;
     }
 
-    if (parsed.type === "result") {
+    const stopHookFeedback =
+      claudeStreamJson && !isClaudeSubagentRecord(parsed) && isClaudeStopHookFeedbackRecord(parsed);
+    if (parsed.type === "result" || stopHookFeedback) {
       finishTaggedReasoningMessage();
       if (classifyClaudeCommentary) {
         flushPendingClaudeText("assistant");
       }
+    }
+
+    if (stopHookFeedback) {
+      resetReplySegment();
     }
 
     let result = parseClaudeCliJsonlResult({
@@ -493,13 +516,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       }
       // An interim result commits its segment. Rebase boundary state so later
       // text is judged on its own, while delta snapshots stay cumulative.
-      segmentStart = assistantText.length;
-      currentMessageStart = segmentStart;
-      preserveFrom = segmentStart;
-      pendingMessageSeparator = false;
-      sawToolUseSinceText = false;
-      currentMessageHadToolUse = false;
-      previousMessageHadToolUse = false;
+      resetReplySegment();
       return;
     }
 

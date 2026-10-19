@@ -43,11 +43,29 @@ describe("worker placement read cache", () => {
     expect(await writer.readRecoveryCandidates()).toEqual([]);
     expect(recoveryReadCount()).toBe(1);
 
-    const remote = await writer.startDispatch({
-      sessionId: "recovery-remote",
+    const local = {
+      sessionId: "recovery-local",
       agentId: "main",
-      sessionKey: "agent:main:recovery-remote",
+      sessionKey: "agent:main:recovery-local",
+    };
+    const claim = await writer.claimTurn({
+      ...local,
+      owner: { kind: "local" },
+      claimId: "local-claim",
+      runId: "local-run",
     });
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    await writer.releaseTurnIfOwned(claim);
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    await writer.retireSessionPlacementAsync({
+      sessionId: local.sessionId,
+      expectedState: "local",
+      expectedGeneration: claim.placementGeneration,
+    });
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    expect(recoveryReadCount()).toBe(1);
+
+    const remote = await writer.startDispatch(local);
     const expected = [{ sessionId: remote.sessionId, environmentId: null, state: "requested" }];
     expect(await reader.readRecoveryCandidates()).toEqual(expected);
     expect(await reader.readRecoveryCandidates()).toEqual(expected);

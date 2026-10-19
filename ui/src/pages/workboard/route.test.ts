@@ -29,8 +29,8 @@ function routeFixture(
   };
   const router = createApplicationRouter();
   const loading = createDeferred();
-  const component = createDeferred<{ render: () => null }>();
-  router.getRoute("about")!.component = async () => ({ render: () => null });
+  const component = createDeferred<{ renderSolid: () => null }>();
+  router.getRoute("about")!.component = async () => ({ renderSolid: () => null });
   router.getRoute("workboard")!.component = () => {
     loading.resolve();
     return component.promise;
@@ -81,7 +81,7 @@ function routeFixture(
     started,
     resolve() {
       metadata.resolve();
-      component.resolve({ render: () => null });
+      component.resolve({ renderSolid: () => null });
     },
     pop(next: RouteLocation) {
       location = next;

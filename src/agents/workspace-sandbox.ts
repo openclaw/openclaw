@@ -5,7 +5,7 @@ import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
-import { resolveSandboxContext } from "./sandbox.js";
+import { resolveSandboxContext } from "./sandbox/context.js";
 import {
   type resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,

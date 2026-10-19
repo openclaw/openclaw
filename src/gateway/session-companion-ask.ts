@@ -11,6 +11,7 @@ import { buildBtwCliPrompt } from "../agents/btw-prompts.js";
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
 import { withSessionManagerWrite } from "../agents/sessions/session-manager-write-admission.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
+import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
@@ -126,12 +127,7 @@ function toRunnerHistoryMessage(
 async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
   params.assertSourceCurrent?.();
   params.assertInputCurrent?.();
-  const selectedModel = resolveSessionCompanionModel({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    modelRef: params.modelRef,
-    operatorAuthority: params.operatorAuthority,
-  });
+  const selectedModel = resolveSessionCompanionModel(params);
   const current = params.messages.at(-1);
   if (!current || current.role !== "user") {
     throw new Error("Session companion has no current question.");
@@ -231,7 +227,11 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
         params.assertSourceCurrent?.();
         answer = (await executePreparedCliRun(prepared)).text;
       } finally {
-        await prepared?.preparedBackend.cleanup?.();
+        try {
+          await prepared?.preparedBackend.cleanup?.();
+        } catch (error) {
+          companionLog.warn("Side chat backend cleanup failed", { error });
+        }
       }
       modelExecution?.assertCurrent();
       return answer;
@@ -324,7 +324,10 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       await removeInternalSessionEffectsSession(
         target,
         executionStarted ? undefined : expectedSeedOwner,
-      );
+      ).catch((error: unknown) => {
+        // Cleanup must not replace a completed answer or replay it through fallback.
+        companionLog.warn("Side chat internal session cleanup failed", { error });
+      });
     } finally {
       modelExecution?.release();
     }
@@ -560,7 +563,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
           "The selected session changed before Side chat could answer.",
         );
       }
-      const rawAnswer = await run({
+      const runParams: SessionCompanionRunParams = {
         cfg,
         agentId,
         modelRef: utilityModelRef,
@@ -573,7 +576,61 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         assertSourceCurrent,
         ...(request.assertInputCurrent ? { assertInputCurrent: request.assertInputCurrent } : {}),
         signal: controller.signal,
-      });
+      };
+      const utility = readUtilityModelSetting(cfg, agentId);
+      const fallbacks = utility.kind === "disabled" ? [] : utility.fallbacks;
+      let rawAnswer: string;
+      if (fallbacks.length) {
+        // The fallback owner filters the whole chain before choosing a permitted route.
+        const selection = resolveSessionCompanionModel({
+          ...runParams,
+          operatorAuthority: undefined,
+        });
+        const [{ runWithModelFallback }, { resolveModelCandidateChain }] = await Promise.all([
+          import("../agents/model-fallback-runner.js"),
+          import("../agents/model-fallback-candidates.js"),
+        ]);
+        const candidateParams = {
+          cfg,
+          agentId,
+          provider: selection.provider,
+          model: selection.modelId,
+          requestedRouteResolution: "resolved" as const,
+          fallbacksOverride: fallbacks,
+        };
+        const modelPolicy = request.operatorAuthority?.modelPolicy;
+        if (modelPolicy && !resolveModelCandidateChain(candidateParams).some(modelPolicy.allows)) {
+          // Preserve Side chat's permitted-model recovery when the entire utility chain is denied.
+          rawAnswer = await run(runParams);
+        } else {
+          const result = await runWithModelFallback({
+            ...candidateParams,
+            abortSignal: controller.signal,
+            operatorAuthority: request.operatorAuthority,
+            skipAuthProfileRuntime: true,
+            resolveAgentHarnessRuntimeOverride: () => "openclaw",
+            run: (provider, model, options) => {
+              controller.signal.throwIfAborted();
+              assertSourceCurrent?.();
+              request.assertInputCurrent?.();
+              return run({
+                ...runParams,
+                modelRef:
+                  options?.modelRoutingProvenance.stage === "fallback"
+                    ? `${provider}/${model}${
+                        provider === selection.provider && selection.profileId
+                          ? `@${selection.profileId}`
+                          : ""
+                      }`
+                    : utilityModelRef,
+              });
+            },
+          });
+          rawAnswer = result.result;
+        }
+      } else {
+        rawAnswer = await run(runParams);
+      }
       const replySessionId = await currentSessionId(sessionKey, agentId);
       if (activeAsk.cancellation || params.isDisposed()) {
         throw new Error("session companion ask was cancelled");

@@ -35,6 +35,9 @@ export function flushMockTimers(): Promise<void> {
 export const mockGatewayTest = it.extend<{ gatewayPage: MockGatewayPage }>({
   gatewayPage: async ({ task }, use) => {
     const dom = new JSDOM("", { url: "http://mock-control-ui/", runScripts: "outside-only" });
+    // Bun exposes a VM Window proxy that jsdom does not register as an EventTarget.
+    // The global-call receiver uses this private realm's admitted Window instead.
+    dom.window.addEventListener = dom.window.addEventListener.bind(undefined);
     const responses: ResponseFrame[] = [];
     try {
       await use({

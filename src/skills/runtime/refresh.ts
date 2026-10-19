@@ -33,6 +33,7 @@ import {
   type SkillsWatcherParams,
 } from "./discovery-worker-input.js";
 import {
+  closeRemoteSkillsWatchersForAgent,
   closeRemoteSkillsWatchers,
   disposeRemoteSkillsWatcher,
   ensureRemoteSkillsWatcher,
@@ -52,6 +53,8 @@ const MAX_SOURCES = 128;
 type Source = {
   selection: SkillsDiscoverySourceSelection;
   workspaceDir: string;
+  agentIds: Set<string>;
+  unowned: boolean;
   environment: SkillsDiscoveryEnvironment;
   watch: boolean;
   dirty: boolean;
@@ -206,7 +209,11 @@ function scanDirtySources(): Promise<void> {
   return state.pending;
 }
 
-async function registerSource(selection: SkillsDiscoverySourceSelection, watch?: boolean) {
+async function registerSource(
+  selection: SkillsDiscoverySourceSelection,
+  watch?: boolean,
+  agentId?: string,
+) {
   if (state.closing) {
     await state.closing;
   }
@@ -235,6 +242,8 @@ async function registerSource(selection: SkillsDiscoverySourceSelection, watch?:
         selection.kind === "planned"
           ? selection.plan.input.workspaceDir
           : selection.request.sourcePlan.workspaceDir,
+      agentIds: new Set(agentId ? [agentId] : []),
+      unowned: agentId === undefined,
       environment,
       watch: watch !== false,
       dirty: true,
@@ -243,6 +252,11 @@ async function registerSource(selection: SkillsDiscoverySourceSelection, watch?:
   } else {
     // An opt-out read must not withdraw another consumer's passive observation.
     source.watch ||= watch !== false;
+    if (agentId) {
+      source.agentIds.add(agentId);
+    } else {
+      source.unowned = true;
+    }
     state.sources.delete(key);
     state.sources.set(key, source);
   }
@@ -364,6 +378,7 @@ async function registerSkillsWatcher(params: SkillsWatcherParams) {
         plan: { input: captureSkillsSourcePlanInput(params.workspaceDir, params) },
       },
       params.config?.skills?.load?.watch,
+      params.agentId,
     );
   }
   const prepared = params.sourcePlan
@@ -375,6 +390,7 @@ async function registerSkillsWatcher(params: SkillsWatcherParams) {
     await ensureRemoteSkillsWatcher({
       watcherKey,
       workspaceDir: params.workspaceDir,
+      agentId: params.agentId,
       executionWorkspaceDir: split.workspaceExecutionWorkspaceDir,
       access: access!,
       sourcePlan: split.workspacePlan,
@@ -398,6 +414,7 @@ async function registerSkillsWatcher(params: SkillsWatcherParams) {
         : undefined,
     },
     params.config?.skills?.load?.watch,
+    params.agentId,
   );
 }
 
@@ -495,6 +512,22 @@ async function resetSkillsDiscoverySources(
 
 export function closeSkillsWatchers(resetState = false): Promise<void> {
   return resetSkillsDiscoverySources(true, resetState);
+}
+
+export async function closeSkillsWatchersForAgent(params: { agentId: string }): Promise<void> {
+  for (const [key, source] of state.sources) {
+    if (!source.agentIds.delete(params.agentId) || source.agentIds.size || source.unowned) {
+      continue;
+    }
+    state.sources.delete(key);
+    bumpSkillsSnapshotVersion({ workspaceDir: source.workspaceDir, reason: "watch" });
+  }
+  state.plans.clear();
+  if (![...state.sources.values()].some((source) => source.watch)) {
+    clearInterval(state.timer);
+    state.timer = undefined;
+  }
+  await closeRemoteSkillsWatchersForAgent(params);
 }
 
 export const detachSkillsWatchers = closeSkillsWatchers;

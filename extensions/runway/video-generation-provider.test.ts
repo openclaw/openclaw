@@ -57,6 +57,13 @@ function mockSuccessfulTask(
 }
 
 describe("runway video generation provider", () => {
+  it("rejects a duration that rounds to zero before submission", async () => {
+    await expect(generateVideo({ durationSeconds: 0.4 })).rejects.toThrow(
+      "durationSeconds must be a positive duration",
+    );
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
   it("registers media-only API-key onboarding alongside video generation", async () => {
     const { default: plugin } = await import("./index.js");
     const captured = capturePluginRegistration(plugin);

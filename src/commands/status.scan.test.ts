@@ -142,6 +142,10 @@ describe("status scans", () => {
       startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
       installationReplacementWarning: "Installation replaced; draining before handoff.",
       secretEgressProxy: { state: "degraded", message: "Check OpenSSL, then retry." },
+      pluginReload: {
+        phase: "reloading",
+        pluginIds: ["composio"],
+      },
     };
     const liveChannelStatus = { ok: true, accounts: [] };
     mocks.callGateway.mockImplementation(async ({ method }: { method: string }) =>

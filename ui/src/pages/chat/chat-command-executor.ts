@@ -52,8 +52,6 @@ type SlashCommandResult = {
   content?: string;
   /** Side-effect action the caller should perform after displaying the result. */
   action?: "refresh";
-  /** Model-dependent tools need refreshing after a confirmed selection. */
-  modelChanged?: boolean;
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
   trackRunId?: string;
   /** When set, the caller should surface a visible pending item tied to the current run. */
@@ -102,7 +100,7 @@ async function patchSession(
   context: SlashCommandContext,
   sessionKey: string,
   patch: Parameters<typeof patchChatCommandSessionSettings>[2],
-  success: () => Pick<SlashCommandResult, "content" | "modelChanged">,
+  success: () => Pick<SlashCommandResult, "content">,
   failureKey: string,
   options?: Parameters<typeof patchChatCommandSessionSettings>[3],
 ): Promise<SlashCommandResult> {
@@ -258,7 +256,6 @@ async function executeModel(
     { model: requestedModel },
     () => ({
       content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
-      modelChanged: true,
     }),
     "chat.commandResults.model.setFailed",
     { ownsModelOverride: context.ownsModelOverride },

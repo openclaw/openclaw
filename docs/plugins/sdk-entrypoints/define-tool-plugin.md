@@ -21,8 +21,8 @@ the OpenClaw tool-result format, and exposes static metadata that
 `configSchema`).
 
 ```typescript
-import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
 
 export default defineToolPlugin({
   id: "stock-quotes",

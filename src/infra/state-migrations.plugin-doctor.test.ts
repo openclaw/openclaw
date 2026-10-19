@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -9,6 +10,7 @@ import { createOpenClawStateLeaseLostError } from "../state/openclaw-state-lease
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   autoMigrateLegacyPluginDoctorState,
+  runPluginDoctorStateMigrationPlans,
   runPostSessionPluginDoctorStateRepairs,
 } from "./state-migrations.plugin-doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
@@ -61,6 +63,83 @@ afterEach(async () => {
 });
 
 describe("plugin Doctor migrations", () => {
+  it.each([
+    { engine: "postgres", familyEngine: undefined, skipped: true },
+    { engine: "postgres", familyEngine: "sqlite", skipped: false },
+    { engine: "sqlite", familyEngine: "postgres", skipped: true },
+    { engine: "sqlite", familyEngine: undefined, skipped: false },
+  ] as const)(
+    "uses the effective family for legacy imports and replay: $engine / $familyEngine",
+    async ({ engine, familyEngine, skipped }) => {
+      const stateDir = await tempDirs.make("openclaw-doctor-sqlite-only-");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const config: OpenClawConfig = {
+        database: {
+          engine,
+          ...(familyEngine ? { families: { state: { engine: familyEngine } } } : {}),
+        },
+      };
+      let imported = false;
+      const detectLegacyState = vi.fn(() => (imported ? null : { preview: ["legacy"] }));
+      const migrateLegacyState = vi.fn(() => {
+        imported = true;
+        return { changes: ["imported"], warnings: [] };
+      });
+      const undeclaredDetector = vi.fn(() => null);
+      controls.entries = [
+        {
+          pluginId: "legacy-owner",
+          channelIds: [],
+          migration: {
+            id: "legacy-import",
+            label: "Legacy import",
+            sqliteOnly: { family: "state", postgresNote: "Preserve the source." },
+            detectLegacyState,
+            migrateLegacyState,
+          },
+        },
+        {
+          pluginId: "unrestricted-owner",
+          channelIds: [],
+          migration: {
+            id: "ordinary-repair",
+            label: "Ordinary repair",
+            detectLegacyState: undeclaredDetector,
+            migrateLegacyState: () => ({ changes: [], warnings: [] }),
+          },
+        },
+      ];
+      const params = {
+        detected: { stateDir, oauthDir: stateDir, doctorOnlyStateMigrations: true },
+        config,
+        env,
+        plannedActions: controls.entries.map(({ pluginId, migration }) => ({
+          pluginId,
+          id: migration.id,
+        })),
+      };
+      const first = await runPluginDoctorStateMigrationPlans(params);
+      const replay = await runPluginDoctorStateMigrationPlans(params);
+
+      expect(first.warnings).toEqual([]);
+      expect(replay.warnings).toEqual([]);
+      expect(first.changes).toEqual(skipped ? [] : ["imported"]);
+      expect(replay.changes).toEqual([]);
+      expect(detectLegacyState).toHaveBeenCalledTimes(skipped ? 0 : 2);
+      expect(migrateLegacyState).toHaveBeenCalledTimes(skipped ? 0 : 1);
+      expect(undeclaredDetector).toHaveBeenCalledTimes(2);
+      expect(first.notices).toEqual(
+        skipped
+          ? [
+              "Legacy import: legacy SQLite migration not applicable on PostgreSQL; legacy data is migrated before port. Preserve the source.",
+            ]
+          : undefined,
+      );
+      expect(replay.notices).toEqual(first.notices);
+      expect(replay.completedPluginIds).toEqual(["legacy-owner", "unrestricted-owner"]);
+    },
+  );
+
   it("refuses pre-July shared schema before plugin migrations", async () => {
     const root = await tempDirs.make("openclaw-plugin-doctor-shared-schema-");
     const stateDir = path.join(root, ".openclaw");

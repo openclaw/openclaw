@@ -71,6 +71,23 @@ function captureCoherePayload(
 }
 
 describe("Cohere provider plugin", () => {
+  it("keeps North Mini Code text-only with Cohere's binary reasoning contract", () => {
+    const model = requireCohereModel("north-mini-code-1-0");
+    expect(model.input).toEqual(["text"]);
+    expect(model.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
+    expect(model.compat?.reasoningEffortMap).toEqual({
+      off: "none",
+      none: "none",
+      minimal: "high",
+      low: "high",
+      medium: "high",
+      high: "high",
+      xhigh: "high",
+      adaptive: "high",
+      max: "high",
+    });
+  });
+
   it("normalizes Cohere live catalog rows for chat discovery", () => {
     expect(COHERE_LIVE_MODEL_DISCOVERY.endpointUrl).toEqual({
       url: "https://api.cohere.com/v1/models?endpoint=chat&page_size=1000",

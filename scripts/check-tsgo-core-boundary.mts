@@ -9,6 +9,7 @@ import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
+  expandTsgoExecutionGraphs,
   findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
   TSGO_CI_ADDITIONAL_GRAPHS,
@@ -202,7 +203,15 @@ async function validateCoreGraphs(cwd: string, query: GraphQuery): Promise<CoreT
         .map((file) => normalize(path.resolve(cwd, path.dirname(graph.config), file)))
         .filter((file) => testRootPattern.test(file)),
     });
-    const extensionFiles = files.filter((file) => file.startsWith("extensions/"));
+    const extensionFiles = files.filter(
+      (file) =>
+        file.startsWith("extensions/") &&
+        !(
+          (graph.name === "ui" || graph.name.startsWith("core-test-")) &&
+          (file === "extensions/active-memory/control-ui.presentation.json" ||
+            file === "extensions/memory-wiki/control-ui.presentation.json")
+        ),
+    );
     for (const file of extensionFiles) {
       violations.push(`${graph.name}: ${file}`);
     }
@@ -226,9 +235,10 @@ export async function inspectCiTsgoCheckGraphs(
   options: { cwd?: string; scope?: "all" | "noncore" } = {},
 ): Promise<CoreTsgoGraph[]> {
   const cwd = realpathSync(options.cwd ?? repoRoot);
-  const inspect = async (query: GraphQuery) => {
-    const graphs = options.scope === "noncore" ? [] : await validateCoreGraphs(cwd, query);
-    for (const graph of TSGO_CI_ADDITIONAL_GRAPHS) {
+  const additionalGraphs = expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS);
+  const inspectAdditional = async (query: GraphQuery) => {
+    const graphs: CoreTsgoGraph[] = [];
+    for (const graph of additionalGraphs) {
       const files = (await query.files(graph.config, graph.name, cwd)).map((file) =>
         normalizeFilePath(file, cwd),
       );
@@ -236,18 +246,31 @@ export async function inspectCiTsgoCheckGraphs(
     }
     return graphs;
   };
-  if (["1", "true"].includes(process.env.OPENCLAW_CI_TYPE_PLAN_SERIAL ?? "")) {
-    return inspect(compilerQueries);
-  }
-  // One immutable compiler snapshot shares parsing and resolution across projects.
-  // Membership still comes from each complete compiler program, including type-only edges.
+  const serial = ["1", "true"].includes(process.env.OPENCLAW_CI_TYPE_PLAN_SERIAL ?? "");
+  // Release core programs before opening additional graphs to bound each compiler heap.
+  // Each phase retains complete compiler inputs, including type-only consumers.
+  const core =
+    options.scope === "noncore"
+      ? []
+      : serial
+        ? await validateCoreGraphs(cwd, compilerQueries)
+        : await inspectSnapshotGraphs(cwd, TSGO_CORE_GRAPHS, (query) =>
+            validateCoreGraphs(cwd, query),
+          );
+  const additional = serial
+    ? await inspectAdditional(compilerQueries)
+    : await inspectSnapshotGraphs(cwd, additionalGraphs, inspectAdditional);
+  return [...core, ...additional];
+}
+
+async function inspectSnapshotGraphs(
+  cwd: string,
+  configs: readonly { config: string }[],
+  inspect: (query: GraphQuery) => Promise<CoreTsgoGraph[]>,
+): Promise<CoreTsgoGraph[]> {
   const { API } = await import("typescript/unstable/async");
   const api = new API({ cwd });
   try {
-    const configs = [
-      ...(options.scope === "noncore" ? [] : TSGO_CORE_GRAPHS),
-      ...TSGO_CI_ADDITIONAL_GRAPHS,
-    ];
     const snapshot = await api.createSnapshot({
       openProjects: configs.map(({ config }) => path.resolve(cwd, config)),
       ensurePrograms: true,

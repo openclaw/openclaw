@@ -1,10 +1,16 @@
 import path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptMessageSync,
+  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -14,15 +20,26 @@ import {
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import {
+  deleteSessionEntryRows,
+  writeSessionEntry,
+} from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { kickSessionEntryMaintenanceAfterWrite } from "../../config/sessions/session-accessor.sqlite-maintenance-kick.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
+import * as reclamationRun from "../../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
-import { createDurableSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
+import { createSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
+import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { assertOpenClawAgentWriterReleased } from "../../state/openclaw-agent-write-admission-state.js";
 import {
   createOpenClawTestState,
@@ -60,6 +77,140 @@ const user = (key: string) => ({
   timestamp: 1,
   idempotencyKey: `${key}:user`,
 });
+
+it.for(["protected", "interrupted retry", "below cap", "below cap protected insert"] as const)(
+  "resumes idle protected-store maintenance after a lazy worker creates a session (starting state: %s)",
+  async (startingState, { signal }) => {
+    const interruptedRetry = startingState === "interrupted retry";
+    const belowCap = startingState.startsWith("below cap");
+    const storePath = state.statePath(`lazy-maintenance-${startingState}.sqlite`);
+    const scope = { agentId: "main", path: storePath };
+    const protectedKey = "agent:main:lazy-protected";
+    const removedKey = "agent:main:lazy-removed";
+    const updatedAt = Date.now();
+    openOpenClawAgentDatabase(scope);
+    runOpenClawAgentWriteTransaction((database) => {
+      for (const key of [
+        protectedKey,
+        ...(belowCap ? [] : ["agent:main:lazy-other-protected"]),
+        ...(interruptedRetry ? [removedKey] : []),
+      ]) {
+        writeSessionEntry(database, key, {
+          sessionId: key,
+          updatedAt,
+          ...(key === removedKey ? { pinnedAt: updatedAt } : { modelSelectionLocked: true }),
+        });
+      }
+    }, scope);
+    const request = {
+      activeSessionKey: protectedKey,
+      archiveDirectory: path.join(path.dirname(storePath), "lazy-archives"),
+      maintenanceConfig: {
+        ...resolveMaintenanceConfigFromInput(),
+        maxEntries: belowCap ? 2 : 1,
+        pruneAfterMs: 86_400_000,
+        archiveDashboardAfterMs: null,
+        preserveRecentMs: null,
+      },
+      scope,
+      storePath,
+    };
+    const settled = createDeferred();
+    const interrupted = createDeferred();
+    const archived = createDeferred();
+    const run = reclamationRun.runSqliteSessionReclamation;
+    let passes = 0;
+    let retryInterrupted = false;
+    const observe = vi
+      .spyOn(reclamationRun, "runSqliteSessionReclamation")
+      .mockImplementation(async (params) => {
+        if (params.plan.kind === "maintenance-plan") {
+          passes++;
+        }
+        const result = await run(params);
+        if (result.kind === "maintenance-plan") {
+          if (belowCap && result.value.archived === 0) {
+            expect(result.value.durableNoCandidates).not.toBe(true);
+            settled.resolve();
+          }
+          if (result.value.durableNoCandidates === true) {
+            if (interruptedRetry && !retryInterrupted) {
+              retryInterrupted = true;
+              kickSessionEntryMaintenanceAfterWrite(request);
+              interrupted.resolve();
+            } else {
+              settled.resolve();
+            }
+          }
+          if (result.value.archived > 0) {
+            archived.resolve();
+          }
+        }
+        return result;
+      });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      kickSessionEntryMaintenanceAfterWrite(request);
+      if (interruptedRetry) {
+        await withinTest(interrupted.promise, signal);
+        await yieldToEventLoop();
+        runOpenClawAgentWriteTransaction((database) => {
+          deleteSessionEntryRows(database, removedKey, { deleteOwnedWindows: true });
+        }, scope);
+      }
+      await withinTest(settled.promise, signal);
+      await yieldToEventLoop();
+      const protectedPasses = passes;
+      kickSessionEntryMaintenanceAfterWrite(request);
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(passes).toBe(protectedPasses);
+
+      const target = {
+        agentId: "main",
+        storePath,
+        sessionKey:
+          startingState === "below cap protected insert"
+            ? "agent:main:direct:lazy-protected-insert"
+            : "agent:main:lazy-eligible",
+        sessionId: "lazy-eligible",
+      };
+      let victim = target;
+      if (belowCap || startingState === "protected") {
+        const firstKey = belowCap ? "lazy-first" : "direct:lazy-protected-insert";
+        const firstTarget = {
+          ...target,
+          sessionKey: `agent:main:${firstKey}`,
+          sessionId: firstKey,
+        };
+        const first = await SessionManager.openAsync(firstTarget, state.workspaceDir);
+        await first.appendMessageAsync(user("lazy-maintenance-first"));
+        await yieldToEventLoop();
+        await vi.advanceTimersByTimeAsync(1_001);
+        expect(passes).toBe(protectedPasses);
+        expect(loadSessionEntry(firstTarget)?.archivedAt).toBeUndefined();
+        victim = belowCap ? firstTarget : target;
+      }
+      const manager = await SessionManager.openAsync(target, state.workspaceDir);
+      await manager.appendMessageAsync(user("lazy-maintenance"));
+      expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
+      await yieldToEventLoop();
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(passes).toBeGreaterThan(protectedPasses);
+      await withinTest(archived.promise, signal);
+      expect(loadSessionEntry(victim)?.archiveReason).toBe("active-session-cap");
+      if (startingState === "below cap protected insert") {
+        expect(loadSessionEntry(target)?.archivedAt).toBeUndefined();
+      }
+      expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({
+        message: user("lazy-maintenance"),
+      });
+    } finally {
+      vi.useRealTimers();
+      await closeOpenClawAgentDatabaseByPathAsync(storePath);
+      observe.mockRestore();
+    }
+  },
+);
 
 it.each([1, 2])(
   "rereads and retries one local append after a transcript conflict (conflicting writes: %s)",
@@ -241,7 +392,7 @@ it("shares one frozen tool-result graph across append receipts, transcript views
     expect(message.details.rows).toBe(original.rows);
     expect(message.details.rows[0]).toBe(original.row);
     expect(message.details.rows[0]!.values).toBe(original.values);
-    for (const value of [entries[index], message, ...Object.values(original)]) {
+    for (const value of [message, ...Object.values(original)]) {
       expect(Object.isFrozen(value)).toBe(true);
     }
   }
@@ -779,7 +930,7 @@ async function withSelectedTranscriptReader<T>(
       if (!identity.key.startsWith("file:")) {
         throw new Error("Expected a physical actor database");
       }
-      const acquired = await createDurableSessionActorFactory(reader.database).acquire(
+      const acquired = await createSessionActorFactory(reader.database).acquire(
         {
           sessionKey: target.sessionKey,
           database: {

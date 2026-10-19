@@ -173,7 +173,6 @@ export function resolveNativeModelThreadId(
     if (!capture) {
       return undefined;
     }
-    capture.assertCurrent();
     return candidate?.[1];
   } catch {
     return undefined;

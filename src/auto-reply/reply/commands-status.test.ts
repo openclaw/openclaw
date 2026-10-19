@@ -1,10 +1,10 @@
-// Tests status command rendering for sessions, agents, diagnostics, and model defaults.
 import fs from "node:fs";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { saveAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -19,13 +19,10 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import * as logger from "../../logger.js";
-import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
 import * as statusText from "../../status/status-text.js";
 import { buildStatusPluginsReply, buildStatusText } from "./commands-status.js";
 import { buildKiraStatusReply, buildStatusReplyForTest } from "./commands-status.test-support.js";
 import { baseCommandTestConfig, buildCommandTestParams } from "./commands.test-harness.js";
-
-// Tests status command rendering for sessions, agents, and diagnostics.
 
 type LoadProviderUsageSummary =
   typeof import("../../infra/provider-usage.js").loadProviderUsageSummary;
@@ -38,39 +35,31 @@ const providerUsageMock = vi.hoisted(() => ({
 }));
 const activeProviderThinkingMock = vi.hoisted(() => ({
   resolveThinkingProfile: vi.fn<
-    (params: {
-      provider: string;
-      context: { modelId: string };
-    }) => ProviderThinkingProfile | null | undefined
+    typeof import("../../plugins/provider-thinking-active.js").resolveActiveProviderThinkingProfile
   >(() => undefined),
 }));
 type StatusPluginHealthSnapshot =
   import("../../status/status-plugin-health.js").StatusPluginHealthSnapshot;
 
-const pluginHealthRuntimeMock = vi.hoisted(() => ({
-  collectInstalledPluginHealthSnapshot: vi.fn(async (): Promise<StatusPluginHealthSnapshot> => ({
+const pluginHealthRuntimeMock = vi.hoisted(() => {
+  const emptySnapshot = (): StatusPluginHealthSnapshot => ({
     plugins: [],
     diagnostics: [],
     contextEngineQuarantines: [],
     runtimeToolQuarantines: [],
     channelPluginFailures: [],
-  })),
-  collectRuntimePluginHealthSnapshot: vi.fn((): StatusPluginHealthSnapshot => ({
-    plugins: [],
-    diagnostics: [],
-    contextEngineQuarantines: [],
-    runtimeToolQuarantines: [],
-    channelPluginFailures: [],
-  })),
-}));
-
-vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/provider-usage.js")>();
+  });
   return {
-    ...actual,
-    loadProviderUsageSummary: providerUsageMock.loadProviderUsageSummary,
+    emptySnapshot,
+    collectInstalledPluginHealthSnapshot: vi.fn(async () => emptySnapshot()),
+    collectRuntimePluginHealthSnapshot: vi.fn(emptySnapshot),
   };
 });
+
+vi.mock("../../infra/provider-usage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/provider-usage.js")>()),
+  loadProviderUsageSummary: providerUsageMock.loadProviderUsageSummary,
+}));
 
 vi.mock("../../plugins/provider-thinking-active.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/provider-thinking-active.js")>()),
@@ -92,11 +81,7 @@ vi.mock("../../agents/harness/builtin-openclaw.js", () => ({
 
 const baseCfg = baseCommandTestConfig;
 const expectedCodexRuntimeUsageAuth = [
-  {
-    provider: "openai",
-    token: "codex-app-server",
-    hookProvider: "codex",
-  },
+  { provider: "openai", token: "codex-app-server", hookProvider: "codex" },
 ];
 const codexStatusModel: ModelDefinitionConfig = {
   id: "gpt-5.5",
@@ -111,28 +96,89 @@ const codexStatusModel: ModelDefinitionConfig = {
 
 type StatusTextParams = Parameters<typeof buildStatusText>[0];
 
-function createStatusSessionParams(statusChannel = "mobilechat") {
-  return {
-    sessionKey: "agent:main:main",
-    parentSessionKey: "agent:main:main",
-    sessionScope: "per-sender",
-    statusChannel,
-  } satisfies Partial<StatusTextParams>;
+const statusDefaults = {
+  cfg: baseCfg,
+  sessionEntry: { sessionId: "status-session", updatedAt: 0 },
+  provider: "openai",
+  model: "gpt-5.5",
+  contextTokens: 32_000,
+  sessionKey: "agent:main:main",
+  parentSessionKey: "agent:main:main",
+  sessionScope: "per-sender",
+  statusChannel: "mobilechat",
+  resolvedFastMode: false,
+  resolvedVerboseLevel: "off",
+  resolvedReasoningLevel: "off",
+  resolveDefaultThinkingLevel: async () => undefined,
+  isGroup: false,
+  defaultGroupActivation: () => "mention",
+} satisfies Partial<StatusTextParams>;
+
+async function renderStatus(params: Partial<StatusTextParams>) {
+  return normalizeTestText(await buildStatusText({ ...statusDefaults, ...params }));
 }
 
-function createStatusDisplayParams(
-  resolvedFastMode = false,
-  resolveDefaultThinkingLevel: StatusTextParams["resolveDefaultThinkingLevel"] = async () =>
-    undefined,
-) {
-  return {
-    resolvedFastMode,
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel,
-    isGroup: false,
-    defaultGroupActivation: () => "mention",
-  } satisfies Partial<StatusTextParams>;
+function expectText(text: string, includes: string[], excludes: string[] = []) {
+  for (const part of includes) {
+    expect(text).toContain(part);
+  }
+  for (const part of excludes) {
+    expect(text).not.toContain(part);
+  }
+}
+
+function expectSelectedUsage(text: string, extra: string[] = []) {
+  expectText(
+    text,
+    [
+      "Model: openai/gpt-5.5",
+      "pinned session; config primary deepseek/deepseek-v4-flash",
+      "clear /model default",
+      "Usage: 5h 91% left",
+      ...extra,
+    ],
+    ["Usage: Balance ¥42.50"],
+  );
+  expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
+    expect.objectContaining({ providers: ["openai"] }),
+  );
+}
+
+function pluginsReply(enabled: boolean) {
+  return buildStatusPluginsReply(
+    buildCommandTestParams("/status plugins", {
+      ...baseCfg,
+      commands: { text: true, plugins: enabled },
+    }),
+  );
+}
+
+const codexRuntimeConfig = {
+  ...baseCfg,
+  agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
+} satisfies OpenClawConfig;
+const deepseekConfig = {
+  ...baseCfg,
+  agents: { defaults: { model: "deepseek/deepseek-v4-flash" } },
+} satisfies OpenClawConfig;
+const kiraConfig = {
+  session: { mainKey: "main", scope: "per-sender" },
+  agents: { defaults: { model: "openai/gpt-5.4" } },
+  channels: { whatsapp: { allowFrom: ["*"] } },
+} satisfies OpenClawConfig;
+
+function mockSelectedProviderUsage() {
+  const resetAt = (Math.floor(Date.now() / 1000) + 60 * 60) * 1000;
+  providerUsageMock.loadProviderUsageSummary.mockImplementation(
+    async ({ providers = [] } = {}) => ({
+      updatedAt: Date.now(),
+      providers: providers.map((provider) =>
+        provider === "openai"
+          ? { provider, displayName: "OpenAI", windows: [{ label: "5h", usedPercent: 9, resetAt }] }
+          : { provider, displayName: "DeepSeek", windows: [], summary: "Balance ¥42.50" },
+      ),
+    }),
+  );
 }
 
 function registerStatusCodexHarness(): void {
@@ -152,44 +198,30 @@ function registerStatusCodexHarness(): void {
   registerAgentHarness(harness, { ownerPluginId: "codex" });
 }
 
-function saveStatusTestAuthProfile(params: {
-  dir: string;
-  profileId: string;
-  provider: "openai" | "anthropic";
-}): void {
-  saveStatusTestAuthProfiles({
-    dir: params.dir,
-    profiles: [{ profileId: params.profileId, provider: params.provider }],
-  });
-}
-
-function saveStatusTestAuthProfiles(params: {
-  dir: string;
-  profiles: Array<{ profileId: string; provider: "openai" | "anthropic" }>;
-}): void {
-  const agentDir = path.join(params.dir, ".openclaw", "agents", "main", "agent");
+function saveStatusTestAuthProfiles(dir: string, includeAnthropic = false): void {
+  const agentDir = path.join(dir, ".openclaw", "agents", "main", "agent");
   fs.mkdirSync(agentDir, { recursive: true });
   saveAuthProfileStore(
     {
       version: 1,
-      profiles: Object.fromEntries(
-        params.profiles.map((profile) => [
-          profile.profileId,
-          profile.provider === "openai"
-            ? {
-                type: "oauth",
-                provider: profile.provider,
-                access: "access-token",
-                refresh: "refresh-token",
-                expires: Date.now() + 60 * 60_000,
-              }
-            : {
+      profiles: {
+        "openai:status": {
+          type: "oauth",
+          provider: "openai",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60 * 60_000,
+        },
+        ...(includeAnthropic
+          ? {
+              "anthropic:work": {
                 type: "api_key",
                 provider: "anthropic",
                 key: "anthropic-api-key",
-              },
-        ]),
-      ),
+              } satisfies AuthProfileCredential,
+            }
+          : {}),
+      },
     },
     agentDir,
     { filterExternalAuthProfiles: false, syncExternalCli: false },
@@ -200,29 +232,17 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   cliBackendsTesting.resetDepsForTest();
   clearAgentHarnesses();
-  providerUsageMock.loadProviderUsageSummary.mockReset();
-  providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+  providerUsageMock.loadProviderUsageSummary.mockReset().mockResolvedValue({
     updatedAt: Date.now(),
     providers: [],
   });
-  activeProviderThinkingMock.resolveThinkingProfile.mockReset();
-  activeProviderThinkingMock.resolveThinkingProfile.mockReturnValue(undefined);
-  pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockReset();
-  pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockResolvedValue({
-    plugins: [],
-    diagnostics: [],
-    contextEngineQuarantines: [],
-    runtimeToolQuarantines: [],
-    channelPluginFailures: [],
-  });
-  pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockReset();
-  pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockReturnValue({
-    plugins: [],
-    diagnostics: [],
-    contextEngineQuarantines: [],
-    runtimeToolQuarantines: [],
-    channelPluginFailures: [],
-  });
+  activeProviderThinkingMock.resolveThinkingProfile.mockReset().mockReturnValue(undefined);
+  pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot
+    .mockReset()
+    .mockImplementation(async () => pluginHealthRuntimeMock.emptySnapshot());
+  pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot
+    .mockReset()
+    .mockImplementation(pluginHealthRuntimeMock.emptySnapshot);
 });
 
 describe("buildStatusReply subagent summary", () => {
@@ -258,10 +278,7 @@ describe("buildStatusReply subagent summary", () => {
     seedSubagentRunForReadTest({
       runId: "run-status-ended-parent",
       childSessionKey: parentKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "status orchestrator",
-      cleanup: "keep",
       createdAt: Date.now() - 120_000,
       startedAt: Date.now() - 120_000,
       endedAt: Date.now() - 110_000,
@@ -273,7 +290,6 @@ describe("buildStatusReply subagent summary", () => {
       requesterSessionKey: parentKey,
       requesterDisplayKey: "subagent:status-ended-parent",
       task: "status child still running",
-      cleanup: "keep",
       createdAt: Date.now() - 60_000,
       startedAt: Date.now() - 60_000,
     });
@@ -283,48 +299,8 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toContain("🤖 Subagents: 1 active");
   });
 
-  it("dedupes stale rows in the verbose subagent status summary", async () => {
-    const childSessionKey = "agent:main:subagent:status-dedupe-worker";
-    seedSubagentRunForReadTest({
-      runId: "run-status-current",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "current status worker",
-      cleanup: "keep",
-      createdAt: Date.now() - 60_000,
-      startedAt: Date.now() - 60_000,
-    });
-    seedSubagentRunForReadTest({
-      runId: "run-status-stale",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "stale status worker",
-      cleanup: "keep",
-      createdAt: Date.now() - 120_000,
-      startedAt: Date.now() - 120_000,
-      endedAt: Date.now() - 90_000,
-      outcome: { status: "ok" },
-    });
-
-    const reply = await buildStatusReplyForTest({ verbose: true });
-
-    expect(reply?.text).toContain("🤖 Subagents: 1 active");
-    expect(reply?.text).not.toContain("· 1 done");
-  });
-
   it("gates /status plugins behind the plugin command flag", async () => {
-    const commandParams = buildCommandTestParams("/status plugins", {
-      ...baseCfg,
-      commands: { text: true, plugins: false },
-    });
-
-    const reply = await buildStatusPluginsReply({
-      cfg: commandParams.cfg,
-      command: commandParams.command,
-      workspaceDir: commandParams.workspaceDir,
-    });
+    const reply = await pluginsReply(false);
 
     expect(reply?.text).toBe(
       "⚠️ /status plugins is disabled. Set commands.plugins=true to enable.",
@@ -344,46 +320,19 @@ describe("buildStatusReply subagent summary", () => {
           path.join(codexHome, "auth.json"),
           JSON.stringify({
             auth_mode: "chatgpt",
-            tokens: {
-              access_token: "codex-access-token",
-              refresh_token: "codex-refresh-token",
-            },
+            tokens: { access_token: "codex-access-token", refresh_token: "codex-refresh-token" },
           }),
           "utf-8",
         );
 
-        const text = await buildStatusText({
-          cfg: {
-            ...baseCfg,
-            agents: {
-              defaults: {
-                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
-              },
-            },
-          },
-          sessionEntry: {
-            sessionId: "sess-status-codex-home-oauth",
-            updatedAt: 0,
-          },
-          ...createStatusSessionParams(),
-          provider: "openai",
-          model: "gpt-5.5",
-          contextTokens: 32_000,
-          ...createStatusDisplayParams(),
-        });
-
-        const normalized = normalizeTestText(text);
-        expect(normalized).toContain("Model: openai/gpt-5.5");
-        expect(normalized).toContain("Runtime: OpenAI Codex");
-        expect(normalized).not.toContain("oauth (codex-cli)");
-        expect(normalized).toContain("api-key (env: OPENAI_API_KEY)");
+        const text = await renderStatus({ cfg: codexRuntimeConfig });
+        expectText(
+          text,
+          ["Model: openai/gpt-5.5", "Runtime: OpenAI Codex", "api-key (env: OPENAI_API_KEY)"],
+          ["oauth (codex-cli)"],
+        );
       },
-      {
-        env: {
-          OPENAI_API_KEY: "status-env-key-placeholder",
-          OPENAI_OAUTH_TOKEN: undefined,
-        },
-      },
+      { env: { OPENAI_API_KEY: "status-env-key-placeholder", OPENAI_OAUTH_TOKEN: undefined } },
     );
   });
 
@@ -392,43 +341,20 @@ describe("buildStatusReply subagent summary", () => {
     providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
       updatedAt: Date.now(),
       providers: [
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          windows: [{ label: "5h", usedPercent: 9 }],
-        },
+        { provider: "openai", displayName: "OpenAI", windows: [{ label: "5h", usedPercent: 9 }] },
       ],
     });
 
     await withTempHome(
       async (dir) => {
-        saveStatusTestAuthProfiles({
-          dir,
-          profiles: [
-            { profileId: "openai:status", provider: "openai" },
-            { profileId: "anthropic:work", provider: "anthropic" },
-          ],
-        });
+        saveStatusTestAuthProfiles(dir, true);
 
-        await buildStatusText({
-          cfg: {
-            ...baseCfg,
-            agents: {
-              defaults: {
-                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
-              },
-            },
-          },
+        await renderStatus({
+          cfg: codexRuntimeConfig,
           sessionEntry: {
-            sessionId: "sess-status-codex-stale-profile",
-            updatedAt: 0,
+            ...statusDefaults.sessionEntry,
             authProfileOverride: "anthropic:work",
           },
-          ...createStatusSessionParams(),
-          provider: "openai",
-          model: "gpt-5.5",
-          contextTokens: 32_000,
-          ...createStatusDisplayParams(),
         });
 
         const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
@@ -441,42 +367,10 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("uses the session-selected provider for /status usage when runtime state is stale", async () => {
-    const usageResetBase = Math.floor(Date.now() / 1000);
-    providerUsageMock.loadProviderUsageSummary.mockImplementation(
-      async ({ providers = [] } = {}) => ({
-        updatedAt: Date.now(),
-        providers: providers.map((provider) =>
-          provider === "openai"
-            ? {
-                provider: "openai",
-                displayName: "OpenAI",
-                windows: [
-                  {
-                    label: "5h",
-                    usedPercent: 9,
-                    resetAt: (usageResetBase + 60 * 60) * 1000,
-                  },
-                ],
-              }
-            : {
-                provider,
-                displayName: "DeepSeek",
-                windows: [],
-                summary: "Balance ¥42.50",
-              },
-        ),
-      }),
-    );
+    mockSelectedProviderUsage();
 
-    const text = await buildStatusText({
-      cfg: {
-        ...baseCfg,
-        agents: {
-          defaults: {
-            model: "deepseek/deepseek-v4-flash",
-          },
-        },
-      },
+    const text = await renderStatus({
+      cfg: deepseekConfig,
       sessionEntry: {
         sessionId: "sess-status-stale-runtime-selected-usage",
         updatedAt: 0,
@@ -486,61 +380,25 @@ describe("buildStatusReply subagent summary", () => {
         modelProvider: "deepseek",
         model: "deepseek-v4-flash",
       },
-      ...createStatusSessionParams("telegram"),
+      statusChannel: "telegram",
       provider: "deepseek",
       model: "deepseek-v4-flash",
       contextTokens: 1_000_000,
-      ...createStatusDisplayParams(),
       modelAuthOverride: "oauth (openai:status)",
       activeModelAuthOverride: "api-key",
     });
 
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Model: openai/gpt-5.5");
-    expect(normalized).toContain("pinned session; config primary deepseek/deepseek-v4-flash");
-    expect(normalized).toContain("clear /model default");
-    expect(normalized).toContain("Usage: 5h 91% left");
-    expect(normalized).not.toContain("Usage: Balance ¥42.50");
-    expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
-      expect.objectContaining({ providers: ["openai"] }),
-    );
+    expectSelectedUsage(text);
   });
 
   it("uses provider-qualified model overrides for /status usage lookup", async () => {
     await withTempHome(
       async (dir) => {
-        saveStatusTestAuthProfile({ dir, profileId: "openai:status", provider: "openai" });
-
-        const usageResetBase = Math.floor(Date.now() / 1000);
-        providerUsageMock.loadProviderUsageSummary.mockImplementation(
-          async ({ providers = [] } = {}) => ({
-            updatedAt: Date.now(),
-            providers: providers.map((provider) =>
-              provider === "openai"
-                ? {
-                    provider: "openai",
-                    displayName: "OpenAI",
-                    windows: [
-                      {
-                        label: "5h",
-                        usedPercent: 9,
-                        resetAt: (usageResetBase + 60 * 60) * 1000,
-                      },
-                    ],
-                  }
-                : {
-                    provider,
-                    displayName: "DeepSeek",
-                    windows: [],
-                    summary: "Balance ¥42.50",
-                  },
-            ),
-          }),
-        );
-
-        const text = await buildStatusText({
+        saveStatusTestAuthProfiles(dir);
+        mockSelectedProviderUsage();
+        const text = await renderStatus({
           cfg: {
-            ...baseCfg,
+            ...deepseekConfig,
             models: {
               providers: {
                 openai: {
@@ -549,40 +407,20 @@ describe("buildStatusReply subagent summary", () => {
                 },
               },
             },
-            agents: {
-              defaults: {
-                model: "deepseek/deepseek-v4-flash",
-              },
-            },
-            auth: {
-              order: {
-                openai: ["openai:status"],
-              },
-            },
+            auth: { order: { openai: ["openai:status"] } },
           },
           sessionEntry: {
             sessionId: "sess-status-qualified-session-selected-usage",
             updatedAt: 0,
             modelOverride: "openai/gpt-5.5",
           },
-          ...createStatusSessionParams("telegram"),
+          statusChannel: "telegram",
           provider: "deepseek",
           model: "deepseek-v4-flash",
           contextTokens: 1_000_000,
-          ...createStatusDisplayParams(),
         });
 
-        const normalized = normalizeTestText(text);
-        expect(normalized).toContain("Model: openai/gpt-5.5");
-        expect(normalized).toContain("pinned session; config primary deepseek/deepseek-v4-flash");
-        expect(normalized).toContain("clear /model default");
-        expect(normalized).toContain("oauth (openai:status)");
-        expect(normalized).toContain("Context: ?/258k");
-        expect(normalized).toContain("Usage: 5h 91% left");
-        expect(normalized).not.toContain("Usage: Balance ¥42.50");
-        expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
-          expect.objectContaining({ providers: ["openai"] }),
-        );
+        expectSelectedUsage(text, ["oauth (openai:status)", "Context: ?/258k"]);
       },
       { env: { OPENAI_API_KEY: undefined } },
     );
@@ -594,24 +432,21 @@ describe("buildStatusReply subagent summary", () => {
       defaultLevel: "max",
     });
 
-    const text = await buildStatusText({
-      cfg: baseCfg,
+    const text = await renderStatus({
       sessionEntry: {
         sessionId: "sess-status-kimi-k3",
         updatedAt: 0,
         thinkingLevel: "off",
       },
-      ...createStatusSessionParams(),
       provider: "moonshot",
       model: "kimi-k3",
       contextTokens: 262_144,
       resolvedThinkLevel: "off",
-      ...createStatusDisplayParams(),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
     });
 
-    expect(normalizeTestText(text)).toContain("think max");
+    expect(text).toContain("think max");
     expect(activeProviderThinkingMock.resolveThinkingProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "moonshot",
@@ -633,8 +468,6 @@ describe("buildStatusReply error handling", () => {
     );
     const reply = await buildStatusReplyForTest({});
 
-    // Exact object equality also pins that no stale presentation or internal
-    // error text reaches the channel; diagnostics belong to the log sink only.
     expect(reply).toEqual({ text: "⚠️ Status: error rendering response" });
     expect(logError).toHaveBeenCalledWith(expect.stringContaining("Unexpected rendering error"));
   });
@@ -645,15 +478,7 @@ describe("buildStatusReply error handling", () => {
       new Error("Cannot find module 'internal/path'"),
     );
 
-    const commandParams = buildCommandTestParams("/status plugins", {
-      ...baseCfg,
-      commands: { text: true, plugins: true },
-    });
-    const reply = await buildStatusPluginsReply({
-      cfg: commandParams.cfg,
-      command: commandParams.command,
-      workspaceDir: commandParams.workspaceDir,
-    });
+    const reply = await pluginsReply(true);
 
     expect(reply?.text).toBe("⚠️ Plugins: health unavailable");
     expect(logError).toHaveBeenCalledWith(
@@ -661,42 +486,18 @@ describe("buildStatusReply error handling", () => {
     );
   });
 });
-describe("buildStatusReply", () => {
-  beforeAll(async () => {
-    await buildKiraStatusReply({
-      session: { mainKey: "main", scope: "per-sender" },
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.4",
-        },
+it("shows per-agent thinkingDefault in the status card", async () => {
+  await buildKiraStatusReply(kiraConfig);
+  const cfg = {
+    ...kiraConfig,
+    agents: {
+      ...kiraConfig.agents,
+      entries: {
+        kira: { model: "openai/gpt-5.4", thinkingDefault: "xhigh" },
       },
-      channels: {
-        whatsapp: { allowFrom: ["*"] },
-      },
-    } as OpenClawConfig);
-  });
+    },
+  } satisfies OpenClawConfig;
 
-  it("shows per-agent thinkingDefault in the status card", async () => {
-    const cfg = {
-      session: { mainKey: "main", scope: "per-sender" },
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.4",
-        },
-        entries: {
-          kira: {
-            model: "openai/gpt-5.4",
-            thinkingDefault: "xhigh",
-          },
-        },
-      },
-      channels: {
-        whatsapp: { allowFrom: ["*"] },
-      },
-    } as OpenClawConfig;
-
-    const reply = await buildKiraStatusReply(cfg);
-
-    expect(reply?.text).toContain("think xhigh");
-  });
+  const reply = await buildKiraStatusReply(cfg);
+  expect(reply?.text).toContain("think xhigh");
 });

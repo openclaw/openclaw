@@ -20,7 +20,6 @@ export async function finalizeManagedWorktreeRemoval(params: {
   record: ManagedWorktreeRecord;
   env: NodeJS.ProcessEnv;
   claimToken: string;
-  now: () => number;
   snapshotRef?: string;
   snapshotOid: string;
   snapshotError?: string;
@@ -36,7 +35,7 @@ export async function finalizeManagedWorktreeRemoval(params: {
 }): Promise<RemoveManagedWorktreeResult> {
   const { record, env, git, options, snapshotRef, snapshotError, recoveryPath } = params;
   options.beforeRun();
-  const removedAt = params.now();
+  const removedAt = Date.now();
   const update = (patch: Parameters<typeof updateRegistryWorktree>[2]) =>
     updateRegistryWorktree(env, record.id, patch, {
       assertCurrent: options.beforeRun,
@@ -89,7 +88,7 @@ export async function finalizeManagedWorktreeRemoval(params: {
         await update({
           runEndCleanup: {
             outcome: "failed",
-            at: params.now(),
+            at: Date.now(),
             reason: truncateUtf16Safe(formatErrorMessage(error), 500),
           },
         });

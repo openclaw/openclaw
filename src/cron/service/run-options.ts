@@ -1,3 +1,5 @@
+import type { CronEventAdmission } from "../event-source.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronJob, CronPayload } from "../types.js";
 
 export type OnExitRunOptions = {
@@ -9,6 +11,8 @@ export type OnExitRunOptions = {
 };
 
 export type ManualRunOptions = {
+  event?: CronEventAdmission;
+  onEventTransferred?: (receipt: CronRunReceiptHandle) => void;
   onExit?: OnExitRunOptions;
   runId?: string;
   /** Revalidates the caller before preflight effects and the durable request. */

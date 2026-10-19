@@ -78,7 +78,7 @@ export function resolveNativeOpenAIResponsesWebSocketMode(
   if (transport !== "websocket" && transport !== "websocket-cached" && transport !== "auto") {
     return undefined;
   }
-  if (getAiTransportHost().requiresManagedTransport(model)) {
+  if (getAiTransportHost().requiresManagedTransport(model, "fetch")) {
     return undefined;
   }
   return supportsNativeOpenAIResponsesEndpoint(model) ? transport : undefined;
@@ -150,13 +150,41 @@ function scheduleSessionWebSocketExpiry(cacheKey: string, entry: CachedWebSocket
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
   }
-  entry.idleTimer = setTimeout(() => {
-    if (entry.busy) {
-      return;
-    }
-    invalidateOwnedWebSocketSession(cacheKey, entry, "idle_timeout");
-  }, SESSION_WEBSOCKET_CACHE_TTL_MS);
+  entry.idleTimer = entry.owner.runInDetachedAsyncContext(() =>
+    setTimeout(() => {
+      if (entry.busy) {
+        return;
+      }
+      invalidateOwnedWebSocketSession(cacheKey, entry, "idle_timeout");
+    }, SESSION_WEBSOCKET_CACHE_TTL_MS),
+  );
   entry.idleTimer.unref?.();
+}
+
+function markDegradedWebSocketConnection(
+  key: string,
+  owner: SessionResourceOwner,
+  sessionId: string | undefined,
+  cooldownMs: number | undefined,
+): void {
+  if (cooldownMs === undefined || !Number.isFinite(cooldownMs) || cooldownMs <= 0) {
+    return;
+  }
+  // Keep only the cooldown identity, outside both the request closure and its async context.
+  const entry: DegradedWebSocketConnection = {
+    sessionId,
+    owner,
+    retryAt: Date.now() + cooldownMs,
+    expiryTimer: owner.runInDetachedAsyncContext(() =>
+      setTimeout(() => {
+        if (degradedWebSocketConnections.get(key) === entry) {
+          degradedWebSocketConnections.delete(key);
+        }
+      }, cooldownMs),
+    ),
+  };
+  entry.expiryTimer.unref?.();
+  degradedWebSocketConnections.set(key, entry);
 }
 
 type PreparedWebSocketConnection = ReturnType<typeof prepareWebSocketConnection>;
@@ -203,9 +231,12 @@ function createWebSocket(
   // openai's dual ESM declaration paths give the same runtime client two nominal
   // private-field types under NodeNext resolution. The SDK constructor receives
   // the actual OpenAI instance; bridge only that declaration mismatch here.
-  const socket = new ResponsesWS(
-    connection.client as unknown as ConstructorParameters<typeof ResponsesWS>[0],
-    { headers: connection.headers, maxQueueSize: 1 },
+  const socket = connection.owner.runInDetachedAsyncContext(
+    () =>
+      new ResponsesWS(
+        connection.client as unknown as ConstructorParameters<typeof ResponsesWS>[0],
+        { headers: connection.headers, maxQueueSize: 1 },
+      ),
   );
   // The SDK async iterator removes its own listeners after every response while
   // cached sockets remain open. Keep one lifetime listener so an idle socket
@@ -249,7 +280,8 @@ function createCachedWebSocketLease(
     entry,
     reusedConnection,
     steeringContinuation,
-    release: ({ keep } = {}) => {
+    release: (options = {}) => {
+      const { keep } = options;
       if (!keep || entry.socket.socket.readyState !== WEBSOCKET_OPEN_STATE) {
         invalidateOwnedWebSocketSession(cacheKey, entry);
         return;
@@ -367,24 +399,13 @@ export function createOpenAIResponsesWebSocketStream(params: {
     clearTimeout(degraded.expiryTimer);
   }
   degradedWebSocketConnections.delete(degradationKey);
-  const markDegraded = () => {
-    const cooldownMs = params.degradeCooldownMs;
-    if (cooldownMs === undefined || !Number.isFinite(cooldownMs) || cooldownMs <= 0) {
-      return;
-    }
-    const entry: DegradedWebSocketConnection = {
-      sessionId: params.sessionId,
-      owner: connection.owner,
-      retryAt: Date.now() + cooldownMs,
-      expiryTimer: setTimeout(() => {
-        if (degradedWebSocketConnections.get(degradationKey) === entry) {
-          degradedWebSocketConnections.delete(degradationKey);
-        }
-      }, cooldownMs),
-    };
-    entry.expiryTimer.unref?.();
-    degradedWebSocketConnections.set(degradationKey, entry);
-  };
+  const markDegraded = () =>
+    markDegradedWebSocketConnection(
+      degradationKey,
+      connection.owner,
+      params.sessionId,
+      params.degradeCooldownMs,
+    );
   let lease: ReturnType<typeof acquireWebSocket>;
   try {
     lease = acquireWebSocket(params, connection);

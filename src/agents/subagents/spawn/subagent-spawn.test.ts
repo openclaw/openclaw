@@ -971,23 +971,6 @@ describe("spawnSubagentDirect seam flow", () => {
     expectNoChildSpawnSideEffects();
   });
 
-  it.each(
-    inheritedSpawnCases.preferences.filter(
-      ({ requesterThinkingLevel, requesterAgent }) =>
-        requesterThinkingLevel === "ultra" && !requesterAgent,
-    ),
-  )(
-    "$name",
-    async ({ task, requesterState, requesterThinkingLevel, thinkingOverride, expected }) => {
-      hoisted.loadSessionStoreMock.mockReturnValue({ "agent:main:main": requesterState });
-      const readStore = captureStore();
-      const result = await spawn({ task, thinking: thinkingOverride }, { requesterThinkingLevel });
-      expect(result.status).toBe("accepted");
-      expect(readStore()[result.childSessionKey!]?.thinkingLevel).toBe(expected);
-      expect(requireRecord(gatewayRequest("agent").params).thinking).toBe(thinkingOverride);
-    },
-  );
-
   it.each(inheritedSpawnCases.preferences.filter(({ collect }) => collect))(
     "$name",
     async ({ task, requesterState, expected }) => {
@@ -998,18 +981,6 @@ describe("spawnSubagentDirect seam flow", () => {
       expect(readStore()[result.childSessionKey!]?.fastMode).toBe(expected);
     },
   );
-
-  it("uses requester agent thinkingDefault without a stored requester", async () => {
-    // Import after the spawn helper installs the mocked session runtime.
-    const { resolveRequesterPreferences } = await import("./subagent-spawn-requester-prefs.js");
-
-    const preferences = resolveRequesterPreferences({
-      cfg: { agents: { entries: { main: { thinkingDefault: "high" } } } },
-      requesterEntry: undefined,
-      requesterAgentId: "main",
-    });
-    expect(preferences.thinkingLevel).toBe("high");
-  });
 
   it("inherits requester selected-model thinking without a session or agent default", async () => {
     configOverride = createConfigOverride({

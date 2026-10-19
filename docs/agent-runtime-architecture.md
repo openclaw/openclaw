@@ -119,6 +119,13 @@ the pool's idle timeout. Local `node:diagnostics_channel` subscribers to
 message transfer time, and pending task/input counts. These events contain no
 task inputs; execution wall time includes worker startup and host waits.
 
+Model-context transcript reads have a three-minute local worker deadline to allow
+for cold startup on slow hardware. Caller cancellation still stops the read.
+A local worker deadline stops model fallback and does not mark provider credentials
+unhealthy. Context-read failures report “Context preparation timed out locally”;
+retry the request and check Gateway logs for slow context reads if it persists.
+An actual provider HTTP 408 retains the provider timeout and fallback policy.
+
 ## Related
 
 - [OpenClaw agent runtime workflow](/openclaw-agent-runtime)

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
+import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { createAvailablePortalTools } from "../../agents/tools/portal-tool.js";
 import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../agents/tools/sessions-spawn-tool.js";
@@ -33,7 +35,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import {
   bindWorkerTurnOwner,
   bindWorkerTurnCapabilities,
@@ -164,35 +166,32 @@ vi.mock("../../agents/tools/in-process-gateway.js", () => ({
   },
 }));
 
+function worker(name: string, ownerEpoch: number) {
+  return {
+    agentId: "main",
+    sessionId: `${name}-session`,
+    environmentId: `${name}-environment`,
+    ownerEpoch,
+  };
+}
 export const SOURCE = {
-  agentId: "main",
-  sessionId: "source-session",
+  ...worker("source", 3),
   sessionKey: "agent:main:dashboard:source",
-  environmentId: "source-environment",
-  ownerEpoch: 3,
 };
 export const TARGET = {
-  agentId: "main",
-  sessionId: "target-session",
+  ...worker("target", 4),
   sessionKey: "agent:main:dashboard:target",
-  environmentId: "target-environment",
-  ownerEpoch: 4,
 };
 export const PARENT = {
   sessionId: "parent-session",
   sessionKey: "agent:main:dashboard:parent",
 };
-export const CHILD = {
-  agentId: "main",
-  sessionId: "spawned-child-session",
-  environmentId: "spawned-child-environment",
-  ownerEpoch: 5,
-};
-export const GRANDCHILD = {
-  agentId: "main",
-  sessionId: "spawned-grandchild-session",
-  environmentId: "spawned-grandchild-environment",
-  ownerEpoch: 6,
+export const CHILD = worker("spawned-child", 5);
+export const GRANDCHILD = worker("spawned-grandchild", 6);
+const CLOUD_PROFILE = {
+  providerId: "fake",
+  profileId: "cloud-profile",
+  profileSnapshot: { install: "bundle" as const, settings: { region: "source" } },
 };
 export const PARENT_EXECUTION_IDENTITY_TOKEN = {
   tokenVersion: 1,
@@ -219,17 +218,8 @@ async function createWorkerSessionToolTestFixture(
   mocks: WorkerSessionToolTestMocks,
   options: WorkerSessionToolTestOptions,
 ) {
-  const {
-    sessionEntries,
-    delivered,
-    gatewayRequest,
-    gatewayCreate,
-    gatewayRuntimeIdentity,
-    dispatchChild,
-    spawnCallerIdentity,
-    spawnArgs,
-    scopedSessionAccess,
-  } = mocks;
+  const { sessionEntries, gatewayRequest, gatewayCreate, dispatchChild, scopedSessionAccess } =
+    mocks;
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-tools-"),
   );
@@ -256,11 +246,7 @@ async function createWorkerSessionToolTestFixture(
   const sourceOperationalRun = createOperationalRunInstanceRef(sourceClaim.runId);
   let sourceRunActive = true;
   let operatorAuthorityActive = true;
-  const assertSourceCurrent = () => {
-    if (!sourceRunActive) {
-      throw new Error("source worker run ended");
-    }
-  };
+  const assertSourceCurrent = () => assert(sourceRunActive, "source worker run ended");
   const sessionTarget = {
     agentId: SOURCE.agentId,
     sessionId: SOURCE.sessionId,
@@ -284,9 +270,7 @@ async function createWorkerSessionToolTestFixture(
     delegatedAuthorities.push(claimAgentRunDelegatedAuthority(sourceOperationalRun));
   }
   const rootAdmission = tryBeginGatewayRootWorkAdmission();
-  if (!rootAdmission) {
-    throw new Error("Worker fixture could not admit its parent turn");
-  }
+  assert(rootAdmission, "Worker fixture could not admit its parent turn");
   await rootAdmission.run(async () => {
     if (scheduledAdmission) {
       await prepareWorkerAgentRuntimeIdentity({
@@ -324,11 +308,8 @@ async function createWorkerSessionToolTestFixture(
         ? createAdmittedRunOperatorAuthority({
             profileId: options.operatorProfileId,
             scopes: options.operatorScopes ?? ["operator.write"],
-            assertCurrent: () => {
-              if (!operatorAuthorityActive) {
-                throw new Error("source operator authority revoked");
-              }
-            },
+            assertCurrent: () =>
+              assert(operatorAuthorityActive, "source operator authority revoked"),
           })
         : undefined,
     );
@@ -345,53 +326,54 @@ async function createWorkerSessionToolTestFixture(
     protocolFeatures: ["worker-gateway-tools-v1"],
     credentialExpiresAtMs: Date.now() + 60_000,
   };
-  sessionEntries.clear();
-  sharedMocks.sessionEntriesByStorePath.clear();
-  sharedMocks.sessionStorePaths.clear();
-  delivered.mockReset();
-  gatewayRequest.mockReset();
-  gatewayCreate.mockReset();
-  gatewayRuntimeIdentity.mockReset();
-  dispatchChild.mockReset();
-  spawnCallerIdentity.mockReset();
-  spawnArgs.mockReset();
-  // Shared mocks must discard unused once overrides before the next fixture starts.
-  scopedSessionAccess.mockReset();
+  // Reset implementations and queued once overrides, not just call histories.
+  for (const value of Object.values(mocks)) {
+    if (typeof value === "function") {
+      value.mockReset();
+    } else {
+      value.clear();
+    }
+  }
   scopedSessionAccess.mockImplementation(async (params) => await params.run());
-  const spawnState: { childSessionKey: string | undefined; order: string[] } = {
-    childSessionKey: undefined,
-    order: [],
-  };
-  gatewayCreate.mockImplementation(
-    async (request: { method: string; params: Record<string, unknown> }) => {
-      spawnState.order.push("create");
-      spawnState.childSessionKey = String(request.params.key);
-      setEntry(spawnState.childSessionKey, CHILD.sessionId, {
-        sessionKey: SOURCE.sessionKey,
-        sessionId: SOURCE.sessionId,
+  function configureSpawnTarget(
+    owner: typeof CHILD,
+    parent: { sessionKey: string; sessionId: string },
+    runId: string,
+  ) {
+    const state: { childSessionKey: string | undefined; order: string[] } = {
+      childSessionKey: undefined,
+      order: [],
+    };
+    gatewayCreate.mockImplementation(
+      async (request: { method: string; params: Record<string, unknown> }) => {
+        state.order.push("create");
+        state.childSessionKey = String(request.params.key);
+        setEntry(state.childSessionKey, owner.sessionId, parent);
+        return { ok: true, key: state.childSessionKey, sessionId: owner.sessionId };
+      },
+    );
+    dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
+      state.order.push("dispatch");
+      expect(placements.get(owner.sessionId)).toBeUndefined();
+      await activate({
+        ...owner,
+        sessionKey: request.sessionKey,
       });
-      return { ok: true, key: spawnState.childSessionKey, sessionId: CHILD.sessionId };
-    },
-  );
-  dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
-    spawnState.order.push("dispatch");
-    expect(placements.get(CHILD.sessionId)).toBeUndefined();
-    await activate({
-      ...CHILD,
-      sessionKey: request.sessionKey,
+      return placements.get(owner.sessionId);
     });
-    return placements.get(CHILD.sessionId);
-  });
-  gatewayRequest.mockImplementation(
-    async (request: { method: string; params: Record<string, unknown> }) => {
-      if (request.method === "agent") {
-        spawnState.order.push("send");
-        expect(placements.get(CHILD.sessionId)?.state).toBe("active");
-        return { runId: "spawned-child-run", status: "accepted" };
-      }
-      throw new Error(`Unexpected gateway request: ${request.method}`);
-    },
-  );
+    gatewayRequest.mockImplementation(
+      async (request: { method: string; params: Record<string, unknown> }) => {
+        if (request.method === "agent") {
+          state.order.push("send");
+          expect(placements.get(owner.sessionId)?.state).toBe("active");
+          return { runId, status: "accepted" };
+        }
+        throw new Error(`Unexpected gateway request: ${request.method}`);
+      },
+    );
+    return state;
+  }
+  const spawnState = configureSpawnTarget(CHILD, SOURCE, "spawned-child-run");
   const executorParams: Parameters<typeof createWorkerSessionToolExecutor>[0] = {
     inheritedToolPolicySource: options.inheritedToolPolicySource,
     delegatedToolPolicyActive: options.delegatedToolPolicyActive,
@@ -405,37 +387,15 @@ async function createWorkerSessionToolTestFixture(
     },
     environments: {
       get: (environmentId: string) => {
-        if (environmentId === SOURCE.environmentId) {
-          return {
-            state: "attached",
-            ownerEpoch: SOURCE.ownerEpoch,
-            attachedSessionIds: [SOURCE.sessionId],
-            providerId: "fake",
-            profileId: "cloud-profile",
-            profileSnapshot: { install: "bundle", settings: { region: "source" } },
-          };
-        }
-        if (environmentId === CHILD.environmentId) {
-          return {
-            state: "attached",
-            ownerEpoch: CHILD.ownerEpoch,
-            attachedSessionIds: [CHILD.sessionId],
-            providerId: "fake",
-            profileId: "cloud-profile",
-            profileSnapshot: { install: "bundle", settings: { region: "source" } },
-          };
-        }
-        if (environmentId === GRANDCHILD.environmentId) {
-          return {
-            state: "attached",
-            ownerEpoch: GRANDCHILD.ownerEpoch,
-            attachedSessionIds: [GRANDCHILD.sessionId],
-            providerId: "fake",
-            profileId: "cloud-profile",
-            profileSnapshot: { install: "bundle", settings: { region: "source" } },
-          };
-        }
-        return undefined;
+        const owner = [SOURCE, CHILD, GRANDCHILD].find((s) => s.environmentId === environmentId);
+        return owner
+          ? {
+              state: "attached",
+              ownerEpoch: owner.ownerEpoch,
+              attachedSessionIds: [owner.sessionId],
+              ...structuredClone(CLOUD_PROFILE),
+            }
+          : undefined;
       },
     } as never,
   };
@@ -459,20 +419,19 @@ async function createWorkerSessionToolTestFixture(
       "prepareTools" | "skillWorkshop"
     > & {
       identity?: WorkerConnectionIdentity;
+      inheritedPublicationToolRef?: { current?: AnyAgentTool };
     } = {},
   ) {
     const workerIdentity = runtimeOptions.identity ?? identity;
     const claim = workerIdentity.turnClaim;
-    if (!claim) {
-      throw new Error("Expected a claimed worker turn");
-    }
+    assert(claim, "Expected a claimed worker turn");
     const runtime = createWorkerGatewayToolRuntime({
       signal: new AbortController().signal,
-      assertCurrent: () => {
-        if (getWorkerTurnToolSurface(workerIdentity) !== runtime) {
-          throw new Error("Worker tool surface owner changed");
-        }
-      },
+      assertCurrent: () =>
+        assert(
+          getWorkerTurnToolSurface(workerIdentity) === runtime,
+          "Worker tool surface owner changed",
+        ),
       prepare: async () => ({
         policy: prepareCoreToolPolicy({}),
         presentation: createToolSurfacePresentationForTest(),
@@ -483,6 +442,7 @@ async function createWorkerSessionToolTestFixture(
             identity: workerIdentity,
           })
         ).filter((tool) => placements.isWorkerTurnToolAuthorized(claim, tool.name)),
+        inheritedPublicationTool: runtimeOptions.inheritedPublicationToolRef?.current,
       }),
     });
     bindWorkerTurnCapabilities(placements, claim, { toolSurface: runtime });
@@ -500,42 +460,11 @@ async function createWorkerSessionToolTestFixture(
     sessionId: string;
     sessionKey: string;
   }): Promise<void> {
-    let placement = await placements.startDispatch(session);
-    placement = await placements.transition({
-      sessionId: session.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: session.environmentId },
-    });
-    placement = await placements.transition({
-      sessionId: session.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = await placements.transition({
-      sessionId: session.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `manifest-${session.sessionId}`,
-        remoteWorkspaceDir: `/workspace/${session.sessionId}`,
-      },
-    });
-    seedAttachedPlacementEnvironment(database, {
+    await advancePlacementFixtureToActive(placements, database, session, {
       environmentId: session.environmentId,
-      sessionId: session.sessionId,
       ownerEpoch: session.ownerEpoch,
-    });
-    await placements.transition({
-      sessionId: session.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: session.ownerEpoch },
+      workspaceBaseManifestRef: `manifest-${session.sessionId}`,
+      remoteWorkspaceDir: `/workspace/${session.sessionId}`,
     });
   }
 
@@ -551,7 +480,10 @@ async function createWorkerSessionToolTestFixture(
     });
   }
 
-  async function send(toolCallId: string) {
+  async function send(
+    toolCallId: string,
+    request: { sessionKey?: string; message?: string; timeoutSeconds?: number } = {},
+  ) {
     return await execute({
       identity,
       toolName: "sessions_send",
@@ -560,6 +492,7 @@ async function createWorkerSessionToolTestFixture(
         sessionKey: TARGET.sessionKey,
         message: "status",
         timeoutSeconds: 0,
+        ...request,
       },
     });
   }
@@ -587,6 +520,7 @@ async function createWorkerSessionToolTestFixture(
       operatorAuthorityActive = false;
     },
     spawnState,
+    configureSpawnTarget,
     activate,
     setEntry,
     send,

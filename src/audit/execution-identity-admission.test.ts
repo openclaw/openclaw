@@ -4,7 +4,6 @@ import {
   createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
   hasExecutionIdentityAdmissionSink,
-  parseExecutionIdentityAdmissionEnvelope,
   parseExecutionIdentityAdmissionWork,
   type ExecutionIdentityAdmissionEnvelope,
   type ExecutionIdentityAdmissionFacts,
@@ -127,7 +126,9 @@ describe("execution identity admission envelope", () => {
     expect(Object.isFrozen(envelope)).toBe(true);
     expect(Object.isFrozen(envelope.ingress)).toBe(true);
     expect(Object.isFrozen(envelope.assurance)).toBe(true);
-    expect(parseExecutionIdentityAdmissionEnvelope(structuredClone(envelope))).toEqual(envelope);
+    expect(
+      parseExecutionIdentityAdmissionWork({ kind: "capture", envelope: structuredClone(envelope) }),
+    ).toEqual({ kind: "capture", envelope });
     expect(Buffer.byteLength(JSON.stringify(envelope), "utf8")).toBeLessThanOrEqual(
       ADMISSION_MAX_BYTES,
     );
@@ -197,16 +198,19 @@ describe("execution identity admission envelope", () => {
 
     for (const invoker of invalidInvokers) {
       expect(() =>
-        parseExecutionIdentityAdmissionEnvelope({ ...present, invoker } as never),
+        parseExecutionIdentityAdmissionWork({ kind: "capture", envelope: { ...present, invoker } }),
       ).toThrow("execution identity admission envelope violates its bounded contract");
     }
     expect(() =>
-      parseExecutionIdentityAdmissionEnvelope({
-        ...present,
-        invoker: {
-          kind: "local-account",
-          state: "present",
-          rawPrincipalRef: "raw-principal",
+      parseExecutionIdentityAdmissionWork({
+        kind: "capture",
+        envelope: {
+          ...present,
+          invoker: {
+            kind: "local-account",
+            state: "present",
+            rawPrincipalRef: "raw-principal",
+          },
         },
       }),
     ).toThrow("execution identity admission envelope is not canonical");
@@ -251,9 +255,9 @@ describe("execution identity admission envelope", () => {
       undefinedEnvelope,
       proxyEnvelope,
     ]) {
-      expect(() => parseExecutionIdentityAdmissionEnvelope(invalid)).toThrow(
-        "execution identity admission data must be clone-safe plain data",
-      );
+      expect(() =>
+        parseExecutionIdentityAdmissionWork({ kind: "capture", envelope: invalid }),
+      ).toThrow("execution identity admission data must be clone-safe plain data");
     }
     expect(() => captureEnvelope(customPrototypeFacts)).toThrow("expected admission envelope");
     expect(() => captureEnvelope(accessorFacts)).toThrow("expected admission envelope");
@@ -271,7 +275,7 @@ describe("execution identity admission envelope", () => {
     const priorIngress = Object.getOwnPropertyDescriptor(Object.prototype, "ingress");
     const priorKind = Object.getOwnPropertyDescriptor(Object.prototype, "kind");
     let inheritedReads = 0;
-    let parsed: ExecutionIdentityAdmissionEnvelope;
+    let parsed: ExecutionIdentityAdmissionWork;
     try {
       defineObjectPrototypeProperty("invoker", {
         configurable: true,
@@ -281,7 +285,7 @@ describe("execution identity admission envelope", () => {
           return { state: "unknown" };
         },
       });
-      parsed = parseExecutionIdentityAdmissionEnvelope(envelope);
+      parsed = parseExecutionIdentityAdmissionWork({ kind: "capture", envelope });
 
       defineObjectPrototypeProperty("ingress", {
         configurable: true,
@@ -291,9 +295,12 @@ describe("execution identity admission envelope", () => {
           return envelope.ingress;
         },
       });
-      expect(() => parseExecutionIdentityAdmissionEnvelope(omitOwn(envelope, "ingress"))).toThrow(
-        "execution identity admission envelope violates its bounded contract",
-      );
+      expect(() =>
+        parseExecutionIdentityAdmissionWork({
+          kind: "capture",
+          envelope: omitOwn(envelope, "ingress"),
+        }),
+      ).toThrow("execution identity admission envelope violates its bounded contract");
 
       defineObjectPrototypeProperty("kind", {
         configurable: true,
@@ -316,7 +323,10 @@ describe("execution identity admission envelope", () => {
       }
     }
     expect(inheritedReads).toBe(0);
-    expect(Object.hasOwn(parsed!, "invoker")).toBe(false);
+    if (parsed.kind !== "capture") {
+      throw new Error("expected captured admission work");
+    }
+    expect(Object.hasOwn(parsed.envelope, "invoker")).toBe(false);
   });
 
   it("rejects invalid owned facts, excess items, and oversized encoded envelopes", () => {

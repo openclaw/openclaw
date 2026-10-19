@@ -157,9 +157,17 @@ it.each(["main", "global"])(
     expect(identity.mock.calls.every(([candidate]) => candidate.sessionId === row.sessionId)).toBe(
       true,
     );
+    identity.mockClear();
+    expect(observations.currentRow(row, "main")).toEqual({ ...fresh, key });
+    expect(identity.mock.calls.every(([candidate]) => candidate.sessionId === row.sessionId)).toBe(
+      true,
+    );
+    expect(observations.currentRow({ ...row, sessionId: "missing" }, "main")).toBeUndefined();
     expect(observations.prepareProjection().projectRows([row])[0]).toEqual(projected);
     expect(observations.projectRows(primary.sessions)[0]).toEqual(projected);
     expect(observations.projectRows([row, { ...row, sessionId: " " }])[1]?.label).toBe("Primary");
+    primary = null;
+    expect(observations.currentRow(row, "main")).toEqual(fresh);
     connection.dispose();
   },
 );

@@ -1,13 +1,12 @@
 import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
-  SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
   SpeechSynthesisTarget,
 } from "openclaw/plugin-sdk/speech";
+import { createSpeechDirectiveParser } from "openclaw/plugin-sdk/speech-provider";
 import {
   asFiniteNumberInRange,
   asOptionalObjectRecord,
@@ -78,7 +77,7 @@ export function xaiSpeechResponseFormatToFileExtension(
 
 function normalizeXaiSpeechProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalObjectRecord(rawConfig.providers);
-  const xai = asOptionalObjectRecord(providers?.xai ?? rawConfig.xai ?? rawConfig) ?? {};
+  const xai = asOptionalObjectRecord(providers?.xai) ?? {};
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: xai.apiKey,
@@ -127,26 +126,18 @@ export function resolveDirectXaiAudioApiKey(configApiKey?: string): string | und
   return normalizeOptionalString(configApiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
 }
 
-function parseXaiSpeechDirectiveToken(
-  ctx: SpeechDirectiveTokenParseContext,
-): SpeechDirectiveTokenParseResult {
-  switch (ctx.key) {
-    case "voice":
-    case "voice_id":
-    case "voiceid":
-    case "xai_voice":
-    case "xaivoice":
-      if (!ctx.policy.allowVoice) {
-        return { handled: true };
-      }
-      if (!isValidXaiTtsVoice(ctx.value)) {
-        return { handled: true, warnings: [`invalid xAI voice "${ctx.value}"`] };
-      }
-      return { handled: true, overrides: { voiceId: ctx.value } };
-    default:
-      return { handled: false };
-  }
-}
+const parseXaiSpeechDirectiveToken = createSpeechDirectiveParser({
+  voice: [
+    "allowVoice",
+    ["voice", "voice_id", "voiceid", "xai_voice", "xaivoice"],
+    {
+      parse: (ctx) =>
+        isValidXaiTtsVoice(ctx.value)
+          ? { handled: true, overrides: { voiceId: ctx.value } }
+          : { handled: true, warnings: [`invalid xAI voice "${ctx.value}"`] },
+    },
+  ],
+});
 
 export function createXaiSpeechProviderMetadata(
   context: Pick<
@@ -198,6 +189,7 @@ export function createXaiSpeechProviderMetadata(
         ...(speed === undefined ? {} : { speed }),
       };
     },
+    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ providerConfig, cfg }) =>
       Boolean(resolveDirectXaiAudioApiKey(readXaiSpeechProviderConfig(providerConfig).apiKey)) ||
       context.isProviderAuthProfileConfigured({ provider: "xai", cfg }),

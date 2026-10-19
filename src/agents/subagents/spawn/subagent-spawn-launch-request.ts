@@ -20,7 +20,6 @@ export function buildSubagentLaunchRequest(params: {
   childIdem: string;
   outputSchema?: Record<string, unknown>;
   childSystemPrompt: string;
-  thinkingOverride?: string;
   runTimeoutSeconds: number;
   lightContext: boolean;
   requesterOrigin?: DeliveryContext;
@@ -52,8 +51,8 @@ export function buildSubagentLaunchRequest(params: {
       ? {}
       : {
           channel: params.childSessionOrigin?.channel,
-          to: params.childSessionOrigin?.to ?? undefined,
-          accountId: params.childSessionOrigin?.accountId ?? undefined,
+          to: params.childSessionOrigin?.to,
+          accountId: params.childSessionOrigin?.accountId,
           threadId:
             params.childSessionOrigin?.threadId != null
               ? stringifyRouteThreadId(params.childSessionOrigin.threadId)
@@ -67,9 +66,8 @@ export function buildSubagentLaunchRequest(params: {
     swarmOutputSchema: params.outputSchema,
     cleanupBundleMcpOnRunEnd: params.spawnMode !== "session",
     extraSystemPrompt: params.childSystemPrompt,
-    thinking: params.thinkingOverride,
     timeout: params.runTimeoutSeconds,
-    // Creation owns the label; delayed launches must preserve operator renames.
+    // Creation owns label and thinking; delayed launches preserve later session edits.
     ...(bootstrapContextMode
       ? {
           bootstrapContextMode,

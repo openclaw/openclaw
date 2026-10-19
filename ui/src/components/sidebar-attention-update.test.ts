@@ -17,11 +17,11 @@ function contextWithGitStatus(status: "behind" | "current" | "unavailable"): App
         updateAvailable: {
           currentVersion: "2026.9.2",
           latestVersion: "2026.9.3",
-          channel: "dev",
+          channel: "stable",
           commitsBehind: 246,
         },
         updateSchedule: {
-          channel: "dev",
+          channel: "stable",
           autoEnabled: false,
           install: { kind: "git", git },
           target: {
@@ -40,6 +40,43 @@ function contextWithGitStatus(status: "behind" | "current" | "unavailable"): App
 }
 
 describe("update attention", () => {
+  it.each(["stable", "beta", "dev", "extended-stable", "unknown"])(
+    "notifies only release-channel subscribers (%s)",
+    (channel) => {
+      const context = contextWithGitStatus("behind");
+      context.overlays.snapshot.updateAvailable!.channel = channel;
+      context.overlays.snapshot.updateSchedule!.channel = channel;
+      expect(resolveSidebarUpdateAttention(context) !== null).toBe(
+        channel === "stable" || channel === "beta",
+      );
+    },
+  );
+
+  it("uses the selected dev channel instead of stale stable availability", () => {
+    const context = contextWithGitStatus("behind");
+    context.overlays.snapshot.updateSchedule!.channel = "dev";
+    expect(resolveSidebarUpdateAttention(context)).toBeNull();
+  });
+
+  it("uses the advertised release channel when the schedule is not available", () => {
+    const context = contextWithGitStatus("behind");
+    context.overlays.snapshot.updateSchedule = null;
+    expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
+    context.overlays.snapshot.updateAvailable!.channel = "dev";
+    expect(resolveSidebarUpdateAttention(context)).toBeNull();
+  });
+
+  it("keeps explicit dev update progress and errors visible", () => {
+    const context = contextWithGitStatus("behind");
+    context.overlays.snapshot.updateSchedule!.channel = "dev";
+    context.overlays.snapshot.updateAvailable!.channel = "dev";
+    context.overlays.snapshot.updateRunning = true;
+    expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
+    context.overlays.snapshot.updateRunning = false;
+    context.overlays.snapshot.updateStatusBanner = { tone: "danger", text: "Update failed" };
+    expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
+  });
+
   it.each([
     { status: "current", present: false },
     { status: "behind", present: true },

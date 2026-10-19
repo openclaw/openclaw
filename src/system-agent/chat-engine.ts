@@ -31,6 +31,10 @@ import {
   requireSystemAgentPersistentApplyInference,
 } from "./inference-guard.js";
 import type { SystemAgentOperation } from "./operations.js";
+import {
+  SYSTEM_AGENT_APPROVAL_APPLICATION_UNCONFIRMED_TEXT,
+  SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES,
+} from "./operator-approval.js";
 import { loadSystemAgentOverview, type SystemAgentOverview } from "./overview.js";
 import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
@@ -115,10 +119,10 @@ export class SystemAgentChatEngine {
         beforePersistentApply,
       );
       if (reply && terminalStatus && !reply.applied) {
-        reply.text = `OpenClaw change ${terminalStatus}. No change. Retry the request if it is still needed.`;
+        reply.text = SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES[terminalStatus];
       }
       if (reply && decision === "allow-once" && !reply.applied) {
-        reply.text += " Check the current settings and OpenClaw status before retrying.";
+        reply.text += ` ${SYSTEM_AGENT_APPROVAL_APPLICATION_UNCONFIRMED_TEXT}`;
       }
       if (reply?.text) {
         this.history.push({ role: "assistant", text: reply.text });

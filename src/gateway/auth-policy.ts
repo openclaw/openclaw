@@ -6,7 +6,6 @@ import { sha256Base64Url } from "../infra/crypto-digest.js";
 import type { GatewayAuthPolicy } from "./auth-policy.types.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { resolveIdentityOperatorScopes } from "./operator-identity-scopes.js";
-import { sourceRolePolicies } from "./operator-role-source-policy.js";
 import { checkGatewayWsBrowserOrigin } from "./origin-check.js";
 
 const policies = new WeakMap<
@@ -36,7 +35,7 @@ export function captureGatewayAuthPolicy(
     const trustedProxy = gateway?.auth?.trustedProxy;
     cached = {
       global: stableStringify({
-        roles: sourceRolePolicies(gateway?.roles),
+        // Named roles are enforced per profile, independently of transport admission.
         trustedProxies: gateway?.trustedProxies?.toSorted(),
         allowRealIpFallback: gateway?.allowRealIpFallback,
         allowTailscale: gateway?.auth?.allowTailscale,
@@ -50,14 +49,10 @@ export function captureGatewayAuthPolicy(
     };
     policies.set(config, cached);
   }
-  const principalKey = stableStringify([
-    role,
-    verifiedIdentity,
-    authMethod,
-    authModeOverride,
-    browserOrigin,
-  ]);
-  let policy = contextualIngress ? undefined : cached.identities.get(principalKey);
+  const principalKey = contextualIngress
+    ? undefined
+    : stableStringify([role, verifiedIdentity, authMethod, authModeOverride, browserOrigin]);
+  let policy = principalKey === undefined ? undefined : cached.identities.get(principalKey);
   if (!policy) {
     const grant =
       role === "operator" && verifiedIdentity
@@ -115,7 +110,7 @@ export function captureGatewayAuthPolicy(
       verifiedIdentity,
       browserOrigin: browserOrigin && Object.freeze({ ...browserOrigin }),
     });
-    if (!contextualIngress) {
+    if (principalKey !== undefined) {
       cached.identities.set(principalKey, policy);
     }
   }

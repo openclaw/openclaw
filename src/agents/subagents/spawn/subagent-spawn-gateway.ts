@@ -3,7 +3,6 @@ import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-co
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
-  isRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
@@ -42,6 +41,9 @@ const SUBAGENT_AGENT_RECONCILE_INTERVAL_MS = 800;
 const SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS = 6_400;
 
 type SubagentGatewayResponse = Awaited<ReturnType<typeof callGateway>>;
+export type SubagentGatewayRequest = Parameters<typeof callGateway>[0] & {
+  params: Record<string, unknown>;
+};
 
 /** Captures the request's Gateway binding and operator owner before spawn preparation awaits. */
 export function captureSubagentSpawnGatewayContext() {
@@ -58,7 +60,7 @@ export function captureSubagentSpawnGatewayContext() {
 }
 
 async function dispatchSubagentGateway(
-  params: Parameters<typeof callGateway>[0],
+  params: SubagentGatewayRequest,
   authorization?: SubagentLaunchAuthorization,
   options?: {
     agentRunTracking?: "native_subagent";
@@ -78,9 +80,7 @@ async function dispatchSubagentGateway(
   // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
   // "agent" -> write) keep their least-privilege scope. Apply the trusted
   // launch authorization before resolving the request's required scope.
-  const authorizedParams = isRecord(params.params)
-    ? applySubagentLaunchAuthorization(params.params, authorization)
-    : params.params;
+  const authorizedParams = applySubagentLaunchAuthorization(params.params, authorization);
   const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
     params.method,
     authorizedParams,
@@ -104,7 +104,7 @@ async function dispatchSubagentGateway(
     params: authorizedParams,
     ...(scopes != null ? { scopes } : {}),
   };
-  if (hasInProcessGateway && isRecord(request.params)) {
+  if (hasInProcessGateway) {
     const requestParams =
       request.method === "agent" && options?.preparedLaunch
         ? bindInProcessSessionRun(request.params, options.preparedLaunch)
@@ -262,14 +262,14 @@ async function reconcileSubagentAgentDispatch(
 }
 
 export async function callSubagentGateway(
-  params: Parameters<typeof callGateway>[0],
+  params: SubagentGatewayRequest,
   authorization?: SubagentLaunchAuthorization,
 ): Promise<SubagentGatewayResponse> {
   return (await dispatchSubagentGateway(params, authorization)).response;
 }
 
 export async function callNativeSubagentGateway(
-  params: Parameters<typeof callGateway>[0],
+  params: SubagentGatewayRequest,
   authorization?: SubagentLaunchAuthorization,
   gatewayContextResolver?: GatewayContextResolver,
   preparedLaunch?: PreparedSessionRun,

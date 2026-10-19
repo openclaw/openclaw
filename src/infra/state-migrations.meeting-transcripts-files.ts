@@ -206,8 +206,10 @@ export function disposeLegacyMeetingTranscriptStage(params: {
     params.database?.close();
   } catch (error) {
     warnings.push(
-      `Could not close the meeting transcript migration stage database: ${String(error)}`,
+      `Could not close the meeting transcript migration stage database: ${String(error)}. Left stage files in place${params.databasePath ? ` at ${params.databasePath}` : ""}; remove them only after this process exits.`,
     );
+    // A failed native close can leave the WAL-index mapped.
+    return warnings;
   }
   if (!params.databasePath) {
     return warnings;

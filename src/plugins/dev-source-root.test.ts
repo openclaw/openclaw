@@ -64,6 +64,7 @@ describe("packaged development official plugins", () => {
       const request = resolveManagedPluginInstallRequest(
         { source: "official", pluginId: "codex" },
         [],
+        "https://clawhub.ai",
       );
       expect(request.source).toBe(expected);
       expect(isBundledPluginInsideDevSourceRoot({ rootDir: pluginRoot, env: process.env })).toBe(
@@ -84,6 +85,7 @@ describe("packaged development official plugins", () => {
           resolveManagedPluginInstallRequest(
             { source: "official", pluginId: "codex", ...choice },
             [],
+            "https://clawhub.ai",
           ).source,
         ).toBe("official");
       }
@@ -96,21 +98,21 @@ describe("packaged development official plugins", () => {
       stagedCommit: commit,
       raw: "@openclaw/codex@2026.9.3",
       pin: false,
-      expected: "npm",
+      expected: "clawhub",
     },
     {
       name: "pinned package",
       stagedCommit: commit,
       raw: "@openclaw/codex",
       pin: true,
-      expected: "official",
+      expected: "clawhub",
     },
     {
       name: "unqualified package",
       stagedCommit: commit,
       raw: "@openclaw/codex",
       pin: false,
-      expected: "bundled",
+      expected: "clawhub",
     },
     {
       name: "explicit npm override",
@@ -123,6 +125,13 @@ describe("packaged development official plugins", () => {
       name: "release package",
       stagedCommit: undefined,
       raw: "@openclaw/codex@2026.9.3",
+      pin: false,
+      expected: "clawhub",
+    },
+    {
+      name: "bare plugin ID",
+      stagedCommit: commit,
+      raw: "codex",
       pin: false,
       expected: "bundled",
     },

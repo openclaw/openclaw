@@ -134,7 +134,10 @@ describe("CodexAppServerTurnRouter", () => {
     await route.bindTurn("turn-warnings");
 
     await vi.waitFor(() =>
-      expect(notifications).toHaveBeenCalledWith(warning, { threadId: "thread-warnings" }),
+      expect(notifications).toHaveBeenCalledWith(
+        { ...warning, completedTurn: undefined },
+        { threadId: "thread-warnings" },
+      ),
     );
   });
 
@@ -247,7 +250,7 @@ describe("CodexAppServerTurnRouter", () => {
     vi.useFakeTimers();
     vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createHarness();
-    let setExecutionTimeoutMs: ((timeoutMs: number) => void) | undefined;
+    let setExecutionTimeoutMs: ((timeoutMs: number | null) => void) | undefined;
     const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
       threadId: "released",
       onRequest: (_request, _scope, _signal, setTimeoutMs) => {
@@ -325,6 +328,9 @@ describe("CodexAppServerTurnRouter", () => {
       {
         method: "item/agentMessage/delta",
         params: { threadId: "thread-2", turnId: "turn-2", delta: "right" },
+        threadId: "thread-2",
+        turnId: "turn-2",
+        completedTurn: undefined,
       },
       { threadId: "thread-2", turnId: "turn-2" },
     );
@@ -332,6 +338,9 @@ describe("CodexAppServerTurnRouter", () => {
       {
         method: "turn/completed",
         params: { threadId: "thread-2", turn: { id: "turn-2", status: "completed", items: [] } },
+        threadId: "thread-2",
+        turnId: "turn-2",
+        completedTurn: { id: "turn-2", status: "completed", items: [] },
       },
       { threadId: "thread-2", turnId: "turn-2" },
     );
@@ -375,11 +384,13 @@ describe("CodexAppServerTurnRouter", () => {
       {
         method: "thread/status/changed",
         params: { threadId: "thread-1", status: { type: "active" } },
+        threadId: "thread-1",
+        completedTurn: undefined,
       },
       { threadId: "thread-1" },
     );
     expect(notifications).toHaveBeenCalledWith(
-      { method: "configWarning", params: { message: "global" } },
+      { method: "configWarning", params: { message: "global" }, completedTurn: undefined },
       { threadId: "thread-1" },
     );
     expect(warn).toHaveBeenCalledTimes(1);
@@ -681,17 +692,23 @@ describe("CodexAppServerTurnRouter", () => {
     harness.send(bufferedNotification);
 
     await vi.waitFor(() =>
-      expect(threadHandler).toHaveBeenCalledWith(liveNotification, {
-        threadId: "thread-live",
-      }),
+      expect(threadHandler).toHaveBeenCalledWith(
+        { ...liveNotification, threadId: "thread-live", completedTurn: undefined },
+        { threadId: "thread-live" },
+      ),
     );
     expect(turnHandler).not.toHaveBeenCalled();
 
     await turnRoute.bindTurn("turn-buffered");
-    expect(turnHandler).toHaveBeenCalledWith(bufferedNotification, {
-      threadId: "thread-buffered",
-      turnId: "turn-buffered",
-    });
+    expect(turnHandler).toHaveBeenCalledWith(
+      {
+        ...bufferedNotification,
+        threadId: "thread-buffered",
+        turnId: "turn-buffered",
+        completedTurn: undefined,
+      },
+      { threadId: "thread-buffered", turnId: "turn-buffered" },
+    );
   });
 
   it("holds dormant traffic until one-shot activation", async () => {
@@ -864,9 +881,10 @@ describe("CodexAppServerTurnRouter", () => {
     expect(notificationHandler).not.toHaveBeenCalled();
 
     await route.cancelTurn();
-    expect(notificationHandler).toHaveBeenCalledWith(earlyError, {
-      threadId: "thread-resumed",
-    });
+    expect(notificationHandler).toHaveBeenCalledWith(
+      { ...earlyError, threadId: "thread-resumed", completedTurn: undefined },
+      { threadId: "thread-resumed" },
+    );
     await expect(waitForResponse(harness, "pending-turn-request")).resolves.toEqual({
       id: "pending-turn-request",
       result: { decision: "decline" },

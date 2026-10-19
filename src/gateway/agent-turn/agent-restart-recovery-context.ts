@@ -3,6 +3,7 @@ import { createExecutionIdentityRecoveryAdmission } from "../../agents/admitted-
 import { parseExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import { resolveRestartRecoveryChannelAuthority } from "../../config/sessions/restart-recovery-state.js";
+import { parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -25,6 +26,7 @@ export function resolveAgentRestartRecoveryContext(params: {
   canUseInternalRuntimeHandoff: boolean;
   expectedExistingSessionId?: string;
   resolvedSessionId?: string;
+  resolvedSessionKey: string | undefined;
   runId: string;
   sessionEntry?: SessionEntry;
 }):
@@ -49,6 +51,17 @@ export function resolveAgentRestartRecoveryContext(params: {
   }
   if (params.isRestartRecoveryResumeRun && entry.restartRecoverySourceIngress === "control-ui") {
     return { messageChannel: INTERNAL_MESSAGE_CHANNEL, pinnedWidgetAuthoring: true };
+  }
+  if (
+    params.isRestartRecoveryResumeRun &&
+    entry.restartRecoverySourceIngress === "internal" &&
+    !entry.restartRecoveryDeliveryContext
+  ) {
+    // WebChat context lets message tools infer external recipients from session keys.
+    const route = parseSessionDeliveryRoute(params.resolvedSessionKey);
+    return !route || route.channel === INTERNAL_MESSAGE_CHANNEL
+      ? { messageChannel: INTERNAL_MESSAGE_CHANNEL }
+      : undefined;
   }
   const messageChannel = normalizeMessageChannel(entry.restartRecoveryDeliveryContext?.channel);
   if (

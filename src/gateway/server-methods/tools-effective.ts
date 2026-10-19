@@ -66,8 +66,6 @@ const TOOLS_EFFECTIVE_SLOW_LOG_MS = 250;
 const TOOLS_EFFECTIVE_CACHE_LIMIT = 128;
 const MCP_CONFIG_SUMMARY_CACHE_LIMIT = 128;
 
-let nowForToolsEffectiveCache = () => Date.now();
-
 type ToolsEffectiveCacheEntry = {
   value: EffectiveToolInventoryResult;
   createdAtMs: number;
@@ -107,6 +105,7 @@ function buildToolsEffectiveCacheKey(context: TrustedToolsEffectiveContext): str
     groupChannel: optionalCacheString(context.groupChannel),
     groupSpace: optionalCacheString(context.groupSpace),
     replyToMode: optionalCacheString(context.replyToMode),
+    webSearchEnabled: context.toolOverrides?.webSearch !== false,
     // Prepared session ceilings can change without a config or session-id change.
     policy: buildConversationToolPolicyPipelineSteps({
       capabilityProfile: context.capabilityProfile,
@@ -160,15 +159,15 @@ function scheduleBaseToolsEffectiveRefresh(
   if (existing) {
     return existing;
   }
-  const startedAt = nowForToolsEffectiveCache();
+  const startedAt = Date.now();
   const task = new Promise<EffectiveToolInventoryResult>((resolve, reject) => {
     setImmediate(() => {
       void resolveBaseToolsEffectiveInventory(context)
         .then((value) => {
           toolsEffectiveCache.delete(key);
-          toolsEffectiveCache.set(key, { value, createdAtMs: nowForToolsEffectiveCache() });
+          toolsEffectiveCache.set(key, { value, createdAtMs: Date.now() });
           pruneMapToMaxSize(toolsEffectiveCache, TOOLS_EFFECTIVE_CACHE_LIMIT);
-          const durationMs = nowForToolsEffectiveCache() - startedAt;
+          const durationMs = Date.now() - startedAt;
           if (durationMs >= TOOLS_EFFECTIVE_SLOW_LOG_MS) {
             logDebug(
               `tools-effective: refresh durationMs=${durationMs} agent=${context.agentId} session=${context.sessionKey} tools=${value.groups.reduce((sum, group) => sum + group.tools.length, 0)}`,
@@ -188,7 +187,7 @@ async function resolveCachedBaseToolsEffective(
   context: TrustedToolsEffectiveContext,
 ): Promise<EffectiveToolInventoryResult> {
   const key = buildToolsEffectiveCacheKey(context);
-  const now = nowForToolsEffectiveCache();
+  const now = Date.now();
   const cached = toolsEffectiveCache.get(key);
   if (cached) {
     const ageMs = now - cached.createdAtMs;
@@ -287,6 +286,7 @@ async function resolveBaseToolsEffectiveInventory(
         groupChannel: context.groupChannel,
         groupSpace: context.groupSpace,
         replyToMode: context.replyToMode,
+        webSearchEnabled: context.toolOverrides?.webSearch,
       }),
     );
   } finally {
@@ -614,8 +614,5 @@ export const testing = {
     toolsEffectiveCache.clear();
     toolsEffectiveInflight.clear();
     mcpConfigSummaryCache.clear();
-  },
-  setToolsEffectiveNowForTest(now: () => number = () => Date.now()) {
-    nowForToolsEffectiveCache = now;
   },
 } as const;

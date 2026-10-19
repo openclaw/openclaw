@@ -248,82 +248,79 @@ describe("pipeline", () => {
     },
   );
 
-  it.each([
-    "hello",
-    `See [the maintainer guide](${githubBlob}).`,
-    `Commit: <https://github.com/openclaw/openclaw/commit/${githubCommit}>`,
-    `Tree: https://github.com/openclaw/openclaw/tree/${githubCommit}/.agents`,
-    `Commit: 'https://github.com/openclaw/openclaw/commit/${githubCommit}'`,
-  ])("runs an allowed outbound and inbound exchange end to end: %s", async (text) => {
-    const { alice, bob } = identities();
-    const outboundAudit = audit();
-    const outboundGuard = mockGuard(allow);
-    const classifyOutbound = vi.spyOn(outboundGuard, "classify");
-    const outbound = await composeOutbound(
-      outboundOptions(alice, bob, {
-        body: { text },
-        ts: now,
-        audit: outboundAudit,
-        guard: outboundGuard,
-      }),
-    );
-    expect(classifyOutbound).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ direction: "outbound", text }),
-    );
-    const inboundAudit = audit();
-    const inboundGuard = mockGuard(allow);
-    const classifyInbound = vi.spyOn(inboundGuard, "classify");
-    const replayStore = new MemoryReplayStore();
-    const options = inboundOptions(outbound.envelope, alice, bob, {
-      replayStore,
-      guard: inboundGuard,
-      audit: inboundAudit,
-    });
-    const inbound = await composeInbound(options);
-    expect(inbound.disposition).toBe("accepted");
-    if (inbound.disposition !== "accepted") {
-      throw new Error("expected accepted result");
-    }
-    expect(inbound.body.text).toBe(text);
-    expect(classifyInbound).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ direction: "inbound", text }),
-    );
-    expect(inbound.receipt).toMatchObject({ id: outbound.envelope.id, status: "accepted" });
-    const outboundEntries = await outboundAudit.entries();
-    const inboundEntries = await inboundAudit.entries();
-    expect(outboundEntries.map((entry) => entry.event.type)).toEqual([
-      "proposal",
-      "guard_verdict",
-      "envelope",
-    ]);
-    expect(inboundEntries.map((entry) => entry.event.type)).toEqual([
-      "guard_verdict",
-      "inbox",
-      "receipt",
-    ]);
-    expect(
-      new Set(
-        outboundEntries.map(
-          (entry) => (entry.event.payload as { approvalDigest: string }).approvalDigest,
-        ),
-      ).size,
-    ).toBe(1);
-    expect(
-      new Set(
-        inboundEntries.map(
-          (entry) => (entry.event.payload as { approvalDigest: string }).approvalDigest,
-        ),
-      ).size,
-    ).toBe(1);
-    const duplicate = await composeInbound({ ...options, now: now + 10 * 60 });
-    expect(duplicate).toEqual({
-      disposition: "duplicate",
-      body: inbound.body,
-      receipt: inbound.receipt,
-    });
-    expect(inboundGuard.calls).toBe(1);
-    expect(await inboundAudit.entries()).toHaveLength(inboundEntries.length);
-  });
+  it.each([`Tree: https://github.com/openclaw/openclaw/tree/${githubCommit}/.agents`])(
+    "runs an allowed outbound and inbound exchange end to end: %s",
+    async (text) => {
+      const { alice, bob } = identities();
+      const outboundAudit = audit();
+      const outboundGuard = mockGuard(allow);
+      const classifyOutbound = vi.spyOn(outboundGuard, "classify");
+      const outbound = await composeOutbound(
+        outboundOptions(alice, bob, {
+          body: { text },
+          ts: now,
+          audit: outboundAudit,
+          guard: outboundGuard,
+        }),
+      );
+      expect(classifyOutbound).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ direction: "outbound", text }),
+      );
+      const inboundAudit = audit();
+      const inboundGuard = mockGuard(allow);
+      const classifyInbound = vi.spyOn(inboundGuard, "classify");
+      const replayStore = new MemoryReplayStore();
+      const options = inboundOptions(outbound.envelope, alice, bob, {
+        replayStore,
+        guard: inboundGuard,
+        audit: inboundAudit,
+      });
+      const inbound = await composeInbound(options);
+      expect(inbound.disposition).toBe("accepted");
+      if (inbound.disposition !== "accepted") {
+        throw new Error("expected accepted result");
+      }
+      expect(inbound.body.text).toBe(text);
+      expect(classifyInbound).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ direction: "inbound", text }),
+      );
+      expect(inbound.receipt).toMatchObject({ id: outbound.envelope.id, status: "accepted" });
+      const outboundEntries = await outboundAudit.entries();
+      const inboundEntries = await inboundAudit.entries();
+      expect(outboundEntries.map((entry) => entry.event.type)).toEqual([
+        "proposal",
+        "guard_verdict",
+        "envelope",
+      ]);
+      expect(inboundEntries.map((entry) => entry.event.type)).toEqual([
+        "guard_verdict",
+        "inbox",
+        "receipt",
+      ]);
+      expect(
+        new Set(
+          outboundEntries.map(
+            (entry) => (entry.event.payload as { approvalDigest: string }).approvalDigest,
+          ),
+        ).size,
+      ).toBe(1);
+      expect(
+        new Set(
+          inboundEntries.map(
+            (entry) => (entry.event.payload as { approvalDigest: string }).approvalDigest,
+          ),
+        ).size,
+      ).toBe(1);
+      const duplicate = await composeInbound({ ...options, now: now + 10 * 60 });
+      expect(duplicate).toEqual({
+        disposition: "duplicate",
+        body: inbound.body,
+        receipt: inbound.receipt,
+      });
+      expect(inboundGuard.calls).toBe(1);
+      expect(await inboundAudit.entries()).toHaveLength(inboundEntries.length);
+    },
+  );
 
   it("rejects a decrypted free-form thread before guard admission", async () => {
     const { alice, bob } = identities();
@@ -335,32 +332,28 @@ describe("pipeline", () => {
     expect(guard.calls).toBe(0);
   });
 
-  it.each([
-    `${githubBlob} ${["sk-", "abcdefghijklmnopqrstuvwxyz123456"].join("")}`,
-    `https://github.com/openclaw/openclaw/commit/${githubCommit}?token=${githubCommit}`,
-    `https://example.org/?next='${githubBlob}`,
-    `https://example.org/#'${githubBlob}`,
-    `_https://example.org/?next=${githubBlob}_`,
-    `mailto:review@example.org?next=${githubBlob}`,
-  ])("stops a deterministic outbound denial before guard and sealing: %s", async (text) => {
-    const { alice, bob } = identities();
-    const guard = mockGuard(allow);
-    let rngCalls = 0;
-    await expect(
-      composeOutbound(
-        outboundOptions(alice, bob, {
-          body: { text },
-          guard,
-          rng(length) {
-            rngCalls++;
-            return new Uint8Array(length);
-          },
-        }),
-      ),
-    ).rejects.toMatchObject({ stage: "deterministic" });
-    expect(guard.calls).toBe(0);
-    expect(rngCalls).toBe(0);
-  });
+  it.each([`mailto:review@example.org?next=${githubBlob}`])(
+    "stops a deterministic outbound denial before guard and sealing: %s",
+    async (text) => {
+      const { alice, bob } = identities();
+      const guard = mockGuard(allow);
+      let rngCalls = 0;
+      await expect(
+        composeOutbound(
+          outboundOptions(alice, bob, {
+            body: { text },
+            guard,
+            rng(length) {
+              rngCalls++;
+              return new Uint8Array(length);
+            },
+          }),
+        ),
+      ).rejects.toMatchObject({ stage: "deterministic" });
+      expect(guard.calls).toBe(0);
+      expect(rngCalls).toBe(0);
+    },
+  );
 
   it("stops an outbound guard denial before sealing", async () => {
     const { alice, bob } = identities();

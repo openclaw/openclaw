@@ -12,11 +12,17 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { hasErrnoCode } from "./errno.js";
 import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
+import { recordSqliteSnapshotFailure } from "./sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import type {
   PreparedSqliteReadOnlyLocation,
   RetainedPreparedSqliteReadOnlyLocation,
 } from "./sqlite-readonly-location.types.js";
+import {
+  assertExpectedContent,
+  hashPublishedFileSync,
+  type SqliteFileContent,
+} from "./sqlite-snapshot-file.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import { SQLITE_STAGING_TOKEN_FILES, type SqliteStagingToken } from "./sqlite-staging-token.js";
 
@@ -55,22 +61,24 @@ export function settleSqliteSnapshotRequest<T>(request: {
   startClose(): RetainedOperation<void>;
 }): Promise<T> {
   return request.result.catch(async (error: unknown) => {
+    let failure = error;
     try {
       await request.startClose().result;
     } catch (cleanupError) {
-      if (cleanupError === error) {
-        throw error;
+      if (cleanupError !== error) {
+        const combined = createSqliteLifecycleAggregateError(
+          [error, cleanupError],
+          "SQLite snapshot allocation and cleanup failed",
+          error,
+        );
+        failure =
+          error instanceof SqliteSnapshotCleanupError
+            ? new SqliteSnapshotCleanupError(error.message, { cause: combined })
+            : combined;
       }
-      const combined = createSqliteLifecycleAggregateError(
-        [error, cleanupError],
-        "SQLite snapshot allocation and cleanup failed",
-        error,
-      );
-      throw error instanceof SqliteSnapshotCleanupError
-        ? new SqliteSnapshotCleanupError(error.message, { cause: combined })
-        : combined;
     }
-    throw error;
+    recordSqliteSnapshotFailure(failure);
+    throw failure;
   });
 }
 
@@ -356,7 +364,6 @@ export async function removeTempDirectoryAsync(
     return removed;
   }
   try {
-    assertSnapshotReadersRetired(owner);
     const retirement = prepareSnapshotRetirement(tempDir, owner);
     try {
       for (const file of retirement?.payload ?? []) {
@@ -447,6 +454,30 @@ export function sealRetainedSnapshotTempDirectory(
   }
   assertSnapshotReadersRetired(owner);
   owner.retirementStarted = true;
+}
+
+export function publishPreparedCopy(
+  directory: string,
+  expectedSourceContent?: SqliteFileContent,
+): PreparedSqliteReadOnlyLocation {
+  const location = path.join(directory, "database.sqlite");
+  for (const suffix of ["-wal", "-shm", "-journal", ""]) {
+    const staged = `${location}.partial${suffix}`;
+    if (fs.existsSync(staged)) {
+      fs.renameSync(staged, `${location}${suffix}`);
+    }
+  }
+  let journalFreeContent: PreparedSqliteReadOnlyLocation["journalFreeContent"];
+  if (expectedSourceContent) {
+    const identity = fs.lstatSync(location, { bigint: true });
+    assertExpectedContent(
+      hashPublishedFileSync(location, identity),
+      expectedSourceContent,
+      location,
+    );
+    journalFreeContent = { ...expectedSourceContent, identity };
+  }
+  return { ...adoptPreparedLocation(location, directory), journalFreeContent };
 }
 
 export function adoptPreparedLocation(

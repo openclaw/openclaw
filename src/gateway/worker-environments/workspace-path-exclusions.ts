@@ -13,6 +13,16 @@ const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
   "node_modules",
 ] as const;
 
+// These producers own exact checkout-relative roots, not every .cache or .artifacts path.
+const DERIVED_WORKSPACE_ROOT_PATHS = [
+  ".cache/vitest",
+  ".cache/openclaw/bun",
+  ".cache/ms-playwright",
+  ".local/share/pnpm/store",
+  ".artifacts/vitest-workers",
+] as const;
+const RUNTIME_WORKSPACE_ROOT_PATHS = [".artifacts/dist-artifacts.lock"] as const;
+
 const DERIVED_WORKSPACE_FILE_NAMES = [".DS_Store"] as const;
 const DERIVED_WORKSPACE_FILE_SUFFIXES = [".pyc", ".pyo"] as const;
 export const WORKER_ATTACHMENT_DIRECTORY_PREFIX = "openclaw-inbound-";
@@ -35,15 +45,27 @@ export const WORKSPACE_PATH_EXCLUSIONS_JS = `
 ${STAGED_INPUT_PATHS_JS}
 ${MANAGED_SANDBOX_SKILLS_PATH_JS}
 const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)};
+const DERIVED_WORKSPACE_ROOT_PATHS = ${JSON.stringify(DERIVED_WORKSPACE_ROOT_PATHS)};
+const RUNTIME_WORKSPACE_ROOT_PATHS = ${JSON.stringify(RUNTIME_WORKSPACE_ROOT_PATHS)};
 const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
 const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
 const WORKER_ATTACHMENT_DIRECTORY_RE = new RegExp(${JSON.stringify(`^${WORKER_ATTACHMENT_DIRECTORY_PATTERN}$`)});
+function isRuntimeOwnedWorkspacePath(relativePath) {
+  return isManagedSandboxSkillsPath(relativePath) || RUNTIME_WORKSPACE_ROOT_PATHS.some(
+    (root) => relativePath === root || relativePath.startsWith(root + "/"),
+  );
+}
 function isDerivedWorkspacePath(relativePath, retainedInput = false) {
-  if (isManagedSandboxSkillsPath(relativePath)) {
+  if (isRuntimeOwnedWorkspacePath(relativePath)) {
     return true;
   }
   if (retainedInput) {
     return false;
+  }
+  if (DERIVED_WORKSPACE_ROOT_PATHS.some(
+    (root) => relativePath === root || relativePath.startsWith(root + "/"),
+  )) {
+    return true;
   }
   const segments = relativePath.split("/");
   // "$" can match before a final newline; require the entire path segment.
@@ -56,11 +78,20 @@ function isDerivedWorkspacePath(relativePath, retainedInput = false) {
   );
 }`;
 
-export const isDerivedWorkspacePath: (relativePath: string, retainedInput?: boolean) => boolean =
-  compileFunction(`${WORKSPACE_PATH_EXCLUSIONS_JS}\nreturn isDerivedWorkspacePath;`)();
+export const {
+  isDerivedWorkspacePath,
+  isRuntimeOwnedWorkspacePath,
+}: {
+  isDerivedWorkspacePath: (relativePath: string, retainedInput?: boolean) => boolean;
+  isRuntimeOwnedWorkspacePath: (relativePath: string) => boolean;
+} = compileFunction(
+  `${WORKSPACE_PATH_EXCLUSIONS_JS}\nreturn { isDerivedWorkspacePath, isRuntimeOwnedWorkspacePath };`,
+)();
 
 export const DERIVED_WORKSPACE_RSYNC_EXCLUDES = [
   `/${MATERIALIZED_SANDBOX_SKILLS_WORKSPACE}`,
+  ...DERIVED_WORKSPACE_ROOT_PATHS.map((root) => `/${root}`),
+  ...RUNTIME_WORKSPACE_ROOT_PATHS.map((root) => `/${root}`),
   ...DERIVED_WORKSPACE_DIRECTORY_NAMES,
   ...DERIVED_WORKSPACE_FILE_NAMES,
   ...DERIVED_WORKSPACE_FILE_SUFFIXES.map((suffix) => `*${suffix}`),

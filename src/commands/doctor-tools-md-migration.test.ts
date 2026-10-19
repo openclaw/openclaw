@@ -125,6 +125,32 @@ describe("TOOLS.md migration", () => {
     );
   });
 
+  it("refuses to migrate a TOOLS.md whose bytes are not valid UTF-8", async () => {
+    const fixture = await createFixture();
+    const agents = "# Agent\n\n## Tools\n\nExisting notes.\n";
+    const toolsBytes = Buffer.concat([
+      Buffer.from("### Cameras\n\n- kitchen → wide "),
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from(" angle\n"),
+    ]);
+    await fs.writeFile(fixture.agentsPath, agents);
+    await fs.writeFile(fixture.toolsPath, toolsBytes);
+
+    const result = await maybeMigrateToolsMd({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+
+    // Replacement decoding would have been merged into AGENTS.md and re-encoded into the
+    // archive before the source unlink, so the migration must refuse before any write.
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining("is not valid UTF-8")]);
+    expect(await fs.readFile(fixture.toolsPath)).toEqual(toolsBytes);
+    expect(await fs.readFile(fixture.agentsPath, "utf8")).toBe(agents);
+    await expectMissing(path.join(fixture.stateDir, "backups", "tools-md-migration"));
+  });
+
   it("preserves customized content and ownership under restrictive umask and is idempotent", async () => {
     const fixture = await createFixture();
     const agents = "# Agent\n\n## Tools\n\nExisting notes.\n\n## Safety\n\nBe careful.\n";
@@ -239,12 +265,12 @@ describe("TOOLS.md migration", () => {
           mode === 0o640 &&
           !sourceTightened
         ) {
-          const readFile = handle.readFile.bind(handle);
-          vi.spyOn(handle, "readFile").mockImplementationOnce(async () => {
-            const content = await readFile();
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementationOnce(async (...readArgs) => {
+            const result = await read(...readArgs);
             await fs.chmod(fixture.toolsPath, 0o600);
             sourceTightened = true;
-            return content;
+            return result;
           });
         }
         return handle;

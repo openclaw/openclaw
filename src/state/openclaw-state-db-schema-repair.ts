@@ -10,6 +10,7 @@ import {
 } from "./openclaw-state-db-audit-migration.js";
 import {
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
+  MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION,
   type OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
@@ -67,7 +68,17 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
     "github_publication_session_lifecycles",
     "github_repository_publication_requests",
   ],
+  "meeting-transcript-start-time": ["meeting_transcript_sessions"],
   "portable-identity-columns-v22": ["acp_sessions", ...STATE_CURSOR_TABLES_V22],
+  "task-run-indexes-v24": [],
+  "subagent-operator-recovery-v25": [],
+  "session-state-head-layout-v26": [],
+  "state-write-indexes-v27": [],
+  "github-publication-draft-v28": [
+    "github_publication_requests",
+    "github_personal_publication_requests",
+    "github_repository_publication_requests",
+  ],
   "predicate-columns-v21": [
     "meeting_transcript_sessions",
     "meeting_transcript_summaries",
@@ -430,6 +441,27 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
     ["acp_sessions", ...STATE_CURSOR_TABLES_V22].some((table) => tableExists(db, table))
   ) {
     migrations.push({ kind: "portable-identity-columns-v22", path: pathname });
+  }
+  if (
+    userVersion < MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION &&
+    tableExists(db, "meeting_transcript_sessions")
+  ) {
+    migrations.push({ kind: "meeting-transcript-start-time", path: pathname });
+  }
+  if (userVersion < 24 && tableExists(db, "task_runs")) {
+    migrations.push({ kind: "task-run-indexes-v24", path: pathname });
+  }
+  if (userVersion < 25) {
+    migrations.push({ kind: "subagent-operator-recovery-v25", path: pathname });
+  }
+  if (userVersion < 26 && tableExists(db, "session_state_heads")) {
+    migrations.push({ kind: "session-state-head-layout-v26", path: pathname });
+  }
+  if (userVersion < 27) {
+    migrations.push({ kind: "state-write-indexes-v27", path: pathname });
+  }
+  if (userVersion < 28) {
+    migrations.push({ kind: "github-publication-draft-v28", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

@@ -7,6 +7,7 @@ import {
   prepareUserProfileGitHubAttribution,
   resolveUserProfileGitHubAttribution,
 } from "../state/user-profile-github-identity.js";
+import { resolveConfiguredGitHubHost } from "./github-host.js";
 import { resolveConfiguredGitHubToolIdentity } from "./github-tool-identity.js";
 
 type GitCoauthorAttribution = {
@@ -16,6 +17,7 @@ type GitCoauthorAttribution = {
 
 type GitCoauthorContributor = {
   accountId: number;
+  email: string;
   contributionCount: number;
   firstPromptedAt: number | null;
   login: string;
@@ -26,6 +28,7 @@ type GitCoauthorAttributionParams = {
   agentId: string;
   config: OpenClawConfig;
   excludeAccountId?: number;
+  host?: string;
   env?: NodeJS.ProcessEnv;
   sessionKey?: string;
   sessionId?: string;
@@ -89,10 +92,14 @@ async function resolveAttribution(
   if (profileIds.length === 0) {
     return empty;
   }
+  const host = params.host ?? resolveConfiguredGitHubHost(params.config);
   const prepared = retainAuthority
-    ? await prepareUserProfileGitHubAttribution(profileIds, { env: params.env })
+    ? await prepareUserProfileGitHubAttribution(profileIds, { env: params.env, host })
     : {
-        identities: await resolveUserProfileGitHubAttribution(profileIds, { env: params.env }),
+        identities: await resolveUserProfileGitHubAttribution(profileIds, {
+          env: params.env,
+          host,
+        }),
         isCurrent: () => true,
       };
   const identities = prepared.identities;
@@ -100,22 +107,30 @@ async function resolveAttribution(
     resolveConfiguredGitHubToolIdentity({ ...params, scope: "agent" }) ??
     resolveConfiguredGitHubToolIdentity({ ...params, scope: "system" });
   const primaryEmail = primaryIdentity?.gitAuthor?.email?.trim().toLowerCase();
-  const contributors = new Map<number, GitCoauthorContributor>();
+  const contributors = new Map<string, GitCoauthorContributor>();
   for (const profileId of profileIds) {
     const record = profileRecords.get(profileId);
     const identity = identities.get(profileId);
     if (!identity) {
       continue;
     }
-    if (identity.accountId === params.excludeAccountId) {
+    const issuer = "host" in identity ? identity.host : "github.com";
+    if (issuer !== host || identity.accountId === params.excludeAccountId) {
       continue;
     }
-    const noreplyEmail = `${identity.accountId}+${identity.login}@users.noreply.github.com`;
+    const email =
+      "host" in identity
+        ? identity.verifiedEmail
+        : `${identity.accountId}+${identity.login}@users.noreply.github.com`;
+    if (!email) {
+      continue;
+    }
     // An explicit publisher replaces the configured primary; the other account may deserve credit.
-    if (params.excludeAccountId === undefined && noreplyEmail.toLowerCase() === primaryEmail) {
+    if (params.excludeAccountId === undefined && email.toLowerCase() === primaryEmail) {
       continue;
     }
-    const contributor = contributors.get(identity.accountId);
+    const identityKey = `${issuer}:${identity.accountId}`;
+    const contributor = contributors.get(identityKey);
     if (contributor) {
       if (record) {
         contributor.contributionCount += record.contributionCount;
@@ -126,8 +141,9 @@ async function resolveAttribution(
       }
       continue;
     }
-    contributors.set(identity.accountId, {
+    contributors.set(identityKey, {
       accountId: identity.accountId,
+      email,
       contributionCount: record?.contributionCount ?? 0,
       firstPromptedAt: record?.firstPromptedAt ?? null,
       login: identity.login,
@@ -152,8 +168,7 @@ async function resolveAttribution(
   const visibleContributors = orderedContributors.slice(0, MAX_SESSION_PARTICIPANTS);
   const logins = visibleContributors.map(({ login }) => login);
   const trailers = visibleContributors.map(
-    ({ accountId, login }) =>
-      `Co-authored-by: ${login} <${accountId}+${login}@users.noreply.github.com>`,
+    ({ email, login }) => `Co-authored-by: ${login} <${email}>`,
   );
   return {
     attribution: trailers.length ? { trailers, logins } : undefined,

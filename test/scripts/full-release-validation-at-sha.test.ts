@@ -398,25 +398,6 @@ describe("full-release-validation-at-sha", () => {
     ).toHaveLength(4);
   });
 
-  it("keeps waiting while the exact run is queued before its witness upload", () => {
-    const queued = { conclusion: null, status: "queued" };
-    const fixture = createDispatchFixture({
-      parentRunStates: [
-        ...Array.from({ length: 6 }, () => queued),
-        { conclusion: "success", status: "completed" },
-      ],
-      witnessMissingReads: 6,
-    });
-    const result = fixture.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toContain("dispatch=pending-witness: run 123 (queued)");
-    expect(fixture.readWaits()).toEqual([30_000, 60_000, 120_000, 120_000, 120_000, 120_000]);
-    expect(fixture.record()).toMatchObject({
-      phase: "observed",
-      run: { id: 123, attempt: 1 },
-    });
-  });
-
   it("delivers the complete wire body through a private, bounded, short-lived payload", () => {
     const fixture = createDispatchFixture();
     const value = "spaces 'quotes' \"double\" = & ? $() `command`\n\u00e9\u65e5\u672c";

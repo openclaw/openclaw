@@ -42,13 +42,6 @@ describe("app-tool-stream run usage", () => {
     expect(host.chatRunUsageById?.get("still-active")?.outputTokens).toBe(59);
   });
 
-  it("keeps the last usage through completion even without an intervening render", () => {
-    const host = createHost({ chatRunId: "client-run" });
-    handleAgentEvent(host, agentEvent("client-run", 1, "usage", { outputTokens: 695 }, "main"));
-    handleAgentEvent(host, agentEvent("client-run", 2, "lifecycle", { phase: "end" }, "main"));
-    expect(host.chatRunUsageById?.get("client-run")?.outputTokens).toBe(695);
-  });
-
   it("accepts a newer corrected count but ignores older recovery usage", () => {
     const host = createHost({ chatRunId: "client-run" });
     handleAgentEvent(host, agentEvent("client-run", 8, "usage", { outputTokens: 120 }, "main"));

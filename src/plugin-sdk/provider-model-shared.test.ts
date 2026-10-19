@@ -2,6 +2,7 @@
  * Tests shared provider model helpers.
  */
 import { describe, expect, it } from "vitest";
+import { expectObjectFields as expectFields } from "../test-utils/mock-call-assertions.js";
 import {
   buildProviderReplayFamilyHooks,
   modelCostsEqual,
@@ -22,16 +23,6 @@ import {
 } from "./provider-model-shared.js";
 
 const EXPECTED_COST = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
-
-function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
-}
 
 function readLevelIds(profile: unknown): string[] {
   const levels = (profile as { levels?: Array<{ id?: unknown }> } | undefined)?.levels;

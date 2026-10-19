@@ -472,7 +472,7 @@ export type FinalizedRuntimeMsgContext = Omit<
 > &
   CanonicalInboundText & {
     CommandAuthorized: boolean;
-    CommandTurn?: CommandTurnContext;
+    CommandTurn: CommandTurnContext;
   };
 
 type NonTemplateContextKey = "ConversationAvatar";

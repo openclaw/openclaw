@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, createEffect, createSignal, onCleanup } from "solid-js";
+import { For, createSignal, onCleanup } from "solid-js";
 import {
   validateApprovalHistoryResult,
   type ApprovalHistoryResult,
@@ -29,9 +29,8 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
+import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { PageLayout } from "../page-layout.tsx";
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
 
@@ -117,13 +116,13 @@ function EmptyRow(props: { columns: number; label: string }) {
 }
 function Cell(props: { labelKey: string; value: JSX.Element; mono?: boolean }) {
   return (
-    <td class={props.mono ? "mono" : undefined} data-label={t(props.labelKey)}>
+    <td class={{ mono: props.mono }} data-label={t(props.labelKey)}>
       {props.value}
     </td>
   );
 }
 
-function ApprovalsPageContent() {
+export function ApprovalsPage() {
   const context = useApplication();
   let disposed = false;
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
@@ -166,44 +165,39 @@ function ApprovalsPageContent() {
     revision();
     return state;
   };
-
-  createEffect(
-    () => context.gateway,
-    (gateway) => {
-      resetHistory(true);
-      state.gatewaySource = gateway;
-      applyGatewaySnapshot(gateway.snapshot);
-      const stopSnapshots = gateway.subscribe((snapshot) => {
-        if (state.gatewaySource === gateway && context.gateway === gateway) {
-          applyGatewaySnapshot(snapshot);
-        }
-      });
-      const stopEvents = gateway.subscribeEvents((event) => {
-        if (
-          state.gatewaySource !== gateway ||
-          context.gateway !== gateway ||
-          !state.approvalsAccess ||
-          !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals ||
-          !parseApprovalResolvedEvent(event.event, event.payload)
-        ) {
-          return;
-        }
-        state.historyRefreshPending = true;
-        if (state.loadKind === null) {
-          void loadPage(true);
-        }
-      });
-      return () => {
-        stopSnapshots();
-        stopEvents();
-        resetHistory(false);
-        state.gatewaySource = null;
-      };
+  let stopEvents: (() => void) | undefined;
+  useGatewayPage({
+    getGateway: () => context.gateway,
+    onSnapshot: ({ snapshot, initial, sourceChanged }) => {
+      if (initial || sourceChanged) {
+        stopEvents?.();
+        resetHistory(true);
+        const gateway = context.gateway;
+        state.gatewaySource = gateway;
+        stopEvents = gateway.subscribeEvents((event) => {
+          if (
+            state.gatewaySource !== gateway ||
+            context.gateway !== gateway ||
+            !state.approvalsAccess ||
+            !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals ||
+            !parseApprovalResolvedEvent(event.event, event.payload)
+          ) {
+            return;
+          }
+          state.historyRefreshPending = true;
+          if (state.loadKind === null) {
+            void loadPage(true);
+          }
+        });
+      }
+      applyGatewaySnapshot(snapshot);
     },
-  );
+  });
   onCleanup(() => {
     disposed = true;
+    stopEvents?.();
     resetHistory(false);
+    state.gatewaySource = null;
   });
 
   function resetHistory(clearData: boolean) {
@@ -318,7 +312,7 @@ function ApprovalsPageContent() {
       if (!canPublish()) {
         return;
       }
-      state.grants = Array.isArray(result.grants) ? result.grants : [];
+      state.grants = result.grants;
       state.grantsError = null;
       publish();
     } catch (error) {
@@ -458,7 +452,7 @@ function ApprovalsPageContent() {
     );
   }
   return (
-    <>
+    <openclaw-approvals-page>
       <SettingsPageHeader
         title={t("tabs.approvals")}
         subtitle={
@@ -606,16 +600,6 @@ function ApprovalsPageContent() {
           ) : null}
         </SettingsPage>
       </SettingsWorkspace>
-    </>
+    </openclaw-approvals-page>
   );
 }
-
-export const ApprovalsPage = defineSolidBridge(
-  "openclaw-approvals-page",
-  (_props, host) => (
-    <PageLayout host={host}>
-      <ApprovalsPageContent />
-    </PageLayout>
-  ),
-  { properties: {} },
-);

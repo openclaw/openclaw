@@ -5,7 +5,6 @@ import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
-  shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
 
 const OBSERVATION_BEARER_TOKEN = "sk-redact-test-token";
@@ -223,14 +222,6 @@ describe("buildApiErrorObservationFields", () => {
 
     expect(observed.httpCode).toBe("401");
     expect(observed.providerRuntimeFailureKind).toBe("unclassified");
-  });
-
-  it("centralizes raw console suffix suppression for auth failures", () => {
-    expect(shouldSuppressRawErrorConsoleSuffix("auth_html")).toBe(true);
-    expect(shouldSuppressRawErrorConsoleSuffix("auth_scope")).toBe(true);
-    expect(shouldSuppressRawErrorConsoleSuffix("auth_refresh")).toBe(true);
-    expect(shouldSuppressRawErrorConsoleSuffix("timeout")).toBe(false);
-    expect(shouldSuppressRawErrorConsoleSuffix(undefined)).toBe(false);
   });
 });
 

@@ -243,7 +243,7 @@ describe("buildCodexMessagesSnapshot", () => {
       ]),
     );
     expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
-      "After steer.",
+      " After steer.",
     ]);
   });
 
@@ -273,7 +273,7 @@ describe("buildCodexMessagesSnapshot", () => {
       await projector.handleNotification(forCurrentTurn("item/completed", { item: final }));
       await projector.handleNotification(turnCompleted([completed, final]));
       expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual(
-        completedBeforeTool ? ["After tool."] : ["Split answer tail.", "After tool."],
+        completedBeforeTool ? ["After tool."] : [" Split answer tail.", "After tool."],
       );
     },
   );
@@ -381,9 +381,7 @@ describe("buildCodexMessagesSnapshot", () => {
       commitSteeringPrefix(projector, prefix);
       await projector.handleNotification(turnCompleted([completed]));
       expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
-        identity === "independent"
-          ? `${beforeSteer}continued and done`.trim()
-          : "continued and done",
+        identity === "independent" ? `${beforeSteer}continued and done` : "continued and done",
       ]);
     },
   );

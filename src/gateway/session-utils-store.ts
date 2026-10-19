@@ -135,7 +135,6 @@ export function prepareDeletedAgentSessionCheck(params: {
 export function loadIncognitoGatewaySessionEntryReadOnly(
   sessionKey: string,
   opts?: Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env"> & {
-    includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
   },
   cfg: OpenClawConfig = getRuntimeConfig(),
@@ -152,7 +151,6 @@ export function loadIncognitoGatewaySessionEntryReadOnly(
     projection: opts?.projection,
     env: opts?.env,
     targetDiscoveryCache: opts?.targetDiscoveryCache,
-    includeStoreChildEntries: opts?.includeStoreChildEntries,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });
@@ -372,6 +370,8 @@ export async function listAgentsForGateway(
     modelCatalogByAgentId?: SessionListModelCatalog;
     includeSystem?: boolean;
     httpAvatarBasePath?: string;
+    /** Limit enrichment while retaining the Gateway's canonical routing metadata. */
+    agentIds?: ReadonlySet<string>;
   },
 ): Promise<{
   defaultId: string;
@@ -386,12 +386,21 @@ export async function listAgentsForGateway(
     listAgentProvenance(),
     loadExecApprovalsReadOnlyAsync(),
   ]);
+  const roster = basic.agents.filter(
+    (entry) =>
+      (options?.includeSystem || entry.kind !== "system") &&
+      (!options?.agentIds || options.agentIds.has(entry.id)),
+  );
+  const rosterIds = new Set(roster.map((entry) => entry.id));
   const identityById = new Map<string, GatewayAgentRow["identity"]>();
   for (const entry of listAgentEntries(cfg)) {
     if (!entry?.id) {
       continue;
     }
     const agentId = normalizeAgentId(entry.id);
+    if (!rosterIds.has(agentId)) {
+      continue;
+    }
     const avatar = normalizeOptionalString(entry.identity?.avatar);
     const httpAvatar =
       avatar && options?.httpAvatarBasePath !== undefined
@@ -415,9 +424,6 @@ export async function listAgentsForGateway(
       : undefined;
     identityById.set(agentId, identity);
   }
-  const roster = options?.includeSystem
-    ? basic.agents
-    : basic.agents.filter((entry) => entry.kind !== "system");
   const provenanceById = new Map(
     provenanceRecords.map((record) => [record.agentId, record] as const),
   );

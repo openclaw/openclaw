@@ -104,41 +104,36 @@ describe("UI protocol freshness health mapping", () => {
     ]);
   });
 
-  it.each([{ kind: "stale-assets", field: "fixHint" }] as const)(
-    "passes the source root as one argument in the $kind manual repair",
-    async ({ kind, field }) => {
-      const root = await createOpenClawRoot("openclaw-doctor-ui-owner's source-");
-      const unrelated = await createOpenClawRoot();
-      await touch(path.join(root, "ui/package.json"), new Date("2026-01-01"));
-      if (kind === "stale-assets") {
-        await touch(path.join(root, "dist/control-ui/index.html"), new Date("2026-01-01"));
-      }
-      vi.spyOn(process, "cwd").mockReturnValue(unrelated);
-      mockGitLog("abc123 protocol changed");
-      const findings = await inspectRoot(root);
-      expect(findings).toHaveLength(1);
-      expect(findings[0]?.kind).toBe(kind);
-      const finding = uiProtocolFreshnessIssueToHealthFinding(findings[0]!);
-      const command = finding[field]?.match(/pnpm [^`\n]+/u)?.[0];
-      expect(command).toBeDefined();
+  it("passes the source root as one argument in the stale-assets manual repair", async () => {
+    const root = await createOpenClawRoot("openclaw-doctor-ui-owner's source-");
+    const unrelated = await createOpenClawRoot();
+    await touch(path.join(root, "ui/package.json"), new Date("2026-01-01"));
+    await touch(path.join(root, "dist/control-ui/index.html"), new Date("2026-01-01"));
+    vi.spyOn(process, "cwd").mockReturnValue(unrelated);
+    mockGitLog("abc123 protocol changed");
+    const findings = await inspectRoot(root);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.kind).toBe("stale-assets");
+    const finding = uiProtocolFreshnessIssueToHealthFinding(findings[0]!);
+    const command = finding.fixHint?.match(/pnpm [^`\n]+/u)?.[0];
+    expect(command).toBeDefined();
 
-      const windows = process.platform === "win32";
-      const captureArguments = windows
-        ? `function pnpm { [Console]::Write(($args -join [char]0) + [char]0) }
+    const windows = process.platform === "win32";
+    const captureArguments = windows
+      ? `function pnpm { [Console]::Write(($args -join [char]0) + [char]0) }
 ${command!}`
-        : `pnpm() { printf '%s\\0' "$@"; }
+      : `pnpm() { printf '%s\\0' "$@"; }
 ${command!}`;
-      const output = execFileSync(
-        windows ? "powershell.exe" : "/bin/sh",
-        windows
-          ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", captureArguments]
-          : ["-c", captureArguments],
-        { cwd: unrelated, timeout: 10_000, encoding: "utf8" },
-      );
+    const output = execFileSync(
+      windows ? "powershell.exe" : "/bin/sh",
+      windows
+        ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", captureArguments]
+        : ["-c", captureArguments],
+      { cwd: unrelated, timeout: 10_000, encoding: "utf8" },
+    );
 
-      expect(output.split("\0")).toEqual(["--dir", root, "ui:build", ""]);
-    },
-  );
+    expect(output.split("\0")).toEqual(["--dir", root, "ui:build", ""]);
+  });
 
   it("does not report dry-run effects when UI sources are unavailable", () => {
     expect(uiProtocolFreshnessIssueToRepairEffects(issue({ canBuild: false }))).toEqual([]);

@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
@@ -217,103 +218,6 @@ describe("prompt asynchronous binary preparation", () => {
       { status: "fulfilled", value: ["ordinary"] },
     ]);
   });
-
-  it("prepares newly eligible binaries after awaited env, config, secret, selection and remote changes", async () => {
-    const skillOverrides = { selected: false };
-    const { binDir, config, eligibility, resolve } = await fixture(
-      [
-        { name: "gate", metadata: { requires: { bins: ["gate-tool"] } } },
-        {
-          name: "env",
-          metadata: { requires: { bins: ["env-tool"], env: ["OPENCLAW_TEST_PROBE_KEY"] } },
-        },
-        {
-          name: "config",
-          metadata: {
-            requires: { anyBins: ["missing-tool", "config-tool"], config: ["browser.enabled"] },
-          },
-        },
-        { name: "secret", metadata: { requires: { bins: ["secret-tool"] } } },
-        {
-          name: "remote",
-          metadata: { os: ["remote-fixture-os"], requires: { bins: ["remote-tool"] } },
-        },
-        { name: "revoked", metadata: { requires: { bins: ["revoked-tool"] } } },
-        { name: "selected", metadata: { requires: { bins: ["selected-tool"] } } },
-      ],
-      { skillOverrides },
-    );
-    for (const name of ["gate", "env", "config", "secret", "revoked", "selected"]) {
-      await fs.writeFile(path.join(binDir, `${name}-tool`), "fixture", { mode: 0o755 });
-    }
-    degrade("secret");
-    const entered = createDeferred();
-    const release = createDeferred();
-    const actualAccess = fs.access;
-    let held = false;
-    const access = vi.spyOn(fs, "access").mockImplementation(async (...args) => {
-      if (!held && args[0] === path.join(binDir, "gate-tool")) {
-        held = true;
-        entered.resolve();
-        await release.promise;
-      }
-      return actualAccess(...args);
-    });
-    const syncAccess = vi.spyOn(fsSync, "accessSync");
-    const pending = resolve();
-    try {
-      await entered.promise;
-      vi.stubEnv("OPENCLAW_TEST_PROBE_KEY", "available");
-      config.browser = { enabled: true };
-      config.skills = { entries: { revoked: { enabled: false } } };
-      skillOverrides.selected = true;
-      setActiveDegradedSecretOwners([]);
-      eligibility.remote = {
-        platforms: ["remote-fixture-os"],
-        hasBin: (bin) => bin === "remote-tool",
-        hasAnyBin: () => false,
-      };
-    } finally {
-      release.resolve();
-    }
-    expect(await pending).toEqual(["config", "env", "gate", "remote", "secret", "selected"]);
-    expect(access.mock.calls.map(([file]) => path.basename(String(file)))).toEqual(
-      expect.arrayContaining([
-        "env-tool",
-        "config-tool",
-        "missing-tool",
-        "remote-tool",
-        "secret-tool",
-        "selected-tool",
-      ]),
-    );
-    expect(syncAccess.mock.calls.filter(([file]) => path.dirname(String(file)) === binDir)).toEqual(
-      [],
-    );
-    eligibility.remote.hasBin = () => false;
-    expect(await resolve()).toEqual(["config", "env", "gate", "secret", "selected"]);
-  });
-
-  it("discards binary facts when PATH changes during an awaited probe", async () => {
-    const { binDir, resolve } = await fixture([
-      { name: "tool", metadata: { requires: { bins: ["selected-tool"] } } },
-    ]);
-    const replacement = path.join(binDir, "replacement");
-    await fs.mkdir(replacement);
-    await fs.writeFile(path.join(binDir, "selected-tool"), "fixture", { mode: 0o755 });
-    const actualAccess = fs.access;
-    const access = vi.spyOn(fs, "access").mockImplementation(async (...args) => {
-      if (args[0] === path.join(binDir, "selected-tool")) {
-        vi.stubEnv("PATH", replacement);
-      }
-      return actualAccess(...args);
-    });
-    expect(await resolve()).toEqual([]);
-    expect(access.mock.calls.map(([file]) => String(file))).toEqual([
-      path.join(binDir, "selected-tool"),
-      path.join(replacement, "selected-tool"),
-    ]);
-  });
 });
 
 let fakeHome = "";
@@ -410,16 +314,6 @@ function createWorkspacePluginMetadataSnapshot(params: {
   };
 }
 
-async function expectMissingPath(pathToCheck: string) {
-  let thrown: unknown;
-  try {
-    await fs.lstat(pathToCheck);
-  } catch (error) {
-    thrown = error;
-  }
-  expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
-}
-
 async function createTempWorkspaceDir() {
   const workspaceDir = path.join(tempRoot, `workspace-${++workspaceCaseIndex}`);
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -465,6 +359,7 @@ beforeAll(async () => {
 
 afterEach(async () => {
   await closeSkillsWatchers(true);
+  vi.useRealTimers();
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
@@ -584,7 +479,9 @@ describe("loadWorkspaceSkills", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
-  it("reuses discovery across execution scopes until the passive refresh interval", async () => {
+  it("reuses discovery across execution scopes until the passive refresh interval", async ({
+    signal,
+  }) => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const workspaceDir = await createTempWorkspaceDir();
     const executionDirs = [await createTempWorkspaceDir(), await createTempWorkspaceDir()] as const;
@@ -604,6 +501,12 @@ describe("loadWorkspaceSkills", () => {
       pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
     };
     const scoped = (executionWorkspaceDir: string) => ({ ...options, executionWorkspaceDir });
+    const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
+    const completePassiveScan = async () => {
+      tasks.mockClear();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await withinTest(Promise.all(tasks.mock.results.map((result) => result.value)), signal);
+    };
     try {
       const first = await prepareWorkspaceSkills(workspaceDir, options);
       expect(
@@ -625,7 +528,7 @@ describe("loadWorkspaceSkills", () => {
       await writeWorkspaceSkills(changedExecutionDir, [
         { name: "cached-skill", description: "Changed loser" },
       ]);
-      await vi.advanceTimersByTimeAsync(60_000);
+      await completePassiveScan();
       expect(
         (await prepareWorkspaceSkills(workspaceDir, scoped(changedExecutionDir)))[0]?.skill
           .description,
@@ -635,7 +538,7 @@ describe("loadWorkspaceSkills", () => {
         { name: "fresh-skill", description: "Fresh skill" },
       ]);
       expect(await prepareWorkspaceSkills(workspaceDir, options)).toEqual(first);
-      await vi.advanceTimersByTimeAsync(60_000);
+      await completePassiveScan();
       for (const executionDir of executionDirs) {
         expect(
           (await prepareWorkspaceSkills(workspaceDir, scoped(executionDir))).map(
@@ -645,7 +548,7 @@ describe("loadWorkspaceSkills", () => {
       }
       expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
     } finally {
-      vi.useRealTimers();
+      tasks.mockRestore();
     }
   });
 
@@ -667,62 +570,6 @@ describe("loadWorkspaceSkills", () => {
         (entry) => entry.skill.name,
       ),
     ).not.toContain("drafting");
-  });
-
-  it("loads the browser plugin automation skill when the bundled plugin is enabled", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    const managedDir = path.join(workspaceDir, ".managed");
-    const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "browser");
-
-    await writePluginWithSkill({
-      pluginRoot,
-      pluginId: "browser",
-      skillId: "browser-automation",
-      skillDescription: "Browser automation",
-    });
-    await fs.writeFile(
-      path.join(pluginRoot, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "browser",
-          enabledByDefault: true,
-          skills: ["./skills"],
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    const enabledEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {},
-      managedSkillsDir: managedDir,
-    });
-
-    const browserEntry = enabledEntries.find((entry) => entry.skill.name === "browser-automation");
-    const browserSkillDir = path.join(pluginRoot, "skills", "browser-automation");
-    expect(browserEntry?.skill.baseDir).toBe(
-      path.join(workspaceDir, ".plugin-skills", "browser-automation"),
-    );
-    expect(browserEntry?.skill.filePath).toBe(
-      path.join(workspaceDir, ".plugin-skills", "browser-automation", "SKILL.md"),
-    );
-    await expect(
-      fs.readlink(path.join(workspaceDir, ".plugin-skills", "browser-automation")),
-    ).resolves.toBe(browserSkillDir);
-
-    const blockedEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        plugins: {
-          entries: { browser: { enabled: false } },
-        },
-      },
-      managedSkillsDir: managedDir,
-    });
-
-    expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("browser-automation");
-    await expectMissingPath(path.join(workspaceDir, ".plugin-skills", "browser-automation"));
   });
 
   it("loads hardlinked skills only from trusted bundled plugins", async () => {

@@ -24,6 +24,7 @@ import {
   openMemoryDatabaseAtPath,
   resetMemoryDatabase,
 } from "./manager-db.js";
+import { bindSqliteWorkerBackend } from "./manager-publication.worker.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 
 function ensureTestMemorySchema(db: DatabaseSync, cacheEnabled = true, ftsEnabled = false): void {
@@ -135,7 +136,7 @@ describe("memory manager database publication", () => {
         });
       }
       const resetRevision = readMemoryDatabaseRevision(db);
-      expect(resetRevision).toBeGreaterThan(revision);
+      expect(resetRevision).toBe(revision + 1);
       expect(await resetMemoryDatabase({ targetDb: db, dbPath, workspaceDir: fixtureRoot })).toBe(
         false,
       );
@@ -516,19 +517,36 @@ describe("memory manager database publication", () => {
         .prepare(
           "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
         )
-        .run("memory.md", "memory", "published", 1, 1);
+        .run("memory.md", "sessions", "published", 1, 1);
       sourceDb
         .prepare(
           "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
         )
-        .run("memory.md", "memory", "shadow", 1, 1);
+        .run("memory.md", "sessions", "shadow", 1, 1);
       const expectedRevision = readMemoryDatabaseRevision(targetDb);
       sourceDb.close();
 
       concurrentDb = new DatabaseSync(targetPath);
-      concurrentDb
-        .prepare("UPDATE memory_index_sources SET hash = ? WHERE path = ? AND source = ?")
-        .run("newer", "memory.md", "memory");
+      const publisher = bindSqliteWorkerBackend(
+        { kind: "agent" },
+        { databasePath: targetPath, database: concurrentDb, admit: () => undefined },
+      );
+      try {
+        expect(
+          publisher.execute({
+            type: "source.refresh",
+            input: {
+              path: "memory.md",
+              expectedHash: "published",
+              hash: "newer",
+              mtime: 2,
+              size: 2,
+            },
+          }),
+        ).toMatchObject({ ok: true, value: true });
+      } finally {
+        publisher.close();
+      }
       concurrentDb.close();
       concurrentDb = undefined;
 
@@ -544,7 +562,7 @@ describe("memory manager database publication", () => {
       expect(
         targetDb
           .prepare("SELECT hash FROM memory_index_sources WHERE path = ? AND source = ?")
-          .get("memory.md", "memory"),
+          .get("memory.md", "sessions"),
       ).toEqual({ hash: "newer" });
     } finally {
       try {

@@ -3,11 +3,17 @@
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../infra/system-events.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import {
+  clearTestEmbeddedRun as detachActiveEmbeddedRun,
+  registerTestEmbeddedRun as attachActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../../embedded-agent-runner/runs.test-support.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   setSubagentAnnounceDeliveryDepsForTest,
@@ -99,10 +105,24 @@ function answerWakes(
     if (wakes.length === 1) {
       await onWake?.(params);
     }
+    const terminal = prepareAgentRunTerminalReply({ rawText: replies[wakes.length - 1] ?? "" });
     return {
       status: "ok",
       inputProcessingCompleted: true,
-      result: { payloads: [{ text: replies[wakes.length - 1] }], meta: {} },
+      result: {
+        payloads: terminal.text ? [{ text: terminal.text }] : [],
+        meta: { terminalReply: terminal.terminalReply },
+        ...(terminal.terminalReply.disposition === "silent"
+          ? {
+              deliveryStatus: {
+                status: "suppressed",
+                succeeded: true,
+                reason: "no_visible_payload",
+                resultCount: 0,
+              },
+            }
+          : {}),
+      },
     } as T;
   };
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
@@ -117,42 +137,61 @@ function expectNoChildResultPushed(draft: TestDraft) {
 }
 
 it.each([
-  ["a visible answer", ["The delegated work is done."]],
-  ["a silent attempt and a visible retry", ["NO_REPLY", "The delegated work is done."]],
-  ["exhausted silent attempts", ["NO_REPLY", "NO_REPLY", "NO_REPLY"]],
-] as const)(
-  "retires the card once, after the cohort's requester wake settles through %s",
-  async (_name, replies) => {
-    const spawns = await yieldCohort("parent-turn", ["a", "b"]);
-    const draft = newDraft();
-    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-    const wakes = answerWakes(draft, replies);
-
-    await endRun("a");
-    expect(wakes).toEqual([]);
-    expect(draft.retire).not.toHaveBeenCalled();
-
-    await endRun("b");
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    try {
-      // A yielded requester owes a visible answer, so silence retries the same wake.
-      for (const retryDelayMs of [30_000, 120_000].slice(0, replies.length - 1)) {
-        expect(draft.retire).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(retryDelayMs);
-        await registryTesting.sweepOnceForTests();
-        await fixture.settle();
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-    expect(wakes.map(({ retiredBefore }) => retiredBefore)).toEqual(replies.map(() => 0));
-    expect(draft.retire).toHaveBeenCalledOnce();
-    expect(draft.push).toHaveBeenCalledWith(
-      expect.objectContaining({ itemId: "b", kind: "subagent", status: "completed" }),
+  ["a visible answer", ["The delegated work is done."], true],
+  ["intentional external silence", ["NO_REPLY"], true],
+  ["required internal result", ["NO_REPLY"], false],
+] as const)("settles the progress card according to %s", async (name, replies, retired) => {
+  const requesterOrigin =
+    name === "intentional external silence"
+      ? { channel: "telegram", to: "12345", accountId: "default" }
+      : undefined;
+  if (requesterOrigin) {
+    await upsertSessionEntryCore(
+      {
+        storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+          agentId: "main",
+        }),
+        sessionKey: requesterKey,
+      },
+      {
+        delivery: {
+          kind: "external",
+          route: {
+            channel: requesterOrigin.channel,
+            accountId: requesterOrigin.accountId,
+            target: { to: requesterOrigin.to },
+          },
+          context: requesterOrigin,
+          origin: {
+            provider: requesterOrigin.channel,
+            to: requesterOrigin.to,
+            accountId: requesterOrigin.accountId,
+          },
+        },
+      },
     );
-    expectNoChildResultPushed(draft);
-  },
-);
+  }
+  const spawns = await yieldCohort("parent-turn", ["a", "b"], requesterOrigin);
+  const draft = newDraft();
+  expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
+  const wakes = answerWakes(draft, replies);
+
+  await endRun("a");
+  expect(wakes).toEqual([]);
+  expect(draft.retire).not.toHaveBeenCalled();
+
+  await endRun("b");
+  expect(wakes.map(({ retiredBefore }) => retiredBefore)).toEqual(replies.map(() => 0));
+  if (retired) {
+    expect(draft.retire).toHaveBeenCalledOnce();
+  } else {
+    expect(draft.retire).not.toHaveBeenCalled();
+  }
+  expect(draft.push).toHaveBeenCalledWith(
+    expect.objectContaining({ itemId: "b", kind: "subagent", status: "completed" }),
+  );
+  expectNoChildResultPushed(draft);
+});
 
 it("does not adopt a card for a cohort whose completion was already delivered", async () => {
   const spawns = await yieldCohort("parent-turn", ["a", "b"]);
@@ -165,6 +204,50 @@ it("does not adopt a card for a cohort whose completion was already delivered", 
   expect(adoptSubagentProgressDraft(spawns, stale)).toBe(false);
   expect(stale.push).not.toHaveBeenCalled();
 });
+
+it.each(["visible result", "exhausted"] as const)(
+  "recovers a known missing required result through periodic admission: %s",
+  async (outcome) => {
+    const spawns = await yieldCohort("parent-turn", ["a"]);
+    const draft = newDraft();
+    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
+    const wakes = answerWakes(draft, [
+      "NO_REPLY",
+      outcome === "visible result" ? "The delegated work is done." : "NO_REPLY",
+      "NO_REPLY",
+    ]);
+    await endRun("a");
+    expect(wakes).toHaveLength(1);
+    expect(draft.retire).not.toHaveBeenCalled();
+    expect(subagentRuns.get("a")?.requesterSettleWake).toMatchObject({
+      status: "pending",
+      attemptCount: 1,
+    });
+    await registryTesting.sweepOnceForTests();
+    await fixture.settle();
+    expect(wakes).toHaveLength(1);
+
+    const clock = vi.spyOn(Date, "now");
+    try {
+      for (let attempt = 1; attempt < (outcome === "visible result" ? 2 : 3); attempt++) {
+        const due = subagentRuns.get("a")?.requesterSettleWake?.nextAttemptAt;
+        expect(due).toBeTypeOf("number");
+        clock.mockReturnValue(due!);
+        await registryTesting.sweepOnceForTests();
+        await fixture.settle();
+        expect(wakes).toHaveLength(attempt + 1);
+        expect(wakes[attempt]?.runId).toBe(`${wakes[0]!.runId}:retry-${attempt}`);
+      }
+      expect(draft.retire).toHaveBeenCalledOnce();
+      expect(subagentRuns.get("a")?.requesterSettleWake).toBeUndefined();
+      await registryTesting.sweepOnceForTests();
+      await fixture.settle();
+      expect(wakes).toHaveLength(outcome === "visible result" ? 2 : 3);
+    } finally {
+      clock.mockRestore();
+    }
+  },
+);
 
 it.each([
   ["killSessionSubagentRuns", "running", "committed"],
@@ -216,7 +299,20 @@ it("keeps the card when stop cannot interrupt a child that is still finishing", 
     runId: "a",
     isAbortable: false,
   });
-  setActiveEmbeddedRun("a-session", handle, childKey("a"), undefined, "main");
+  attachActiveEmbeddedRun(
+    "a-session",
+    handle,
+    childKey("a"),
+    undefined,
+    "main",
+    undefined,
+    undefined,
+    {
+      storeScope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+        agentId: "main",
+      }),
+    },
+  );
   try {
     await killSessionSubagentRuns({
       cfg: getRuntimeConfig(),
@@ -231,7 +327,7 @@ it("keeps the card when stop cannot interrupt a child that is still finishing", 
     expect(child?.requesterSettleWake).toBeDefined();
     expect(draft.retire).not.toHaveBeenCalled();
   } finally {
-    clearActiveEmbeddedRun("a-session", handle, childKey("a"));
+    detachActiveEmbeddedRun("a-session", handle, childKey("a"));
   }
   answerWakes(draft, ["The delegated work is done."]);
   await endRun("a");

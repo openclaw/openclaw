@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { readPreparedActivity, summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
@@ -100,11 +101,36 @@ describe("observed steering boundary", () => {
 });
 
 describe("status text truncation", () => {
-  it.each([
-    ["short", "Ready 😀", "Ready 😀"],
-    ["ASCII limit", "x".repeat(257), "x".repeat(256)],
-    ["surrogate boundary", `${"x".repeat(255)}😀 trailing`, "x".repeat(255)],
-  ])("preserves complete characters in %s retry and fallback labels", (_name, input, expected) => {
+  it("restores model waits after prior activity and rejects stale wait replay", () => {
+    const host = createHost({ chatRunId: "run-1" });
+    handleAgentEvent(host, agentEvent("run-1", 1, "assistant", { text: "First result" }));
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "run_status", {
+        phase: "waiting_for_model",
+        reason: "slot",
+      }),
+    );
+    expect(chatStartupStatusLabel(activeChatRunStartupStatus(host.chatRunStartup), null)).toBe(
+      "Waiting for a free model slot",
+    );
+    handleAgentEvent(host, agentEvent("run-1", 3, "run_status", { phase: "starting_model" }));
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "run_status", {
+        phase: "waiting_for_model",
+        reason: "slot",
+      }),
+      "history",
+    );
+    expect(chatStartupStatusLabel(activeChatRunStartupStatus(host.chatRunStartup), null)).toBe(
+      "Waiting for a response",
+    );
+  });
+
+  it("preserves complete characters at the retry and fallback label boundary", () => {
+    const expected = "x".repeat(255);
+    const input = `${expected}😀 trailing`;
     const host = createHost({
       chatRunId: "run-1",
       chatRunStartup: { state: "status", runId: "run-1", phase: "starting_model" },
@@ -473,8 +499,9 @@ describe("app-tool-stream approval lifecycle", () => {
 describe("app-tool-stream throttled projections", () => {
   it("renders a deferred tool update when its projection flushes", () => {
     useToolStreamFakeTimers();
-    const requestUpdate = vi.fn();
-    const host = createHost({ requestUpdate });
+    const publication = vi.fn();
+    const host = createHost();
+    chatRunPresentation(host).subscribe(publication);
     const toolCallId = "call-deferred";
     emitTool(host, "run-1", 1, {
       phase: "start",
@@ -483,19 +510,19 @@ describe("app-tool-stream throttled projections", () => {
       args: { path: "notes.txt" },
     });
     vi.advanceTimersByTime(80);
-    requestUpdate.mockClear();
+    publication.mockClear();
     emitTool(host, "run-1", 2, {
       phase: "update",
       name: "read",
       toolCallId,
       partialResult: "still reading",
     });
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(publication).not.toHaveBeenCalled();
     vi.advanceTimersByTime(79);
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(publication).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(host.chatToolMessages).toHaveLength(1);
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(publication).toHaveBeenCalledOnce();
     expect(host.chatToolMessages[0]?.content).toEqual([
       { type: "toolcall", name: "read", arguments: { path: "notes.txt" } },
       { type: "toolresult", name: "read", text: "still reading" },

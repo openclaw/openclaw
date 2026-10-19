@@ -24,6 +24,7 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { clearArtifactDownloads } from "./artifact-download-grants.js";
 import {
   collectGatewayProcessMemoryUsageMb,
   measureGatewayCloseStep,
@@ -226,9 +227,6 @@ export async function prepareGatewayClose(
   const { measureCloseStep, shutdownStep } = createCloseSteps(reason, warnings);
   // Fence async session-state writes before the first awaited shutdown step.
   fenceSessionSuspensionWritesForGatewayShutdown();
-  // Debug-level: the signal handler already announced the stop/restart at
-  // info, and the completion line below reports duration and outcome.
-  shutdownLog.debug(`shutdown started: ${reason}`);
 
   const triggerLifecycleHook = (action: "shutdown" | "pre-restart", timeoutMs: number) => {
     const hookName = `gateway:${action}` as const;
@@ -252,32 +250,43 @@ export async function prepareGatewayClose(
     );
   };
 
+  const prepareRuns = async () => {
+    const admissions = await measureCloseStep("reply-drain", () =>
+      prepareGatewayRunShutdown({
+        ...params,
+        timeoutMs:
+          typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
+            ? Math.max(0, Math.floor(opts.drainTimeoutMs))
+            : 0,
+        warnings,
+      }),
+    );
+    // Track settlement immediately: ordinary-stop hooks may still be running
+    // when an admission releases or its cancellation callback fails.
+    const settlement = cleanupWork.track(() =>
+      measureCloseStep("session-admissions", () => admissions.released),
+    );
+    void settlement.catch((error: unknown) => {
+      shutdownLog.warn(`session admission settlement failed: ${formatErrorMessage(error)}`);
+      recordShutdownWarning(warnings, "session-admissions");
+    });
+  };
+
   try {
+    // Ordinary stop already spent its grace period. Cancel received work before
+    // hooks can join it; restart hooks run before recovery marking instead.
+    if (!restart) {
+      await prepareRuns();
+    }
     await shutdownStep("update-check", () => params.updateCheckStop?.());
     await shutdownStep("config-reloader", () => params.configReloader.stop());
     await triggerLifecycleHook("shutdown", GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
     if (restart) {
       await triggerLifecycleHook("pre-restart", GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
     }
-    const drainTimeoutMs =
-      typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
-        ? Math.max(0, Math.floor(opts.drainTimeoutMs))
-        : 0;
-    const admissions = await measureCloseStep("reply-drain", () =>
-      prepareGatewayRunShutdown({
-        ...params,
-        restart,
-        timeoutMs: drainTimeoutMs,
-        warnings,
-      }),
-    );
-    const admissionSettlement = cleanupWork.track(() =>
-      measureCloseStep("session-admissions", () => admissions.released),
-    );
-    void admissionSettlement.catch((error: unknown) => {
-      shutdownLog.warn(`session admission settlement failed: ${formatErrorMessage(error)}`);
-      recordShutdownWarning(warnings, "session-admissions");
-    });
+    if (restart) {
+      await prepareRuns();
+    }
     // Cancel code cells before received work joins their pending bridge calls.
     await shutdownStep("code-mode-runs", () => params.disposeAllCodeModeRuns());
     // ACPX owns agent-process cleanup; memory retirement must not overtake its drain.
@@ -404,6 +413,7 @@ async function closeGatewayResources(
         disposeRuntime("bundle-lsp", params.disposeAllBundleLspRuntimes),
       ]);
     });
+    await shutdownStep("artifact-downloads", clearArtifactDownloads);
     await shutdownStep("periodic-maintenance", () => params.maintenance?.stopPeriodicTasks());
     await shutdownStep("skill-usage", () => params.maintenance?.skillUsageCleanup());
     try {

@@ -4,6 +4,7 @@
  * new public access-profile config surface.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -35,7 +36,7 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
-import { prepareSandboxSessionRename } from "./tools/sessions-operator-authority.js";
+import { prepareSandboxSessionTools } from "./tools/sessions-operator-authority.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function resolveManifestToolProfileNames(
@@ -99,6 +100,17 @@ export type ConversationCapabilityProfileParams = {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
+/** Prepare the authoritative inbound surface once for each tool catalog. */
+export function resolveConversationQuestionInputMode(
+  params: Pick<ConversationCapabilityProfileParams, "messageChannel" | "messageProvider">,
+): "native" | "buttons" | "none" {
+  const channel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
+    return "native";
+  }
+  return getChannelPlugin(channel)?.agentPrompt?.questionInputMode ?? "none";
+}
+
 /** Prepare standalone worker reads before running the shared synchronous policy. */
 export function prepareConversationCapabilityProfile(params: ConversationCapabilityProfileParams) {
   return withPreparedSessionCapabilityRead(() => resolveConversationCapabilityProfile(params));
@@ -108,7 +120,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
   const messageProvider = params.messageProvider;
   const effective = resolveEffectiveToolPolicy(params);
   const { policy: sandboxToolPolicy, renameOnly: sandboxSessionRenameOnly } =
-    prepareSandboxSessionRename({
+    prepareSandboxSessionTools({
       policy: resolveSessionPlacementSandboxToolPolicy(params.sandboxToolPolicy, {
         runId: params.runId,
         agentId: effective.agentId,
@@ -213,6 +225,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       sessionId: params.sessionId,
       messageProvider,
       messageChannel: params.messageChannel,
+      questionInputMode: resolveConversationQuestionInputMode(params),
       groupId: trustedGroup.groupId,
       groupChannel: trustedGroupChannel,
       groupSpace: trustedGroupSpace,

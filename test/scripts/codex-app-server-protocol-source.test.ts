@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-// Codex App Server Protocol Source tests cover codex app server protocol source script behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
@@ -34,6 +33,22 @@ afterEach(() => {
     process.env.OPENCLAW_CODEX_REPO = originalOpenClawCodexRepo;
   }
 });
+
+function versionFixture(version: string, cargoVersion = version) {
+  const repoRoot = createTempDir("openclaw-protocol-version-root-");
+  const codexRepo = createTempDir("openclaw-protocol-version-codex-");
+  fs.mkdirSync(path.join(repoRoot, "extensions/codex"), { recursive: true });
+  fs.mkdirSync(path.join(codexRepo, "codex-rs"), { recursive: true });
+  fs.writeFileSync(
+    path.join(repoRoot, "extensions/codex/package.json"),
+    JSON.stringify({ dependencies: { "@openai/codex": version } }),
+  );
+  fs.writeFileSync(
+    path.join(codexRepo, "codex-rs/Cargo.toml"),
+    `[workspace.package]\nversion = "${cargoVersion}"\n`,
+  );
+  return { codexRepo, repoRoot };
+}
 
 describe("Codex app-server generated artifact staging", () => {
   it("copies JSON bytes and normalizes nested TypeScript files in one pass", async () => {
@@ -122,37 +137,13 @@ version = "9.9.9"
   });
 
   it("rejects a Codex checkout that differs from the pinned package version", async () => {
-    const repoRoot = createTempDir("openclaw-protocol-version-root-");
-    const codexRepo = createTempDir("openclaw-protocol-version-codex-");
-    fs.mkdirSync(path.join(repoRoot, "extensions/codex"), { recursive: true });
-    fs.mkdirSync(path.join(codexRepo, "codex-rs"), { recursive: true });
-    fs.writeFileSync(
-      path.join(repoRoot, "extensions/codex/package.json"),
-      JSON.stringify({ dependencies: { "@openai/codex": "0.142.5" } }),
-    );
-    fs.writeFileSync(
-      path.join(codexRepo, "codex-rs/Cargo.toml"),
-      '[workspace.package]\nversion = "0.142.4"\n',
-    );
-
-    await expect(validateCodexProtocolSourceVersion({ codexRepo, repoRoot })).rejects.toThrow(
-      /0\.142\.4 does not match @openai\/codex 0\.142\.5/,
-    );
+    await expect(
+      validateCodexProtocolSourceVersion(versionFixture("0.142.5", "0.142.4")),
+    ).rejects.toThrow(/0\.142\.4 does not match @openai\/codex 0\.142\.5/);
   });
 
   it("requires a Git repository, exact-version tag, and matching tagged commit", async () => {
-    const repoRoot = createTempDir("openclaw-protocol-version-root-");
-    const codexRepo = createTempDir("openclaw-protocol-version-codex-");
-    fs.mkdirSync(path.join(repoRoot, "extensions/codex"), { recursive: true });
-    fs.mkdirSync(path.join(codexRepo, "codex-rs"), { recursive: true });
-    fs.writeFileSync(
-      path.join(repoRoot, "extensions/codex/package.json"),
-      JSON.stringify({ dependencies: { "@openai/codex": "0.149.0" } }),
-    );
-    fs.writeFileSync(
-      path.join(codexRepo, "codex-rs/Cargo.toml"),
-      '[workspace.package]\nversion = "0.149.0"\n',
-    );
+    const { repoRoot, codexRepo } = versionFixture("0.149.0");
     await expect(validateCodexProtocolSourceVersion({ codexRepo, repoRoot })).rejects.toThrow(
       /Could not resolve Codex protocol source HEAD/,
     );
@@ -238,24 +229,12 @@ version = "9.9.9"
     ).toThrow(/non-negative byte count/);
   });
 
-  it("checks the Codex workspace target dir by default", () => {
-    expect(resolveCodexProtocolCargoTargetDir("/codex", {})).toBe(
-      path.join("/codex", "codex-rs", "target"),
-    );
-  });
-
-  it("resolves relative Cargo target dir overrides from the Codex checkout", () => {
-    expect(resolveCodexProtocolCargoTargetDir("/codex", { CARGO_TARGET_DIR: "target-cache" })).toBe(
-      path.join("/codex", "target-cache"),
-    );
-  });
-
-  it("checks Cargo's build target dir override", () => {
-    expect(
-      resolveCodexProtocolCargoTargetDir("/codex", {
-        CARGO_BUILD_TARGET_DIR: "/cache/build-target",
-      }),
-    ).toBe(path.resolve("/cache/build-target"));
+  it.each([
+    [{}, path.join("/codex", "codex-rs", "target")],
+    [{ CARGO_TARGET_DIR: "target-cache" }, path.join("/codex", "target-cache")],
+    [{ CARGO_BUILD_TARGET_DIR: "/cache/build-target" }, path.resolve("/cache/build-target")],
+  ] as const)("resolves Cargo target directory %j", (env, expected) => {
+    expect(resolveCodexProtocolCargoTargetDir("/codex", env)).toBe(expected);
   });
 
   it("wraps Windows pnpm formatting through cmd.exe without shell mode", () => {
@@ -319,29 +298,12 @@ version = "9.9.9"
 describe("Codex app-server protocol JSON canonicalizer", () => {
   it("sorts object keys recursively before formatting", () => {
     const source = JSON.stringify({
-      z: {
-        d: 1,
-        b: {
-          y: 2,
-          x: 3,
-        },
-      },
-      a: [
-        {
-          z: 4,
-          a: {
-            c: 5,
-            b: 6,
-          },
-        },
-      ],
+      z: { d: 1, b: { y: 2, x: 3 } },
+      a: [{ z: 4, a: { c: 5, b: 6 } }],
       definitions: {
         Zebra: { type: "string", description: "last" },
         Alpha: {
-          properties: {
-            z: { type: "number" },
-            a: { type: "string" },
-          },
+          properties: { z: { type: "number" }, a: { type: "string" } },
           type: "object",
         },
       },
@@ -359,72 +321,43 @@ describe("Codex app-server protocol JSON canonicalizer", () => {
   });
 
   it("sorts typed-object arrays only for order-insensitive schema keywords", () => {
-    expect(
-      canonicalizeCodexAppServerProtocolJson({
-        anyOf: [
-          { z: 1, type: "string" },
-          { type: "integer", a: 2 },
-        ],
-        enum: [
-          { z: 1, type: "z" },
-          { type: "a", a: 2 },
-        ],
-        mixed: [{ type: "b" }, "item", { type: "a" }],
-        oneOf: [
-          { type: "object", z: true },
-          { a: true, type: "array" },
-          { type: "object", z: false },
-        ],
-        prefixItems: [
-          { z: 1, type: "string" },
-          { type: "number", a: 2 },
-        ],
-        required: [
-          { z: 1, type: "z" },
-          { type: "a", a: 2 },
-        ],
-        typed: [
-          { type: "beta", z: 1 },
-          { type: "alpha", z: 2 },
-          { type: "beta", z: 3 },
-        ],
-      }),
-    ).toEqual({
-      anyOf: [
-        { a: 2, type: "integer" },
-        { type: "string", z: 1 },
-      ],
-      enum: [
-        { a: 2, type: "a" },
-        { type: "z", z: 1 },
-      ],
+    const item = (type: string, fields: Record<string, unknown>) => ({ type, ...fields });
+    const anyOf = [item("string", { z: 1 }), item("integer", { a: 2 })];
+    const enumValues = [item("z", { z: 1 }), item("a", { a: 2 })];
+    const oneOf = [
+      item("object", { z: true }),
+      item("array", { a: true }),
+      item("object", { z: false }),
+    ];
+    const unchanged = {
       mixed: [{ type: "b" }, "item", { type: "a" }],
-      oneOf: [
-        { a: true, type: "array" },
-        { type: "object", z: true },
-        { type: "object", z: false },
-      ],
-      prefixItems: [
-        { type: "string", z: 1 },
-        { a: 2, type: "number" },
-      ],
-      required: [
-        { a: 2, type: "a" },
-        { type: "z", z: 1 },
-      ],
-      typed: [
-        { type: "beta", z: 1 },
-        { type: "alpha", z: 2 },
-        { type: "beta", z: 3 },
-      ],
+      prefixItems: [item("string", { z: 1 }), item("number", { a: 2 })],
+      typed: [item("beta", { z: 1 }), item("alpha", { z: 2 }), item("beta", { z: 3 })],
+    };
+    expect(
+      canonicalizeCodexAppServerProtocolJson(
+        structuredClone({
+          anyOf,
+          enum: enumValues,
+          required: enumValues,
+          oneOf,
+          ...unchanged,
+        }),
+      ),
+    ).toEqual({
+      anyOf: [anyOf[1], anyOf[0]],
+      enum: [enumValues[1], enumValues[0]],
+      required: [enumValues[1], enumValues[0]],
+      oneOf: [oneOf[1], oneOf[0], oneOf[2]],
+      ...unchanged,
     });
   });
 
   it("factors repeated definitions and exactly reconstructs every source schema", () => {
     const schemas = new Map<string, unknown>(
-      selectedCodexAppServerJsonSchemas.map((schemaPath) => [
-        schemaPath,
-        { $schema: "http://json-schema.org/draft-07/schema#", title: schemaPath, type: "object" },
+      selectedCodexAppServerJsonSchemas.map((title) => [
+        title,
+        { $schema: "http://json-schema.org/draft-07/schema#", title, type: "object" },
       ]),
     );
     const shared = { properties: { value: { $ref: "#/definitions/Leaf" } }, type: "object" };
@@ -482,10 +415,7 @@ describe("Codex app-server protocol JSON canonicalizer", () => {
 
   it("rejects same-name definitions with different schema semantics", () => {
     const schemas = new Map<string, unknown>(
-      selectedCodexAppServerJsonSchemas.map((schemaPath) => [
-        schemaPath,
-        { title: schemaPath, type: "object" },
-      ]),
+      selectedCodexAppServerJsonSchemas.map((title) => [title, { title, type: "object" }]),
     );
     schemas.set("v2/ErrorNotification.json", {
       definitions: { Shared: { type: "string" } },

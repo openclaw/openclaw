@@ -6,7 +6,7 @@ import { enhanceMarkdownTables, releaseMarkdownTables } from "./markdown-tables.
 let codeBlockRegionSequence = 0;
 const blockSelector = ".code-block-wrapper, .markdown-mermaid";
 export class MarkdownBlocks {
-  private observedRoot: HTMLElement | undefined;
+  private observing = false;
   private scanPending = false;
   private active = true;
   private disposed = false;
@@ -51,7 +51,7 @@ export class MarkdownBlocks {
         }
       }
       for (const node of record.removedNodes) {
-        if (!(node instanceof HTMLElement) || this.root?.contains(node)) {
+        if (!(node instanceof HTMLElement) || this.root.contains(node)) {
           continue;
         }
         const removed = [node, ...node.querySelectorAll<HTMLElement>(".code-block-viewport, code")];
@@ -81,13 +81,11 @@ export class MarkdownBlocks {
   private release(): void {
     // Hidden retained DOM keeps its controls, but must release foreground observers.
     this.mutationObserver.disconnect();
-    this.observedRoot = undefined;
+    this.observing = false;
     this.pendingBlocks.clear();
     this.resizeObserver?.disconnect();
     this.observedNodes.clear();
-    if (this.root) {
-      releaseMarkdownTables(this.root);
-    }
+    releaseMarkdownTables(this.root);
   }
 
   private scheduleScan(): void {
@@ -99,7 +97,7 @@ export class MarkdownBlocks {
     // and fence queued scans when the host is removed before the microtask runs.
     queueMicrotask(() => {
       this.scanPending = false;
-      if (this.active && !this.disposed && this.root?.isConnected) {
+      if (this.active && !this.disposed && this.root.isConnected) {
         this.scan(this.root);
       }
     });
@@ -109,32 +107,27 @@ export class MarkdownBlocks {
     // Session retirement can independently release the table owner. Reacquire it
     // after commit; an existing owner returns without walking retained history.
     enhanceMarkdownTables(root);
-    if (this.observedRoot !== root) {
+    if (!this.observing) {
       this.collectBlocks(root);
       this.mutationObserver.observe(root, {
         childList: true,
         subtree: true,
         characterData: !this.resizeObserver,
       });
-      this.observedRoot = root;
+      this.observing = true;
     }
     // A post-commit scan can precede observer delivery. Wire new controls
     // from this commit's records before consumers observe the rendered result.
     this.collectMutations(this.mutationObserver.takeRecords());
-    const blocks = [...this.pendingBlocks];
-    this.pendingBlocks.clear();
-    for (const wrapper of blocks) {
+    for (const wrapper of this.pendingBlocks) {
+      this.pendingBlocks.delete(wrapper);
       if (!root.contains(wrapper)) {
         continue;
       }
       if (wrapper.matches(".markdown-mermaid")) {
         if (!wrapper.querySelector("openclaw-mermaid") && wrapper.querySelector("pre code")) {
           const isCurrent = () =>
-            this.active &&
-            !this.disposed &&
-            this.root === root &&
-            root.isConnected &&
-            root.contains(wrapper);
+            this.active && !this.disposed && root.isConnected && root.contains(wrapper);
           void import("./markdown-mermaid.tsx").then(
             ({ mountMermaidBlocks }) => {
               if (isCurrent()) {

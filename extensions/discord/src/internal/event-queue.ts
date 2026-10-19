@@ -27,28 +27,18 @@ export class DiscordEventQueue {
   private readonly queue: DiscordEventQueueJob[] = [];
   private queueHead = 0;
   private processing = 0;
-  private processedCount = 0;
-  private droppedCount = 0;
-  private timeoutCount = 0;
 
   constructor(options: DiscordEventQueueOptions = {}) {
     this.options = {
-      maxQueueSize: normalizePositiveInteger(options.maxQueueSize, DEFAULT_MAX_QUEUE_SIZE),
-      maxConcurrency: normalizePositiveInteger(options.maxConcurrency, DEFAULT_MAX_CONCURRENCY),
-      listenerTimeout: normalizePositiveInteger(
-        options.listenerTimeout,
-        DEFAULT_LISTENER_TIMEOUT_MS,
-      ),
-      slowListenerThreshold: normalizePositiveInteger(
-        options.slowListenerThreshold,
-        DEFAULT_SLOW_LISTENER_THRESHOLD_MS,
-      ),
+      maxQueueSize: options.maxQueueSize ?? DEFAULT_MAX_QUEUE_SIZE,
+      maxConcurrency: options.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY,
+      listenerTimeout: options.listenerTimeout ?? DEFAULT_LISTENER_TIMEOUT_MS,
+      slowListenerThreshold: options.slowListenerThreshold ?? DEFAULT_SLOW_LISTENER_THRESHOLD_MS,
     };
   }
 
   enqueue(params: Omit<DiscordEventQueueJob, "resolve" | "reject">): Promise<void> {
     if (this.pendingQueueSize >= this.options.maxQueueSize) {
-      this.droppedCount += 1;
       return Promise.reject(
         new Error(
           `Discord event queue is full for ${params.eventType}; maxQueueSize=${this.options.maxQueueSize}`,
@@ -59,18 +49,6 @@ export class DiscordEventQueue {
       this.queue.push({ ...params, resolve, reject });
       this.processNext();
     });
-  }
-
-  getMetrics() {
-    return {
-      queueSize: this.pendingQueueSize,
-      processing: this.processing,
-      processed: this.processedCount,
-      dropped: this.droppedCount,
-      timeouts: this.timeoutCount,
-      maxQueueSize: this.options.maxQueueSize,
-      maxConcurrency: this.options.maxConcurrency,
-    };
   }
 
   private get pendingQueueSize(): number {
@@ -99,11 +77,7 @@ export class DiscordEventQueue {
       this.processing += 1;
       const listenerPromise = Promise.resolve().then(() => job.run());
       const runJobPromise = this.runJob(job, listenerPromise);
-      void runJobPromise.then(job.resolve, job.reject).finally(() => {
-        // Processed counts externally settled dispatches; a timed-out listener
-        // can still retain its concurrency slot until its own settlement.
-        this.processedCount += 1;
-      });
+      void runJobPromise.then(job.resolve, job.reject);
       // A timeout settles enqueue but cannot cancel the listener. Hold its slot
       // until actual settlement or late listeners can exceed maxConcurrency.
       void Promise.allSettled([runJobPromise, listenerPromise]).then(
@@ -145,7 +119,6 @@ export class DiscordEventQueue {
       return "completed";
     } catch (error) {
       if (error instanceof Error && error.name === "DiscordEventQueueListenerTimeoutError") {
-        this.timeoutCount += 1;
         console.error(
           `[EventQueue] Listener ${job.listenerName} timed out after ${this.options.listenerTimeout}ms for event ${job.eventType}`,
         );
@@ -167,11 +140,4 @@ export class DiscordEventQueue {
       `[EventQueue] Slow listener detected: ${job.listenerName} took ${durationMs}ms for event ${job.eventType}`,
     );
   }
-}
-
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return fallback;
-  }
-  return Math.max(1, Math.floor(value));
 }

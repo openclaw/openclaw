@@ -7,6 +7,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   applySessionEntryReplacements,
   assignSessionOwner,
@@ -56,8 +57,10 @@ describe("session entry replacement compare-and-swap", () => {
       );
     }
     const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-    const reads = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
-      /\bfrom\s+"session_nodes"/iu.test(sql) ? "entries" : null,
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["entries"],
+      (sql) => (/\bfrom\s+"session_nodes"/iu.test(sql) ? "entries" : null),
     );
     try {
       const snapshot = readSessionEntryReplacementState(database, {});
@@ -141,10 +144,13 @@ describe("session entry replacement compare-and-swap", () => {
           membershipInvalidatedKeys: [],
           maintenancePlans: [],
         };
-        const reads = trackSqliteStatementExecutions(database.db, ["publication"], (sql) =>
-          /\bfrom\s+"(?:session_nodes|session_participants|session_windows)"/iu.test(sql)
-            ? "publication"
-            : null,
+        const reads = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(database.db),
+          ["publication"],
+          (sql) =>
+            /\bfrom\s+"(?:session_nodes|session_participants|session_windows)"/iu.test(sql)
+              ? "publication"
+              : null,
         );
         try {
           written.model = "not committed";

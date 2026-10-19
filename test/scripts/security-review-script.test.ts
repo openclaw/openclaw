@@ -94,6 +94,8 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
   const fixturePath = path.join(root, "fixture.json");
   const eventPath = path.join(root, "event.json");
   const environmentPath = path.join(root, "environment");
+  const outputPath = path.join(root, "output");
+  writeFileSync(outputPath, "");
   writeFileSync(environmentPath, "");
   writeFileSync(logPath, "");
   // The resolver selects the PR for CI-completion events as well as PR/comments.
@@ -138,6 +140,7 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
           : { OPENCLAW_SECURITY_REVIEW_DEADLINE_MS: String(deadline) }),
         GITHUB_EVENT_PATH: eventPath,
         GITHUB_ENV: environmentPath,
+        GITHUB_OUTPUT: outputPath,
         GITHUB_REPOSITORY: "openclaw/openclaw",
         GITHUB_RUN_ID: "123",
         OPENCLAW_SECURITY_REVIEW_PR_NUMBER: "7",
@@ -163,6 +166,7 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
   return {
     ...result,
     environment: readFileSync(environmentPath, "utf8"),
+    output: readFileSync(outputPath, "utf8"),
     requests,
     waits: requests.filter((entry) => entry.method === "WAIT").map((entry) => entry.delay!),
     combined: requests
@@ -173,6 +177,64 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
 }
 
 describe("combined security review entry point", () => {
+  it("finishes ordinary preparation with the same decisions and fewer requests than separate detection", () => {
+    const detection = evaluate({}, "detect");
+    const enforcement = evaluate();
+    const prepared = evaluate({}, "prepare");
+    expect(prepared.status, prepared.stderr).toBe(0);
+    expect(prepared.output).toContain("autoscrub=false\n");
+    expect(prepared.output).toContain("completed=true\n");
+    expect(prepared.requests).toEqual(enforcement.requests);
+    expect(prepared.combined).toEqual(["pending", "success"]);
+    expect(prepared.reviews).toEqual(enforcement.reviews);
+    expect(detection.requests.length).toBeGreaterThan(0);
+    expect(prepared.requests.length).toBeLessThan(
+      detection.requests.length + enforcement.requests.length,
+    );
+  });
+
+  it("leaves cleanup candidates pending for autoscrub and fresh enforcement", () => {
+    const routes = { ...lockfileRoutes, [`GET ${pullPath}`]: lockfilePr };
+    const prepared = evaluate(routes, "prepare");
+    expect(prepared.status, prepared.stderr).toBe(0);
+    expect(prepared.output).toContain("autoscrub=true\n");
+    expect(prepared.output).not.toContain("completed=true");
+    expect(prepared.combined).toEqual(["pending"]);
+    expect(prepared.requests.some((entry) => entry.path === "/graphql")).toBe(false);
+    const enforcement = evaluate(routes);
+    expect(enforcement.requests[0]).toMatchObject({ method: "GET", path: pullPath });
+    expect(enforcement.combined.at(-1)).toBe("failure");
+  });
+
+  it.each([
+    { name: "real error", response: { httpError: 401 }, status: 1 },
+    { name: "ineligible PR", response: { ...pr, draft: true }, status: 0 },
+  ])("does not complete preparation after $name", ({ response, status }) => {
+    const result = evaluate({ [`GET ${pullPath}`]: response }, "prepare");
+    expect(result.status, result.stderr).toBe(status);
+    expect(result.output).not.toContain("completed=true");
+    expect(result.combined).not.toContain("success");
+  });
+
+  it("shares notice inventories between both guards without sharing approval authority", () => {
+    const result = evaluate();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.combined.at(-1)).toBe("success");
+    for (const inventory of ["comments", "labels"]) {
+      expect(
+        result.requests.filter(
+          (entry) =>
+            entry.method === "GET" &&
+            entry.path === `/repos/openclaw/openclaw/issues/7/${inventory}`,
+        ),
+      ).toHaveLength(1);
+    }
+    expect(
+      result.requests.filter((entry) => entry.method === "GET" && entry.path === rolePath.slice(4))
+        .length,
+    ).toBeGreaterThan(1);
+  });
+
   it.each([
     {
       name: "fetch deadline",

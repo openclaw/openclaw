@@ -1,7 +1,8 @@
+import { mapAssistantMessageStream } from "../../llm/utils/stream-wrapper.js";
 import { decodeHtmlEntities } from "../../shared/html-entities.js";
 import { visitObjectContentBlocks } from "../../shared/message-content-blocks.js";
 import type { StreamFn } from "../runtime/index.js";
-import { mapAssistantMessageStream, wrapStreamObjectEvents } from "./run/stream-wrapper.js";
+import { wrapStreamObjectEvents } from "./run/stream-wrapper.js";
 
 function decodeHtmlEntitiesInObject(value: unknown): unknown {
   if (typeof value === "string") {

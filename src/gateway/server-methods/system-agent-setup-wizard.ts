@@ -189,6 +189,7 @@ export async function startSetupActivationWizard(params: {
           }
           runnerSession.setModelActivation({
             modelRef: result.modelRef,
+            ...(result.modelName ? { modelName: result.modelName } : {}),
             ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
             ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
           });

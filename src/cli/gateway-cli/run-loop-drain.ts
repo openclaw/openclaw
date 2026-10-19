@@ -107,8 +107,8 @@ export async function drainGatewayActiveWork({
         logger.warn(
           `gateway active-work drain timeout reached; proceeding with shutdown: ${formatGatewayDrainCounts(activeWorkDrain.snapshot)}`,
         );
-        runtime.abortEmbeddedAgentRun(undefined, { mode: "all" });
-        runtime.abortActiveCronTaskRuns("Gateway stopping.");
+        // The server shutdown owner records task custody before canceling runs.
+        runtime.abortActiveCronTaskRuns();
       }
     } catch (err) {
       logger.warn(
@@ -126,7 +126,7 @@ function createGatewayDrainReporter(
   drainTimeoutMs: number | undefined,
   runtime: Pick<
     typeof import("./lifecycle.runtime.js"),
-    "listActiveEmbeddedRunSessionIds" | "getDiagnosticSessionActivitySnapshot"
+    "listActiveSessionRunIds" | "getDiagnosticSessionActivitySnapshot"
   >,
   logger: Pick<SubsystemLogger, "info" | "warn">,
   recordCounts: (counts: string) => void,
@@ -150,7 +150,7 @@ function createGatewayDrainReporter(
         const requestTimeoutMs = Math.max(
           0,
           ...runtime
-            .listActiveEmbeddedRunSessionIds()
+            .listActiveSessionRunIds()
             .map(
               (sessionId) =>
                 runtime.getDiagnosticSessionActivitySnapshot({ sessionId })

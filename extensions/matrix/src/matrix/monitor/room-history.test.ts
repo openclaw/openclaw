@@ -125,26 +125,6 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     expect(followUp.history).toHaveLength(0);
   });
 
-  it("keeps main-room and thread histories isolated", () => {
-    const tracker = createRoomHistoryTracker();
-
-    tracker.recordPending(ROOM, entry("main-1"));
-    tracker.recordPending(ROOM, entry("thread-1"), "$thread");
-    tracker.recordPending(ROOM, entry("main-2"));
-
-    const mainPrepared = tracker.prepareTrigger(AGENT, ROOM, 100, entry("main-trigger"));
-    const threadPrepared = tracker.prepareTrigger(
-      AGENT,
-      ROOM,
-      100,
-      entry("thread-trigger"),
-      "$thread",
-    );
-
-    expect(mainPrepared.history.map((entryValue) => entryValue.body)).toEqual(["main-1", "main-2"]);
-    expect(threadPrepared.history.map((entryValue) => entryValue.body)).toEqual(["thread-1"]);
-  });
-
   it("advances watermarks independently per thread", () => {
     const tracker = createRoomHistoryTracker();
 

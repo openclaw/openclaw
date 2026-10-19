@@ -2,12 +2,19 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { ConfigSnapshotReadMeasure, ConfigSnapshotReadOptions } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { assertDatabasePortStartupAllowed } from "../infra/database-port-recovery.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { RetiredStateFormatError } from "../infra/state-migrations.retired-files.js";
 import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
-import type { PluginCache } from "../plugins/plugin-cache.js";
+import {
+  getPluginCache,
+  getPluginMetadataSnapshotCache,
+  withPluginCache,
+  type PluginCache,
+} from "../plugins/plugin-cache.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
   readAdmittedConfigSnapshot,
@@ -175,7 +182,22 @@ async function prepareStartupConfig(
         return result(read);
       }
     }
-    const { HISTORICAL_WEBHOOK_CHANNELS, recordUnwrittenWebhookCompletion } =
+    const [{ initializeNativeOpenClawStateDatabase }, { isStatePostgres }] = await Promise.all([
+      import("../state/openclaw-state-db.js"),
+      import("../state/openclaw-state-db-engine.js"),
+    ]);
+    await beforeStatePreparation(read.snapshot);
+    assertLeaseCurrent();
+    // Native clients can create a version-zero catalog before the first Gateway.
+    // Finish that producer's bootstrap after read admission releases its snapshot,
+    // before webhook history or other runtime tables are consumed.
+    if (!isStatePostgres()) {
+      initializeNativeOpenClawStateDatabase({ env });
+      const { initializeFreshDaemonRuntimePinMigration } =
+        await import("../infra/state-migrations.daemon-runtime-pins.js");
+      initializeFreshDaemonRuntimePinMigration(env);
+    }
+    const { HISTORICAL_WEBHOOK_CHANNELS, prepareUnwrittenWebhookCompletion } =
       await import("./doctor/shared/legacy-webhook-pins.js");
     const webhookCompletion = read.snapshot.sourceConfig.meta?.migrations?.webhookListeners;
     if (
@@ -185,14 +207,17 @@ async function prepareStartupConfig(
       const migration = await measureDoctorConfigPreflightStep("webhook-readiness", async () => {
         const { applyPluginDoctorCompatibilityMigrations } =
           await import("../plugins/doctor-contract-registry.js");
-        return applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
-          config: read.snapshot.sourceConfig,
-          env,
-          manifestRegistry: read.pluginMetadataSnapshot?.manifestRegistry,
-          pluginIds: HISTORICAL_WEBHOOK_CHANNELS,
-          historicalWebhookListeners: true,
-          startup: true,
-        });
+        // Legacy compatibility inspection is synchronous boot admission, before runtime starts.
+        return withEngineStoreAdmission(() =>
+          applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
+            config: read.snapshot.sourceConfig,
+            env,
+            manifestRegistry: read.pluginMetadataSnapshot?.manifestRegistry,
+            pluginIds: HISTORICAL_WEBHOOK_CHANNELS,
+            historicalWebhookListeners: true,
+            startup: true,
+          }),
+        );
       });
       if (migration.warnings?.length) {
         throw new Error(migration.warnings.join("\n"));
@@ -200,7 +225,8 @@ async function prepareStartupConfig(
       if (migration.changes.length) {
         await beforeStatePreparation(read.snapshot);
         assertLeaseCurrent();
-        if (!recordUnwrittenWebhookCompletion(read.snapshot, migration, env)) {
+        const completion = prepareUnwrittenWebhookCompletion(read.snapshot, migration, env);
+        if (!completion) {
           const { StartupMaintenanceRequiredError } =
             await import("../infra/startup-maintenance-required.js");
           throw new StartupMaintenanceRequiredError(
@@ -208,13 +234,17 @@ async function prepareStartupConfig(
             `Webhook listeners require config migration. Run \`openclaw doctor --fix\`, then restart. Startup left the config unchanged.\n${migration.changes.join("\n")}`,
           );
         }
+        const { writeConfigMachineStateAsync } =
+          await import("../state/config-machine-state-async.js");
+        await writeConfigMachineStateAsync(completion.key, completion.value, { env });
       }
     }
-    const verification = await refreshStartupPluginQuarantine({
-      cfg: read.snapshot.sourceConfig,
-      env,
-      measure,
-    });
+    const verification = await withPluginCache(
+      read.pluginMetadataSnapshot
+        ? getPluginMetadataSnapshotCache(read.pluginMetadataSnapshot)
+        : getPluginCache(),
+      () => refreshStartupPluginQuarantine({ cfg: read.snapshot.sourceConfig, env, measure }),
+    );
     setActiveDegradedPlugins(verification.quarantinedPlugins);
     recordStartupMigrationWarnings([
       ...readStartupStateWarnings(env),
@@ -238,7 +268,9 @@ async function prepareStartupConfig(
 }
 
 function result(read: ConfigPreflightSnapshotRead) {
+  const selection = read.databaseEngineSelection ?? getDatabaseEngineSelection();
   return {
+    ...(selection ? { databaseEngineSelection: selection } : {}),
     snapshot: read.snapshot,
     baseConfig: read.snapshot.sourceConfig,
     ...(read.pluginMetadataSnapshot ? { pluginMetadataSnapshot: read.pluginMetadataSnapshot } : {}),

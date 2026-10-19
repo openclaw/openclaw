@@ -5,7 +5,6 @@ import { withEnv, withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { resolveA2aChannelAccount } from "./accounts.js";
 import { a2aChannelPlugin } from "./channel.js";
-import { a2aChannelStatus } from "./status.js";
 
 const PLACEHOLDER = "${OPENCLAW_A2A_TEST_UNSET_INBOUND}";
 
@@ -52,16 +51,16 @@ describe("A2A account credential resolution", () => {
 
       const account = resolveA2aChannelAccount({ cfg });
       expect(account.unresolvedPeers).toEqual(["lost"]);
-      const withheld = await a2aChannelStatus.buildAccountSnapshot?.({ account, cfg });
+      const withheld = await a2aChannelPlugin.status?.buildAccountSnapshot?.({ account, cfg });
       expect(withheld).toMatchObject({ peerCount: 1, unresolvedPeers: ["lost"] });
       // The adapter must hand these snapshots to the collector so `channels status` warns.
-      expect(a2aChannelStatus.collectStatusIssues).toBeTypeOf("function");
-      const issues = a2aChannelStatus.collectStatusIssues?.([
+      expect(a2aChannelPlugin.status?.collectStatusIssues).toBeTypeOf("function");
+      const issues = a2aChannelPlugin.status?.collectStatusIssues?.([
         { accountId: "default", enabled: true, configured: true, ...withheld },
       ]);
       expect(issues?.[0]?.message).toContain("lost");
 
-      const clean = await a2aChannelStatus.buildAccountSnapshot?.({
+      const clean = await a2aChannelPlugin.status?.buildAccountSnapshot?.({
         account: resolveA2aChannelAccount({
           cfg: { channels: { a2a: { peers: { good: { token: "inline-secret" } } } } },
         }),

@@ -4,12 +4,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import {
-  adjustTextareaHeight,
-  disconnectTextareaOverflowObserver,
-  observeTextareaOverflow,
-} from "./chat-composer-dom.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import {
   initializeQuestionDrafts,
   questionDraftValues,
@@ -26,9 +21,9 @@ import type {
 type PanelBridgeProps = { props?: QuestionPanelProps };
 export type ChatQuestionPanel = SolidBridgeElement<PanelBridgeProps>;
 
-function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQuestionPanel }) {
+function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
+  // The keyed request retains its initial draft model until request replacement.
   const initialModel = untrack(() => props.panel.model);
-  const host = untrack(() => props.host);
   initializeQuestionDrafts(initialModel.questions, initialModel.drafts);
   const [currentQuestionIndex, setCurrentQuestionIndex] = createSignal(0);
   const [uncontrolledCollapsed, setUncontrolledCollapsed] = createSignal(initialModel.collapsed);
@@ -36,8 +31,14 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
   const [pendingKind, setPendingKind] = createSignal<"submit" | "skip" | null>(null);
   let resolving = false;
   let live = true;
-  let answerTextarea: HTMLTextAreaElement | null = null;
-  let measuredAnswer: string | null = null;
+  let panel: HTMLElement | undefined;
+  let answerControl: HTMLInputElement | HTMLTextAreaElement | undefined;
+  let hostsInput: HTMLInputElement | undefined;
+  const options = new Set<HTMLButtonElement>();
+  const optionAt = (index: number) =>
+    Array.from(options).find(
+      (option) => option.isConnected && Number(option.dataset.optionIndex) === index,
+    );
   const model = () => props.panel.model;
   const collapsed = () =>
     props.panel.onCollapsedChange ? model().collapsed : uncontrolledCollapsed();
@@ -54,43 +55,19 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
     const item = question();
     return item && (item.allowEmpty || answerValues(model(), item).length > 0);
   };
-  const focusPanel = () =>
-    host.querySelector<HTMLElement>(".chat-question-panel")?.focus({ preventScroll: true });
   const focusTarget = createMemo(() => [collapsed(), currentQuestionIndex()] as const, {
     equals: (previous, next) => previous[0] === next[0] && previous[1] === next[1],
   });
   let initialFocus = true;
+  // Question navigation moves browser focus to the newly presented panel.
   createEffect(focusTarget, ([isCollapsed]) => {
     if (!isCollapsed && (!initialFocus || initialModel.autoFocus !== false)) {
-      focusPanel();
+      panel?.focus({ preventScroll: true });
     }
     initialFocus = false;
   });
-  createEffect(
-    () => [draft(), currentQuestionIndex(), collapsed()] as const,
-    () => {
-      const textarea = host.querySelector<HTMLTextAreaElement>(".chat-question-panel__textarea");
-      if (answerTextarea !== textarea) {
-        if (answerTextarea) {
-          disconnectTextareaOverflowObserver(answerTextarea);
-        }
-        answerTextarea = textarea;
-        measuredAnswer = null;
-        if (textarea) {
-          observeTextareaOverflow(textarea);
-        }
-      }
-      if (textarea && measuredAnswer !== textarea.value) {
-        adjustTextareaHeight(textarea);
-        measuredAnswer = textarea.value;
-      }
-    },
-  );
   onCleanup(() => {
     live = false;
-    if (answerTextarea) {
-      disconnectTextareaOverflowObserver(answerTextarea);
-    }
   });
   const setCollapsed = (value: boolean) => {
     if (props.panel.onCollapsedChange) {
@@ -179,24 +156,34 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
     if (disabled() || event.isComposing || event.keyCode === 229) {
       return;
     }
-    if (event.target instanceof HTMLTextAreaElement) {
-      if (
-        event.key === "Enter" &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.altKey &&
-        !event.shiftKey &&
-        (item.allowEmpty || answerValues(model(), item).length > 0)
-      ) {
-        event.preventDefault();
-        advanceOrSubmit(item);
-      }
+    // Links and file pickers retain native activation instead of submitting answers.
+    if (
+      event.target instanceof HTMLAnchorElement ||
+      (event.target instanceof HTMLInputElement && event.target.type === "file")
+    ) {
       return;
     }
     if (
+      event.key === "Enter" &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
+      !event.shiftKey &&
+      (event.target === event.currentTarget ||
+        event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement ||
+        (event.target instanceof HTMLButtonElement &&
+          ["radio", "checkbox"].includes(event.target.getAttribute("role") ?? ""))) &&
+      (item.allowEmpty || answerValues(model(), item).length > 0)
+    ) {
+      event.preventDefault();
+      advanceOrSubmit(item);
+      return;
+    }
+    if (
+      event.target instanceof HTMLTextAreaElement ||
       event.metaKey ||
       event.ctrlKey ||
-      event.altKey ||
-      event.target instanceof HTMLAnchorElement
+      event.altKey
     ) {
       return;
     }
@@ -231,17 +218,11 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
       }
       toggleOption(item, option.value ?? option.label, false);
       // The same option node survives selection; focus need not wait for rendering.
-      props.host
-        .querySelector<HTMLButtonElement>(
-          `.chat-question-panel__option[data-option-index="${next}"]`,
-        )
-        ?.focus({ preventScroll: true });
+      optionAt(next)?.focus({ preventScroll: true });
       return;
     }
     const index = Number(event.key) - 1;
-    const option = host.querySelector<HTMLButtonElement>(
-      `.chat-question-panel__option[data-option-index="${index}"]`,
-    );
+    const option = optionAt(index);
     if (index >= 0 && index < 9 && option) {
       event.preventDefault();
       option.click();
@@ -255,8 +236,8 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
       index === item.options.length
     ) {
       event.preventDefault();
-      props.host
-        .querySelector<HTMLInputElement | HTMLTextAreaElement>(".chat-question-panel__other")
+      [hostsInput, answerControl]
+        .find((element) => element?.isConnected)
         ?.focus({ preventScroll: true });
     }
   };
@@ -302,6 +283,24 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
     </button>
   );
   const progress = () => `${currentQuestionIndex() + 1}/${model().questions.length}`;
+  const skipLabel = () =>
+    t(
+      model().nonBlocking
+        ? pendingKind() === "skip"
+          ? "chat.asyncQuestions.dismissing"
+          : "chat.asyncQuestions.dismiss"
+        : pendingKind() === "skip"
+          ? "chat.questions.skipping"
+          : "chat.questions.skip",
+    );
+  const advanceLabel = () =>
+    t(
+      pendingKind() === "submit" || model().submitting
+        ? "chat.questions.submitting"
+        : currentQuestionIndex() === model().questions.length - 1
+          ? "chat.questions.submit"
+          : "chat.questions.next",
+    );
   return (
     <Show when={question()}>
       {(item) => (
@@ -340,6 +339,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
           ) : (
             <section
               class="chat-question-panel"
+              ref={(element) => (panel = element)}
               role="group"
               aria-label={model().title}
               tabindex={0}
@@ -391,6 +391,12 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
                 selected={draft()?.selected ?? new Set()}
                 disabled={disabled()}
                 onSelect={(value) => toggleOption(item(), value)}
+                optionRef={(element) => {
+                  options.add(element);
+                  return () => {
+                    options.delete(element);
+                  };
+                }}
               />
               {item().secretStore && (
                 <div class="chat-question-panel__store">
@@ -436,6 +442,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
                     <label class="chat-question-panel__store-hosts">
                       <span>{t("secretsStore.allowedHosts")}</span>
                       <input
+                        ref={(element) => (hostsInput = element)}
                         class="chat-question-panel__other chat-question-panel__hosts"
                         type="text"
                         autocomplete="off"
@@ -464,6 +471,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
                 )}
                 disabled={disabled()}
                 onInput={(value) => setFreeText(item(), value)}
+                inputRef={(element) => (answerControl = element)}
               />
               {item().resource && (
                 <ChatQuestionResource
@@ -507,34 +515,12 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
                   />
                 )}
                 {props.panel.onSkip && (
-                  <Action
-                    name="skip"
-                    label={
-                      pendingKind() === "skip"
-                        ? t(
-                            model().nonBlocking
-                              ? "chat.asyncQuestions.dismissing"
-                              : "chat.questions.skipping",
-                          )
-                        : t(
-                            model().nonBlocking
-                              ? "chat.asyncQuestions.dismiss"
-                              : "chat.questions.skip",
-                          )
-                    }
-                    onClick={() => void resolve("skip")}
-                  />
+                  <Action name="skip" label={skipLabel()} onClick={() => void resolve("skip")} />
                 )}
                 {
                   <Action
                     name="advance"
-                    label={
-                      pendingKind() === "submit" || model().submitting
-                        ? t("chat.questions.submitting")
-                        : currentQuestionIndex() === model().questions.length - 1
-                          ? t("chat.questions.submit")
-                          : t("chat.questions.next")
-                    }
+                    label={advanceLabel()}
                     onClick={() => advanceOrSubmit(item())}
                     unavailable={!canAdvance() || !props.panel.onSubmit}
                   />
@@ -550,13 +536,13 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
 
 export const ChatQuestionPanel = defineSolidBridge<PanelBridgeProps>(
   "openclaw-chat-question-panel",
-  (props, host) => {
+  (props) => {
     const request = createMemo(() => (props.props ? { key: props.props.model.requestKey } : null), {
       equals: (previous, next) => previous?.key === next?.key,
     });
     return (
       <Show when={request()} keyed>
-        {(_request) => <QuestionPanelRequest panel={props.props!} host={host} />}
+        {(_request) => <QuestionPanelRequest panel={props.props!} />}
       </Show>
     );
   },

@@ -6,8 +6,7 @@ import {
   ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
-  type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js";
@@ -48,10 +47,7 @@ export function resolveMcpAppRequesterId(
   );
 }
 
-export type McpAppActiveView = {
-  runtime: SessionMcpRuntime;
-  view: McpAppViewLease;
-};
+export type McpAppActiveView = NonNullable<Awaited<ReturnType<typeof restoreMcpAppView>>>;
 
 export class McpAppViewExpiredError extends Error {
   constructor() {
@@ -80,7 +76,7 @@ function isAppCallableTool(
   );
 }
 
-function isAppCallableListedTool(tool: Tool): boolean {
+function isAppCallableListedTool(tool: { _meta?: Record<string, unknown> }): boolean {
   const visibility = asOptionalRecord(tool._meta?.ui)?.visibility;
   return !Array.isArray(visibility) || visibility.includes("app");
 }

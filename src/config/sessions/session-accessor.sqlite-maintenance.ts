@@ -18,7 +18,13 @@ import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-lifecy
 import type {
   SessionEntryMaintenancePlan,
   SessionEntryMaintenanceResult,
+  SqliteSessionReclamationPlan,
+  SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
+import {
+  capturePendingSessionMaintenanceAgeChanges,
+  type SessionEntryMaintenanceAgeChange,
+} from "./session-accessor.sqlite-maintenance-age.js";
 import {
   applySessionEntryMaintenanceInDatabase,
   emptySessionEntryMaintenancePlan,
@@ -57,6 +63,53 @@ const SESSION_TRANSCRIPT_BYTE_QUERY_BATCH = MAX_SESSION_MAINTENANCE_BATCH_ENTRIE
 // cleanups must not pay the measured synchronous full-database analysis cost.
 const SESSION_PLANNER_ANALYSIS_MIN_DELETED_ENTRIES = MAX_SESSION_MAINTENANCE_BATCH_ENTRIES;
 const plannerMaintenanceByStore = new Map<string, Promise<void>>();
+
+export function releaseSessionEntryMaintenanceExecution(
+  databasePath: string,
+  owner: { execution?: OpenClawAgentDatabaseExecution; release?: Promise<void> },
+): void {
+  if (!owner.execution) {
+    return;
+  }
+  const released = owner.execution.release();
+  owner.release = owner.release
+    ? Promise.all([owner.release, released]).then(() => undefined)
+    : released;
+  owner.execution = undefined;
+  void owner.release.catch((error: unknown) =>
+    getChildLogger({ subsystem: "session-sqlite" }).warn(
+      "SQLite automatic maintenance could not release its executor",
+      { error, path: databasePath },
+    ),
+  );
+}
+
+export async function readSessionEntryMaintenanceAgeAfterWriterRelease(
+  params: Pick<
+    Extract<SqliteSessionReclamationPlan, { kind: "maintenance-age" }>,
+    "databaseOptions" | "maintenance"
+  > & {
+    ageChanges: Map<string, SessionEntryMaintenanceAgeChange>;
+    assertCurrent: () => void;
+  },
+): Promise<
+  Extract<SqliteSessionReclamationResult, { kind: "maintenance-age" | "maintenance-plan-stale" }>
+> {
+  const pending = capturePendingSessionMaintenanceAgeChanges(params.ageChanges);
+  const result = await runSqliteSessionReclamation({
+    diagnostics: { kind: "maintenance-age" },
+    assertCommitAllowed: params.assertCurrent,
+    plan: {
+      kind: "maintenance-age",
+      databaseOptions: params.databaseOptions,
+      materializedPlans: [],
+      maintenance: params.maintenance,
+      ageChanges: pending.changes,
+    },
+  });
+  pending.acknowledge();
+  return result;
+}
 
 /** Coalesce bounded planner-statistics refreshes behind the per-store writer lane. */
 export async function refreshSqliteSessionPlannerStatisticsBestEffort(
@@ -177,18 +230,16 @@ function buildSessionMaintenanceBatches(params: {
     }
   }
 
-  const groupsByRoot = new Map<number, SessionMaintenanceBatch & { order: number }>();
+  const groupsByRoot = new Map<number, SessionMaintenanceBatch>();
   for (const [index, removal] of params.entryRemovals.entries()) {
     const root = find(index);
     const group = groupsByRoot.get(root) ?? {
       archiveBytes: 0,
       entryRemovals: [],
-      order: index,
       stateDeletePlans: [],
       workItems: 0,
     };
     group.entryRemovals.push(removal);
-    group.order = Math.min(group.order, index);
     groupsByRoot.set(root, group);
   }
 
@@ -198,8 +249,7 @@ function buildSessionMaintenanceBatches(params: {
     plans.push(plan);
     plansBySessionId.set(plan.sessionId, plans);
   }
-  const standaloneGroups: Array<SessionMaintenanceBatch & { order: number }> = [];
-  let standaloneOrder = params.entryRemovals.length;
+  const standaloneGroups: SessionMaintenanceBatch[] = [];
   for (const [sessionId, plans] of plansBySessionId) {
     const removalIndex = removalIndexBySessionId.get(sessionId);
     const removalGroup =
@@ -207,7 +257,6 @@ function buildSessionMaintenanceBatches(params: {
     const group = removalGroup ?? {
       archiveBytes: 0,
       entryRemovals: [],
-      order: standaloneOrder++,
       stateDeletePlans: [],
       workItems: 0,
     };
@@ -220,15 +269,7 @@ function buildSessionMaintenanceBatches(params: {
     }
   }
 
-  const groups = [...groupsByRoot.values(), ...standaloneGroups]
-    .map((group) => {
-      group.workItems = Math.max(
-        group.entryRemovals.length,
-        new Set(group.stateDeletePlans.map((plan) => plan.sessionId)).size,
-      );
-      return group;
-    })
-    .toSorted((left, right) => left.order - right.order);
+  const groups = [...groupsByRoot.values(), ...standaloneGroups];
   const batches: SessionMaintenanceBatch[] = [];
   let batch: SessionMaintenanceBatch = {
     archiveBytes: 0,
@@ -246,6 +287,10 @@ function buildSessionMaintenanceBatches(params: {
   // Limits apply between ownership groups. One inseparable group may exceed them so shared or
   // historical session state is never deleted in a different transaction from its last owner.
   for (const group of groups) {
+    group.workItems = Math.max(
+      group.entryRemovals.length,
+      new Set(group.stateDeletePlans.map((plan) => plan.sessionId)).size,
+    );
     const exceedsEntryLimit =
       batch.workItems > 0 &&
       batch.workItems + group.workItems > MAX_SESSION_MAINTENANCE_BATCH_ENTRIES;
@@ -576,9 +621,6 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
               });
         },
       );
-      if (result.kind !== "maintenance-finalize") {
-        throw new Error("SQLite maintenance returned another operation's result");
-      }
       archivedTranscripts = result.value.archivedTranscripts;
       const committedIndices = new Set(result.value.committedEntryIndices);
       changedEntryRemovals = removalOutcomes.filter((_, index) => !committedIndices.has(index));

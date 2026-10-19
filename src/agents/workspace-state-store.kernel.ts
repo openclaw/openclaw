@@ -11,6 +11,7 @@ import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { resolveUserPath } from "../utils.js";
+import { chunkItems } from "../utils/chunk-items.js";
 import {
   createWorkspaceStateIdentity,
   resolveWorkspaceStateAliases,
@@ -169,42 +170,53 @@ export function registerWorkspaceStateAliasIdentitiesInTransaction(params: {
 }): void {
   assertCanonicalIntegerTimestamp(params.updatedAtMs, "path alias update");
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db);
-  for (const alias of params.aliases) {
-    const existing = executeSqliteQueryTakeFirstSync(
+  for (const aliases of chunkItems(params.aliases, 64)) {
+    const existingRows = executeSqliteQuerySync(
       params.database.db,
       kysely
         .selectFrom("workspace_path_aliases")
         .selectAll()
-        .where("alias_key", "=", alias.workspaceKey),
-    );
-    if (existing) {
-      if (
-        existing.alias_path !== alias.workspacePath ||
-        existing.workspace_key !== params.identity.workspaceKey ||
-        existing.workspace_path !== params.identity.workspacePath
-      ) {
-        throw new Error("workspace path alias conflicts with canonical state");
+        .where(
+          "alias_key",
+          "in",
+          aliases.map((alias) => alias.workspaceKey),
+        ),
+    ).rows;
+    const existingByKey = new Map(existingRows.map((row) => [row.alias_key, row]));
+    const missing: typeof existingRows = [];
+    for (const alias of aliases) {
+      const existing = existingByKey.get(alias.workspaceKey);
+      if (existing) {
+        if (
+          existing.alias_path !== alias.workspacePath ||
+          existing.workspace_key !== params.identity.workspaceKey ||
+          existing.workspace_path !== params.identity.workspacePath
+        ) {
+          throw new Error("workspace path alias conflicts with canonical state");
+        }
+        continue;
       }
+      const row = {
+        alias_key: alias.workspaceKey,
+        alias_path: alias.workspacePath,
+        workspace_key: params.identity.workspaceKey,
+        workspace_path: params.identity.workspacePath,
+        updated_at_ms: params.updatedAtMs,
+      };
+      missing.push(row);
+      existingByKey.set(row.alias_key, row);
+    }
+    if (missing.length === 0) {
       continue;
     }
-    const inserted = executeSqliteQueryTakeFirstSync(
+    const inserted = executeSqliteQuerySync(
       params.database.db,
-      kysely
-        .insertInto("workspace_path_aliases")
-        .values({
-          alias_key: alias.workspaceKey,
-          alias_path: alias.workspacePath,
-          workspace_key: params.identity.workspaceKey,
-          workspace_path: params.identity.workspacePath,
-          updated_at_ms: params.updatedAtMs,
-        })
-        .returningAll(),
+      kysely.insertInto("workspace_path_aliases").values(missing).returningAll(),
+    ).rows;
+    workspaceStatePublication.stagePostimages(
+      params.database.db,
+      inserted.map((row) => ({ kind: "alias", row })),
     );
-    if (inserted) {
-      workspaceStatePublication.stagePostimages(params.database.db, [
-        { kind: "alias", row: inserted },
-      ]);
-    }
   }
 }
 
@@ -345,7 +357,6 @@ export function replaceWorkspaceAttestationInDatabase(
   // Capture the comparison clock only after BEGIN IMMEDIATE acquires the
   // writer lock, so a newer committed row cannot look future-dated.
   const updatedAtMs = params.nowMs ?? Date.now();
-  assertCanonicalIntegerTimestamp(updatedAtMs, "attestation update");
   const resolution = resolveWorkspaceIdentityFromDatabase({
     workspaceDir: params.workspaceDir,
     database,

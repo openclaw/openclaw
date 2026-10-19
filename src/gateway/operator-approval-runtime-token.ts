@@ -1,4 +1,3 @@
-// Operator approval runtime token.
 // Uses an existing shared socket token when available, with a process-local fallback.
 import { createHmac, randomBytes } from "node:crypto";
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";

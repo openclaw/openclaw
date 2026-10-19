@@ -38,6 +38,9 @@ it("rebuilds only changed automation bindings and preserves complete unrelated r
         .map((row) => projection.present(row, { now: 1 }));
     try {
       await projection.ensureMaterialized();
+      for (const key of keys) {
+        projection.describe({ agentId: "main", key });
+      }
       const before = snapshot();
       const databaseReads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
       const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
@@ -108,6 +111,7 @@ it("keeps automation aliases scoped to their logical agent in a shared store", a
     const projection = await createSessionRowProjection({ cfg });
     try {
       await projection.ensureMaterialized();
+      projection.describe({ agentId: "main", key: "global", storePath });
       const work = projection.describe({ agentId: "work", key: "global", storePath });
       const count = projection.materializedCount;
       binding.enabled = false;

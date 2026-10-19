@@ -26,6 +26,10 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
+// mock-isolation: Process lifecycle tests use synthetic destinations; durable notification behavior has its own owner suite.
+vi.mock("../config/sessions/session-accessor.sqlite-entry.js", () => ({
+  patchSessionEntryCore: async () => null,
+}));
 const enqueueSessionEventMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({ spawn: vi.fn() }));

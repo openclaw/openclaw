@@ -200,7 +200,7 @@ it("refreshes time-sensitive subagent reads while retaining unchanged ancestor m
 });
 
 it("patches list facts after keyed publications without rebuilding for progress-only updates", () => {
-  const run = createSubagentRunRecord({
+  let run = createSubagentRunRecord({
     runId: "changed",
     childSessionKey: child,
     requesterSessionKey: parent,
@@ -209,12 +209,17 @@ it("patches list facts after keyed publications without rebuilding for progress-
   const builds = vi.spyOn(registryRead, "buildSubagentSessionListReadIndex");
   const { context, prepare } = fixture();
   const initialRevision = context.materializedRevisions.subagentRevision;
+  const initialRun = run;
   for (let update = 0; update < 100; update++) {
-    run.requesterSettleWake = {
-      status: "pending",
-      attemptCount: 0,
-      progressOperationId: `progress-${update}`,
+    run = {
+      ...initialRun,
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        progressOperationId: `progress-${update}`,
+      },
     };
+    subagentRuns.set(run.runId, run);
     subagentRuns.commitOwnership(run);
     prepare(update + 1);
   }
@@ -222,7 +227,11 @@ it("patches list facts after keyed publications without rebuilding for progress-
   expect(builds).toHaveBeenCalledTimes(1);
   expect(context.current.subagentRuns.countActiveDescendantRuns(parent)).toBe(1);
 
-  run.execution = { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } };
+  run = {
+    ...run,
+    execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
+  };
+  subagentRuns.set(run.runId, run);
   subagentRuns.commitOwnership(run);
   prepare(101);
   expect(context.current.subagentRuns.getDisplaySubagentRun(child)?.execution.status).toBe(

@@ -30,14 +30,13 @@ export async function readRetiredDeferredPluginMigrationWarnings(
     (await readDeferredPluginMigrationsAsync()).map(({ pluginId }) => pluginId),
   );
   return new Set(
-    [...pluginWarnings]
-      .filter(
-        ([message, pluginId]) =>
-          !pending.has(pluginId) ||
-          latestByPlugin.get(pluginId) !== message ||
-          finallyReportedPluginIds.has(pluginId),
-      )
-      .map(([message]) => message),
+    [...pluginWarnings].flatMap(([message, pluginId]) =>
+      !pending.has(pluginId) ||
+      latestByPlugin.get(pluginId) !== message ||
+      finallyReportedPluginIds.has(pluginId)
+        ? [message]
+        : [],
+    ),
   );
 }
 
@@ -48,9 +47,11 @@ export async function readRetiredDeferredPluginMigrationWarnings(
  */
 export async function retainCurrentDeferredPluginMigrationWarnings(
   warnings: readonly string[],
+  finallyReportedPluginIds: ReadonlySet<string> = new Set(),
 ): Promise<string[]> {
-  const retired = await readRetiredDeferredPluginMigrationWarnings(warnings).catch(
-    () => new Set<string>(),
-  );
+  const retired = await readRetiredDeferredPluginMigrationWarnings(
+    warnings,
+    finallyReportedPluginIds,
+  ).catch(() => new Set<string>());
   return warnings.filter((warning) => !retired.has(warning));
 }

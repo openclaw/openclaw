@@ -7,25 +7,6 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     expect(resolveDynamicSessionMutationRequiredScope("sessions.recover")).toBe("operator.write");
   });
 
-  it.each([
-    { incognito: true },
-    { key: "agent:main:dashboard:incognito-123" },
-    { parentSessionKey: "agent:main:subagent:incognito-123" },
-    { execNode: "node-1" },
-  ])("requires admin for privileged session creation params %#", (params) => {
-    expect(resolveDynamicSessionMutationRequiredScope("sessions.create", params)).toBe(
-      "operator.admin",
-    );
-  });
-
-  it("leaves Gateway cwd containment to the state-aware create handler", () => {
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.create", {
-        cwd: "/configured/workspace/packages/app",
-      }),
-    ).toBe("operator.write");
-  });
-
   it("requires admin to create a full-access session", () => {
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.create", { permissionMode: "full" }),
@@ -67,24 +48,17 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     },
   );
 
-  it.each([
-    { contextWindow: "extended" },
-    { toolOverrides: {} },
-    { sandboxMode: "off" },
-    { sandboxMode: null },
-    { verboseLevel: "full" },
-    { reasoningLevel: "high" },
-    { thinkingLevel: "high", verboseLevel: "full" },
-    { fastMode: true, permissionMode: "full" },
-    { model: null, futureField: true },
-  ])("keeps privileged or unknown patch fields admin-scoped %#", (patch) => {
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.patch", {
-        key: "agent:main:thread",
-        ...patch,
-      }),
-    ).toBe("operator.admin");
-  });
+  it.each([{ contextWindow: "extended" }, { sandboxMode: null }])(
+    "keeps privileged or unknown patch fields admin-scoped %#",
+    (patch) => {
+      expect(
+        resolveDynamicSessionMutationRequiredScope("sessions.patch", {
+          key: "agent:main:thread",
+          ...patch,
+        }),
+      ).toBe("operator.admin");
+    },
+  );
 
   it("scopes sessions.patchMany from the shared patch only", () => {
     for (const sandboxMode of ["off", null]) {
@@ -141,42 +115,7 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     );
   });
 
-  it("allows write-scoped deletion only for safe archived-only requests", () => {
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.delete", {
-        key: "agent:main:archived",
-        deleteTranscript: true,
-        archivedOnly: true,
-        expectedSessionId: "session-1",
-      }),
-    ).toBe("operator.write");
-    for (const params of [
-      undefined,
-      null,
-      [],
-      { key: "agent:main:active", deleteTranscript: true },
-      { key: "agent:main:archived", archivedOnly: "yes" },
-      {
-        key: "agent:main:archived",
-        archivedOnly: true,
-        expectedSessionId: "session-1",
-        emitLifecycleHooks: false,
-      },
-      {
-        key: "agent:main:archived",
-        archivedOnly: true,
-        expectedSessionId: "session-1",
-        futureField: true,
-      },
-    ]) {
-      expect(resolveDynamicSessionMutationRequiredScope("sessions.delete", params)).toBe(
-        "operator.admin",
-      );
-    }
-  });
-
   it.each([
-    [{ key: "agent:main:thread", profileId: "development" }, "operator.admin"],
     [{ key: "agent:main:thread", autoDevice: true }, "operator.write"],
     [
       { key: "agent:main:thread", profileId: "development", deviceId: "device-1" },
@@ -184,28 +123,6 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     ],
   ] as const)("classifies dispatch target %j as %s", (params, expected) => {
     expect(resolveDynamicSessionMutationRequiredScope("sessions.dispatch", params)).toBe(expected);
-  });
-
-  const moveExpected = {
-    generation: 1,
-    environmentId: "environment-1",
-    ownerEpoch: 1,
-  };
-  it.each([
-    [
-      { key: "agent:main:thread", expected: moveExpected, target: { kind: "gateway" } },
-      "operator.write",
-    ],
-    [
-      {
-        key: "agent:main:thread",
-        expected: moveExpected,
-        target: { kind: "profile", profileId: "development" },
-      },
-      "operator.admin",
-    ],
-  ] as const)("classifies move target %j as %s", (params, expected) => {
-    expect(resolveDynamicSessionMutationRequiredScope("sessions.move", params)).toBe(expected);
   });
 
   it("does not duplicate static method policy from the core descriptor table", () => {

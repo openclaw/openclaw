@@ -15,7 +15,7 @@ function reserveAndCommit(
 ) {
   const decision = gate.reserveBurst(targetGuildId, nowMs, gateOptions);
   if (decision.allowed) {
-    gate.commitBurst(targetGuildId, decision.reservation, nowMs);
+    gate.commitBurst(decision.reservation, nowMs);
   }
   return decision;
 }
@@ -59,7 +59,7 @@ describe("DiscordPresenceEmissionGate", () => {
       reason: "burst-pending",
     });
 
-    gate.commitBurst(guildId, first.reservation, 12_000);
+    gate.commitBurst(first.reservation, 12_000);
     expect(gate.reserveBurst(guildId, 12_001, burstOptions)).toMatchObject({
       allowed: false,
       reason: "burst",

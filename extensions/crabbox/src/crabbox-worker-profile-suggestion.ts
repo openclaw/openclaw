@@ -4,29 +4,22 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findCrabboxBinary } from "./crabbox-binary.js";
-import { runCrabboxProcess } from "./crabbox-process.js";
-import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import { createCrabboxMachineCatalogResolver } from "./crabbox-worker-machine-options.js";
 import { loadCrabboxConfigShow } from "./crabbox-worker-preflight.js";
 
 const STANDARD_CLASSES = ["tiny", "small", "standard", "fast", "large", "beast"];
 
 export function createCrabboxProfileSuggestionDiscovery(dependencies: {
-  findBinary?: () => string | undefined;
-  runCommand?: CrabboxCommandRunner;
   warn: (message: string) => void;
 }): WorkerProfileSuggestionDiscovery {
-  const runCommand = dependencies.runCommand ?? runCrabboxProcess;
   let cached: Promise<SuggestedWorkerProfile | undefined> | undefined;
 
   const discover = async (): Promise<SuggestedWorkerProfile | undefined> => {
-    const binary = dependencies.findBinary
-      ? dependencies.findBinary()
-      : findCrabboxBinary({ pathEnv: process.env.PATH });
+    const binary = findCrabboxBinary({ pathEnv: process.env.PATH });
     if (!binary) {
       return undefined;
     }
-    const config = await loadCrabboxConfigShow({ binary, runCommand });
+    const config = await loadCrabboxConfigShow({ binary });
     if (!isRecord(config) || config.providerSelected !== true) {
       return undefined;
     }
@@ -52,7 +45,6 @@ export function createCrabboxProfileSuggestionDiscovery(dependencies: {
     }
     const catalog = await createCrabboxMachineCatalogResolver({
       resolveBinary: async () => binary,
-      runCommand,
       warn: dependencies.warn,
     })(provider);
     const machineClass = STANDARD_CLASSES.find((candidate) =>
@@ -72,7 +64,7 @@ export function createCrabboxProfileSuggestionDiscovery(dependencies: {
           provider,
           target: "linux",
           class: machineClass,
-          ttl: "8h",
+          ttl: "4h",
           idleTimeout: "45m",
           warmImage: true,
         },

@@ -190,6 +190,8 @@ export function useTelegramHttpFixture() {
         );
       });
     });
+    // Application-clock jumps must not evict a real HTTP request's peer socket.
+    server.keepAliveTimeout = 0;
     server.on("connection", (socket) => {
       sockets.add(socket);
       socket.on("close", () => sockets.delete(socket));

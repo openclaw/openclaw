@@ -8,6 +8,7 @@ import {
   validateSystemAgentSetupAutoParams,
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
+  validateSystemAgentSetupRuntimeStartParams,
   validateSystemAgentSetupVerifyParams,
 } from "../index.js";
 import {
@@ -117,6 +118,36 @@ describe("OpenClaw interactive activation protocol", () => {
         acceptCapabilities: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("OpenClaw installed runtime setup protocol", () => {
+  it("requires an explicit runtime target and accepts only runtime setup fields", () => {
+    const params = {
+      sessionId: "runtime-consent",
+      agentId: "research",
+      runtimeId: "fixture-native",
+      configPatch: { plugins: { entries: { fixture: { config: { enabled: true } } } } },
+    };
+    expect(validateSystemAgentSetupRuntimeStartParams(params)).toBe(true);
+    const requiredKeys: Array<keyof typeof params> = [
+      "sessionId",
+      "agentId",
+      "runtimeId",
+      "configPatch",
+    ];
+    for (const key of requiredKeys) {
+      const missing: Partial<typeof params> = { ...params };
+      delete missing[key];
+      expect(validateSystemAgentSetupRuntimeStartParams(missing)).toBe(false);
+    }
+    for (const key of ["sessionId", "agentId", "runtimeId"]) {
+      expect(validateSystemAgentSetupRuntimeStartParams({ ...params, [key]: "" })).toBe(false);
+    }
+    expect(validateSystemAgentSetupRuntimeStartParams({ ...params, configPatch: [] })).toBe(false);
+    expect(validateSystemAgentSetupRuntimeStartParams({ ...params, modelRef: "other/model" })).toBe(
+      false,
+    );
   });
 });
 

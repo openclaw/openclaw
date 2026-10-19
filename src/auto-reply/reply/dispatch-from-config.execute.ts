@@ -5,6 +5,7 @@ import {
   isFastModeAutoProgressPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
+import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
@@ -36,6 +37,7 @@ import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
+import { readReplySourceInput, readReplySourcePreparationRetry } from "./reply-source-binding.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
   const {
@@ -72,10 +74,15 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     wrapProgressCallback,
   } = state;
   // Bind at invocation so every public resolver consumes the request generation without widening its Plugin SDK contract.
-  const replyResolver = bindPreparedReplyDispatchRuntime(
+  const preparedReplyResolver = bindPreparedReplyDispatchRuntime(
     params.configOverride ? undefined : state.preparedReplyDispatchRuntime,
     state.replyResolver,
   );
+  const runPreparation = readReplySourcePreparationRetry(readReplySourceInput(params.replyOptions));
+  // Retry before raw resolver work settles so this same turn and FIFO source retain custody.
+  const replyResolver: typeof preparedReplyResolver = runPreparation
+    ? (...args) => runPreparation(() => preparedReplyResolver(...args))
+    : preparedReplyResolver;
   let pendingContinuation = false;
   let pendingContinuationSettlement: PendingContinuationSettlement | undefined;
   let rawLlmResponse: string | undefined;
@@ -199,8 +206,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       await waitForReplyDispatcherIdle(dispatcher, getDispatchAbortSignal());
                     },
                     onVisible: (payload) => {
-                      if (hasOutboundReplyContent(payload, { trimText: true })) {
-                        didDeliverVisiblePartialReply = true;
+                      didDeliverVisiblePartialReply ||= hasOutboundReplyContent(payload, {
+                        trimText: true,
+                      });
+                      if (didDeliverVisiblePartialReply) {
+                        state
+                          .getDispatchReplyOperation()
+                          ?.watchdog.progress("finalization", "reply:partial_delivered");
                       }
                     },
                   }),
@@ -508,8 +520,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       // Adoption retires ingress replay before the model starts. A progress ACK
       // cannot settle a later failure; use normal final delivery and its policy.
       return adopted &&
-        state.replyOperationRunState.replyCompletion?.expectation === "required" &&
-        state.replyOperationRunState.replyCompletion.outcome !== "blocked" &&
+        isRequiredReplyExpectation(state.replyOperationRunState.replyCompletion?.expectation) &&
+        state.replyOperationRunState.replyCompletion?.outcome !== "blocked" &&
         !state.suppressDelivery &&
         !state.getObservedReplyDelivery()
         ? { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }

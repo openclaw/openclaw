@@ -1,98 +1,96 @@
-/**
- * Mutate `MdAst` at an OcPath. Returns a new AST; original unchanged.
- *
- *   oc://FILE/[frontmatter]/key   → frontmatter value
- *   oc://FILE/section/item/field  → item.kv.value
- *
- * Section bodies aren't writable through this primitive.
- *
- * @module @openclaw/oc-path/edit
- */
-
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { AstItem, FrontmatterEntry, MdAst } from "./ast.js";
-import { rebuildMdRaw } from "./emit.js";
+import { isAlias, isNode, parseDocument } from "yaml";
+import type { MdAst } from "./ast.js";
+import { OcPathEditError } from "./edit-error.js";
+import { replaceMdSource } from "./emit.js";
+import { formatFrontmatterValue } from "./frontmatter-format.js";
 import { formatOcPath, type OcPath } from "./oc-path.js";
 import { resolveMdOcPath } from "./resolve.js";
 import { guardSentinel } from "./sentinel.js";
+import { sourceLineEnding, sourceLineOffset } from "./source.js";
 
-type MdEditResult =
-  | { readonly ok: true; readonly ast: MdAst }
-  | {
-      readonly ok: false;
-      readonly reason: "unresolved" | "not-writable" | "no-item-kv";
-    };
-
-// Sentinel guard at the boundary keeps md symmetric with jsonc/jsonl,
-// which both reject sentinel values before they reach the AST.
-export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdEditResult {
+export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdAst {
   guardSentinel(newValue, formatOcPath(path));
   if (path.section === "[frontmatter]") {
     const key = path.item ?? path.field;
-    if (key === undefined) {
-      return { ok: false, reason: "unresolved" };
+    const existing = ast.frontmatter.find((entry) => entry.key === key);
+    if (existing === undefined || ast.frontmatterEndLine === undefined) {
+      throw new OcPathEditError("unresolved");
     }
-    const idx = ast.frontmatter.findIndex((e) => e.key === key);
-    const existing = ast.frontmatter[idx];
-    if (existing === undefined) {
-      return { ok: false, reason: "unresolved" };
+    const offset = sourceLineOffset(ast.raw, existing.line);
+    const source = ast.raw.slice(offset, sourceLineOffset(ast.raw, ast.frontmatterEndLine));
+    const prefix = /^[^:\r\n]*:[ \t]*/.exec(source)?.[0];
+    // YAML owns the selected value's extent, including block scalars and maps.
+    const value = parseDocument(source, { prettyErrors: false, logLevel: "silent" }).get(
+      existing.key,
+      true,
+    );
+    if (prefix === undefined || !isNode(value) || !value.range) {
+      throw new OcPathEditError("unresolved");
     }
-    const newEntry: FrontmatterEntry = { ...existing, value: newValue };
-    const newFm = ast.frontmatter.slice();
-    newFm[idx] = newEntry;
-    return { ok: true, ast: rebuildMdRaw({ ...ast, frontmatter: newFm }) };
+    const end = value.range[1];
+    const ending = source.slice(0, end).match(/\r?\n$/)?.[0] ?? "";
+    const anchor = !isAlias(value) && value.anchor ? `&${value.anchor} ` : "";
+    const idx = ast.frontmatter.indexOf(existing);
+    return replaceMdSource(
+      ast,
+      offset + prefix.length,
+      offset + end,
+      (prefix.endsWith(":") ? " " : "") + anchor + formatFrontmatterValue(newValue) + ending,
+      (shifted) => ({
+        ...shifted,
+        frontmatter: shifted.frontmatter.map((entry, index) =>
+          index === idx ? { ...entry, value: newValue } : entry,
+        ),
+      }),
+    );
   }
 
   if (path.section === undefined || path.item === undefined || path.field === undefined) {
-    return { ok: false, reason: "not-writable" };
+    throw new OcPathEditError("not-writable");
   }
-
   const match = resolveMdOcPath(ast, { ...path, field: undefined });
   if (match?.kind !== "item") {
-    return { ok: false, reason: "unresolved" };
+    throw new OcPathEditError("unresolved");
   }
   const { node: item, block } = match;
   if (item.kv === undefined) {
-    return { ok: false, reason: "no-item-kv" };
+    throw new OcPathEditError("no-item-kv");
   }
   if (item.kv.key.toLowerCase() !== path.field.toLowerCase()) {
-    return { ok: false, reason: "unresolved" };
+    throw new OcPathEditError("unresolved");
   }
-
-  const bodyLines = block.bodyText.split("\n");
-  const bodyLine = item.line - block.line - 1;
-  const prefix = new RegExp(`^([\\s\\S]*?${escapeRegExp(item.kv.key)}[ \\t]*:[ \\t]*)`).exec(
-    bodyLines.slice(bodyLine).join("\n"),
+  const key = item.kv.key;
+  const offset = sourceLineOffset(ast.raw, item.line);
+  const prefix = new RegExp(`^([\\s\\S]*?${escapeRegExp(item.kv.key)}[ \\t]*:\\s*)`).exec(
+    ast.raw.slice(offset),
   )?.[1];
   if (prefix === undefined) {
-    return { ok: false, reason: "unresolved" };
+    throw new OcPathEditError("unresolved");
   }
-  const prefixLines = prefix.split("\n");
-  const oldLineCount = item.kv.value.split("\n").length;
-  const lineDelta = newValue.split("\n").length - oldLineCount;
-  if (item.kv.value !== newValue) {
-    // Restrict replacement to the selected item; duplicate keys and code fences
-    // elsewhere in the block must not redirect the write.
-    bodyLines.splice(
-      bodyLine + prefixLines.length - 1,
-      oldLineCount,
-      `${prefix.slice(prefix.lastIndexOf("\n") + 1)}${newValue}`,
-    );
-  }
-  const newItem: AstItem = { ...item, kv: { key: item.kv.key, value: newValue } };
+  const start = offset + prefix.length;
+  const lastLine = item.line + prefix.split("\n").length + item.kv.value.split("\n").length - 2;
+  const lineEnd = sourceLineOffset(ast.raw, lastLine + 1);
+  const ending = ast.raw.slice(start, lineEnd).match(/\r?\n$/)?.[0] ?? "";
+  const blockIdx = ast.blocks.indexOf(block);
   const itemIdx = block.items.indexOf(item);
-  const newItems = block.items.map((entry, index) =>
-    index === itemIdx
-      ? newItem
-      : index > itemIdx && lineDelta !== 0
-        ? { ...entry, line: entry.line + lineDelta }
-        : entry,
+  return replaceMdSource(
+    ast,
+    start,
+    lineEnd - ending.length,
+    newValue.replace(/\r?\n/g, sourceLineEnding(ast.raw)),
+    (shifted) => ({
+      ...shifted,
+      blocks: shifted.blocks.map((entry, index) =>
+        index !== blockIdx
+          ? entry
+          : {
+              ...entry,
+              items: entry.items.map((child, childIndex) =>
+                childIndex !== itemIdx ? child : { ...child, kv: { key, value: newValue } },
+              ),
+            },
+      ),
+    }),
   );
-  const newBlocks = ast.blocks.slice();
-  newBlocks[ast.blocks.indexOf(block)] = {
-    ...block,
-    items: newItems,
-    bodyText: bodyLines.join("\n"),
-  };
-  return { ok: true, ast: rebuildMdRaw({ ...ast, blocks: newBlocks }) };
 }

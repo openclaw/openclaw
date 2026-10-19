@@ -84,7 +84,9 @@ describe("Mcp", () => {
 
     const card = container.querySelector("openclaw-mcp-servers-card");
     expect(card).not.toBeNull();
-    expect(card?.pluginsHref).toBe("/settings/plugins");
+    expect(card?.querySelector(".settings-section__desc a")?.getAttribute("href")).toBe(
+      "/settings/plugins",
+    );
   });
 
   it("keeps the summary free of save actions and preserves the embedded editor", () => {

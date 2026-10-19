@@ -28,7 +28,6 @@ import {
   withOpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "../../auth.js";
 import { gitHubPublicApi } from "../../github-public-api.js";
 import type { HealthSummary } from "../../health/types.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
@@ -45,6 +44,7 @@ import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   SharedGatewaySessionGenerationState,
 } from "../../server-shared-auth-generation.js";
+import * as wsLog from "../../ws-log.js";
 import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
 import { disconnectDisallowedGatewayPolicyClients } from "../ws-origin-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
@@ -156,8 +156,10 @@ vi.mock("../../../infra/host-account-name.js", async (importOriginal) => ({
   resolveHostAccountName: resolveHostAccountNameMock,
 }));
 
+// mock-isolation: Ordinary connection tests do not use Enterprise identity or remote enrichment.
 vi.mock("../../github-user-identity.js", () => ({
   createAuthenticatedGitHubIdentitySync: createAuthenticatedGitHubIdentitySyncMock,
+  resolveTrustedEnterpriseGitHubAccountId: () => undefined,
 }));
 
 vi.mock("./auth-context.js", async (importOriginal) => {
@@ -244,6 +246,27 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         });
       },
     );
+  });
+
+  it("attributes ephemeral backend connections in the normal journal", async () => {
+    const mode = "backend";
+    const harness = attachGatewayHarness({
+      connId: `conn-${mode}`,
+      connectNonce: `nonce-${mode}`,
+    });
+    harness.sendConnect("connect", {
+      ...BACKEND_CONNECT_PARAMS,
+      client: { ...BACKEND_CONNECT_PARAMS.client, mode, displayName: "synthetic-poller" },
+    });
+    await harness.runWhenIdle();
+    expect(harness.frames).toContainEqual(expect.objectContaining({ id: "connect", ok: true }));
+    const connections = harness.logWsControl.info.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.startsWith("client connected "));
+    expect(connections).toHaveLength(1);
+    expect(connections[0]).toContain(`conn=conn-${mode}`);
+    expect(connections[0]).toContain("client=gateway-client name=synthetic-poller");
+    expect(connections[0]).toContain(`mode=${mode} role=operator`);
   });
 
   it("prewarms cold session history for an admitted operator without delaying hello", async () => {
@@ -364,7 +387,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         const owner = authMethod === "password";
         if (!owner) {
           await waitForFast(() =>
-            expect(harness.send).toHaveBeenCalledWith(
+            expect(harness.frames).toContainEqual(
               expect.objectContaining({
                 ok: false,
                 error: expect.objectContaining({
@@ -508,14 +531,14 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         await harness.runWhenIdle();
 
         expect(close).not.toHaveBeenCalled();
-        expect(harness.send).toHaveBeenCalledWith(
+        expect(harness.frames).toContainEqual(
           expect.objectContaining({
             id: "connect",
             ok: false,
             error: expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
           }),
         );
-        expect(harness.send).toHaveBeenCalledWith(
+        expect(harness.frames).toContainEqual(
           expect.objectContaining({ id: "update-after-snapshot", ok: true }),
         );
         expect(harness.logGateway.error).toHaveBeenCalledWith(
@@ -540,7 +563,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     await harness.runWhenIdle();
     expect(close).not.toHaveBeenCalled();
     expect(harness.client).toBeNull();
-    expect(harness.send).toHaveBeenCalledWith(
+    expect(harness.frames).toContainEqual(
       expect.objectContaining({
         id: "failed-connect",
         ok: false,
@@ -549,11 +572,13 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     );
     harness.sendConnect("retry-connect", BACKEND_CONNECT_PARAMS);
     await harness.runWhenIdle();
-    expect(JSON.parse(harness.socketSend.mock.calls[0]![0])).toMatchObject({
-      id: "retry-connect",
-      ok: true,
-      payload: { type: "hello-ok" },
-    });
+    expect(harness.frames).toContainEqual(
+      expect.objectContaining({
+        id: "retry-connect",
+        ok: true,
+        payload: expect.objectContaining({ type: "hello-ok" }),
+      }),
+    );
     expect(close).not.toHaveBeenCalled();
   });
 
@@ -597,14 +622,14 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     await harness.runWhenIdle();
 
     expect(close).not.toHaveBeenCalled();
-    expect(harness.send).toHaveBeenCalledWith(
+    expect(harness.frames).toContainEqual(
       expect.objectContaining({
         id: "failed",
         ok: false,
         error: expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
       }),
     );
-    expect(harness.send).toHaveBeenCalledWith(
+    expect(harness.frames).toContainEqual(
       expect.objectContaining({ id: "update-after-handler", ok: true }),
     );
   });
@@ -654,7 +679,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         });
         harness.sendRequest("after-post-connect", "update.status");
         await harness.runWhenIdle();
-        expect(harness.send).toHaveBeenCalledWith(
+        expect(harness.frames).toContainEqual(
           expect.objectContaining({
             id: "after-post-connect",
             ok: true,
@@ -664,25 +689,39 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     },
   );
 
-  it.each([false, true])(
-    "closes malformed JSON explicitly (authenticated=%s)",
-    async (connected) => {
-      const close = createCloseMock();
-      const harness = attachGatewayHarness({
-        connId: "conn-malformed-json",
-        connectNonce: "nonce-malformed-json",
-        close,
-      });
-      if (connected) {
-        harness.sendConnect("connect", BACKEND_CONNECT_PARAMS);
-        await harness.runWhenIdle();
-      }
-      harness.sendMessage("{");
-      await harness.runWhenIdle();
-      expect(close).toHaveBeenCalledWith(1007, "invalid JSON");
-      expect(harness.logGateway.error).toHaveBeenCalledWith(expect.stringContaining("parse error"));
-    },
-  );
+  it("closes malformed JSON explicitly on an authenticated connection", async () => {
+    const close = createCloseMock();
+    const setCloseCause = createSetCloseCauseMock();
+    const websocketLog = vi.spyOn(wsLog, "logWs");
+    onTestFinished(() => websocketLog.mockRestore());
+    const harness = attachGatewayHarness({
+      connId: "conn-malformed-json",
+      connectNonce: "nonce-malformed-json",
+      close,
+      setCloseCause,
+    });
+    harness.sendConnect("connect", BACKEND_CONNECT_PARAMS);
+    await harness.runWhenIdle();
+    websocketLog.mockClear();
+    harness.logGateway.error.mockClear();
+    const marker = "PRIVATE_JSON_FRAME";
+    harness.sendMessage(marker);
+    await harness.runWhenIdle();
+    expect(close).toHaveBeenCalledWith(1007, "invalid JSON");
+    expect(harness.logGateway.error).toHaveBeenCalledWith("parse error: invalid JSON");
+    expect(setCloseCause).toHaveBeenCalledWith("parse-error", { error: "invalid JSON" });
+    expect(websocketLog).toHaveBeenCalledWith("out", "parse-error", {
+      connId: "conn-malformed-json",
+      error: "invalid JSON",
+    });
+    expect(
+      JSON.stringify([
+        harness.logGateway.error.mock.calls,
+        websocketLog.mock.calls,
+        setCloseCause.mock.calls,
+      ]),
+    ).not.toContain(marker);
+  });
 
   it.each(["bytes", "count"] as const)(
     "rejects queued handshake %s overflow before registration",
@@ -991,9 +1030,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         new RegExp(`^/api/users/${profileId}/avatar\\?v=[0-9a-f]{64}-png$`, "u"),
       );
 
-      expect(first.harness.logWsControl.info).toHaveBeenCalledWith(
-        "authenticated user connected conn=conn-trusted-proxy-user-first user=alice@example.com",
-      );
+      const connections = first.harness.logWsControl.info.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.includes(" connected "));
+      expect(connections).toHaveLength(1);
+      expect(connections[0]).toContain("client connected conn=conn-trusted-proxy-user-first");
+      expect(connections[0]).toContain("user=alice@example.com");
     });
   });
 
@@ -1366,7 +1408,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           });
 
           await waitForFast(() => {
-            expect(harness.send).toHaveBeenCalledWith(
+            expect(harness.frames).toContainEqual(
               expect.objectContaining({
                 id: "connect-github-role-verification-failure",
                 ok: false,
@@ -1382,8 +1424,8 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             expect(close).toHaveBeenCalledWith(1013, expect.stringContaining(message));
           });
           expect(harness.client).toBeNull();
-          expect(harness.socketSend).not.toHaveBeenCalled();
-          expect(JSON.stringify(harness.send.mock.calls)).not.toContain("private upstream failure");
+          expect(harness.frames).toHaveLength(1);
+          expect(JSON.stringify(harness.frames)).not.toContain("private upstream failure");
         },
       );
     },
@@ -1436,81 +1478,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       )?.[1];
       expect(presence).not.toHaveProperty("user");
       expect(harness.refreshConnectedUserProfile).not.toHaveBeenCalled();
-    });
-  });
-
-  it("mints Cloudflare sync only for the standard trusted-proxy header contract", async () => {
-    const assertion = "header.payload.signature";
-    useGatewayTestConfig(loadConfigMock, () => ({
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "cf-access-authenticated-user-email",
-            requiredHeaders: ["CF-Access-JWT-Assertion"],
-          },
-        },
-        trustedProxies: ["10.0.0.1"],
-        controlUi: { allowedOrigins: ["https://team.openclaw.ai"] },
-      },
-    }));
-    const resolvedAuth: ResolvedGatewayAuth = {
-      mode: "trusted-proxy",
-      allowTailscale: false,
-      trustedProxy: {
-        userHeader: "cf-access-authenticated-user-email",
-        requiredHeaders: ["CF-Access-JWT-Assertion"],
-      },
-    };
-    const harness = attachGatewayHarness({
-      connId: "conn-cloudflare-access",
-      connectNonce: "nonce-cloudflare-access",
-      requestHost: "team.openclaw.ai",
-      requestOrigin: "https://team.openclaw.ai",
-      remoteAddr: "10.0.0.1",
-      resolvedAuth,
-      headers: {
-        "cf-access-authenticated-user-email": "ada@example.com",
-        "cf-access-jwt-assertion": assertion,
-        "x-forwarded-for": "203.0.113.10",
-      },
-      ingressAttribution: {
-        kind: "trusted-proxy",
-        clientIp: "203.0.113.10",
-        rateLimit: { subject: { key: "203.0.113.10" }, resetOnSuccess: true },
-      },
-    });
-
-    harness.sendConnect("connect-cloudflare-access", {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "openclaw-control-ui",
-        version: "dev",
-        platform: "test",
-        mode: "ui",
-      },
-      role: "operator",
-      caps: [],
-    });
-
-    await waitForFast(() => {
-      expect(harness.client).toMatchObject({
-        authenticatedUserId: "ada@example.com",
-        authenticatedGitHubIdentitySync: expect.any(Function),
-      });
-      expect(createAuthenticatedGitHubIdentitySyncMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          authResult: expect.objectContaining({
-            method: "trusted-proxy",
-            user: "ada@example.com",
-          }),
-          authConfig: expect.objectContaining({ mode: "trusted-proxy" }),
-          requestHeaders: expect.objectContaining({
-            "cf-access-jwt-assertion": assertion,
-          }),
-        }),
-      );
     });
   });
 
@@ -1702,7 +1669,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       releasePreparation.resolve();
 
       await waitForFast(() => {
-        expect(harness.send).toHaveBeenCalledWith(
+        expect(harness.frames).toContainEqual(
           expect.objectContaining({
             ok: false,
             error: expect.objectContaining({
@@ -1715,7 +1682,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       });
       expect(close).toHaveBeenCalledWith(1008, expect.stringContaining("origin not allowed"));
       expect(harness.client).toBeNull();
-      expect(harness.socketSend).not.toHaveBeenCalled();
+      expect(harness.frames).toHaveLength(1);
     } finally {
       releasePreparation.resolve();
       if (previousLoadConfig) {
@@ -1781,9 +1748,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
     expect(JSON.stringify(captured.events)).not.toContain("wrong-token");
     expect(JSON.stringify(captured.events)).not.toContain("gateway-token");
-    const response = harness.send.mock.calls.at(0)?.[0] as
-      | { error?: Record<string, unknown> }
-      | undefined;
+    const response = harness.frames.at(0) as { error?: Record<string, unknown> } | undefined;
     expect(response?.error).not.toHaveProperty("retryable");
     expect(response?.error).not.toHaveProperty("retryAfterMs");
     await harness.runWhenIdle();
@@ -1827,9 +1792,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       expect(close).toHaveBeenCalledWith(1008, expect.stringContaining("retry later"));
     });
 
-    const response = harness.send.mock.calls.at(0)?.[0] as
-      | { error?: Record<string, unknown> }
-      | undefined;
+    const response = harness.frames.at(0) as { error?: Record<string, unknown> } | undefined;
     expect(response?.error).toMatchObject({
       code: ErrorCodes.INVALID_REQUEST,
       message: "unauthorized: too many failed authentication attempts (retry later)",

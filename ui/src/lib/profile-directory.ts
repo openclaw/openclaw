@@ -21,8 +21,9 @@ export function profileDirectory(gateway: ApplicationGateway): ProfileDirectory 
   return directory;
 }
 
+/** Uploads and email-backed Gravatar both resolve through the versioned profile route. */
 export function profileAvatarUrl(profile: UserProfile | undefined): string | undefined {
-  return profile?.hasAvatar
+  return profile?.hasAvatar || profile?.emails.length
     ? buildControlUiUserAvatarPath(profile.id, profile.updatedAt)
     : undefined;
 }

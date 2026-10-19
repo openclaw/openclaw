@@ -8,6 +8,7 @@ import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec-runner.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
+import { withChildProcessOperation } from "../../process/spawn-diagnostics.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import {
   commandError,
@@ -164,9 +165,11 @@ export async function removeManagedCheckout(
               'require("node:fs").rmSync(process.argv[1], { recursive: true, force: true })',
               retired,
             ];
-            const deleted = await runCommandWithTimeout(
-              process.platform === "win32" ? argv : ["nice", "-n", "10", ...argv],
-              { timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS, killProcessTree: true },
+            const deleted = await withChildProcessOperation("worktree.cleanup", () =>
+              runCommandWithTimeout(
+                process.platform === "win32" ? argv : ["nice", "-n", "10", ...argv],
+                { timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS, killProcessTree: true },
+              ),
             );
             if (deleted.termination !== "exit" || deleted.code !== 0) {
               throw new Error(deleted.stderr || "Retired checkout deletion did not complete");

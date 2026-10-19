@@ -1,7 +1,7 @@
 import type { SessionsStorageStatusResult } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
+import { For, Show, createSignal, onSettled } from "solid-js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
@@ -19,7 +19,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatByteSize, formatDateTimeMs } from "../../lib/format.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import { createSettingsStatus } from "./settings-status.ts";
 import { SESSION_STORAGE_SETTINGS_TARGET_ID } from "./settings-targets.ts";
 
@@ -39,11 +39,11 @@ function externalizedTranscripts(count: number): string {
 }
 
 type SettingsProps = {
-  mutationDisabled: boolean;
-  buildEditor: (() => JSX.Element) | undefined;
-  advancedExpanded: boolean;
+  mutationDisabled?: boolean;
+  buildEditor?: () => JSX.Element;
+  advancedExpanded?: boolean;
 };
-function SessionStorageSettingsContent(props: SettingsProps) {
+export function SessionStorageSettings(props: SettingsProps) {
   const context = useApplication();
   const {
     client,
@@ -87,15 +87,17 @@ function SessionStorageSettingsContent(props: SettingsProps) {
       }
     }, 2_000);
   }
-  function retireRequests() {
+  function retireRequests(identityChanged: boolean) {
     stopPolling();
-    followingRun = false;
-    setAgeDraft(null);
     setRunOperation(null);
-    setRunError(null);
-    setRunOutcome(null);
+    if (identityChanged) {
+      followingRun = false;
+      setAgeDraft(null);
+      setRunError(null);
+      setRunOutcome(null);
+    }
   }
-  onCleanup(retireRequests);
+  onSettled(() => stopPolling);
   function observeMaintenance(status: SessionsStorageStatusResult) {
     if (status.maintenance.running) {
       followingRun = true;
@@ -168,16 +170,7 @@ function SessionStorageSettingsContent(props: SettingsProps) {
       !currentResult.status.maintenance.running
     );
   }
-  let ageInput: HTMLInputElement | undefined;
-  createEffect(
-    () => ageDraft() ?? String(storageConfig().afterDays),
-    (value) => {
-      // Preserve the native number draft when an owner publication leaves it unchanged.
-      if (ageInput && ageInput.value !== value) {
-        ageInput.value = value;
-      }
-    },
-  );
+  const ageValue = liveValue(() => ageDraft() ?? String(storageConfig().afterDays));
   async function runNow() {
     const currentClient = client();
     const ownsConnection = capture();
@@ -329,10 +322,11 @@ function SessionStorageSettingsContent(props: SettingsProps) {
 
   const status = () => {
     const currentResult = result();
-    return requestStatus() !== "error" && currentResult?.isCurrent() ? currentResult.status : null;
+    // canRun checks live authority; the last loaded inventory remains displayable.
+    return requestStatus() !== "error" ? currentResult?.status : null;
   };
   return (
-    <>
+    <openclaw-session-storage-settings>
       <SettingsPage>
         <div class="settings-stack" id={SESSION_STORAGE_SETTINGS_TARGET_ID}>
           <SettingsSection
@@ -404,9 +398,7 @@ function SessionStorageSettingsContent(props: SettingsProps) {
                     step="1"
                     required
                     disabled={disabled()}
-                    ref={(element) => {
-                      ageInput = element;
-                    }}
+                    ref={ageValue}
                     onInput={(event: Event) => {
                       // SAFETY: This handler is bound directly to the native number input.
                       setAgeDraft((event.currentTarget as HTMLInputElement).value);
@@ -454,18 +446,6 @@ function SessionStorageSettingsContent(props: SettingsProps) {
           {props.buildEditor?.()}
         </details>
       </ShellLayoutBoundary>
-    </>
+    </openclaw-session-storage-settings>
   );
 }
-
-export const SessionStorageSettings = defineSolidBridge<SettingsProps>(
-  "openclaw-session-storage-settings",
-  (props) => <SessionStorageSettingsContent {...props} />,
-  {
-    properties: {
-      mutationDisabled: { default: false, type: Boolean },
-      buildEditor: { default: undefined, attribute: false },
-      advancedExpanded: { default: false, type: Boolean },
-    },
-  },
-);

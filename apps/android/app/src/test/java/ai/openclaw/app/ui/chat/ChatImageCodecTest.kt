@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
+import ai.openclaw.app.ui.image.imageSampleSize
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.pm.ProviderInfo
@@ -68,9 +69,9 @@ class ChatImageCodecTest {
   }
 
   @Test
-  fun computeInSampleSizeCapsLongestEdge() {
-    assertEquals(4, computeInSampleSize(width = 4032, height = 3024, maxDimension = 1600))
-    assertEquals(1, computeInSampleSize(width = 800, height = 600, maxDimension = 1600))
+  fun imageSampleSizeCapsLongestEdge() {
+    assertEquals(4, imageSampleSize(width = 4032, height = 3024, maxDimension = 1600, maxSample = 64))
+    assertEquals(1, imageSampleSize(width = 800, height = 600, maxDimension = 1600, maxSample = 64))
   }
 
   @Test

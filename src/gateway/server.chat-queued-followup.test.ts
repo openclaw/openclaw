@@ -15,12 +15,20 @@ import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-s
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
+import {
+  completeFollowupRunLifecycle,
+  enqueueFollowupRun,
+  type FollowupRun,
+} from "../auto-reply/reply/queue.js";
+import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
+import { bindReplySourceToFollowup } from "../auto-reply/reply/reply-source-binding.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
 } from "../process/gateway-work-admission.js";
+import { captureSessionControllerSourceSettlement } from "../sessions/session-controller.mailbox.js";
 import { drainOpenClawAgentWriteQueuesForTest } from "../state/openclaw-agent-write-admission.test-support.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
@@ -139,10 +147,32 @@ describe("queued WebChat follow-up delivery", () => {
     async ({ name, completion, payloads, state }) => {
       await withMainSessionStore(async () => {
         let options: InternalGetReplyOptions | undefined;
+        let queued: FollowupRun | undefined;
         const releaseDispatch = createDeferred();
         dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
           options = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
-          options?.turnAdoptionLifecycle?.onDeferred?.();
+          queued = createQueueTestRun({
+            prompt: "queue a reply while the previous run is active",
+            originatingChannel: "webchat",
+          });
+          queued.turnAdoptionLifecycle = options?.turnAdoptionLifecycle;
+          queued.run = {
+            ...queued.run,
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            sessionId: "sess-main",
+          };
+          expect(bindReplySourceToFollowup(options, queued)).toBeDefined();
+          expect(
+            enqueueFollowupRun(
+              "agent:main:main",
+              queued,
+              { mode: "followup" },
+              "none",
+              undefined,
+              false,
+            ),
+          ).toBe(true);
           await releaseDispatch.promise;
           return {};
         });
@@ -240,11 +270,9 @@ describe("queued WebChat follow-up delivery", () => {
             stream: "assistant",
             data: {
               text:
-                name === "canvas" || name === "suppressed-canvas"
+                name === "canvas" || name === "suppressed-canvas" || name === "silent-canvas"
                   ? ""
-                  : name === "silent-canvas"
-                    ? "NO_REPLY"
-                    : "late answer arrived over the live WebSocket",
+                  : "late answer arrived over the live WebSocket",
             },
           });
           if (completion.kind === "failed" || completion.kind === "aborted") {
@@ -263,6 +291,7 @@ describe("queued WebChat follow-up delivery", () => {
             data: {
               phase: completion.kind === "failed" ? "error" : "end",
               executionSettled: true,
+              ...(name === "silent-canvas" ? { terminalReply: { disposition: "silent" } } : {}),
               ...(completion.kind === "aborted" ? { aborted: true, stopReason: "restart" } : {}),
             },
           });
@@ -285,12 +314,12 @@ describe("queued WebChat follow-up delivery", () => {
           if (name === "abort") {
             expect(completed.payload).toMatchObject({ stopReason: "restart" });
           }
-          if (name === "canvas" || name === "abort") {
+          if (name === "canvas" || name === "silent-canvas" || name === "abort") {
             expect(completed.payload?.message).toMatchObject({
               content: expect.arrayContaining([expect.objectContaining({ type: "canvas" })]),
             });
           }
-          if (name === "silent-canvas" || name === "suppressed-canvas") {
+          if (name === "suppressed-canvas") {
             expect(completed.payload?.message).toBeUndefined();
           }
           if (name === "text") {
@@ -323,7 +352,12 @@ describe("queued WebChat follow-up delivery", () => {
         } finally {
           releaseDispatch.resolve();
           ws.off("message", recordFollowup);
-          options?.turnAdoptionLifecycle?.onSettled?.();
+          if (queued) {
+            completeFollowupRunLifecycle(queued);
+            if (queued.controllerInput) {
+              await captureSessionControllerSourceSettlement(queued.controllerInput);
+            }
+          }
         }
       });
     },

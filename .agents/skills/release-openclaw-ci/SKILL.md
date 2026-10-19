@@ -291,12 +291,12 @@ until their dependent enforcement changes land.
   plus a fix-in-parallel issue or PR on `main`; never a re-cut, tooling change,
   or new FRV. New dispatches reject `known_flaky_jobs_json`.
 - For a supported parent, `pnpm frv rerun --run <parent-run-id> --job
-"<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
+  "<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
   Actions job ID. Get the child key and exact name from `frv status --json`.
   GitHub also reruns dependent jobs. The controller waits only for that child
   before sending the request; it does not retry unrelated failures.
 - `pnpm frv rerun --run <parent-run-id> --child <child-key|run-id>
-[--max-attempts N]` records one of those bounded reruns. It waits for the
+  [--max-attempts N]` records one of those bounded reruns. It waits for the
   child to finish, sends exactly one rerun-failed-jobs request, and returns once
   the new attempt exists without duplicate jobs. Before the request it prints
   each failed job's runner labels and the current `OPENCLAW_CI_RUNNER_BACKEND`;
@@ -907,13 +907,13 @@ run-ID-cached bytes first.
    jobs, do not cancel unrelated work or accept a generic manual dispatch.
    First verify the PR head carries the current fallback schema:
    `gh api 'repos/openclaw/openclaw/contents/.github/workflows/ci.yml?ref=<pr-head-branch>'
---jq .content | base64 --decode | rg -q 'pull_request_number:'`. If absent,
+   --jq .content | base64 --decode | rg -q 'pull_request_number:'`. If absent,
    refresh the PR head from `main` and use the new head SHA; let normal CI run
    before considering another fallback.
    From the PR head branch, dispatch the explicit exact-SHA fallback:
    `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
-target_ref=<full-pr-sha> -f pull_request_number=<pr-number> -f
-include_android=true -f release_gate=true`.
+   target_ref=<full-pr-sha> -f pull_request_number=<pr-number> -f
+   include_android=true -f release_gate=true`.
    It runs on GitHub-hosted runners and is accepted only when its run title is
    `CI release gate <full-pr-sha>`. Record the stalled Blacksmith run and the
    fallback run in release evidence.

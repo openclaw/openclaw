@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readNonBlankString,
@@ -126,10 +126,7 @@ function parseApprovalScope(value: unknown): ApprovalScope | null {
             kind: "message-send",
             target: value.target,
             recipientCount: value.recipientCount,
-            ...(Array.isArray(value.recipients) &&
-            value.recipients.every((recipient) => typeof recipient === "string")
-              ? { recipients: value.recipients }
-              : {}),
+            ...(isStringArray(value.recipients) ? { recipients: value.recipients } : {}),
             ...(value.audience === "internal" || value.audience === "external"
               ? { audience: value.audience }
               : {}),

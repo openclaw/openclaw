@@ -324,7 +324,7 @@ function warnLegacyApprovalRouting(name: string): void {
   });
 }
 
-/** @deprecated Use resolveApprovalRequestAccountIdAsync; removed in a later release after stable deprecation. */
+/** @deprecated Use resolveApprovalRequestAccountIdAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveApprovalRequestAccountId(
   params: Parameters<typeof resolveApprovalRequestAccountIdFromDelivery>[0],
 ): ReturnType<typeof resolveApprovalRequestAccountIdFromDelivery> {
@@ -347,7 +347,7 @@ export async function resolveApprovalRequestAccountIdAsync(
   );
 }
 
-/** @deprecated Use resolveApprovalRequestChannelAccountIdAsync; removed in a later release after stable deprecation. */
+/** @deprecated Use resolveApprovalRequestChannelAccountIdAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveApprovalRequestChannelAccountId(
   params: Parameters<typeof resolveApprovalRequestChannelAccountIdFromDelivery>[0],
 ): ReturnType<typeof resolveApprovalRequestChannelAccountIdFromDelivery> {
@@ -372,7 +372,7 @@ export async function resolveApprovalRequestChannelAccountIdAsync(
   );
 }
 
-/** @deprecated Use doesApprovalRequestMatchChannelAccountAsync; removed in a later release after stable deprecation. */
+/** @deprecated Use doesApprovalRequestMatchChannelAccountAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function doesApprovalRequestMatchChannelAccount(
   params: Parameters<typeof doesApprovalRequestMatchChannelAccountFromDelivery>[0],
 ): ReturnType<typeof doesApprovalRequestMatchChannelAccountFromDelivery> {
@@ -395,7 +395,7 @@ export async function doesApprovalRequestMatchChannelAccountAsync(
   );
 }
 
-/** @deprecated Use doesApprovalRequestSelectChannelAccountAsync; removed in a later release after stable deprecation. */
+/** @deprecated Use doesApprovalRequestSelectChannelAccountAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function doesApprovalRequestSelectChannelAccount(
   params: Parameters<typeof doesApprovalRequestSelectChannelAccountFromDelivery>[0],
 ): ReturnType<typeof doesApprovalRequestSelectChannelAccountFromDelivery> {

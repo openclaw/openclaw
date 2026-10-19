@@ -33,6 +33,7 @@ afterEach(async () => {
       capture.cleanup();
     }
     resetLogger();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   }
 });
@@ -276,12 +277,12 @@ describe("node desktop stream tickets", () => {
   });
 
   it("rejects an expired ticket before upgrading", async () => {
-    let now = 1_000;
-    const broker = createNodeDesktopStreamBroker({ ttlMs: 60_000, now: () => now });
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const broker = createNodeDesktopStreamBroker();
     const session = { connId: "conn-1", pairingGeneration: "generation-1" };
     const baseUrl = await startBrokerServer({ broker, session });
     const minted = broker.mint({ nodeId: "node-1", ...session });
-    now = minted.expiresAtMs;
+    now.mockReturnValue(minted.expiresAtMs);
 
     await expectUnauthorized(`${baseUrl}${minted.attachPath}`);
     await expect(minted.attached).rejects.toThrow("expired");
@@ -324,7 +325,8 @@ describe("node desktop stream tickets", () => {
     async (outcome) => {
       const logCapture = createDiagnosticLogRecordCapture();
       logCaptures.push(logCapture);
-      const broker = createNodeDesktopStreamBroker({ now: () => 1_000 });
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const broker = createNodeDesktopStreamBroker();
       const session = { connId: "conn-1", pairingGeneration: "generation-1" };
       const baseUrl = await startBrokerServer({ broker, session });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -348,6 +350,7 @@ describe("node desktop stream tickets", () => {
       await expect(minted.attached).rejects.toThrow(`node desktop stream ticket ${outcome}`);
       await expect(closed).resolves.toEqual({ code: 1008, reason: "node desktop attach rejected" });
       vi.useRealTimers();
+      now.mockRestore();
       await expect
         .poll(async () => {
           await logCapture.flush();

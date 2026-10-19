@@ -101,7 +101,7 @@ export class RelayState {
     );
   }
 
-  async initialize(): Promise<{ privateKey: string }> {
+  async initialize(): Promise<ReturnType<typeof identityFromPrivateKey>> {
     let identity = await this.#store.lookup("identity");
     if (identity === undefined) {
       identity = {
@@ -125,8 +125,9 @@ export class RelayState {
         `MCP relay identity is bound to ${identity.relayOrigin}. Restore the matching relayUrl in the plugin configuration.`,
       );
     }
+    let resolvedIdentity: ReturnType<typeof identityFromPrivateKey>;
     try {
-      identityFromPrivateKey(identity.privateKey);
+      resolvedIdentity = identityFromPrivateKey(identity.privateKey);
     } catch {
       throw stateError();
     }
@@ -137,7 +138,7 @@ export class RelayState {
         this.#grants.set(grant.grantId, grant);
       }
     }
-    return { privateKey: identity.privateKey };
+    return resolvedIdentity;
   }
 
   async #update<T>(action: () => Promise<T>): Promise<T> {
@@ -171,7 +172,7 @@ export class RelayState {
     assertCommandCurrent?: () => void,
     authority: RelayGrantAuthority = OWNER_AUTHORITY,
   ): Promise<void> {
-    await this.#store.register(`code:${codeHash}`, parseAuthority(authority), {
+    await this.#store.register(`code:${codeHash}`, authority, {
       ttlMs: expiresAt - now,
       assertCurrent: assertCommandCurrent,
     });

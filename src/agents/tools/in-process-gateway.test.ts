@@ -444,6 +444,107 @@ describe("request-shaped in-process Gateway dispatch", () => {
     mocks.callGateway.mockReset().mockResolvedValue({ runId: "run-1" });
   });
 
+  it("uses the local router with least privilege and transport-equivalent request options", async () => {
+    const controller = new AbortController();
+    const onAccepted = vi.fn();
+    const agentToolCaller = {
+      agentId: "main",
+      sessionKey: "agent:main:discord:direct:colin",
+    };
+
+    await callAgentToolGatewayRequest({
+      method: "agent",
+      params: { sessionKey: "agent:main:worker", message: "run" },
+      agentToolCaller,
+      expectFinal: true,
+      onAccepted,
+      signal: controller.signal,
+    });
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "agent",
+      { sessionKey: "agent:main:worker", message: "run" },
+      {
+        forceSyntheticClient: true,
+        operatorRoleActor: { kind: "system" },
+        agentToolCaller,
+        syntheticScopeMode: "minimum",
+        syntheticScopes: ["operator.write"],
+        expectFinal: true,
+        onAccepted,
+        signal: controller.signal,
+        timeoutMs: 10_000,
+        resolveGatewayContext: expect.any(Function),
+      },
+    );
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("carries trusted runtime identity only through the private in-process carrier", async () => {
+    const identity = {
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "agent:main:worker",
+      operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+      delegatedAuthority: {
+        kind: "local",
+        lifecycleGeneration: "generation-1",
+        claimId: "claim-1",
+        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+      },
+    } as const;
+    const request = withAgentToolGatewayRuntimeIdentity(
+      { method: "chat.send", params: { sessionKey: "agent:main:child" } },
+      identity,
+    );
+    mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
+      expect(readInProcessAgentRuntimeIdentity(options)).toBe(identity);
+      return { runId: "run-1" };
+    });
+
+    await callAgentToolGatewayRequest(request);
+
+    expect(JSON.stringify(request)).toBe(
+      '{"method":"chat.send","params":{"sessionKey":"agent:main:child"}}',
+    );
+  });
+
+  it("marks only an owner-bound plugin approval request for host admission", async () => {
+    const identity = {
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+      delegatedAuthority: {
+        kind: "local",
+        lifecycleGeneration: "generation-1",
+        claimId: "claim-1",
+        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+      },
+      approvalOwnerPluginId: "registered-hook",
+    } as const;
+    const request = withAgentToolGatewayRuntimeIdentity(
+      { method: "plugin.approval.request", params: { title: "Review action" } },
+      identity,
+    );
+    await callAgentToolGatewayRequest(request);
+
+    const requestOptions = mocks.dispatch.mock.calls[0]?.[2];
+    expect(requestOptions).toMatchObject({ allowHostPluginApprovalRequest: true });
+    expect(readInProcessAgentRuntimeIdentity(requestOptions)).toBe(identity);
+
+    await callAgentToolGatewayRequest(
+      withAgentToolGatewayRuntimeIdentity(
+        {
+          method: "plugin.approval.resolve",
+          params: { id: "plugin:test", decision: "allow-once" },
+        },
+        identity,
+      ),
+    );
+    expect(mocks.dispatch.mock.calls[1]?.[2]).not.toHaveProperty("allowHostPluginApprovalRequest");
+  });
+
   it.each([
     [undefined, 10_000],
     [null, undefined],
@@ -462,6 +563,7 @@ describe("request-shaped in-process Gateway dispatch", () => {
         method: "agent",
         params: { sessionKey: "agent:main:worker", message: "run" },
         agentToolCaller,
+        replyExpectation: "optional",
         expectFinal: true,
         onAccepted,
         timeoutMs,
@@ -475,6 +577,7 @@ describe("request-shaped in-process Gateway dispatch", () => {
           forceSyntheticClient: true,
           operatorRoleActor: { kind: "system" },
           agentToolCaller,
+          replyExpectation: "optional",
           syntheticScopeMode: "minimum",
           syntheticScopes: ["operator.write"],
           expectFinal: true,

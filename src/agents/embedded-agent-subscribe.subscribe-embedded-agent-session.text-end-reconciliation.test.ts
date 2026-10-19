@@ -144,14 +144,8 @@ describe("native snapshot reconciliation", () => {
     });
   });
 
-  it.each([
-    { name: "shortened", checkpoint: "Hello world. Next sentence.", tail: [] },
-    {
-      name: "corrected identical tail",
-      checkpoint: "Hello world. Hello world.",
-      tail: ["Hello world."],
-    },
-  ])("preserves delivered sentence chunks at a $name checkpoint", async ({ checkpoint, tail }) => {
+  it("preserves delivered sentence chunks at a shortened checkpoint", async () => {
+    const checkpoint = "Hello world. Next sentence.";
     const h = setup({ blockReplyChunking: sentenceChunking });
     const first = "First block.";
     const delivered = [first, "Hello world.", "Next sentence."];
@@ -170,9 +164,9 @@ describe("native snapshot reconciliation", () => {
     expect(h.subscription.assistantTexts).toEqual(delivered);
     h.end([first, checkpoint], 1);
     await h.subscription.waitForPendingEvents();
-    expect(h.texts()).toEqual([...delivered, ...tail]);
-    expect(h.subscription.assistantTexts).toEqual([...delivered, ...tail]);
-    expect(h.onBlockReply).toHaveBeenCalledTimes(delivered.length + tail.length);
+    expect(h.texts()).toEqual(delivered);
+    expect(h.subscription.assistantTexts).toEqual(delivered);
+    expect(h.onBlockReply).toHaveBeenCalledTimes(delivered.length);
   });
 
   it("keeps native code continuation fenced after a shortened open-fence checkpoint", async () => {

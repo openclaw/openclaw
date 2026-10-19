@@ -323,7 +323,7 @@ fetch_pr_head() {
     return 1
   fi
   case "$destination" in
-    ""|"refs/heads/pr-$pr"|"refs/heads/pr-$pr-verify") ;;
+    ""|"refs/heads/pr-$pr") ;;
     *) echo "Invalid PR head acquisition destination for #$pr: $destination" >&2; return 1 ;;
   esac
 

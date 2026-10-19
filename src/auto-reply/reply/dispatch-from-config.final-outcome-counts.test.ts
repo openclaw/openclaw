@@ -317,7 +317,7 @@ describe("settled dispatcher final outcomes", () => {
         });
         const ledger = createReplyTurnLedger(dispatcher);
         await ledger.settleQueued();
-        expect(ledger.hasPendingDelivery()).toBe(true);
+        expect(ledger.canAttemptFallback()).toBe(false);
         expect(ledger.hasObservedDelivery()).toBe(false);
       } else {
         await expect(dispatcher.waitForIdle()).rejects.toBe(finalFirst ? finalError : error);

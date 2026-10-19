@@ -8,6 +8,7 @@ import {
   validateSystemAgentSetupActivateParams,
   validateSystemAgentSetupActivateStartParams,
   validateSystemAgentSetupAuthStartParams,
+  validateSystemAgentSetupRuntimeStartParams,
   validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupAutoParams,
   validateSystemAgentSetupVerifyParams,
@@ -73,6 +74,7 @@ import {
 } from "./system-agent-setup-wizard.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
+import { startWizardLogin } from "./wizard-login.js";
 
 export type { SystemAgentChatSession };
 
@@ -153,7 +155,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     validateSystemAgentSetupDetectParams,
     async ({ params, respond }) => {
       const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
-      respond(true, await detectSetupInference({}, params.agentId), undefined);
+      respond(true, await detectSetupInference(params.agentId), undefined);
     },
   ),
   "openclaw.setup.auto": defineValidatedGatewayHandler(
@@ -187,6 +189,60 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         });
         respond(true, result, undefined);
       });
+    },
+  ),
+  "openclaw.setup.runtime.start": defineValidatedGatewayHandler(
+    "openclaw.setup.runtime.start",
+    validateSystemAgentSetupRuntimeStartParams,
+    async (options) => {
+      const { params, context, respond, client } = options;
+      if (rejectExistingSetupWizardSession({ sessionId: params.sessionId, context, respond })) {
+        return;
+      }
+      if (!client) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "Client required"));
+        return;
+      }
+      const authority = retainGatewayRequestMutationAuthority(options);
+      let created = false;
+      try {
+        await startWizardLogin({
+          client,
+          context,
+          sessionId: params.sessionId,
+          respond,
+          assertCurrent: authority.assertCurrent,
+          createSession: () => {
+            created = true;
+            return new WizardSession(
+              async (prompter, signal, runnerSession) => {
+                try {
+                  // Keep installed plugin runtime loading off Gateway startup.
+                  const { setupNativeRuntime } =
+                    await import("../../system-agent/setup-native-runtime.js");
+                  await setupNativeRuntime({
+                    ...params,
+                    prompter,
+                    signal,
+                    assertCurrent: authority.assertCurrent,
+                    onCommitStarted: () => runnerSession.lockCancellation(),
+                  });
+                } finally {
+                  authority.release();
+                }
+              },
+              { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
+            );
+          },
+        });
+      } catch (error) {
+        authority.release();
+        throw error;
+      } finally {
+        if (!created) {
+          authority.release();
+        }
+      }
     },
   ),
   "openclaw.setup.auth.start": defineValidatedGatewayHandler(

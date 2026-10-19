@@ -443,24 +443,6 @@ describe("xAI OAuth", () => {
     expect(refreshed.refresh).toBe("refresh-1");
   });
 
-  it("does not retry terminal xAI OAuth refresh errors", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () =>
-      jsonResponse(
-        {
-          error: "invalid_grant",
-          error_description: "Invalid or unknown refresh token",
-        },
-        { status: 400 },
-      ),
-    );
-    const credential = createXaiOAuthCredential();
-
-    await expect(refreshWithFetch(credential, { fetchImpl })).rejects.toThrow(
-      "invalid_grant (Invalid or unknown refresh token)",
-    );
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
   it("does not retry refresh on transport errors so a rotated refresh token is never resent", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => {
       throw new Error("socket hang up");

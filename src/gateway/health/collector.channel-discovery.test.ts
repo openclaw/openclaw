@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as persistedAuth from "../../channels/plugins/persisted-auth-state.js";
+import * as packageState from "../../channels/plugins/package-state-probes.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import * as configRuntime from "../../config/config.js";
 import {
@@ -258,11 +258,11 @@ describe("Gateway health channel discovery", () => {
     setActivePluginRegistry(registry);
 
     // The real read-only resolver must not enter this synchronous cold-loader boundary.
-    vi.spyOn(persistedAuth, "listBundledChannelIdsWithPersistedAuthState").mockReturnValue([
-      "dormant-chat",
-    ]);
+    vi.spyOn(packageState, "listBundledChannelIdsForPackageState").mockImplementation(
+      (metadataKey) => (metadataKey === "persistedAuthState" ? ["dormant-chat"] : []),
+    );
     const checkPersistedAuth = vi
-      .spyOn(persistedAuth, "hasBundledChannelPersistedAuthState")
+      .spyOn(packageState, "hasBundledChannelPackageState")
       .mockImplementation(() => {
         throw new Error("health attempted dormant credential discovery");
       });

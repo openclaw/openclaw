@@ -7,6 +7,7 @@ import {
   getSessionEntryAsync,
   readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
+  resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
@@ -147,12 +148,8 @@ export function formatTelegramAmbientTranscriptBody(
 export function createTelegramMessageSessionRuntime({
   accountId,
   resolveTelegramGroupConfig,
-  telegramDeps,
-}: Pick<
-  RegisterTelegramHandlerParams,
-  "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
->) {
-  const loadSessionEntry = telegramDeps.getSessionEntryAsync ?? getSessionEntryAsync;
+}: Pick<RegisterTelegramHandlerParams, "accountId" | "resolveTelegramGroupConfig">) {
+  const loadSessionEntry = getSessionEntryAsync;
   const resolveTelegramSessionState = async (params: ResolveTelegramSessionStateParams) => {
     const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
     const { topicConfig } = resolveTelegramGroupConfig(
@@ -172,7 +169,7 @@ export function createTelegramMessageSessionRuntime({
       route,
       dmThreadId,
     });
-    const storePath = telegramDeps.resolveStorePath(params.runtimeCfg.session?.store, {
+    const storePath = resolveStorePath(params.runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
     const entry = await loadSessionEntry({ agentId: route.agentId, storePath, sessionKey });
@@ -213,17 +210,13 @@ export function createTelegramMessageSessionRuntime({
     if (!params.isGroup) {
       return undefined;
     }
-    const key = (
-      telegramDeps.resolveAmbientTranscriptWatermarkKey ?? resolveAmbientTranscriptWatermarkKey
-    )({
+    const key = resolveAmbientTranscriptWatermarkKey({
       channel: "telegram",
       accountId,
       conversationId: String(params.chatId),
       ...(params.resolvedThreadId !== undefined ? { threadId: params.resolvedThreadId } : {}),
     });
-    return await (
-      telegramDeps.readAmbientTranscriptWatermarkAsync ?? readAmbientTranscriptWatermarkAsync
-    )({
+    return await readAmbientTranscriptWatermarkAsync({
       storePath: params.storePath,
       sessionKey: params.sessionKey,
       key,
@@ -239,14 +232,12 @@ export function createTelegramMessageContextRuntime({
   ownerAgentId,
   opts,
   telegramCfg,
-  telegramDeps,
 }: Pick<RegisterTelegramHandlerParams, "cfg" | "accountId" | "ownerAgentId" | "telegramCfg"> & {
   opts: Pick<RegisterTelegramHandlerParams["opts"], "botInfo">;
-  telegramDeps: Pick<RegisterTelegramHandlerParams["telegramDeps"], "resolveStorePath">;
 }) {
   const messageCache = createTelegramMessageCache({
     scope: resolveTelegramMessageCacheScope(
-      telegramDeps.resolveStorePath(cfg.session?.store, {
+      resolveStorePath(cfg.session?.store, {
         agentId: ownerAgentId,
       }),
     ),

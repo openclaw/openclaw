@@ -261,7 +261,7 @@ export type TurnRecapWatch = {
   sessionKey: string;
   agentId: string | null;
   gatewayClient: GatewayBrowserClient | null;
-  runId: string;
+  runId: string | null;
   /** For a run that resumed a handoff: when its request was asked and the runs before it. */
   request: TurnRequest | null;
   recap: TurnRecap | null;
@@ -292,11 +292,20 @@ export function resolveTurnRecap(
     agentId?: string | null;
     gatewayClient?: GatewayBrowserClient | null;
     indicator?: { runId?: string; request?: TurnRequest };
+    activeRunId?: string | null;
     row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs" | "endedAt">;
     usageByRun?: ReadonlyMap<string, RunOutputUsage>;
   },
 ): (TurnRecap & { runId: string }) | null {
-  const { sessionKey, agentId = null, gatewayClient = null, indicator, row, usageByRun } = params;
+  const {
+    sessionKey,
+    agentId = null,
+    gatewayClient = null,
+    indicator,
+    activeRunId,
+    row,
+    usageByRun,
+  } = params;
   let watch = host.turnRecapWatch;
   if (
     watch?.sessionKey !== sessionKey ||
@@ -305,19 +314,19 @@ export function resolveTurnRecap(
   ) {
     watch = null;
   }
-  if (indicator) {
-    const runId = indicator.runId;
-    if (!runId) {
-      host.turnRecapWatch = null;
-      return null;
-    }
+  if (indicator || activeRunId) {
+    const runId = indicator?.runId ?? activeRunId ?? null;
     if (watch?.runId !== runId) {
-      watch = { sessionKey, agentId, gatewayClient, runId, request: null, recap: null };
+      // An answer can identify a resumed run after its working indicator has vanished.
+      const request = watch?.runId === null ? watch.request : null;
+      watch = { sessionKey, agentId, gatewayClient, runId, request, recap: null };
     }
-    watch.request = indicator.request ?? null;
+    if (indicator) {
+      watch.request = indicator.request ?? null;
+    }
   }
   host.turnRecapWatch = watch;
-  if (!watch) {
+  if (!watch?.runId) {
     return null;
   }
   const runIds = [...(watch.request?.runIds ?? []), watch.runId];

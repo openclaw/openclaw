@@ -15,12 +15,12 @@ import {
 } from "../runtime-api.js";
 import { resolveMSTeamsRuntimeAccount, withAccountScopedMSTeamsConfig } from "./accounts.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
-import { createMSTeamsMonitorStores } from "./monitor-account-stores.js";
 import { isMSTeamsInvokeAuthorized, createMSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { createMSTeamsHandlerConfigReader } from "./monitor-handler/config.js";
@@ -31,7 +31,11 @@ import {
   type MSTeamsStatusSink,
 } from "./monitor-status.js";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
-import { extractMSTeamsPollVote, type MSTeamsPollStore } from "./polls.js";
+import {
+  createMSTeamsPollStoreState,
+  extractMSTeamsPollVote,
+  type MSTeamsPollStore,
+} from "./polls.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import { createMSTeamsReplayContext } from "./replay-context.js";
 import {
@@ -218,7 +222,9 @@ export async function monitorMSTeamsProvider(
       cfg,
       resolveChannelLimitMb: ({ cfg: channelCfg }) => channelCfg.channels?.msteams?.mediaMaxMb,
     }) ?? 8 * 1024 * 1024;
-  const { conversationStore, pollStore } = createMSTeamsMonitorStores(accountId, opts);
+  const conversationStore =
+    opts.conversationStore ?? createMSTeamsConversationStoreState({ accountId });
+  const pollStore = opts.pollStore ?? createMSTeamsPollStoreState({ accountId });
 
   log.info("starting provider on Gateway HTTP routes");
 

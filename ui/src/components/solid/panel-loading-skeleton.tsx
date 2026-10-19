@@ -1,6 +1,6 @@
-import type { JSX } from "@solidjs/web";
-import { createMemo, createRenderEffect, For } from "solid-js";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { spread, type JSX } from "@solidjs/web";
+import { createMemo, For } from "solid-js";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import panelStyles from "../../styles/panel-loading-skeleton.css?inline";
 
 export type PanelLoadingSkeletonVariant =
@@ -22,7 +22,7 @@ export type PanelLoadingSkeletonProps = {
   overlay?: boolean;
 };
 
-export type PanelLoadingSkeletonElement = SolidBridgeElement<PanelLoadingSkeletonProps>;
+type PanelLoadingSkeletonElement = SolidBridgeElement<PanelLoadingSkeletonProps>;
 
 type LineWidth = "short" | "medium" | "long";
 
@@ -180,14 +180,15 @@ export function PanelLoadingSkeletonContent(props: PanelLoadingSkeletonProps) {
 export const PanelLoadingSkeleton = defineSolidBridge<PanelLoadingSkeletonProps>(
   "openclaw-panel-loading-skeleton",
   (props, host) => {
-    host.setAttribute("role", "status");
-    host.setAttribute("aria-busy", "true");
-    createRenderEffect(
-      () => ({ variant: props.variant ?? "files", label: props.label }),
-      (value) => {
-        host.setAttribute("data-panel-skeleton", value.variant);
-        host.setAttribute("aria-label", value.label);
-      },
+    spread(
+      host,
+      () => ({
+        role: "status",
+        "aria-busy": "true",
+        "data-panel-skeleton": props.variant ?? "files",
+        "aria-label": props.label,
+      }),
+      true,
     );
     return (
       <>
@@ -205,3 +206,9 @@ export const PanelLoadingSkeleton = defineSolidBridge<PanelLoadingSkeletonProps>
     },
   },
 );
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-panel-loading-skeleton": PanelLoadingSkeletonElement;
+  }
+}

@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import type { JSX } from "@solidjs/web";
+import { dynamic, type JSX } from "@solidjs/web";
 import { createMemo, createSignal, createEffect, onCleanup, For, untrack } from "solid-js";
 import { AgentPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
@@ -503,6 +503,7 @@ export function InlineText(props: InlineTextProps) {
   };
   const Editor = () => {
     const bindValue = liveInputValue(draftValue);
+    const Input = dynamic(() => (props.field === "notes" ? "textarea" : "input"));
     return (
       <span
         class={["workboard-detail__text-editor", `workboard-detail__text-editor--${props.field}`]}
@@ -531,26 +532,15 @@ export function InlineText(props: InlineTextProps) {
           }
         }}
       >
-        {props.field === "notes" ? (
-          <textarea
-            class="settings-input"
-            aria-label={fieldLabel()}
-            rows={12}
-            ref={bindValue}
-            disabled={isSaving() || (disabled() && !props.readOnly)}
-            readonly={props.readOnly}
-            onInput={input}
-          />
-        ) : (
-          <input
-            class="settings-input"
-            aria-label={fieldLabel()}
-            ref={bindValue}
-            disabled={isSaving() || (disabled() && !props.readOnly)}
-            readonly={props.readOnly}
-            onInput={input}
-          />
-        )}
+        <Input
+          class="settings-input"
+          aria-label={fieldLabel()}
+          rows={props.field === "notes" ? 12 : undefined}
+          ref={bindValue}
+          disabled={isSaving() || (disabled() && !props.readOnly)}
+          readonly={props.readOnly}
+          onInput={input}
+        />
         <span class="workboard-detail__text-actions">
           <button
             type="button"

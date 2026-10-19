@@ -146,7 +146,14 @@ describe("prepared reply fallback ownership", () => {
       }
     });
     const execute = bindPreparedReplyDispatchRuntime(dispatch, () =>
-      runPreparedReply({ provider: "selected", model: "model" } as RunPreparedReplyParams),
+      runPreparedReply({
+        provider: "selected",
+        model: "model",
+        ctx: {},
+        sessionCtx: {},
+        cfg: config,
+        agentId: dispatch.agentId,
+      } as RunPreparedReplyParams),
     );
 
     await expect(execute()).resolves.toEqual({ text: "reply admitted with legacy context" });
@@ -321,7 +328,14 @@ describe("prepared reply fallback ownership", () => {
         return { text: "fallback admitted" };
       });
       const execute = bindPreparedReplyDispatchRuntime(dispatch, () =>
-        runPreparedReply({ provider: run.provider, model: run.model } as RunPreparedReplyParams),
+        runPreparedReply({
+          provider: run.provider,
+          model: run.model,
+          ctx: {},
+          sessionCtx: {},
+          cfg: config,
+          agentId: dispatch.agentId,
+        } as RunPreparedReplyParams),
       );
 
       await expect(execute()).resolves.toEqual({ text: "fallback admitted" });

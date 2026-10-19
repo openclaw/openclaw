@@ -34,7 +34,6 @@ export function retainDiscordProgressDraft(params: {
   };
   const compositor = createChannelProgressDraftCompositor({
     preparedItems: true,
-    showWorkStatus: true,
     entry: params.entry,
     mode: "progress",
     active: true,

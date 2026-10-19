@@ -4,14 +4,18 @@ import type {
   GatewayRecoveryRuntime,
 } from "../../gateway/server-instance-runtime.types.js";
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
+import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  buildAgentRunTerminalOutcomeFromWaitResult,
+  classifyAgentRunTerminalOutcome,
+} from "../agent-run-terminal-outcome.js";
 
 const RESTART_RECOVERY_START_OBSERVATION_MS = 10_000;
 
 type RestartRecoveryDispatchResult = {
   runId: string;
-  status?: unknown;
-};
+} & NonNullable<Parameters<typeof buildAgentRunTerminalOutcomeFromWaitResult>[0]>;
 
 type RestartRecoveryDispatchObservation = {
   dispatchAccepted: boolean;
@@ -38,6 +42,7 @@ export type RestartRecoveryDispatchStartOutcome =
 
 export async function dispatchRestartRecoveryUntilStarted(params: {
   agentParams: AgentRunRequest;
+  controllerInput?: SessionControllerInput;
   gatewayRuntime: GatewayRecoveryRuntime;
   restartRecoveryOperatorTarget?: GatewayInstanceAgentDispatchOptions["restartRecoveryOperatorTarget"];
   assertAdmissionCurrent?: () => void;
@@ -50,6 +55,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
   let preStartAbortAttempted = false;
   let preStartAbortConfirmed = false;
   let startOwner: AgentTurnStartOwner | undefined;
+  const requesterStartDeadlineAtMs = Date.now() + RESTART_RECOVERY_START_OBSERVATION_MS;
   const observe = (): RestartRecoveryDispatchObservation => ({
     dispatchAccepted,
     executionStarted,
@@ -87,11 +93,16 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
       onExecutionStarted();
       return;
     }
-    if (ownerState && ownerState.expiresAtMs > Date.now()) {
-      // Queueing and runtime preparation already have an exact Gateway owner
-      // and deadline. Recovery observes that budget instead of cancelling healthy waits.
+    const deadlineAtMs =
+      ownerState?.startDeadlineAtMs === null
+        ? null
+        : (ownerState?.startDeadlineAtMs ?? requesterStartDeadlineAtMs);
+    if (ownerState && (deadlineAtMs === null || deadlineAtMs > Date.now())) {
+      // The controller owns healthy waits; until it publishes a budget, our bound applies.
       scheduleObservation(
-        Math.min(RESTART_RECOVERY_START_OBSERVATION_MS, ownerState.expiresAtMs - Date.now()),
+        deadlineAtMs === null
+          ? RESTART_RECOVERY_START_OBSERVATION_MS
+          : Math.min(RESTART_RECOVERY_START_OBSERVATION_MS, deadlineAtMs - Date.now()),
       );
       return;
     }
@@ -112,6 +123,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
       params.agentParams,
       undefined,
       {
+        controllerInput: params.controllerInput,
         expectFinal: true,
         restartRecoveryOperatorTarget: params.restartRecoveryOperatorTarget,
         assertAdmissionCurrent: params.assertAdmissionCurrent,
@@ -165,12 +177,19 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
   ]);
 }
 
-export type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
+export type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout" | "cancelled";
 
 export function normalizeRestartRecoveryTerminalStatus(
-  value: unknown,
+  result: Parameters<typeof buildAgentRunTerminalOutcomeFromWaitResult>[0],
 ): RestartRecoveryTerminalStatus | undefined {
-  return value === "error" || value === "ok" || value === "timeout" ? value : undefined;
+  const outcome = buildAgentRunTerminalOutcomeFromWaitResult(result);
+  if (!outcome) {
+    return undefined;
+  }
+  if (classifyAgentRunTerminalOutcome(outcome) === "cancellation") {
+    return outcome.stopReason === "restart" ? undefined : "cancelled";
+  }
+  return outcome.status;
 }
 
 export async function probeRestartRecoveryTerminalStatus(
@@ -178,11 +197,11 @@ export async function probeRestartRecoveryTerminalStatus(
   gatewayRuntime: GatewayRecoveryRuntime,
 ): Promise<RestartRecoveryTerminalStatus | undefined> {
   try {
-    const result = await gatewayRuntime.waitForAgent<{ endedAt?: unknown; status?: unknown }>(
+    const result = await gatewayRuntime.waitForAgent<RestartRecoveryDispatchResult>(
       { runId, timeoutMs: 0 },
       2_000,
     );
-    const status = normalizeRestartRecoveryTerminalStatus(result.status);
+    const status = normalizeRestartRecoveryTerminalStatus(result);
     // A zero-time wait also reports timeout for active or unknown work.
     return status === "timeout" && typeof result.endedAt !== "number" ? undefined : status;
   } catch {

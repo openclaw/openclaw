@@ -5,24 +5,25 @@ import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
+  buildAssistantFailoverSignal,
   classifyAssistantFailoverReason,
-  formatBillingErrorMessage,
-  formatUserFacingAssistantErrorText,
-  GENERIC_ASSISTANT_ERROR_TEXT,
-  isTimeoutErrorMessage,
   isAuthAssistantError,
   isBillingAssistantError,
   isFailoverAssistantError,
   isRateLimitAssistantError,
-  parseImageDimensionError,
-  pickFallbackThinkingLevel,
-} from "../../embedded-agent-helpers.js";
-import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
+} from "../../embedded-agent-helpers/assistant-message-failures.js";
+import {
+  formatUserFacingAssistantErrorText,
+  GENERIC_ASSISTANT_ERROR_TEXT,
+} from "../../embedded-agent-helpers/error-text.js";
+import { parseImageDimensionError } from "../../embedded-agent-helpers/image-errors.js";
+import { pickFallbackThinkingLevel } from "../../embedded-agent-helpers/thinking.js";
 import {
   FailoverError,
   recordModelFallbackStop,
   resolveFailoverStatus,
 } from "../../failover-error.js";
+import { isTimeoutErrorMessage } from "../../failover/message-patterns.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import {
   classifyRateLimitWindow,
@@ -30,7 +31,10 @@ import {
   shouldRetryFailoverSignal,
 } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
-import { renderRateLimitRetryExhaustion } from "../../failover/user-copy.js";
+import {
+  formatBillingErrorMessage,
+  renderRateLimitRetryExhaustion,
+} from "../../failover/user-copy.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 import { log } from "../logger.js";
@@ -42,7 +46,7 @@ import { createFailoverDecisionLogger } from "./failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn-recovery.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 import { isEmbeddedRunTerminalInterrupted, isEmbeddedRunTimeoutFinal } from "./terminal-outcome.js";
 
 const MAX_EMPTY_ERROR_RETRIES = 3;
@@ -337,7 +341,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       result: effectiveFailoverReason === "timeout" ? "timeout" : result,
       ...(effectiveFailoverReason ? { reason: effectiveFailoverReason } : {}),
       stage: "assistant",
-      ...(typeof status === "number" ? { status } : {}),
+      ...(status !== undefined ? { status } : {}),
     });
   };
   const throwFailure = (error: FailoverError): never => {

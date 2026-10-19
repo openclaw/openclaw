@@ -288,7 +288,7 @@ extension ChatSessionSidebar {
         let generation: Int?
         let loading: Bool
         let healthy: Bool
-        // ui/src/components/session-lineage-controller.ts:302: lifecycle facts, not live display updates, retire reads.
+        // ui/src/components/session-lineage.ts: lifecycle facts, not live display updates, retire reads.
         let selection: OpenClawChatSessionEntry
         let parents: [OpenClawChatSessionEntry]
         let inlineParents: Set<String>

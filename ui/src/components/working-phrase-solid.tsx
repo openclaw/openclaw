@@ -1,9 +1,9 @@
 // Decorative long-wait text; the working row owns the accessible status.
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 
 const PHRASE_KEYS = [
   "shelling",
@@ -44,26 +44,20 @@ function displayedPhraseIndex(seed: string, bucket: number, length: number): num
   return (offset + bucket * stride) % length;
 }
 
-defineSolidBridge<{
+type WorkingPhraseProps = {
   startMs: number | null;
   seed: string;
   phrases: readonly string[] | undefined;
-}>(
+};
+
+defineSolidBridge<WorkingPhraseProps>(
   "openclaw-working-phrase",
   (props, host) => {
     host.style.display = "contents";
     const [tick, setTick] = createSignal(0);
-    const polling = useVisiblePoll(1_000, () => setTick((value) => value + 1));
-    createEffect(
-      () => props.startMs != null && props.phrases?.length !== 0,
-      (ticking) => {
-        if (ticking) {
-          polling.start();
-        } else {
-          polling.stop();
-        }
-      },
-    );
+    useVisiblePoll(1_000, () => setTick((value) => value + 1), {
+      enabled: () => props.startMs != null && props.phrases?.length !== 0,
+    });
     const label = createMemo(() => {
       tick();
       if (props.startMs == null || props.phrases?.length === 0) {
@@ -92,3 +86,20 @@ defineSolidBridge<{
     },
   },
 );
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-working-phrase": SolidBridgeElement<WorkingPhraseProps>;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-working-phrase": HTMLAttributes<HTMLElementTagNameMap["openclaw-working-phrase"]> &
+        Properties<HTMLElementTagNameMap["openclaw-working-phrase"]> & {
+          "prop:phrases"?: WorkingPhraseProps["phrases"];
+        };
+    }
+  }
+}

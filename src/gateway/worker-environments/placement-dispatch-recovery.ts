@@ -223,7 +223,14 @@ export function createPlacementRecoveryActions(
     environmentId?: string,
     resultsOnly?: "results-only",
   ): Promise<void> => {
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
     let facts = await placements.readProjection([sessionId], { current: true });
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
+    // Once recovery accepts a result, finish this session's durable settlement.
     const stagedOwners = await recoverPendingWorkspaceResults(deps, facts, environmentId);
     if (resultsOnly === "results-only") {
       return;
@@ -313,16 +320,28 @@ export function createPlacementRecoveryActions(
     mode?: "startup",
     admit: WorkerPlacementRecoveryAdmission = admitRecovery,
   ): Promise<void> => {
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
     // Environment reconciliation can resume provisioning through session admission.
     // It must finish outside admission, before any recoverSession unit enters it.
     if (mode === "startup") {
       // Older Gateways can commit draining before claiming a result, or release
       // an unstaged failed claim. The draining placement still owes a final save.
       for (const { sessionId } of await placements.readRecoveryCandidates()) {
+        if (deps.isShuttingDown?.()) {
+          return;
+        }
         let abandonedEnvironmentId: string | undefined;
         // A busy session has a live lifecycle operation in this process that owns its final save.
         await admit([sessionId], async () => {
+          if (deps.isShuttingDown?.()) {
+            return;
+          }
           const facts = await placements.readProjection([sessionId], { current: true });
+          if (deps.isShuttingDown?.()) {
+            return;
+          }
           const placement = facts.placements.get(sessionId);
           if (!placement || facts.moves.has(sessionId)) {
             return;
@@ -339,12 +358,15 @@ export function createPlacementRecoveryActions(
             environment.ownerEpoch === placement.activeOwnerEpoch
           ) {
             await deps.workspaceOperations.run(environment.environmentId, async () => {
+              if (deps.isShuttingDown?.()) {
+                return;
+              }
               await forceAbandonWorkerEnvironment({
                 ...deps,
                 environmentId: environment.environmentId,
               });
+              abandonedEnvironmentId = environment.environmentId;
             });
-            abandonedEnvironmentId = environment.environmentId;
             return;
           }
           if (
@@ -381,7 +403,13 @@ export function createPlacementRecoveryActions(
       const reconciled = await runTasksWithConcurrency({
         tasks: (await placements.readRecoveryCandidates()).flatMap(({ environmentId, state }) =>
           environmentId && state !== "failed" && state !== "local" && state !== "reclaimed"
-            ? [() => environments.reconcileEnvironment(environmentId)]
+            ? [
+                async () => {
+                  if (!deps.isShuttingDown?.()) {
+                    await environments.reconcileEnvironment(environmentId);
+                  }
+                },
+              ]
             : [],
         ),
         limit: 8,
@@ -401,6 +429,9 @@ export function createPlacementRecoveryActions(
           : undefined;
     }
     for (const { sessionId } of candidates) {
+      if (deps.isShuttingDown?.()) {
+        return;
+      }
       await admit([sessionId], () => recoverSession(sessionId, mode ?? "restart"));
     }
     if (
@@ -418,8 +449,14 @@ export function createPlacementRecoveryActions(
     environmentId?: string,
     admit: WorkerPlacementRecoveryAdmission = admitRecovery,
   ): Promise<void> => {
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
     await environments.reconcileOnce(environmentId);
     for (const candidate of await placements.readRecoveryCandidates()) {
+      if (deps.isShuttingDown?.()) {
+        return;
+      }
       if (
         environmentId !== undefined &&
         candidate.environmentId !== environmentId &&

@@ -27,7 +27,7 @@ function makeZeroUsageSnapshot() {
   };
 }
 
-export const assertRecord = (value: unknown): Record<string, unknown> => {
+const assertRecord = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("expected record");
   }

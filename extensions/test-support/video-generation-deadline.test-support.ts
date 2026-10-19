@@ -16,11 +16,13 @@ export function testVideoGenerationDeadlines({
   providerId,
   model,
   pendingStatus,
+  defaultPollingTimeoutMs = 120_000,
   loadPlugin,
 }: {
   providerId: "runway" | "together";
   model: string;
   pendingStatus: string;
+  defaultPollingTimeoutMs?: number;
   loadPlugin: () => Promise<Parameters<typeof capturePluginRegistration>[0]>;
 }) {
   describe(`${providerId} video generation deadlines`, () => {
@@ -55,12 +57,12 @@ export function testVideoGenerationDeadlines({
         expectedTimeoutMs: 180_000,
       },
       {
-        name: "retains the default polling budget after a slow submission",
+        name: "finishes near the default polling deadline after a slow submission",
         timeoutMs: undefined,
-        readyAfterMs: Infinity,
-        pendingAtMs: 125_000,
-        settleByMs: 131_000,
-        expectedTimeoutMs: 120_000,
+        readyAfterMs: defaultPollingTimeoutMs + 5_000,
+        pendingAtMs: defaultPollingTimeoutMs,
+        settleByMs: defaultPollingTimeoutMs + 6_000,
+        expectedTimeoutMs: undefined,
       },
     ])("$name", async ({ timeoutMs, readyAfterMs, pendingAtMs, settleByMs, expectedTimeoutMs }) => {
       vi.useFakeTimers();

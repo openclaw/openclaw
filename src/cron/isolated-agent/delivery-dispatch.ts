@@ -1,6 +1,6 @@
 /** Finalize one run result, confirm its notification, then commit its destination conversation. */
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
@@ -12,7 +12,6 @@ import { normalizeCronRunErrorText } from "../service/execution-errors.js";
 import type { CronResolvedDeliveryState } from "../types.js";
 import {
   logCronDeliveryWarn,
-  normalizeSilentReplyText,
   resolveDescendantSubagentFollowup,
   resolveDirectCronDeliveryGeneration,
   resolveStaleCronDeliveryError,
@@ -26,7 +25,6 @@ import { normalizeDirectCronDeliveryPayloads } from "./delivery-payload-normaliz
 import { requiresExternalCronDelivery } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
-import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 const followup = createLazyImportLoader(() => import("./subagent-followup.runtime.js"));
 const conversationResult = createLazyImportLoader(() => import("../conversation-result.js"));
@@ -62,7 +60,12 @@ export async function dispatchCronDelivery(
     synthesizedText = text;
     outputText = synthesizedText;
     summary = pickSummaryFromOutput(synthesizedText) ?? summary;
-    deliveryPayloads = [{ text: synthesizedText }];
+    deliveryPayloads = [
+      ...deliveryPayloads.filter((payload) =>
+        hasOutboundReplyContent({ ...payload, text: undefined }, { trimText: true }),
+      ),
+      { text: synthesizedText },
+    ];
   };
   const finish = async (
     disposition?: CronDeliveryDisposition,
@@ -111,6 +114,14 @@ export async function dispatchCronDelivery(
     record("not-delivered", detail);
     return finish({ kind: "error", error: detail, errorKind: "delivery-target" });
   };
+  const finishInterrupted = () => {
+    const error = params.abortReason();
+    if (!sentByTool) {
+      record("not-delivered", error);
+    }
+    // An unfinished child still owns execution; a completed reader owns only delivery here.
+    return finish(params.spawnOnlyHandoff ? { kind: "error", error } : undefined);
+  };
 
   if (!params.deliveryRequested) {
     if (params.deliveryPlan.mode === "none" && params.spawnOnlyHandoff) {
@@ -122,7 +133,7 @@ export async function dispatchCronDelivery(
         timeoutMs: params.timeoutMs,
         abortSignal: params.abortSignal,
       });
-      if (!child?.reply || params.isAborted()) {
+      if ((!child?.reply && child?.disposition !== "silent") || params.isAborted()) {
         return finish({
           kind: "error",
           error: params.isAborted()
@@ -133,7 +144,7 @@ export async function dispatchCronDelivery(
           delivered: false,
         });
       }
-      if (!isSilentReplyText(child.reply, SILENT_REPLY_TOKEN)) {
+      if (child?.reply) {
         adoptChild(child.reply);
       }
     }
@@ -146,7 +157,7 @@ export async function dispatchCronDelivery(
   }
 
   if (params.isAborted()) {
-    return finish({ kind: "error", error: params.abortReason() });
+    return finishInterrupted();
   }
   if (
     !sentByTool &&
@@ -162,20 +173,42 @@ export async function dispatchCronDelivery(
     return failTarget(params.resolvedDelivery.error.message);
   }
   if (!sentByTool && (synthesizedText || params.spawnOnlyHandoff)) {
-    const initial = synthesizedText?.trim() ?? "";
-    const child = await resolveDescendantSubagentFollowup({
-      sessionKey: params.runSessionKey,
-      runStartedAt: params.runStartedAt,
-      timeoutMs: params.timeoutMs,
-      deliveryBestEffort: params.deliveryBestEffort,
-      spawnOnlyHandoff: params.spawnOnlyHandoff,
-      initialSynthesizedText: initial,
-      abortSignal: params.abortSignal,
-    });
+    const initial = synthesizedText ?? "";
+    let child: Awaited<ReturnType<typeof resolveDescendantSubagentFollowup>>;
+    try {
+      child = await resolveDescendantSubagentFollowup({
+        sessionKey: params.runSessionKey,
+        runStartedAt: params.runStartedAt,
+        timeoutMs: params.timeoutMs,
+        deliveryBestEffort: params.deliveryBestEffort,
+        spawnOnlyHandoff: params.spawnOnlyHandoff,
+        initialSynthesizedText: initial,
+        abortSignal: params.abortSignal,
+      });
+    } catch (error) {
+      if (!params.isAborted()) {
+        throw error;
+      }
+      return finishInterrupted();
+    }
+    if (params.isAborted()) {
+      return finishInterrupted();
+    }
+    if (child.finalDisposition === "silent") {
+      deliveryPayloads = deliveryPayloads.filter((payload) =>
+        hasOutboundReplyContent({ ...payload, text: undefined }, { trimText: true }),
+      );
+      synthesizedText = outputText = summary = undefined;
+      if (deliveryPayloads.length === 0) {
+        deliveryAttempted = true;
+        record("not-delivered", undefined, "silent");
+        return finish({ kind: "suppressed" });
+      }
+    }
     if (child.finalReply) {
       adoptChild(child.finalReply);
     }
-    if (params.spawnOnlyHandoff && !synthesizedText?.trim()) {
+    if (params.spawnOnlyHandoff && !synthesizedText?.trim() && deliveryPayloads.length === 0) {
       deliveryAttempted = true;
       return finish({
         kind: "error",
@@ -187,13 +220,7 @@ export async function dispatchCronDelivery(
         delivered: false,
       });
     }
-    if (
-      (!params.deliveryBestEffort && child.hasUnsettledDescendants) ||
-      (child.hadDescendants &&
-        synthesizedText?.trim() === initial &&
-        isLikelyInterimCronMessage(initial) &&
-        !isSilentReplyText(initial, SILENT_REPLY_TOKEN))
-    ) {
+    if (!params.deliveryBestEffort && child.hasUnsettledDescendants) {
       deliveryAttempted = true;
       record(
         "not-delivered",
@@ -226,13 +253,8 @@ export async function dispatchCronDelivery(
     return finish(sentByTool ? undefined : { kind: "suppressed" });
   }
   deliveryPayloads = normalized.payload;
-  const finalText = normalizeSilentReplyText(synthesizedText);
-  synthesizedText = finalText.strippedTrailingSilentToken ? undefined : finalText.text;
   if (synthesizedText) {
     outputText = synthesizedText;
-  }
-  if (params.isAborted()) {
-    return finish({ kind: "error", error: params.abortReason() });
   }
 
   const conversationRuntime = await conversationResult.load();

@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
@@ -38,6 +38,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayPluginReloadResult } from "./server-reload-contracts.js";
 import {
@@ -73,6 +74,8 @@ let skipChannels: string | undefined;
 let skipProviders: string | undefined;
 
 beforeEach(() => {
+  const watcher = installWatcherMock();
+  onTestFinished(() => watcher.restore());
   pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
   skipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
   skipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;

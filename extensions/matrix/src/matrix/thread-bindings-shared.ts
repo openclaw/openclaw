@@ -25,14 +25,14 @@ type MatrixThreadBindingManager = {
   }) => MatrixThreadBindingRecord | undefined;
   listBySessionKey: (targetSessionKey: string) => MatrixThreadBindingRecord[];
   listBindings: () => MatrixThreadBindingRecord[];
-  /** @deprecated Use touchBindingAsync; removal follows a stable deprecation period. */
+  /** @deprecated Use touchBindingAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   touchBinding: (bindingId: string, at?: number) => MatrixThreadBindingRecord | null;
-  /** @deprecated Use setIdleTimeoutBySessionKeyAsync; removal follows a stable deprecation period. */
+  /** @deprecated Use setIdleTimeoutBySessionKeyAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   setIdleTimeoutBySessionKey: (params: {
     targetSessionKey: string;
     idleTimeoutMs: number;
   }) => MatrixThreadBindingRecord[];
-  /** @deprecated Use setMaxAgeBySessionKeyAsync; removal follows a stable deprecation period. */
+  /** @deprecated Use setMaxAgeBySessionKeyAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   setMaxAgeBySessionKey: (params: {
     targetSessionKey: string;
     maxAgeMs: number;
@@ -173,14 +173,14 @@ function createMatrixThreadBindingTimeoutSetter<
   };
 }
 
-/** @deprecated Use setMatrixThreadBindingIdleTimeoutBySessionKeyAsync; removal follows a stable deprecation period. */
+/** @deprecated Use setMatrixThreadBindingIdleTimeoutBySessionKeyAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export const setMatrixThreadBindingIdleTimeoutBySessionKey = createMatrixThreadBindingTimeoutSetter(
   "setMatrixThreadBindingIdleTimeoutBySessionKey",
   (manager, params: { accountId: string; targetSessionKey: string; idleTimeoutMs: number }) =>
     manager.setIdleTimeoutBySessionKey(params),
 );
 
-/** @deprecated Use setMatrixThreadBindingMaxAgeBySessionKeyAsync; removal follows a stable deprecation period. */
+/** @deprecated Use setMatrixThreadBindingMaxAgeBySessionKeyAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export const setMatrixThreadBindingMaxAgeBySessionKey = createMatrixThreadBindingTimeoutSetter(
   "setMatrixThreadBindingMaxAgeBySessionKey",
   (manager, params: { accountId: string; targetSessionKey: string; maxAgeMs: number }) =>

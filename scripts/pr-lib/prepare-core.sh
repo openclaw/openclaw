@@ -215,7 +215,8 @@ prepare_baseline_materialize() (
     done
   fi
   enter_worktree "$pr" false || return 1
-  local PREP_BRANCH="" PREP_REVIEW_MODE="" PR_NUMBER=""
+  local PREP_BRANCH="" PREP_REVIEW_MODE="" PR_NUMBER="" PR_HEAD_SHA_BEFORE=""
+  local PREP_INCOMING_JSON_OID=""
   local PREP_BASELINE_REFRESH_HEAD="" PREP_BASELINE_REFRESH_OID=""
   source .local/prep-context.env || return 1
   [ "$PREP_REVIEW_MODE" = correction ] && [ "$PR_NUMBER" = "$pr" ] &&
@@ -225,7 +226,11 @@ prepare_baseline_materialize() (
   root=$(repo_root) || return 1
   helper="$(dirname "$(review_artifacts_helper_path)")/baseline-refresh.mjs"
   node "$helper" check-signing-source "$expected" || return 1
-  snapshot=$(correction_review_snapshot "$pr") || return 1
+  if [ "$successor" = false ] && [ "$expected" = "$PR_HEAD_SHA_BEFORE" ]; then
+    snapshot=$(node "$helper" incoming-source-snapshot "$pr" "$expected" "$PREP_INCOMING_JSON_OID") || return 1
+  else
+    snapshot=$(correction_review_snapshot "$pr") || return 1
+  fi
   observation=$(cat .local/pr-meta.json) || return 1
   [ -n "$snapshot" ] && [ -n "$PR_MAIN_SHA" ] || return 1
   require_baseline_source() {

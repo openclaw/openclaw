@@ -3,9 +3,9 @@ import type { SkillsLibraryReadResult } from "../../../../packages/gateway-proto
 import "../../components/modal-dialog.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import { libraryFileText } from "./library-files.ts";
+import { libraryFileText } from "./library-file-text.ts";
 
-export type LibraryPinReadProps = {
+type LibraryPinReadProps = {
   read: SkillsLibraryReadResult;
   file: string;
   onFile: (file: string) => void;

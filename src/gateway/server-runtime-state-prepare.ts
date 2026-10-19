@@ -5,6 +5,8 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
+import { readDevicePairingNodeSnapshot } from "../infra/device-pairing-store-readonly.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -32,7 +34,7 @@ import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import type { GatewayPluginReloadStatus } from "./server-plugin-runtime-generation.js";
+import type { GatewayPluginReloadStatus } from "./server-plugin-reload-status.types.js";
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
 import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
@@ -124,6 +126,12 @@ export async function prepareGatewayKernelState(params: {
     getPluginRegistry: () => pluginRuntime.registry,
     hostDesktopService,
   });
+  await startupTrace.measure("device-identity", () =>
+    loadOrCreateProcessDeviceIdentityAsync().catch(() => {
+      // Chat fingerprints are optional; admission owns the bounded unavailability warning.
+    }),
+  );
+  await startupTrace.measure("device-pairing", () => readDevicePairingNodeSnapshot());
   const workerEnvironmentRuntime = workerEnvironmentStartup
     ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
         const workerModule = await import("./server-worker-environment-startup.js");
@@ -194,31 +202,29 @@ export async function prepareGatewayKernelState(params: {
             gatewayNamespace: nodeWorkerGatewayNamespace,
             nodeWorkerBundleRetention,
             getSessionChangeContext: () => pluginGatewayContext.current,
-            persistAbandonedPartial: async ({ sessionId, sessionKey, agentId, runId }) => {
+            persistAbandonedPartial: async (request) => {
               // Placement runtime starts before chat state exists; callers run only after startup.
-              const partial = connectionState.chatRunState.resolveBuffer(runId, { final: true });
+              const partial = connectionState.chatRunState.resolveBuffer(request.runId, {
+                final: true,
+              });
               const text = partial.displayText ?? partial.text;
-              if (!text.trim()) {
+              if (!text.trim() && !request.missingToolResultText) {
                 return;
               }
-              const {
-                captureAbortedPartial,
-                persistAbortedPartials,
-                prepareChatAbortSessionSnapshot,
-              } = await import("./server-methods/chat-transcript-persistence.runtime.js");
-              await persistAbortedPartials({
+              const transcript =
+                await import("./server-methods/chat-transcript-persistence.runtime.js");
+              await transcript.persistAbortedPartials({
                 context: { logGateway: log },
+                missingToolResultText: request.missingToolResultText,
                 snapshots: [
-                  captureAbortedPartial({
-                    sessionKey,
-                    sessionId,
-                    runId,
+                  transcript.captureAbortedPartial({
+                    ...request,
                     text,
                     abortOrigin: "placement-abandon",
-                    session: await prepareChatAbortSessionSnapshot({
+                    session: await transcript.prepareChatAbortSessionSnapshot({
                       cfg: getCommittedRuntimeConfig(),
-                      key: sessionKey,
-                      agentId,
+                      key: request.sessionKey,
+                      agentId: request.agentId,
                     }),
                   }),
                 ],
@@ -480,6 +486,7 @@ export async function prepareGatewayKernelState(params: {
   log.info("starting HTTP server...");
   const connectionState = await startupTrace.measure("runtime.state", () =>
     createGatewayConnectionState({
+      resolveGatewayContext: resolvePluginGatewayContext,
       scheduler,
       bootId,
       cfg: cfgAtStart,

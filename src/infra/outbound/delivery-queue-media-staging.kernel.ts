@@ -1,5 +1,5 @@
 // SQLite media custody runs on the queue operation's admitted connection.
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
@@ -94,7 +94,7 @@ export function loadDeliveryQueueMediaRetentionSnapshotInDatabase(
       return [];
     }
     const paths = report?.mediaPaths;
-    if (!Array.isArray(paths) || !paths.every((value) => typeof value === "string")) {
+    if (!isStringArray(paths)) {
       throw new Error("Cannot safely collect queue media with an invalid migration receipt");
     }
     return paths;

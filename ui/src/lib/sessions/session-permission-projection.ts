@@ -43,7 +43,7 @@ export function createSessionPermissionProjection(
     }
   >();
   const permissionIdentity = (key: string, agentId?: string | null) => {
-    const identity = resolveUiConversationIdentity(gateway.snapshot, key, agentId ?? undefined);
+    const identity = resolveUiConversationIdentity(gateway.snapshot, key, agentId);
     return `${identity.sessionKey}\0${identity.agentId ?? ""}`;
   };
   const createProjection = (identity: string, sessionId?: string) => {

@@ -9,6 +9,7 @@ import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { removePersistedPluginModelCatalogCredentials } from "../plugin-model-catalog-credentials.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { replaceAuthProfileAuthorization } from "./authorization-lifetime.js";
 import {
   listCandidateAuthProfileStores,
   loadCandidateAuthProfileStoreAsync,
@@ -91,8 +92,7 @@ export async function setAuthProfileOrder(params: {
   sharedStoreWrite?: boolean;
 }): Promise<AuthProfileStore | null> {
   const providerKey = resolveProviderIdForAuth(params.provider);
-  const sanitized =
-    params.order && Array.isArray(params.order) ? normalizeStringEntries(params.order) : [];
+  const sanitized = params.order ? normalizeStringEntries(params.order) : [];
   const deduped = dedupeProfileIds(sanitized);
   const order = deduped.length > 0 ? deduped : undefined;
 
@@ -163,7 +163,7 @@ export async function promoteAuthProfileInOrder(params: {
   return updated === null ? err("lock-contention") : ok(updated);
 }
 
-/** @deprecated Use upsertAuthProfileAsync. Retained until an announced stable removal window. */
+/** @deprecated Use upsertAuthProfileAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export function upsertAuthProfile(params: {
   profileId: string;
   credential: AuthProfileCredential;
@@ -176,7 +176,7 @@ export function upsertAuthProfile(params: {
   });
   const credential = normalizeAuthProfileCredential(params.credential);
   const store = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
-  store.profiles[params.profileId] = credential;
+  store.profiles[params.profileId] = replaceAuthProfileAuthorization(credential);
   saveAuthProfileStore(store, params.agentDir, {
     filterExternalAuthProfiles: false,
     sharedStoreWrite: true,
@@ -694,6 +694,7 @@ export async function markAuthProfileSuccess(params: {
   store: AuthProfileStore;
   provider: string;
   profileId: string;
+  modelId?: string;
   agentDir?: string;
 }): Promise<void> {
   const { store, provider, profileId, agentDir } = params;
@@ -707,7 +708,12 @@ export async function markAuthProfileSuccess(params: {
     return;
   }
   const updated = await runAuthProfileUsage(async () => {
-    const reduction = { kind: "success" as const, expectedProfile: profile, lastUsed: Date.now() };
+    const reduction = {
+      kind: "success" as const,
+      expectedProfile: profile,
+      lastUsed: Date.now(),
+      modelId: params.modelId,
+    };
     if (isUserModelAuthProfileId(profileId)) {
       return preparePersonalAuthProfileUsage(store, profileId).record(reduction);
     }

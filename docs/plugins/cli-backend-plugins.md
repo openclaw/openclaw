@@ -113,6 +113,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
     function buildAcmeCliBackend(): Parameters<OpenClawPluginApi["registerCliBackend"]>[0] {
       return {
         id: "acme-cli",
+        modelProvider: "acme-cli",
         liveTest: {
           defaultModelRef: "acme-cli/acme-large",
           defaultImageProbe: false,
@@ -169,6 +170,13 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
     The backend id must match the manifest `cliBackends` entry. The registered
     adapter is authoritative plugin code; OpenClaw config selects the backend
     but does not rewrite its command contract.
+
+    Set `modelProvider` to the canonical model provider whose models the CLI
+    executes. It can match the backend id, as above, or a separate provider id.
+    Omitting it or supplying a blank value emits a warning during runtime or
+    setup-only registration: direct CLI references still work, but no
+    provider-to-runtime binding is created. OpenClaw does not infer this field
+    from `id`.
 
   </Step>
 </Steps>
@@ -423,6 +431,16 @@ for backend-owned lifecycle records instead.
 Tool events describe work the backend already performed. OpenClaw renders and
 summarizes them, but does not treat them as host tool execution, trusted
 diagnostics, loopback correlation, or message-delivery evidence.
+
+### `classifyErrorCode`: backend-native failure details
+
+Set `classifyErrorCode(message)` to attach a diagnostic code to a selected CLI
+failure. OpenClaw calls it for structured terminal errors and failed process
+exits, after extracting the error message. Return `undefined` for unrecognized
+errors. This hook does not select the failover reason or change retry policy;
+host-owned terminal-stop, context-overflow, and empty-exit codes take precedence.
+For example, `refresh_contention` selects the sign-in-in-progress message instead
+of treating a refresh lock as an expired login.
 
 ### `parseJsonlLifecycleEvent`: provider-native lifecycle records
 

@@ -36,7 +36,6 @@ import {
 } from "./state-migrations.receipts.js";
 import {
   LegacyMigrationSourceClaim,
-  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
   readLegacyMigrationSourceSnapshot,
   resolveLegacyMigrationRelativePath,
   type LegacyMigrationSourceSnapshot,
@@ -201,11 +200,6 @@ function importAndRecordReceipt(params: {
             stateDb.insertInto("device_identities").values({ identity_key: IDENTITY_KEY, ...row }),
           );
         }
-      }
-
-      const verified = readCanonicalIdentity(db);
-      if (!verified || classifyCanonicalRow(verified, params.snapshot.identity) !== "same") {
-        throw new Error("SQLite verification failed for the primary device identity");
       }
 
       const reportJson = JSON.stringify({
@@ -441,10 +435,11 @@ export async function migrateLegacyDeviceIdentity(params: {
         if (await source.exists()) {
           throw new Error("legacy device identity source reappeared during import");
         }
-        const finalSnapshot = await source.read(true);
-        if (!snapshotsMatch(snapshot, finalSnapshot)) {
-          throw new Error("legacy device identity claim changed after SQLite import");
-        }
+        const finalSnapshot = await source.verify(
+          snapshot,
+          "legacy device identity claim changed after SQLite import",
+          true,
+        );
         verifyCanonicalIdentity(finalSnapshot.identity, env);
         await source.remove({
           removeSource: params.removeSource,

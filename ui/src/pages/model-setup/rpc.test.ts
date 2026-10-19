@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
+import { createRoot } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as deviceIdentity from "../../lib/nodes/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import type { ControllerHost, PageLifecycle } from "../model-providers/page-controller.ts";
 import { createModelSetupDetectRequest, createModelSetupVerifyRequest } from "./rpc.ts";
 
 type RequestFrame = { id: string; method: string; params?: unknown };
@@ -61,6 +61,7 @@ it.each([
   "keeps verification through a healthy slow model response while preserving $outcome settlement for target $modelTarget",
   async ({ outcome, modelTarget }) => {
     const client = new GatewayBrowserClient({ url: "ws://localhost", token: "test-token" });
+    let stop: (() => void) | undefined;
     try {
       client.start();
       const socket = sockets[0]!;
@@ -86,8 +87,9 @@ it.each([
           policy: { tickIntervalMs: 10_000 },
         },
       });
-      const runVerification = createModelSetupVerifyRequest({
-        addController: () => undefined,
+      const runVerification = createRoot((dispose) => {
+        stop = dispose;
+        return createModelSetupVerifyRequest();
       });
       const settled = vi.fn();
       const verification = runVerification([client, "main", modelTarget]);
@@ -128,6 +130,7 @@ it.each([
       await vi.advanceTimersByTimeAsync(0);
       expect(settled).toHaveBeenCalledOnce();
     } finally {
+      stop?.();
       client.stop();
     }
   },
@@ -135,17 +138,15 @@ it.each([
 
 it("retires a disconnected detection before a transport that ignores abort replies", async () => {
   const response = createDeferred<import("../../api/types.ts").SystemAgentSetupDetectResult>();
-  let lifecycle: PageLifecycle | undefined;
-  const host: Pick<ControllerHost, "addController"> = {
-    addController: (controller) => {
-      lifecycle = controller;
-    },
-  };
+  let stop!: () => void;
   const onComplete = vi.fn();
   const client = { request: () => response.promise } as unknown as GatewayBrowserClient;
-  const runDetection = createModelSetupDetectRequest(host, { getHello: () => null, onComplete });
+  const runDetection = createRoot((dispose) => {
+    stop = dispose;
+    return createModelSetupDetectRequest({ getHello: () => null, onComplete });
+  });
   const running = runDetection([client, "main", {}]);
-  lifecycle?.hostDisconnected?.();
+  stop();
   response.resolve({
     candidates: [],
     manualProviders: [],

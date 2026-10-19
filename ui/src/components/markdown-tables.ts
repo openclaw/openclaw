@@ -2,8 +2,9 @@ import type { MarkdownIt } from "markdown-it";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
-import { createMarkdownIcon } from "./markdown-icon.ts";
+import { createIconElement } from "./markdown-icon.ts";
 
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
@@ -74,9 +75,8 @@ function enhanceTableShell(shell: HTMLElement): void {
   enhancedTableShells.add(shell);
   const label = shell.ownerDocument.createElement("span");
   label.textContent = t("common.expandTable");
-  expand.replaceChildren(createMarkdownIcon("maximize", shell.ownerDocument), label);
-  copy.replaceChildren(createMarkdownIcon("copy", shell.ownerDocument));
-  viewport.addEventListener("scroll", () => syncTableOverflow(shell), { passive: true });
+  expand.replaceChildren(createIconElement("maximize", shell.ownerDocument), label);
+  copy.replaceChildren(createIconElement("copy", shell.ownerDocument));
 }
 
 export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
@@ -153,8 +153,31 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
       }
       syncTables(shells);
     });
+    const stopScroll = listen(
+      owner,
+      "scroll",
+      (event) => {
+        const viewport = event.target;
+        if (!(viewport instanceof HTMLElement) || !viewport.matches(tableViewportSelector)) {
+          return;
+        }
+        // Message roots and their transcript can both own table enhancements.
+        const nearestOwner = event
+          .composedPath()
+          .find((node) => node instanceof HTMLElement && tableOwnerStates.has(node));
+        if (nearestOwner !== owner) {
+          return;
+        }
+        const shell = viewport.closest<HTMLElement>(tableShellSelector);
+        if (shell) {
+          syncTableOverflow(shell);
+        }
+      },
+      { capture: true, passive: true },
+    );
     state = {
       release: () => {
+        stopScroll();
         mutationObserver.disconnect();
         resizeObserver?.disconnect();
       },
@@ -183,9 +206,13 @@ async function showTableDialog(
     return;
   }
   let dialog: HTMLElementTagNameMap["openclaw-modal-dialog"] | undefined;
+  const stopListeners: Array<() => void> = [];
   const close = () => {
     if (state.closeDialog === close) {
       delete state.closeDialog;
+    }
+    for (const stop of stopListeners.splice(0)) {
+      stop();
     }
     dialog?.remove();
   };
@@ -220,20 +247,20 @@ async function showTableDialog(
         }
       }, 0);
     };
-    dialog.addEventListener("modal-cancel", close);
+    stopListeners.push(listen(dialog, "modal-cancel", close));
     const content = document.createElement("div");
     content.className = "markdown-table-dialog chat-text";
     content.dir = getComputedStyle(table).direction;
     for (const event of ["click", "auxclick", "keydown"]) {
-      content.addEventListener(event, dismissLink);
+      stopListeners.push(listen(content, event, dismissLink));
     }
     const dismiss = document.createElement("button");
     dismiss.type = "button";
     dismiss.className = "markdown-table-dialog__close";
     dismiss.setAttribute("aria-label", t("common.closeTable"));
     dismiss.autofocus = true;
-    dismiss.addEventListener("click", close);
-    dismiss.append(createMarkdownIcon("x", document));
+    stopListeners.push(listen(dismiss, "click", close));
+    dismiss.append(createIconElement("x", document));
     content.append(dismiss, table.cloneNode(true));
     dialog.append(content);
     // Keep delegated file/session actions and modal teardown with their transcript.
@@ -275,7 +302,7 @@ export function handleMarkdownTableInteraction(event: Event): void {
         shell.querySelector("table") === table &&
         markdownTableCopyText(table) === text,
       (copied) => {
-        copy.replaceChildren(createMarkdownIcon(copied ? "check" : "copy", copy.ownerDocument));
+        copy.replaceChildren(createIconElement(copied ? "check" : "copy", copy.ownerDocument));
         if (copied === undefined) {
           copy.setAttribute("aria-label", t("common.copyTable"));
         } else {

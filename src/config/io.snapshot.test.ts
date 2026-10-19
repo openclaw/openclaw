@@ -8,6 +8,7 @@ import * as manifestRegistry from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createConfigIoContext } from "./io.context.js";
+import { createConfigIO } from "./io.factory.js";
 import { createConfigReadError } from "./io.invalid-config.js";
 import {
   readConfigFileSnapshotFromContext,
@@ -46,6 +47,26 @@ function createContext(root: string, configPath = path.join(root, "openclaw.json
 }
 
 describe("config snapshot plugin metadata", () => {
+  it.skipIf(process.platform === "win32")(
+    "reads captured root bytes with relative includes without following the live config alias",
+    async () => {
+      const root = tempDirs.make("openclaw-captured-config-");
+      const context = createContext(root);
+      fs.symlinkSync(path.join(root, "missing-live-config.json"), context.configPath);
+      fs.writeFileSync(path.join(root, "settings.json5"), '{ gateway: { mode: "local" } }');
+
+      const snapshot = await createConfigIO({
+        ...context.deps,
+        pluginValidation: "core-only",
+      }).readConfigFileSnapshotFromRaw('{ $include: "./settings.json5" }');
+
+      expect(snapshot.valid).toBe(true);
+      expect(snapshot.config.gateway?.mode).toBe("local");
+      expect(snapshot.raw).toBe('{ $include: "./settings.json5" }');
+      expect(fs.existsSync(path.join(root, "missing-live-config.json"))).toBe(false);
+    },
+  );
+
   it.each(["file", "includes", "validate"])(
     "preserves the original %s read failure without serializing its cause",
     async (phase) => {

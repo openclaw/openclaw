@@ -454,6 +454,7 @@ what was recorded, not as proof of what happened:
 - Writes go through a bounded asynchronous process-owned queue; queue
   saturation, storage failure, or a bounded shutdown timeout can drop records
   and log one operational warning.
+  A rejected metadata record does not stop the queue from accepting later records.
 - Shutdown drops waiting metadata at its existing deadline but joins submitted
   worker operations before releasing the writer. Unknown worker outcomes are
   not replayed; ordinary native lock contention keeps the existing FIFO retry.
@@ -500,8 +501,10 @@ Fresh and upgraded installations do not populate identity contexts until an
 operator enables collection.
 First-use schema creation, HMAC-key access, canonical context construction, and
 SQLite persistence happen in the process-owned audit queue drain, never in
-agent admission. Lock attempts fail fast and retry asynchronously with bounded
-backoff so SQLite contention does not synchronously wait on the Gateway thread.
+agent admission. Audit writes use the shared worker's SQLite busy timeout. A
+competing writer can delay that worker until the timeout, while the Gateway
+thread remains nonblocking. Failed lock attempts retain FIFO retries with
+bounded asynchronous backoff.
 Contexts are retained for 30 days and capped at 100,000 rows. Exact-execution
 inspection and run discovery never return a context, candidate, or admission
 decision after that context is older than 30 days, even if physical cleanup
@@ -576,7 +579,8 @@ boundaries alongside the operator behavior above:
   absent. It must not change approval decisions when provenance is missing,
   deleted, or corrupt. Do not add eager creation, late binding, dual writes,
   fallback readers, sidecars, or schema-version workarounds. Changes require
-  older-reader open/use and candidate-reopen proof.
+  enabled, disabled, integrity, downgrade, older-reader open/use, and
+  candidate-reopen proof.
 - Invoker evidence is tri-state: tagged principal-bearing input is `present`,
   tagged principal-less input is `unknown`, and omission alone is `absent`.
   Validate the closed raw variant before projection or field dropping; reject

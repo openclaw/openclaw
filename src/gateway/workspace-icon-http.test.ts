@@ -38,7 +38,6 @@ vi.mock("./http-utils.js", () => ({
 }));
 
 const {
-  clearWorkspaceIconCacheForTest,
   handleWorkspaceIconHttpRequest,
   resolveWorkspaceIcon,
   SVG_ICON_MAX_BYTES,
@@ -68,10 +67,6 @@ async function makeWorkspace(files: Record<string, Buffer>): Promise<string> {
   }
   return root;
 }
-
-beforeEach(() => {
-  clearWorkspaceIconCacheForTest();
-});
 
 afterEach(() => vi.restoreAllMocks());
 

@@ -68,6 +68,18 @@ public struct OpenClawChatUsageCost: Codable, Hashable, Sendable {
     public let total: Double?
 }
 
+/// Latest model call's context snapshot. Only an available marker decodes; an
+/// unavailable or unknown state reads as no marker.
+public struct OpenClawChatUsageContextSnapshot: Codable, Hashable, Sendable {
+    public enum State: String, Codable, Sendable {
+        case available
+    }
+
+    public let state: State
+    public let promptTokens: Int
+    public let totalTokens: Int
+}
+
 public struct OpenClawChatUsage: Codable, Hashable, Sendable {
     public let input: Int?
     public let output: Int?
@@ -75,6 +87,8 @@ public struct OpenClawChatUsage: Codable, Hashable, Sendable {
     public let cacheWrite: Int?
     public let cost: OpenClawChatUsageCost?
     public let total: Int?
+    /// Counters can cover a whole multi-call turn; context readers size the window from this.
+    public let contextUsage: OpenClawChatUsageContextSnapshot?
 
     private enum DecodingKeys: String, CodingKey {
         case input
@@ -84,6 +98,7 @@ public struct OpenClawChatUsage: Codable, Hashable, Sendable {
         case cost
         case total
         case totalTokens
+        case contextUsage
     }
 
     public init(from decoder: Decoder) throws {
@@ -96,6 +111,10 @@ public struct OpenClawChatUsage: Codable, Hashable, Sendable {
         self.total =
             try container.decodeIfPresent(Int.self, forKey: .total) ??
             container.decodeIfPresent(Int.self, forKey: .totalTokens)
+        // A malformed marker must not fail the message; readers fall back to the counters.
+        self.contextUsage = try? container.decodeIfPresent(
+            OpenClawChatUsageContextSnapshot.self,
+            forKey: .contextUsage)
     }
 }
 
@@ -832,6 +851,7 @@ public struct OpenClawChatSessionInfo: Codable, Sendable {
     public let agentId: String?
     public let hasActiveRun: Bool?
     public let activeRunIds: [String]?
+    public let reasoningLevel: String?
 
     // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
     public init(hasActiveRun: Bool?, activeRunIds: [String]? = nil, key: String? = nil, agentId: String? = nil) {
@@ -839,6 +859,7 @@ public struct OpenClawChatSessionInfo: Codable, Sendable {
         self.agentId = agentId
         self.hasActiveRun = hasActiveRun
         self.activeRunIds = activeRunIds
+        self.reasoningLevel = nil
     }
 }
 
@@ -1110,6 +1131,14 @@ public struct OpenClawSessionMessageEventPayload: Codable, Sendable {
         case hasActiveRun
         case activeRunIds
     }
+}
+
+/// The existing Gateway refresh receipt, including the authoritative pre-refresh baseline.
+public struct OpenClawChatProgressCardRefreshResult: Decodable, Sendable {
+    private enum Status: String, Decodable, Sendable { case accepted }
+    public let runId: String
+    public let revision: Int
+    private let status: Status
 }
 
 public struct OpenClawAgentEventPayload: Codable, Sendable, Identifiable {

@@ -72,26 +72,6 @@ export function isBrowserStateRuntimeCurrent(
   return (!runtime || getOptionalBrowserStateRuntime() === runtime) && isCurrent?.() !== false;
 }
 
-export async function readCurrentBrowserState<T>(
-  runtime: BrowserStateRuntime | undefined,
-  read: () => Promise<T>,
-  isCurrent?: () => boolean,
-): Promise<T | undefined> {
-  if (!isBrowserStateRuntimeCurrent(runtime, isCurrent)) {
-    return undefined;
-  }
-  try {
-    const value = await read();
-    return isBrowserStateRuntimeCurrent(runtime, isCurrent) ? value : undefined;
-  } catch (error) {
-    // Revoked preparation is discarded; accepted closes and writes still settle.
-    if (!isBrowserStateRuntimeCurrent(runtime, isCurrent)) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
 export function getPendingBrowserDashboardRegistrations(
   runtime: BrowserStateRuntime,
   targetId: string | undefined,

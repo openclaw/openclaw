@@ -27,6 +27,7 @@ import {
   vi,
   expectUsageFields,
 } from "./event-projector.test-harness.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
 
 registerCodexEventProjectorTestLifecycle();
 
@@ -248,15 +249,17 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       detailedExplanation: "🙂".repeat(16_384),
       steer: { message: ` ${"🙂".repeat(255)}   ` },
     };
-    await projector.handleNotification({
-      method: "error",
-      params: {
-        threadId: THREAD_ID,
-        turnId: "unrelated-turn",
-        error: { ...error, misalignment: details },
-        willRetry: false,
-      },
-    });
+    await projector.handleNotification(
+      prepareCodexServerNotification({
+        method: "error",
+        params: {
+          threadId: THREAD_ID,
+          turnId: "unrelated-turn",
+          error: { ...error, misalignment: details },
+          willRetry: false,
+        },
+      }),
+    );
     expect(refusalDetails(projector)).not.toHaveProperty("review");
     await projector.handleNotification(
       terminalError({ ...error, misalignment: details }, "turn/completed"),

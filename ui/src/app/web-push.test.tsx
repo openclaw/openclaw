@@ -707,6 +707,12 @@ describe("web push Gateway reconciliation", () => {
           button("Enable notifications")?.click();
         }
         await vi.waitFor(() => expect(container.textContent).toContain("another Gateway"));
+        expect(request).toHaveBeenCalledWith("push.web.unsubscribe", {
+          endpoint: mismatchedSubscription.endpoint,
+        });
+        expect(request).not.toHaveBeenCalledWith("push.web.subscribe", expect.anything());
+        expect(subscribe).not.toHaveBeenCalled();
+        expect(unsubscribe).not.toHaveBeenCalled();
         expect(container.textContent).toContain("Not subscribed");
         expect(button("Send test")).toBeUndefined();
         const resetButton = button("Unsubscribe");

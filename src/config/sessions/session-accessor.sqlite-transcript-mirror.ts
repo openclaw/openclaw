@@ -17,7 +17,11 @@ import { createTranscriptEntryAnchor } from "./session-accessor.sqlite-transcrip
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
-import { transcriptEventJsonSql, transcriptEventRunIdSql } from "./transcript-payload.js";
+import {
+  transcriptEventJsonSql,
+  transcriptEventRunIdSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
 import { selectVisibleTranscriptEvents } from "./transcript-visible-events.js";
 
 // Keep supplied-key probes below SQLite's conservative variable ceiling.
@@ -152,7 +156,7 @@ export function readTranscriptMirrorFacts(
             events
               .where("event.session_id", "=", resolved.sessionId)
               .where("active.event_seq", "is not", null)
-              .where("event.message_role", "=", "assistant")
+              .where(transcriptPredicateSql(database.db, "message_role", "event"), "=", "assistant")
               .where("event.seq", ">=", (eb) =>
                 eb.fn.coalesce(
                   db

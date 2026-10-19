@@ -1,7 +1,6 @@
 import { render } from "@solidjs/web";
 import { createMemo, createSignal, For, onCleanup, runWithOwner, Show } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { i18n } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { presenceConnectionDescriptions } from "../lib/presence-connections.ts";
 import {
@@ -11,7 +10,7 @@ import {
   presenceUserLabel,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { getLocale, i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   resolveSessionPreferredFace,
@@ -37,7 +36,11 @@ type PersonCardInput = {
   mainKey: string;
   globalScope: boolean;
   routing: PersonActivityRouting;
-  openSession: (row: GatewaySessionRow, agentId: string) => void;
+  openSession: (
+    row: GatewaySessionRow,
+    agentId: string,
+    options: ReturnType<typeof sessionNavigationTarget>["options"],
+  ) => void;
 };
 
 /** Loaded, caller-visible roster facts, paired with their owning list scope. */
@@ -72,14 +75,13 @@ function Elapsed(props: {
   timestamp: number;
   display?: "compact" | "minute-compact" | "single-unit";
 }) {
-  const date = () => new Date(props.timestamp);
+  const date = createMemo(() => new Date(props.timestamp));
+  const localizedDate = createMemo(() => date().toLocaleString(getLocale()));
   return (
     <time
       datetime={date().toISOString()}
-      title={date().toLocaleString(i18n.getLocale())}
-      aria-label={
-        props.display === "minute-compact" ? undefined : date().toLocaleString(i18n.getLocale())
-      }
+      title={localizedDate()}
+      aria-label={props.display === "minute-compact" ? undefined : localizedDate()}
     >
       <openclaw-elapsed-time
         prop:startMs={props.timestamp}
@@ -111,7 +113,10 @@ function Sessions(props: {
               keyed={({ row, agentId }) => sessionIdentity(row.key, agentId, props.input)}
             >
               {(session) => {
-                const name = () => resolveSessionDisplayName(session().row.key, session().row);
+                const name = createMemo(() => {
+                  i18nRevision();
+                  return resolveSessionDisplayName(session().row.key, session().row);
+                });
                 const target = () =>
                   sessionNavigationTarget({
                     face: resolveSessionPreferredFace(session().row),
@@ -126,11 +131,10 @@ function Sessions(props: {
                     class="person-activity-card__session session-row-host"
                     href={target().href}
                     onClick={(event) => {
-                      if (!shouldHandleNavigationClick(event)) {
-                        return;
+                      if (shouldHandleNavigationClick(event)) {
+                        event.preventDefault();
+                        props.input.openSession(session().row, session().agentId, target().options);
                       }
-                      event.preventDefault();
-                      props.input.openSession(session().row, session().agentId);
                     }}
                   >
                     <span class="person-activity-card__session-icon" aria-hidden="true">
@@ -169,30 +173,33 @@ function Sessions(props: {
 }
 
 function PersonActivityCard(props: { input: PersonCardInput }) {
-  let recentSessionKeys: string[] | undefined;
-  const view = createMemo(() => {
-    const input = props.input;
-    const { user } = input;
-    const label = presenceUserLabel(user, t("presence.card.person"));
-    const activityLink = personActivityLink(user.identity?.id, input.routing, label.name);
-    // Undefined means presence has not been observed; an empty snapshot means offline.
-    const observed = user.entries !== undefined;
-    const offline = user.entries?.length === 0;
-    const entries = user.entries ?? [];
-    const onlineTimes = entries.flatMap((entry) =>
+  const user = () => props.input.user;
+  const label = createMemo(() => presenceUserLabel(user(), t("presence.card.person")));
+  const activityLink = createMemo(() =>
+    personActivityLink(user().identity?.id, props.input.routing, label().name),
+  );
+  // Undefined means presence has not been observed; an empty snapshot means offline.
+  const offline = () => user().entries?.length === 0;
+  const onlineSince = createMemo(() => {
+    const times = (user().entries ?? []).flatMap((entry) =>
       entry.onlineSince === undefined ? [] : [entry.onlineSince],
     );
-    const onlineSince = onlineTimes.length ? Math.min(...onlineTimes) : undefined;
-    const lastActivityAt = presenceViewerLastActivity(user);
-    const activity = presenceViewerActivity(user);
-    const where = presenceConnectionDescriptions(entries);
-    const zones = [
-      ...new Set(
-        entries.flatMap((entry) => (entry.timeZone?.trim() ? [entry.timeZone.trim()] : [])),
-      ),
-    ].toSorted();
+    return times.length ? Math.min(...times) : undefined;
+  });
+  const lastActivityAt = createMemo(() => presenceViewerLastActivity(user()));
+  const activity = createMemo(() => presenceViewerActivity(user()));
+  const where = createMemo(() => {
+    i18nRevision();
+    return presenceConnectionDescriptions(user().entries ?? []);
+  });
+  const zones = createMemo(() =>
+    [...new Set(user().entries?.flatMap((entry) => entry.timeZone?.trim() || []))].toSorted(),
+  );
+  let recentSessionKeys: string[] | undefined;
+  const sessions = createMemo(() => {
+    const input = props.input;
     const watched = new Set(
-      user.watchedSessions.map((key) => sessionIdentity(key, input.watchAgentId, input)),
+      input.user.watchedSessions.map((key) => sessionIdentity(key, input.watchAgentId, input)),
     );
     const unique = loadedPresenceSessions(input);
     const newestFirst = (a: ScopedSession, b: ScopedSession) =>
@@ -208,7 +215,7 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
       ({ row, agentId }) =>
         !watched.has(sessionIdentity(row.key, agentId, input)) &&
         [row.owner?.actor, row.createdActor].some((actor) =>
-          presenceMatchesProfile(user, actor?.identity),
+          presenceMatchesProfile(input.user, actor?.identity),
         ),
     );
     if (!recentSessionKeys) {
@@ -220,72 +227,57 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
         .slice(0, 3)
         .map(({ row, agentId }) => sessionIdentity(row.key, agentId, input));
     }
-
-    return {
-      input,
-      user,
-      label,
-      activityLink,
-      observed,
-      offline,
-      onlineSince,
-      lastActivityAt,
-      activity,
-      where,
-      zones,
-      viewing,
-      recent: recentSessionKeys ? recent : [],
-    };
+    return { viewing, recent: recentSessionKeys ? recent : [] };
   });
   return (
     <div class="person-activity-card">
       <header class="person-activity-card__header">
         <openclaw-viewer-avatar
-          prop:user={view().user}
+          prop:user={user()}
           prop:markAsViewer={false}
           variant="footer"
           aria-hidden="true"
         />
         <div>
-          <h2>{view().label.name}</h2>
-          <Show when={view().observed}>
+          <h2>{label().name}</h2>
+          <Show when={user().entries !== undefined}>
             <span
               class={[
                 "person-activity-card__status",
-                `person-activity-card__status--${view().offline ? "offline" : view().activity}`,
+                `person-activity-card__status--${offline() ? "offline" : activity()}`,
               ]}
             >
               <span aria-hidden="true" />
-              {view().offline ? (
+              {offline() ? (
                 t("presence.offline")
-              ) : view().onlineSince === undefined ? (
+              ) : onlineSince() === undefined ? (
                 t("presence.rosterTitle")
               ) : (
                 <>
                   {t("presence.card.onlineFor")}{" "}
-                  <Elapsed timestamp={view().onlineSince!} display="minute-compact" />
+                  <Elapsed timestamp={onlineSince()!} display="minute-compact" />
                 </>
               )}
-              {!view().offline && view().activity !== "unknown" ? (
-                <> · {t(view().activity === "active" ? "presence.active" : "presence.idle")}</>
+              {!offline() && activity() !== "unknown" ? (
+                <> · {t(activity() === "active" ? "presence.active" : "presence.idle")}</>
               ) : undefined}
             </span>
           </Show>
         </div>
       </header>
-      <Show when={view().label.isSharedOwner}>
+      <Show when={label().isSharedOwner}>
         <p class="person-activity-card__hint person-activity-card__muted">
           {t("presence.sharedOwner.hint")}
         </p>
       </Show>
-      <Show when={view().observed && !view().offline}>
+      <Show when={user().entries !== undefined && !offline()}>
         <dl class="person-activity-card__facts">
-          <Show when={view().where.length > 0 || view().zones.length > 0}>
+          <Show when={where().length > 0 || zones().length > 0}>
             <div>
               <dt>{t("presence.card.where")}</dt>
               <dd>
-                <For each={view().where}>{(description) => <span>{description}</span>}</For>
-                <For each={view().zones}>
+                <For each={where()}>{(description) => <span>{description}</span>}</For>
+                <For each={zones()}>
                   {(zone) => <small>{t("presence.card.reportedTimeZone", { zone })}</small>}
                 </For>
               </dd>
@@ -294,20 +286,20 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
           <div>
             <dt>{t("presence.card.lastActivity")}</dt>
             <dd>
-              {view().lastActivityAt === undefined ? (
+              {lastActivityAt() === undefined ? (
                 t("presence.card.notObserved")
               ) : (
                 <span>
-                  <Elapsed timestamp={view().lastActivityAt!} /> {t("presence.card.ago")}
+                  <Elapsed timestamp={lastActivityAt()!} /> {t("presence.card.ago")}
                 </span>
               )}
             </dd>
           </div>
         </dl>
       </Show>
-      <Sessions sessions={view().viewing} input={view().input} recent={false} />
-      <Sessions sessions={view().recent} input={view().input} recent={true} />
-      <Show when={view().activityLink}>
+      <Sessions sessions={sessions().viewing} input={props.input} recent={false} />
+      <Sessions sessions={sessions().recent} input={props.input} recent={true} />
+      <Show when={activityLink()}>
         {(link) => (
           <footer>
             <a href={link().href} onClick={(event) => link().open(event)}>
@@ -334,15 +326,13 @@ export function updatePersonActivityCard(container: HTMLElement, input?: CardVal
   const existing = cards.get(container);
   if (input === undefined) {
     existing?.dispose();
-    cards.delete(container);
   } else if (existing) {
     existing.update(input);
   } else {
-    const initial: CardValue = input;
     // The portal outlives the caller’s transient render scope.
     const dispose = runWithOwner(null, () =>
       render(() => {
-        const [value, setValue] = createSignal<CardValue>(initial, { ownedWrite: true });
+        const [value, setValue] = createSignal<CardValue>(input, { ownedWrite: true });
         cards.set(container, { update: setValue, dispose: () => dispose() });
         onCleanup(() => cards.delete(container));
         return (

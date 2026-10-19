@@ -1,5 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   SESSION_NAVIGATION_INTENT_EVENT,
   type SessionNavigationIntent,
@@ -18,7 +19,6 @@ export const QUEUED_EDIT_RETENTION_CHANGE_EVENT = "openclaw:queued-edit-retentio
 const RETAINED_SESSIONS_PER_PANE = 3;
 const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
 
-type RetentionHost = HTMLElement & { requestUpdate(): unknown };
 type RetentionBindings = {
   context: () => ApplicationContext | undefined;
   presented: () => boolean;
@@ -30,17 +30,26 @@ type RetentionBindings = {
 };
 
 export class ChatPageRetainedSessions {
+  private readonly listeners = new Set<() => void>();
   private readonly sessionsByPane = new Map<string, Map<string, number>>();
   private readonly unbound = new Set<string>();
   private pendingAtFocus = new WeakSet<AbortController>();
   private preview: (SessionNavigationIntent & { href: string; paneId: string }) | null = null;
   private previewFrame: number | undefined;
   private previewTimer: number | undefined;
+  private stopEvents: (() => void)[] = [];
 
   constructor(
-    private readonly host: RetentionHost,
+    private readonly host: HTMLElement,
     private readonly bindings: RetentionBindings,
   ) {}
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
 
   get unboundPaneIds(): ReadonlySet<string> {
     return this.unbound;
@@ -86,9 +95,11 @@ export class ChatPageRetainedSessions {
   }
 
   connect(): void {
-    this.host.addEventListener(QUEUED_EDIT_RETENTION_CHANGE_EVENT, this.refreshRetention);
-    window.addEventListener("popstate", this.cancelPreview);
-    window.addEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
+    this.stopEvents = [
+      listen(this.host, QUEUED_EDIT_RETENTION_CHANGE_EVENT, this.refreshRetention),
+      listen(window, "popstate", this.cancelPreview),
+      listen(window, SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent),
+    ];
   }
 
   disconnect(): void {
@@ -97,15 +108,17 @@ export class ChatPageRetainedSessions {
     this.sessionsByPane.clear();
     this.unbound.clear();
     this.pendingAtFocus = new WeakSet();
-    this.host.removeEventListener(QUEUED_EDIT_RETENTION_CHANGE_EVENT, this.refreshRetention);
-    window.removeEventListener("popstate", this.cancelPreview);
-    window.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
+    this.stopEvents.splice(0).forEach((stop) => stop());
     this.cancelPreview();
   }
 
-  private readonly refreshRetention = () => {
-    this.host.requestUpdate();
-  };
+  private publish(): void {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+
+  private readonly refreshRetention = () => this.publish();
 
   suspend(): void {
     this.cancelPreview();
@@ -217,7 +230,7 @@ export class ChatPageRetainedSessions {
   ): void => {
     const context = this.bindings.context();
     if (context && readDeletedSessionStartup(context, sessionKey)) {
-      this.host.requestUpdate();
+      this.publish();
       return;
     }
     const deletedPane = this.findPane(paneId, sessionKey);
@@ -243,7 +256,7 @@ export class ChatPageRetainedSessions {
     if (selectedSessionKey && areUiSessionKeysEquivalent(selectedSessionKey, sessionKey)) {
       this.bindings.selectReplacement(paneId, sessionKey, replacementSessionKey);
     } else {
-      this.host.requestUpdate();
+      this.publish();
     }
   };
 

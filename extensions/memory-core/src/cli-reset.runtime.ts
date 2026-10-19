@@ -4,6 +4,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { getDatabaseEngineSelection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { defaultRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createClackPrompter } from "openclaw/plugin-sdk/setup-runtime";
@@ -18,6 +19,7 @@ import {
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
   resetMemoryDatabase,
+  resetPostgresMemoryDatabase,
 } from "./memory/manager-db.js";
 
 export async function runMemoryReset(opts: MemoryResetCommandOptions): Promise<void> {
@@ -45,6 +47,19 @@ export async function runMemoryReset(opts: MemoryResetCommandOptions): Promise<v
   }
   for (const agentId of agentIds) {
     const dbPath = resolveOpenClawAgentSqlitePath({ agentId });
+    if (getDatabaseEngineSelection()?.effectiveEngines.agent === "postgres") {
+      const changed = await resetPostgresMemoryDatabase({
+        agentId,
+        dbPath,
+        workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+      });
+      defaultRuntime.log(
+        changed
+          ? `Memory index reset (${agentId}). Sessions preserved. Rebuild with: openclaw memory index --agent ${agentId}`
+          : `No memory index to reset (${agentId}).`,
+      );
+      continue;
+    }
     if (!fs.existsSync(dbPath)) {
       defaultRuntime.log(`No memory index to reset (${agentId}).`);
       continue;

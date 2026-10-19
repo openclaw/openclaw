@@ -1,4 +1,3 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { AgentOwnershipSchema } from "./agents-models-skills.js";
@@ -8,6 +7,8 @@ import { GatewaySuspensionSchema } from "./gateway-suspend.js";
 import { NonEmptyString } from "./primitives.js";
 import { GatewayEventLoopHealthSchema } from "./runtime-vitals.js";
 import { SessionPersonSchema } from "./session-participant.js";
+// Gateway Protocol schema module defines protocol validation shapes.
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 /**
  * Gateway state snapshot schemas.
@@ -154,16 +155,11 @@ const HealthSnapshotSchema = closedObject({
   ),
   modelPricing: Type.Optional(
     closedObject({
-      state: Type.Union([Type.Literal("ok"), Type.Literal("degraded"), Type.Literal("disabled")]),
+      state: stringLiteralUnion(["ok", "degraded", "disabled"]),
       sources: Type.Array(
         closedObject({
-          source: Type.Union([
-            Type.Literal("openrouter"),
-            Type.Literal("litellm"),
-            Type.Literal("bootstrap"),
-            Type.Literal("refresh"),
-          ]),
-          state: Type.Union([Type.Literal("ok"), Type.Literal("degraded")]),
+          source: stringLiteralUnion(["openrouter", "litellm", "bootstrap", "refresh"]),
+          state: stringLiteralUnion(["ok", "degraded"]),
           lastFailureAt: Type.Optional(Type.Integer({ minimum: 0 })),
           detail: Type.Optional(Type.String()),
         }),
@@ -174,7 +170,7 @@ const HealthSnapshotSchema = closedObject({
   ),
   configReload: Type.Optional(
     closedObject({
-      hotReloadStatus: Type.Union([Type.Literal("active"), Type.Literal("disabled")]),
+      hotReloadStatus: stringLiteralUnion(["active", "disabled"]),
     }),
   ),
   // The running process reports the Node binary it will use for child workers.
@@ -246,14 +242,7 @@ export const SnapshotSchema = closedObject({
   sessionDefaults: Type.Optional(SessionDefaultsSchema),
   /** Credential-free browser sign-in endpoint advertised to authenticated operators. */
   controlUiIdentityUrl: Type.Optional(NonEmptyString),
-  authMode: Type.Optional(
-    Type.Union([
-      Type.Literal("none"),
-      Type.Literal("token"),
-      Type.Literal("password"),
-      Type.Literal("trusted-proxy"),
-    ]),
-  ),
+  authMode: Type.Optional(stringLiteralUnion(["none", "token", "password", "trusted-proxy"])),
   updateAvailable: Type.Optional(UpdateAvailableSchema),
   updateSchedule: Type.Optional(UpdateScheduleStateSchema),
 });

@@ -1,5 +1,4 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Show, createMemo } from "solid-js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
@@ -25,7 +24,7 @@ import { SystemSection } from "./system-section.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+type GatewayAuthMode = NonNullable<NonNullable<GatewayHelloOk["snapshot"]>["authMode"]>;
 
 export type ConnectionProps = {
   phase: ApplicationGatewayPhase;
@@ -167,12 +166,7 @@ export function ConnectionView(props: ConnectionProps) {
   const busy = () => ["connecting", "starting", "reconnecting"].includes(props.phase);
   const submitting = () => busy() && !props.dirty;
   const reloadRequired = () => props.phase === "reload-required";
-  const authMode = () => {
-    const mode = asOptionalRecord(props.hello?.snapshot)?.authMode;
-    return mode === "none" || mode === "token" || mode === "password" || mode === "trusted-proxy"
-      ? mode
-      : undefined;
-  };
+  const authMode = () => props.hello?.snapshot?.authMode;
   const draftAuthMode = createMemo(() =>
     gatewayCredentialScope(props.settings.gatewayUrl) ===
     gatewayCredentialScope(props.liveGatewayUrl)
@@ -192,6 +186,14 @@ export function ConnectionView(props: ConnectionProps) {
         ? t("connection.access.applyReconnect")
         : t(props.lastError ? "connection.access.retry" : "common.connect");
   const tick = () => formatTick(props.hello?.policy?.tickIntervalMs);
+  const activityState = () =>
+    props.statusFailed
+      ? "failed"
+      : !connected()
+        ? "offline"
+        : props.statusHistory.length === 0
+          ? "loading"
+          : null;
 
   return (
     <SettingsPage>
@@ -309,26 +311,12 @@ export function ConnectionView(props: ConnectionProps) {
             status={props.statusHistory.at(-1)?.status ?? {}}
             history={props.statusHistory}
           />
-          <Show
-            when={props.statusFailed}
-            fallback={
-              <Show
-                when={!connected()}
-                fallback={
-                  <Show when={props.statusHistory.length === 0}>
-                    <p class="settings-row__desc" role="status">
-                      {t("common.loading")}
-                    </p>
-                  </Show>
-                }
-              >
-                <p class="settings-row__desc">{t("connection.activity.offline")}</p>
-              </Show>
-            }
-          >
-            <p class="settings-row__desc" role="status">
-              {t("connection.activity.failed")}
-            </p>
+          <Show when={activityState()}>
+            {(state) => (
+              <p class="settings-row__desc" role={state() === "offline" ? undefined : "status"}>
+                {t(state() === "loading" ? "common.loading" : `connection.activity.${state()}`)}
+              </p>
+            )}
           </Show>
         </div>
       </SettingsSection>

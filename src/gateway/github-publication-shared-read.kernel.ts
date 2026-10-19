@@ -135,6 +135,9 @@ export function readSharedGitHubPublicationRequestInDatabase(
     } else if (selector.idempotencyKey !== undefined) {
       selection = selection.where("idempotency_key", "=", selector.idempotencyKey);
     }
+    if ("status" in selector && selector.status === "published") {
+      selection = selection.where("github_publication_requests.status", "=", "published");
+    }
     // Unbound terminal receipts are history, not evidence of the current workspace.
     if (!tableExists(db, "github_publication_session_lifecycles")) {
       const pending = executeSqliteQueryTakeFirstSync(
@@ -218,6 +221,9 @@ export function readSharedRepositoryGitHubPublicationInDatabase(
       }
     } else if (selector.idempotencyKey !== undefined) {
       selection = selection.where("idempotency_key", "=", selector.idempotencyKey);
+    }
+    if ("status" in selector && selector.status === "published") {
+      selection = selection.where("status", "=", "published");
     }
     const ordered = selection.orderBy("created_at_ms", "desc").orderBy("request_id", "desc");
     let workspace: ReturnType<typeof readSharedGitHubPublicationWorkspace>;

@@ -84,8 +84,6 @@ async function setThemeMode(page: Page, mode: "dark" | "light") {
     const root = document.documentElement;
     root.dataset.themeMode = nextMode;
     root.dataset.themeResolved = nextMode;
-    root.classList.toggle("wa-light", nextMode === "light");
-    root.classList.toggle("wa-dark", nextMode === "dark");
     root.style.colorScheme = nextMode;
   }, mode);
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
@@ -926,7 +924,7 @@ suite.define(() => {
         await gateway.emitGatewayEvent("update.available", {
           schedule: {
             autoEnabled: false,
-            channel: "dev",
+            channel: "beta",
             install: { kind: "git", git: { status: "behind", commitsBehind: 246 } },
             target: {
               kind: "git",
@@ -936,7 +934,7 @@ suite.define(() => {
             },
           },
           updateAvailable: {
-            channel: "dev",
+            channel: "beta",
             commitsBehind: 246,
             currentSha: "1111111111111111111111111111111111111111",
             currentVersion: "2026.8.1",

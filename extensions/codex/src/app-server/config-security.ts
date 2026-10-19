@@ -129,8 +129,9 @@ export function hasCodexMcpToolApprovalOverrides(
 export function withMcpElicitationsApprovalPolicy(
   policy: CodexAppServerEffectiveApprovalPolicy,
 ): CodexAppServerEffectiveApprovalPolicy {
-  // UnlessTrusted already allows MCP elicitation; granular would erase per-command approvals.
-  if (policy === "untrusted") {
+  // These policies already allow MCP elicitation. Preserve their identity for managed
+  // allowlists; granular would also erase per-command approvals under UnlessTrusted.
+  if (policy === "untrusted" || policy === "on-request") {
     return policy;
   }
   if (typeof policy !== "string") {

@@ -1,14 +1,13 @@
 // Banner tests cover CLI banner rendering and suppression behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliBannerLine } from "./banner.js";
 
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 const bannerOptions = {
   argv: ["node", "openclaw"],
   commit: "abc1234",
   env: { LANG: "en_US.UTF-8" },
-  isTty: true,
-  platform: "darwin" as const,
   richTty: false,
   mode: "off" as const,
 };
@@ -18,8 +17,20 @@ vi.mock("./banner-config-lite.js", () => ({
     value === "random" || value === "default" || value === "off" ? value : undefined,
 }));
 
+beforeEach(() => {
+  setStdoutIsTty(true);
+  Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+  for (const key of ["TERM_PROGRAM", "WT_SESSION", "LC_ALL", "LC_CTYPE"]) {
+    vi.stubEnv(key, undefined);
+  }
+  vi.stubEnv("TERM", "xterm-256color");
+  vi.stubEnv("LANG", "en_US.UTF-8");
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  Object.defineProperty(process, "platform", platformDescriptor);
   if (stdoutIsTtyDescriptor) {
     Object.defineProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
   } else {
@@ -50,10 +61,9 @@ describe("formatCliBannerLine", () => {
   });
 
   it("drops decorative emoji for generic Linux terminals", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     const line = formatCliBannerLine("2026.3.7", {
       ...bannerOptions,
-      env: { TERM: "xterm-256color", LANG: "en_US.UTF-8" },
-      platform: "linux",
     });
 
     expect(line).toBe("OpenClaw 2026.3.7 (abc1234)");
@@ -61,14 +71,13 @@ describe("formatCliBannerLine", () => {
 });
 
 describe("emitCliBanner", () => {
-  it("uses injected non-TTY state before writing to stdout", async () => {
+  it("does not write a banner without a TTY", async () => {
     const { emitCliBanner, hasEmittedCliBanner } = await importFreshBannerModule();
-    setStdoutIsTty(true);
+    setStdoutIsTty(false);
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
     emitCliBanner("2026.3.7", {
       ...bannerOptions,
-      isTty: false,
     });
 
     expect(writeSpy).not.toHaveBeenCalled();

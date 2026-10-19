@@ -14,21 +14,19 @@ type QuestionFooterFixtures = {
   ) => Promise<{ gateway: MockGatewayControls; page: Page }>;
   questionRecord: (id: string, questions: Question[]) => QuestionRecord;
   questionSessionKey: string;
-  screenshot: (page: Page, name: string) => Promise<void>;
 };
 
 export function defineQuestionFooterTests({
   openQuestionPage,
   questionRecord,
   questionSessionKey,
-  screenshot,
 }: QuestionFooterFixtures) {
   it.each([
-    { height: 844, screenshotName: "portrait", width: 390 },
-    { height: 390, screenshotName: "landscape", width: 844 },
+    { height: 844, orientation: "portrait", width: 390 },
+    { height: 390, orientation: "landscape", width: 844 },
   ])(
-    "keeps a collapsed question separate from PRs, notices, and the input on $screenshotName",
-    async ({ height, screenshotName, width }) => {
+    "keeps a collapsed question separate from PRs, notices, and the input on $orientation",
+    async ({ height, width }) => {
       const { gateway, page } = await openQuestionPage({ height, width }, true);
       const composer = page.locator(".agent-chat__input");
       const draft = composer.locator(".agent-chat__composer-combobox > textarea");
@@ -106,7 +104,6 @@ export function defineQuestionFooterTests({
             shellBorder: getComputedStyle(element).borderTopWidth,
             shellShadow: getComputedStyle(element).boxShadow,
             hasPullRequests,
-            noticeTop: notice.getBoundingClientRect().top,
             noticeBottom: notice.getBoundingClientRect().bottom,
             questionTop: question.getBoundingClientRect().top,
             contextBottom: stack.getBoundingClientRect().bottom,
@@ -132,10 +129,6 @@ export function defineQuestionFooterTests({
         for (const radius of [...layout.questionBottomCorners, ...layout.inputTopCorners]) {
           expect(Number.parseFloat(radius)).toBeGreaterThan(0);
         }
-        await screenshot(
-          page,
-          "07-question-mobile-context-" + screenshotName + "-" + theme + ".png",
-        );
       }
       await openDetailsPullRequests(page);
       await pullRequest.click({ trial: true });

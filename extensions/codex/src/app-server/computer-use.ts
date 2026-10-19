@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import { reconcileCodexComputerUseStartArtifacts } from "./auth-bridge.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { describeControlFailure } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
+import { reconcileCodexComputerUseStartArtifacts } from "./computer-use-artifacts.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
 import {
   resolveBundledComputerUseMarketplacePath,
@@ -31,15 +31,16 @@ import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
   type CodexComputerUseConfig,
+  type CodexPluginConfig,
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
 import { resolveMacOSDesktopCodexBundledMarketplaceCandidates } from "./desktop-app-paths.js";
 import { isManagedCodexDesktopCommand } from "./managed-binary.js";
+import { findCodexMcpServerStatus } from "./mcp-server-status.js";
 import type {
   CodexAppServerRequestResult,
   CodexConfigReadResponse,
   CodexListMcpServerStatusResponse,
-  CodexMcpServerStatus,
   CodexPluginDetail,
   CodexPluginListResponse,
   CodexPluginReadResponse,
@@ -69,7 +70,7 @@ class CodexComputerUseSetupError extends Error {
 }
 
 export type CodexComputerUseSetupParams = {
-  pluginConfig?: unknown;
+  pluginConfig?: CodexPluginConfig;
   config?: Parameters<typeof requestCodexAppServerClientJson>[0]["config"];
   agentDir?: string;
   overrides?: Partial<CodexComputerUseConfig>;
@@ -96,7 +97,6 @@ type CodexComputerUseInspectionParams = Omit<
 };
 
 type ExplicitManagedComputerUseInstallContext = {
-  client: CodexAppServerClient;
   agentDir: string;
   codexHome: string;
   command: string;
@@ -249,7 +249,6 @@ async function inspectCodexComputerUse(
         options: { ...clientOptions, timeoutMs: remainingTimeoutMs() },
         signal: params.signal,
         run: async (readClient, requestOptions) => {
-          const { assertCurrent } = requestOptions();
           return await inspectCodexComputerUseWithoutFence({
             ...params,
             client: readClient,
@@ -264,7 +263,7 @@ async function inspectCodexComputerUse(
                   ? {
                       timeoutMs: options?.timeoutMs ?? operationTimeoutMs,
                       signal: options?.signal,
-                      assertCurrent,
+                      assertCurrent: undefined,
                     }
                   : requestOptions();
               return await requestCodexAppServerClientJson<T>({
@@ -439,11 +438,25 @@ async function inspectCodexComputerUseWithoutFence(
     installPlugin: boolean,
   ): Promise<CodexComputerUseStatus> {
     const { client, signal, runLiveTest } = params;
-    let server = await readMcpServerStatus(request, computerUseConfig.mcpServerName);
+    const readServer = () =>
+      findCodexMcpServerStatus(
+        (cursor) =>
+          request<CodexListMcpServerStatusResponse>("mcpServerStatus/list", {
+            cursor,
+            limit: 100,
+            detail: "toolsAndAuthOnly",
+          } satisfies CodexRequestObject),
+        computerUseConfig.mcpServerName,
+        {
+          repeatedCursor: "Codex Computer Use MCP server status repeated a cursor",
+          pageLimit: "Codex Computer Use MCP server status exceeded the page limit",
+        },
+      );
+    let server = await readServer();
     let tools = Object.keys(server?.tools ?? {}).toSorted();
     if ((!server || tools.length === 0) && installPlugin) {
       await request("config/mcpServer/reload", undefined);
-      server = await readMcpServerStatus(request, computerUseConfig.mcpServerName);
+      server = await readServer();
       tools = Object.keys(server?.tools ?? {}).toSorted();
     }
     if (!server || tools.length === 0) {
@@ -559,7 +572,6 @@ async function resolveExplicitManagedComputerUseInstallContext(
     return undefined;
   }
   return {
-    client: params.client,
     agentDir: params.agentDir,
     codexHome,
     command,
@@ -783,26 +795,6 @@ async function readComputerUsePlugin(
     pluginRequestParams(marketplace, pluginName),
   );
   return response.plugin;
-}
-
-async function readMcpServerStatus(
-  request: CodexComputerUseRequest,
-  serverName: string,
-): Promise<CodexMcpServerStatus | undefined> {
-  let cursor: string | null | undefined;
-  do {
-    const response = await request<CodexListMcpServerStatusResponse>("mcpServerStatus/list", {
-      cursor,
-      limit: 100,
-      detail: "toolsAndAuthOnly",
-    } satisfies CodexRequestObject);
-    const found = response.data.find((server) => server.name === serverName);
-    if (found) {
-      return found;
-    }
-    cursor = response.nextCursor;
-  } while (cursor);
-  return undefined;
 }
 
 function pluginRequestParams(marketplace: MarketplaceRef, pluginName: string) {

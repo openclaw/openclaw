@@ -8,7 +8,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
-import { useManagedWorktreeTestRepository } from "./service.test-support.js";
+import {
+  ageManagedWorktreeTemplates,
+  useManagedWorktreeTestRepository,
+} from "./service.test-support.js";
 import { listTemplatesAsync } from "./template-registry-async.js";
 
 const execFileAsync = promisify(execFile);
@@ -192,8 +195,7 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     );
     await fs.writeFile(path.join(repo, ".env.local"), "first");
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-    let now = Date.now();
-    const service = new ManagedWorktreeService({ env, now: () => now, getConfig: () => ({}) });
+    const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
     const first = await service.create({ repoRoot: repo, name: "first", baseRef: "HEAD" });
     const template = (await listTemplatesAsync(env))[0];
     assert(template);
@@ -234,7 +236,7 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     expect((await listTemplatesAsync(env))[0]?.sourceCommit).toBe(
       await git(repo, "rev-parse", "HEAD"),
     );
-    now += IDLE_GC_MS + 1;
+    await ageManagedWorktreeTemplates(env, Date.now() - IDLE_GC_MS - 1);
     expect((await service.gc()).removed).toEqual([]);
     expect(await listTemplatesAsync(env)).toEqual([]);
     expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("saved edit\n");

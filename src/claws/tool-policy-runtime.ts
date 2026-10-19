@@ -78,14 +78,19 @@ function applyPreparedClawToolPolicyConsent(
     const current =
       adopted || schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION;
     try {
-      if (
-        current &&
-        schemaVersionRead.agentConfigDigest !==
-          (adopted
-            ? candidate.adoptedAgentConfigDigest(stateOptions.env)
-            : candidate.agentConfigDigest)
-      ) {
-        throw new Error("Claw agent configuration does not match its consent provenance.");
+      if (current) {
+        const accepted = adopted
+          ? candidate.adoptedAgentConfigDigests(stateOptions.env)
+          : {
+              owned: candidate.agentConfigDigest,
+              legacy: candidate.legacyAgentConfigDigest,
+            };
+        if (
+          schemaVersionRead.agentConfigDigest !== accepted.owned &&
+          schemaVersionRead.agentConfigDigest !== accepted.legacy
+        ) {
+          throw new Error("Claw agent configuration does not match its consent provenance.");
+        }
       }
     } catch (error) {
       preparedClawToolPolicies.set(candidate.tools, {
@@ -152,10 +157,11 @@ class ClawToolProfileConsentError extends Error {
     super(
       options.unboundedFullProfile
         ? `Claw-managed agent ${JSON.stringify(agentId)} uses the legacy unbounded full tool profile. ` +
-            "Add an explicit tools.allow list to its package OpenClaw profile, then " +
-            `run \`openclaw claws update ${agentId}\` and approve the refreshed tool authority.`
+            "Its tool consent cannot be refreshed in place. Add the Claw again to create an " +
+            "ordinary agent with an explicit tool allowlist, then move your work before deleting this agent."
         : `Claw-managed agent ${JSON.stringify(agentId)} uses a legacy dynamic tool policy. ` +
-            `Run \`openclaw claws update ${agentId}\` and approve the refreshed tool authority before running it.`,
+            "Its tool consent cannot be refreshed in place. Add the Claw again to create an " +
+            "ordinary agent, then move your work before deleting this agent.",
     );
     this.name = "ClawToolProfileConsentError";
   }

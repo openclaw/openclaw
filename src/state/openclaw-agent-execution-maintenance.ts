@@ -4,7 +4,6 @@ import type {
   ReclamationDatabaseOptions,
   SessionMaintenanceMetadataCommand,
   SessionMaintenanceLiveProtection,
-  SessionMaintenanceReadCommand,
 } from "../config/sessions/session-accessor.sqlite-lifecycle-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
@@ -14,12 +13,11 @@ import type { WorkerOperations } from "./worker-operation-registry.js";
 type PreparationInput = Omit<
   Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>,
   "kind"
-> & { id: string };
+>;
 type MetadataInput =
   | Exclude<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>
   | {
       kind: "maintenance-plan";
-      preparationId: string;
       protection: SessionMaintenanceLiveProtection;
     };
 
@@ -27,60 +25,41 @@ type MetadataInput =
 export function createAgentDatabaseMaintenanceOwner(context: {
   databaseOptions: ReclamationDatabaseOptions;
   openWriter(): OpenClawAgentDatabase;
-  readPreparedDatabase(): OpenClawAgentDatabase;
   admit(stage: "transaction" | "commit", publication?: unknown): void;
 }) {
-  const preparations = new Map<
-    string,
-    {
-      plan: PreparationInput;
-      prepared: ReturnType<
-        typeof import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js").prepareSessionMaintenanceInWorker
-      >;
-    }
-  >();
+  let preparation:
+    | {
+        plan: PreparationInput;
+        prepared: ReturnType<
+          typeof import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js").prepareSessionMaintenanceInWorker
+        >;
+      }
+    | undefined;
   let maintenance:
     | typeof import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js")
     | undefined;
   let replacements:
     | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
     | undefined;
-  const releasePreparation = (id: string) => {
-    const preparation = preparations.get(id);
+  const releasePreparation = () => {
     if (preparation) {
       preparation.prepared.release();
-      preparations.delete(id);
+      preparation = undefined;
     }
   };
   const operations = {
-    "session.maintenance.read": (plan: SessionMaintenanceReadCommand) => {
-      const kernel = expectDefined(maintenance, "Session maintenance kernel");
-      return {
-        kind: "session-maintenance-read" as const,
-        result: kernel.readSessionMaintenanceInWorker(
-          { ...plan, databaseOptions: context.databaseOptions },
-          context.readPreparedDatabase(),
-        ),
-        workerThreadId: threadId,
-      };
-    },
-    "session.maintenance.release": ({ id }: { id: string }) => releasePreparation(id),
     "session.maintenance.prepare": (input: PreparationInput) => {
       const kernel = expectDefined(maintenance, "Session maintenance kernel");
-      if (preparations.has(input.id)) {
-        throw new Error("Session maintenance preparation is already retained");
-      }
-      // The coalesced planner may overlap one revoked predecessor awaiting cleanup.
-      if (preparations.size >= 2) {
-        throw new Error("Session maintenance preparation capacity is occupied");
-      }
+      // Automatic maintenance coalesces per store. A stopped pass may leave
+      // its bounded snapshot here until the next preparation or ordinary close.
+      releasePreparation();
       const prepared = kernel.prepareSessionMaintenanceInWorker({
         kind: "maintenance-plan",
         input: input.input,
         ageChanges: input.ageChanges,
         databaseOptions: context.databaseOptions,
       });
-      preparations.set(input.id, { plan: input, prepared });
+      preparation = { plan: input, prepared };
     },
     "session.maintenance.metadata": (input: MetadataInput) => {
       const kernel = expectDefined(maintenance, "Session maintenance kernel");
@@ -92,17 +71,17 @@ export function createAgentDatabaseMaintenanceOwner(context: {
       const previous = new Map<string, SessionEntry>();
       const current = new Map<string, SessionEntry>();
       let publication: ReturnType<typeof preparePublication> | undefined;
-      const preparation =
+      const selected =
         input.kind === "maintenance-plan"
-          ? expectDefined(preparations.get(input.preparationId), "Session maintenance preparation")
+          ? expectDefined(preparation, "Session maintenance preparation")
           : undefined;
-      if (preparation && input.kind === "maintenance-plan") {
-        Object.assign(preparation.plan.input, input.protection);
+      if (selected && input.kind === "maintenance-plan") {
+        Object.assign(selected.plan.input, input.protection);
       }
       const plan: SessionMaintenanceMetadataCommand =
         input.kind === "maintenance-plan"
           ? {
-              ...expectDefined(preparation, "Session maintenance preparation").plan,
+              ...expectDefined(selected, "Session maintenance preparation").plan,
               kind: "maintenance-plan",
             }
           : input;
@@ -137,10 +116,9 @@ export function createAgentDatabaseMaintenanceOwner(context: {
             context.admit("commit", publication);
           },
         },
-        preparation?.prepared,
+        selected?.prepared,
       );
-      return value.kind === "maintenance-preservation-required" ||
-        value.kind === "maintenance-plan-stale"
+      return value.kind === "maintenance-plan-stale"
         ? { kind: "not-committed" as const, workerThreadId: threadId, value }
         : {
             kind: "committed" as const,
@@ -163,11 +141,11 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     },
     cleanup(input: MetadataInput) {
       if (input.kind === "maintenance-plan") {
-        releasePreparation(input.preparationId);
+        releasePreparation();
       }
     },
     getPreparationReleases() {
-      return [...preparations.keys()].map((id) => () => releasePreparation(id));
+      return preparation ? [releasePreparation] : [];
     },
   };
 }

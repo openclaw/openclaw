@@ -2,12 +2,14 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { readTranscriptMessages } from "../../sessions/user-turn-transcript.test-support.js";
 import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureCronInferenceBinding } from "../inference-binding.runtime.js";
 import { runCronIsolatedAgentTurn } from "./run.js";
 // Keep lazy runner imports outside the turn's timeout budget.
 import "./run-executor.runtime.js";
@@ -78,12 +80,17 @@ it("continues one cron user turn when the primary times out after provider dispa
     models.providers = {
       "mock-openai": {
         ...expectDefined(models.providers?.openai, "provider fixture"),
+        apiKey: undefined,
         baseUrl: "http://127.0.0.1:44080/v1",
         timeoutSeconds: 2,
         request: { allowPrivateNetwork: true },
       },
     };
     models.catalogRefresh = { enabled: false };
+    config.auth = {
+      profiles: { "mock-openai:cron-fixture": { provider: "mock-openai", mode: "api_key" } },
+      order: { "mock-openai": ["mock-openai:cron-fixture"] },
+    };
     config.agents = {
       entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
       defaults: {
@@ -102,10 +109,24 @@ it("continues one cron user turn when the primary times out after provider dispa
       },
     };
     setRuntimeConfigSnapshot(config);
+    await persistAuthProfileBatch({
+      stateDir: state.stateDir,
+      profiles: [
+        {
+          profileId: "mock-openai:cron-fixture",
+          credential: { type: "api_key", provider: "mock-openai", key: "synthetic-cron-key" },
+        },
+      ],
+    });
+    const inferenceBinding = expectDefined(
+      await captureCronInferenceBinding({ cfg: config, agentId: "main" }),
+      "stored inference account",
+    );
     const requests: string[] = [];
     const timeoutAdvances: ReturnType<typeof vi.advanceTimersByTimeAsync>[] = [];
     const fetchProvider = vi.fn<typeof fetch>(async (_url, options) => {
       const request = new Request(_url, options);
+      expect(request.headers.get("authorization")).toBe("Bearer synthetic-cron-key");
       const body = JSON.parse(await request.text()) as { model: string };
       requests.push(body.model);
       if (body.model !== "primary") {
@@ -142,6 +163,7 @@ it("continues one cron user turn when the primary times out after provider dispa
       message: "Reply exactly Fallback report",
       job: {
         id: "fallback-transcript",
+        inferenceBinding,
         name: "Fallback transcript proof",
         enabled: false,
         createdAtMs: 1,

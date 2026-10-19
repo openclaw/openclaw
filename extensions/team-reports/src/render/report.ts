@@ -1,4 +1,5 @@
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
+import { GITHUB_ITEM_KINDS } from "../github-item-kinds.js";
 import type { PeriodListEntry } from "../store.js";
 import type { GithubCounts, PersonReport, ReportDocument, SummaryDocument } from "../types.js";
 import type { PersonWorkSessions } from "../work-sessions.js";
@@ -20,7 +21,7 @@ import {
   shell,
   sourceBanners,
 } from "./page.js";
-import { ITEM_LABELS, memberSummary, metric, renderAvatar } from "./shared.js";
+import { memberSummary, metric, renderAvatar } from "./shared.js";
 import { renderPersonWorkSessions } from "./work-sessions.js";
 
 function activitySegments(github: GithubCounts, discord: number) {
@@ -114,7 +115,7 @@ function personRow(
     .slice(0, 3)
     .map(
       (item) =>
-        `<div class="theme"><span class="theme-kind">${ITEM_LABELS[item.kind]}</span> ${externalLink(item.url, item.title)}</div>`,
+        `<div class="theme"><span class="theme-kind">${GITHUB_ITEM_KINDS[item.kind].label}</span> ${externalLink(item.url, item.title)}</div>`,
     )
     .join("");
   const counts: Array<[string, number]> = [
@@ -130,7 +131,7 @@ function personRow(
     ? `<details><summary>Discord excerpts</summary>${member.discord.excerpts.map((excerpt) => `<blockquote><small>#${escapeHtml(excerpt.channel)} · ${escapeHtml(date(excerpt.atMs, ctx.displayTimezone))}</small><br>${escapeHtml(excerpt.excerpt)}</blockquote>`).join("")}</details>`
     : "";
   const items = member.github.items.length
-    ? `<details><summary>${member.github.items.length} GitHub items</summary><ul class="oc-resource-list">${member.github.items.map((item) => `<li class="oc-resource-list-item resource-row"><span class="theme-kind">${ITEM_LABELS[item.kind]} · ${escapeHtml(item.repo)}</span>${externalLink(item.url, item.title)}</li>`).join("")}</ul></details>`
+    ? `<details><summary>${member.github.items.length} GitHub items</summary><ul class="oc-resource-list">${member.github.items.map((item) => `<li class="oc-resource-list-item resource-row"><span class="theme-kind">${GITHUB_ITEM_KINDS[item.kind].label} · ${escapeHtml(item.repo)}</span>${externalLink(item.url, item.title)}</li>`).join("")}</ul></details>`
     : "";
   return `<article class="person oc-card" data-maintainer-card data-maintainer-search="${searchText(member)}"><div class="person-title"><div class="person-heading">${renderAvatar(member.login, member.display, "md")}<div><a class="handle" href="${escapeHtml(href(ctx.basePath, "people", member.login))}">@${escapeHtml(member.login)}</a><div class="person-name">${escapeHtml(member.display)}</div>${member.aliases.length ? `<div class="alias-line">${member.aliases.map((alias) => `@${escapeHtml(alias)}`).join(" · ")}</div>` : ""}</div></div>${affiliation(member)}<div class="role-line">${roleBadges(member)}</div></div><div class="person-body"><div class="chips">${chips}</div><p class="focus">${escapeHtml(memberSummary(member))}</p>${themes}${items}${excerpts}${workSessions ? renderPersonWorkSessions(ctx, member.login, workSessions) : ""}</div><div class="person-numbers">${counts.map(([label, count]) => `<div class="number-line"><span>${label}</span><strong>${count}</strong></div>`).join("")}</div></article>`;
 }

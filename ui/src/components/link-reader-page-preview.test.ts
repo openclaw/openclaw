@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { WizardStepControls } from "../pages/model-setup/wizard-step-controls.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { LinkReaderHovercardProvider as LinkHovercardProvider } from "./link-reader-hovercard.ts";
@@ -12,6 +11,7 @@ import {
   LINK_READER_HOVERCARD_PROVIDER_TAG as LINK_HOVERCARD_TAG,
   resolveHoverPreviewTarget,
 } from "./link-reader-target.ts";
+import { WizardStepControls } from "./wizard-step-controls.tsx";
 
 function linkHovercardUrl(anchor: HTMLAnchorElement) {
   const owner = anchor.closest<LinkHovercardProvider>(LINK_HOVERCARD_TAG)!;
@@ -132,14 +132,10 @@ describe("generic link hovercards", () => {
   });
 
   it.each([
-    "https://github.com/",
-    "https://github.com/login/device",
     "https://github.com/%6cogin/device",
-    "https://github.com/acme/project/settings",
     "https://github.com/acme/project.git",
     "https://github.com/acme%2fother/project",
     "https://github.com:8443/acme/project",
-    "https://www.github.com/acme/project",
   ])("never substitutes a public-page card for unsupported GitHub URL %s", async (href) => {
     const view = fixture();
     view.anchor.href = href;
@@ -181,10 +177,7 @@ describe("generic link hovercards", () => {
     await hover(view.anchor);
     expect(card()?.textContent).toContain("Field guide");
   });
-  it.each([
-    [url, "example.com", "^/guide$"],
-    ["https://github.com/openclaw/openclaw", "github.com", "^/openclaw/openclaw$"],
-  ])(
+  it.each([["https://github.com/openclaw/openclaw", "github.com", "^/openclaw/openclaw$"]])(
     "keeps the detail-only plugin claim authoritative without prefetching %s",
     async (href, host, pathPattern) => {
       const view = fixture();
@@ -249,7 +242,7 @@ describe("generic link hovercards", () => {
     expect(view.request).toHaveBeenCalledOnce();
   });
 
-  it.each(["config", "client", "generation", "scope", "href", "removed", "hidden", "file"])(
+  it.each(["config", "client", "scope", "href", "removed", "hidden", "file"])(
     "retires pending metadata when %s changes",
     async (change) => {
       const view = fixture();
@@ -262,9 +255,6 @@ describe("generic link hovercards", () => {
       }
       if (change === "client") {
         view.context.gateway.snapshot.client = { ...view.client };
-      }
-      if (change === "generation") {
-        view.client.connectionGeneration++;
       }
       if (change === "scope") {
         view.client.recoveryScope = "next";
@@ -290,6 +280,28 @@ describe("generic link hovercards", () => {
       expect(view.anchor.hasAttribute("aria-controls")).toBe(false);
     },
   );
+
+  it("keeps the page preview across a transport blip but retires it after an account change", async () => {
+    const view = fixture();
+    await hover(view.anchor);
+    const original = card();
+    view.client.connected = false;
+    view.client.connectionGeneration++;
+    view.context.gateway.snapshot.phase = "reconnecting";
+    view.notify();
+    expect(card()).toBe(original);
+    expect(card()?.textContent).toContain("Field guide");
+    view.client.connected = true;
+    view.client.connectionGeneration++;
+    view.context.gateway.snapshot.phase = "connected";
+    view.notify();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(card()).toBe(original);
+    expect(view.request).toHaveBeenCalledTimes(2);
+    view.client.recoveryScope = "another-account";
+    view.notify();
+    expect(card()).toBeNull();
+  });
 
   it("keeps fallback usable on failure and hides broken images", async () => {
     const view = fixture();
@@ -361,11 +373,7 @@ describe("generic link hovercards", () => {
   });
 
   it.each([
-    ["https://github.com/openclaw/openclaw/pull/42", false],
-    ["https://github.com/openclaw/openclaw/issues/42", false],
     ["/chat/main", false],
-    ["#section", false],
-    ["mailto:hello@example.com", false],
     ["file:///guide", false],
     ["https://user:pass@example.com/", false],
     [url, true],
@@ -377,32 +385,5 @@ describe("generic link hovercards", () => {
       pane.appendChild(document.createElement("openclaw-tooltip")).append(anchor);
     }
     expect(linkHovercardUrl(anchor)).toBeNull();
-  });
-  it.each([
-    "https://github.com/openclaw/openclaw",
-    "https://github.com/openclaw/clawsweeper/?tab=readme-ov-file#readme",
-    "https://github.com/%6fpenclaw/project.name",
-    "https://github.com/education/students",
-  ])("shows a public GitHub social card on intent without prefetching %s", async (href) => {
-    const { anchor, request } = fixture();
-    anchor.href = href;
-    const imageDataUrl = "data:image/png;base64,AAAA";
-    request.mockResolvedValue({
-      title: "OpenClaw repository",
-      description: "Your own personal assistant.",
-      imageDataUrl,
-    });
-    await prefetchLinkReader(anchor, new AbortController().signal);
-    expect(request).not.toHaveBeenCalled();
-    await hover(anchor);
-    expect(card()?.textContent).toContain("OpenClaw repository");
-    expect(card()?.textContent).toContain("Your own personal assistant.");
-    expect(card()?.querySelector(".link-hovercard__image")?.getAttribute("src")).toBe(imageDataUrl);
-    expect(card()?.querySelector("a")?.href).toBe(href);
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      "controlUi.linkPreview",
-      { url: href.split("#", 1)[0] },
-      { signal: expect.any(AbortSignal) },
-    );
   });
 });

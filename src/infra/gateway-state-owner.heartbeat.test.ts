@@ -201,6 +201,35 @@ async function startRuntime(
   };
 }
 
+it.each(["reparented", "unchanged ppid"])(
+  "settles maintenance with a lost launcher (%s) before forced termination",
+  async (kind) => {
+    const rootPath = path.join(tempDirs.make("openclaw-owner-orphan-"), "root.lock");
+    const raw = JSON.stringify({
+      pid: process.pid,
+      parentPid: kind === "reparented" ? process.ppid + 1 : process.ppid,
+      ...(kind === "unchanged ppid" ? { parentStartTime: 0 } : {}),
+      role: "sqlite-maintenance",
+      createdAt: new Date().toISOString(),
+      configPath: "synthetic-config",
+    });
+    fs.writeFileSync(rootPath, raw);
+    const oldStamp = new Date(Date.now() - 30_000);
+    fs.utimesSync(rootPath, oldStamp, oldStamp);
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    const runtime = await startRuntime({ [rootPath]: raw });
+    try {
+      expect(runtime.readEvents()).toContain("parent-lost");
+      expect(kill).not.toHaveBeenCalled();
+      expect(fs.statSync(rootPath).mtimeMs).toBeGreaterThan(oldStamp.getTime());
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(kill).toHaveBeenLastCalledWith(process.pid, "SIGKILL");
+    } finally {
+      await runtime.stop();
+    }
+  },
+);
+
 it.each([65_000, -5_000])(
   "renews unchanged worker custody after a heartbeat age of %s ms",
   async (age) => {
@@ -267,6 +296,8 @@ it.each([
 ] as const)(
   "preserves unmarked $clock custody with seed age $age",
   async ({ clock, age, renew }) => {
+    // Bun workers have independent hrtime origins, so unmarked monotonic custody is refused.
+    const shouldRenew = renew && !(process.versions.bun && clock === "monotonic");
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     vi.spyOn(process.hrtime, "bigint").mockReturnValue(500_000_000_000n);
@@ -286,10 +317,13 @@ it.each([
     const seed = BigInt((clock === "monotonic" ? 500_000 : Date.now()) - age);
     const runtime = await startRuntime({ [rootPath]: raw }, { clock: undefined, seed });
     try {
-      expect(vi.getTimerCount()).toBe(renew ? 1 : 0);
-      expect(fs.statSync(rootPath).mtimeMs).toBe(renew ? Date.now() : previous.getTime());
-      if (!renew) {
+      expect(vi.getTimerCount()).toBe(shouldRenew ? 1 : 0);
+      expect(fs.statSync(rootPath).mtimeMs).toBe(shouldRenew ? Date.now() : previous.getTime());
+      if (!shouldRenew) {
         expect(Atomics.load(runtime.lastBeat, 0)).toBe(seed);
+        expect(runtime.readEvents()).toEqual([
+          `${rootPath}: heartbeat clock could not be identified`,
+        ]);
       }
     } finally {
       await runtime.stop();

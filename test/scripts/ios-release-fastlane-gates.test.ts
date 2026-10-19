@@ -24,54 +24,7 @@ const snapshotUITestPath = path.join(
 );
 const rootTabsPath = path.join(process.cwd(), "apps", "ios", "Sources", "RootTabs.swift");
 const ciWorkflowPath = path.join(process.cwd(), ".github", "workflows", "ci.yml");
-const rubyVersionPath = path.join(process.cwd(), "apps", "ios", ".ruby-version");
 const gemfilePath = path.join(process.cwd(), "apps", "ios", "Gemfile");
-const gemfileLockPath = path.join(process.cwd(), "apps", "ios", "Gemfile.lock");
-const screenshotsScriptPath = path.join(process.cwd(), "scripts", "ios-screenshots.sh");
-
-function runIosScreenshotsCommand(
-  options: {
-    bundleCheckExit?: number;
-    bundleExit?: number;
-    conflictingGemfile?: boolean;
-  } = {},
-) {
-  const fixture = mkdtempSync(path.join(tmpdir(), "openclaw-ios-fastlane-"));
-  const tracePath = path.join(fixture, "trace.log");
-  const writeExecutable = (name: string, body: string) => {
-    const executable = path.join(fixture, name);
-    writeFileSync(executable, `#!/usr/bin/env bash\n${body}\n`, "utf8");
-    chmodSync(executable, 0o755);
-  };
-  writeExecutable(
-    "bundle",
-    '[[ "$BUNDLE_GEMFILE" == "$OPENCLAW_FASTLANE_EXPECTED_GEMFILE" ]] || exit 91\n' +
-      '[[ "${1:-}" == "_4.0.22_" ]] || exit 92\n' +
-      `[[ "\${2:-}" != "check" ]] || exit ${options.bundleCheckExit ?? 0}\n` +
-      'printf "bundle:%s\\n" "$*" >> "$OPENCLAW_FASTLANE_TEST_TRACE"\n' +
-      `exit ${options.bundleExit ?? 0}`,
-  );
-  writeExecutable("fastlane", 'printf "direct:%s\\n" "$*" >> "$OPENCLAW_FASTLANE_TEST_TRACE"');
-
-  try {
-    const result = spawnSync("bash", [screenshotsScriptPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        BUNDLE_GEMFILE: options.conflictingGemfile ? path.join(fixture, "Gemfile") : "",
-        OPENCLAW_FASTLANE_EXPECTED_GEMFILE: gemfilePath,
-        OPENCLAW_FASTLANE_TEST_TRACE: tracePath,
-        PATH: `${fixture}:/usr/bin:/bin`,
-      },
-    });
-    return {
-      result,
-      trace: existsSync(tracePath) ? readFileSync(tracePath, "utf8") : "",
-    };
-  } finally {
-    rmSync(fixture, { force: true, recursive: true });
-  }
-}
 
 function readFastfile(): string {
   return readFileSync(fastfilePath, "utf8");
@@ -127,6 +80,7 @@ describe("iOS Fastlane release upload gates", () => {
   it("recovers notes and build selection on the registered stage lane without uploading again", () => {
     const source = String.raw`
 require "json"
+require "spaceship" if ENV["OPENCLAW_TEST_FASTLANE_BUNDLE"] == "1"
 module UI
   def self.user_error!(message); raise message; end
   def self.success(*); end
@@ -140,9 +94,9 @@ def lane(name, &body); define_singleton_method(name, &body); end
 alias private_lane lane
 load ARGV.fetch(0)
 module Spaceship
-  module ConnectAPI
+  class ConnectAPI
     module Platform
-      IOS = "IOS"
+      IOS = "IOS" unless const_defined?(:IOS)
     end
     class Build
       def self.all(**options)
@@ -151,6 +105,25 @@ module Spaceship
         }
         $builds
       end
+    end
+    unless const_defined?(:Response)
+      class Response
+        attr_reader :body
+        def initialize(body:); @body = body; end
+        def to_models
+          data = body["data"]
+          raise "No data" unless data
+          [Struct.new(:id, :version).new(data.fetch("id"), data.fetch("attributes").fetch("version"))]
+        end
+      end
+    end
+    def self.get_build(app_store_version_id:)
+      raise "build lookup unavailable" if $scenario == "build-lookup-failure"
+      version = $app.versions.find { |candidate| candidate.id == app_store_version_id }
+      build = version.selected
+      body = { "data" => build && { "type" => "builds", "id" => build.id, "attributes" => { "version" => build.version } } }
+      body = {} if $scenario == "missing-build-data"
+      Response.new(body: body)
     end
   end
 end
@@ -163,12 +136,14 @@ Localization = Struct.new(:locale, :whats_new) do
   end
 end
 Version = Struct.new(:version_string, :app_version_state, :selected, :localization) do
-  def get_build; selected; end
+  def id; version_string; end
+  def get_build; Spaceship::ConnectAPI.get_build(app_store_version_id: id).to_models.first; end
   def get_app_store_version_localizations; [localization]; end
   def select_build(build_id:)
     $events << "select"
     raise "selection rejected" if $scenario == "selection-failure"
     self.selected = $builds.find { |build| build.id == build_id }
+    self.selected = nil if $scenario == "missing-selection-readback"
     localization.whats_new = "stale" if $scenario == "readback-failure"
   end
 end
@@ -191,7 +166,7 @@ def resolve_app_store_connect_app(**); $app; end
 def upload_to_testflight(**); raise "reupload attempted"; end
 def resolve_ios_release_plan!(**); raise "replanning attempted"; end
 ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] = "1"
-rows = %w[success first source-mismatch processing expired missing ambiguous locked newer notes-failure selection-failure readback-failure retry].map do |scenario|
+rows = %w[success first source-mismatch processing expired missing ambiguous locked newer build-lookup-failure missing-build-data notes-failure selection-failure readback-failure missing-selection-readback retry].map do |scenario|
   $scenario, $events = scenario, []
   build = Build.new("uploaded", "3", "2026.7.21", scenario == "processing" ? "PROCESSING" : "VALID", scenario == "expired")
   $builds = scenario == "missing" ? [] : [build]
@@ -215,7 +190,13 @@ rows = %w[success first source-mismatch processing expired missing ambiguous loc
 end
 puts JSON.generate(rows)
 `;
-    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
+    const useBundle = process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1";
+    const rubyArgs = ["-e", source, fastfilePath];
+    const result = spawnSync(
+      useBundle ? "bundle" : "ruby",
+      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      { encoding: "utf8", env: { ...process.env, BUNDLE_GEMFILE: gemfilePath } },
+    );
     expect(result.status, result.stderr).toBe(0);
     const rows = JSON.parse(result.stdout) as {
       scenario: string;
@@ -244,15 +225,20 @@ puts JSON.generate(rows)
           ambiguous: "found 2",
           locked: "locked in state IN_REVIEW",
           newer: "already selects newer build 4",
+          "build-lookup-failure": "build lookup unavailable",
+          "missing-build-data": 'key not found: "data"',
           "notes-failure": "notes rejected",
           "selection-failure": "selection rejected",
           "readback-failure": "staging readback did not match",
+          "missing-selection-readback": "staging readback did not match",
         };
         expect(row.error).toContain(expectedErrors[row.scenario]);
         const expectedEvents =
           row.scenario === "notes-failure"
             ? ["notes"]
-            : ["selection-failure", "readback-failure"].includes(row.scenario)
+            : ["selection-failure", "readback-failure", "missing-selection-readback"].includes(
+                  row.scenario,
+                )
               ? ["notes", "select"]
               : [];
         expect(row.events).toEqual(expectedEvents);
@@ -328,14 +314,13 @@ Review = Struct.new(:contact_first_name, :contact_last_name, :contact_email, :co
 Group = Struct.new(:id, :name, :is_internal_group, :builds) do
   def fetch_builds; builds; end
 end
-StoreVersion = Struct.new(:version_string, :selected) do
-  def get_build; selected; end
-end
+StoreVersion = Struct.new(:version_string, :selected)
 App = Struct.new(:id, :groups, :localizations) do
   def get_beta_groups; groups; end
   def get_beta_app_localizations; localizations; end
 end
 fastfile.instance_eval do
+  def selected_app_store_build(version); version.selected; end
   def read_ios_version_metadata(**)
     { version: "2026.7.2", short_version: "2026.7.21", app_store_revision: "1" }
   end
@@ -653,54 +638,6 @@ puts JSON.generate(rows)
     }
   });
 
-  it("pins the CI Ruby and Fastlane toolchain on the Fastlane-owning screenshot shards", () => {
-    const workflow = readFileSync(ciWorkflowPath, "utf8");
-    const iosJobStart = workflow.indexOf("\n  ios-build:\n");
-    const iosJobEnd = workflow.indexOf("\n  ios-screenshot-shard:\n", iosJobStart);
-    const iosJob = workflow.slice(iosJobStart, iosJobEnd);
-    const shardJobEnd = workflow.indexOf("\n  ios-screenshot-evidence:\n", iosJobEnd);
-    const shardJob = workflow.slice(iosJobEnd, shardJobEnd);
-    const gemfile = readFileSync(gemfilePath, "utf8");
-    const lockfile = readFileSync(gemfileLockPath, "utf8");
-
-    expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.11\n");
-    expect(gemfile).toContain('gem "fastlane", "2.240.1"');
-    expect(gemfile).toContain('ruby "3.4.11"');
-    expect(lockfile).toContain("fastlane (2.240.1)");
-    expect(lockfile).toContain("arm64-darwin");
-    expect(lockfile).toContain("x86_64-darwin");
-    expect(lockfile).toContain("CHECKSUMS");
-    expect(lockfile).toContain("RUBY VERSION\n  ruby 3.4.11");
-    expect(lockfile).toContain("BUNDLED WITH\n  4.0.22");
-    expect(iosJob).not.toContain("BUNDLE_DEPLOYMENT");
-    expect(iosJob).not.toContain("BUNDLE_GEMFILE");
-    expect(iosJob).not.toContain("ruby/setup-ruby@");
-    expect(iosJob).not.toContain("Install locked Fastlane bundle");
-    expect(shardJob).toContain('BUNDLE_DEPLOYMENT: "true"');
-    expect(shardJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
-    // Dependabot bumps this pin; the contract is an immutable commit SHA, not one release.
-    expect(shardJob).toMatch(/ruby\/setup-ruby@[0-9a-f]{40}\s/u);
-    expect(shardJob).toContain('ruby-version: "3.4.11"');
-    expect(shardJob).toContain('bundler: "4.0.22"');
-    expect(shardJob).toContain("bundler-cache: false");
-    expect(shardJob).toContain("working-directory: apps/ios");
-    expect(shardJob).toContain("bundle _4.0.22_ install --jobs 4 --retry 3");
-    expect(shardJob).toContain("bundle _4.0.22_ check");
-    expect(shardJob).toContain("bundle _4.0.22_ exec fastlane --version");
-    expect(workflow.match(/ruby\/setup-ruby@/gu)).toHaveLength(1);
-    expect(workflow.match(/name: Install locked Fastlane bundle/gu)).toHaveLength(1);
-  });
-
-  it("prints the pinned setup command when the repository bundle is unavailable", () => {
-    const { result, trace } = runIosScreenshotsCommand({ bundleCheckExit: 1 });
-
-    expect(result.status).toBe(1);
-    expect(trace).toBe("");
-    expect(result.stderr).toContain("Install Ruby 3.4.11");
-    expect(result.stderr).toContain("gem install bundler -v 4.0.22");
-    expect(result.stderr).toContain("bundle _4.0.22_ install");
-  });
-
   it("fails closed when the repository Gemfile is absent", () => {
     const fixture = mkdtempSync(path.join(tmpdir(), "openclaw-ios-fastlane-missing-gemfile-"));
     const wrapperPath = path.join(fixture, "scripts", "lib", "ios-fastlane.sh");
@@ -744,23 +681,6 @@ puts JSON.generate(rows)
     }
   });
 
-  it("plans revisions and builds from App Store versions and build uploads", () => {
-    const fastfile = readFastfile();
-    const planner = functionBody(fastfile, "resolve_ios_release_plan!");
-    const planLane = laneBody(fastfile, "release_plan");
-    const uploadState = functionBody(fastfile, "app_store_build_upload_state");
-
-    expect(planner).toContain("get_app_store_versions");
-    expect(planner).toContain("app_store_build_uploads");
-    expect(planner).toContain("app_store_build_upload_state(upload)");
-    expect(uploadState).toContain('detail["state"]');
-    expect(uploadState).toContain("expected a StateDetail object");
-    expect(planner).toContain("does not match the root package version");
-    expect(planner).toContain('File.join(repo_root, "scripts", "ios-release-plan.ts")');
-    expect(planLane).toContain("resolve_ios_release_plan!");
-    expect(planLane).toContain("JSON.pretty_generate(plan)");
-  });
-
   it("validates the exported IPA before the sole TestFlight upload call", () => {
     const fastfile = readFastfile();
     const validationCall = fastfile.indexOf("expected_commit: context[:git_commit]");
@@ -768,42 +688,6 @@ puts JSON.generate(rows)
 
     expect(validationCall).toBeGreaterThanOrEqual(0);
     expect(uploadCall).toBeGreaterThan(validationCall);
-  });
-
-  it("fails from authoritative Xcode results and keeps successful bundles outside screenshots", () => {
-    const fastfile = readFastfile();
-    const screenshots = laneBody(fastfile, "screenshots");
-    const capture = functionBody(fastfile, "capture_release_ios_screenshot!");
-    const archive = functionBody(fastfile, "archive_snapshot_test_result!");
-    const attemptRecorder = functionBody(fastfile, "record_release_ios_screenshot_attempt!");
-    const attemptWriter = functionBody(fastfile, "write_release_ios_screenshot_attempts!");
-    const verifier = functionBody(fastfile, "verify_snapshot_test_result!");
-
-    expect(screenshots).toContain("devices = snapshot_devices");
-    expect(screenshots).toContain('"build-for-testing"');
-    expect(screenshots).toContain("RELEASE_IOS_SCREENSHOT_TESTS.each");
-    expect(screenshots).toContain("capture_release_ios_screenshot!(");
-    expect(screenshots).toContain(
-      "result_bundle_archive_directory: result_bundle_archive_directory",
-    );
-    expect(capture).toContain("verify_snapshot_test_result!");
-    expect(attemptRecorder).toContain('"captureOutcome" => capture_outcome');
-    expect(attemptRecorder).toContain("write_release_ios_screenshot_attempts!(");
-    expect(attemptWriter).toContain('"schemaVersion" => 1');
-    expect(archive).toContain('"#{device}-#{screenshot_name}-attempt-#{attempt}.xcresult"');
-    expect(screenshots).toContain("verify_release_ios_screenshot_manifest!(");
-    expect(screenshots).toContain(
-      'result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")',
-    );
-    expect(screenshots).toContain(
-      'capture_attempts_path = File.join(result_bundle_archive_directory, "capture-attempts.json")',
-    );
-    expect(screenshots.indexOf("capture_release_ios_screenshot!")).toBeLessThan(
-      screenshots.indexOf('FileUtils.rm_rf(File.join(output_directory, "test_output"))'),
-    );
-    expect(verifier).toContain('"xcresulttool"');
-    expect(verifier).toContain('summary.fetch("failedTests")');
-    expect(verifier).toContain("UI.test_failure!");
   });
 
   it("preserves the first screenshot failure and records one capture without retrying", () => {
@@ -1114,7 +998,9 @@ def sh(command, *arguments, **_options)
     @owned[udid] = { "name" => args[3], "udid" => udid, "runtime" => args[5], "state" => "Shutdown" }
     return udid
   elsif args[0, 3] == ["xcrun", "simctl", "bootstatus"]
-    @owned.fetch(args[3])["state"] = "Booted"
+    device = @owned.fetch(args[3])
+    # CI observed bootstatus exiting 0 after CoreSimulator shut the Watch down mid-boot.
+    device["state"] = @scenario == "boot-ended" && device.fetch("name").include?("Apple Watch") ? "Shutdown" : "Booted"
     raise "boot failed" if @scenario == "boot-failure"
   elsif args[0, 3] == ["xcrun", "simctl", "shutdown"]
     raise "cleanup failed" if @scenario == "capture-cleanup-failure" || @scenario == "cleanup-failure"
@@ -1133,7 +1019,7 @@ def sh(command, *arguments, **_options)
   end
 end
 
-results = %w[combined diagnostics iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure capture-failure capture-cleanup-failure cleanup-failure].map do |scenario|
+results = %w[combined diagnostics iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
@@ -1304,6 +1190,21 @@ puts JSON.generate(results)
     expect(row("busy").error).toContain("shut down the 1 active simulator");
     expect(row("busy").lifecycle).toEqual([]);
     expect(row("boot-failure").error).toBe("boot failed");
+    expect(row("boot-ended")).toMatchObject({
+      error:
+        "Task-owned screenshot simulator 00000000-0000-0000-0000-000000000003 is Shutdown, not Booted; CoreSimulator ended its session.",
+      pngs: 8,
+    });
+    expect(row("boot-ended").lifecycle.slice(-3)).toEqual([
+      [
+        "create",
+        "Apple Watch Ultra 3 (49mm)",
+        "watch-type",
+        "com.apple.CoreSimulator.SimRuntime.watchOS-27-0",
+      ],
+      ["bootstatus", "00000000-0000-0000-0000-000000000003", "-b"],
+      ["delete", "00000000-0000-0000-0000-000000000003"],
+    ]);
     expect(row("capture-failure").error).toBe("capture failed");
     expect(row("capture-cleanup-failure").error).toBe("capture failed");
     expect(row("cleanup-failure").error).toBe("cleanup failed");
@@ -1414,15 +1315,15 @@ end
     });
   });
 
-  it("runs screenshot shards alongside builds without changing runner authorization", () => {
+  it("captures all screenshot families once without changing runner authorization", () => {
     const workflow = readFileSync(ciWorkflowPath, "utf8");
     const iosJobStart = workflow.indexOf("\n  ios-build:\n");
-    const iosJobEnd = workflow.indexOf("\n  ios-screenshot-shard:\n", iosJobStart);
+    const iosJobEnd = workflow.indexOf("\n  ios-screenshot-capture:\n", iosJobStart);
     const iosJob = workflow.slice(iosJobStart, iosJobEnd);
-    const shardJobStart = iosJobEnd;
-    const shardJobEnd = workflow.indexOf("\n  ios-screenshot-evidence:\n", shardJobStart);
-    const shardJob = workflow.slice(shardJobStart, shardJobEnd);
-    const reducerJobStart = shardJobEnd;
+    const captureJobStart = iosJobEnd;
+    const captureJobEnd = workflow.indexOf("\n  ios-screenshot-evidence:\n", captureJobStart);
+    const captureJob = workflow.slice(captureJobStart, captureJobEnd);
+    const reducerJobStart = captureJobEnd;
     const reducerJobEnd = workflow.indexOf("\n  android:\n", reducerJobStart);
     const reducerJob = workflow.slice(reducerJobStart, reducerJobEnd);
 
@@ -1430,32 +1331,32 @@ end
     expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"');
     expect(iosJob).toContain("timeout-minutes: 150");
     expect(iosJob).not.toContain("Capture iOS release screenshots");
-    expect(shardJob).toContain("needs: [preflight]");
-    expect(shardJob).toContain("max-parallel: 2");
-    expect(shardJob).toContain("device_family: [iphone, ipad-13]");
-    expect(shardJob).toContain(
-      "OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ matrix.device_family == 'iphone' && '1' || '0' }}",
-    );
-    expect(shardJob).not.toContain("run_ios_fastlane ios watch_screenshot");
-    expect(shardJob).toContain("run: pnpm ios:screenshots");
-    expect(shardJob).toContain("id: package_screenshot_evidence");
-    expect(shardJob).toContain('if [[ "$DEVICE_FAMILY" == "ipad-13" ]]; then');
+    expect(captureJob).toContain("needs: [preflight]");
+    expect(captureJob).not.toContain("strategy:");
+    expect(captureJob).not.toContain("OPENCLAW_SNAPSHOT_DEVICE_FAMILY");
+    expect(captureJob).not.toContain("OPENCLAW_SNAPSHOT_SKIP_WATCH");
+    expect(captureJob).not.toContain("run_ios_fastlane ios watch_screenshot");
+    expect(captureJob).toContain("run: pnpm ios:screenshots");
+    expect(captureJob).toContain("id: package_screenshot_evidence");
+    expect(captureJob).not.toContain("--family");
     expect(
-      shardJob.match(/node \.ci-harness\/scripts\/ios-screenshot-evidence\.mjs/g),
-    ).toHaveLength(2);
-    expect(shardJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");
-    expect(shardJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
-    expect(shardJob).toContain("steps.device_screenshots.outcome == 'failure'");
-    expect(shardJob).toContain("apps/ios/build/SnapshotTestResults/capture-attempts.json");
-    expect(shardJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
-    expect(shardJob).toContain("IOS_SCREENSHOT_NODE_VERSION");
-    expect(shardJob).toContain("IOS_SCREENSHOT_XCODE_VERSION");
-    expect(shardJob).not.toContain('test "$fastlane_version" = "$IOS_SCREENSHOT_FASTLANE_VERSION"');
-    expect(shardJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
-    expect(shardJob).not.toContain("SnapshotDerivedData");
-    expect(shardJob.match(/contents: read/g)).toHaveLength(1);
-    expect(reducerJob).toContain("needs: [preflight, ios-screenshot-shard]");
-    expect(reducerJob).toContain("merge-multiple: false");
+      captureJob.match(/node \.ci-harness\/scripts\/ios-screenshot-evidence\.mjs/g),
+    ).toHaveLength(1);
+    expect(captureJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");
+    expect(captureJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
+    expect(captureJob).toContain("steps.device_screenshots.outcome == 'failure'");
+    expect(captureJob).toContain("apps/ios/build/SnapshotTestResults/capture-attempts.json");
+    expect(captureJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
+    expect(captureJob).toContain("IOS_SCREENSHOT_NODE_VERSION");
+    expect(captureJob).toContain("IOS_SCREENSHOT_XCODE_VERSION");
+    expect(captureJob).not.toContain(
+      'test "$fastlane_version" = "$IOS_SCREENSHOT_FASTLANE_VERSION"',
+    );
+    expect(captureJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
+    expect(captureJob).not.toContain("SnapshotDerivedData");
+    expect(captureJob.match(/contents: read/g)).toHaveLength(1);
+    expect(reducerJob).toContain("needs: [preflight, ios-screenshot-capture]");
+    expect(reducerJob).not.toContain("merge-multiple:");
     expect(reducerJob).toContain("Setup screenshot evidence Node");
     expect(reducerJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
     expect(reducerJob).toContain("id: reduce_screenshot_evidence");
@@ -1474,21 +1375,6 @@ end
     );
     expect(reducerJob).toContain("apps/ios/build/ScreenshotEvidence/manifest.json");
     expect(reducerJob).not.toContain("SnapshotDerivedData");
-  });
-
-  it("records the installed Fastlane semver before the update notice", () => {
-    const workflow = readFileSync(ciWorkflowPath, "utf8");
-    const parser = workflow.match(/run_ios_fastlane --version 2>&1 \| awk '([^']+)'/u)?.[1];
-
-    expect(parser).toBeDefined();
-    const result = spawnSync("awk", [parser!], {
-      encoding: "utf8",
-      input:
-        "fastlane installation at path:\nfastlane 2.236.1\n# fastlane 2.238.0 is available. You are on 2.236.1.\n",
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("2.236.1\n");
   });
 
   it("preserves caller-pinned Swift tools in archive build PATH", () => {

@@ -11,11 +11,11 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { withTempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
-import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import type { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import { buildDiscordSendError, createDiscordClient, resolveChannelId } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
+import { parseAndResolveDiscordTarget } from "./target-resolver.js";
 import {
   ensureOggOpus,
   getVoiceMessageMetadata,
@@ -75,7 +75,11 @@ export async function sendVoiceMessageDiscord(
         try {
           client = createDiscordClient({ ...opts, cfg });
           const { token, rest, request, account: accountInfo } = client;
-          const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
+          const recipient = await parseAndResolveDiscordTarget(
+            to,
+            { cfg, accountId: accountInfo.accountId },
+            { defaultKind: "channel" },
+          );
           channelId = (await resolveChannelId(rest, recipient, request)).channelId;
 
           ogg = await ensureOggOpus(localInputPath);

@@ -50,6 +50,9 @@ function createOutboundCapture() {
   const app = {
     api: {
       serviceUrl: "https://smba.trafficmanager.net/emea/",
+      fromServiceUrl({ serviceUrl }: { serviceUrl: string }) {
+        return { ...this, serviceUrl };
+      },
       teams: { getById: vi.fn(async () => ({})) },
       conversations: {
         activities: (conversationId: string) => ({
@@ -119,14 +122,24 @@ describe("Microsoft Teams durable ingress", () => {
   it("does not dispatch a failed append's stale live context on retry", async () => {
     await withQueue(async (queue) => {
       let failNext = true;
-      const enqueue = queue.enqueue.bind(queue);
-      queue.enqueue = async (...args) => {
+      const failAdmissionOnce = () => {
         if (failNext) {
           failNext = false;
           throw new Error("sqlite busy");
         }
+      };
+      const enqueue = queue.enqueue.bind(queue);
+      queue.enqueue = async (...args) => {
+        failAdmissionOnce();
         return await enqueue(...args);
       };
+      const enqueueAndClaim = queue.enqueueAndClaim?.bind(queue);
+      if (enqueueAndClaim) {
+        queue.enqueueAndClaim = async (...args) => {
+          failAdmissionOnce();
+          return await enqueueAndClaim(...args);
+        };
+      }
       const contexts: unknown[] = [];
       const ingress = createMSTeamsIngress({
         accountId: "default",

@@ -1,4 +1,8 @@
-import type { WorkboardCard, WorkboardSessionsBoardView } from "@openclaw/workboard-contract";
+import type {
+  WorkboardCard,
+  WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardView,
+} from "@openclaw/workboard-contract";
 import { readStringParam } from "openclaw/plugin-sdk/core";
 import { captureLocalStateMutationGuard } from "openclaw/plugin-sdk/gateway-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -29,7 +33,16 @@ import {
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
-const cardsListFilterSchema = z.object({ sessionKey: z.string().trim().min(1).optional() });
+const cardsListFilterSchema = z.object({
+  sessionKey: z.string().trim().min(1).optional(),
+  after: z
+    .object({
+      position: z.number().finite(),
+      createdAt: z.number().finite(),
+      id: z.string().min(1),
+    })
+    .optional(),
+});
 const CLI_OWNER_METHODS = new Set([
   "workboard.cards.list",
   "workboard.cards.create",
@@ -40,7 +53,7 @@ const CLI_OWNER_METHODS = new Set([
 
 function sessionsBoardView(input: Record<string, unknown>): WorkboardSessionsBoardView | undefined {
   const unknownParam = Object.keys(input).find(
-    (key) => key !== "boardId" && key !== "view" && key !== "sinceRevision",
+    (key) => key !== "boardId" && key !== "view" && key !== "sinceRevision" && key !== "after",
   );
   if (unknownParam) {
     throw new Error(`Unknown Sessions board read field: ${unknownParam}.`);
@@ -72,6 +85,27 @@ function sessionsBoardView(input: Record<string, unknown>): WorkboardSessionsBoa
     }
   }
   return view;
+}
+
+function sessionsBoardPage(
+  result: WorkboardSessionsBoardRead,
+  after?: string,
+): WorkboardSessionsBoardRead {
+  const previous =
+    after === undefined ? -1 : result.sessions.findIndex((session) => session.key === after);
+  if (after !== undefined && previous < 0) {
+    throw new Error("This Sessions board page has changed. Refresh the board to continue.");
+  }
+  const start = previous + 1;
+  const sessions = result.sessions.slice(start, start + 100);
+  return {
+    ...result,
+    sessions,
+    total: result.sessions.length,
+    ...(start + sessions.length < result.sessions.length
+      ? { nextCursor: sessions.at(-1)!.key }
+      : {}),
+  };
 }
 
 /**
@@ -229,10 +263,11 @@ export function registerWorkboardGatewayMethods(params: {
   const dispatchCards = createWorkboardDispatchHandler({ api, store });
 
   register("workboard.cards.list", READ_SCOPE, async ({ params: input }) => {
-    const { sessionKey } = cardsListFilterSchema.parse(input);
-    const result = await store.listCards(input.boardId, sessionKey);
+    const { sessionKey, after } = cardsListFilterSchema.parse(input);
+    const result = await store.listCards(input.boardId, sessionKey, after);
     const since = input.sinceRevision;
-    return isRecord(since) &&
+    return after === undefined &&
+      isRecord(since) &&
       since.epoch === result.revision.epoch &&
       since.revision === result.revision.revision &&
       since.boardId === result.revision.boardId &&
@@ -324,20 +359,25 @@ export function registerWorkboardGatewayMethods(params: {
     return params.sessionsBoard;
   };
   register("workboard.sessionsBoard.read", READ_SCOPE, async (request) => {
+    const after =
+      request.params.after === undefined
+        ? undefined
+        : readStringParam(request.params, "after", { required: true });
     const result = await sessionsBoard().read(
       readStringParam(request.params, "boardId", { required: true }),
       sessionsBoardView(request.params),
       sessionsBoardCaller(request),
     );
     const since = request.params.sinceRevision;
-    return isRecord(since) &&
+    return after === undefined &&
+      isRecord(since) &&
       result.revision &&
       since.epoch === result.revision.epoch &&
       since.revision === result.revision.revision &&
       since.boardId === result.revision.boardId &&
       since.scope === result.revision.scope
       ? { unchanged: true, revision: result.revision }
-      : result;
+      : sessionsBoardPage(result, after);
   });
   register("workboard.sessionsBoard.update", WRITE_SCOPE, async (request) => {
     const input = request.params;
@@ -349,12 +389,14 @@ export function registerWorkboardGatewayMethods(params: {
       board: await sessionsBoard().update(boardId, input.patch, sessionsBoardCaller(request)),
     };
   });
-  register("workboard.sessionsBoard.move", WRITE_SCOPE, (request) =>
-    sessionsBoard().move(
-      readStringParam(request.params, "boardId", { required: true }),
-      readStringParam(request.params, "sessionKey", { required: true }),
-      readStringParam(request.params, "columnId", { required: true }),
-      sessionsBoardCaller(request),
+  register("workboard.sessionsBoard.move", WRITE_SCOPE, async (request) =>
+    sessionsBoardPage(
+      await sessionsBoard().move(
+        readStringParam(request.params, "boardId", { required: true }),
+        readStringParam(request.params, "sessionKey", { required: true }),
+        readStringParam(request.params, "columnId", { required: true }),
+        sessionsBoardCaller(request),
+      ),
     ),
   );
   register("workboard.boards.archive", WRITE_SCOPE, async ({ params: input }) => ({

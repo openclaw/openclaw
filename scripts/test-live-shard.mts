@@ -324,7 +324,7 @@ function isMoonshotLiveTest(file: string) {
   return file.startsWith("extensions/moonshot/");
 }
 
-// The frozen 2026.9.8 and 2026.9.9 candidates retain three intentionally skipped single-case
+// The frozen 2026.9.8, 2026.9.9 and 2026.9.33 candidates retain three intentionally skipped single-case
 // live files. The trusted tooling checkout owns shard selection, so omit those
 // candidate files here rather than weakening the per-file passing-assertion guard.
 const RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES = new Set([
@@ -335,6 +335,8 @@ const RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES = new Set([
 const RELEASE_WAIVED_LIVE_FILES = new Map<string, ReadonlySet<string>>([
   ["2026.9.8", RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES],
   ["2026.9.9", RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES],
+  // Extended-stable 2026.9.33 is cut from the 2026.9.9 line with the same skips.
+  ["2026.9.33", RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES],
 ]);
 
 export function withoutReleaseWaivedLiveFiles(

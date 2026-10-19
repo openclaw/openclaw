@@ -296,7 +296,3 @@ export async function runSearxngSearch(params: {
   writeCache(SEARXNG_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  SEARXNG_SEARCH_CACHE,
-};

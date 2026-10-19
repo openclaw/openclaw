@@ -19,7 +19,6 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
-import { validConfigSnapshot } from "./update-command-post-update.test-support.js";
 import { assertUpdateCommandPackageFinalization } from "./update-command-recovery.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import { resolveSettledUpdateCommandResult } from "./update-command-terminal.js";
@@ -204,7 +203,14 @@ describe("durable terminal finalizer consumer", () => {
           root: f.live,
           result: { status: "ok", mode: "npm", root: f.live, steps: [], durationMs: 0 },
           configSnapshot: {
-            ...validConfigSnapshot,
+            valid: true,
+            parsed: {},
+            config: {},
+            runtimeConfig: {},
+            sourceConfig: {},
+            warnings: [],
+            issues: [],
+            legacyIssues: [],
             path: path.join(f.root, "openclaw.json"),
             exists: true,
             raw: "{}",

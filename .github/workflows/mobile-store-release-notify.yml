@@ -1,0 +1,44 @@
+name: Mobile Store Release Notifications
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] reads trusted release metadata; executes only default-branch code, never triggering artifacts or source
+    workflows: [iOS Store Release, Android Store Release]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  notify:
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      github.event.workflow_run.head_repository.full_name == 'openclaw/openclaw' &&
+      github.event.workflow_run.event == 'schedule' &&
+      (github.event.workflow_run.display_title == 'iOS Store release (weekly)' ||
+      github.event.workflow_run.display_title == 'Android Store release (weekly)')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: ${{ github.event.workflow_run.display_title == 'iOS Store release (weekly)' && 'ios-store-release' || 'android-store-release' }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out trusted notification script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: /scripts/github/mobile-store-release-notify.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
+      - name: Notify scheduled store release result
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DISCORD_MOBILE_RELEASE_WEBHOOK_URL: ${{ secrets.DISCORD_MOBILE_RELEASE_WEBHOOK_URL }}
+        run: node scripts/github/mobile-store-release-notify.mjs

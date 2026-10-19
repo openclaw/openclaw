@@ -1,6 +1,5 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  createChannelInboundEnvelopeBuilderAsync,
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -15,16 +14,16 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-r
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { prepareMatrixReplyPayload } from "../../outbound.js";
 import { isPollEventType } from "../poll-types.js";
 import type { LocationMessageEventContent } from "../sdk.js";
+import { RelationType } from "../send/types.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
-import { resolveMatrixMonitorLiveUserAllowlist } from "./config.js";
 import { createMatrixEventContextResolver } from "./event-context.js";
 import { resolveMatrixInboundContext } from "./handler-context.js";
 import { createMatrixDraftController } from "./handler-draft-controller.js";
 import {
+  hasBundledMatrixReplacementRelation,
   markTrackedRoomIfFirst,
   shouldDeferMatrixAudioPreflightForRoomIngress,
 } from "./handler-helpers.js";
@@ -33,14 +32,15 @@ import {
   type MatrixIngressAccessParams,
 } from "./handler-ingress-access.js";
 import { resolveMatrixIngressContent } from "./handler-ingress-content.js";
-import { readMatrixIngressPrefix } from "./handler-ingress-prefix.js";
 import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
 import { loadMatrixSendModule } from "./handler-runtime.js";
 import { createMatrixHandlerState } from "./handler-state.js";
 import type { MatrixHandlerRuntimeConfig, MatrixMonitorHandlerParams } from "./handler-types.js";
+import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { createRoomHistoryTracker } from "./room-history.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
+import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
 
 // Core emits this stable error code across the plugin boundary; Matrix cannot import the
 // core lifecycle module that owns it. Keep the notice actionable or replay will dead-end.
@@ -70,21 +70,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     inboundDeduper,
     directTracker,
     getMemberDisplayName,
-    resolveLiveUserAllowlist = resolveMatrixMonitorLiveUserAllowlist,
-    resolveStorePath: resolveStorePathImpl = resolveStorePath,
-    createChannelInboundEnvelopeBuilderAsync:
-      createChannelInboundEnvelopeBuilderImpl = createChannelInboundEnvelopeBuilderAsync,
-    resolveHumanDelayConfig: resolveHumanDelayConfigImpl = resolveHumanDelayConfig,
   } = params;
   const handlerConfig: MatrixHandlerRuntimeConfig = {
     ...params,
     allowFromResolvedEntries,
     groupAllowFromResolvedEntries,
     configuredBotUserIds,
-    resolveLiveUserAllowlist,
-    resolveStorePath: resolveStorePathImpl,
-    createChannelInboundEnvelopeBuilderAsync: createChannelInboundEnvelopeBuilderImpl,
-    resolveHumanDelayConfig: resolveHumanDelayConfigImpl,
   };
   const handlerState = createMatrixHandlerState({
     core,
@@ -92,7 +83,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     runtime,
     allowFromResolvedEntries,
     groupAllowFromResolvedEntries,
-    resolveLiveUserAllowlist,
   });
   const resolveThreadContext = createMatrixEventContextResolver({
     kind: "thread",
@@ -159,25 +149,63 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           inboundReplayClaim = undefined;
         }
       };
-      const readIngressPrefix = () =>
-        readMatrixIngressPrefix({
-          client,
-          senderId,
-          dropPreStartupMessages,
-          eventTs: eventTs ?? undefined,
-          eventAge: eventAge ?? undefined,
-          startupMs,
-          event,
+      const readIngressPrefix = async () => {
+        const selfUserId = await client.getUserId();
+        if (senderId === selfUserId) {
+          return undefined;
+        }
+        if (dropPreStartupMessages) {
+          if (typeof eventTs === "number" && eventTs < startupMs) {
+            return undefined;
+          }
+          if (typeof eventTs !== "number" && typeof eventAge === "number" && eventAge > 0) {
+            return undefined;
+          }
+        }
+
+        const content = locationContent;
+
+        if (
+          eventType === EventType.RoomMessage &&
+          isMatrixVerificationRoomMessage({
+            msgtype: content.msgtype,
+            body: content.body,
+          })
+        ) {
+          logVerboseMessage(`matrix: skip verification/system room message room=${roomId}`);
+          return undefined;
+        }
+
+        const locationPayload: MatrixLocationPayload | null = resolveMatrixLocation({
           eventType,
-          eventId,
-          inboundDeduper,
-          roomId,
-          logVerboseMessage,
-          directTracker,
-          claimInboundReplay: (handle) => {
-            inboundReplayClaim = handle;
-          },
+          content,
         });
+
+        const relates = content["m.relates_to"];
+        if (relates && "rel_type" in relates && relates.rel_type === RelationType.Replace) {
+          return undefined;
+        }
+        if (hasBundledMatrixReplacementRelation(event)) {
+          return undefined;
+        }
+        if (eventId && inboundDeduper) {
+          const claim = await inboundDeduper.claim({ roomId, eventId });
+          // Missing identifiers fail open; committed and in-flight events do not.
+          if (claim.kind === "claimed") {
+            inboundReplayClaim = claim.handle;
+          } else if (claim.kind !== "invalid") {
+            logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
+            return undefined;
+          }
+        }
+
+        const directMessage = await directTracker.isDirectMessage({
+          roomId,
+          senderId,
+          selfUserId,
+        });
+        return { content, isDirectMessage: directMessage, locationPayload, selfUserId };
+      };
       const ingressContext = {
         handler: handlerConfig,
         roomId,
@@ -337,7 +365,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const replyDispatcher = createMatrixReplyDispatcher({
         cfg,
         prefixOptions,
-        humanDelay: resolveHumanDelayConfigImpl(cfg, _route.agentId),
+        humanDelay: resolveHumanDelayConfig(cfg, _route.agentId),
         typingCallbacks,
         streaming,
         draftStream,

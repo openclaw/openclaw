@@ -283,6 +283,9 @@ suite.define(() => {
         .poll(() => page.getByRole("menuitem", { name: "Delete…" }).isDisabled())
         .toBe(true);
       await page.keyboard.press("Escape");
+      await page.getByRole("menu", { name: "Advanced", exact: true }).waitFor({ state: "hidden" });
+      await page.keyboard.press("Escape");
+      await page.locator("openclaw-session-menu [role=menu]").first().waitFor({ state: "hidden" });
       await sidebarResearch.hover();
       await sidebarResearch.click({ button: "right" });
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Archive session" }));
@@ -383,7 +386,7 @@ suite.define(() => {
         table.locator("tbody .session-data-row .session-label-chip").allTextContents();
       await expect.poll(rowNames).toEqual(["Zulu thread", "Alpha thread"]);
 
-      for (const name of ["Key", "Kind", "Updated", "Tokens"]) {
+      for (const name of ["Session", "Updated"]) {
         await table.getByRole("columnheader", { name }).getByRole("button", { name }).waitFor();
       }
 
@@ -393,8 +396,8 @@ suite.define(() => {
       await expect.poll(rowNames).toEqual(["Alpha thread", "Zulu thread"]);
       expect(await updatedHeader.getAttribute("aria-sort")).toBe("ascending");
 
-      const keyHeader = table.getByRole("columnheader", { name: "Key" });
-      await keyHeader.getByRole("button", { name: "Key" }).press("Enter");
+      const keyHeader = table.getByRole("columnheader", { name: "Session" });
+      await keyHeader.getByRole("button", { name: "Session" }).press("Enter");
       await expect.poll(rowNames).toEqual(["Zulu thread", "Alpha thread"]);
       expect(await keyHeader.getAttribute("aria-sort")).toBe("descending");
       expect(await updatedHeader.getAttribute("aria-sort")).toBeNull();
