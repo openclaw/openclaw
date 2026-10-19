@@ -2,10 +2,11 @@
 import { createComponent } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
@@ -194,6 +195,62 @@ it("projects direct active children through the live observer with stable rounde
   element.presented = false;
   await element.updateComplete;
   expect(element.querySelector("openclaw-chat-subagent-activity")).toBeNull();
+});
+
+it("renders unknown without invented zero counts and keeps the All changes action usable", async () => {
+  const open = vi.fn();
+  const element = await mount({ onOpenSessionDiff: open });
+  const button = element.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
+  expect(button.textContent).toContain("—");
+  expect(button.textContent).not.toContain("0 files");
+  button.click();
+  expect(open).toHaveBeenCalledOnce();
+});
+
+it("shows abbreviated colored deltas with exact accessible totals, partial and stale states", async () => {
+  vi.useFakeTimers();
+  const request = vi
+    .fn<(method: string) => Promise<unknown>>()
+    .mockImplementation(async (method: string) =>
+      method === "sessions.diff"
+        ? { files: [{ path: "app.ts" }], additions: 12_480, deletions: 61, truncated: true }
+        : { jobs: [], total: 0, hasMore: false, nextOffset: null, snapshotRevision: "1" },
+    );
+  // SAFETY: These components only read the supplied connection and subscription surface.
+  const gateway = {
+    snapshot: { client: { request }, phase: "connected", hello: null },
+    connectionRevision: 1,
+    subscribe: () => () => {},
+    subscribeEvents: () => () => {},
+  } as unknown as ApplicationGateway;
+  try {
+    const element = await mount({ onOpenSessionDiff: vi.fn(), pullRequestsGateway: gateway });
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForSolid(() =>
+      expect(element.querySelector(".chat-details__change-files")?.textContent).toContain("1 file"),
+    );
+    const button = element.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
+    expect(element.querySelector(".chat-details__change-lines--add")?.textContent).toBe("+12.5K");
+    expect(element.querySelector(".chat-details__change-lines--del")?.textContent).toBe("−61");
+    expect(button.getAttribute("aria-description")).toContain("+12480 lines, −61 lines");
+    expect(button.textContent).toContain("partial");
+    request.mockRejectedValue(new Error("offline"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitForSolid(() => expect(button.textContent).toContain("stale"));
+    expect(button.textContent).toContain("+12.5K");
+    expect(button.getAttribute("aria-description")).toContain("Last-known changes");
+    request.mockResolvedValue({ files: [], additions: 0, deletions: 0 });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitForSolid(() => expect(button.textContent).toContain("0 files"));
+    expect(button.textContent).toContain("+0");
+    expect(button.textContent).toContain("−0");
+    expect(
+      element.querySelector(".chat-details__change-lines--add, .chat-details__change-lines--del"),
+    ).toBeNull();
+    element.remove();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("groups every direct subagent with counts, live activity first, and a bounded preview", async () => {

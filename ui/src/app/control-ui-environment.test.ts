@@ -12,6 +12,7 @@ import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createApplicationConfigCapability } from "./config.ts";
+import { bindControlUiDocumentHead, controlUiDocumentHead } from "./control-ui-document-head.ts";
 
 type EnvironmentElement = HTMLElement & {
   environment?: ControlUiEnvironment | null;
@@ -21,7 +22,8 @@ type EnvironmentElement = HTMLElement & {
 afterEach(() => {
   vi.unstubAllGlobals();
   document.body.replaceChildren();
-  document.head.querySelectorAll('link[rel="icon"]').forEach((link) => link.remove());
+  controlUiDocumentHead().favicons.forEach((link) => link.remove());
+  bindControlUiDocumentHead({ themeColors: [], favicons: [] });
   document.documentElement.removeAttribute("data-openclaw-environment");
   document.documentElement.style.removeProperty("--control-ui-environment-color");
   document.documentElement.style.removeProperty("--control-ui-environment-ink");
@@ -39,6 +41,7 @@ describe("Control UI environment presentation", () => {
     favicon.type = "image/svg+xml";
     favicon.href = "/favicon.svg";
     document.head.append(favicon);
+    bindControlUiDocumentHead({ themeColors: [], favicons: [favicon] });
     document.documentElement.style.setProperty("--control-ui-environment-amber", "#f59e0b");
 
     const [cardEnvironment, setCardEnvironment] = createSignal<ControlUiEnvironment | null>(null);
@@ -111,6 +114,7 @@ describe("Control UI environment presentation", () => {
     pngFavicon.setAttribute("href", "/favicon-32.png");
     pngFavicon.setAttribute("type", "image/png");
     document.head.append(svgFavicon, pngFavicon);
+    bindControlUiDocumentHead({ themeColors: [], favicons: [svgFavicon, pngFavicon] });
 
     const bootstrap: ControlUiBootstrapConfig = {
       basePath: "",

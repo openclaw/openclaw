@@ -14,6 +14,7 @@ import {
   SIDEBAR_SESSION_SORT_OPTIONS,
   SIDEBAR_SESSION_STATUS_OPTIONS,
 } from "./app-sidebar-session-types.ts";
+import type { PickerFocusHandle } from "./select-picker-types.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarFilterMenuView, SidebarMenus } from "./sidebar-menus.tsx";
 import { SidebarSessionFilterPopover } from "./sidebar-session-filter-popover.tsx";
@@ -257,6 +258,9 @@ export function renderSidebarSessionSortMenuForMenus(
   position: NonNullable<SidebarMenus["sessionSortMenuPosition"]>,
 ): JSX.Element {
   let defaultStatus: HTMLInputElement | undefined;
+  const statusInputs = new Map<string, HTMLInputElement>();
+  const controls = new Map<string, HTMLElement>();
+  const pickers = new Map<string, PickerFocusHandle>();
   const sessionSources = SETTINGS_ROUTE_TARGETS.sessionSources;
   const rosterMode = () => host.sidebarAgentsMode === "roster";
   const grouping = () => host.effectiveSessionsGrouping();
@@ -307,6 +311,7 @@ export function renderSidebarSessionSortMenuForMenus(
     onChange: (checked: boolean) => void,
   ) => (
     <button
+      ref={(element) => controls.set(id, element)}
       type="button"
       role="switch"
       id={id}
@@ -325,6 +330,12 @@ export function renderSidebarSessionSortMenuForMenus(
       class="sidebar-session-sort-menu"
       anchor={menus.triggers.get("sessionSort") ?? null}
       label={t("chat.sidebar.sortSessions")}
+      initialFocus={() => statusInputs.get(host.sessionsStatusFilter)}
+      focusTargets={() => [
+        ...statusInputs.values(),
+        ...controls.values(),
+        ...[...pickers.values()].flatMap((picker) => picker.elements()),
+      ]}
       onClose={menus.positionedMenuHandlers("sessionSort").onClose}
       content={
         <>
@@ -336,6 +347,7 @@ export function renderSidebarSessionSortMenuForMenus(
               <h3 id="sidebar-sessions-filters-label">{t("chat.sidebar.menuFilters")}</h3>
               {settingsChanged() ? (
                 <button
+                  ref={(element) => controls.set("reset", element)}
                   type="button"
                   id="sidebar-sessions-reset"
                   class="sidebar-session-menu-reset"
@@ -370,6 +382,7 @@ export function renderSidebarSessionSortMenuForMenus(
                 })),
               (statusFilter) => host.sessionOrganizer.setSessionsStatusFilter(statusFilter),
               (value, element) => {
+                statusInputs.set(value, element);
                 if (value === "active") {
                   defaultStatus = element;
                 }
@@ -397,6 +410,7 @@ export function renderSidebarSessionSortMenuForMenus(
             </div>
             {rosterMode() ? undefined : (
               <Picker
+                focusRef={(handle) => pickers.set("group", handle)}
                 id="sidebar-sessions-group"
                 label={t("sessionsView.groupBy")}
                 value={grouping()}
@@ -418,6 +432,7 @@ export function renderSidebarSessionSortMenuForMenus(
               />
             )}
             <Picker
+              focusRef={(handle) => pickers.set("sort", handle)}
               id="sidebar-sessions-sort"
               label={t("chat.sidebar.sortBy")}
               value={host.effectiveSessionSortMode()}
@@ -436,6 +451,7 @@ export function renderSidebarSessionSortMenuForMenus(
             />
             {rosterMode() ? undefined : (
               <Picker
+                focusRef={(handle) => pickers.set("empty", handle)}
                 id="sidebar-sessions-empty"
                 label={t("sessionsView.hideEmptyGroups")}
                 value={host.sessionsEmptyGroupsMode}
@@ -463,6 +479,7 @@ export function renderSidebarSessionSortMenuForMenus(
           </section>
           <footer class="sidebar-session-menu-footer">
             <a
+              ref={(element) => controls.set("sources", element)}
               id="sidebar-sessions-sources"
               class="sidebar-session-filter-footer"
               href={

@@ -159,8 +159,8 @@ async function writeMcpProbeScript(repoRoot: string, marker: string, receiptEndp
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-mcp-probe-"));
   cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
   const require = createRequire(path.join(repoRoot, "package.json"));
-  const mcpUrl = pathToFileURL(require.resolve("@modelcontextprotocol/sdk/server/mcp.js")).href;
-  const stdioUrl = pathToFileURL(require.resolve("@modelcontextprotocol/sdk/server/stdio.js")).href;
+  const mcpUrl = pathToFileURL(require.resolve("@modelcontextprotocol/server")).href;
+  const stdioUrl = pathToFileURL(require.resolve("@modelcontextprotocol/server/stdio")).href;
   const scriptPath = path.join(dir, `${marker}.mjs`);
   await fs.writeFile(
     scriptPath,

@@ -95,7 +95,7 @@ export type CommandPaletteProps = {
   onSlashCommand?: (command: string) => void;
   pluginIconUrls: Readonly<Record<string, string>>;
   onPluginIconError: (pluginId: string) => void;
-  onPluginIconVisible: (pluginId: string) => void;
+  registerPluginIcon: (readId: () => string) => () => void;
   desktopAvailable: boolean;
   custodianAvailable: boolean;
   onInputRef: (element: Element | undefined, previous?: HTMLTextAreaElement) => void;
@@ -397,7 +397,7 @@ function PaletteSearch(props: {
                         identity={current().agentIdentity?.get(agentId())}
                         pluginIconUrls={current().pluginIconUrls}
                         onPluginIconError={current().onPluginIconError}
-                        onPluginIconVisible={current().onPluginIconVisible}
+                        registerPluginIcon={current().registerPluginIcon}
                       />
                     </div>
                   );
@@ -446,10 +446,6 @@ function PaletteSearch(props: {
 
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
   const current = () => props.readProps();
-  createEffect(
-    () => [current().mentionMenu, current().draft.mentionDirectory] as const,
-    ([mentionMenu, directory]) => mentionMenu.syncDirectory(directory),
-  );
   createEffect(
     createMemo(() => current().mentionMenu.open),
     () => current().onMentionChange(),

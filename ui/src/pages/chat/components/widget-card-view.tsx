@@ -31,6 +31,7 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -526,45 +527,33 @@ function widgetActionsPlacementRef(
       }
       const target = element;
       let thread: HTMLElement | null = null;
-      let frame: number | undefined;
       const placeActions = () => {
         if (!thread) {
-          return;
+          return undefined;
         }
         const clipRight =
           thread.getBoundingClientRect().left + thread.clientLeft + thread.clientWidth;
-        target.toggleAttribute(
-          "data-widget-actions-above",
-          clipRight - target.getBoundingClientRect().right < 40,
-        );
+        const above = clipRight - target.getBoundingClientRect().right < 40;
+        return () => target.toggleAttribute("data-widget-actions-above", above);
       };
-      // Keep layout writes out of resize delivery, including transcript rerenders.
-      const observer = new ResizeObserver(() => {
-        if (frame !== undefined) {
-          return;
-        }
-        frame = requestAnimationFrame(() => {
-          frame = undefined;
-          placeActions();
-        });
-      });
+      const observer = new ResizeObserver(() => scheduleLayout(target, placeActions));
       // Content updates can arrive during resize delivery. Reattach after insertion
       // in the next frame so the shallower thread cannot become a skipped delivery.
-      frame = requestAnimationFrame(() => {
-        frame = undefined;
-        thread = target.closest<HTMLElement>(".chat-thread");
-        if (!thread) {
-          return;
+      scheduleLayout(target, () => {
+        const container = target.closest<HTMLElement>(".chat-thread");
+        if (!container) {
+          return undefined;
         }
-        observer.observe(target);
-        observer.observe(thread);
-        // First placement must not wait for the observer's initial delivery.
-        placeActions();
+        thread = container;
+        const place = placeActions();
+        return () => {
+          observer.observe(target);
+          observer.observe(container);
+          place?.();
+        };
       });
       return () => {
-        if (frame !== undefined) {
-          cancelAnimationFrame(frame);
-        }
+        cancelLayout(target);
         observer.disconnect();
       };
     },

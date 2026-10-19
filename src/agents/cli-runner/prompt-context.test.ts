@@ -60,13 +60,17 @@ describe("CLI resume user context", () => {
   it("puts the drift note before exchanges the resumed session missed", () => {
     const render = createCliCurrentPromptRenderer(
       { currentInboundContext },
-      { mode: "reuse-with-drift", sessionId: "native-bound", drift: { reasons: ["prompt-tools"] } },
+      {
+        mode: "reuse-with-drift",
+        sessionId: "native-bound",
+        drift: { reasons: ["system-prompt"] },
+      },
       { preservedTurnsContext, writer: historyWriter },
     );
 
     expect(render("ask")).toBe(
       [
-        buildCliSessionDriftNote(["prompt-tools"]),
+        buildCliSessionDriftNote(["system-prompt"]),
         preservedTurnsContext,
         "Conversation info",
         "ask",
