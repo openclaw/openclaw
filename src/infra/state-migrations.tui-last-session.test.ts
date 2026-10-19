@@ -2,20 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { readTuiLastSessionKey } from "../tui/tui-last-session.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   detectLegacyTuiLastSessions,
   migrateLegacyTuiLastSessions,
 } from "./state-migrations.tui-last-session.js";
-
-type TuiLastSessionTestDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
 const tempDirs = createTempDirTracker();
 
@@ -50,19 +46,14 @@ function fixture(value: unknown = { terminal: pointer() }) {
 }
 
 function seedPointer(stateDir: string, updatedAt: number): void {
+  // Seed historical timestamps; the runtime writer stamps Date.now().
   runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<TuiLastSessionTestDatabase>(db)
-          .insertInto("config_machine_state")
-          .values({
-            state_key: "tui.lastSession.terminal",
-            value_json: JSON.stringify("agent:main:current"),
-            updated_at_ms: updatedAt,
-          }),
-      );
-    },
+    ({ db }) =>
+      db
+        .prepare(
+          "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+        )
+        .run("tui.lastSession.terminal", JSON.stringify("agent:main:current"), updatedAt),
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
   );
 }
@@ -85,7 +76,7 @@ afterEach(() => {
 });
 
 describe("legacy TUI last-session migration", () => {
-  it("runs only through explicit doctor detection and discards heartbeat pointers", async () => {
+  it("requires Doctor opt-in and discards heartbeat pointers", async () => {
     const { stateDir, sourcePath, read } = fixture({
       terminal: pointer(),
       heartbeat: pointer("agent:main:telegram:direct:123:heartbeat", 200),
@@ -130,7 +121,7 @@ describe("legacy TUI last-session migration", () => {
     await expectRefusal(state, state.run(), "Failed reading legacy TUI last-session state", null);
   });
 
-  it("rejects an empty unexpected field before claiming or writing", async () => {
+  it("rejects unexpected fields before claiming or writing", async () => {
     const { sourcePath, run, read } = fixture({
       terminal: { "": 1, later: 2, ...pointer() },
     });
@@ -167,36 +158,33 @@ describe("legacy TUI last-session migration", () => {
     ["beforeVerify", "source changed after doctor loaded it"],
     ["beforeClaim", "source changed before doctor could claim it"],
     ["removeSource", "simulated unlink failure"],
-  ] as const)(
-    "retains the source after %s failure and safely retries cleanup",
-    async (hook, warning) => {
-      const session = hook === "removeSource" ? "agent:main:tui-123" : "agent:main:first";
-      const state = fixture({ terminal: pointer(session) });
-      const result = state.run({
-        [hook]: () => {
-          if (hook === "removeSource") {
-            throw new Error(warning);
-          }
-          const target =
-            hook === "beforeClaim" ? `${state.sourcePath}.replacement` : state.sourcePath;
-          fs.writeFileSync(
-            target,
-            `${JSON.stringify({ terminal: pointer("agent:main:second", 200) })}\n`,
-          );
-          if (hook === "beforeClaim") {
-            fs.renameSync(target, state.sourcePath);
-          }
-        },
-      });
-      await expectRefusal(state, result, warning, session);
-      if (hook === "beforeVerify") {
-        return;
-      }
-      expect(state.run().warnings).toEqual([]);
-      expect(fs.existsSync(state.sourcePath)).toBe(false);
-      await expect(state.read()).resolves.toBe(
-        hook === "beforeClaim" ? "agent:main:second" : session,
-      );
-    },
-  );
+  ] as const)("retains sources after %s failure; retries cleanup", async (hook, warning) => {
+    const session = hook === "removeSource" ? "agent:main:tui-123" : "agent:main:first";
+    const state = fixture({ terminal: pointer(session) });
+    const result = state.run({
+      [hook]: () => {
+        if (hook === "removeSource") {
+          throw new Error(warning);
+        }
+        const target =
+          hook === "beforeClaim" ? `${state.sourcePath}.replacement` : state.sourcePath;
+        fs.writeFileSync(
+          target,
+          `${JSON.stringify({ terminal: pointer("agent:main:second", 200) })}\n`,
+        );
+        if (hook === "beforeClaim") {
+          fs.renameSync(target, state.sourcePath);
+        }
+      },
+    });
+    await expectRefusal(state, result, warning, session);
+    if (hook === "beforeVerify") {
+      return;
+    }
+    expect(state.run().warnings).toEqual([]);
+    expect(fs.existsSync(state.sourcePath)).toBe(false);
+    await expect(state.read()).resolves.toBe(
+      hook === "beforeClaim" ? "agent:main:second" : session,
+    );
+  });
 });

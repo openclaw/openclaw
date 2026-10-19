@@ -57,7 +57,7 @@ async function copiedOwnerFixture(
   return { cfg, source, target, run };
 }
 
-it("preserves refused archives when a healthy database shares their directory", async () => {
+it("retains archives beside a refused database", async () => {
   await withOpenClawTestState({ prefix: "openclaw shared archives " }, async (state) => {
     const source = createLegacyDatabaseFixture({ env: state.env, eventsBySession: {} });
     const healthy = createLegacyDatabaseFixture({
@@ -106,7 +106,7 @@ it("preserves refused archives when a healthy database shares their directory", 
   });
 });
 
-it("recovers an identical wrong-owner copy despite unequal short reads", async () => {
+it("recovers identical wrong-owner copies despite short reads", async () => {
   await withOpenClawTestState({ prefix: "openclaw owner mismatch " }, async (state) => {
     const { cfg, source, target, run } = await copiedOwnerFixture(state);
     const original = fs.readFileSync(source);
@@ -163,20 +163,16 @@ it("recovers an identical wrong-owner copy despite unequal short reads", async (
     expect(fs.readFileSync(path.join(path.dirname(target), copies[0]!))).toEqual(original);
     expect(result.warnings.join("\n")).toContain(copies[0]);
     const fresh = openOpenClawAgentDatabase({ agentId: "cleaner", env: state.env });
-    expect(
-      fresh.db.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get()
-        ?.agent_id,
-    ).toBe("cleaner");
-    expect(fresh.db.prepare("SELECT COUNT(*) AS count FROM transcript_events").get()?.count).toBe(
-      0,
-    );
+    const sql =
+      "SELECT agent_id, (SELECT COUNT(*) FROM transcript_events) AS count FROM schema_meta WHERE meta_key = 'primary'";
+    expect(fresh.db.prepare(sql).get()).toMatchObject({ agent_id: "cleaner", count: 0 });
     await expect(
       assertOpenClawDatabasesReady({ env: state.env, operation: "gateway-startup", config: cfg }),
     ).resolves.toBeUndefined();
   });
 });
 
-it("continues independent Doctor repairs while preserving a divergent wrong-owner database", async () => {
+it("runs independent repairs while refusing divergent copies", async () => {
   await withOpenClawTestState({ prefix: "openclaw divergent owner " }, async (state) => {
     const event = { type: "message", id: "shared", timestamp: 1, message: { role: "user" } };
     const { cfg, target, run } = await copiedOwnerFixture(state, {
@@ -210,21 +206,18 @@ it("continues independent Doctor repairs while preserving a divergent wrong-owne
     const receipts = Object.fromEntries(
       result.stepReceipts.map((receipt) => [receipt.id, receipt]),
     );
+    const blocked = {
+      outcome: "refused",
+      changes: [],
+      refusal: { code: "blocked-by-agent-database-refusal" },
+    };
     expect(receipts).toMatchObject({
       "media-persistence": {
         outcome: "refused",
         refusal: { code: "agent-database-ownership-mismatch" },
       },
-      "transcript-directives": {
-        outcome: "refused",
-        changes: [],
-        refusal: { code: "blocked-by-agent-database-refusal" },
-      },
-      "plugin-doctor-post-session-state": {
-        outcome: "refused",
-        changes: [],
-        refusal: { code: "blocked-by-agent-database-refusal" },
-      },
+      "transcript-directives": blocked,
+      "plugin-doctor-post-session-state": blocked,
     });
     expect(
       result.stepReceipts.flatMap((receipt) => receipt.recoveredAgentDatabasePaths ?? []),

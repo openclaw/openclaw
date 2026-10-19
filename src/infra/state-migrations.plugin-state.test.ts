@@ -37,11 +37,7 @@ describe("legacy migration plan failure isolation", () => {
       ...params,
     };
   }
-  const artifactPlan = (
-    kind: "move" | "copy",
-    label: string,
-    sourcePath: string,
-  ): ChannelLegacyStateMigrationPlan => ({
+  const artifactPlan = (kind: "move" | "copy", label: string, sourcePath: string) => ({
     kind,
     label,
     sourcePath,
@@ -69,7 +65,7 @@ describe("legacy migration plan failure isolation", () => {
   });
 
   it.each(["throw", "reject"] as const)(
-    "retains completed work, continues later plans, and retries a failed import (%s)",
+    "isolates %s replacement failures and retries imports",
     async (failure) => {
       const sourcePath = await state.writeText("legacy-import.json", "legacy source\n");
       const earlierPath = await state.writeText("earlier.txt", "earlier artifact\n");
@@ -136,7 +132,7 @@ describe("legacy migration plan failure isolation", () => {
     { failure: "predicate", cleanupFirst: true },
     { failure: "empty", cleanupFirst: false },
   ] as const)(
-    "retires a shared source only after every consumer completes ($failure, cleanup first: $cleanupFirst)",
+    "defers shared-source cleanup ($failure, cleanupFirst=$cleanupFirst)",
     async ({ failure, cleanupFirst }) => {
       // iMessage derives a durable short-id counter and an expiring cache from one JSONL file.
       const original = `${JSON.stringify({ shortId: failure === "empty" ? "0" : "9000", timestamp: 0 })}\n`;
@@ -214,7 +210,7 @@ describe("legacy migration plan failure isolation", () => {
   );
 
   it.each([false, true])(
-    "keeps source cleanup scoped and before unrelated imports (cleanup throws: %s)",
+    "scopes cleanup before later imports (throws: %s)",
     async (cleanupThrows) => {
       const storeOptions = { namespace: "old-rows", maxEntries: 4 };
       const ambient = store<string>("old-rows", 4, state.stateDir);

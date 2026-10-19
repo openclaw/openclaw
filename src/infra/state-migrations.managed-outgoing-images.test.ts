@@ -8,14 +8,12 @@ import {
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
   type ManagedImageRecord,
-  type ManagedImageRecordDatabase,
 } from "../gateway/managed-image-record-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   detectLegacyManagedOutgoingImages,
   migrateLegacyManagedOutgoingImages,
@@ -93,7 +91,7 @@ describe("legacy managed outgoing image migration", () => {
     await fsp.rm(stateDir, { recursive: true, force: true });
   });
 
-  it("recovers a claimed import, verifies typed metadata, and removes JSON", async () => {
+  it("recovers claims and imports typed metadata before removing JSON", async () => {
     const legacy = await writeLegacyRecord();
     const claimPath = `${legacy.sourcePath}.doctor-importing-4242-22222222-2222-4222-8222-222222222222`;
     await fsp.rename(legacy.sourcePath, claimPath);
@@ -124,18 +122,15 @@ describe("legacy managed outgoing image migration", () => {
     const database = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db)
-        .selectFrom("managed_outgoing_image_records")
-        .select("record_json")
-        .where("attachment_id", "=", legacy.record.attachmentId),
-    );
+    // Inspect serialized storage, independently of the typed record reader above.
+    const row = database.db
+      .prepare("SELECT record_json FROM managed_outgoing_image_records WHERE attachment_id = ?")
+      .get(legacy.record.attachmentId);
     expect(row?.record_json).not.toContain(legacy.originalPath);
     expect(row?.record_json).not.toContain('"path"');
   });
 
-  it("retains expired metadata until attachment cleanup succeeds on retry", async () => {
+  it("retries expired attachment cleanup without importing metadata", async () => {
     const legacy = await writeLegacyRecord({ messageId: null, retentionClass: "transient" });
     const expire = () => migrate({ nowMs: Date.parse("2026-07-15T00:16:00.000Z") });
     const remove = fs.rmSync;
@@ -168,7 +163,7 @@ describe("legacy managed outgoing image migration", () => {
     await expect(fsp.access(legacy.originalPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("fails atomically on a conflicting SQLite row and retains every source", async () => {
+  it("retains all sources on atomic SQLite conflict", async () => {
     const first = await writeLegacyRecord();
     const second = await writeLegacyRecord({}, 2);
     await insertManagedImageRecord(
@@ -224,7 +219,7 @@ describe("legacy managed outgoing image migration", () => {
   it.each([
     ["root before original", true, '""'],
     ["original only", false, 'original.""'],
-  ])("rejects empty unexpected fields before mutation: %s", async (_label, root, field) => {
+  ])("rejects unexpected fields before mutation: %s", async (_label, root, field) => {
     const legacy = await writeLegacyRecord();
     const original = { ...legacy.record.original, "": 1, later: 2 };
     const record = root

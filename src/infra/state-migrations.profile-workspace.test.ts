@@ -76,7 +76,7 @@ async function makeFixture() {
         env,
       });
       expect(snapshotFiles(root)).toEqual(before);
-      return plan;
+      return plan.steps.find((step) => step.id === "profile-workspace");
     },
   };
 }
@@ -89,7 +89,7 @@ function seedWorkspace(directory: string, content = directory) {
 
 describe("configured profile workspace preservation", () => {
   it.each(["profile", "state-dir"])(
-    "keeps Doctor and SDK reads inside the active %s except its named workspace migration",
+    "isolates Doctor/SDK reads in active %s except its workspace",
     async (selector) => {
       const fixture = await makeFixture();
       if (selector === "state-dir") {
@@ -158,7 +158,7 @@ describe("configured profile workspace preservation", () => {
     { roster: "defaults", endpoint: "target", alias: "ancestor", targetExists: false },
     { roster: "defaults", endpoint: "source", alias: "tilde", targetExists: false },
   ] as const)(
-    "preserves configured $roster $endpoint workspace (alias=$alias, targetExists=$targetExists)",
+    "preserves $roster workspace: $endpoint/$alias/$targetExists",
     async ({ roster, endpoint, alias, targetExists }) => {
       const fixture = await makeFixture();
       const { source, target } = fixture;
@@ -189,30 +189,22 @@ describe("configured profile workspace preservation", () => {
             : { list: [{ id: "main", workspace }] };
       const cfg = { agents };
       fixture.writeConfig(cfg);
-      const plan = await fixture.plan();
-      const step = plan.steps.find((entry) => entry.id === "profile-workspace");
-      expect(step).toMatchObject({ source: [], target: [], requiredness: "not-required" });
+      const step = await fixture.plan();
+      const skipped = { source: [], target: [], requiredness: "not-required" };
+      expect(step).toMatchObject(skipped);
       expect(step?.refusal).toBeUndefined();
       const log = { info: vi.fn(), warn: vi.fn() };
       for (let run = 0; run < 2; run++) {
         const result = await fixture.migrate(cfg, log);
         expect(result.stepReceipts.find((entry) => entry.id === "profile-workspace")).toMatchObject(
-          {
-            source: [],
-            target: [],
-            requiredness: "not-required",
-            outcome: "skipped",
-          },
+          { ...skipped, outcome: "skipped" },
         );
         expect(result.warnings).toEqual([]);
         if (targetExists) {
           expect(log.info).toHaveBeenCalledWith(expect.stringContaining("was left unchanged"));
+          const other = endpoint === "source" ? target : source;
           expect(result.notices).toContain(
-            "Profile workspace: keeping configured workspace at " +
-              configured +
-              "; existing workspace at " +
-              (endpoint === "source" ? target : source) +
-              " was left unchanged.",
+            `Profile workspace: keeping configured workspace at ${configured}; existing workspace at ${other} was left unchanged.`,
           );
         } else {
           expect(fs.existsSync(target)).toBe(false);
@@ -226,7 +218,7 @@ describe("configured profile workspace preservation", () => {
     },
   );
 
-  it("honors native case semantics for an absent configured target", async () => {
+  it("uses native case semantics for absent targets", async () => {
     const fixture = await makeFixture();
     const { source, target } = fixture;
     seedWorkspace(source, "workspace marker");
@@ -239,8 +231,8 @@ describe("configured profile workspace preservation", () => {
       },
     };
     fixture.writeConfig(cfg);
-    const plan = await fixture.plan();
-    expect(plan.steps.find((step) => step.id === "profile-workspace")).toMatchObject({
+    const step = await fixture.plan();
+    expect(step).toMatchObject({
       source: caseInsensitive ? [] : [{ kind: "path", path: source }],
       target: caseInsensitive ? [] : [{ kind: "path", path: target }],
       requiredness: caseInsensitive ? "not-required" : "conditional",

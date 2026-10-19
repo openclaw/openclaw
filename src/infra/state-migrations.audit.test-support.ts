@@ -52,15 +52,10 @@ export function configAuditRecord(
 }
 
 export class AuditMigrationFixture {
-  readonly env: NodeJS.ProcessEnv;
-  readonly config;
-  readonly system;
-
-  constructor(readonly stateDir: string) {
-    this.env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    this.config = auditPaths(stateDir, path.join("logs", "config-audit.jsonl"));
-    this.system = auditPaths(stateDir, path.join("audit", "system-agent.jsonl"));
-  }
+  constructor(readonly stateDir: string) {}
+  readonly env: NodeJS.ProcessEnv = { ...process.env, OPENCLAW_STATE_DIR: this.stateDir };
+  readonly config = auditPaths(this.stateDir, path.join("logs", "config-audit.jsonl"));
+  readonly system = auditPaths(this.stateDir, path.join("audit", "system-agent.jsonl"));
 
   detect(doctorOnlyStateMigrations = true) {
     return detectLegacyAuditLogs({
@@ -154,44 +149,49 @@ export async function writeAuditRestoreJournal(
   await fs.writeFile(`${rawPath}.doctor-scrub-restore`, journal);
 }
 
+function onStateRoot(
+  fixture: AuditMigrationFixture,
+  opened: (root: Awaited<ReturnType<typeof fsSafe.root>>) => void,
+) {
+  const openRoot = fsSafe.root;
+  return vi.spyOn(fsSafe, "root").mockImplementation(async (rootPath, defaults) => {
+    const root = await openRoot(rootPath, defaults);
+    if (rootPath === fixture.stateDir) {
+      opened(root);
+    }
+    return root;
+  });
+}
+
 export function failArchiveHardening(
   fixture: AuditMigrationFixture,
   archivePath: string,
   message: string,
 ) {
-  const openRoot = fsSafe.root;
-  const restorers: Array<() => void> = [];
+  const spies: Array<{ mockRestore(): void }> = [];
   let armed = true;
-  const rootSpy = vi.spyOn(fsSafe, "root").mockImplementation(async (rootPath, defaults) => {
-    const root = await openRoot(rootPath, defaults);
-    if (rootPath === fixture.stateDir) {
-      const openWritable = root.openWritable.bind(root);
-      const openSpy = vi
-        .spyOn(root, "openWritable")
-        .mockImplementation(async (relativePath, options) => {
-          const opened = await openWritable(relativePath, options);
-          // Publication uses a backend-dependent chmod path; fail the explicit hardening only.
-          if (
-            armed &&
-            options?.writeMode === "update" &&
-            path.resolve(rootPath, relativePath) === archivePath
-          ) {
-            armed = false;
-            const chmodSpy = vi
-              .spyOn(opened.handle, "chmod")
-              .mockRejectedValueOnce(new Error(message));
-            restorers.push(() => chmodSpy.mockRestore());
-          }
-          return opened;
-        });
-      restorers.push(() => openSpy.mockRestore());
-    }
-    return root;
+  const rootSpy = onStateRoot(fixture, (root) => {
+    const openWritable = root.openWritable.bind(root);
+    spies.push(
+      vi.spyOn(root, "openWritable").mockImplementation(async (relativePath, options) => {
+        const opened = await openWritable(relativePath, options);
+        // Publication uses a backend-dependent chmod path; fail the explicit hardening only.
+        if (
+          armed &&
+          options?.writeMode === "update" &&
+          path.resolve(fixture.stateDir, relativePath) === archivePath
+        ) {
+          armed = false;
+          spies.push(vi.spyOn(opened.handle, "chmod").mockRejectedValueOnce(new Error(message)));
+        }
+        return opened;
+      }),
+    );
   });
   return {
     mockRestore() {
-      for (const restore of restorers.toReversed()) {
-        restore();
+      for (const spy of spies.toReversed()) {
+        spy.mockRestore();
       }
       rootSpy.mockRestore();
     },
@@ -215,20 +215,15 @@ export function failAuditMove(
   ),
   beforeRefusal?: () => void,
 ) {
-  const openRoot = fsSafe.root;
-  return vi.spyOn(fsSafe, "root").mockImplementation(async (rootPath, defaults) => {
-    const root = await openRoot(rootPath, defaults);
-    if (rootPath === fixture.stateDir) {
-      const move = root.move.bind(root);
-      vi.spyOn(root, "move").mockImplementation(async (...args) => {
-        if (path.resolve(rootPath, args[0]) === sourcePath) {
-          beforeRefusal?.();
-          throw error;
-        }
-        return move(...args);
-      });
-    }
-    return root;
+  return onStateRoot(fixture, (root) => {
+    const move = root.move.bind(root);
+    vi.spyOn(root, "move").mockImplementation(async (...args) => {
+      if (path.resolve(fixture.stateDir, args[0]) === sourcePath) {
+        beforeRefusal?.();
+        throw error;
+      }
+      return move(...args);
+    });
   });
 }
 
@@ -236,14 +231,10 @@ export async function failSecondScrubWrite(fixture: AuditMigrationFixture) {
   // The source inode becomes the raw archive; sibling publication writes must succeed.
   const sourceIdentity = await fs.stat(fixture.config.source, { bigint: true });
   const probe = await fs.open(path.join(fixture.stateDir, "write-probe"), "w+");
+  type WriteArgs = [Uint8Array, number, number, number | null];
   const prototype = Object.getPrototypeOf(probe) as {
     stat(options: { bigint: true }): Promise<{ dev: bigint; ino: bigint }>;
-    write(
-      buffer: Uint8Array,
-      offset: number,
-      length: number,
-      position: number | null,
-    ): Promise<{ bytesWritten: number; buffer: Uint8Array }>;
+    write(...args: WriteArgs): Promise<{ bytesWritten: number; buffer: Uint8Array }>;
   };
   await probe.close();
   const original = Reflect.get(prototype, "write") as typeof prototype.write;
