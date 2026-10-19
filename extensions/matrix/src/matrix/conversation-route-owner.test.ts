@@ -65,6 +65,16 @@ const dm: Conversation = {
   peerId: "@alice:example.org",
   nativeChannelId: "!dm:example.org",
 };
+const channel = (peerId: string): Conversation => ({ kind: "channel", peerId });
+const resolveOps = (cfg: OpenClawConfig, conversation: Conversation) =>
+  resolveOwner({ cfg, accountId: "ops", conversation });
+function agentBinding(
+  agentId: string,
+  accountId: string,
+  peer?: { kind: "channel" | "direct"; id: string },
+) {
+  return { agentId, match: { channel: "matrix", accountId, ...(peer ? { peer } : {}) } };
+}
 const cases: Case[] = [
   {
     name: "native DM runtime agent",
@@ -74,7 +84,7 @@ const cases: Case[] = [
   },
   {
     name: "canonical channel runtime agent",
-    conversation: { kind: "channel", peerId: "!Room:example.org" },
+    conversation: channel("!Room:example.org"),
     target: "agent:finance:bound",
     expected: { kind: "agent", agentId: "finance" },
   },
@@ -171,24 +181,10 @@ describe.each(["per-user", "per-room"] as const)(
           },
         },
         bindings: [
-          { agentId: "main", match: { channel: "matrix", accountId: "default" } },
-          { agentId: "ops-agent", match: { channel: "matrix", accountId: "ops" } },
-          {
-            agentId: "room-agent",
-            match: {
-              channel: "matrix",
-              accountId: "ops",
-              peer: { kind: "channel", id: "!dm:example.org" },
-            },
-          },
-          {
-            agentId: "sender-agent",
-            match: {
-              channel: "matrix",
-              accountId: "ops",
-              peer: { kind: "direct", id: "@alice:example.org" },
-            },
-          },
+          agentBinding("main", "default"),
+          agentBinding("ops-agent", "ops"),
+          agentBinding("room-agent", "ops", { kind: "channel", id: "!dm:example.org" }),
+          agentBinding("sender-agent", "ops", { kind: "direct", id: "@alice:example.org" }),
         ],
       };
       installMatrixTestRuntime({ cfg, stateDir });
@@ -244,12 +240,7 @@ describe.each(["per-user", "per-room"] as const)(
             ...(cfg.bindings ?? []),
             {
               type: "acp",
-              agentId: "acp-agent",
-              match: {
-                channel: "matrix",
-                accountId: "ops",
-                peer: { kind: "channel", id: "!dm:example.org" },
-              },
+              ...agentBinding("acp-agent", "ops", { kind: "channel", id: "!dm:example.org" }),
             },
           ],
         };
@@ -262,11 +253,7 @@ describe.each(["per-user", "per-room"] as const)(
         ),
       ];
       try {
-        const owner = await resolveOwner({
-          cfg,
-          accountId: "ops",
-          conversation: testCase.conversation,
-        });
+        const owner = await resolveOps(cfg, testCase.conversation);
         const counts = counters.map((counter) => counter.mock.calls.length);
         expect(owner).toEqual(testCase.expected);
         expect(touch).not.toHaveBeenCalled();
@@ -288,10 +275,6 @@ describe.each(["per-user", "per-room"] as const)(
             });
           }
         }
-        console.info(
-          "MATRIX_ROUTE_OWNER_SQL",
-          JSON.stringify({ case: testCase.name, sessionScope, counts, owner }),
-        );
         expect(counts).toEqual([0, 0, 0, 0, 0, 0]);
       } finally {
         counters.forEach((counter) => counter.mockRestore());
@@ -348,7 +331,7 @@ describe("inactive Matrix account scopes", () => {
         await resolveOwner({
           cfg,
           accountId,
-          conversation: { kind: "channel", peerId: "!room:example.org" },
+          conversation: channel("!room:example.org"),
         }),
       ).toBeNull();
     },
@@ -369,7 +352,7 @@ describe("inactive Matrix account scopes", () => {
       await resolveOwner({
         cfg,
         accountId: "default",
-        conversation: { kind: "channel", peerId: "!room:example.org" },
+        conversation: channel("!room:example.org"),
       }),
     ).toEqual({ kind: "unavailable" });
   });
@@ -382,7 +365,7 @@ describe("inactive Matrix account scopes", () => {
       await resolveOwner({
         cfg,
         accountId: "retired",
-        conversation: { kind: "channel", peerId: "!room:example.org" },
+        conversation: channel("!room:example.org"),
       }),
     ).toBeNull();
   });

@@ -1,4 +1,3 @@
-// Matrix tests cover SQLite-backed credentials behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +28,13 @@ const auth = {
   userId: "@bot:example.org",
   accessToken: "secret-token",
 };
+const load = () => loadMatrixCredentials({}, "default");
+const save = (value: Parameters<typeof saveMatrixCredentials>[0] = auth) =>
+  saveMatrixCredentials(value, {}, "default");
+const backfill = (value: Parameters<typeof saveBackfilledMatrixDeviceId>[0]) =>
+  saveBackfilledMatrixDeviceId(value, {}, "default");
+const clear = () => clearMatrixCredentials({}, "default");
+const touch = () => touchMatrixCredentials({}, "default");
 
 function expectMatrixCredentials(
   credentials: ReturnType<typeof loadMatrixCredentials>,
@@ -69,11 +75,7 @@ describe("matrix credentials storage", () => {
         ["alerts", "@alerts:example.org"],
       ] as const) {
         await saveMatrixCredentials(
-          {
-            homeserver: "https://matrix.example.org",
-            userId,
-            accessToken: "synthetic-token",
-          },
+          { ...auth, userId, accessToken: "synthetic-token" },
           { OPENCLAW_STATE_DIR: stateDir },
           accountId,
         );
@@ -145,12 +147,12 @@ describe("matrix credentials storage", () => {
   it("touch updates lastUsedAt while preserving createdAt", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-01T10:00:00.000Z"));
-    await saveMatrixCredentials(auth, {}, "default");
-    const initial = expectMatrixCredentials(loadMatrixCredentials({}, "default"));
+    await save();
+    const initial = expectMatrixCredentials(load());
 
     vi.setSystemTime(new Date("2026-03-01T10:05:00.000Z"));
-    await touchMatrixCredentials({}, "default");
-    const touched = expectMatrixCredentials(loadMatrixCredentials({}, "default"));
+    await touch();
+    const touched = expectMatrixCredentials(load());
 
     expect(touched.createdAt).toBe(initial.createdAt);
     expect(touched.lastUsedAt).toBe("2026-03-01T10:05:00.000Z");
@@ -158,7 +160,7 @@ describe("matrix credentials storage", () => {
 
   it("omits an explicitly undefined device id from persisted credentials", async () => {
     const withoutDevice = { ...auth, deviceId: undefined };
-    await saveMatrixCredentials(withoutDevice, {}, "default");
+    await save(withoutDevice);
     await expect(saveBackfilledMatrixDeviceId(withoutDevice, {}, "ops")).resolves.toBe("saved");
 
     expect(openMatrixCredentialsStore({}).lookup("account:default")).not.toHaveProperty("deviceId");
@@ -166,24 +168,16 @@ describe("matrix credentials storage", () => {
   });
 
   it("backfills a matching device id but preserves newer auth lineage", async () => {
-    await saveMatrixCredentials({ ...auth, accessToken: "tok-new" }, {}, "default");
+    await save({ ...auth, accessToken: "tok-new" });
 
     await expect(
-      saveBackfilledMatrixDeviceId(
-        { ...auth, accessToken: "tok-new", deviceId: "DEVICE123" },
-        {},
-        "default",
-      ),
+      backfill({ ...auth, accessToken: "tok-new", deviceId: "DEVICE123" }),
     ).resolves.toBe("saved");
-    await expect(
-      saveBackfilledMatrixDeviceId(
-        { ...auth, accessToken: "tok-old", deviceId: "STALE" },
-        {},
-        "default",
-      ),
-    ).resolves.toBe("skipped");
+    await expect(backfill({ ...auth, accessToken: "tok-old", deviceId: "STALE" })).resolves.toBe(
+      "skipped",
+    );
 
-    expect(loadMatrixCredentials({}, "default")).toMatchObject({
+    expect(load()).toMatchObject({
       accessToken: "tok-new",
       deviceId: "DEVICE123",
     });
@@ -192,17 +186,9 @@ describe("matrix credentials storage", () => {
   it.each(["before", "during comparison"])(
     "does not let delayed background writes undo credential revocation %s",
     async (timing) => {
-      await saveMatrixCredentials(
-        {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          accessToken: "secret-token",
-        },
-        {},
-        "default",
-      );
+      await save();
       if (timing === "before") {
-        await clearMatrixCredentials({}, "default");
+        await clear();
       } else {
         const runtime = getMatrixRuntime();
         const openStore = runtime.state.openKeyedStoreV2.bind(runtime.state);
@@ -215,7 +201,7 @@ describe("matrix credentials storage", () => {
               store.compareAndApply = async (...args) => {
                 if (!revoked) {
                   revoked = true;
-                  await clearMatrixCredentials({}, "default");
+                  await clear();
                 }
                 return await compare(...args);
               };
@@ -225,21 +211,10 @@ describe("matrix credentials storage", () => {
         );
       }
 
-      await expect(
-        saveBackfilledMatrixDeviceId(
-          {
-            homeserver: "https://matrix.example.org",
-            userId: "@bot:example.org",
-            accessToken: "secret-token",
-            deviceId: "STALE",
-          },
-          {},
-          "default",
-        ),
-      ).resolves.toBe("skipped");
-      await touchMatrixCredentials({}, "default");
+      await expect(backfill({ ...auth, deviceId: "STALE" })).resolves.toBe("skipped");
+      await touch();
 
-      expect(loadMatrixCredentials({}, "default")).toBeNull();
+      expect(load()).toBeNull();
       expect(openMatrixCredentialsStore({}).lookup("account:default")).toMatchObject({
         kind: "revoked",
       });
@@ -252,20 +227,19 @@ describe("matrix credentials storage", () => {
     fs.writeFileSync(
       legacyPath,
       JSON.stringify({
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
+        ...auth,
         accessToken: "legacy-token",
         createdAt: "2026-03-01T10:00:00.000Z",
       }),
     );
 
-    expect(loadMatrixCredentials({}, "default")).toBeNull();
-    await clearMatrixCredentials({}, "default");
+    expect(load()).toBeNull();
+    await clear();
     expect(fs.existsSync(legacyPath)).toBe(true);
   });
 
   it("clears only the requested canonical account", async () => {
-    await saveMatrixCredentials(auth, {}, "default");
+    await save();
     await saveMatrixCredentials(auth, {}, "ops");
 
     await clearMatrixCredentials({}, "ops");
@@ -275,7 +249,7 @@ describe("matrix credentials storage", () => {
       kind: "revoked",
       accountId: "ops",
     });
-    expect(loadMatrixCredentials({}, "default")).not.toBeNull();
+    expect(load()).not.toBeNull();
   });
 
   it("keeps persisted-auth presence scoped to valid live records and the supplied environment", async () => {
@@ -324,12 +298,7 @@ describe("matrix credentials storage", () => {
   });
 
   it("requires a token match when userId is absent", () => {
-    const stored = {
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "tok-123",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    };
+    const stored = { ...auth, accessToken: "tok-123", createdAt: "2026-01-01T00:00:00.000Z" };
     expect(
       credentialsMatchConfig(stored, {
         homeserver: stored.homeserver,

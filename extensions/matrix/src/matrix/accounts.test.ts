@@ -1,4 +1,3 @@
-// Matrix tests cover accounts plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixScopedEnvVarNames } from "../env-vars.js";
 import type { CoreConfig, MatrixConfig } from "../types.js";
@@ -52,17 +51,9 @@ function createMatrixTopLevelDefaultScopedEntriesConfig(scopeKey: MatrixRoomScop
       matrix: {
         ...createMatrixAccountConfig("default-token"),
         [scopeKey]: {
-          "!default-room:example.org": {
-            enabled: true,
-            account: "default",
-          },
-          "!ops-room:example.org": {
-            enabled: true,
-            account: "ops",
-          },
-          "!shared-room:example.org": {
-            enabled: true,
-          },
+          "!default-room:example.org": { enabled: true, account: "default" },
+          "!ops-room:example.org": { enabled: true, account: "ops" },
+          "!shared-room:example.org": { enabled: true },
         },
         accounts: {
           ops: createMatrixAccountConfig("ops-token"),
@@ -72,64 +63,20 @@ function createMatrixTopLevelDefaultScopedEntriesConfig(scopeKey: MatrixRoomScop
   } as unknown as CoreConfig;
 }
 
-function expectMatrixScopedEntries(
-  cfg: CoreConfig,
-  scopeKey: MatrixRoomScopeKey,
-  accountId: string,
-  expected: Record<string, { enabled: true; account?: string }>,
-): void {
-  expect(resolveMatrixAccount({ cfg, accountId }).config[scopeKey]).toEqual(expected);
-}
-
-function expectTopLevelDefaultMatrixScopedEntries(
-  cfg: CoreConfig,
-  scopeKey: MatrixRoomScopeKey,
-): void {
-  expectMatrixScopedEntries(cfg, scopeKey, "default", {
-    "!default-room:example.org": {
-      enabled: true,
-      account: "default",
-    },
-    "!shared-room:example.org": {
-      enabled: true,
-    },
-  });
-  expectMatrixScopedEntries(cfg, scopeKey, "ops", {
-    "!ops-room:example.org": {
-      enabled: true,
-      account: "ops",
-    },
-    "!shared-room:example.org": {
-      enabled: true,
-    },
-  });
-}
-
 function configWithMatrix(matrix: MatrixConfig): CoreConfig {
   return { channels: { matrix } };
 }
 
 describe("resolveMatrixAccount", () => {
-  let prevEnv: Record<string, string | undefined> = {};
-
   beforeEach(() => {
     loadMatrixCredentialsMock.mockReset().mockReturnValue(null);
-    prevEnv = {};
     for (const key of envKeys) {
-      prevEnv[key] = process.env[key];
-      delete process.env[key];
+      vi.stubEnv(key, undefined);
     }
   });
 
   afterEach(() => {
-    for (const key of envKeys) {
-      const value = prevEnv[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    vi.unstubAllEnvs();
   });
 
   it("requires userId + password when no access token is set", () => {
@@ -189,11 +136,7 @@ describe("resolveMatrixAccount", () => {
     process.env[keys.homeserver] = "https://matrix.example.org";
     process.env[keys.accessToken] = "ops-token";
 
-    const cfg: CoreConfig = {
-      channels: {
-        matrix: {},
-      },
-    };
+    const cfg = configWithMatrix({});
 
     expect(listMatrixAccountIds(cfg)).toEqual(["default", "team-ops"]);
     expect(resolveDefaultMatrixAccountId(cfg)).toBe("default");
@@ -209,11 +152,7 @@ describe("resolveMatrixAccount", () => {
       MATRIX_ALERTS_ACCESS_TOKEN: "alerts-token",
     } as NodeJS.ProcessEnv;
 
-    const cfg: CoreConfig = {
-      channels: {
-        matrix: {},
-      },
-    };
+    const cfg = configWithMatrix({});
 
     expect(
       Array.from(
@@ -252,32 +191,23 @@ describe("resolveMatrixAccount", () => {
     ).toEqual(["@ops:example.org"]);
   });
 
-  it.each([
-    {
-      name: "filters legacy channel-level rooms when the default account is configured at the top level",
-      scopeKey: "rooms",
-      createConfig: createMatrixTopLevelDefaultScopedEntriesConfig,
-      expectEntries: expectTopLevelDefaultMatrixScopedEntries,
-    },
-  ] as const)("$name", ({ scopeKey, createConfig, expectEntries }) => {
-    expectEntries(createConfig(scopeKey), scopeKey);
+  it("filters legacy channel-level rooms when the default account is configured at the top level", () => {
+    const cfg = createMatrixTopLevelDefaultScopedEntriesConfig("rooms");
+    expect(resolveMatrixAccount({ cfg, accountId: "default" }).config.rooms).toEqual({
+      "!default-room:example.org": { enabled: true, account: "default" },
+      "!shared-room:example.org": { enabled: true },
+    });
+    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.rooms).toEqual({
+      "!ops-room:example.org": { enabled: true, account: "ops" },
+      "!shared-room:example.org": { enabled: true },
+    });
   });
 
-  it.each([
-    {
-      name: "keeps scoped groups bound to their account even when only one account is active",
-      scopeKey: "groups",
-    },
-  ] as const)("$name", ({ scopeKey }) => {
+  it("keeps scoped groups bound to their account even when only one account is active", () => {
     const cfg = configWithMatrix({
-      [scopeKey]: {
-        "!default-room:example.org": {
-          enabled: true,
-          account: "default",
-        },
-        "!shared-room:example.org": {
-          enabled: true,
-        },
+      groups: {
+        "!default-room:example.org": { enabled: true, account: "default" },
+        "!shared-room:example.org": { enabled: true },
       },
       accounts: {
         ops: {
@@ -287,34 +217,23 @@ describe("resolveMatrixAccount", () => {
       },
     });
 
-    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config[scopeKey]).toEqual({
-      "!shared-room:example.org": {
-        enabled: true,
-      },
+    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.groups).toEqual({
+      "!shared-room:example.org": { enabled: true },
     });
   });
 
-  it.each([
-    {
-      name: "lets an account clear inherited legacy rooms with an explicit empty map",
-      scopeKey: "rooms",
-    },
-  ] as const)("$name", ({ scopeKey }) => {
+  it("lets an account clear inherited legacy rooms with an explicit empty map", () => {
     const cfg = configWithMatrix({
-      [scopeKey]: {
-        "!shared-room:example.org": {
-          enabled: true,
-        },
-      },
+      rooms: { "!shared-room:example.org": { enabled: true } },
       accounts: {
         ops: {
           homeserver: "https://matrix.example.org",
           accessToken: "ops-token",
-          [scopeKey]: {},
+          rooms: {},
         },
       },
     });
 
-    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config[scopeKey]).toBeUndefined();
+    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.rooms).toBeUndefined();
   });
 });

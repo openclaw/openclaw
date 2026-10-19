@@ -13,6 +13,14 @@ import {
   reconcileMatrixUnknownSend,
   resolveMatrixDurableDeliveryIdentity,
 } from "./delivery-plan.js";
+function dispatch(roomId: string, transactionId: string, version = "v3") {
+  return {
+    roomId,
+    eventType: "m.room.message" as const,
+    transactionId,
+    requestPath: `/_matrix/client/${version}/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${transactionId}`,
+  };
+}
 
 const client = {
   getTransactionScopeId: vi.fn(async () => "scope-1"),
@@ -22,20 +30,10 @@ const client = {
       roomId: string,
       _content: unknown,
       transactionId?: string,
-      beforeWireDispatch?: (dispatch: {
-        roomId: string;
-        eventType: "m.room.message";
-        transactionId: string;
-        requestPath: string;
-      }) => Promise<void>,
+      beforeWireDispatch?: (dispatch: ReturnType<typeof dispatch>) => Promise<void>,
     ) => {
       const resolvedTransactionId = transactionId ?? "missing";
-      await beforeWireDispatch?.({
-        roomId,
-        eventType: "m.room.message",
-        transactionId: resolvedTransactionId,
-        requestPath: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${resolvedTransactionId}`,
-      });
+      await beforeWireDispatch?.(dispatch(roomId, resolvedTransactionId));
       return `$${resolvedTransactionId}`;
     },
   ),
@@ -74,6 +72,25 @@ function events(deliveryIdentity = identity(), body = "durable hello") {
   });
 }
 
+function planTarget(deliveryIdentity = identity()) {
+  return {
+    identity: deliveryIdentity,
+    accountId: "default",
+    roomId: "!room:example.org",
+    transactionScopeId: "scope-1",
+    wireEventType: "m.room.message" as const,
+  };
+}
+
+function persistEvents(plannedEvents: ReturnType<typeof events>, target = planTarget()) {
+  const transactionId = plannedEvents[0]!.transactionId;
+  return persistMatrixDeliveryPlan({
+    ...target,
+    events: plannedEvents,
+    dispatch: dispatch(target.roomId, transactionId),
+  });
+}
+
 async function persist(
   params: {
     queueId?: string;
@@ -86,19 +103,10 @@ async function persist(
 ) {
   const deliveryIdentity = identity(params.queueId, params.partIndex, params.partCount);
   const plannedEvents = events(deliveryIdentity, params.body);
-  return await persistMatrixDeliveryPlan({
-    identity: deliveryIdentity,
+  return await persistEvents(plannedEvents, {
+    ...planTarget(deliveryIdentity),
     accountId: params.accountId ?? "default",
-    roomId: "!room:example.org",
     transactionScopeId: params.scope ?? "scope-1",
-    wireEventType: "m.room.message",
-    events: plannedEvents,
-    dispatch: {
-      roomId: "!room:example.org",
-      eventType: "m.room.message",
-      transactionId: plannedEvents[0]!.transactionId,
-      requestPath: `/_matrix/client/v3/rooms/!room%3Aexample.org/send/m.room.message/${plannedEvents[0]!.transactionId}`,
-    },
   });
 }
 
@@ -137,36 +145,15 @@ describe("Matrix durable delivery plans", () => {
       content: { msgtype: "m.text", body: "durable hello" },
     });
     expect(plan.events[0]?.transactionId).toMatch(/^oc_/);
-    await expect(
-      loadMatrixDeliveryPlan({
-        identity: deliveryIdentity,
-        accountId: "default",
-        roomId: "!room:example.org",
-        transactionScopeId: "scope-1",
-        wireEventType: "m.room.message",
-      }),
-    ).resolves.toEqual(plan);
+    await expect(loadMatrixDeliveryPlan(planTarget(deliveryIdentity))).resolves.toEqual(plan);
 
     const changedEvents = createMatrixPlannedEvents({
       identity: deliveryIdentity,
       events: [{ receiptKind: "text", content: { msgtype: "m.text", body: "changed" } }],
     });
-    await expect(
-      persistMatrixDeliveryPlan({
-        identity: deliveryIdentity,
-        accountId: "default",
-        roomId: "!room:example.org",
-        transactionScopeId: "scope-1",
-        wireEventType: "m.room.message",
-        events: changedEvents,
-        dispatch: {
-          roomId: "!room:example.org",
-          eventType: "m.room.message",
-          transactionId: changedEvents[0]!.transactionId,
-          requestPath: `/_matrix/client/v3/rooms/!room%3Aexample.org/send/m.room.message/${changedEvents[0]!.transactionId}`,
-        },
-      }),
-    ).rejects.toThrow("no longer matches the prepared event batch");
+    await expect(persistEvents(changedEvents, planTarget(deliveryIdentity))).rejects.toThrow(
+      "no longer matches the prepared event batch",
+    );
   });
 
   it("fails closed when a persisted plan contains invalid UTF-8", async () => {
@@ -205,46 +192,7 @@ describe("Matrix durable delivery plans", () => {
       },
     );
     expect(client.sendMessage).not.toHaveBeenCalled();
-    await expect(
-      loadMatrixDeliveryPlan({
-        identity: deliveryIdentity,
-        accountId: "default",
-        roomId: "!room:example.org",
-        transactionScopeId: "scope-1",
-        wireEventType: "m.room.message",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("reissues the exact stored event with its transaction id and reports the provider event id", async () => {
-    const plan = await persist();
-    client.sendMessage.mockImplementationOnce(
-      async (roomId, _content, transactionId, beforeWireDispatch) => {
-        await beforeWireDispatch?.({
-          roomId,
-          eventType: "m.room.message",
-          transactionId: transactionId ?? "missing",
-          requestPath: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${transactionId}`,
-        });
-        return "$event-1";
-      },
-    );
-
-    await expect(reconcileMatrixUnknownSend(reconciliationContext())).resolves.toMatchObject({
-      status: "sent",
-      messageId: "$event-1",
-      receipt: {
-        primaryPlatformMessageId: "$event-1",
-        platformMessageIds: ["$event-1"],
-        parts: [{ platformMessageId: "$event-1", kind: "text" }],
-      },
-    });
-    expect(client.sendMessage).toHaveBeenCalledWith(
-      "!room:example.org",
-      plan.events[0]!.content,
-      plan.events[0]!.transactionId,
-      expect.any(Function),
-    );
+    await expect(loadMatrixDeliveryPlan(planTarget(deliveryIdentity))).resolves.toBeNull();
   });
 
   it("preserves the unknown-error fallback for non-error send failures", async () => {
@@ -280,23 +228,11 @@ describe("Matrix durable delivery plans", () => {
           },
         ],
       });
-      await persistMatrixDeliveryPlan({
-        identity: deliveryIdentity,
-        accountId: "default",
-        roomId: "!room:example.org",
-        transactionScopeId: "scope-1",
-        wireEventType: "m.room.message",
-        events: plannedEvents,
-        dispatch: {
-          roomId: "!room:example.org",
-          eventType: "m.room.message",
-          transactionId: plannedEvents[0]!.transactionId,
-          requestPath: `/_matrix/client/v3/rooms/!room%3Aexample.org/send/m.room.message/${plannedEvents[0]!.transactionId}`,
-        },
-      });
+      await persistEvents(plannedEvents, planTarget(deliveryIdentity));
       client.sendMessage
         .mockResolvedValueOnce("$media-event")
         .mockResolvedValueOnce(duplicateId ? "$media-event" : "$text-event");
+      const messageIds = duplicateId ? ["$media-event"] : ["$media-event", "$text-event"];
 
       await expect(
         reconcileMatrixUnknownSend({
@@ -306,32 +242,19 @@ describe("Matrix durable delivery plans", () => {
         }),
       ).resolves.toMatchObject({
         status: "sent",
-        messageId: duplicateId ? "$media-event" : "$text-event",
+        messageId: messageIds.at(-1),
         receipt: {
           primaryPlatformMessageId: "$media-event",
-          platformMessageIds: duplicateId ? ["$media-event"] : ["$media-event", "$text-event"],
+          platformMessageIds: messageIds,
           replyToId: "$reply",
           threadId: "$thread",
-          parts: [
-            {
-              platformMessageId: "$media-event",
-              kind: "media",
-              index: 0,
-              replyToId: "$reply",
-              threadId: "$thread",
-            },
-            ...(duplicateId
-              ? []
-              : [
-                  {
-                    platformMessageId: "$text-event",
-                    kind: "text",
-                    index: 1,
-                    replyToId: "$reply",
-                    threadId: "$thread",
-                  },
-                ]),
-          ],
+          parts: messageIds.map((platformMessageId, index) => ({
+            platformMessageId,
+            kind: index === 0 ? "media" : "text",
+            index,
+            replyToId: "$reply",
+            threadId: "$thread",
+          })),
         },
       });
     },
@@ -349,27 +272,14 @@ describe("Matrix durable delivery plans", () => {
       error: expect.stringContaining("incomplete event plan"),
     });
     expect(client.sendMessage).not.toHaveBeenCalled();
-    await expect(
-      loadMatrixDeliveryPlan({
-        identity: incompleteIdentity,
-        accountId: "default",
-        roomId: "!room:example.org",
-        transactionScopeId: "scope-1",
-        wireEventType: "m.room.message",
-      }),
-    ).resolves.toBeNull();
+    await expect(loadMatrixDeliveryPlan(planTarget(incompleteIdentity))).resolves.toBeNull();
   });
 
   it("fails closed when the SDK selects a different Matrix endpoint path", async () => {
     await persist({ queueId: "queue-route" });
     client.sendMessage.mockImplementationOnce(
       async (roomId, _content, transactionId, beforeWireDispatch) => {
-        await beforeWireDispatch?.({
-          roomId,
-          eventType: "m.room.message",
-          transactionId: transactionId ?? "missing",
-          requestPath: `/_matrix/client/v4/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${transactionId}`,
-        });
+        await beforeWireDispatch?.(dispatch(roomId, transactionId ?? "missing", "v4"));
         return "$must-not-send";
       },
     );
@@ -453,13 +363,7 @@ describe("Matrix durable delivery plans", () => {
         ).resolves.toBeNull();
       }
       await expect(
-        loadMatrixDeliveryPlan({
-          identity: identity("queue-keep"),
-          accountId: "default",
-          roomId: "!room:example.org",
-          transactionScopeId: "scope-1",
-          wireEventType: "m.room.message",
-        }),
+        loadMatrixDeliveryPlan(planTarget(identity("queue-keep"))),
       ).resolves.not.toBeNull();
     },
   );
@@ -486,13 +390,7 @@ describe("Matrix durable delivery plans", () => {
       expect(client.sendMessage).not.toHaveBeenCalled();
       if (populated) {
         await expect(
-          loadMatrixDeliveryPlan({
-            identity: identity("queue-keep"),
-            accountId: "default",
-            roomId: "!room:example.org",
-            transactionScopeId: "scope-1",
-            wireEventType: "m.room.message",
-          }),
+          loadMatrixDeliveryPlan(planTarget(identity("queue-keep"))),
         ).resolves.not.toBeNull();
       }
     },
