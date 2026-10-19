@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   claimPendingAgentQuestionAnswer,
   type AgentHarnessQuestionGatewayCall,
@@ -8,13 +9,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCopilotUserInputBridge } from "./user-input-bridge.js";
 
-type GatewayCallRecord = { method: string; opts: unknown; params: unknown };
-
-function createGatewayStub() {
-  const calls: GatewayCallRecord[] = [];
+function createHarness(signal?: AbortSignal) {
+  const calls: Array<{ method: string; params: unknown }> = [];
   const wait = createDeferred<unknown>();
-  const call: AgentHarnessQuestionGatewayCall = async (method, opts, params) => {
-    calls.push({ method, opts, params });
+  const call: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
+    calls.push({ method, params });
     if (method === "question.request") {
       return { id: (params as { id: string }).id, expiresAtMs: Date.now() + 75_000 };
     }
@@ -34,10 +33,6 @@ function createGatewayStub() {
     }
     throw new Error(`unexpected gateway method: ${method}`);
   };
-  return { call, calls };
-}
-
-function createHarness(signal?: AbortSignal) {
   const params = {
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
@@ -46,18 +41,22 @@ function createHarness(signal?: AbortSignal) {
     timeoutMs: 75_000,
     onBlockReply: vi.fn(),
   } as unknown as EmbeddedRunAttemptParams;
-  const gateway = createGatewayStub();
   const bridge = createCopilotUserInputBridge({
     paramsForRun: params,
-    gatewayCall: gateway.call,
+    gatewayCall: call,
     signal,
   });
   return {
     params,
-    gateway,
+    calls,
     bridge,
-    ask: (request: Parameters<typeof bridge.onUserInputRequest>[0]) =>
-      bridge.onUserInputRequest(request, { sessionId: "sdk-session-1" }),
+    ask: (question: string, choices?: string[]) =>
+      bridge.onUserInputRequest(
+        { question, choices, allowFreeform: !choices },
+        { sessionId: "sdk-session-1" },
+      ),
+    answer: (text: string) =>
+      claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text }),
     prompt: async () => {
       await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
       return vi.mocked(params.onBlockReply!).mock.calls[0]![0];
@@ -67,18 +66,10 @@ function createHarness(signal?: AbortSignal) {
 
 describe("Copilot user input bridge", () => {
   it("registers, presents, claims, and returns a selected option", async () => {
-    const { params, gateway, ask, prompt } = createHarness();
-    const response = ask({
-      question: "Pick a mode",
-      choices: ["Fast", "Deep"],
-      allowFreeform: false,
-    });
+    const { calls, ask, answer, prompt } = createHarness();
+    const response = ask("Pick a mode", ["Fast", "Deep"]);
     const payload = await prompt();
-    const request = gateway.calls[0];
-    if (!request) {
-      throw new Error("expected question.request");
-    }
-
+    const request = expectDefined(calls[0], "question.request");
     expect(request.params).toMatchObject({
       sessionKey: "agent:main:session-1",
       agentId: "main",
@@ -90,44 +81,34 @@ describe("Copilot user input bridge", () => {
         }),
       ],
     });
+    const questionId = (request.params as { id: string }).id;
     expect(payload.channelData).toEqual({
-      askUser: {
-        questionId: (request.params as { id: string }).id,
-        optionValues: ["Fast", "Deep"],
-      },
+      askUser: { questionId, optionValues: ["Fast", "Deep"] },
     });
     expect(payload.presentationTextMode).toBe("fallback");
     expect(payload.text).toContain("Reply with the number or option text.");
     expect(payload.text).not.toContain("your own answer");
-
-    await expect(
-      claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "2" }),
-    ).resolves.toBe(true);
+    await expect(answer("2")).resolves.toBe(true);
     await expect(response).resolves.toEqual({ answer: "Deep", wasFreeform: false });
   });
 
   it("supports option-less free-form questions", async () => {
-    const { params, gateway, ask, prompt } = createHarness();
-    const response = ask({ question: "Which branch?", allowFreeform: true });
+    const { calls, ask, answer, prompt } = createHarness();
+    const response = ask("Which branch?");
     expect((await prompt()).presentation).toBeUndefined();
-    expect(gateway.calls[0]?.params).toMatchObject({
+    expect(calls[0]?.params).toMatchObject({
       questions: [expect.objectContaining({ options: [] })],
     });
-
-    await claimPendingAgentQuestionAnswer({
-      sessionKey: params.sessionKey,
-      text: "fix/harness-parity",
-    });
+    await answer("fix/harness-parity");
     await expect(response).resolves.toEqual({ answer: "fix/harness-parity", wasFreeform: true });
   });
 
   it("escapes SDK-controlled prompt text before delivery", async () => {
     const { bridge, ask, prompt } = createHarness();
-    const response = ask({
-      question: "Pick [trusted](https://evil) <@U123> @here\u202e",
-      choices: ["One @everyone", "Two `code`"],
-      allowFreeform: false,
-    });
+    const response = ask("Pick [trusted](https://evil) <@U123> @here\u202e", [
+      "One @everyone",
+      "Two `code`",
+    ]);
     const { text = "", presentation } = await prompt();
     expect(text).not.toContain("`code`");
     expect(text).toContain("\uff20here");
@@ -147,31 +128,28 @@ describe("Copilot user input bridge", () => {
     await response;
   });
 
-  it("cancels the gateway record and returns an empty answer on abort", async () => {
+  it.each(["before", "after"])("handles abort %s registration", async (when) => {
     const controller = new AbortController();
-    const { gateway, ask, prompt } = createHarness(controller.signal);
-    const response = ask({ question: "Continue?", choices: ["Yes", "No"], allowFreeform: false });
-    await prompt();
-    controller.abort();
-
+    if (when === "before") {
+      controller.abort();
+    }
+    const { params, calls, ask, prompt } = createHarness(controller.signal);
+    const response = ask("Continue?", ["Yes", "No"]);
+    if (when === "after") {
+      await prompt();
+      controller.abort();
+    }
     await expect(response).resolves.toEqual({ answer: "", wasFreeform: true });
-    expect(gateway.calls).toContainEqual(
-      expect.objectContaining({
-        method: "question.resolve",
-        params: expect.objectContaining({ cancel: true, resolvedBy: "run-abort" }),
-      }),
-    );
-  });
-
-  it("does not register a gateway question after the run already aborted", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    const { params, gateway, ask } = createHarness(controller.signal);
-
-    await expect(
-      ask({ question: "Continue?", choices: ["Yes", "No"], allowFreeform: false }),
-    ).resolves.toEqual({ answer: "", wasFreeform: true });
-    expect(gateway.calls).toEqual([]);
-    expect(params.onBlockReply).not.toHaveBeenCalled();
+    if (when === "before") {
+      expect(calls).toEqual([]);
+      expect(params.onBlockReply).not.toHaveBeenCalled();
+    } else {
+      expect(calls).toContainEqual(
+        expect.objectContaining({
+          method: "question.resolve",
+          params: expect.objectContaining({ cancel: true, resolvedBy: "run-abort" }),
+        }),
+      );
+    }
   });
 });
