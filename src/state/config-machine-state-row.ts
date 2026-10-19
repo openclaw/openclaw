@@ -10,7 +10,6 @@ import {
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
-import { publishRemoteModelCatalogChanged } from "../model-catalog/remote-store-receipt.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 
@@ -18,6 +17,16 @@ export type ConfigMachineStateDatabase = Pick<OpenClawStateKyselyDatabase, "conf
 
 type ConfigMachineStateRow = { value_json: string; updated_at_ms: number };
 type ConfigMachineStateRowAdmission = { row: ConfigMachineStateRow | undefined };
+// Exchange only the committed receipt, not the potentially large catalog payload.
+const catalogReceipt: SqliteDatabaseAdmissionKey<object> = {
+  name: "model-catalog.remote",
+  read: (value) => (isRecord(value) ? value : undefined),
+};
+
+export function readRemoteModelCatalogReceipt(databasePath: string): object {
+  return getOrLoadSqliteDatabaseAdmissionForPath(databasePath, catalogReceipt, () => ({})) ?? {};
+}
+
 const ttsPathAdmission: SqliteDatabaseAdmissionKey<ConfigMachineStateRowAdmission> = {
   name: "state.tts-prefs-path",
   read(value) {
@@ -54,7 +63,7 @@ export function publishConfigMachineStateRow(
     key === "modelCatalog.remote.v2" ||
     key === "modelCatalog.remote"
   ) {
-    publishRemoteModelCatalogChanged(database);
+    publishSqliteDatabaseAdmission(database, catalogReceipt, {});
   }
 }
 

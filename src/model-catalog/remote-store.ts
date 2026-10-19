@@ -1,8 +1,8 @@
+import { readRemoteModelCatalogReceipt } from "../state/config-machine-state-row.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { readRemoteModelCatalogReceipt } from "./remote-store-receipt.js";
 
 type RemoteModelCatalogStoreRow = {
   id: number;
