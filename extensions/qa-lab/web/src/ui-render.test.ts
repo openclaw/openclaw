@@ -1,12 +1,15 @@
-// Qa Lab UI render tests cover evidence gallery affordances.
 import { describe, expect, it } from "vitest";
 import { renderQaLabUi, type UiState } from "./ui-render.js";
-import type { EvidenceArtifactView, EvidenceEnvelope } from "./ui-types.js";
+import type {
+  EvidenceArtifactView,
+  EvidenceEntryView,
+  EvidenceEnvelope,
+  EvidenceMatrixCell,
+} from "./ui-types.js";
 
 type Snapshot = NonNullable<UiState["snapshot"]>;
 
 function message(
-  id: string,
   text: string,
   overrides: Partial<Snapshot["messages"][number]> = {},
 ): Snapshot["messages"][number] {
@@ -14,7 +17,7 @@ function message(
     accountId: "account-a",
     conversation: { id: "shared", kind: "channel" },
     direction: "outbound",
-    id,
+    id: text,
     reactions: [],
     senderId: "openclaw",
     text,
@@ -69,6 +72,40 @@ function artifact(
     path,
     preview: null,
     source: "ux-matrix:web-ui:first-run",
+  };
+}
+
+function evidenceEntry(
+  status: EvidenceEntryView["status"],
+  overrides: Partial<EvidenceEntryView> = {},
+): EvidenceEntryView {
+  return {
+    artifacts: [],
+    coverage: [],
+    failureReason: null,
+    key: "0",
+    effective: true,
+    id: status,
+    kind: "script-test",
+    sourcePath: "fixture.ts",
+    status,
+    title: status,
+    ...overrides,
+  };
+}
+
+function matrixCell(surface: string, lane: string, entryKey: string | null): EvidenceMatrixCell {
+  return {
+    artifactKinds: entryKey ? ["screenshot"] : [],
+    artifactPaths: entryKey ? ["screenshot.png"] : [],
+    coverageIds: [],
+    runner: { availability: "local", command: "run-ux-fixture", lane, workflow: "fixture.yml" },
+    stage: "first-run",
+    status: entryKey ? "pass" : "proof-gap",
+    surface,
+    entryKey,
+    testId: entryKey ? "ux-matrix.web-ui.first-run" : null,
+    title: entryKey ? "UX Matrix: web-ui / first-run" : null,
   };
 }
 
@@ -235,7 +272,10 @@ describe("QA Lab UI evidence render", () => {
     (kind, otherKind, labels) => {
       const selectedConversationKey = JSON.stringify(["account-a", kind, "shared"]);
       const conversation = { id: "shared", kind };
-      const direction = kind === "group" ? "inbound" : "outbound";
+      const sameKind = {
+        conversation,
+        direction: kind === "group" ? "inbound" : "outbound",
+      } as const;
       const html = renderState({
         activeTab: "chat",
         selectedConversationKey,
@@ -262,19 +302,9 @@ describe("QA Lab UI evidence render", () => {
           cursor: 0,
           events: [],
           messages: [
-            message("selected-message", "selected message", {
-              conversation,
-              direction,
-              senderId: kind === "group" ? "alice" : "openclaw",
-            }),
-            message("foreign-message", "foreign message", {
-              conversation,
-              direction,
-              accountId: "account-b",
-              senderId: kind === "group" ? "bob" : "openclaw",
-              timestamp: 2,
-            }),
-            message("other-kind-message", "other kind message", {
+            message("selected message", sameKind),
+            message("foreign message", { ...sameKind, accountId: "account-b", timestamp: 2 }),
+            message("other kind message", {
               conversation: { id: "shared", kind: otherKind },
               timestamp: 3,
             }),
@@ -333,13 +363,13 @@ describe("QA Lab UI evidence render", () => {
       cursor: 0,
       events: [],
       messages: [
-        message("root-message", "root timeline message", room),
-        message("thread-message", "thread-only reply", {
+        message("root timeline message", room),
+        message("thread-only reply", {
           ...room,
           threadId: "owned-thread",
           timestamp: 2,
         }),
-        message("external-thread-message", "externally observed thread reply", {
+        message("externally observed thread reply", {
           ...room,
           threadId: "external-thread",
           timestamp: 3,
@@ -464,30 +494,15 @@ describe("QA Lab UI evidence render", () => {
       evidence: gallery({
         counts: { blocked: 1, fail: 0, pass: 0, skipped: 1 },
         entries: [
-          {
-            artifacts: [],
+          evidenceEntry("blocked", {
             coverage: [{ id: "qa.blocked", role: "primary" }],
             failureReason: "Environment unavailable",
-            id: "qa-lab.blocked",
-            key: "0",
-            effective: true,
-            kind: "script-test",
-            sourcePath: "scripts/blocked.ts",
-            status: "blocked",
-            title: "Blocked evidence",
-          },
-          {
-            artifacts: [],
+          }),
+          evidenceEntry("skipped", {
             coverage: [{ id: "qa.skipped", role: "primary" }],
-            failureReason: null,
-            id: "qa-lab.skipped",
             key: "1",
-            effective: true,
             kind: "vitest-test",
-            sourcePath: "extensions/qa-lab/src/skipped.test.ts",
-            status: "skipped",
-            title: "Skipped evidence",
-          },
+          }),
         ],
       }),
       selectedEvidenceEntryKey: "0",
@@ -505,22 +520,16 @@ describe("QA Lab UI evidence render", () => {
       evidence: gallery({
         counts: { blocked: 0, fail: 0, pass: 1, skipped: 0 },
         entries: [
-          {
+          evidenceEntry("pass", {
             artifacts: [
               artifact("screenshot.png", "screenshot", "image"),
               artifact("recording.gif", "motion-preview-gif", "image"),
               artifact("recording.webm", "video", "video"),
             ],
-            coverage: [],
-            failureReason: null,
             id: "ux-matrix.web-ui.first-run",
-            key: "0",
-            effective: true,
             kind: "ux-matrix-cell",
-            sourcePath: "scripts/ux-matrix/dashboard.ts",
-            status: "pass",
             title: "UX Matrix: web-ui / first-run",
-          },
+          }),
         ],
         producerContext: {
           commands: null,
@@ -534,42 +543,8 @@ describe("QA Lab UI evidence render", () => {
           },
           matrix: {
             cells: [
-              {
-                artifactKinds: ["screenshot"],
-                artifactPaths: ["screenshot.png"],
-                coverageIds: [],
-                runner: {
-                  availability: "local",
-                  command:
-                    "node external/qa/ux-matrix-producer.mjs --artifact-base .artifacts/external-qa/ux-matrix",
-                  lane: "web-ui-playwright",
-                  workflow: "external/ci/ux-matrix.yml#matrix-local",
-                },
-                stage: "first-run",
-                status: "pass",
-                surface: "web-ui",
-                testId: "ux-matrix.web-ui.first-run",
-                entryKey: "0",
-                title: "UX Matrix: web-ui / first-run",
-              },
-              {
-                artifactKinds: [],
-                artifactPaths: [],
-                coverageIds: [],
-                runner: {
-                  availability: "local",
-                  command:
-                    "node external/qa/ux-matrix-producer.mjs --artifact-base .artifacts/external-qa/ux-matrix",
-                  lane: "cli-status",
-                  workflow: "external/ci/ux-matrix.yml#matrix-local",
-                },
-                stage: "first-run",
-                status: "proof-gap",
-                surface: "cli",
-                testId: null,
-                entryKey: null,
-                title: null,
-              },
+              matrixCell("web-ui", "web-ui-playwright", "0"),
+              matrixCell("cli", "cli-status", null),
             ],
             counts: { pass: 1, "proof-gap": 1 },
             path: "matrix.json",
@@ -665,16 +640,11 @@ describe("QA Lab UI evidence render", () => {
     expectMarkup(html, ["[redacted]"], ["secret-token"]);
   });
 
-  it.each([["tail", `${"a".repeat(350)}😀${"z".repeat(79)}`]])(
-    "keeps the bounded capture %s free of lone surrogates",
-    (_edge, payload) => {
-      const html = renderQaLabUi(
-        capturePayloadState(payload, "raw", { contentType: "text/plain" }),
-      );
-      const loneSurrogate =
-        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+  it("keeps the bounded capture tail free of lone surrogates", () => {
+    const payload = `${"a".repeat(350)}😀${"z".repeat(79)}`;
+    const html = renderQaLabUi(capturePayloadState(payload, "raw", { contentType: "text/plain" }));
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 
-      expect(html).not.toMatch(loneSurrogate);
-    },
-  );
+    expect(html).not.toMatch(loneSurrogate);
+  });
 });

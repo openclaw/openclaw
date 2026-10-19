@@ -1144,7 +1144,6 @@
 ["extensions/qa-lab/src/suite-runtime-parity-runner.cleanup.test.ts","openclaw/plugin-sdk/ssrf-runtime","f4468e09d98ffebbdd49e69e54c6feb26f950b34f36c47d7b386ac5e81e8ae42",1]
 ["extensions/qa-lab/src/suite-runtime-parity-runner.control-ui.test.ts","./suite-run-standard.js","5da5beb1d478f2be8c84bb1de5b5f97a52a4c05cb82e7f948fad30e7aa55d0fa",1]
 ["extensions/qa-lab/src/suite.test.ts","openclaw/plugin-sdk/ssrf-runtime","c4158bd78d2436e364e9cae0b8bf7b683375c110d09f099c5f1bb97ac4933ab7",1]
-["extensions/qa-lab/web/src/app.browser.test-support.ts","./http.js","fe6a59fd1dbffbbd3b9668541bacbb629329a2d59673e4382d9b589ba72a835f",1]
 ["extensions/radius/index.test.ts","openclaw/plugin-sdk/provider-auth-runtime","007cc38241a39816e70155fb7fa55144823b2a5be4295c3903c15220444ea9bb",1]
 ["extensions/radius/oauth.test.ts","openclaw/plugin-sdk/ssrf-runtime","5b96914d2f0568896afc1e43ddc4b2a61ea715bb44ae5bec04fef46f0e79d832",1]
 ["extensions/searxng/src/searxng-search-provider.test.ts","./searxng-client.js","173dbf20240c281919d1c7f82c917eb32140e25159c143825bc3850dbf703b43",1]
