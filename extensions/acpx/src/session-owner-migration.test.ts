@@ -22,11 +22,55 @@ type Claim = Awaited<
   ReturnType<NonNullable<PluginDoctorStateMigrationContext["inspectAcpSessionClaims"]>>
 >["claims"][number];
 const directories = useAutoCleanupTempDirTracker(afterEach);
+const target = {
+  agentId: "work",
+  sessionKey: "global",
+  agent: "fixture",
+  mode: "persistent" as const,
+};
 afterEach(() => resetPluginStateStoreForTests());
 
 async function expectNoMigrationStaging(sourcePath: string) {
   const files = await fs.readdir(path.dirname(sourcePath));
   expect(files.filter((name) => name.startsWith(".openclaw-owner-"))).toEqual([]);
+}
+
+async function runAndClose(
+  runtime: UpstreamRuntime | AcpxRuntime,
+  handle: Parameters<UpstreamRuntime["runTurn"]>[0]["handle"],
+  text: string,
+  requestId: string,
+  reason = "test-complete",
+) {
+  const chunks: string[] = [];
+  try {
+    for await (const event of runtime.runTurn({ handle, text, requestId, mode: "prompt" })) {
+      if (event.type === "text_delta") {
+        chunks.push(event.text);
+      }
+    }
+    return chunks.join("");
+  } finally {
+    await runtime.close({ handle, reason });
+  }
+}
+
+async function expectOwnerRejection(
+  runtime: AcpxRuntime,
+  input: Parameters<AcpxRuntime["ensureSession"]>[0],
+) {
+  let adopted: Awaited<ReturnType<AcpxRuntime["ensureSession"]>> | undefined;
+  const rejected = { detailCode: "SESSION_OWNER_MIGRATION_REQUIRED" };
+  try {
+    await expect(
+      runtime.ensureSession(input).then((handle) => (adopted = handle)),
+    ).rejects.toMatchObject(rejected);
+    await expect(runtime.prepareFreshSession(input)).rejects.toMatchObject(rejected);
+  } finally {
+    if (adopted) {
+      await runtime.close({ handle: adopted, reason: "test-cleanup" });
+    }
+  }
 }
 
 async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey = "global") {
@@ -52,21 +96,11 @@ async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey
   };
   const legacy = new UpstreamRuntime(runtimeOptions);
   const handle = await legacy.ensureSession({ sessionKey, agent: "fixture", mode });
-  try {
-    for await (const ignoredEventValue of legacy.runTurn({
-      handle,
-      text: "retained history",
-      mode: "prompt",
-      requestId: "before-migration",
-    })) {
-      void ignoredEventValue;
-    }
-  } finally {
-    await legacy.close({ handle, reason: "offline-migration" });
-  }
+  await runAndClose(legacy, handle, "retained history", "before-migration", "offline-migration");
   const file = (id: string) => path.join(stateDir, "sessions", `${encodeURIComponent(id)}.json`);
   const sourcePath = file(handle.acpxRecordId!);
-  const raw = JSON.parse(await fs.readFile(sourcePath, "utf8"));
+  const read = (recordPath = sourcePath) => fs.readFile(recordPath, "utf8");
+  const raw = JSON.parse(await read());
   raw.future_field = { opaque: ["preserve", 42] };
   await fs.writeFile(sourcePath, JSON.stringify(raw));
   const claims: Claim[] = [
@@ -91,8 +125,7 @@ async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey
       },
     },
   ];
-  let interrupt = false;
-  let interruptVerification = false;
+  const interruption = { publication: false, canonical: false };
   let updated = false;
   const context: PluginDoctorStateMigrationContext = {
     openPluginStateKeyedStore: (options) =>
@@ -102,10 +135,10 @@ async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey
       }),
     inspectAcpSessionClaims: async () => ({
       claims: structuredClone(claims),
-      incomplete: interruptVerification && updated ? ["interrupted after canonical update"] : [],
+      incomplete: interruption.canonical && updated ? ["interrupted after canonical update"] : [],
     }),
     updateAcpSessionIdentity(input) {
-      if (interrupt) {
+      if (interruption.publication) {
         throw new Error("interrupted after publication");
       }
       expect(claims[0]).toEqual(input.claim);
@@ -130,61 +163,53 @@ async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey
     raw,
     sourcePath,
     runtimeOptions,
-    setVerificationInterrupted: (value: boolean) => {
-      interruptVerification = value;
+    interruption,
+    migrate: () => acpxSessionOwnerMigration.migrateLegacyState(input),
+    read,
+    runtime: (legacyKeys?: string[]) =>
+      new AcpxRuntime({
+        ...runtimeOptions,
+        openclawLegacyBareSessionKeys: new Set(legacyKeys),
+      }),
+    async expectPublished() {
+      const resource = resolveAcpxSessionResource(claims[0]!);
+      await expectNoMigrationStaging(sourcePath);
+      expect(JSON.parse(await read(file(resource)))).toEqual({
+        ...raw,
+        name: resource,
+        acpx_record_id: resource,
+      });
+      return resource;
     },
-    setInterrupted: (value: boolean) => {
-      interrupt = value;
+    async expectRetained() {
+      await expectNoMigrationStaging(sourcePath);
+      expect(JSON.parse(await read())).toEqual(raw);
     },
   };
 }
 
-it.each(["publication", "canonical"])(
+it.each([
+  ["publication", "interrupted after publication"],
+  ["canonical", "stored metadata verification failed"],
+] as const)(
   "preserves raw history and resumes idempotently after interruption=%s",
-  async (interrupted) => {
+  async (interrupted, warning) => {
     const f = await fixture();
-    const resource = resolveAcpxSessionResource(f.claims[0]!);
-    if (interrupted === "canonical") {
-      f.setVerificationInterrupted(true);
-      expect((await acpxSessionOwnerMigration.migrateLegacyState(f.input)).warnings).toEqual([
-        expect.stringContaining("stored metadata verification failed"),
-      ]);
-      await expectNoMigrationStaging(f.sourcePath);
-      expect(JSON.parse(await fs.readFile(f.sourcePath, "utf8"))).toEqual(f.raw);
-      f.setVerificationInterrupted(false);
-    }
-    if (interrupted === "publication") {
-      f.setInterrupted(true);
-      expect((await acpxSessionOwnerMigration.migrateLegacyState(f.input)).warnings).toEqual([
-        expect.stringContaining("interrupted after publication"),
-      ]);
-      await expectNoMigrationStaging(f.sourcePath);
-      expect(JSON.parse(await fs.readFile(f.sourcePath, "utf8"))).toEqual(f.raw);
-      f.setInterrupted(false);
-    }
-    const result = await acpxSessionOwnerMigration.migrateLegacyState(f.input);
-    expect(result.warnings).toEqual([]);
-    await expectNoMigrationStaging(f.sourcePath);
-    expect(JSON.parse(await fs.readFile(f.file(resource), "utf8"))).toEqual({
-      ...f.raw,
-      name: resource,
-      acpx_record_id: resource,
-    });
-    expect(JSON.parse(await fs.readFile(`${f.sourcePath}.migrated`, "utf8"))).toEqual(f.raw);
+    f.interruption[interrupted] = true;
+    expect((await f.migrate()).warnings).toEqual([expect.stringContaining(warning)]);
+    await f.expectRetained();
+    f.interruption[interrupted] = false;
+    expect((await f.migrate()).warnings).toEqual([]);
+    const resource = await f.expectPublished();
+    expect(JSON.parse(await f.read(`${f.sourcePath}.migrated`))).toEqual(f.raw);
     expect(decodeAcpxRuntimeHandleState(f.claims[0]!.meta.runtimeSessionName)).toMatchObject({
       name: resource,
       acpxRecordId: resource,
     });
-    expect(await acpxSessionOwnerMigration.migrateLegacyState(f.input)).toEqual({
-      changes: [],
-      warnings: [],
-    });
-    const runtime = new AcpxRuntime(f.runtimeOptions);
+    expect(await f.migrate()).toEqual({ changes: [], warnings: [] });
+    const runtime = f.runtime();
     const handle = await runtime.ensureSession({
-      sessionKey: "global",
-      agentId: "work",
-      agent: "fixture",
-      mode: "persistent",
+      ...target,
       persistedHandle: {
         ...f.handle,
         agentId: "work",
@@ -192,24 +217,10 @@ it.each(["publication", "canonical"])(
         acpxRecordId: resource,
       },
     });
-    try {
-      const chunks: string[] = [];
-      for await (const event of runtime.runTurn({
-        handle,
-        text: "after-migration",
-        requestId: "after",
-        mode: "prompt",
-      })) {
-        if (event.type === "text_delta") {
-          chunks.push(event.text);
-        }
-      }
-      expect(JSON.parse(chunks.join(""))).toMatchObject({
-        history: ["retained history", "after-migration"],
-      });
-    } finally {
-      await runtime.close({ handle, reason: "test-complete" });
-    }
+    const response = await runAndClose(runtime, handle, "after-migration", "after");
+    expect(JSON.parse(response)).toMatchObject({
+      history: ["retained history", "after-migration"],
+    });
   },
 );
 
@@ -234,8 +245,8 @@ it.each(["ambiguous", "missing", "event-log", "conflict", "live"])(
       await fs.writeFile(f.file(resource), '{"conflict":true}');
     }
     await fs.writeFile(f.sourcePath, JSON.stringify(f.raw));
-    const before = await fs.readFile(f.sourcePath, "utf8");
-    const result = await acpxSessionOwnerMigration.migrateLegacyState(f.input);
+    const before = await f.read();
+    const result = await f.migrate();
     expect(result.warnings.length).toBeGreaterThan(0);
     if (scenario === "event-log") {
       expect(result.warnings).toEqual([
@@ -244,9 +255,9 @@ it.each(["ambiguous", "missing", "event-log", "conflict", "live"])(
     }
     expect(result.changes).toEqual([]);
     await expectNoMigrationStaging(f.sourcePath);
-    expect(await fs.readFile(f.sourcePath, "utf8")).toBe(before);
+    expect(await f.read()).toBe(before);
     if (scenario === "conflict") {
-      expect(await fs.readFile(f.file(resource), "utf8")).toBe('{"conflict":true}');
+      expect(await f.read(f.file(resource))).toBe('{"conflict":true}');
     }
   },
 );
@@ -254,54 +265,28 @@ it.each(["ambiguous", "missing", "event-log", "conflict", "live"])(
 it.each(["runtime", "doctor"])(
   "%s rejects an unclaimed legacy record whose raw key looks owner-qualified",
   async (boundary) => {
-    const target = { agentId: "work", sessionKey: "global" };
     const resource = resolveAcpxSessionResource(target);
     const f = await fixture("persistent", resource);
     f.claims.length = 0;
-    const before = await fs.readFile(f.sourcePath, "utf8");
+    const before = await f.read();
     if (boundary === "doctor") {
       expect(await acpxSessionOwnerMigration.detectLegacyState(f.input)).not.toBeNull();
-      expect((await acpxSessionOwnerMigration.migrateLegacyState(f.input)).warnings).toEqual([
+      expect((await f.migrate()).warnings).toEqual([
         expect.stringContaining("exactly one current owner claim is required"),
       ]);
     } else {
-      const runtime = new AcpxRuntime({
-        ...f.runtimeOptions,
-        openclawLegacyBareSessionKeys: new Set([resource]),
-      });
-      let adopted: Awaited<ReturnType<AcpxRuntime["ensureSession"]>> | undefined;
-      try {
-        await expect(
-          runtime
-            .ensureSession({ ...target, agent: "fixture", mode: "persistent" })
-            .then((handle) => {
-              adopted = handle;
-              return handle;
-            }),
-        ).rejects.toMatchObject({ detailCode: "SESSION_OWNER_MIGRATION_REQUIRED" });
-        await expect(runtime.prepareFreshSession(target)).rejects.toMatchObject({
-          detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
-        });
-      } finally {
-        if (adopted) {
-          await runtime.close({ handle: adopted, reason: "test-cleanup" });
-        }
-      }
+      await expectOwnerRejection(f.runtime([resource]), target);
     }
-    expect(await fs.readFile(f.sourcePath, "utf8")).toBe(before);
+    expect(await f.read()).toBe(before);
   },
 );
 
 it.each([false, true])(
   "recreates a deleted bare session with fresh history (new runtime: %s)",
   async (restart) => {
-    const target = { agentId: "work", sessionKey: "global" };
     const resource = resolveAcpxSessionResource(target);
     const f = await fixture("persistent", resource);
-    const runtime = new AcpxRuntime({
-      ...f.runtimeOptions,
-      openclawLegacyBareSessionKeys: new Set([resource]),
-    });
+    const runtime = f.runtime([resource]);
     await runtime.close({
       handle: { ...f.handle, ...target },
       reason: "session-delete",
@@ -312,39 +297,21 @@ it.each([false, true])(
       closedAt: expect.any(String),
       acpx: { reset_on_next_ensure: true },
     });
-    const recreatedRuntime = restart ? new AcpxRuntime(f.runtimeOptions) : runtime;
-    const fresh = await recreatedRuntime.ensureSession({
-      ...target,
-      agent: "fixture",
-      mode: "persistent",
-    });
-    try {
-      expect(fresh.backendSessionId).not.toBe(f.handle.backendSessionId);
-      const chunks: string[] = [];
-      for await (const event of recreatedRuntime.runTurn({
-        handle: fresh,
-        text: "recreated",
-        requestId: "after-delete",
-        mode: "prompt",
-      })) {
-        if (event.type === "text_delta") {
-          chunks.push(event.text);
-        }
-      }
-      expect(JSON.parse(chunks.join(""))).toMatchObject({ history: ["recreated"] });
-    } finally {
-      await recreatedRuntime.close({ handle: fresh, reason: "test-complete" });
-    }
+    const recreatedRuntime = restart ? f.runtime() : runtime;
+    const fresh = await recreatedRuntime.ensureSession(target);
+    const response = await runAndClose(recreatedRuntime, fresh, "recreated", "after-delete");
+    expect(fresh.backendSessionId).not.toBe(f.handle.backendSessionId);
+    expect(JSON.parse(response)).toMatchObject({ history: ["recreated"] });
   },
 );
 
 it("keeps oneshot physical IDs and bytes while repairing the canonical locator", async () => {
   const f = await fixture("oneshot");
-  const before = await fs.readFile(f.sourcePath, "utf8");
+  const before = await f.read();
   expect(f.handle.acpxRecordId).toMatch(/^global:oneshot:/);
-  expect((await acpxSessionOwnerMigration.migrateLegacyState(f.input)).warnings).toEqual([]);
+  expect((await f.migrate()).warnings).toEqual([]);
   await expectNoMigrationStaging(f.sourcePath);
-  expect(await fs.readFile(f.sourcePath, "utf8")).toBe(before);
+  expect(await f.read()).toBe(before);
   expect(f.claims[0]!.meta.identity?.acpxRecordId).toBe(f.handle.acpxRecordId);
   expect(decodeAcpxRuntimeHandleState(f.claims[0]!.meta.runtimeSessionName)?.name).toBe(
     resolveAcpxSessionResource(f.claims[0]!),
@@ -355,28 +322,13 @@ it("keeps oneshot physical IDs and bytes while repairing the canonical locator",
 it("requires repair when a bare backend locator belongs to an agent-qualified canonical key", async () => {
   const f = await fixture("persistent", "shared-project");
   f.claims[0]!.sessionKey = "agent:work:shared-project";
-  const runtime = new AcpxRuntime(f.runtimeOptions);
-  const target = {
+  const repairTarget = {
+    ...target,
     sessionKey: f.claims[0]!.sessionKey,
-    agentId: "work",
-    agent: "fixture",
-    mode: "persistent" as const,
     persistedHandle: f.handle,
   };
-  await expect(runtime.ensureSession(target)).rejects.toMatchObject({
-    detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
-  });
-  await expect(runtime.prepareFreshSession(target)).rejects.toMatchObject({
-    detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
-  });
-  expect(JSON.parse(await fs.readFile(f.sourcePath, "utf8"))).toEqual(f.raw);
-  expect((await acpxSessionOwnerMigration.migrateLegacyState(f.input)).warnings).toEqual([]);
-  await expectNoMigrationStaging(f.sourcePath);
-  const resource = resolveAcpxSessionResource(f.claims[0]!);
-  expect(resource).toBe(target.sessionKey);
-  expect(JSON.parse(await fs.readFile(f.file(resource), "utf8"))).toEqual({
-    ...f.raw,
-    acpx_record_id: resource,
-    name: resource,
-  });
+  await expectOwnerRejection(f.runtime(), repairTarget);
+  expect(JSON.parse(await f.read())).toEqual(f.raw);
+  expect((await f.migrate()).warnings).toEqual([]);
+  expect(await f.expectPublished()).toBe(repairTarget.sessionKey);
 });
