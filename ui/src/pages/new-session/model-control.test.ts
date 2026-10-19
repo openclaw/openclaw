@@ -146,9 +146,6 @@ it("renders an all-cold catalog as setup actions", async () => {
   await vi.waitFor(() => expect(find("model-catalog-state", "ready")).not.toBeNull());
   const container = draw();
   expect(container.querySelector("[data-chat-model-select]")?.textContent).toContain(luna.name);
-  expect(
-    control.modelUnavailableReason({ id: "main", model: { primary: "openai/gpt-5.6-luna" } }),
-  ).toBe("missing-auth");
   const options = [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
   expect(options).toHaveLength(2);
   expect(options[0]?.textContent).toContain("Sign-in needed");

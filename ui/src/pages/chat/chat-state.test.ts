@@ -54,7 +54,6 @@ import {
   refreshChatModelAuthStatus,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
-import { mutateChatRunState } from "./chat-state-render.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createSessionEventState, renderedTranscript } from "./chat-state.test-support.ts";
 import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
@@ -2161,7 +2160,10 @@ describe("chat state render lifecycle", () => {
     });
     flush();
     awaitDomCommit.mockClear();
-    mutateChatRunState(state!, () => (state!.chatStream = "queued stream"), "animation-frame");
+    chatRunPresentation(state!).batch(
+      () => (state!.chatStream = "queued stream"),
+      "animation-frame",
+    );
     expect(frames.size).toBe(1);
     controller.publishPendingRunState();
     controller.captureRenderChanges();
@@ -2212,13 +2214,9 @@ describe("chat state render lifecycle", () => {
     onTestFinished(dispose);
     flush();
     for (const text of ["A", "AB", "ABC"]) {
-      mutateChatRunState(
-        state,
-        () => {
-          state.chatStream = text;
-        },
-        "animation-frame",
-      );
+      chatRunPresentation(state).batch(() => {
+        state.chatStream = text;
+      }, "animation-frame");
       expect(state.chatStream).toBe(text);
       flush();
     }
@@ -2232,15 +2230,11 @@ describe("chat state render lifecycle", () => {
     state.chatMessage = "typing leaves the transcript alone";
     flush();
     expect(rendered).toHaveLength(2);
-    mutateChatRunState(
-      state,
-      () => {
-        state.chatStream = "ABCD";
-      },
-      "animation-frame",
-    );
+    chatRunPresentation(state).batch(() => {
+      state.chatStream = "ABCD";
+    }, "animation-frame");
     const superseded = frames.get(2)!;
-    mutateChatRunState(state, () => {
+    chatRunPresentation(state).batch(() => {
       state.chatStream = null;
       state.chatRunId = null;
     });
@@ -2265,7 +2259,7 @@ describe("chat state render lifecycle", () => {
     controller.attach(first);
     activity.mockClear();
     awaitDomCommit.mockClear();
-    mutateChatRunState(first, () => {
+    chatRunPresentation(first).batch(() => {
       first.chatRunId = "live-run";
       first.chatStream = "working";
     });

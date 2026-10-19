@@ -15,7 +15,6 @@ import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
-import { cancelChatStreamRenderFrame, publishChatRunState } from "./chat-state-render.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
@@ -201,7 +200,7 @@ export function createChatState<TState extends ChatPageHost>(
         releaseChatMediaResourceOwner(stateValue);
         attachmentReadsValue.abortReads();
         composerPersistence.stop();
-        cancelChatStreamRenderFrame(stateValue);
+        chatRunPresentation(stateValue).cancelFrame();
         cancelChatScroll(stateValue);
         stopChatRealtimeTalk(stateValue);
       }
@@ -308,15 +307,13 @@ export function createChatState<TState extends ChatPageHost>(
     publishPendingRunState() {
       const state = stateValue;
       if (state?.chatStreamRenderFrame != null) {
-        cancelChatStreamRenderFrame(state);
-        publishChatRunState(state);
+        chatRunPresentation(state).cancelFrame();
+        chatRunPresentation(state).publish();
       }
     },
 
-    captureRenderChanges() {
-      // Every owner-driven frame captures transcript changes before its DOM commit.
-      captureRenderLifecycleChanges();
-    },
+    // Every owner-driven frame captures transcript changes before its DOM commit.
+    captureRenderChanges: captureRenderLifecycleChanges,
   };
   return api;
 
@@ -589,7 +586,7 @@ export function createChatState<TState extends ChatPageHost>(
     if (state) {
       disposeSelectedSessionMessageSubscription(state);
       releaseChatMediaResourceOwner(state);
-      cancelChatStreamRenderFrame(state);
+      chatRunPresentation(state).cancelFrame();
       cancelChatScroll(state);
       invalidateImageLightbox(state);
       if (

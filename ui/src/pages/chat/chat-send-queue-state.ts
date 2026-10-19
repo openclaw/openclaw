@@ -55,7 +55,6 @@ import {
   prepareOutboxPayload,
   retireOutboxPayload,
 } from "./outbox-payloads.ts";
-import { controlUiNowMs } from "./performance.ts";
 import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
@@ -67,7 +66,7 @@ export function createPendingSendMessage(
   text: string,
   attachments?: ChatAttachment[],
   refreshSessions?: boolean,
-  submittedAtMs = controlUiNowMs(),
+  submittedAtMs = performance.now(),
   sendState?: ChatQueueItem["sendState"],
   replyToId?: string,
   resumedOrderKey?: number,

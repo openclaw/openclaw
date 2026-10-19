@@ -31,7 +31,6 @@ import {
   createEmptyDraftModelMetadata,
   isDraftAccountModelAvailable,
   resolveDraftModelControls,
-  resolveDraftModelUnavailableReason,
   resolveDraftModelSelectionBlockedReason,
   type NewSessionModelMetadata,
 } from "./model-target.ts";
@@ -419,15 +418,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       ...state,
       modelSelectionPolicy: this.metadataState.modelSelectionPolicy,
       catalogInitialized: this.metadataState.hasSnapshot && !this.metadataState.retired,
-    });
-  }
-
-  modelUnavailableReason(agent: GatewayAgentRow | undefined) {
-    return resolveDraftModelUnavailableReason({
-      model: this.effectiveModel,
-      agentRuntime: this.agentRuntime,
-      metadata: this.metadataState,
-      agent,
     });
   }
 
