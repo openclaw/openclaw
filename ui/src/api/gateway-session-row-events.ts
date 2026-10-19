@@ -75,7 +75,7 @@ function decodeRow(value: unknown, transaction: RowTransaction): unknown {
     (wire.agentId !== undefined && typeof wire.agentId !== "string") ||
     !validVersion(wire.version)
   ) {
-    throw new Error("invalid session row identity");
+    throw new Error("invalid session row");
   }
   const identity = sessionRowIdentity(wire.key, wire.agentId);
   let row: Record<string, unknown>;
@@ -90,7 +90,7 @@ function decodeRow(value: unknown, transaction: RowTransaction): unknown {
       "set" in wire ||
       "remove" in wire
     ) {
-      throw new Error("invalid full session row");
+      throw new Error("invalid session row");
     }
     row = full;
   } else {
@@ -114,7 +114,7 @@ function decodeRow(value: unknown, transaction: RowTransaction): unknown {
       (Object.hasOwn(set, "agentId") && set.agentId !== wire.agentId) ||
       "retain" in wire
     ) {
-      throw new Error("invalid session row patch or missing baseline");
+      throw new Error("invalid session row");
     }
     row = { ...previous.row, ...set };
     for (const field of wire.remove) {
@@ -148,15 +148,33 @@ export class GatewaySessionRowEvents {
       const ancestorSessions = Array.isArray(ancestors)
         ? ancestors.map((row) => decodeRow(row, transaction))
         : ancestors;
+      let envelope = payload;
+      if (Object.hasOwn(payload, "sessionFieldRefs")) {
+        const row = asNullableRecord(session);
+        if (!row || !Array.isArray(payload.sessionFieldRefs)) {
+          throw new Error("invalid session row");
+        }
+        const fields = Object.keys(row).toSorted();
+        const restored: Record<string, unknown> = Object.create(null);
+        for (const index of payload.sessionFieldRefs) {
+          const field = fields[index];
+          if (!Number.isInteger(index) || field === undefined || Object.hasOwn(payload, field)) {
+            throw new Error("invalid session row");
+          }
+          restored[field] = row[field];
+        }
+        envelope = { ...payload, ...restored };
+        delete envelope.sessionFieldRefs;
+      }
       transaction.commit();
       return {
         event:
-          session === payload.session && ancestorSessions === ancestors
+          session === payload.session && ancestorSessions === ancestors && envelope === payload
             ? event
             : {
                 ...event,
                 payload: {
-                  ...payload,
+                  ...envelope,
                   ...(Object.hasOwn(payload, "session") ? { session } : {}),
                   ...(Object.hasOwn(payload, "ancestorSessions") ? { ancestorSessions } : {}),
                 },

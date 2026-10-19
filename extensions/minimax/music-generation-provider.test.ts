@@ -90,6 +90,8 @@ describe("minimax music generation provider", () => {
   );
 
   it("streams generated music chunks from MiniMax", async () => {
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(1_700_000_000_000);
     const chunkA = Buffer.from("ID3\x04\x00mp3-a");
     const chunkB = Buffer.from("mp3-b");
     postJsonRequestMock.mockResolvedValue({

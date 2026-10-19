@@ -637,7 +637,11 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       apply({ type: "freeze" });
       setResult({ kind: "failed", code: "run_stalled" });
       detachUpstreamAbort();
-      abortInternally(createAbortError("Reply operation stalled"));
+      abortInternally(
+        Object.assign(createAbortError("Reply operation stalled"), {
+          code: "OPENCLAW_SESSION_WATCHDOG",
+        }),
+      );
       try {
         backend?.cancel("superseded");
       } finally {

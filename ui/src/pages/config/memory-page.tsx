@@ -19,7 +19,7 @@ import {
 } from "../../lib/plugins/index.ts";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
+import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t, getLocale, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { ControlUiSettingsPresentation } from "../../plugins/control-ui-settings-view.solid.tsx";
@@ -89,7 +89,6 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const gateway = projectGateway(application.gateway);
   const agentSelection = projectAgentSelection(application.settingsAgentSelection);
   const runtime = projectRuntimeConfig(application.runtimeConfig);
-  const agents = projectAgents(application.agents);
   const dreamingConfigOwner = createMemo(
     () => resolveConfiguredDreaming(currentConfigObject(runtime.read().state)).pluginId,
   );
@@ -111,13 +110,14 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   let settingsEpoch = 0;
   const settingsListeners = new Set<() => void>();
-  const [settingsRevision, setSettingsRevision] = createSignal(0, { ownedWrite: true });
-  function retireSettingsReads() {
-    settingsEpoch += 1;
-    setSettingsRevision(settingsEpoch);
+  function publishSettings() {
     for (const notify of settingsListeners) {
       notify();
     }
+  }
+  function retireSettingsReads() {
+    settingsEpoch += 1;
+    publishSettings();
   }
 
   const [support, setSupport] = createSignal<DreamingConfigPathSupport>("unknown");
@@ -208,11 +208,13 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       setCatalog({
         kind: "unavailable",
       });
+      onSettled(publishSettings);
       return;
     }
     setCatalog({
       kind: "loading",
     });
+    onSettled(publishSettings);
     setAddonNotices(
       (current) =>
         new Map([...current].filter(([, notice]) => notice.bootId && notice.bootId === bootId)),
@@ -254,6 +256,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       return;
     }
     setCatalog(nextCatalog);
+    onSettled(publishSettings);
   }
 
   function engineState(selection: MemoryEngineSelection): MemoryPluginState {
@@ -496,6 +499,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     () => {
       syncRouteAgent();
       syncCanonicalLocation();
+      publishSettings();
     },
   );
   onSettled(() => {
@@ -522,12 +526,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const currentEngineState = () => engineState(engineSelection());
   const agentId = () => agentSelection.read().state.selectedId;
   function readSettingsSnapshot(): ControlUiSettingsSnapshot {
-    // Track the projections, but read authority directly from each live owner.
-    agentSelection.read();
-    gateway.read();
-    runtime.read();
-    agents.read();
-    settingsRevision();
+    // Read authority directly from each live owner.
     const selection = resolveMemoryEngineSelection(
       currentConfigObject(application.runtimeConfig.state) ?? {},
     );
@@ -560,7 +559,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   function subscribeSettings(listener: () => void) {
     settingsListeners.add(listener);
     // The plugin bridge must retire its request scope synchronously, before a batched render.
-    const stops = [agentSelection, gateway, runtime, agents, i18n].map((source) =>
+    const stops = [agentSelection, gateway, runtime, application.agents, i18n].map((source) =>
       source.subscribe(listener),
     );
     return () => {
