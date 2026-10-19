@@ -138,6 +138,9 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const fsSafeWatchIoPath = fs.realpathSync(
     path.join(path.dirname(require.resolve("@openclaw/fs-safe/package.json")), "dist/watch-io.js"),
   );
+  const fsSafeWatchWorkerPath = fs.realpathSync(
+    path.join(path.dirname(fsSafeWatchIoPath), "watch-io-worker.js"),
+  );
   const [packageJsonPath, browsersJsonPath, , treeSitterWasmPath, bashWasmPath, photonWasmPath] =
     resolveWorkerDeployGeneratorInputs(rootDir);
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
@@ -207,6 +210,10 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         resolvedId = fs.realpathSync(path.resolve(id));
       } catch {
         return null;
+      }
+      if (resolvedId === fsSafeWatchWorkerPath) {
+        // This entry registers its message listener despite the dependency's sideEffects:false.
+        return { code, moduleSideEffects: "no-treeshake" };
       }
       if (resolvedId === sealedBootstrapPath) {
         const mode = 'configureFsSafeNative({ mode: "off" });';
