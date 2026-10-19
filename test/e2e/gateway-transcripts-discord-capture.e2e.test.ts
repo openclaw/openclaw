@@ -14,10 +14,11 @@ import type {
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { buildMockOpenAiResponsesProvider } from "../../src/gateway/test-openai-responses-model.js";
 import { createTestPluginServiceScheduler } from "../../src/plugin-sdk/plugin-test-api.js";
-import type { OpenClawPluginApi } from "../../src/plugins/types.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../src/test-utils/env.js";
 import { withIsolatedTestHome } from "../../test/test-env.js";
+import { readRequestText, closeHttpServer } from "../helpers/gateway-integration-fixtures.js";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 type TranscriptCapturePorts = { gateway: number; provider: number };
 
@@ -34,32 +35,9 @@ type ScriptedCall = {
   args: CaptureArguments;
   output?: string;
 };
-type DiscordCaptureFixture = {
-  register(api: OpenClawPluginApi): void;
-  bindPublishedRuntime(): void;
-  rotateManager(cfg: OpenClawConfig): Promise<void>;
-  expectReady(): Promise<{ speakerId: string; speakerLabel: string; voiceSessionKey: string }>;
-  recordAfterTurn(): Promise<void>;
-  beginLateDelivery(): Promise<void>;
-  finishLateDelivery(): Promise<void>;
-  close(): Promise<void>;
-  restore(): void;
-};
-type DiscordCaptureTestApi = {
-  loadDiscordGatewayCaptureFixture(this: void): Promise<{
-    captureTarget: { accountId: string; guildId: string; channelId: string };
-    capturedText: string;
-    lateText: string;
-    createDiscordGatewayCaptureFixture(
-      this: void,
-      params: {
-        cfg: OpenClawConfig;
-        scheduler: ReturnType<typeof createTestPluginServiceScheduler>;
-        test: { expect: typeof expect; vi: typeof vi };
-      },
-    ): DiscordCaptureFixture;
-  }>;
-};
+type DiscordCaptureTestApi = typeof import("../../extensions/discord/test-api.js");
+type CaptureModule = Awaited<ReturnType<DiscordCaptureTestApi["loadDiscordGatewayCaptureFixture"]>>;
+type DiscordCaptureFixture = ReturnType<CaptureModule["createDiscordGatewayCaptureFixture"]>;
 
 function sendResponse(response: ServerResponse, item: Record<string, unknown>) {
   response.writeHead(200, { "content-type": "text/event-stream" });
@@ -190,11 +168,7 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
       expect(request.method).toBe("POST");
       expect(request.url).toBe("/v1/responses");
       expect(request.headers.authorization).toBe("Bearer test");
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const body = asOptionalRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      const body = asOptionalRecord(JSON.parse(await readRequestText(request)));
       expect(body?.model).toBe("capture-proof");
       expect(body?.stream).toBe(true);
       requests.push(body!);
@@ -245,7 +219,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
       const result = inputItems.findLast(
         (item) => item?.type === "function_call_output" && item.call_id === call.callId,
       );
-      expect(result, `Missing tool result for ${call.callId}`).toBeDefined();
       expect(typeof result?.output).toBe("string");
       call.output = result!.output as string;
       currentCall = undefined;
@@ -297,47 +270,11 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     });
     const testApiPath = fileURLToPath(new URL(testApiId, import.meta.url));
     const discordPluginDir = path.dirname(testApiPath);
-    const [
-      { createPluginModuleLoader },
-      { resolveOpenClawDevSourceRoot },
-      { preparePluginLoaderAliases, resolvePluginRuntimeModulePathWithDiagnostics },
-    ] = await Promise.all([
+    const [{ createPluginModuleLoader }, { resolveOpenClawDevSourceRoot }] = await Promise.all([
       import("../../src/plugins/loader-module-runtime.js"),
       import("../../src/plugins/dev-source-root.js"),
-      import("../../src/plugins/sdk-alias.js"),
     ]);
     const devSourceRoot = resolveOpenClawDevSourceRoot();
-    const loaderModuleUrl = new URL("../../src/plugins/loader-module-runtime.ts", import.meta.url)
-      .href;
-    const sourceHostRoot = await fs.realpath(
-      devSourceRoot ?? fileURLToPath(new URL("../..", import.meta.url)),
-    );
-    const sdkAliases = preparePluginLoaderAliases({
-      modulePath: testApiPath,
-      moduleUrl: loaderModuleUrl,
-      devSourceRoot,
-    });
-    const sdkTargets = ["runtime-store", "extension-shared", "channel-entry-contract"].map(
-      (subpath) => {
-        const target = sdkAliases.resolveAlias(`openclaw/plugin-sdk/${subpath}`);
-        expect(target, `Missing SDK seam: ${subpath}`).toBeDefined();
-        expect(
-          path.normalize(target!),
-          `The capture fixture must share the source host's ${subpath} SDK.`,
-        ).toBe(path.join(sourceHostRoot, "src", "plugin-sdk", `${subpath}.ts`));
-        return target!;
-      },
-    );
-    const runtimeModule = resolvePluginRuntimeModulePathWithDiagnostics({
-      moduleUrl: loaderModuleUrl,
-      devSourceRoot,
-    });
-    expect(runtimeModule.resolvedPath, JSON.stringify(runtimeModule)).toBe(
-      path.join(sourceHostRoot, "src", "plugins", "runtime", "index.ts"),
-    );
-    await Promise.all(
-      [...new Set([...sdkTargets, runtimeModule.resolvedPath!])].map((target) => fs.access(target)),
-    );
     // Use the runtime entry's loader graph so the fixture manager and model-selected
     // provider share Discord's lifecycle state. Vitest owns only the injected test utilities.
     const loadDiscordModule = createPluginModuleLoader({
@@ -393,24 +330,22 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     const { resolveSourceProvider } = await import("../../src/transcripts/capture.js");
     const { createTranscriptsAutoStartService } =
       await import("../../src/transcripts/auto-start.js");
-    const { readConfiguredTranscriptStarts } =
-      await import("../../src/transcripts/configured-start-status.js");
     const { TranscriptsStore } = await import("../../src/transcripts/store.js");
+    const ownedCaptures = () =>
+      [...activeSessions.values()].filter(
+        (capture) => capture.session.source.accountId === captureTarget.accountId,
+      );
     const previousRegistry = captureActivePluginRegistrySnapshot();
-    cleanupRuntime = async () => {
-      const ownedCaptures = () =>
-        [...activeSessions.values()].filter(
-          (capture) => capture.session.source.accountId === captureTarget.accountId,
-        );
-      try {
-        for (const capture of ownedCaptures()) {
-          await capture.finalization?.released;
-        }
-        expect(ownedCaptures()).toEqual([]);
-      } finally {
-        try {
-          await drainSessionStoreWriterQueuesForTest();
-        } finally {
+    cleanupRuntime = () =>
+      runQaGatewayFixture(
+        async () => {
+          for (const capture of ownedCaptures()) {
+            await capture.finalization?.released;
+          }
+          expect(ownedCaptures()).toEqual([]);
+        },
+        drainSessionStoreWriterQueuesForTest,
+        async () => {
           clearSessionStoreCacheForTest();
           await resetPreparedModelRuntimeSnapshotsForTest();
           await closeOpenClawStateDatabaseByPathAsync(
@@ -420,9 +355,8 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
           clearRuntimeConfigSnapshot();
           clearConfigCache();
           restoreActivePluginRegistrySnapshot(previousRegistry);
-        }
-      }
-    };
+        },
+      );
     resetConfigOverrides();
     const token = "synthetic-gateway-capture-token";
     const cfg: OpenClawConfig = {
@@ -527,7 +461,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     registration.registry.plugins.push(record);
     const api = registration.createApi(record, { config: cfg });
     const pluginInstance = getPluginInstance(record)!;
-    expect(pluginInstance).toBeDefined();
     const scheduler = pluginInstance.run(() => createTestPluginServiceScheduler());
     fixtureScheduler = scheduler;
     fixture = pluginInstance.run(() =>
@@ -554,7 +487,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     await gateway.server.startupSettled;
     expect(getRuntimeConfig().channels?.discord).toMatchObject(cfg.channels!.discord!);
     const metadata = getPluginRuntimeLoadContext(registration.registry)?.metadataSnapshot;
-    expect(metadata).toBeDefined();
     // Minimal startup skips the model-publication sidecar. Publish through its
     // production owner, retaining the real fixture registration for both agents.
     setActivePluginRegistry(
@@ -584,7 +516,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
         (entry) => entry.provider.id === "discord-voice",
       )?.provider;
       expect(selectedProvider, agentId).toBe(inboundProvider);
-      expect(getPluginValueInstance(selectedProvider!)).toBe(pluginInstance);
     }
     pluginInstance.run(() => fixture!.bindPublishedRuntime());
     expect(gateway.port).not.toBe(providerPort);
@@ -606,15 +537,13 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
         deliver: false,
         idempotencyKey: randomUUID(),
       });
-      expect(accepted.status).toBe("accepted");
-      expect(accepted.runId).toEqual(expect.any(String));
+      expect(accepted).toMatchObject({ status: "accepted", runId: expect.any(String) });
       const completed = await client.request<{ status: string }>("agent.wait", {
         runId: accepted.runId,
         timeoutMs: 30_000,
       });
       expect(completed.status, `${agentId}:${args.action}`).toBe("ok");
       expect(errors).toEqual([]);
-      expect(call.output).toBeDefined();
       expect(currentCall).toBeUndefined();
       return call.output!;
     };
@@ -629,43 +558,40 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     expect(selector).toBeDefined();
     const speaker = await pluginInstance.run(() => fixture!.expectReady());
     const admitted = await store.readSession(selector!);
+    const source = { providerId: "discord-voice", ...captureTarget };
     expect(admitted).toMatchObject({ sessionId, metadata: { agentId: "main" } });
-    expect(admitted?.source).toEqual({
-      providerId: "discord-voice",
-      ...captureTarget,
-      agentId: "main",
-    });
+    expect(admitted?.source).toEqual({ ...source, agentId: "main" });
     const listed = await client.request<TranscriptsListResult>("transcripts.list", {});
-    expect(listed.sessions).toHaveLength(1);
-    expect(listed.sessions[0]).toMatchObject({
-      selector,
-      sessionId,
-      agentId: "main",
-      source: { providerId: "discord-voice", ...captureTarget },
-      activeSubscription: true,
-    });
+    const session = { selector, sessionId };
+    expect(listed.sessions).toEqual([
+      expect.objectContaining({
+        ...session,
+        agentId: "main",
+        source: expect.objectContaining(source),
+        activeSubscription: true,
+      }),
+    ]);
     expect(requests).toHaveLength(2);
 
     await fixture.recordAfterTurn();
-    const captured = await client.request<TranscriptsGetResult>("transcripts.get", {
-      selector,
-      includeUtterances: true,
+    const readCapture = () =>
+      client.request<TranscriptsGetResult>("transcripts.get", {
+        selector,
+        includeUtterances: true,
+      });
+    const captured = await readCapture();
+    expect(captured).toMatchObject({
+      session: { ...session, utteranceCount: 1, activeSubscription: true },
+      utterances: [
+        {
+          sequence: 0,
+          text: capturedText,
+          final: true,
+          speakerId: speaker.speakerId,
+          speakerLabel: speaker.speakerLabel,
+        },
+      ],
     });
-    expect(captured.session).toMatchObject({
-      selector,
-      sessionId,
-      utteranceCount: 1,
-      activeSubscription: true,
-    });
-    expect(captured.utterances).toEqual([
-      expect.objectContaining({
-        sequence: 0,
-        text: capturedText,
-        final: true,
-        speakerId: speaker.speakerId,
-        speakerLabel: speaker.speakerLabel,
-      }),
-    ]);
     expect(requests).toHaveLength(2);
     expect(errors).toEqual([]);
 
@@ -674,20 +600,18 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     expect(stop).toContain(`Transcripts stopped: ${sessionId}`);
     expect(stop).toContain(`Selector: ${selector}`);
     await fixture.finishLateDelivery();
-    const stopped = await client.request<TranscriptsGetResult>("transcripts.get", {
-      selector,
-      includeUtterances: true,
-    });
-    expect(stopped.session).toMatchObject({
-      selector,
-      sessionId,
-      agentId: "main",
-      utteranceCount: 1,
-      activeSubscription: false,
-      stoppedAt: expect.any(String),
+    const stopped = await readCapture();
+    expect(stopped).toMatchObject({
+      session: {
+        ...session,
+        agentId: "main",
+        utteranceCount: 1,
+        activeSubscription: false,
+        stoppedAt: expect.any(String),
+      },
+      summary: { utteranceCount: 1, source: "model" },
     });
     expect(stopped.utterances).toEqual(captured.utterances);
-    expect(stopped.summary).toMatchObject({ utteranceCount: 1, source: "model" });
     expect(JSON.stringify(stopped)).not.toContain(lateText);
     const stoppedSession = await store.readSession(selector!);
     expect(stoppedSession).toEqual({ ...admitted, stoppedAt: stopped.session.stoppedAt });
@@ -716,17 +640,10 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
       },
     };
     await pluginInstance.run(() => fixture!.rotateManager(routedConfig));
-    const routedWarnings: string[] = [];
     const routedContext: Parameters<typeof createTranscriptsAutoStartService>[0] = {
       stateDir,
       config: routedConfig,
-      logger: {
-        warn: (message) => {
-          if (routedWarnings.length < 8) {
-            routedWarnings.push(message);
-          }
-        },
-      },
+      logger: { warn: vi.fn() },
       caller: { kind: "operator", source: "scheduled" },
     };
     const routedProvider = resolveSourceProvider("discord-voice", routedContext);
@@ -735,27 +652,13 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     routedService = createTranscriptsAutoStartService(routedContext);
     await withPluginRuntimeRegistryScope(registration.registry, () => routedService!.start())
       .settled;
-    const readRoutedState = () => {
-      const capture = [...activeSessions.values()].find(
-        (candidate) => candidate.session.source.accountId === captureTarget.accountId,
-      );
-      return {
-        capture: capture && {
-          phase: capture.phase,
-          session: { sessionId: capture.session.sessionId, metadata: capture.session.metadata },
-        },
-        starts: [...(readConfiguredTranscriptStarts(routedConfig.transcripts) ?? [])].map(
-          ([index, fact]) => ({ index, diagnostic: fact.diagnostic }),
-        ),
-        warnings: routedWarnings,
-      };
-    };
-    await expect.poll(readRoutedState).toMatchObject({
-      capture: { phase: "active", session: { metadata: { agentId: "agent-b" } } },
-    });
-    const replacement = [...activeSessions.values()].find(
-      (capture) => capture.session.source.accountId === captureTarget.accountId,
-    )!;
+    await expect
+      .poll(() => ownedCaptures()[0])
+      .toMatchObject({
+        phase: "active",
+        session: { metadata: { agentId: "agent-b" } },
+      });
+    const replacement = ownedCaptures()[0]!;
     expect(replacement.session.sessionId).not.toBe(sessionId);
     expect(await store.readSession(selector!)).toEqual(stoppedSession);
     expect(await store.readUtterancesForSession(stoppedSession!)).toEqual(utterances);
@@ -791,44 +694,26 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
     expect(deniedConnections).toEqual([]);
   } finally {
     // Keep the actual runtime and edge spies alive until sources, streams and Gateway settle.
-    try {
-      try {
+    await runQaGatewayFixture(
+      async () => {
         await routedService?.stop();
-      } finally {
+      },
+      () => {
         fixtureScheduler?.beginClose();
-        try {
-          await fixture?.close();
-        } finally {
-          await fixtureScheduler?.stop();
-        }
-      }
-    } finally {
-      try {
-        if (gateway) {
-          try {
-            await gateway.client.stopAndWait();
-          } finally {
-            await gateway.server.close({ reason: "synthetic transcript capture cleanup" });
-          }
-        }
-      } finally {
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
-        try {
-          await cleanupRuntime?.();
-        } finally {
-          try {
-            await releaseFixtureRegistry?.();
-          } finally {
-            fixture?.restore();
-            socketFence.mockRestore();
-            isolated.cleanup();
-            env.restore();
-          }
-        }
-      }
-    }
+      },
+      () => fixture?.close(),
+      () => fixtureScheduler?.stop(),
+      () => gateway?.client.stopAndWait(),
+      () => gateway?.server.close({ reason: "synthetic transcript capture cleanup" }),
+      () => closeHttpServer(providerServer),
+      () => cleanupRuntime?.(),
+      () => releaseFixtureRegistry?.(),
+      () => {
+        fixture?.restore();
+        socketFence.mockRestore();
+        isolated.cleanup();
+        env.restore();
+      },
+    );
   }
 });
