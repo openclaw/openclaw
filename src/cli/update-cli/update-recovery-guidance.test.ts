@@ -179,6 +179,36 @@ describe("update recovery reporting", () => {
     }
   });
 
+  it.each(["not-needed", "not-attempted", "succeeded", "failed"] as const)(
+    "preserves the recorded %s rollback outcome after installed-runtime recovery admission",
+    (status) => {
+      const action = resolveUpdateResultNextAction({
+        result: failure({
+          recovery: { serviceRestartSafe: true, version: "2.0.0", service: "healthy" },
+          rollbackOutcome: { status, reason: "recorded rollback detail" },
+          steps: [
+            {
+              name: "installed gateway recovery admission",
+              command: "admit installed gateway recovery",
+              cwd: "/fixture",
+              durationMs: 0,
+              exitCode: 0,
+            },
+          ],
+        }),
+        env: {},
+      });
+      expect(action).toContain("installed Gateway is healthy");
+      if (status === "not-attempted" || status === "failed") {
+        expect(action).toContain(
+          `Rollback ${status === "failed" ? "failed" : "not attempted"}: recorded rollback detail.`,
+        );
+      } else {
+        expect(action).not.toContain("Rollback");
+      }
+    },
+  );
+
   it("keeps healthy previous-generation rollback guidance distinct from migrated candidate recovery", () => {
     const action = resolveUpdateResultNextAction({
       result: failure({

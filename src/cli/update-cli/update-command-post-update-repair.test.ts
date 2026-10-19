@@ -150,7 +150,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const fixture = () => createPostUpdateRepairFixture(dirs.make("post-update-repair-"));
+const fixture = (profile?: string) =>
+  createPostUpdateRepairFixture(dirs.make("post-update-repair-"), profile);
 
 describe("post-activation failure settlement without inference", () => {
   beforeEach(async () => {
@@ -671,7 +672,7 @@ describe("post-activation failure settlement without inference", () => {
   ] as const)(
     "recovers the installed Gateway only for an owned stop and settled Doctor (%s)",
     async (receipt) => {
-      const params = fixture();
+      const params = fixture("work");
       const swap =
         receipt === "migration-verified"
           ? await createRetainedPackageSwap(params.opts.run!.env!.OPENCLAW_STATE_DIR!)
@@ -698,7 +699,6 @@ describe("post-activation failure settlement without inference", () => {
         receipt === "migration-verified" ||
         receipt === "current-core-parked" ||
         receipt === "current-core-rollback-refused";
-      params.opts.run!.env!.OPENCLAW_PROFILE = recovered ? "work" : undefined;
       let agentVersion = receipt === "migration-verified" ? 23 : 21;
       const doctor = vi.spyOn(freshDoctor, "runUpdateFinalizationDoctorInFreshProcess");
       if (migration) {
@@ -986,8 +986,8 @@ describe("post-activation failure settlement without inference", () => {
         }
       }
       if (migration && !recovered) {
-        expect(rendered).toContain("openclaw doctor --fix");
-        expect(rendered).toContain("openclaw gateway start");
+        expect(rendered).toContain("openclaw --profile work doctor --fix");
+        expect(rendered).toContain("openclaw --profile work gateway start");
       }
       if (recovered) {
         expect(rendered).toContain("openclaw --profile work update repair");
