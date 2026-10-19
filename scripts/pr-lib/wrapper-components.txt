@@ -2606,3 +2606,5 @@ src/agents/run-termination.ts
 src/config/sessions/session-run-lifecycle-projection.ts
 src/shared/agent-liveness.ts
 src/agents/agent-bundle-mcp-manager-catalog.ts
+src/agents/agent-bundle-mcp-runtime-owner.ts
+src/agents/agent-bundle-mcp-runtime-shared.ts
