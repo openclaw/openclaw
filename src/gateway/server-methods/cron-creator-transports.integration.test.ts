@@ -449,7 +449,9 @@ it.each([
           expect(before).toMatchObject([
             {
               name: "Live creator",
-              ...ownedJob,
+              owner: ownedJob.owner,
+              scheduledToolPolicy: ownedJob.scheduledToolPolicy,
+              ...(origin === "local" ? {} : { createdActor: CREATOR }),
               sessionKey: SESSION,
               sessionTarget: "current",
               payload: {
@@ -463,6 +465,10 @@ it.each([
               },
             },
           ]);
+          if (origin === "local") {
+            // This fixture has local authority without a current operator profile.
+            expect(before[0]).not.toHaveProperty("createdActor");
+          }
           expect(before[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
           expect(before[0]?.runtimeAuthority).toBeUndefined();
           await fixture.rejectMutation(

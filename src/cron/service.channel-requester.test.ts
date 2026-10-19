@@ -212,6 +212,46 @@ it("rejects a minted requester token at commit after its MCP capture is deactiva
   }
 });
 
+it("binds legacy requester provenance without replacing the executable definition", async () => {
+  const created = await cron.add(requesterDeclaration(), {
+    scheduledToolPolicy: requesterPolicy,
+    createdActor: { type: "human", source: "channel", id: "historical-creator" },
+    toolsAllowProvenance: {
+      version: 1,
+      source: "final-executable-surface",
+      callerOrigin: { kind: "unknown" },
+    },
+  });
+  const before = (await readJob())!;
+  await cron.updateWithPrecondition(created.id, {}, () => {}, {
+    reauthorizeChannelRequester: true,
+    toolsAllowProvenance: {
+      version: 1,
+      source: "authenticated-requester",
+      callerOrigin: { kind: "external", channel: "discord" },
+      channelRequester,
+    },
+  });
+  const after = (await readJob())!;
+  const {
+    toolsAllowProvenance: _beforeProvenance,
+    updatedAtMs: _beforeTime,
+    ...beforeDefinition
+  } = before;
+  const {
+    toolsAllowProvenance: _afterProvenance,
+    updatedAtMs: _afterTime,
+    ...afterDefinition
+  } = after;
+  expect(afterDefinition).toEqual(beforeDefinition);
+  expect(after.toolsAllowProvenance).toEqual({
+    version: 1,
+    source: "final-executable-surface",
+    callerOrigin: { kind: "external", channel: "discord" },
+    channelRequester,
+  });
+});
+
 it("persists and rebinds a finite authenticated requester cap", async () => {
   const created = await cron.add(requesterDeclaration(), {
     scheduledToolPolicy: requesterPolicy,

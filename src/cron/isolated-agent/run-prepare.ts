@@ -11,7 +11,6 @@ import {
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -22,6 +21,7 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronCreatorSandbox } from "../creator-sandbox.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
@@ -227,7 +227,10 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
 
   async function prepareAdmittedSession() {
     const now = Date.now();
-    const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
+    const { sandbox, assertCurrent: assertCreatorCurrent } = await resolveCronCreatorSandbox(
+      runtimeCfg,
+      input.job,
+    );
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
     const cronSession = await prepareCronSession({
       cfg: runtimeCfg,
@@ -291,7 +294,11 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       });
       workspaceLease = selectedWorkspace.lease;
       const workspaceDir = selectedWorkspace.workspaceDir;
-      const persistCronSessionRow = createCronSessionRowWriter({ agentId, agentSessionKey });
+      const persistCronSessionRow = createCronSessionRowWriter({
+        agentId,
+        agentSessionKey,
+        assertCurrent: assertCreatorCurrent,
+      });
       const persistSessionEntry = createPersistCronSessionEntry({
         cronSession,
         agentSessionKey,
@@ -656,6 +663,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
               : undefined,
           cronSession,
           sessionPreparationEffect,
+          assertCreatorCurrent,
           persistSessionEntry,
           preRunSessionPersisted,
           runContinuationSession,

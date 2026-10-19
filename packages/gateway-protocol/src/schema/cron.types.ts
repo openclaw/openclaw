@@ -19,6 +19,7 @@ import type {
   CronScratchSetResultSchema,
   CronStatusParamsSchema,
   CronUpdateParamsSchema,
+  CronReauthorizeChannelRequesterParamsSchema,
 } from "./cron.js";
 
 export type CronJob = Static<typeof CronJobSchema>;
@@ -66,3 +67,7 @@ export type CronScratchGetResult = Static<typeof CronScratchGetResultSchema>;
 export type CronScratchSetParams = Static<typeof CronScratchSetParamsSchema>;
 export type CronScratchSetResult = Static<typeof CronScratchSetResultSchema>;
 export type CronRunLogEntry = Static<typeof CronRunLogEntrySchema>;
+
+export type CronReauthorizeChannelRequesterParams = Static<
+  typeof CronReauthorizeChannelRequesterParamsSchema
+>;

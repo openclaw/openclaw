@@ -1,5 +1,10 @@
 import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
-import { cronListShareKey, modelsListShareKey, operatorReadShareKey } from "./read-share-keys.js";
+import {
+  CRON_LIST_READ_POLICY,
+  CRON_STATUS_READ_POLICY,
+  modelsListShareKey,
+  operatorReadShareKey,
+} from "./read-share-keys.js";
 
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
 const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
@@ -307,31 +312,18 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["node.invoke.result", "nodes", "node", "<=2026.7"],
   ["node.event", "nodes", "node", "<=2026.7"],
   ["cron.get", "cron", "operator.read", "<=2026.7"],
-  [
-    "cron.list",
-    "cron",
-    "operator.read",
-    "<=2026.7",
-    {
-      shareKey: cronListShareKey,
-      shareMaxAgeMs: 1_000,
-      shareInvalidationEvents: ["cron", "sessions.changed"],
-    },
-  ],
-  [
-    "cron.status",
-    "cron",
-    "operator.read",
-    "<=2026.7",
-    {
-      shareKey: operatorReadShareKey,
-      shareMaxAgeMs: 1_000,
-      shareInvalidationEvents: ["cron"],
-    },
-  ],
+  ["cron.list", "cron", "operator.read", "<=2026.7", CRON_LIST_READ_POLICY],
+  ["cron.status", "cron", "operator.read", "<=2026.7", CRON_STATUS_READ_POLICY],
   ["cron.scratch.get", "cron", "operator.admin", "2026.7"],
   ["cron.scratch.set", "cron", "operator.admin", "2026.7"],
   ["cron.add", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  [
+    "cron.reauthorizeChannelRequester",
+    "cron",
+    "operator.admin",
+    "2026.10",
+    { ...CONTROL_PLANE_WRITE, ...PROFILE_DEPENDENT },
+  ],
   ["cron.update", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["cron.remove", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["cron.run", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],

@@ -623,6 +623,16 @@ export const CronUpdateParamsSchema = cronIdOrJobIdParams({
   expectedConfigRevision: Type.Optional(CronConfigRevisionSchema),
 });
 
+/** Administrator attestation of the exact durable channel requester for an existing job. */
+export const CronReauthorizeChannelRequesterParamsSchema = closedObject({
+  id: NonEmptyString,
+  channel: NonEmptyString,
+  accountId: NonEmptyString,
+  senderId: NonEmptyString,
+  expectedProfileId: NonEmptyString,
+  expectedConfigRevision: CronConfigRevisionSchema,
+});
+
 /** Removes a cron job by id or legacy jobId alias. */
 export const CronRemoveParamsSchema = cronIdOrJobIdParams({
   /** Rejects removal when the current definition differs from the caller's token. */

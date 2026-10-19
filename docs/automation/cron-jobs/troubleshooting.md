@@ -65,3 +65,25 @@ openclaw doctor
 
   </Accordion>
 </AccordionGroup>
+
+### Reauthorize a legacy channel creator
+
+Legacy channel-created jobs without an authenticated requester binding fail closed.
+This applies to script payloads and trigger scripts as well as agent turns. Scripts
+retain the current requester's identity and role checks through tool execution and
+honor required creator-role sandboxes even when agent sandboxing is off.
+An explicitly authenticated local creator uses the current operator profile;
+a reused session's historical channel actor does not require channel reauthorization.
+An authenticated Gateway administrator can explicitly attest the original requester
+with `cron.reauthorizeChannelRequester`. First verify the durable channel identity
+link with `users.listChannelIdentities` and read the job with `cron.get`.
+Supply `id`, the exact `channel`, `accountId`, and `senderId`, the canonical
+`expectedProfileId`, and the job's `expectedConfigRevision` from that read.
+The channel and account must match the original job's recorded scope. A missing,
+revoked, or relinked identity, changed administrator authority, or stale job revision
+rejects the operation; verify the current facts before retrying.
+
+This operation changes only the authenticated requester provenance. It preserves
+the original job, creator history, schedule, payload, scope, and tool allowances.
+It never derives identity from the administrator's session or delivery target,
+and no automatic live migration occurs.

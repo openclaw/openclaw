@@ -551,6 +551,7 @@ export {
   CronDeclarativeAddResultSchema,
   CronDeliveryPreviewSchema,
   CronUpdateParamsSchema,
+  CronReauthorizeChannelRequesterParamsSchema,
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,

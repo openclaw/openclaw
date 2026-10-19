@@ -2,6 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -14,8 +18,19 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import {
+  linkUserChannelIdentity,
+  unlinkUserChannelIdentity,
+} from "../../state/user-channel-identities.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
+  loadRunCronIsolatedAgentTurn,
+  mockRunCronFallbackPassthrough,
+  ensureAgentWorkspaceMock,
+  runEmbeddedAgentMock,
   loadSessionEntryMock,
   patchSessionEntryMock,
   resetRunCronIsolatedAgentTurnHarness,
@@ -40,6 +55,251 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("cron session preparation", () => {
+  it.each([
+    "linked",
+    "local",
+    "historical-actor",
+    "canonical-historical-actor",
+    "wrong-channel",
+    "legacy-unbound",
+    "unlinked",
+    "wrong-account",
+    "malformed",
+  ] as const)("prepares creator identity fail-closed: %s", async (kind) => {
+    resetRunCronIsolatedAgentTurnHarness();
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-channel-creator-"));
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+    const profile = ensureProfileForEmail("creator@example.test");
+    if (kind !== "unlinked") {
+      linkUserChannelIdentity(profile.id, {
+        channelId: "slack",
+        accountId: "work",
+        senderId: "U-LEGACY-CREATOR",
+      });
+    }
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    const boundary = new Error("session preparation reached");
+    resolveCronSessionMock.mockRejectedValue(boundary);
+    const sessionKey = "agent:main:source";
+    const preparation = prepareCronRunContext({
+      input: makeIsolatedAgentParamsFixture({
+        agentId: "main",
+        cfg: {
+          session: { store: database.path },
+          gateway: {
+            roles: {
+              default: "guest",
+              definitions: {
+                guest: {
+                  sessions: { others: "none" },
+                  agents: "*",
+                  scopes: [],
+                  sandbox: "required",
+                },
+              },
+            },
+          },
+        },
+        sessionKey,
+        job: makeIsolatedAgentJobFixture({
+          createdActor: {
+            type: "human",
+            source: kind === "canonical-historical-actor" ? "profile" : "channel",
+            // A shared main session may retain a previous person's actor.
+            id:
+              kind === "canonical-historical-actor"
+                ? "different-historical-profile"
+                : kind === "historical-actor"
+                  ? "U-PREVIOUS-PERSON"
+                  : "U-LEGACY-CREATOR",
+          },
+          owner: {
+            agentId: "main",
+            sessionKey,
+            accountId: kind === "wrong-account" ? "other" : "work",
+          },
+          scheduledToolPolicy: {
+            version: 1,
+            mode: "account",
+            ownerSessionKey: sessionKey,
+            ownerAccountId: "work",
+          },
+          toolsAllowProvenance: {
+            version: 1,
+            source: "final-executable-surface",
+            callerOrigin:
+              kind === "local"
+                ? { kind: "local" }
+                : {
+                    kind: "external",
+                    channel: kind === "wrong-channel" ? "discord" : "slack",
+                  },
+            ...(kind === "legacy-unbound" || kind === "local"
+              ? {}
+              : {
+                  channelRequester: {
+                    version: 1,
+                    channel: "slack",
+                    accountId: "work",
+                    senderId: kind === "malformed" ? "" : "U-LEGACY-CREATOR",
+                  },
+                }),
+          },
+          payload: { kind: "agentTurn", message: "test", toolsAllow: ["read"] },
+          delivery: { mode: "none" },
+        }),
+      }),
+      isFastTestEnv: true,
+      onLifecycleInterrupt: () => {},
+    });
+    if (
+      kind === "linked" ||
+      kind === "local" ||
+      kind === "historical-actor" ||
+      kind === "canonical-historical-actor"
+    ) {
+      await expect(preparation).rejects.toBe(boundary);
+    } else {
+      await expect(preparation).rejects.toThrow(/reauthoriz/i);
+      expect(resolveCronSessionMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["unchanged", "revoked", "relinked", "role", "config", "profile-role"] as const)(
+    "checks creator authority before session persistence and runner launch: %s",
+    async (change) => {
+      resetRunCronIsolatedAgentTurnHarness();
+      mockRunCronFallbackPassthrough();
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-launch-authority-"));
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+      resolveCronSessionMock.mockImplementation(actualSession.prepareCronSession);
+      loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
+      patchSessionEntryMock.mockImplementation(actualAccessor.patchSessionEntryCore);
+      const profile = ensureProfileForEmail("requester@example.test");
+      const identity = { channelId: "slack", accountId: "default", senderId: "U-REQUESTER" };
+      if (change !== "profile-role") {
+        linkUserChannelIdentity(profile.id, identity);
+      }
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      ensureAgentWorkspaceMock.mockImplementationOnce(async () => {
+        if (change === "revoked" || change === "relinked") {
+          unlinkUserChannelIdentity(profile.id, identity);
+          if (change === "relinked") {
+            linkUserChannelIdentity(profile.id, identity);
+          }
+        } else if (change === "role" || change === "profile-role") {
+          setUserProfileRole(profile.id, "restricted");
+        } else if (change === "config") {
+          const current = getRuntimeConfigSnapshot()!;
+          setRuntimeConfigSnapshot({
+            ...current,
+            gateway: {
+              ...current.gateway,
+              roles: {
+                default: "restricted",
+                definitions: {
+                  restricted: {
+                    sessions: { others: "none" },
+                    agents: "*",
+                    scopes: [],
+                    sandbox: "required",
+                  },
+                },
+              },
+            },
+          });
+        }
+        return { dir: "/tmp/workspace" };
+      });
+      const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+      const run = runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          agentId: "main",
+          cfg: {
+            session: { store: database.path },
+            gateway: {
+              roles: {
+                default: "guest",
+                definitions: {
+                  guest: {
+                    sessions: { others: "none" },
+                    agents: "*",
+                    scopes: [],
+                    sandbox: change === "unchanged" ? "required" : undefined,
+                  },
+                  restricted: {
+                    sessions: { others: "none" },
+                    agents: "*",
+                    scopes: [],
+                    sandbox: "required",
+                  },
+                },
+              },
+            },
+          },
+          job: makeIsolatedAgentJobFixture({
+            createdActor:
+              change === "profile-role"
+                ? { type: "human", source: "profile", id: profile.id }
+                : { type: "human", source: "channel", id: "U-HISTORICAL-PERSON" },
+            owner: { agentId: "main", sessionKey: "agent:main:source", accountId: "default" },
+            scheduledToolPolicy: {
+              version: 1,
+              mode: "account",
+              ownerSessionKey: "agent:main:source",
+              ownerAccountId: "default",
+            },
+            toolsAllowProvenance:
+              change === "profile-role"
+                ? undefined
+                : {
+                    version: 1,
+                    source: "final-executable-surface",
+                    callerOrigin: { kind: "external", channel: "slack" },
+                    channelRequester: {
+                      version: 1,
+                      channel: "slack",
+                      accountId: "default",
+                      senderId: "U-REQUESTER",
+                    },
+                  },
+            payload: { kind: "agentTurn", message: "test", toolsAllow: ["read"] },
+            delivery: { mode: "none" },
+          }),
+        }),
+      );
+      if (change === "unchanged") {
+        const result = await run;
+        expect(result.status).toBe("ok");
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        expect(runEmbeddedAgentMock.mock.calls[0]?.[0].execSession).toMatchObject({
+          sandbox: "required",
+          createdActor: { type: "human", source: "channel", id: "U-HISTORICAL-PERSON" },
+        });
+      } else {
+        const result = await run;
+        expect(result).toMatchObject({
+          status: "error",
+          admissionDisposition: "rejected",
+          executionStarted: false,
+          error: expect.stringContaining(
+            change === "profile-role" ? "Retry the run" : "cron.reauthorizeChannelRequester",
+          ),
+        });
+        if (change === "profile-role") {
+          expect(result.error).not.toContain("cron.reauthorizeChannelRequester");
+        }
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+        expect(
+          actualAccessor.loadSessionEntry({
+            storePath: database.path,
+            sessionKey: "agent:main:cron:test",
+          }),
+        ).toBeUndefined();
+      }
+    },
+  );
+
   it.each(["unchanged", "workspace"] as const)(
     "revalidates %s authority across absent-field snapshot representations",
     async (change) => {

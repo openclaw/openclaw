@@ -15,6 +15,12 @@ import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import {
   readCronRunHistoryPageForTests,
   readCronRunRecordsForTests,
 } from "../run-history.test-support.js";
@@ -53,7 +59,9 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
 
@@ -106,6 +114,18 @@ describe("scheduled account policy outcomes", () => {
       callerOrigin,
     }) => {
       const { storePath } = fixtures.makeStorePath();
+      vi.stubEnv(
+        "OPENCLAW_STATE_DIR",
+        path.join(path.dirname(storePath), `${path.basename(storePath)}-state`),
+      );
+      if (callerOrigin?.kind === "external" && callerOrigin.channel === "whatsapp") {
+        const profile = ensureProfileForEmail("account-requester@example.test");
+        linkUserChannelIdentity(profile.id, {
+          channelId: "whatsapp",
+          accountId: "work",
+          senderId: "sender",
+        });
+      }
       const sessionRoot = path.join(
         path.dirname(storePath),
         path.basename(storePath, ".jobs.json"),
@@ -142,6 +162,16 @@ describe("scheduled account policy outcomes", () => {
                 version: 1,
                 source: "final-executable-surface",
                 callerOrigin,
+                ...(callerOrigin.kind === "external" && callerOrigin.channel === "whatsapp"
+                  ? {
+                      channelRequester: {
+                        version: 1 as const,
+                        channel: "whatsapp",
+                        accountId: "work",
+                        senderId: "sender",
+                      },
+                    }
+                  : {}),
               },
             }
           : {}),

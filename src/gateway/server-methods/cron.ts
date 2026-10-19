@@ -74,6 +74,7 @@ import {
   scopedCronJobHandler,
 } from "./cron-job-access.js";
 import { cronListHandler } from "./cron-list.js";
+import { cronReauthorizeChannelRequesterHandler } from "./cron-reauthorize-channel-requester.js";
 import { respondCronJobConfigRevisionConflict } from "./cron-revision-error.js";
 import { cronRunsHandler } from "./cron-runs.js";
 import { cronScratchHandlers } from "./cron-scratch.js";
@@ -260,6 +261,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
+  "cron.reauthorizeChannelRequester": cronReauthorizeChannelRequesterHandler,
   "cron.update": async ({
     params,
     respond,

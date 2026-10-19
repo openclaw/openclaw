@@ -62,10 +62,15 @@ async function loadSessionAccessorRuntime() {
 export function createCronSessionRowWriter(params: {
   agentId: string;
   agentSessionKey: string;
+  assertCurrent?: () => void;
 }): CronSessionRowWriter {
   const { agentId, agentSessionKey } = params;
   let baseSessionMaintenanceStarted = false;
   return async ({ storePath, sessionKey, operation, resetBoundary, assertCommitAllowed }) => {
+    const assertWriteCurrent = () => {
+      params.assertCurrent?.();
+      assertCommitAllowed?.();
+    };
     if (resetBoundary) {
       const [{ applySessionEntryLifecycleMutation }, { projectCronSessionEntry }] =
         await Promise.all([
@@ -76,6 +81,7 @@ export function createCronSessionRowWriter(params: {
       await applySessionEntryLifecycleMutation({
         activeSessionKey: sessionKey,
         agentId,
+        commitGuard: assertWriteCurrent,
         storePath,
         upserts: [
           {
@@ -96,7 +102,7 @@ export function createCronSessionRowWriter(params: {
       replaceEntry: true,
       // The maintenance owner follows later writes through its receipt subscription.
       skipMaintenance: baseSessionMaintenanceStarted || sessionKey !== agentSessionKey,
-      workerGuard: { assertCurrent: assertCommitAllowed },
+      workerGuard: { assertCurrent: assertWriteCurrent },
     });
     if (sessionKey === agentSessionKey) {
       baseSessionMaintenanceStarted = true;

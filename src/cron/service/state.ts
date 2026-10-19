@@ -466,6 +466,8 @@ export type CronUpdateOptions = Pick<
   | "captureRuntimeAuthority"
   | "inferenceBinding"
 > & {
+  /** Administrator-verified provenance-only binding; never public patch input. */
+  reauthorizeChannelRequester?: boolean;
   /** Null forbids policy adoption; undefined retains in-process operator defaults. */
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
 };
@@ -480,4 +482,4 @@ export type CronRemoveOptions = CronCommitGuardOptions & {
   expectedConfigRevision?: string;
 };
 /** Cron-store-locked guard evaluated against the current job before an update applies. */
-export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;
+export type CronUpdatePrecondition = (job: CronStoredJob, nowMs: number) => void | Promise<void>;

@@ -43,6 +43,7 @@ import {
 import { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox/context.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import {
   resolveScheduledToolPolicyContext,
   type ScheduledToolPolicyContext,
@@ -68,6 +69,7 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveCronCreatorSandbox } from "./creator-sandbox.js";
 import {
   resolveCronActiveRuntimeConfig,
   resolveCronAgentConfig,
@@ -146,6 +148,9 @@ type PrepareTriggerRuntime = (params: {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   callerOrigin?: CronScheduledToolCallerOrigin;
   execTarget?: CronToolsAllowExecTarget;
+  creatorSandbox?: "required";
+  creatorProfileId?: string;
+  assertCreatorCurrent?: () => void;
   signal?: AbortSignal;
 }) => Promise<PreparedTriggerRuntime>;
 
@@ -185,6 +190,7 @@ async function prepareTriggerRuntime(
 ): Promise<PreparedTriggerRuntime> {
   const { signal: preparationSignal } = params;
   preparationSignal?.throwIfAborted();
+  params.assertCreatorCurrent?.();
   const agentId = resolveTriggerAgentId(params.runtimeConfig, params.agentId);
   const selectedAgentConfig = resolveAgentConfig(params.runtimeConfig, agentId);
   const agentConfigOverride = params.agentId?.trim() ? selectedAgentConfig : undefined;
@@ -206,9 +212,15 @@ async function prepareTriggerRuntime(
     ensureBootstrapFiles: !agentDefaults.skipBootstrap,
     skipOptionalBootstrapFiles: agentDefaults.skipOptionalBootstrapFiles,
     provisioning: workspaceProvisioning,
-    guard: { assertHost: () => preparationSignal?.throwIfAborted() },
+    guard: {
+      assertHost: () => {
+        preparationSignal?.throwIfAborted();
+        params.assertCreatorCurrent?.();
+      },
+    },
   });
   preparationSignal?.throwIfAborted();
+  params.assertCreatorCurrent?.();
   const workspaceDir = workspace.dir;
   const pluginRegistry = loadPluginRegistry({
     config,
@@ -228,6 +240,17 @@ async function prepareTriggerRuntime(
       config,
       sessionKey,
       workspaceDir,
+      assertCurrent: params.assertCreatorCurrent,
+      preparedRuntimeStatus: resolvePreparedSandboxRuntimeStatus({
+        cfg: config,
+        sessionKey,
+        preparedSessionEntry: {
+          sandbox: params.creatorSandbox,
+          ...(params.creatorProfileId
+            ? { createdActor: { type: "human", source: "profile", id: params.creatorProfileId } }
+            : {}),
+        },
+      }),
     });
     try {
       preparationSignal?.throwIfAborted();
@@ -404,6 +427,8 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       request.scheduledToolPolicy ?? null,
       request.callerOrigin ?? null,
       request.execTarget ?? null,
+      request.creatorSandbox ?? null,
+      request.creatorProfileId ?? null,
     ]);
     const cached = runtimeCache.get(request.jobId);
     if (
@@ -426,13 +451,22 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     }
     const promise = prepareRuntime({ ...request, signal: scope.signal }).then((runtime) => {
       entry.lifetime.publish(runtime);
+      const pluginsCurrent = runtime.pluginRegistry
+        ? (capturePluginLifecycleAuthority(runtime.pluginRegistry, undefined, {
+            scopedRuntime: true,
+          }) ?? (() => false))
+        : () => true;
       return {
         ...runtime,
-        isCurrent: runtime.pluginRegistry
-          ? (capturePluginLifecycleAuthority(runtime.pluginRegistry, undefined, {
-              scopedRuntime: true,
-            }) ?? (() => false))
-          : () => true,
+        isCurrent: () => {
+          try {
+            // Provisioned sandbox handles retain the preparation's creator guard.
+            request.assertCreatorCurrent?.();
+            return pluginsCurrent();
+          } catch {
+            return false;
+          }
+        },
       };
     });
     const entry: TriggerRuntimeCacheEntry = {
@@ -480,8 +514,13 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     let mcp: CronScriptMcpTools | undefined;
     let releaseRuntime = () => {};
     try {
+      const runtimeConfig = resolveCronActiveRuntimeConfig(deps.config);
+      const creator = await resolveCronCreatorSandbox(runtimeConfig, params.job);
       const request = {
-        runtimeConfig: resolveCronActiveRuntimeConfig(deps.config),
+        runtimeConfig,
+        creatorSandbox: creator.sandbox,
+        creatorProfileId: creator.profileId,
+        assertCreatorCurrent: creator.assertCurrent,
         jobId: params.job.id,
         agentId: params.job.agentId,
         toolsAllow: params.job.payload.toolsAllow,
@@ -496,7 +535,9 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       const retained = await resolveCachedRuntime(request, evaluationScope);
       const runtime = retained.runtime;
       releaseRuntime = retained.release;
+      creator.assertCurrent();
       admission = prepareCronRunAdmission({
+        assertSourceCurrent: creator.assertCurrent,
         cfg: runtime.context.config,
         runId,
         agentId: runtime.context.agentId,

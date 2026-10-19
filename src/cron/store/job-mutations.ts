@@ -146,8 +146,13 @@ export function planCronJobMutation(
       job: nextJob,
       previousJob,
       toolsAllowProvenance: options.toolsAllowProvenance,
-      reauthorize: mutation.kind === "add" || explicitlyMutatesToolsAllow,
-      reauthorizeCallerOrigin: mutation.kind === "update" && explicitlyMutatesToolsAllow,
+      reauthorize:
+        mutation.kind === "add" ||
+        explicitlyMutatesToolsAllow ||
+        options.reauthorizeChannelRequester,
+      reauthorizeCallerOrigin:
+        mutation.kind === "update" &&
+        (explicitlyMutatesToolsAllow || options.reauthorizeChannelRequester),
     });
     resolveCronJobEffectiveAgentId(nextJob, defaultAgentId);
     reconcileCronOperatorSource({ job: nextJob, previousJob, captured: options.operatorSource });

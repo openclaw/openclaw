@@ -525,6 +525,9 @@ export const validateCronListParams = compile(S.CronListParamsSchema);
 export const validateCronStatusParams = compile(S.CronStatusParamsSchema);
 export const validateCronGetParams = compile(S.CronGetParamsSchema);
 export const validateCronAddParams = compile(S.CronAddParamsSchema);
+export const validateCronReauthorizeChannelRequesterParams = compile(
+  S.CronReauthorizeChannelRequesterParamsSchema,
+);
 export const validateCronUpdateParams = compile(S.CronUpdateParamsSchema);
 export const validateCronRemoveParams = compile(S.CronRemoveParamsSchema);
 export const validateCronRunParams = compile(S.CronRunParamsSchema);
