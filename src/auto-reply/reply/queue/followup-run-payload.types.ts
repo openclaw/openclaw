@@ -40,6 +40,7 @@ import type {
   ScheduledSessionAutomation,
   SessionEventExecution,
 } from "../session-event-contract.js";
+import type { TypingController } from "../typing.js";
 
 type FollowupQueueDisposition = Parameters<
   NonNullable<GetReplyOptions["onFollowupQueueDisposition"]>
@@ -95,6 +96,8 @@ export type FollowupRunPayload = ReplyCallbackCustodyBinding & {
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   /** Canonical ownership lifecycle for durable ingress / reply-lane transfer. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
+  /** Typing of the dispatch that queued this run; drain reuses the latest runner's defaults. */
+  typing?: TypingController;
   /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
   onQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Keep delivery bound to the source that owned admission, not later runner defaults. */
