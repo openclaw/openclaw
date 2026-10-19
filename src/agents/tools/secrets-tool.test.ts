@@ -266,9 +266,10 @@ describe("secrets request normalization", () => {
 describe("secrets tool", () => {
   it("returns a clear local store blocker without publishing a credential prompt", async () => {
     const previousMode = isEmbeddedMode();
-    const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
     const events: string[] = [];
-    broker.subscribe((event) => events.push(event.event));
+    const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler(), (event) =>
+      events.push(event.event),
+    );
     setEmbeddedMode(true);
     setEmbeddedQuestionBroker(broker);
     try {
