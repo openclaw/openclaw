@@ -748,6 +748,10 @@
     "target": "Amazon Bedrock Mantle"
   },
   {
+    "source": "Abstract",
+    "target": "Abstract"
+  },
+  {
     "source": "Anthropic (API + Claude CLI)",
     "target": "Anthropic（API + Claude CLI）"
   },
