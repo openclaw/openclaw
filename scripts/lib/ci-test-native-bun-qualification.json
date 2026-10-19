@@ -216,7 +216,6 @@
     "src/infra/fixed-window-rate-limit.test.ts": "39675e52a1af76ba8f6b56ddf5b9202db4c8223f18d0b87971b07b7ad256fb96",
     "src/infra/format-time/parse-offsetless-zoned-datetime.test.ts": "a8e9ff882da87af5884d73b6f6f544f4a1ed6ba0f047d264a545087814553c88",
     "src/infra/google-api-base-url.test.ts": "817ebb7c592b157ff9d535a3927b4ebcaf3382f1ac96ddff7b79177062671a16",
-    "src/infra/heartbeat-cooldown.test.ts": "d92c50f15f9bbeabac892c45f37591499e0e3962bf346af1e0c1daed68e95803",
     "src/infra/heartbeat-reason.test.ts": "0b89f6a8de9535655b70eacacd74563a24c6c5787827c4815152f0e62b809d1f",
     "src/infra/inline-option-token.test.ts": "839fafbb610d7d03e8131d8174878d53181fe2dac754791de4382373719edfdb",
     "src/infra/install-mode-options.test.ts": "e568d115f235c9a0190ca7782ccea98fab4ebd4a2bf2e64bcb331181bbe829d3",

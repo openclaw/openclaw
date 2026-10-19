@@ -1,3 +1,7 @@
+import {
+  resolveStateDir,
+  resolveUserPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type {
   readOpenClawAgentDatabaseIdentity,
   openOpenClawAgentSqliteWorkerStoreV2,
@@ -22,3 +26,17 @@ export type MemoryDatabaseOpenOptions = {
   maintenanceSource?: import("./manager-database-context.js").MemoryIndexDatabase;
   schema: import("./manager-publication-task.js").MemoryPublicationOperations["schema.admit"]["input"];
 };
+
+export function captureMemoryDatabaseWriteOptions(
+  agentId: string,
+  databasePath: string,
+  source?: MemoryDatabaseOpenOptions["maintenanceSource"],
+) {
+  const env = { ...(source?.writeOptions?.env ?? process.env) };
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  return {
+    agentId,
+    path: source?.writeOptions?.path ?? resolveUserPath(databasePath),
+    env,
+  };
+}

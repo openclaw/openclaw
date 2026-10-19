@@ -1,6 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { isTest, readInventorySources } from "./control-ui-solid-inventory.mts";
 import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";

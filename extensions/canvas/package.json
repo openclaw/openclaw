@@ -9,8 +9,8 @@
     "@solidjs/compiler": "2.0.0-rc.14"
   },
   "dependencies": {
-    "@a2ui/lit": "0.12.0",
-    "@a2ui/web_core": "0.12.0",
+    "@a2ui/lit": "0.13.0",
+    "@a2ui/web_core": "0.13.0",
     "@solidjs/web": "2.0.0-rc.14",
     "signal-utils": "0.21.1",
     "solid-js": "2.0.0-rc.14",

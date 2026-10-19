@@ -10,6 +10,7 @@ import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
+import { createTabFocus } from "../../../lib/tabs.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import { SidebarPanel as SidebarPanelView } from "../chat-pane-embedded-view.tsx";
 import {
@@ -49,8 +50,8 @@ function Region(props: RegionProps, host: RegionElement) {
   const panelHosts = new Map<SidebarSlotId, SidebarPanelHost>();
   const panelElements = new Map<string, HTMLDivElement>();
   let sideHeader: HTMLElement | null = null;
-  let focusActiveTab: ((options?: FocusOptions) => void) | null = null;
-  const focusActiveSideTab = (options?: FocusOptions) => focusActiveTab?.(options);
+  const tabFocus = createTabFocus();
+  const focusActiveSideTab = tabFocus.focusActive;
   const operations = {
     readPanelHost: (slot: SidebarSlotId) =>
       panelHosts.get(slot) ??
@@ -273,9 +274,7 @@ function Region(props: RegionProps, host: RegionElement) {
     before.focus({ preventScroll: true });
     if (document.activeElement !== before) {
       // That control is gone by now; carry on from the main view's own header.
-      props.elements?.header
-        .querySelector<HTMLElement>("button:not([disabled])")
-        ?.focus({ preventScroll: true });
+      props.elements?.header.focus({ preventScroll: true });
     }
   }
 
@@ -431,8 +430,8 @@ function Region(props: RegionProps, host: RegionElement) {
                   host={host}
                   hostedRevision={hostedRevision}
                   refreshHostedTabs={refreshHostedTabs}
-                  onFocusActiveReady={(focus) => (focusActiveTab = focus)}
                   headerRef={(element) => (sideHeader = element)}
+                  tabFocus={tabFocus}
                 />
               </Show>
               <Show when={mounted()}>

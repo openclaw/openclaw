@@ -274,10 +274,10 @@ describe("config env vars", () => {
       const expected = {
         plugins: { entries: { brave: { config: { webSearch: { apiKey: "from-dotenv" } } } } },
       };
-      loadDotEnv({ quiet: true });
+      loadDotEnv();
       expect(resolveConfigEnvVars(cfg, process.env)).toEqual(expected);
       delete process.env.BRAVE_API_KEY;
-      loadDotEnv({ quiet: true });
+      loadDotEnv();
       expect(resolveConfigEnvVars(cfg, process.env)).toEqual(expected);
     });
   });

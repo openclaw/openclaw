@@ -13,7 +13,6 @@ import {
   clearDiscussionBindingGeneration,
   getPendingDiscussionOpen,
   listPendingDiscussionOpens,
-  type PendingDiscussionOpen,
 } from "./binding-generation.js";
 import { DetachedDiscussionBindingRetention } from "./binding-retention.js";
 import {
@@ -230,8 +229,6 @@ export class ClickClackDiscussionService {
         installationId: this.#installationId,
         sessionKey,
         ensureTimer: () => this.#ensureTimer(),
-        reconcilePendingOpen: (pending) =>
-          this.#reconcilePendingOpen(pending, { allowRetry: false }),
         withChannelMutationLock: (run) => this.#withChannelMutationLock(run),
         ensureBindingCapacity: (key) => this.#detachedBindings.ensureCapacity(key),
         warn: (message) => this.#logger().warn(message),
@@ -259,7 +256,15 @@ export class ClickClackDiscussionService {
         }
         const pending = await getPendingDiscussionOpen(this.#runtime, sessionKey);
         if (pending) {
-          await this.#reconcilePendingOpen(pending);
+          const shouldRetry = await reconcilePendingDiscussionOpen({
+            runtime: this.#runtime,
+            store: this.#store,
+            clientFactory: this.#clientFactory,
+            pending,
+          });
+          if (shouldRetry) {
+            await this.#open(sessionKey);
+          }
         }
       });
     } finally {
@@ -561,20 +566,6 @@ export class ClickClackDiscussionService {
       );
       return undefined;
     }
-  }
-
-  async #reconcilePendingOpen(
-    pending: PendingDiscussionOpen,
-    options: { allowRetry?: boolean } = {},
-  ): Promise<void> {
-    await reconcilePendingDiscussionOpen({
-      runtime: this.#runtime,
-      store: this.#store,
-      clientFactory: this.#clientFactory,
-      pending,
-      ...options,
-      open: (key) => this.#open(key),
-    });
   }
 
   async #releaseStaleBinding(

@@ -847,10 +847,10 @@ async function runCliWithPreparedOutputMode(
     await startupTrace.measure("dotenv", async () => {
       if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
         const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
-        await loadGatewayDispatchCliDotEnv({ quiet: true });
+        await loadGatewayDispatchCliDotEnv();
       } else {
         const { loadCliDotEnv } = await import("./dotenv.js");
-        loadCliDotEnv({ loadGlobalEnv, quiet: true });
+        loadCliDotEnv({ loadGlobalEnv });
       }
     });
   }

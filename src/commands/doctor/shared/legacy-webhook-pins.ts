@@ -75,15 +75,22 @@ function recordUnwrittenWebhookCompletion(
   return true;
 }
 
+export type HistoricalWebhookCompletion = {
+  marker: true | Record<string, string[][]> | undefined;
+};
+
 type HistoricalWebhookPinState = {
   env: NodeJS.ProcessEnv;
-  completion?: { marker: true | Record<string, string[][]> | undefined };
+  completion?: HistoricalWebhookCompletion;
   existingInstallation?: boolean;
 };
 
 /** One synchronous pass shares its receipt, including its own rehearsal writes. */
-export function createHistoricalWebhookPinMigration(env: NodeJS.ProcessEnv = process.env) {
-  const state: HistoricalWebhookPinState = { env };
+export function createHistoricalWebhookPinMigration(
+  env: NodeJS.ProcessEnv = process.env,
+  completion?: HistoricalWebhookCompletion,
+) {
+  const state: HistoricalWebhookPinState = { env, completion };
   return applyHistoricalWebhookPins.bind(undefined, state);
 }
 

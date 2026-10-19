@@ -35,7 +35,18 @@ const deliveredFinal = {
   requesterYieldBatch: true,
   pause: false,
   delivered: true,
+  batchRunIds: ["run-a"],
+  rearmGeneration: 1,
+  finalAssistantVisibleText: "final",
 };
+
+function promote(overrides: Partial<Parameters<typeof promoteRequesterFinalAttachment>[0]> = {}) {
+  return promoteRequesterFinalAttachment({ ...base, ...deliveredFinal, ...overrides });
+}
+
+function finalize(overrides: Partial<Parameters<typeof finalizeRequesterFinalAttachment>[0]> = {}) {
+  finalizeRequesterFinalAttachment({ ...deliveredFinal, ...overrides });
+}
 
 describe("requester final attachment", () => {
   beforeEach(() => {
@@ -47,35 +58,15 @@ describe("requester final attachment", () => {
     const append = vi.fn(() => true);
     const registration = registerRequesterFinalAttachment({ ...base, append });
 
-    finalizeRequesterFinalAttachment({
-      ...deliveredFinal,
-      batchRunIds: ["run-a", "run-b"],
-      rearmGeneration: 1,
-      finalAssistantVisibleText: "final",
-    });
+    finalize({ batchRunIds: ["run-a", "run-b"] });
     expect(append).not.toHaveBeenCalled();
-    expect(
-      promoteRequesterFinalAttachment({
-        requesterAgentId: base.requesterAgentId,
-        requesterSessionKey: base.requesterSessionKey,
-        requesterTurnRunId: base.requesterTurnRunId,
-        batchRunIds: ["run-b", "run-a"],
-        rearmGeneration: 1,
-      }),
-    ).toBe(true);
+    expect(promote({ batchRunIds: ["run-b", "run-a"] })).toBe(true);
     registration.releaseProvisional();
 
-    finalizeRequesterFinalAttachment({
-      ...deliveredFinal,
-      batchRunIds: ["run-a", "run-b"],
-      rearmGeneration: 1,
-      finalAssistantVisibleText: "final",
-    });
+    finalize({ batchRunIds: ["run-a", "run-b"] });
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
-    finalizeRequesterFinalAttachment({
-      ...deliveredFinal,
+    finalize({
       batchRunIds: ["run-a", "run-b"],
-      rearmGeneration: 1,
       finalAssistantVisibleText: "replay",
     });
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
@@ -84,38 +75,27 @@ describe("requester final attachment", () => {
   it("rejects the wrong session or batch without consuming the owner", () => {
     const append = vi.fn(() => true);
     registerRequesterFinalAttachment({ ...base, append });
-    promoteRequesterFinalAttachment({
-      requesterAgentId: base.requesterAgentId,
-      requesterSessionKey: base.requesterSessionKey,
-      requesterTurnRunId: base.requesterTurnRunId,
-      batchRunIds: ["run-a"],
-      rearmGeneration: 2,
-    });
+    promote({ rearmGeneration: 2 });
 
-    finalizeRequesterFinalAttachment({
-      ...deliveredFinal,
+    finalize({
       requesterSessionId: "session-other",
-      batchRunIds: ["run-a"],
       rearmGeneration: 2,
       finalAssistantVisibleText: "wrong session",
     });
-    finalizeRequesterFinalAttachment({
-      ...deliveredFinal,
+    finalize({
       batchRunIds: ["run-b"],
       rearmGeneration: 2,
       finalAssistantVisibleText: "wrong batch",
     });
     expect(append).not.toHaveBeenCalled();
-    finalizeRequesterFinalAttachment({
-      ...deliveredFinal,
-      batchRunIds: ["run-a"],
-      rearmGeneration: 2,
-      finalAssistantVisibleText: "final",
-    });
+    finalize({ rearmGeneration: 2 });
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
   });
 
-  it("replacement and lifecycle rotation revoke stale callbacks", () => {
+  it.each([
+    ["rotated", 1],
+    ["current", 3],
+  ] as const)("only the %s lifecycle can finalize a replacement", (state, rearmGeneration) => {
     const first = vi.fn(() => true);
     const second = vi.fn(() => true);
     const firstRegistration = registerRequesterFinalAttachment({ ...base, append: first });
@@ -126,85 +106,39 @@ describe("requester final attachment", () => {
     });
     firstRegistration.revoke();
     expect(
-      promoteRequesterFinalAttachment({
-        requesterAgentId: base.requesterAgentId,
-        requesterSessionKey: base.requesterSessionKey,
+      promote({
         requesterTurnRunId: "run-new",
         batchRunIds: ["run-new-child"],
-        rearmGeneration: 1,
+        rearmGeneration,
       }),
     ).toBe(true);
 
-    lifecycle.generation = "generation-2";
-    lifecycle.rotate?.(lifecycle.generation);
-    finalizeRequesterFinalAttachment({
-      ...deliveredFinal,
+    if (state === "rotated") {
+      lifecycle.generation = "generation-2";
+      lifecycle.rotate?.(lifecycle.generation);
+    }
+    finalize({
       batchRunIds: ["run-new-child"],
-      rearmGeneration: 1,
-      finalAssistantVisibleText: "stale",
+      rearmGeneration,
+      finalAssistantVisibleText: state === "rotated" ? "stale" : "new final",
     });
     expect(first).not.toHaveBeenCalled();
-    expect(second).not.toHaveBeenCalled();
-  });
-
-  it("exact registration revocation cannot delete a newer replacement", () => {
-    const first = vi.fn(() => true);
-    const second = vi.fn(() => true);
-    const firstRegistration = registerRequesterFinalAttachment({ ...base, append: first });
-    registerRequesterFinalAttachment({
-      ...base,
-      requesterTurnRunId: "run-new",
-      append: second,
-    });
-
-    firstRegistration.revoke();
-    expect(
-      promoteRequesterFinalAttachment({
-        requesterAgentId: base.requesterAgentId,
-        requesterSessionKey: base.requesterSessionKey,
-        requesterTurnRunId: "run-new",
-        batchRunIds: ["run-new-child"],
-        rearmGeneration: 3,
-      }),
-    ).toBe(true);
-    finalizeRequesterFinalAttachment({
-      ...deliveredFinal,
-      batchRunIds: ["run-new-child"],
-      rearmGeneration: 3,
-      finalAssistantVisibleText: "new final",
-    });
-    expect(first).not.toHaveBeenCalled();
-    expect(second).toHaveBeenCalledExactlyOnceWith("new final");
+    if (state === "rotated") {
+      expect(second).not.toHaveBeenCalled();
+    } else {
+      expect(second).toHaveBeenCalledExactlyOnceWith("new final");
+    }
   });
 
   it("consumes a throwing callback without failing or replaying finalization", () => {
     const append = vi.fn(() => {
       throw new Error("socket closed");
     });
-    registerRequesterFinalAttachment({
-      ...base,
-      append,
-    });
-    promoteRequesterFinalAttachment({
-      requesterAgentId: base.requesterAgentId,
-      requesterSessionKey: base.requesterSessionKey,
-      requesterTurnRunId: base.requesterTurnRunId,
-      batchRunIds: ["run-a"],
-      rearmGeneration: 1,
-    });
+    registerRequesterFinalAttachment({ ...base, append });
+    promote();
 
-    finalizeRequesterFinalAttachment({
-      ...deliveredFinal,
-      batchRunIds: ["run-a"],
-      rearmGeneration: 1,
-      finalAssistantVisibleText: "final",
-    });
-    finalizeRequesterFinalAttachment({
-      ...deliveredFinal,
-      batchRunIds: ["run-a"],
-      rearmGeneration: 1,
-      finalAssistantVisibleText: "replay",
-    });
+    finalize();
+    finalize({ finalAssistantVisibleText: "replay" });
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
   });
 
@@ -214,15 +148,7 @@ describe("requester final attachment", () => {
       vi.setSystemTime(1_000);
       registerRequesterFinalAttachment({ ...base, timeoutMs: 10, append: vi.fn(() => true) });
       vi.setSystemTime(1_011);
-      expect(
-        promoteRequesterFinalAttachment({
-          requesterAgentId: base.requesterAgentId,
-          requesterSessionKey: base.requesterSessionKey,
-          requesterTurnRunId: base.requesterTurnRunId,
-          batchRunIds: ["run-a"],
-          rearmGeneration: 1,
-        }),
-      ).toBe(false);
+      expect(promote()).toBe(false);
     } finally {
       vi.useRealTimers();
     }

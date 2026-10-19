@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -28,17 +29,43 @@ export type LeaseScenario = {
 
 // A narrow child substitutes for the CLI, not for its cross-process lease.
 export async function runUpdateLeaseChild(): Promise<void> {
-  if (process.argv[2] !== "doctor" || process.argv[3] === "--lint") {
-    await runUpdateLeaseChildWithCleanup();
-    return;
+  const observationUrl = new URL(
+    import.meta.url.endsWith(".js")
+      ? "../../infra/owned-directory-observation.js"
+      : "../../infra/owned-directory-observation.ts",
+    import.meta.url,
+  ).href;
+  // These short-lived Doctor fixtures never replace directories externally.
+  // Keep real discovery and repair, without unrelated native watcher setup.
+  const observationHook =
+    process.argv[2] === "doctor"
+      ? registerHooks({
+          load(url, context, nextLoad) {
+            return url === observationUrl || url.startsWith(`${observationUrl}?`)
+              ? {
+                  format: "module",
+                  source: "export function observeOwnedDirectory() { return { close() {} }; }",
+                  shortCircuit: true,
+                }
+              : nextLoad(url, context);
+          },
+        })
+      : undefined;
+  try {
+    if (process.argv[2] !== "doctor" || process.argv[3] === "--lint") {
+      await runUpdateLeaseChildWithCleanup();
+      return;
+    }
+    const [{ retainUpdateDoctorProcesses }, { withCommandProcessScope }] = await Promise.all([
+      import("../../infra/update-doctor-process-custody.js"),
+      import("../../process/exec-spawn.js"),
+    ]);
+    // Match Doctor's custody lifetime, including its final worker joins.
+    using custody = await retainUpdateDoctorProcesses();
+    await withCommandProcessScope(runUpdateLeaseChildWithCleanup, undefined, custody);
+  } finally {
+    observationHook?.deregister();
   }
-  const [{ retainUpdateDoctorProcesses }, { withCommandProcessScope }] = await Promise.all([
-    import("../../infra/update-doctor-process-custody.js"),
-    import("../../process/exec-spawn.js"),
-  ]);
-  // Match Doctor's custody lifetime, including its final worker joins.
-  using custody = await retainUpdateDoctorProcesses();
-  await withCommandProcessScope(runUpdateLeaseChildWithCleanup, undefined, custody);
 }
 
 async function runUpdateLeaseChildWithCleanup(): Promise<void> {

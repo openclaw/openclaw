@@ -87,6 +87,10 @@ const repositoryScriptEntries = [
   "scripts/perf/catalog-polling-measure.ts",
   // The history/diff benchmark guide invokes this measurement CLI by path.
   "scripts/perf/history-diff-measure.ts!",
+  // scripts/perf/README.md invokes this checkout-diff measurement CLI by path.
+  "scripts/perf/checkout-diff-measure.ts!",
+  // scripts/perf/README.md invokes this isolated viewer-presence measurement CLI.
+  "scripts/perf/presence-churn-measure.ts!",
   "scripts/perf/seal-version-restart.ts!",
   // Worker-environment shutdown proof invokes this measurement CLI by path.
   "scripts/perf/worker-environment-shutdown-measure.ts!",

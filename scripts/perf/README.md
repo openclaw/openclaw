@@ -218,6 +218,39 @@ chat Details. Optional `--request-stacks` adds caller stacks for diagnosis;
 leave it off for paired timing. Use only synthetic requests:
 parameters and stacks are retained, while auth and response payloads are omitted.
 
+For active-session loads, add `--activity-session <synthetic-key>` and configure
+that isolated Gateway with two loopback mock-provider models:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/catalog-polling-measure.ts \
+  --url 'http://127.0.0.1:40967/#token=synthetic-token' \
+  --load-runs 1 --load-path /chat/main --expect-session agent:main:main \
+  --activity-session agent:main:main --duration 60 --interval-ms 2000 \
+  --request-stacks --output /path/to/active-chat.json
+```
+
+The driver cycles a model selection, the same selection with a changed label, a
+status/pinning/thinking patch, and a real chat turn. Models default to
+`openai/gpt-5.6-sol,openai/gpt-5.6-luna`; override with `--activity-models` to match
+synthetic configuration. Each turn must finish successfully through `agent.wait`.
+Add `--activity-cron --open-details` to include forced runs of a temporary disabled
+cron job while Details is visible; this requires an `agent:<agent-id>:main` session.
+Each cron run must finish within a bounded wait and reach the browser as a matching
+finished event before the driver records success.
+The driver binds the job to that agent and session and removes it afterward;
+cleanup failures remain in the report.
+Use `/dashboard/main` to exercise the same session's board surface.
+
+The activity window begins after readiness and five seconds of settling. Its
+fixed action count is `floor(duration * 1000 / interval-ms)`; startup time never
+reduces the workload. Reports retain activity start/end, action latency, warm
+Long Task blocking, and the event preceding each catalog request. Session event
+metadata includes catalog-change flags, model-selection revisions, and lifecycle
+phases; message and response bodies are excluded. Caller stacks are diagnostic
+only. With `--start-at`, the active window begins thirty seconds after the
+scheduled navigation and fails if readiness misses that deadline. Use one load
+per invocation for paired activity measurements.
+
 For paired activity measurements, use `--start-at <epoch-ms>` with the same future
 time on both sides; it gates the runtime window after browser readiness and
 rejects a missed deadline. Hold the host's shared measurement lock, use separate
@@ -427,6 +460,36 @@ bodies. Recap mode creates ordinary shared sessions, since recaps exclude
 subagents, and requests `sessions.activitySummary.ensure` after each completed
 turn cohort. Measured rounds must observe both recap model requests and recap
 change events; the model fixture serves the recaps without external inference.
+Add `--recap-burst-repeats 20 --recap-burst-interval-ms 50` to replay repeated
+Activity ensure requests after that cohort's recap reaches every socket. These
+are real `sessions.activitySummary.ensure` RPCs against unchanged transcripts;
+the driver does not invoke publishers or invent state transitions. Each repeat
+sweeps the same sessions in batches of 20, sequentially, with a minimum 50 ms
+start-to-start interval between sweeps. Repeats default to zero and are capped
+at 100; the interval defaults to 50 ms and is capped at 1000 ms. Use identical
+parameters for both revisions. No extra agent turns occur inside this phase.
+
+`recapPhase` separates the turn and initial recap fanout from repeated ensures,
+including frame/byte counts by audience, recap model request counts, RPC response
+states, timestamps, and repeated-ensure main-thread/process CPU. A zero model
+request count during repeated ensures establishes unchanged-source churn rather
+than additional inference. Current ensure responses enqueue no recap source work.
+If the last ensure reports `updating`, every socket must receive a current recap
+after that sweep started; a receipt retained from the initial phase cannot satisfy
+this wait. CPU includes RPC admission, source checks, and the subsequent one-second
+event drain. With `--cpu-profile`, the repeated-ensure phase also saves
+a main-isolate profile and reports `broadcastSampledMs`: inclusive sampled time
+under `broadcastInternal`, including recipient projection, encoding, and sends.
+This is a sampling estimate, not a precise socket-only timer. The driver uses
+the Control UI's row decoder with negotiated patches/field references, requires
+the latest cohort's distinct recap text and `current` state on every socket, and
+compares its timestamp with a final `sessions.describe` read. `recapReceipts`
+records observed recap transitions. `latestValueDelivery.committedToReceivedMs`
+measures the first current receipt minus the summary's `updatedAt` clock, including
+commit/publication/transport delay; compare its maximum with the desired one-second
+budget. `finalReceiptAfterLastEnsureMs` reports trailing delivery after the last
+repeat response, or zero when the already-correct recap remains unchanged. These
+prove delivery into the same decoder as the UI, not browser rendering latency.
 `--list-interval-ms 1000` adds concurrent compact `sessions.list` polling, one
 request at a time per client, and reports successful latency samples and
 p50/p95/p99. Invalid or failed list responses reject the run.
@@ -877,3 +940,31 @@ with the same sampling settings. No profiling runs when `--allocations` is absen
 For live operator attribution, `diagnostics.heapProfile` accepts
 `{ "durationMs": 10000, "includeCollected": true }` with the existing admin
 scope and 30-second churn cap; it remains a timed sample, not an RPC denominator.
+
+## Presence during chat pane replacement
+
+`presence-churn-measure.ts` starts an isolated loopback Gateway with synthetic
+sessions and 42 WebSocket operators (40 delta readers and two legacy readers).
+It drives the same viewer-declaration owner as chat pages, replacing its owner
+without changing the watched session once per second. A real session change and
+final departure are positive controls after the measured churn.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/presence-churn-measure.ts \
+  --state-dir /path/to/new-synthetic-presence-state --port 41466 \
+  --clients 42 --rounds 20 --interval-ms 1000 --output /path/to/presence.json
+```
+
+The state directory must not exist. Run with an isolated `HOME`, `OPENCLAW_HOME`,
+and `TMPDIR`. `--viewer-owner` accepts the baseline or candidate TypeScript owner
+module; both sides otherwise use the same Gateway. This isolates client-side
+publication changes without counting Gateway startup as a performance result.
+Use `--start-at <epoch-ms>` for concurrent pairs with separate directories and
+ports, swapping CPU halves between pairs under the quiet-measurement lock.
+
+Compare viewer requests, presence frames and UTF-8 payload bytes per minute.
+A successful no-op fix removes unchanged-viewer requests and their fan-out while
+both legacy and delta readers still receive real changes. CPU and RSS cover the
+workload in the shared Gateway/client process; they are context, not full-browser
+or production capacity measurements. This script models a reproducible lifecycle
+pattern, not a claim that all observed viewer traffic is redundant.

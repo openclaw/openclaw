@@ -128,7 +128,6 @@ function createHarness(params?: {
       await Promise.all(Array.from(pendingTasks));
     }
   };
-  const onRoomMessage = vi.fn(async () => {});
   const listVerifications = vi.fn(async () => params?.verifications ?? []);
   const ensureVerificationDmTracked = vi.fn(
     params?.ensureVerificationDmTracked ?? (async () => null),
@@ -211,7 +210,6 @@ function createHarness(params?: {
       params?.getHealthySyncSinceMs ??
       (typeof params?.startupMs === "number" ? () => params.startupMs : undefined),
     formatNativeDependencyHint,
-    onRoomMessage,
     runDetachedTask,
     sasNoticeRetryDelayMs: params?.sasNoticeRetryDelayMs ?? 0,
   });
@@ -229,7 +227,6 @@ function createHarness(params?: {
 
   return {
     dispose,
-    onRoomMessage,
     sendMessage,
     invalidateRoom,
     invalidateMemberDisplayName,
@@ -332,25 +329,6 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     );
   });
 
-  it("forwards reaction room events into the shared room handler", async () => {
-    const { onRoomMessage, sendMessage, roomEventListener, flushTasks } = createHarness();
-
-    roomEventListener("!room:example.org", {
-      event_id: "$reaction1",
-      type: EventType.Reaction,
-      content: { "m.relates_to": { rel_type: "m.annotation", event_id: "$msg1", key: "👍" } },
-    });
-
-    await flushTasks();
-    const roomMessageCalls = onRoomMessage.mock.calls as unknown[][];
-    expect(roomMessageCalls[0]?.[0]).toBe("!room:example.org");
-    expect(requireRecord(roomMessageCalls[0]?.[1], "reaction event")).toMatchObject({
-      event_id: "$reaction1",
-      type: EventType.Reaction,
-    });
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
   it.each(["@mallory:example.org", undefined])(
     "invalidates only authoritative member cache keys: %s",
     (stateKey) => {
@@ -390,21 +368,6 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     },
   );
 
-  it("routes late-decrypted room messages through the normal room handler", async () => {
-    const { onRoomMessage, roomDecryptedEventListener, flushTasks } = createHarness();
-    const event: MatrixRawEvent = matrixEvent({
-      event_id: "$decrypted1",
-      type: EventType.RoomMessage,
-      content: { msgtype: "m.text", body: "@bot late decrypt trigger" },
-    });
-
-    roomDecryptedEventListener("!room:example.org", event);
-
-    await flushTasks();
-    expect(onRoomMessage).toHaveBeenCalledTimes(1);
-    expect(onRoomMessage).toHaveBeenCalledWith("!room:example.org", event);
-  });
-
   it.each<{
     name: string;
     eventId: string;
@@ -412,7 +375,6 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     accepted: boolean;
     storeConsulted?: boolean;
     blockedLog?: string;
-    expectNoRoomDispatch?: boolean;
   }>([
     {
       name: "blocks verification request notices when dmPolicy pairing would block the sender",
@@ -420,7 +382,6 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       options: { dmPolicy: "pairing" },
       accepted: false,
       blockedLog: "matrix: blocked verification sender @alice:example.org (dmPolicy=pairing)",
-      expectNoRoomDispatch: true,
     },
     {
       name: "allows verification notices for pairing-authorized DM senders from the allow store",
@@ -437,41 +398,29 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       blockedLog:
         "matrix: blocked verification sender @alice:example.org (dmPolicy=open, dmEnabled=false)",
     },
-  ])(
-    "$name",
-    async ({ eventId, options, accepted, storeConsulted, blockedLog, expectNoRoomDispatch }) => {
-      const {
-        onRoomMessage,
-        sendMessage,
-        roomMessageListener,
-        logVerboseMessage,
-        readStoreAllowFrom,
-        flushTasks,
-      } = createHarness(options);
+  ])("$name", async ({ eventId, options, accepted, storeConsulted, blockedLog }) => {
+    const { sendMessage, roomMessageListener, logVerboseMessage, readStoreAllowFrom, flushTasks } =
+      createHarness(options);
 
-      roomMessageListener("!room:example.org", {
-        event_id: eventId,
-        type: EventType.RoomMessage,
-        content: { msgtype: "m.key.verification.request", body: "verification request" },
-      });
+    roomMessageListener("!room:example.org", {
+      event_id: eventId,
+      type: EventType.RoomMessage,
+      content: { msgtype: "m.key.verification.request", body: "verification request" },
+    });
 
-      await flushTasks();
-      if (blockedLog) {
-        expect(logVerboseMessage).toHaveBeenCalledWith(blockedLog);
-      }
-      if (storeConsulted) {
-        expect(readStoreAllowFrom).toHaveBeenCalled();
-      }
-      if (!accepted) {
-        expect(sendMessage).not.toHaveBeenCalled();
-        if (expectNoRoomDispatch) {
-          expect(onRoomMessage).not.toHaveBeenCalled();
-        }
-        return;
-      }
-      expect(sendMessage).toHaveBeenCalledTimes(1);
-    },
-  );
+    await flushTasks();
+    if (blockedLog) {
+      expect(logVerboseMessage).toHaveBeenCalledWith(blockedLog);
+    }
+    if (storeConsulted) {
+      expect(readStoreAllowFrom).toHaveBeenCalled();
+    }
+    if (!accepted) {
+      expect(sendMessage).not.toHaveBeenCalled();
+      return;
+    }
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
 
   it("posts ready-stage guidance for emoji verification", async () => {
     const { sendMessage, roomEventListener, flushTasks } = createHarness();

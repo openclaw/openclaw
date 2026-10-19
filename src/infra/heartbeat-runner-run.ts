@@ -8,6 +8,7 @@ import {
 } from "../auto-reply/reply/reply-operation-run-state.js";
 import { withReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import type { MsgContext } from "../auto-reply/templating.js";
+import { createTypingCallbacks, type TypingCallbacks } from "../channels/typing.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { parseSessionDeliveryRoute } from "../routing/session-key.js";
@@ -31,7 +32,6 @@ import {
   resolveHeartbeatWakeStage,
   type HeartbeatRunOptions,
 } from "./heartbeat-runner-execution.js";
-import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import {
   getHeartbeatWakeAbortSignal,
   HEARTBEAT_SKIP_CHANNEL_NOT_READY,
@@ -163,22 +163,41 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       : [],
   );
   const admittedGenericEvents: SystemEvent[] = [];
-  const typing =
+  let typing: TypingCallbacks | undefined;
+  if (
     channel &&
     isHeartbeatTypingEnabled({
       cfg,
       agentId,
       hasChatDelivery: Boolean(delivery.to && (visibility.showAlerts || visibility.showOk)),
     })
-      ? createHeartbeatTypingCallbacks({
-          cfg,
-          target: { ...delivery, channel },
-          plugin: resolveHeartbeatChannelPlugin(channel),
-          deps: opts.deps,
-          typingIntervalSeconds: resolveHeartbeatTypingIntervalSeconds(cfg),
-          log: heartbeatLog,
-        })
-      : undefined;
+  ) {
+    const hooks = resolveHeartbeatChannelPlugin(channel)?.heartbeat;
+    const sendTyping = hooks?.sendTyping;
+    const to = delivery.to?.trim();
+    if (sendTyping && to) {
+      const clearTyping = hooks?.clearTyping;
+      const target = {
+        cfg,
+        to,
+        ...(delivery.accountId !== undefined ? { accountId: delivery.accountId } : {}),
+        ...(delivery.threadId !== undefined ? { threadId: delivery.threadId } : {}),
+        ...(opts.deps ? { deps: opts.deps } : {}),
+      };
+      typing = createTypingCallbacks({
+        start: async () => sendTyping(target),
+        ...(clearTyping ? { stop: async () => clearTyping(target) } : {}),
+        keepaliveIntervalMs: (resolveHeartbeatTypingIntervalSeconds(cfg) ?? 6) * 1000,
+        onStartError: (error) => {
+          heartbeatLog.debug(`heartbeat typing failed for ${channel}`, {
+            error: String(error),
+            channel,
+            accountId: delivery.accountId,
+          });
+        },
+      });
+    }
+  }
   try {
     let assertSourceCurrent: SessionSourceAssertion | undefined;
     if (sourceScope) {

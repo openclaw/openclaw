@@ -281,6 +281,12 @@ own active chat runs and queued turns, and waits on the process-wide pending-rep
 count. Both report remaining work as named counts; categories can overlap and
 should not be added as distinct turns.
 
+Shutdown rejects new requests before canceling admitted turns. Their in-process
+Gateway binding remains available until execution and finalizers settle, so
+interrupted inputs can preserve recovery state before the instance is retired.
+Worker reconciliation also cancels recovery waiting for session admission;
+provider operations and writes that already started still finish before teardown.
+
 Transcript index reconciliation gets five seconds to finish during final cleanup.
 After that, shutdown logs the stalled worker, cancels further projection work,
 and terminates its native task. It still waits for accepted writes and database
@@ -429,7 +435,9 @@ databases before exiting. It skips plugin and channel teardown that could retain
 the process until the deadline. Database admission stays fenced through lock
 release and log flushing, which have a final five-second exit window. Shutdown
 logs report each cleanup step that takes at least one second, including its name
-and elapsed milliseconds. Deadline exits list the currently pending cleanup steps
+and elapsed milliseconds. While cleanup remains pending, a normal info-level report
+every five seconds lists the pending wait count, names, and elapsed times, including
+worker reconciliation already in progress before shutdown. Deadline exits also list the currently pending cleanup steps
 and how long each has been waiting (up to eight, with a count of any others).
 These diagnostics are always enabled; `OPENCLAW_GATEWAY_RESTART_TRACE=1` adds
 begin/end timing for fast steps too. The supervisor deadline remains
@@ -452,7 +460,10 @@ Worker-environment shutdown also names its computer, inference, transfer, tunnel
 and accepted-operation joins. Closing the service cancels a pending reconciliation
 owner lookup through the database reader before joining the guard; an idle lookup
 does not wait for the process shutdown deadline. Admitted recovery effects still
-settle before their owners close. For an attached worker, shutdown stops the exact
+settle before their owners close. After cancellation, reconciliation skips fresh
+placement scans and retention writes; the next boot resumes from durable state.
+Pending diagnostics distinguish attachment reconciliation, environment reconciliation,
+retention writes, candidate reads, and session recovery. For an attached worker, shutdown stops the exact
 remote environment before draining its workspace queue: a foreground command
 can hold that queue until the stop cancels it. Remote stop, drain, and active-turn
 cancellation acknowledgments share at most five seconds after shutdown begins,

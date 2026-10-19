@@ -297,7 +297,13 @@ describe("Code Mode subscribed host denial", () => {
       });
       release.resolve();
       await finished.promise;
-      await vi.waitFor(() => expect(harness.subscription.getItemLifecycle().activeCount).toBe(0));
+      await vi.waitFor(() =>
+        expect(harness.subscription.getItemLifecycle()).toEqual({
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        }),
+      );
       harness.expectNoStart();
       expect(after.execute).not.toHaveBeenCalled();
       expect(testing.activeRuns.size).toBe(0);

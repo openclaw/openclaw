@@ -4,6 +4,7 @@ import type {
   WorkerInferenceStartParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
+import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -144,12 +145,7 @@ export async function joinInferenceOperations(
       ...retainedFailures,
     ]),
   ];
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, aggregateMessage);
-  }
+  throwCollectedErrors(errors, aggregateMessage);
 }
 
 export function createWorkerInferenceSessionControls(params: {

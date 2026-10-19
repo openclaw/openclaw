@@ -394,10 +394,9 @@ export type ResolvedPluginHarnessToolPolicies = {
   toolPolicyRestricted: boolean;
 };
 
-export async function preparePluginHarnessPolicyToolsAllow(
-  params: PluginHarnessToolPolicyContext,
-): Promise<[] | undefined> {
-  const policies = await preparePluginHarnessToolPolicies(params);
+export function resolvePluginHarnessPolicyToolsAllow(
+  policies: ResolvedPluginHarnessToolPolicies,
+): [] | undefined {
   return [policies.senderPolicy, policies.groupPolicy, ...policies.runtimePolicies].some(
     toolPolicyRestrictsTools,
   )
@@ -423,7 +422,7 @@ export async function preparePluginHarnessToolPolicies(
   params: PluginHarnessToolPolicyContext,
   safeDenyToolNames?: readonly string[],
   nativeToolNames?: readonly string[],
-  webSearchModel?: ModelRef,
+  webSearchModel?: ModelRef | null,
 ): Promise<ResolvedPluginHarnessToolPolicies> {
   const consume = (sandbox: ReturnType<typeof resolveSandboxRuntimeStatus>) => {
     const requesterFacts = new Map<string, SessionCapabilitySnapshot>();
@@ -455,11 +454,14 @@ export async function preparePluginHarnessToolPolicies(
           : undefined;
         return {
           ...policies,
-          webSearchPolicy: webSearchPolicy && {
-            ...webSearchPolicy,
-            modelRef: webSearchModel,
-            requesterFacts: [...requesterFacts.values()],
-          },
+          webSearchPolicy:
+            webSearchModel === null
+              ? { allowed: false, persistentAllowed: false }
+              : webSearchPolicy && {
+                  ...webSearchPolicy,
+                  modelRef: webSearchModel,
+                  requesterFacts: [...requesterFacts.values()],
+                },
         };
       },
       {
@@ -469,26 +471,23 @@ export async function preparePluginHarnessToolPolicies(
       },
     );
   };
+  const runtimeParams = {
+    cfg: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey ?? (params.agentId ? undefined : params.sandboxSessionKey),
+    classificationSessionKey: params.sandboxSessionKey ?? params.sessionKey,
+    classificationAgentId: params.sandboxAgentId,
+  };
   if (params.preparedSessionEntry !== undefined) {
     return consume(
       resolveSandboxRuntimeStatus({
-        cfg: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey ?? (params.agentId ? undefined : params.sandboxSessionKey),
-        classificationSessionKey: params.sandboxSessionKey ?? params.sessionKey,
-        classificationAgentId: params.sandboxAgentId,
+        ...runtimeParams,
         preparedSessionEntry: params.preparedSessionEntry,
       }),
     );
   }
   return withSandboxRuntimeStatusInWorker(
-    {
-      cfg: params.config,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey ?? (params.agentId ? undefined : params.sandboxSessionKey),
-      classificationSessionKey: params.sandboxSessionKey ?? params.sessionKey,
-      classificationAgentId: params.sandboxAgentId,
-    },
+    runtimeParams,
     { env: process.env, cwd: process.cwd(), assertCurrent() {} },
     consume,
   );

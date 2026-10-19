@@ -1,4 +1,4 @@
-import type { Checker, Project } from "typescript/unstable/sync";
+import type { Checker, Project } from "typescript/sync";
 
 export type UsageBucket = "internal" | "production" | "test";
 

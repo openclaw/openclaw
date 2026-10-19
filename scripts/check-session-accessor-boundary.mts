@@ -2,7 +2,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { z } from "zod";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
@@ -128,7 +128,7 @@ const migratedSessionAccessorFiles = new Set([
   ...gatewaySessionServerMethodFiles,
   "src/gateway/server-session-events.ts",
   "src/gateway/session-reset-service.ts",
-  "src/infra/outbound/message-action-tts.ts",
+  "src/infra/outbound/message-action-send.ts",
   "src/agents/tools/embedded-gateway-stub.ts",
   "src/agents/tools/session-status-tool.ts",
   "src/agents/tools/sessions-list-tool.ts",

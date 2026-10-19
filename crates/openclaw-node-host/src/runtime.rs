@@ -134,11 +134,17 @@ pub enum RuntimeBuildError {
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error(transparent)]
-    Client(#[from] ClientError),
+    Client(Box<ClientError>),
     #[error("runtime result delivery queue saturated; session must be restarted")]
     DeliverySaturated,
     #[error("runtime result task failed: {0}")]
     ResultTask(String),
+}
+
+impl From<ClientError> for RuntimeError {
+    fn from(error: ClientError) -> Self {
+        Self::Client(Box::new(error))
+    }
 }
 
 struct Registration {

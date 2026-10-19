@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import { expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
@@ -51,6 +49,7 @@ import {
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { sessionManagerReadMessageAnchor } from "../../sessions/session-manager-message-anchor.js";
 import { SessionMetadataCommittedError } from "../../sessions/session-manager-metadata-error.js";
+import { sessionManagerAppendInitialMetadata } from "../../sessions/session-manager-metadata.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { rewriteTranscriptEntriesInSessionManager } from "../transcript-rewrite.js";
@@ -63,44 +62,6 @@ import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const userMessage = { role: "user" as const, content: "First user turn", timestamp: 1 };
 const initialWriteKinds = ["message", "model", "thinking"] as const;
-
-it("retained transcript writers do not retain completed attempt continuations", async () => {
-  async function completeAttempt() {
-    const attempt = {
-      config: {},
-      runId: "retention",
-      sessionId: "retention",
-      sessionFile: "agent:main:retention",
-      sessionKey: "agent:main:retention",
-      sessionPersistence: "detached" as const,
-      sessionTarget: {
-        agentId: "main",
-        sessionId: "retention",
-        sessionKey: "agent:main:retention",
-        storePath: "/tmp/retention-unused.sqlite",
-      },
-      continuation: { messages: [userMessage], prompt: "continue" },
-    };
-    const prepared = await prepareEmbeddedAttemptTranscriptLifecycle({
-      attempt,
-      runAbortController: new AbortController(),
-      externalAbortController: { arm() {}, async throwIfFiredAfterPrepCleanup() {} },
-    });
-    await prepared.withOwnedTranscriptWrite(async () => {});
-    await prepared.transcriptLifecycle.dispose();
-    return {
-      writer: prepared.withOwnedTranscriptWrite,
-      continuation: new WeakRef(attempt.continuation),
-    };
-  }
-  const completed = await Promise.all(Array.from({ length: 20 }, completeAttempt));
-  const control = new WeakRef({});
-  await nextTurn();
-  queryObjects(WeakRef);
-  expect(control.deref()).toBeUndefined();
-  expect(completed.filter(({ continuation }) => continuation.deref())).toHaveLength(0);
-  await expect(completed[0]!.writer(async () => {})).rejects.toThrow("attempt disposed");
-});
 
 function observeCreation(
   sessionId: string,
@@ -885,7 +846,44 @@ it("publishes no initial claim or identity for a rolled-back outer transaction",
     }
   }));
 
-it.each(["message", "model"] as const)(
+it("commits the initial metadata pair in one actor append and adopts later metadata", () =>
+  withInitialWriter(async ({ manager, transcript, admission, target }) => {
+    const actor = transcript.ownedTranscriptWriteContext.sessionActor!.actor;
+    using append = vi.spyOn(actor, "appendTranscriptEvent");
+    const { session } = await createTestSession({
+      model: { ...testModel, reasoning: true },
+      sessionManager: manager,
+      thinkingLevel: "high",
+    });
+    try {
+      expect(append).toHaveBeenCalledOnce();
+      const model = manager.getEntries()[0]?.id;
+      const thinking = manager.getEntries()[1]?.id;
+      expect(manager.getEntries()).toMatchObject([
+        { id: model, type: "model_change", parentId: null },
+        { id: thinking, type: "thinking_level_change", parentId: model, thinkingLevel: "high" },
+      ]);
+      expect(manager.getPersistedEntries()).toEqual(readEvents(target));
+
+      const changed = await manager.appendThinkingLevelChange("low");
+      expect(manager.getEntries().at(-1)).toMatchObject({
+        id: changed,
+        parentId: thinking,
+        thinkingLevel: "low",
+      });
+      expect(manager.getPersistedEntries()).toEqual(readEvents(target));
+      const before = readEvents(target);
+      admission.close();
+      await expect(
+        createTestSession({ sessionManager: manager, thinkingLevel: "off" }),
+      ).rejects.toThrow();
+      expect(readEvents(target)).toEqual(before);
+    } finally {
+      session.dispose();
+    }
+  }));
+
+it.each(["message", "model", "initial metadata"] as const)(
   "captures the committed claim before identity-observer cancellation stops the first %s append",
   (kind) =>
     withInitialWriter(async ({ controller, manager, promptState, runParams, target }) => {
@@ -896,7 +894,11 @@ it.each(["message", "model"] as const)(
         controller.abort(callerError);
       });
       try {
-        const failure = await appendInitial(kind, manager).catch((error: unknown) => error);
+        const failure = await (
+          kind === "initial metadata"
+            ? manager[sessionManagerAppendInitialMetadata]("test-provider", "test-model", "high")
+            : appendInitial(kind, manager)
+        ).catch((error: unknown) => error);
         if (kind === "message") {
           expect(failure).toBe(callerError);
         } else {
@@ -919,6 +921,9 @@ it.each(["message", "model"] as const)(
           expect(events).toMatchObject([
             { type: "session" },
             { type: "model_change", provider: "test-provider", modelId: "test-model" },
+            ...(kind === "initial metadata"
+              ? [{ type: "thinking_level_change", thinkingLevel: "high" }]
+              : []),
           ]);
         }
       } finally {

@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import { formatDiskSpaceBytes } from "./disk-space.js";
-import { hasNodeErrorCode } from "./path-guards.js";
+import { statIfExists } from "./path-existence.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
 
 export async function measureUpdateStateFiles(
@@ -13,13 +12,7 @@ export async function measureUpdateStateFiles(
   for (const file of files) {
     let family = 0;
     for (const suffix of ["", "-wal", "-shm", "-journal"]) {
-      try {
-        family += (await fs.stat(file + suffix)).size;
-      } catch (error) {
-        if (!hasNodeErrorCode(error, "ENOENT")) {
-          throw error;
-        }
-      }
+      family += (await statIfExists(file + suffix))?.size ?? 0;
     }
     bytes += family;
     largest = Math.max(largest, family);

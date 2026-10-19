@@ -1,5 +1,7 @@
+import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelMessageReplyPipeline,
+  createTypingCallbacks,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -17,7 +19,7 @@ import { buildDiscordMessageProcessContext } from "./message-handler.context.js"
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { formatDiscordReplySkip } from "./reply-delivery.js";
-import { createDiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
+import { sendTyping } from "./typing.js";
 
 type DiscordMessageProcessContext = NonNullable<
   Awaited<ReturnType<typeof buildDiscordMessageProcessContext>>
@@ -94,7 +96,6 @@ export function createDiscordMessageReplyRuntime(params: {
     cfg,
     discordConfig,
     accountId,
-    token,
     guildHistories,
     historyLimit,
     textLimit,
@@ -106,16 +107,16 @@ export function createDiscordMessageReplyRuntime(params: {
   const deliverChannelId = replyPlan.deliverTarget.startsWith("channel:")
     ? replyPlan.deliverTarget.slice("channel:".length)
     : messageChannelId;
-  let typingFeedback: ReturnType<typeof createDiscordReplyTypingFeedback> | undefined;
+  let typingFeedback: ReturnType<typeof createTypingCallbacks> | undefined;
   const getTypingFeedback = () =>
-    (typingFeedback ??= createDiscordReplyTypingFeedback({
-      cfg,
-      token,
-      accountId,
-      channelId: deliverChannelId,
-      rest: params.feedbackRest,
-      log: logVerbose,
+    (typingFeedback ??= createTypingCallbacks({
+      start: () => sendTyping({ rest: params.feedbackRest, channelId: deliverChannelId }),
+      onStartError: (error) => {
+        logTypingFailure({ log: logVerbose, channel: "discord", target: deliverChannelId, error });
+      },
       keepaliveIntervalMs: params.shouldDisableCoreTypingKeepalive ? undefined : 0,
+      // Discord can keep long tool-heavy replies alive, but not forever.
+      maxDurationMs: 20 * 60_000,
     }));
 
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({

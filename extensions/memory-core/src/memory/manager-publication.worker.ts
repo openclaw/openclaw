@@ -7,6 +7,9 @@ import { admitStoreSearch } from "openclaw/plugin-sdk/database-engine-worker-run
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtensionFromPath,
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE,
   stageMemoryIndexSchemaExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
@@ -311,8 +314,30 @@ function createPublicationBackend(
       }
     }
   };
-  const withFacts = <T>(result: MemoryPublicationResult<T>): MemoryPublicationResult<T> =>
-    result.ok ? { ...result, facts: readMemoryDatabaseFacts(db) } : result;
+  const withFacts = <T>(
+    result: MemoryPublicationResult<T>,
+    includeSearchSchema = false,
+  ): MemoryPublicationResult<T> => {
+    if (!result.ok) {
+      return result;
+    }
+    const facts = readMemoryDatabaseFacts(db);
+    // DDL receipts carry the admitted SQL verbatim, including sqlite-vec's exact declaration.
+    const schema = includeSearchSchema && getAdmittedSqliteSchemaFacts(db)!.tableSql;
+    return {
+      ...result,
+      facts,
+      ...(schema
+        ? {
+            searchSchema: {
+              fts: schema.get(MEMORY_INDEX_FTS_TABLE) ?? null,
+              paths: schema.get(MEMORY_INDEX_PATHS_FTS_TABLE) ?? null,
+              vector: schema.get(MEMORY_INDEX_VECTOR_TABLE) ?? null,
+            },
+          }
+        : {}),
+    };
+  };
   const cacheSize = () => {
     const token = readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE);
     let retained = embeddingCacheSizes.get(db);
@@ -395,7 +420,7 @@ function createPublicationBackend(
           if (result.ok) {
             admitSqliteSchema(db);
           }
-          const published = withFacts(result);
+          const published = withFacts(result, true);
           return published.ok && "kind" in input
             ? {
                 ...published,
@@ -552,6 +577,7 @@ function createPublicationBackend(
               writeMemoryIndexMetadata(db, { ...meta, vectorDims: dimensions });
             }
           }),
+          true,
         );
       }
       loadExtension(command.input.state.extensionPath);

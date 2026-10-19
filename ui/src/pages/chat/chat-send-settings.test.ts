@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
 import {
@@ -71,7 +72,11 @@ it("dispatches a fresh-pane send without waiting for background roster loading",
       expect.objectContaining({
         message: "send without changing a picker",
       }),
-      { timeoutMs: 30_000 },
+      {
+        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        signal: expect.any(AbortSignal),
+        retainSentResultOnAbort: true,
+      },
     );
   } finally {
     roster.resolve(createSessionsListResult());

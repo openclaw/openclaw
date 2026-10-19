@@ -2331,7 +2331,7 @@
     "chrome-devtools-mcp"
   ],
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.7.0",
+    "@agentclientprotocol/sdk": "1.8.0",
     "@anthropic-ai/sdk": "0.133.0",
     "@babel/generator": "8.0.6",
     "@babel/parser": "8.0.7",
@@ -2356,7 +2356,7 @@
     "@opentelemetry/semantic-conventions": "1.43.0",
     "@resvg/resvg-js": "2.6.2",
     "@silvia-odwyer/photon-node": "0.3.4",
-    "@trycua/cua-driver": "0.34.0",
+    "@trycua/cua-driver": "0.34.1",
     "acorn": "8.19.0",
     "chalk": "6.0.1",
     "chrome-devtools-mcp": "1.10.1",
@@ -2369,7 +2369,7 @@
     "esbuild": "0.28.2",
     "execa": "10.1.0",
     "express": "5.3.0",
-    "fast-uri": "4.2.1",
+    "fast-uri": "4.2.2",
     "file-type": "22.1.1",
     "grammy": "1.46.0",
     "highlight.js": "11.12.0",
@@ -2386,9 +2386,9 @@
     "minimatch": "10.2.6",
     "node-edge-tts": "1.2.11",
     "npm": "12.2.0",
-    "openai": "7.31.0",
+    "openai": "7.32.0",
     "p-limit": "7.3.3",
-    "p-map": "7.0.8",
+    "p-map": "7.1.1",
     "parse5": "8.0.1",
     "partial-json": "0.1.7",
     "pg": "8.23.1",
@@ -2404,14 +2404,14 @@
     "web-tree-sitter": "0.27.1",
     "ws": "8.22.0",
     "yaml": "2.9.1",
-    "zod": "4.6.5",
+    "zod": "4.6.6",
     "zod-to-json-schema": "3.25.2"
   },
   "devDependencies": {
-    "@a2ui/lit": "0.12.0",
-    "@a2ui/web_core": "0.12.0",
+    "@a2ui/lit": "0.13.0",
+    "@a2ui/web_core": "0.13.0",
     "@babel/types": "8.0.6",
-    "@copilotkit/aimock": "1.44.0",
+    "@copilotkit/aimock": "1.45.0",
     "@mdx-js/mdx": "3.1.1",
     "@mistralai/mistralai": "2.7.0",
     "@openclaw/crabline": "0.1.29",
@@ -2427,7 +2427,7 @@
     "@types/jsdom": "30.0.0",
     "@types/markdown-it": "14.2.0",
     "@types/mdast": "4.0.4",
-    "@types/node": "26.6.4",
+    "@types/node": "26.6.5",
     "@types/pg": "8.23.1",
     "@types/semver": "7.8.0",
     "@types/web-push": "3.6.4",
@@ -2447,7 +2447,7 @@
     "nostr-tools": "2.25.2",
     "oxfmt": "0.72.0",
     "oxlint": "1.87.0",
-    "oxlint-tsgolint": "7.0.2003",
+    "oxlint-tsgolint": "7.0.2004",
     "pako": "3.0.2",
     "playwright": "1.64.0",
     "postcss": "8.5.29",
@@ -2460,10 +2460,10 @@
     "stylelint-config-recommended": "18.0.0",
     "tinyglobby": "0.2.17",
     "tree-sitter-bash": "0.25.1",
-    "tsdown": "0.23.0",
+    "tsdown": "0.23.1",
     "tsrs": "0.16.0-ts7.1.0-dev.20260929",
     "tsx": "4.23.15",
-    "typescript": "7.1.0-dev.20260928.1",
+    "typescript": "7.1.0-dev.20261011.1",
     "unrun": "0.3.1",
     "vite": "8.3.4",
     "vitest": "5.0.3"
@@ -2474,5 +2474,5 @@
   "engines": {
     "node": ">=24.16.0 <25 || >=26.1.0"
   },
-  "packageManager": "pnpm@12.11.1+sha512.5b0e3288239a7ea4155d2094f547066e122a1376b3cd785a680c9112e116913e64aaaecf20dd83cc34030fa67013f5c5511f9cf430dd8384188b4c60b8a2ad1e"
+  "packageManager": "pnpm@12.12.1+sha512.b7f98934c0b1f29a65f5da52f2d7f994e7faad573ffdddea1497fb4dcb5aec051590ee7c7d95a38172b4bfae103a5b83edf2ee866e11731c2cafa96063610ac5"
 }

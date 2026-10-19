@@ -548,7 +548,6 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
           <Switch>
             <Match when={route()?.mode === "sessions"}>
               <SessionActivityView
-                context={state().context}
                 expandedAutomationDays={expandedAutomationDays()}
                 filters={{
                   ...(sessionRoute()?.filters ?? {

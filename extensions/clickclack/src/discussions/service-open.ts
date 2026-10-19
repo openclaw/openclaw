@@ -1,6 +1,5 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { SessionDiscussionInfo } from "openclaw/plugin-sdk/session-discussion";
 import { listClickClackAccountIds, resolveClickClackAccount } from "../accounts.js";
 import {
   ClickClackHttpError,
@@ -47,7 +46,6 @@ type OpenDiscussionParams = {
   installationId: string;
   sessionKey: string;
   ensureTimer: () => Promise<void>;
-  reconcilePendingOpen: (pending: PendingDiscussionOpen) => Promise<void>;
   withChannelMutationLock: <T>(run: () => Promise<T>) => Promise<T>;
   ensureBindingCapacity: (sessionKey: string) => Promise<void>;
   warn: (message: string) => void;
@@ -269,7 +267,13 @@ export async function openClickClackDiscussionBinding(
       unresolved.serverBaseUrl !== serverBaseUrl ||
       unresolved.workspaceId !== workspace.id)
   ) {
-    await params.reconcilePendingOpen(unresolved);
+    await reconcilePendingDiscussionOpen({
+      runtime,
+      store,
+      clientFactory: params.clientFactory,
+      pending: unresolved,
+      allowRetry: false,
+    });
     if (await getPendingDiscussionOpen(runtime, sessionKey)) {
       throw new Error(
         "A previous ClickClack discussion open is still unresolved; restore its credential and retry",
@@ -499,19 +503,19 @@ export async function openClickClackDiscussionBinding(
   });
 }
 
+/** Returns whether the service should retry inside its current session queue. */
 export async function reconcilePendingDiscussionOpen(params: {
   runtime: PluginRuntime;
   store: ClickClackDiscussionBindingStore;
   clientFactory: (account: ResolvedClickClackAccount) => ClickClackClient;
   pending: PendingDiscussionOpen;
   allowRetry?: boolean;
-  open: (sessionKey: string) => Promise<SessionDiscussionInfo>;
-}): Promise<void> {
+}): Promise<boolean> {
   const { pending } = params;
   const currentBinding = await params.store.getAsync(pending.sessionKey);
   if (currentBinding?.externalRef === pending.externalRef) {
     await finalizePendingDiscussionBinding(params.runtime, pending.sessionKey, currentBinding);
-    return;
+    return false;
   }
   // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.
   const cfg = params.runtime.config.current() as CoreConfig;
@@ -526,7 +530,7 @@ export async function reconcilePendingDiscussionOpen(params: {
   if (!account) {
     // Without the creating credential, keep the destination quarantined until
     // an operator restores access or explicitly cleans up the pending record.
-    return;
+    return false;
   }
   const client = params.clientFactory(account);
   const entry = await readDiscussionSessionEntry(params.runtime, pending.sessionKey);
@@ -547,8 +551,7 @@ export async function reconcilePendingDiscussionOpen(params: {
       retryAccount.discussions.workspace,
     );
     if (configuredWorkspace?.id === pending.workspaceId) {
-      await params.open(pending.sessionKey);
-      return;
+      return true;
     }
   }
   const channels = await client.channels(pending.workspaceId);
@@ -569,11 +572,12 @@ export async function reconcilePendingDiscussionOpen(params: {
       sessionKey: pending.sessionKey,
       expectedGeneration: pending.generation,
     });
-    return;
+    return false;
   }
   await clearDiscussionBindingGeneration({
     runtime: params.runtime,
     sessionKey: pending.sessionKey,
     expectedGeneration: pending.generation,
   });
+  return false;
 }

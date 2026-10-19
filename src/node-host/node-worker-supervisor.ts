@@ -1,8 +1,8 @@
-import { addAbortListener } from "node:events";
 import path from "node:path";
 import { NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { resolveStateDir } from "../config/paths.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
@@ -23,7 +23,6 @@ import {
   type WorkerConnectionEndpoint,
 } from "../worker/worker-connection-endpoint.js";
 import type { NodeWorkerProcessInput } from "../worker/worker-process-observation.js";
-import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import { NodeWorkerChildLifecycle } from "./node-worker-child-lifecycle.js";
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
@@ -282,13 +281,7 @@ class NodeWorkerSupervisor {
       signal.throwIfAborted();
       if (owner.retiring) {
         // Shutdown must abort admission before stopping its retiring physical owner.
-        const aborted = createDeferredCore();
-        const listener = addAbortListener(signal, () => aborted.resolve());
-        try {
-          await Promise.race([owner.done, aborted.promise]);
-        } finally {
-          listener[Symbol.dispose]();
-        }
+        await racePromiseWithAbortSignal(owner.done, signal, (aborted) => aborted.reason);
       }
       signal.throwIfAborted();
       if (this.children.active.get(owner.launchId) !== owner) {
@@ -572,7 +565,7 @@ class NodeWorkerSupervisor {
           result.status === "rejected" ? [result.reason] : [],
         ),
       );
-      throwNodeHostCleanupErrors(errors, "node worker environment cleanup failed");
+      throwCollectedErrors(errors, "node worker environment cleanup failed");
     });
   }
 
@@ -718,7 +711,7 @@ class NodeWorkerSupervisor {
     await this.journal
       .drain({ close: errors.length === 0 })
       .catch((error: unknown) => errors.push(error));
-    throwNodeHostCleanupErrors(errors, "node worker terminal reconciliation failed");
+    throwCollectedErrors(errors, "node worker terminal reconciliation failed");
   }
 }
 

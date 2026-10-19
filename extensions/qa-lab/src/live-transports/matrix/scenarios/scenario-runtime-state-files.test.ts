@@ -1,17 +1,18 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
+  createChannelIngressQueueForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, expect, it } from "vitest";
 import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
 import {
   deleteMatrixSyncStoreCursor,
   rewriteMatrixSyncStoreCursor,
-  waitForMatrixInboundDedupeEntry,
+  waitForMatrixIngressCompletion,
   waitForMatrixSyncStoreWithCursor,
 } from "./scenario-runtime-state-files.js";
 
@@ -71,6 +72,7 @@ const expectNoCursor = (stateDir: string) =>
 
 afterEach(async () => {
   resetPluginStateStoreForTests();
+  await closeOpenClawStateDatabaseAsync();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
 });
 
@@ -147,26 +149,26 @@ it.each(["json", "sqlite"] as const)(
   },
 );
 
-it("observes inbound dedupe entries committed through the core claimable dedupe", async () => {
+it("observes only the requested account's completed ingress event", async () => {
   const stateDir = await createStateDir();
-  const accountRoot = path.join(stateDir, "matrix", "accounts", "sut", "server", "token");
   const eventId = "$event";
-  const roomId = "!room:matrix-qa.test";
-  // Match the monitor's persisted account-scoped key, including its suffix.
-  const guard = createClaimableDedupe({
-    pluginId: "matrix",
-    namespacePrefix: "matrix.inbound-dedupe",
-    ttlMs: 30 * 24 * 60 * 60 * 1000,
-    memoryMaxSize: 100,
-    stateMaxEntries: 100,
-    env: { ...process.env, OPENCLAW_STATE_DIR: accountRoot },
+  const accountId = "sut";
+  const queue = createChannelIngressQueueForTests({ channelId: "matrix", accountId, stateDir });
+  const otherQueue = createChannelIngressQueueForTests({
+    channelId: "matrix",
+    accountId: "other",
+    stateDir,
   });
-  const key = `runtime-default\0${roomId}\0${eventId}`;
-  await guard.claim(key);
-  await guard.commit(key);
-  resetPluginStateStoreForTests();
-
+  await otherQueue.complete(eventId);
+  await queue.enqueue(eventId, { roomId: "!room:matrix-qa.test" });
   await expect(
-    waitForMatrixInboundDedupeEntry({ eventId, roomId, stateDir, timeoutMs: 1_000 }),
-  ).resolves.toBe(path.join(accountRoot, "state", "openclaw.sqlite"));
+    waitForMatrixIngressCompletion({ accountId, eventId, stateDir, timeoutMs: 20 }),
+  ).rejects.toThrow("timed out waiting for Matrix ingress completion");
+
+  const claimed = await queue.claim(eventId, { ownerId: "qa-probe" });
+  expect(claimed).toBeDefined();
+  await queue.complete(claimed!);
+  await expect(
+    waitForMatrixIngressCompletion({ accountId, eventId, stateDir, timeoutMs: 1_000 }),
+  ).resolves.toBe(path.join(stateDir, "state", "openclaw.sqlite"));
 });
