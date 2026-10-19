@@ -317,7 +317,7 @@ function renderCatalogGroup(
             : undefined
         }
         disabledReason={sectionDragDisabledReason()}
-        onStartDrag={(sectionId) => params.host.sessionOrganizer.startSidebarSectionDrag(sectionId)}
+        onStartDrag={(id) => params.host.sessionOrganizer.startSidebarSectionDrag(id)}
         onFinishDrag={() => params.host.sessionOrganizer.finishSidebarSectionDrag()}
         reorder={{
           label: readCatalog().label,
@@ -431,7 +431,7 @@ function renderCatalogGroup(
               data-session-catalog-load-more={readCatalog().id}
               disabled={loadingMore()}
               aria-busy={loadingMore() ? "true" : "false"}
-              onClick={() => params.host.sessionData.loadMoreSessionCatalog(readCatalog().id)}
+              onClick={() => void params.host.sessionData.loadMoreSessionCatalog(readCatalog().id)}
             >
               {t("chat.selectors.loadMoreSessions")}
             </button>
