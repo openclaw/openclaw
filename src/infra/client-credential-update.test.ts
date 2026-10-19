@@ -377,10 +377,6 @@ async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>
       expect(
         recordUpdateDatabaseWrites(captured.backup, writes, {
           name: "candidate Doctor",
-          command: "doctor --fix",
-          cwd: f.root,
-          durationMs: 0,
-          exitCode: 0,
         }),
       ).toBeDefined();
       expect(captured.backup.restoreRefusal).toBeUndefined();
@@ -593,10 +589,6 @@ describe("client credential public update custody", () => {
         expect(
           recordUpdateDatabaseWrites(captured.backup, writes, {
             name: "candidate Doctor",
-            command: "doctor --fix",
-            cwd: f.root,
-            durationMs: 0,
-            exitCode: 0,
           }),
         ).toBeDefined();
         expect(captured.backup.restoreRefusal).toBeUndefined();
