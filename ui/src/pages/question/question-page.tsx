@@ -20,7 +20,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
-import { projectMutableSource } from "../../lib/reactive/projection.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ChatQuestionCard } from "../chat/components/chat-question-card-view.tsx";
 import { createGatewayQuestionPanelProps } from "../chat/components/chat-question-card.ts";
@@ -57,8 +57,16 @@ function createQuestionPage(
     rememberPanelFocus();
     publishQuestions();
   });
-  const questions = projectMutableSource(questionState, listQuestionPrompts);
-  publishQuestions = questions.publish;
+  const questions = projectSource(questionState, {
+    read: listQuestionPrompts,
+    subscribe: (_state, notify) => {
+      publishQuestions = notify;
+      return () => {
+        publishQuestions = () => {};
+      };
+    },
+    equality: "revision",
+  });
   const prompt = () => questions.read().find((candidate) => candidate.id === props.questionId);
   // Gateway receipts retire question operations and rebind the prompt client synchronously before reconnect.
   const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);

@@ -19,7 +19,7 @@ import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { projectMutableSource } from "../../lib/reactive/projection.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { renderApprovalPresentation } from "./approval-presentation.tsx";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
@@ -161,8 +161,16 @@ function createApprovalPage(
   let boundApprovalId: string | undefined;
   let heading: HTMLHeadingElement | undefined;
   let notify = () => {};
-  const view = projectMutableSource(state, (source) => source);
-  notify = view.publish;
+  const view = projectSource(state, {
+    read: (source) => source,
+    subscribe: (_source, publish) => {
+      notify = publish;
+      return () => {
+        notify = () => {};
+      };
+    },
+    equality: "revision",
+  });
   const hasGatewayConnection = (current = state) => current.connected && Boolean(clientOwner);
   const hasApprovalAccess = (current = state) =>
     current.approvalsAccess &&
