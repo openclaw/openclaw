@@ -58,10 +58,7 @@ export function SidebarAgentCard(props: SidebarAgentCardProps) {
         ]}
       >
         <button
-          ref={(element) => {
-            menuTrigger = element;
-            props.onTriggerRef?.(element);
-          }}
+          ref={[(element) => (menuTrigger = element), props.onTriggerRef]}
           type="button"
           class="sidebar-agent-card__main"
           aria-haspopup="menu"

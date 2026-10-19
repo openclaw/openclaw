@@ -869,6 +869,79 @@ describe("title tooltips", () => {
     await expectOpenCount(1);
   });
 
+  it("keeps an inherited hint on its focused control until focus moves to a sibling", async () => {
+    const wrapper = document.createElement("div");
+    wrapper.title = "Shared action details";
+    const first = document.createElement("button");
+    const second = document.createElement("button");
+    first.textContent = "First action";
+    second.textContent = "Second action";
+    first.setAttribute("aria-describedby", "first-description");
+    second.setAttribute("aria-describedby", "second-description");
+    wrapper.append(first, second);
+    document.body.append(wrapper);
+
+    second.focus();
+    const tooltip = document.querySelector<TooltipElement>("openclaw-tooltip")!;
+    await settleTooltip(tooltip);
+    const ids = (second.getAttribute("aria-describedby") ?? "").split(/\s+/u);
+    expect(ids).toHaveLength(2);
+    const descriptionId = ids.find((id) => id !== "second-description")!;
+    expect(document.getElementById(descriptionId)?.textContent).toBe("Shared action details");
+    expect(first.getAttribute("aria-describedby")).toBe("first-description");
+    expect(wrapper.hasAttribute("aria-describedby")).toBe(false);
+    const surface = currentTooltipSurface(tooltip);
+    expect(tooltipIsOpen(tooltip)).toBe(true);
+
+    for (const target of [first, wrapper]) {
+      dispatchMousePointer(target, "pointerover");
+      await settleTooltip(tooltip);
+      expect(second.getAttribute("aria-describedby")).toBe(`second-description ${descriptionId}`);
+      expect(first.getAttribute("aria-describedby")).toBe("first-description");
+    }
+
+    first.focus();
+    await settleTooltip(tooltip);
+    expect(document.activeElement).toBe(first);
+    expect(first.getAttribute("aria-describedby")).toBe(`first-description ${descriptionId}`);
+    expect(second.getAttribute("aria-describedby")).toBe("second-description");
+    expect(document.querySelector("openclaw-tooltip")).toBe(tooltip);
+    expect(currentTooltipSurface(tooltip)).toBe(surface);
+    expect(tooltipIsOpen(tooltip)).toBe(true);
+  });
+
+  it("describes a titled label's associated control and follows its next pointer discovery", async () => {
+    const label = document.createElement("label");
+    label.title = "Account details";
+    label.textContent = "Account";
+    const first = document.createElement("input");
+    const second = document.createElement("input");
+    first.id = "first-account";
+    second.id = "second-account";
+    first.setAttribute("aria-describedby", "first-description");
+    second.setAttribute("aria-describedby", "second-description");
+    label.htmlFor = first.id;
+    document.body.append(label, first, second);
+
+    dispatchMousePointer(label, "pointerover");
+    const tooltip = document.querySelector<TooltipElement>("openclaw-tooltip")!;
+    await settleTooltip(tooltip);
+    const ids = (first.getAttribute("aria-describedby") ?? "").split(/\s+/u);
+    expect(ids).toHaveLength(2);
+    const descriptionId = ids.find((id) => id !== "first-description")!;
+    expect(document.getElementById(descriptionId)?.textContent).toBe("Account details");
+    expect(label.hasAttribute("aria-describedby")).toBe(false);
+    expect(second.getAttribute("aria-describedby")).toBe("second-description");
+
+    label.htmlFor = second.id;
+    dispatchMousePointer(label, "pointerover");
+    await settleTooltip(tooltip);
+    expect(first.getAttribute("aria-describedby")).toBe("first-description");
+    expect(second.getAttribute("aria-describedby")).toBe(`second-description ${descriptionId}`);
+    expect(label.hasAttribute("aria-describedby")).toBe(false);
+    expect(document.querySelector("openclaw-tooltip")).toBe(tooltip);
+  });
+
   it("uses the nearest inherited title through shadow DOM and preserves iframe names", async () => {
     const parent = document.createElement("div");
     parent.title = "Inherited hint";
@@ -882,6 +955,9 @@ describe("title tooltips", () => {
     await commitTooltip(tooltip);
     expect(tooltip.content).toBe("Inherited hint");
     await settleTooltip(tooltip);
+    const descriptionId = trigger.getAttribute("aria-describedby") ?? "";
+    expect(shadow.getElementById(descriptionId)?.textContent).toBe("Inherited hint");
+    expect(parent.hasAttribute("aria-describedby")).toBe(false);
     expect(tooltipIsOpen(tooltip)).toBe(true);
 
     const iframe = document.createElement("iframe");

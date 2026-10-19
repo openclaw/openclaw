@@ -198,11 +198,23 @@ export function installTitleTooltips(ownerDocument: Document) {
         event.detail === "focus")
         ? "focus"
         : "pointer";
+    const control =
+      elements.find((element) => element.matches(DESCRIBABLE_SELECTOR)) ??
+      elements.find((element) => element instanceof HTMLLabelElement)?.control;
+    const descriptionTarget = () => (control?.isConnected ? control : (anchor ?? null));
     const previewOwned = ownsPreview(link);
     if (anchor === active?.anchor && previewOwned === active?.previewOwned) {
       if (active) {
         active.link = link;
         active[input] = true;
+        // Pointer movement within an inherited hint must not displace its focused control.
+        if (
+          tooltip &&
+          (input === "focus" || (!active.focus && control)) &&
+          tooltip.descriptionTarget?.() !== descriptionTarget()
+        ) {
+          tooltip.descriptionTarget = descriptionTarget;
+        }
         if (link && !active.anchor.contains(link)) {
           observer.observe(link, { attributes: true, attributeFilter: ["href"] });
         }
@@ -266,11 +278,7 @@ export function installTitleTooltips(ownerDocument: Document) {
     if (!explicit && tooltipContent) {
       tooltip ??= ownerDocument.createElement("openclaw-tooltip");
       tooltip.disabled = dialogExpanded();
-      // Title hints adapt caller-owned DOM, including markdown and plugin output.
-      tooltip.descriptionTarget = () =>
-        anchor.matches(DESCRIBABLE_SELECTOR)
-          ? anchor
-          : (anchor.querySelector(DESCRIBABLE_SELECTOR) ?? anchor);
+      tooltip.descriptionTarget = descriptionTarget;
       if (active.filePath) {
         const current = active;
         const path = active.filePath;

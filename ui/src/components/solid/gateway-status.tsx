@@ -41,7 +41,7 @@ export function GatewayStatus(params: GatewayStatusProps & { row?: boolean }): J
       <openclaw-tooltip
         class="gateway-status-tooltip"
         prop:content={params.lastError ? redactLoginFailureError(params.lastError) : ""}
-        prop:descriptionTarget={() => (canRetry() ? (retry ?? null) : null)}
+        prop:descriptionTarget={canRetry() ? () => retry ?? null : undefined}
       >
         <span
           class={[

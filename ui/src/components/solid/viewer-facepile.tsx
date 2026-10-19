@@ -133,16 +133,12 @@ export function ViewerFacepileContent(props: ViewerFacepileProps) {
           }
         >
           {(user) => (
-            <openclaw-tooltip prop:content={presenceViewerLabel(user())}>
-              <span class="viewer-facepile__tooltip-anchor">
-                <FacepilePerson
-                  user={user()}
-                  markAsViewer={!props.staticParticipants}
-                  routing={props.personActivity}
-                  registerLink={props.registerLink}
-                />
-              </span>
-            </openclaw-tooltip>
+            <FacepilePerson
+              user={user()}
+              markAsViewer={!props.staticParticipants}
+              routing={props.personActivity}
+              registerLink={props.registerLink}
+            />
           )}
         </For>
         <Show when={overflowCount() > 0}>
@@ -169,23 +165,34 @@ function FacepilePerson(props: {
       : null,
   );
   const avatar = <ParticipantAvatar user={props.user} markAsViewer={props.markAsViewer} />;
+  let profileLink: HTMLAnchorElement | undefined;
   return (
-    <Show when={link()} fallback={avatar}>
-      {(target) => {
-        let anchor!: HTMLAnchorElement;
-        onSettled(() => props.registerLink?.(anchor));
-        return (
-          <a
-            ref={(element) => (anchor = element)}
-            class="person-activity-avatar-link"
-            href={target().href}
-            onClick={(event) => target().open(event)}
-          >
-            {avatar}
-          </a>
-        );
-      }}
-    </Show>
+    <openclaw-tooltip
+      prop:content={presenceViewerLabel(props.user)}
+      prop:descriptionTarget={link() ? () => profileLink ?? null : undefined}
+    >
+      <span class="viewer-facepile__tooltip-anchor">
+        <Show when={link()} fallback={avatar}>
+          {(target) => {
+            let anchor!: HTMLAnchorElement;
+            onSettled(() => props.registerLink?.(anchor));
+            return (
+              <a
+                ref={(element) => {
+                  anchor = element;
+                  profileLink = element;
+                }}
+                class="person-activity-avatar-link"
+                href={target().href}
+                onClick={(event) => target().open(event)}
+              >
+                {avatar}
+              </a>
+            );
+          }}
+        </Show>
+      </span>
+    </openclaw-tooltip>
   );
 }
 

@@ -70,7 +70,7 @@ export function CommentPreviewChip(props: ChipProps) {
       prop:placement="top-start"
       prop:autoSize={true}
       prop:describe={false}
-      prop:descriptionTarget={() => (props.removal ? (trigger ?? null) : null)}
+      prop:descriptionTarget={props.removal ? () => trigger ?? null : undefined}
       prop:openOnClick={true}
       prop:hoverDismissDelay={props.removal ? 200 : undefined}
     >
@@ -83,10 +83,7 @@ export function CommentPreviewChip(props: ChipProps) {
         onReveal={props.onReveal}
         onClick={props.onReveal}
         elementRef={props.elementRef}
-        triggerRef={(element) => {
-          trigger = element;
-          props.triggerRef?.(element);
-        }}
+        triggerRef={[(element) => (trigger = element), props.triggerRef]}
         removal={
           props.removal
             ? { ...props.removal, label: t("chat.messages.removeAnnotations") }

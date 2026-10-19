@@ -273,7 +273,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
         <td class="data-table-key-col">
           <openclaw-tooltip
             prop:content={keyCellTitle()}
-            prop:descriptionTarget={() => (canLink() ? (sessionLink ?? null) : null)}
+            prop:descriptionTarget={canLink() ? () => sessionLink ?? null : undefined}
           >
             <div class={["session-key-cell", { mono: !friendlyKeyLabel() }]}>
               <div class="session-key-cell__text">
