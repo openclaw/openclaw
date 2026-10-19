@@ -21,7 +21,6 @@ const poolCtor = vi.fn();
 const proxyAgentCtor = vi.fn();
 const proxyConnect = vi.fn();
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-const DESTINATION_AGENT = Symbol("destination agent");
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
@@ -47,43 +46,23 @@ class MockAgent extends EventEmitter {
 
   createOriginDispatcher(options: Record<string, unknown>): EventEmitter {
     const factory = this.options?.factory;
-    return typeof factory === "function"
-      ? (factory(new URL("https://service.test"), options) as EventEmitter)
-      : options.connections === 1
-        ? new MockClient(new URL("https://service.test"), options)
-        : new MockPool(new URL("https://service.test"), options);
+    if (typeof factory !== "function") {
+      throw new Error("expected origin dispatcher factory");
+    }
+    return factory(new URL("https://service.test"), options) as EventEmitter;
   }
 }
 
-class MockPool extends EventEmitter {
-  constructor(
-    public readonly origin: unknown,
-    public readonly options: unknown,
-  ) {
-    super();
+class MockPool extends MockClient {
+  constructor(origin: unknown, options: unknown) {
+    super(origin, options);
     poolCtor(origin, options);
   }
 }
 
-class MockEnvHttpProxyAgent extends EventEmitter {
-  readonly [DESTINATION_AGENT]: MockAgent;
-
-  constructor(public readonly options: unknown) {
-    super();
-    this[DESTINATION_AGENT] = new MockAgent(
-      expectOptionsRecord(options, "expected EnvHttpProxyAgent options"),
-    );
-  }
-}
-
-class MockProxyAgent extends EventEmitter {
-  readonly [DESTINATION_AGENT]: MockAgent;
-
-  constructor(public readonly options: unknown) {
-    super();
-    this[DESTINATION_AGENT] = new MockAgent(
-      expectOptionsRecord(options, "expected ProxyAgent options"),
-    );
+class MockProxyAgent extends MockAgent {
+  constructor(options: Record<string, unknown>) {
+    super(options);
     proxyAgentCtor(options);
   }
 }
@@ -92,7 +71,7 @@ function installUndiciRuntimeDeps(): void {
   (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
     Agent: MockAgent,
     Client: MockClient,
-    EnvHttpProxyAgent: MockEnvHttpProxyAgent,
+    EnvHttpProxyAgent: MockAgent,
     Pool: MockPool,
     ProxyAgent: MockProxyAgent,
     buildConnector: () => proxyConnect,
@@ -107,28 +86,8 @@ function expectOptionsRecord(options: unknown, message: string): Record<string, 
   return options as Record<string, unknown>;
 }
 
-function requireProxyAgentOptions(): Record<string, unknown> {
-  const call = proxyAgentCtor.mock.calls[0];
-  if (!call) {
-    throw new Error("expected ProxyAgent constructor call");
-  }
-  return expectOptionsRecord(call[0], "expected ProxyAgent options object");
-}
-
-function requireClientOptions(): Record<string, unknown> {
-  const call = poolCtor.mock.calls[0];
-  if (!call) {
-    throw new Error("expected Pool constructor call");
-  }
-  return expectOptionsRecord(call[1], "expected Pool options object");
-}
-
-function invokeProxyClientFactory(options: Record<string, unknown>): void {
-  const clientFactory = options.clientFactory;
-  if (typeof clientFactory !== "function") {
-    throw new Error("expected ProxyAgent clientFactory");
-  }
-  clientFactory(new URL("https://127.0.0.1:8443"), { connect: proxyConnect });
+function requireOptions(mock: ReturnType<typeof vi.fn>, index: number): Record<string, unknown> {
+  return expectOptionsRecord(mock.mock.calls[0]?.[index], "expected constructor options");
 }
 
 describe("installed dispatcher lifecycle", () => {
@@ -191,20 +150,13 @@ describe("installed dispatcher lifecycle", () => {
         delete globalThis[overrideKey];
         hook.deregister();
         await Promise.all(dispatchers.map((dispatcher) => dispatcher.destroy()));
+        assert.ok(dispatchers.every((dispatcher) => dispatcher.destroyed));
       }
       `,
       { imports: ["tsx"] },
     );
 
     expect(output.trim()).toBe("ok");
-  });
-
-  it("supports destroy without a runtime override", async () => {
-    const dispatcher = createHttp1Agent();
-
-    await dispatcher.destroy();
-
-    expect(dispatcher.destroyed).toBe(true);
   });
 });
 
@@ -220,14 +172,6 @@ describe("undici dispatcher errors", () => {
   });
 });
 
-function invokeClientConnect(options: Record<string, unknown>, servername: string): void {
-  const connect = options.connect;
-  if (typeof connect !== "function") {
-    throw new Error("expected wrapped Client connect");
-  }
-  connect({ host: "127.0.0.1:8443", servername }, vi.fn());
-}
-
 describe("createHttp1ProxyAgent", () => {
   it("adds active managed proxy CA trust to explicit ProxyAgent options", () => {
     installUndiciRuntimeDeps();
@@ -238,10 +182,11 @@ describe("createHttp1ProxyAgent", () => {
     try {
       createHttp1ProxyAgent({ uri: "https://proxy.test:8443" });
 
-      const options = requireProxyAgentOptions();
-      expect(options.uri).toBe("https://proxy.test:8443");
-      expect(options.allowH2).toBe(false);
-      expect(options.proxyTls).toMatchObject({ ca: "explicit-proxy-agent-ca" });
+      expect(requireOptions(proxyAgentCtor, 0)).toMatchObject({
+        uri: "https://proxy.test:8443",
+        allowH2: false,
+        proxyTls: { ca: "explicit-proxy-agent-ca" },
+      });
     } finally {
       stopActiveManagedProxyRegistration(registration);
     }
@@ -261,8 +206,16 @@ describe("proxy SNI policy", () => {
     } else {
       createHttp1ProxyAgent({ uri });
     }
-    invokeProxyClientFactory(requireProxyAgentOptions());
-    invokeClientConnect(requireClientOptions(), servername);
+    const { clientFactory } = requireOptions(proxyAgentCtor, 0);
+    if (typeof clientFactory !== "function") {
+      throw new Error("expected ProxyAgent clientFactory");
+    }
+    clientFactory(new URL("https://127.0.0.1:8443"), { connect: proxyConnect });
+    const { connect } = requireOptions(poolCtor, 1);
+    if (typeof connect !== "function") {
+      throw new Error("expected wrapped Client connect");
+    }
+    connect({ host: "127.0.0.1:8443", servername }, vi.fn());
 
     expect(proxyConnect).toHaveBeenCalledWith(
       preserve
