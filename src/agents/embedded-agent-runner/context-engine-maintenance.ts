@@ -100,7 +100,7 @@ function scheduleDeferredTurnMaintenance(
 
   const activeRun = activeDeferredTurnMaintenanceRuns.get(sessionKey);
   if (activeRun) {
-    if (activeRun.closing) {
+    if (activeRun.closing || activeRun.maintenance.signal.aborted) {
       params.onDeferredMaintenanceFailure?.(
         new Error("Deferred maintenance is finishing cleanup; try again on the next turn"),
       );
@@ -124,6 +124,7 @@ function scheduleDeferredTurnMaintenance(
   const schedulerAbort = createDeferredTurnMaintenanceAbortSignal();
   const maintenance = createSessionMaintenanceOwner({
     sessionKey,
+    preemptible: true,
     abortSignal: schedulerAbort.abortSignal,
   });
   const completion = createDeferredCore();
@@ -192,9 +193,12 @@ function scheduleDeferredTurnMaintenance(
       );
     } catch (error) {
       params.onDeferredMaintenanceFailure?.(error);
-      log.warn(
-        "Failed to schedule deferred context engine maintenance: " + formatErrorMessage(error),
-      );
+      // Yielding to a foreground turn is routine, not a scheduling failure.
+      if (!isContextEngineAbortRejection(error, maintenance.signal)) {
+        log.warn(
+          "Failed to schedule deferred context engine maintenance: " + formatErrorMessage(error),
+        );
+      }
     }
   };
   void (async () => {
@@ -203,12 +207,15 @@ function scheduleDeferredTurnMaintenance(
       await params.runInContext(() => runContextEngineMaintenanceWork(run, maintenance.signal));
     } finally {
       try {
+        // Close before cleanup waits on predecessors, so later requests cannot join a dying run.
         state.closing = true;
-        while (state.engines.length > 0) {
-          const engine = state.engines[0]!;
-          await disposeRetainedEngine(state, engine.contextEngine);
-        }
-        await Promise.all(state.disposals);
+        await maintenance.runCleanup(async () => {
+          while (state.engines.length > 0) {
+            const engine = state.engines[0]!;
+            await disposeRetainedEngine(state, engine.contextEngine);
+          }
+          await Promise.all(state.disposals);
+        });
       } finally {
         activeDeferredTurnMaintenanceRuns.delete(sessionKey);
         schedulerAbort.dispose();
