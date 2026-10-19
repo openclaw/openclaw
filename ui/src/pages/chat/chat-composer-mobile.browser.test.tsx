@@ -84,3 +84,48 @@ it("keeps mobile editing, field and caret while the native composer menu owns fo
     .toHaveAttribute("data-composer-editing", "false");
   outside.remove();
 });
+
+it("keeps editing and caret when pointer clicks empty composer padding and toolbar gaps", async () => {
+  await page.viewport(430, 800);
+  const editing = vi.fn();
+  const view = renderComposerFixture({
+    mobileComposer: true,
+    draft: "Keep this draft and selection",
+    onComposerEditingChange: editing,
+  });
+  // Chat's focusable content host receives native pointer focus from blank children.
+  view.container.tabIndex = -1;
+  document.body.append(view.container);
+  view.container.style.cssText = "position:fixed;bottom:24px;left:16px;width:398px";
+  const outside = document.createElement("button");
+  outside.textContent = "Outside composer";
+  document.body.append(outside);
+  onTestFinished(() => outside.remove());
+  const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea")!;
+  const input = view.container.querySelector<HTMLElement>(".agent-chat__input")!;
+  const shell = view.container.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
+  const footer = view.container.querySelector<HTMLElement>(".agent-chat__composer-footer")!;
+  const blur = vi.fn();
+  textarea.addEventListener("blur", blur);
+  await page.elementLocator(textarea).click();
+  await expect.element(page.elementLocator(shell)).toHaveAttribute("data-composer-editing", "true");
+  await Promise.all(input.getAnimations().map((animation) => animation.finished));
+  textarea.setSelectionRange(2, 8);
+  editing.mockClear();
+  for (const [target, position] of [
+    [input, { x: 3, y: 3 }],
+    [footer, { x: footer.clientWidth / 2, y: footer.clientHeight - 2 }],
+  ] as const) {
+    await page.elementLocator(target).click({ position });
+    expect(document.activeElement).toBe(textarea);
+    expect(blur).not.toHaveBeenCalled();
+    expect(editing.mock.calls.some(([value]) => value === false)).toBe(false);
+    expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([2, 8]);
+    expect(textarea.value).toBe(view.props.draft);
+  }
+  expect(view.props.onSend).not.toHaveBeenCalled();
+  await page.elementLocator(outside).click();
+  await expect
+    .element(page.elementLocator(shell))
+    .toHaveAttribute("data-composer-editing", "false");
+});
