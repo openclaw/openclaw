@@ -50,6 +50,8 @@ it.each([
   ["webhook", "after-acceptance"],
   ["announce", "before-delivery"],
   ["webhook", "before-delivery"],
+  ["announce", "legacy-unknown"],
+  ["webhook", "legacy-unknown"],
 ] as const)(
   "recovers %s interrupted %s without duplicating its completion",
   async (mode, interrupted) => {
@@ -60,7 +62,7 @@ it.each([
     const received: string[] = [];
     const receive = async (text: string) => {
       received.push(text);
-      if (interrupted === "after-acceptance" && received.length === 1) {
+      if (interrupted !== "before-delivery" && received.length === 1) {
         reachedInterruption.resolve();
         await acknowledgment.promise;
       }
@@ -139,7 +141,7 @@ it.each([
       await next.clock.advanceBy(120_000);
       await onTimer(next.state);
     };
-    const expectedDeliveries = interrupted === "after-acceptance" ? [result] : [];
+    const expectedDeliveries = interrupted === "before-delivery" ? [] : [result];
     const expectRecoveredOnce = () => {
       expect(received).toEqual([result]);
       expect(executionCount).toBe(interrupted === "before-delivery" ? 2 : 1);
@@ -164,6 +166,14 @@ it.each([
       const receipt = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
       expect(receipt).toBeDefined();
       expect((await first.cron.readJob(job.id))?.state.runningReceiptId).toBe(receipt?.receiptId);
+      if (interrupted === "legacy-unknown") {
+        // Schema-19 migration preserves uncertainty for already-running receipts.
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "UPDATE cron_run_receipts SET delivery_attempt_state = 'unknown' WHERE receipt_id = ?",
+          )
+          .run(receipt!.receiptId);
+      }
 
       await restart(first, replacement);
       expectRecoveredOnce();
@@ -172,7 +182,7 @@ it.each([
         enabled: false,
         state: {
           lastRunStatus: interrupted === "before-delivery" ? "ok" : "error",
-          ...(interrupted === "after-acceptance"
+          ...(interrupted !== "before-delivery"
             ? { lastError: interruptedError, lastDeliveryStatus: "unknown" }
             : { lastDeliveryStatus: "delivered" }),
         },
@@ -180,7 +190,7 @@ it.each([
       expect(recovered?.state.nextRunAtMs).toBeUndefined();
       expect(recovered?.state.startupCatchupAtMs).toBeUndefined();
       expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
-      if (interrupted === "after-acceptance") {
+      if (interrupted !== "before-delivery") {
         expect(recovered?.deleteAfterRun).toBe(true);
       }
       const readHistory = () =>

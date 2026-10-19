@@ -20,7 +20,7 @@ export type CronRunReceipt = {
   startedAtMs: number;
   finishedAtMs: number | null;
   error?: string;
-  deliveryStarted?: true;
+  deliveryNotStarted?: true;
 };
 
 export type CronRunReceiptHandle = Pick<

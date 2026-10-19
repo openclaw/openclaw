@@ -289,7 +289,7 @@ it.for([
 );
 
 it.for(["queued force", "scheduled", "due", "late force"] as const)(
-  "recovers crash state without consuming another occurrence after a %s run",
+  "recovers only scheduled work or its preserved occurrence after a %s run",
   async (mode, { signal }) => {
     const payload = createAgentGate();
     const capacity = createQueueBlocker();
@@ -384,23 +384,24 @@ it.for(["queued force", "scheduled", "due", "late force"] as const)(
       const recovered = expectDefined(await cron.readJob(job.id), "recovered one-shot");
       expect(recovered?.state.runningAtMs).toBeUndefined();
       expect(recovered?.state.lastError).toBe("cron: job interrupted by gateway restart");
-      expect(recovered?.enabled).toBe(mode === "queued force");
+      const resumesScheduledWork = mode === "queued force" || mode === "scheduled";
+      expect(recovered.enabled).toBe(resumesScheduledWork);
       expect(historyFor(job.id).filter((entry) => entry.status === "error")).toEqual([
         expect.objectContaining({
           error: "cron: job interrupted by gateway restart",
           ...(requestedRunId ? { runId: requestedRunId } : {}),
         }),
       ]);
-      if (mode === "queued force") {
+      if (resumesScheduledWork) {
         expect(recovered?.state.nextRunAtMs).toEqual(expect.any(Number));
-        clock.setTime(expectDefined(recovered.state.nextRunAtMs, "preserved occurrence"));
+        clock.setTime(expectDefined(recovered.state.nextRunAtMs, "scheduled continuation"));
       } else {
         expect(recovered?.state.nextRunAtMs).toBeUndefined();
       }
       cron.resumeScheduling();
       await onTimer(state);
-      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
-      if (mode === "queued force") {
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(mode === "scheduled" ? 3 : 2);
+      if (resumesScheduledWork) {
         expect((await cron.readJob(job.id))?.enabled).toBe(false);
       }
     } finally {

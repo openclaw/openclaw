@@ -215,7 +215,7 @@ export function recoverCronJobInDatabase(
       restartRetryAtMs:
         receipt &&
         parseCronScheduledRunId(receipt.receiptId) &&
-        !receipt.deliveryStarted &&
+        receipt.deliveryNotStarted === true &&
         receipt.configRevision === resolveCronJobConfigRevision(job) &&
         !job.state.runningScheduleChangeId
           ? resolveCronRestartRetryAtMs(job, runningAtMs, nowMs)
