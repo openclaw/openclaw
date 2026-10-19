@@ -1,6 +1,5 @@
-// Frozen reader from refs/tags/v2026.9.4:src/commands/triage-update.ts.
-// Only the writer is omitted; retain released schema and bounds.
-// Preserve one failed update as bounded diagnostics across the updater's fresh CLI handoff.
+// Reader contract frozen at refs/tags/v2026.9.4:src/commands/triage-update.ts.
+// Schema wrappers are factored locally; keep released validation, sanitization and bounds.
 import fs from "node:fs/promises";
 import { z } from "zod";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -14,6 +13,8 @@ import { truncateUtf8Prefix, truncateUtf8Suffix } from "../utils/utf8-truncate.j
 
 const UPDATE_FAILURE_MAX_BYTES = 8 * 1024;
 const UPDATE_FAILURE_PROMPT_MAX_BYTES = 4 * 1024;
+const optionalObject = <T extends z.ZodRawShape>(shape: T) => z.object(shape).optional();
+const objects = <T extends z.ZodRawShape>(shape: T) => z.array(z.object(shape));
 const updateIdentitySchema = z.object({
   sha: z.string().nullish(),
   version: z.string().nullish(),
@@ -28,77 +29,55 @@ const updateFailureSchema = z
         reason: z.string().optional(),
         before: updateIdentitySchema.optional(),
         after: updateIdentitySchema.optional(),
-        steps: z.array(
-          z.object({
-            name: z.string(),
-            exitCode: z.number().int().nullable(),
-            stdoutTail: z.string().nullish(),
-            stderrTail: z.string().nullish(),
-            termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]).optional(),
-            advisory: z
-              .object({
-                kind: z.enum([
-                  "package-post-install-doctor",
-                  "candidate-runtime-unavailable",
-                  "recoverable-maintenance",
-                ]),
-                message: z.string(),
-                details: z.array(z.string()).optional(),
-              })
-              .optional(),
+        steps: objects({
+          name: z.string(),
+          exitCode: z.number().int().nullable(),
+          stdoutTail: z.string().nullish(),
+          stderrTail: z.string().nullish(),
+          termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]).optional(),
+          advisory: optionalObject({
+            kind: z.enum([
+              "package-post-install-doctor",
+              "candidate-runtime-unavailable",
+              "recoverable-maintenance",
+            ]),
+            message: z.string(),
+            details: z.array(z.string()).optional(),
           }),
-        ),
-        recovery: z
-          .object({
-            serviceRestartSafe: z.boolean(),
+        }),
+        recovery: optionalObject({
+          serviceRestartSafe: z.boolean(),
+          reason: z.string().optional(),
+          packageRollbackVerified: z.boolean().optional(),
+          version: z.string().optional(),
+          buildId: z.string().optional(),
+          service: z.enum(["healthy", "failed"]).optional(),
+        }),
+        postUpdate: optionalObject({
+          plugins: optionalObject({
+            status: z.enum(["ok", "warning", "skipped", "error"]),
             reason: z.string().optional(),
-            packageRollbackVerified: z.boolean().optional(),
-            version: z.string().optional(),
-            buildId: z.string().optional(),
-            service: z.enum(["healthy", "failed"]).optional(),
-          })
-          .optional(),
-        postUpdate: z
-          .object({
-            plugins: z
-              .object({
-                status: z.enum(["ok", "warning", "skipped", "error"]),
-                reason: z.string().optional(),
-                sync: z.object({ errors: z.array(z.string()) }).optional(),
-                npm: z
-                  .object({
-                    outcomes: z.array(
-                      z.object({
-                        pluginId: z.string(),
-                        status: z.enum(["updated", "unchanged", "skipped", "error"]),
-                        message: z.string(),
-                      }),
-                    ),
-                  })
-                  .optional(),
-                integrityDrifts: z
-                  .array(
-                    z.object({
-                      pluginId: z.string(),
-                      spec: z.string(),
-                      expectedIntegrity: z.string(),
-                      actualIntegrity: z.string(),
-                    }),
-                  )
-                  .optional(),
-                warnings: z
-                  .array(
-                    z.object({
-                      pluginId: z.string().optional(),
-                      reason: z.string(),
-                      message: z.string(),
-                    }),
-                  )
-                  .optional(),
-              })
-              .optional(),
-          })
-          .optional(),
+            sync: z.object({ errors: z.array(z.string()) }).optional(),
+            npm: optionalObject({
+              outcomes: objects({
+                pluginId: z.string(),
+                status: z.enum(["updated", "unchanged", "skipped", "error"]),
+                message: z.string(),
+              }),
+            }),
+            integrityDrifts: objects({
+              pluginId: z.string(),
+              spec: z.string(),
+              expectedIntegrity: z.string(),
+              actualIntegrity: z.string(),
+            }).optional(),
+            warnings: objects({
+              pluginId: z.string().optional(),
+              reason: z.string(),
+              message: z.string(),
+            }).optional(),
+          }),
+        }),
       }),
       error: z.string().trim().min(1).optional(),
       omittedDetails: z.number().int().nonnegative().optional(),

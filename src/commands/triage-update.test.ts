@@ -20,8 +20,11 @@ describe("update failure triage diagnostics", () => {
     stateDir = path.join(home, ".openclaw");
     env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
   });
-  const write = async (input: Failure) => {
-    const outputPath = await writeTriageUpdateFailure(input, { env });
+  const write = async (result: Partial<Result>, error?: string) => {
+    const outputPath = await writeTriageUpdateFailure(
+      { result: { status: "error", mode: "npm", steps: [], ...result }, error },
+      { env },
+    );
     return {
       outputPath,
       raw: await fs.readFile(outputPath, "utf8"),
@@ -29,15 +32,7 @@ describe("update failure triage diagnostics", () => {
     };
   };
   const writePlugins = (plugins: Plugins) =>
-    write({
-      result: {
-        status: "error",
-        mode: "npm",
-        reason: "post-update-plugins",
-        steps: [],
-        postUpdate: { plugins },
-      },
-    });
+    write({ reason: "post-update-plugins", postUpdate: { plugins } });
 
   it("writes bounded sanitized failure evidence without changing the result", async () => {
     const secret = "sk-test-update-triage-secret-1234567890";
@@ -61,10 +56,7 @@ describe("update failure triage diagnostics", () => {
         cwd: home,
         durationMs: 1,
         exitCode: index === 0 ? 0 : 1,
-        stdoutTail:
-          index === 1
-            ? null
-            : `${"Earlier build output\n".repeat(100)}The compiler reported the actual failure on stdout`,
+        stdoutTail: index === 1 ? null : `${"output\n".repeat(300)}stdout failure`,
         stderrTail: `PackageUpdateSwapError: token=${secret}\n${"🦞".repeat(8_000)} ${stateDir}/npm.log recovery is unverified token=${secret}`,
         failureFacts: [
           {
@@ -81,35 +73,33 @@ describe("update failure triage diagnostics", () => {
       })),
     };
 
-    const { outputPath, raw, failure } = await write({ result });
+    const { outputPath, raw, failure } = await write(result);
 
     expect(outputPath.startsWith(path.join(stateDir, "logs", "support"))).toBe(true);
     expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(8 * 1024);
-    expect(raw).not.toContain(secret);
-    expect(raw).not.toContain(home);
-    expect(raw).not.toContain("unredacted-command");
-    expect(raw).toContain("core/doctor/runtime-tool-schemas");
-    expect(raw).toContain("mcp.servers");
-    expect(raw).not.toContain("\uFFFD");
+    for (const excluded of [secret, home, "unredacted-command", "\uFFFD", "step-4"]) {
+      expect(raw).not.toContain(excluded);
+    }
     expect(failure).toMatchObject({
       result: {
         runId: result.runId,
         reason: "Package install failed",
         before: { version: "2026.8.1" },
         recovery: result.recovery,
+        steps: [{ name: "step-1" }, { name: "step-2" }, { name: "step-3" }],
       },
     });
-    expect("result" in failure && failure.result.steps.map((step) => step.name)).toEqual([
-      "step-1",
-      "step-2",
-      "step-3",
-    ]);
-    expect(raw).toContain("actual failure on stdout");
-    expect(raw).toContain("npm.log");
-    expect(raw).toContain("PackageUpdateSwapError");
-    expect(raw).toContain("recovery is unverified");
-    expect(raw).toContain("...");
-    expect(raw).not.toContain("step-4");
+    for (const included of [
+      "core/doctor/runtime-tool-schemas",
+      "mcp.servers",
+      "stdout failure",
+      "npm.log",
+      "PackageUpdateSwapError",
+      "recovery is unverified",
+      "...",
+    ]) {
+      expect(raw).toContain(included);
+    }
     expect(result.steps).toHaveLength(5);
     expect(result.steps[0]?.command).toContain(secret);
     if (process.platform !== "win32") {
@@ -118,18 +108,18 @@ describe("update failure triage diagnostics", () => {
   });
 
   it("preserves a post-install activation error even when the core update succeeded", async () => {
-    const failure = {
-      result: {
-        status: "ok" as const,
-        mode: "git" as const,
-        after: { version: "2026.9.1" },
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        steps: [],
-      },
-      error: `Gateway activation failed ${"intermediate context ".repeat(100)}terminal recovery cause`,
+    const result: Result = {
+      status: "ok",
+      mode: "git",
+      after: { version: "2026.9.1" },
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      steps: [],
     };
-    const { failure: recorded } = await write(failure);
-    expect(recorded).toMatchObject({ result: failure.result });
+    const { failure: recorded } = await write(
+      result,
+      `Gateway activation failed ${"intermediate context ".repeat(100)}terminal recovery cause`,
+    );
+    expect(recorded).toMatchObject({ result });
     expect(recorded.error).toContain("Gateway activation failed");
     expect(recorded.error).toContain("terminal recovery cause");
   });
@@ -137,29 +127,19 @@ describe("update failure triage diagnostics", () => {
   it("retains actual plugin sync and npm errors after a successful core replacement", async () => {
     const { raw, failure } = await writePlugins({
       status: "error",
-      sync: { errors: ["Configured plugin package is unavailable"] },
+      sync: { errors: ["Plugin sync failed"] },
       npm: {
         outcomes: [
-          {
-            pluginId: "fixture-ok",
-            status: "updated",
-            message: "Updated successfully",
-          },
-          {
-            pluginId: "fixture-failed",
-            status: "error",
-            message: "Plugin dependency resolution failed",
-          },
+          { pluginId: "fixture-ok", status: "updated", message: "Updated" },
+          { pluginId: "fixture-failed", status: "error", message: "Plugin install failed" },
         ],
       },
     });
 
-    expect(raw).toContain("Configured plugin package is unavailable");
-    expect(raw).toContain("Plugin dependency resolution failed");
+    expect(raw).toContain("Plugin sync failed");
+    expect(raw).toContain("Plugin install failed");
     expect(raw).not.toContain("fixture-ok");
-    expect(failure).toMatchObject({
-      result: { reason: "post-update-plugins" },
-    });
+    expect(failure).toMatchObject({ result: { reason: "post-update-plugins" } });
   });
 
   it("reserves the terminal plugin warning before earlier errors exhaust the diagnostic budget", async () => {

@@ -55,39 +55,31 @@ describe("uninstallCommand", () => {
     expectDataPreserved();
   });
 
-  it.each([
-    {
-      failure: "inspection fails",
-      arrange: () => gatewayService.isLoaded.mockRejectedValue(new Error("inspection failed")),
+  it.each(["isLoaded", "stop", "uninstall", "nix"] as const)(
+    "preserves user data when gateway teardown is blocked by %s",
+    async (failure) => {
+      if (failure === "nix") {
+        setCleanupNixMode(true);
+      } else {
+        gatewayService[failure].mockRejectedValue(new Error(`${failure} failed`));
+      }
+
+      await expectFailure({ all: true });
+      expectDataPreserved();
+      expect(cleanupCommandLogMessages(runtime)).not.toContain(
+        "CLI removal instructions: https://docs.openclaw.ai/install/uninstall",
+      );
+      if (failure === "nix") {
+        for (const mock of [
+          gatewayService.isLoaded,
+          gatewayService.stop,
+          gatewayService.uninstall,
+        ]) {
+          expect(mock).not.toHaveBeenCalled();
+        }
+      }
     },
-    {
-      failure: "stop fails",
-      arrange: () => gatewayService.stop.mockRejectedValue(new Error("stop failed")),
-    },
-    {
-      failure: "service removal fails",
-      arrange: () => gatewayService.uninstall.mockRejectedValue(new Error("uninstall failed")),
-    },
-  ])("preserves user data when gateway $failure", async ({ arrange }) => {
-    arrange();
-
-    await expectFailure({ all: true });
-    expectDataPreserved();
-    expect(cleanupCommandLogMessages(runtime)).not.toContain(
-      "CLI removal instructions: https://docs.openclaw.ai/install/uninstall",
-    );
-  });
-
-  it("preserves user data when Nix owns service lifecycle", async () => {
-    setCleanupNixMode(true);
-
-    await expectFailure({ all: true });
-
-    expect(gatewayService.isLoaded).not.toHaveBeenCalled();
-    expect(gatewayService.stop).not.toHaveBeenCalled();
-    expect(gatewayService.uninstall).not.toHaveBeenCalled();
-    expectDataPreserved();
-  });
+  );
 
   it("removes an unloaded service definition before deleting user data", async () => {
     gatewayService.isLoaded.mockResolvedValue(false);
