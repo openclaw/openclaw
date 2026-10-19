@@ -27,13 +27,8 @@ function veniceModel(id: string): Model<"openai-completions"> {
   };
 }
 
-function toolCall(
-  id: string,
-  name: string,
-  thoughtSignature?: string,
-  args: Record<string, unknown> = {},
-): ToolCall {
-  return { type: "toolCall", id, name, arguments: args, thoughtSignature };
+function toolCall(id: string, name: string, thoughtSignature?: string): ToolCall {
+  return { type: "toolCall", id, name, arguments: {}, thoughtSignature };
 }
 
 function assistant(
@@ -69,6 +64,18 @@ function wireResult(id: string, content: string) {
   return { role: "tool", tool_call_id: id, content };
 }
 
+function expectTextHistory(messages: Record<string, unknown>[], name: string, result: string) {
+  expect(messages[0]).toMatchObject({
+    role: "assistant",
+    content: expect.stringContaining(`[Historical tool call: ${name}(`),
+  });
+  expect(messages[0]).not.toHaveProperty("tool_calls");
+  expect(messages[1]).toEqual({
+    role: "user",
+    content: `[Historical tool result for ${name}:\n${result}]`,
+  });
+}
+
 async function patchPayload(
   payload: { model: string; messages: Record<string, unknown>[] } & Record<string, unknown>,
   messages: Context["messages"] = [],
@@ -88,6 +95,10 @@ async function patchPayload(
   expect(streamFn).toBeTypeOf("function");
   await streamFn?.(veniceModel(payload.model), { messages }, {});
   return payload;
+}
+
+async function patchGemini(messages: Record<string, unknown>[], history: Context["messages"]) {
+  return (await patchPayload({ model: GEMINI_MODEL, messages }, history)).messages;
 }
 
 describe("venice provider plugin", () => {
@@ -167,83 +178,39 @@ describe("venice provider plugin", () => {
     });
   });
 
-  it("replays Gemini signatures and downgrades foreign tool history to text", async () => {
-    const payload = {
-      model: GEMINI_MODEL,
-      messages: [
-        { role: "user", content: "echo" },
+  it("downgrades foreign Gemini tool history to text", async () => {
+    const messages = await patchGemini(
+      [
         wireAssistant(wireCall("call_1", "echo_value", '{"value":"repro"}')),
         wireResult("call_1", "ok"),
       ],
-    };
-    const signed = await patchPayload(structuredClone(payload), [
-      { role: "user", content: "echo", timestamp: 0 },
-      assistant([toolCall("call_1", "echo_value", "SIG-VENICE-OPAQUE-ABC==", { value: "repro" })]),
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "echo_value",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-        timestamp: 0,
-      },
-    ]);
-    expect(signed.messages).toMatchObject([
-      { role: "user", content: "echo" },
-      {
-        role: "assistant",
-        tool_calls: [{ id: "call_1", thought_signature: "SIG-VENICE-OPAQUE-ABC==" }],
-      },
-      wireResult("call_1", "ok"),
-    ]);
-    expect(signed.messages[1]).not.toHaveProperty("tool_calls.0.extra_content");
-
-    const foreign = await patchPayload(structuredClone(payload), [
-      assistant([toolCall("call_1", "echo_value", "SIG-CROSS-ROUTE")], {
-        api: "google-generative-ai",
-        provider: "google",
-      }),
-    ]);
-    expect(foreign.messages[1]).toMatchObject({
-      role: "assistant",
-      content: expect.stringContaining("[Historical tool call: echo_value("),
-    });
-    expect(foreign.messages[1]).not.toHaveProperty("tool_calls");
-    expect(foreign.messages[2]).toEqual({
-      role: "user",
-      content: "[Historical tool result for echo_value:\nok]",
-    });
+      [
+        { role: "user", content: "echo", timestamp: 0 },
+        assistant([toolCall("call_1", "echo_value", "SIG-CROSS-ROUTE")], {
+          api: "google-generative-ai",
+          provider: "google",
+        }),
+      ],
+    );
+    expectTextHistory(messages, "echo_value", "ok");
   });
 
   it("downgrades mixed signed and unsigned Gemini tool batches to text history", async () => {
-    const { messages } = await patchPayload(
-      {
-        model: GEMINI_MODEL,
-        messages: [
-          wireAssistant(
-            wireCall("foreign_call", "web_fetch"),
-            wireCall("legacy_call", "read"),
-            wireCall("signed_call", "read"),
-          ),
-          wireResult("foreign_call", "foreign result"),
-          wireResult("legacy_call", "legacy result"),
-          wireResult("signed_call", "signed result"),
-          { role: "user", content: "current prompt" },
-        ],
-      },
+    const calls = [
+      toolCall("foreign_call", "web_fetch"),
+      toolCall("legacy_call", "read"),
+      toolCall("signed_call", "read", "SIG-EXACT-SAME-ROUTE=="),
+    ];
+    const results = ["foreign result", "legacy result", "signed result"];
+    const messages = await patchGemini(
       [
-        assistant([
-          toolCall("foreign_call", "web_fetch"),
-          toolCall("legacy_call", "read"),
-          toolCall("signed_call", "read", "SIG-EXACT-SAME-ROUTE=="),
-        ]),
+        wireAssistant(...calls.map(({ id, name }) => wireCall(id, name))),
+        ...calls.map(({ id }, index) => wireResult(id, results[index])),
+        { role: "user", content: "current prompt" },
       ],
+      [assistant(calls)],
     );
-    expect(messages[0]).toMatchObject({
-      role: "assistant",
-      content: expect.stringContaining("[Historical tool call: web_fetch("),
-    });
-    expect(messages[0]).not.toHaveProperty("tool_calls");
+    expectTextHistory(messages, "web_fetch", "foreign result");
     expect(messages.slice(1, 4)).toEqual([
       { role: "user", content: "[Historical tool result for web_fetch:\nforeign result]" },
       { role: "user", content: "[Historical tool result for read:\nlegacy result]" },
@@ -275,20 +242,13 @@ describe("venice provider plugin", () => {
     expect(signed.messages[2]).toMatchObject({
       tool_calls: [{ id: "call_0", thought_signature: "SIG-WRITE" }],
     });
+    expect(signed.messages[0]).not.toHaveProperty("tool_calls.0.extra_content");
 
     const mixed = await patchPayload(payload("legacy result", "signed result"), [
       assistant([toolCall("call_0", "read")]),
       assistant([toolCall("call_0", "write", "SIG-WRITE")]),
     ]);
-    expect(mixed.messages[0]).toMatchObject({
-      role: "assistant",
-      content: expect.stringContaining("[Historical tool call: read("),
-    });
-    expect(mixed.messages[0]).not.toHaveProperty("tool_calls");
-    expect(mixed.messages[1]).toEqual({
-      role: "user",
-      content: "[Historical tool result for read:\nlegacy result]",
-    });
+    expectTextHistory(mixed.messages, "read", "legacy result");
     expect(mixed.messages[2]).toMatchObject({
       role: "assistant",
       tool_calls: [{ id: "call_0", thought_signature: "SIG-WRITE" }],
