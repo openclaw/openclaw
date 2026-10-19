@@ -436,6 +436,50 @@ describe("gateway chat metadata lifecycle", () => {
     }
   });
 
+  it.each(["resolve", "reject"] as const)(
+    "retains publication failure when attachment catch-up settles by %s",
+    async (outcome) => {
+      const harness = await createRealMetadataLifecycle({ attach: false });
+      const entered = createDeferred();
+      const release = createDeferred();
+      const failure = new Error("prepared owner publication failed during attachment");
+      harness.refresh.mockImplementationOnce(() => {
+        entered.resolve();
+        return release.promise;
+      });
+      const attaching = harness.attach();
+      try {
+        await entered.promise;
+        harness.invalidateOwner();
+        harness.modelEvent({ phase: "failed", error: failure });
+        if (outcome === "reject") {
+          release.reject(failure);
+        } else {
+          release.resolve();
+        }
+        await attaching;
+        await expect(harness.lifecycle.read({ agentId: "main" })).rejects.toBe(failure);
+        const broadcasts = harness.broadcast.mock.calls.length;
+
+        harness.events.skills();
+        harness.events.auth();
+        await nextEventLoopTurn();
+
+        expect(harness.refresh).toHaveBeenCalledOnce();
+        expect(harness.broadcast).toHaveBeenCalledTimes(broadcasts);
+        await expect(harness.lifecycle.read({ agentId: "main" })).rejects.toBe(failure);
+        harness.replaceOwner();
+        await expect(harness.lifecycle.read({ agentId: "main" })).resolves.toMatchObject({
+          models: [expect.objectContaining({ id: "after-publication" })],
+        });
+      } finally {
+        release.resolve();
+        await attaching;
+        await harness.stop();
+      }
+    },
+  );
+
   it.each(["auth", "owner"] as const)(
     "retains a terminal metadata failure through a later %s invalidation",
     async (event) => {
