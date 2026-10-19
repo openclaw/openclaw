@@ -531,14 +531,11 @@ it("accounts for config cleanup with concurrent replacement", async () => {
         await manager.acquire({
           ...params,
           sessionId: `other-${index}`,
-          cfg: { ...cfg, mcp: { servers: { second: server } } },
+          cfg: next,
         }),
       );
     }
-    const reload = manager.reloadConfig({
-      cfg: { ...cfg, mcp: { servers: { second: server } } },
-      manifestRegistry: params.manifestRegistry,
-    });
+    const reload = publish(next);
     await closing.promise;
     const replacement = acquire(params.sessionId);
     const blocked = await acquire("overflow");
