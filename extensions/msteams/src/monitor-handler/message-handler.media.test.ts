@@ -3,21 +3,29 @@ import type { MSTeamsConfig } from "../../runtime-api.js";
 import { resolveMSTeamsRequestTimeoutMs } from "../request-timeout.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
-type Downloads = typeof import("../attachments.js");
 type GetTeamDetails = NonNullable<MSTeamsTurnContext["getTeamDetails"]>;
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 
 const { media, graphMedia, botFrameworkMedia } = vi.hoisted(() => ({
-  media: vi.fn<Downloads["downloadMSTeamsAttachments"]>(),
-  graphMedia: vi.fn<Downloads["downloadMSTeamsGraphMedia"]>(),
-  botFrameworkMedia: vi.fn<Downloads["downloadMSTeamsBotFrameworkAttachments"]>(),
+  media: vi.fn<typeof import("../attachments/download.js").downloadMSTeamsAttachments>(),
+  graphMedia: vi.fn<typeof import("../attachments/graph.js").downloadMSTeamsGraphMedia>(),
+  botFrameworkMedia:
+    vi.fn<
+      typeof import("../attachments/bot-framework.js").downloadMSTeamsBotFrameworkAttachments
+    >(),
 }));
-vi.mock("../attachments.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../attachments.js")>()),
+vi.mock("../attachments/download.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../attachments/download.js")>()),
   downloadMSTeamsAttachments: media,
+}));
+vi.mock("../attachments/graph.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../attachments/graph.js")>()),
   downloadMSTeamsGraphMedia: graphMedia,
+}));
+vi.mock("../attachments/bot-framework.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../attachments/bot-framework.js")>()),
   downloadMSTeamsBotFrameworkAttachments: botFrameworkMedia,
 }));
 import { createMSTeamsMessageHandler } from "./message-handler.js";
