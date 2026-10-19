@@ -298,7 +298,6 @@ extensions/feishu/src/markdown.ts	1
 extensions/feishu/src/media-chunk-idle.ts	1
 extensions/feishu/src/media.ts	5
 extensions/feishu/src/monitor.account.ts	3
-extensions/feishu/src/monitor.comment.ts	1
 extensions/feishu/src/monitor.message-handler.ts	1
 extensions/feishu/src/monitor.transport.ts	1
 extensions/feishu/src/monitor.vc-meeting-invited-handler.ts	1
@@ -472,7 +471,6 @@ extensions/mattermost/src/mattermost/directory.ts	2
 extensions/mattermost/src/mattermost/interactions.ts	3
 extensions/mattermost/src/mattermost/monitor-reactions.ts	2
 extensions/mattermost/src/mattermost/monitor-slash.ts	1
-extensions/mattermost/src/mattermost/monitor-websocket.ts	1
 extensions/mattermost/src/mattermost/monitor.ts	1
 extensions/mattermost/src/mattermost/slash-commands.ts	1
 extensions/mattermost/src/mattermost/slash-state.ts	1

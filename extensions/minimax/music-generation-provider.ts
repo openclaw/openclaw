@@ -74,14 +74,13 @@ function decodePossibleText(data: string): string {
 async function downloadTrackFromUrl(params: {
   url: string;
   timeoutMs?: number;
-  fetchFn: typeof fetch;
   maxBytes: number;
   policy: MinimaxRequestPolicy;
 }): Promise<GeneratedMusicAsset> {
   return await downloadGeneratedMusicAsset({
     candidate: { url: params.url },
     timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    fetchFn: params.fetchFn,
+    fetchFn: fetch,
     provider: "MiniMax",
     requestFailedMessage: "MiniMax generated music download failed",
     maxBytes: params.maxBytes,
@@ -93,7 +92,6 @@ async function downloadTrackFromUrl(params: {
         url: params.url,
         init: { method: "GET" },
         timeoutMs,
-        fetchFn: params.fetchFn,
         requestFailedMessage: "MiniMax generated music download failed",
         policy: params.policy,
       });
@@ -231,7 +229,6 @@ export function buildMinimaxMusicGenerationProvider(
         throw new Error("MiniMax music generation currently supports mp3 output only.");
       }
 
-      const fetchFn = fetch;
       const operationTimeoutMs = req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveMinimaxMediaRequestConfig({
@@ -276,7 +273,7 @@ export function buildMinimaxMusicGenerationProvider(
           deadline,
           defaultTimeoutMs: operationTimeoutMs,
         }),
-        fetchFn,
+        fetchFn: fetch,
         pinDns: false,
         allowPrivateNetwork,
         dispatcherPolicy,
@@ -323,7 +320,6 @@ export function buildMinimaxMusicGenerationProvider(
                 deadline,
                 defaultTimeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
               }),
-              fetchFn,
               maxBytes: maxGeneratedMusicBytes,
               policy: requestPolicy,
             })

@@ -75,16 +75,16 @@ async function fixture(value = props(), width = 600, fullscreen = false) {
   frame.append(conversation);
   mounted.push(pane, styles);
   await element.updateComplete;
-  const session = pane.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
   const progress = pane.querySelector<HTMLElement>("openclaw-chat-details-progress")!;
-  await session.updateComplete;
   flush();
   return {
     element,
     frame,
     pane,
     footer,
-    session,
+    get session() {
+      return pane.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
+    },
     progress,
     conversation,
     panel: pane.querySelector<HTMLElement>(".chat-details")!,
@@ -107,11 +107,10 @@ afterEach(() => {
 describe("chat Details presentation", () => {
   it("automatically docks within the available pane, preserves intent, and releases its column", async () => {
     await page.viewport(1700, 900);
-    const { element, frame, conversation, footer, trigger, panel, session } = await fixture(
-      props(),
-      1320,
-    );
+    const { element, frame, conversation, footer, trigger, panel } = await fixture(props(), 1320);
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
+    const session = panel.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
     expect(panel.getAttribute("role")).toBe("complementary");
     expect(panel.querySelector(".chat-details__toolbar")).toBeNull();
     const groupStyle = getComputedStyle(panel.querySelector(".chat-details__group")!);
@@ -182,6 +181,7 @@ describe("chat Details presentation", () => {
     );
     trigger.click();
     await element.updateComplete;
+    await expect.poll(() => panel.querySelector(".chat-details__environment")).not.toBeNull();
     const environment = panel.querySelector(".chat-details__environment")!;
     const navigation = environment.querySelector<HTMLButtonElement>(".chat-details__navigation")!;
     const heading = environment.querySelector("summary")!;
@@ -234,12 +234,14 @@ describe("chat Details presentation", () => {
     const { element, trigger, panel } = await fixture();
     expect(trigger.textContent).toContain("Details");
     expect(panel.matches(":popover-open")).toBe(false);
+    expect(panel.querySelector("openclaw-chat-details-session")).toBeNull();
     element.props = { ...element.props!, progressCard: { ...card, revision: 2 } };
     await element.updateComplete;
     expect(panel.matches(":popover-open")).toBe(false);
     trigger.click();
     await element.updateComplete;
     expect(panel.matches(":popover-open")).toBe(true);
+    await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
     expect(panel.querySelector(".chat-details__toolbar")).toBeNull();
     panel.querySelector<HTMLButtonElement>("button")!.focus();
     document.dispatchEvent(
@@ -349,9 +351,11 @@ describe("chat Details presentation", () => {
   });
 
   it("keeps metadata visible while progress retains its collapse across revisions", async () => {
-    const { element, trigger, session, progress } = await fixture();
+    const { element, trigger, panel, progress } = await fixture();
     trigger.click();
     await element.updateComplete;
+    await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
+    const session = panel.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
     await session.updateComplete;
     flush();
     const sessionSection = session.querySelector<HTMLElement>(".chat-details-session")!;

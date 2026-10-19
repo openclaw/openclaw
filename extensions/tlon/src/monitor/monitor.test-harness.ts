@@ -167,24 +167,6 @@ export function messageEssay(author: string, content: unknown, sent = 1_700_000_
   return { author, content: typeof content === "string" ? [{ inline: [content] }] : content, sent };
 }
 
-export function chatEvent(params: {
-  whom: string;
-  author: string;
-  text: string | unknown[];
-  id: string;
-  sent?: number;
-}) {
-  return {
-    whom: params.whom,
-    id: params.id,
-    response: {
-      add: {
-        essay: messageEssay(params.author, params.text, params.sent),
-      },
-    },
-  };
-}
-
 function configureTlon(
   tlon: Record<string, unknown>,
   config: Omit<OpenClawConfig, "channels"> = {},

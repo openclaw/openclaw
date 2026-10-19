@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { registerMenuShortcuts } from "../menu-shortcuts.ts";
 import { createOverlayAnchor, type OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, findOverlayParent, type Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed, registryFor } from "../overlay-registry.ts";
@@ -267,6 +268,11 @@ export function Menu(props: BranchProps): JSX.Element {
     ids: { trigger: initialIdentity.triggerId },
     pointerFocus: () => props.pointerFocus ?? "menu",
   });
+  onSettled(() =>
+    registerMenuShortcuts(overlay.surface, () =>
+      binding.items().map((element) => ({ element, key: element.dataset.shortcut })),
+    ),
+  );
   const ownItems = () =>
     binding.items().filter((item) => !item.matches(':disabled, [aria-disabled="true"]'));
   const triggerItemRef = initialIdentity.binding?.itemRef();

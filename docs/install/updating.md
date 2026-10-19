@@ -839,6 +839,10 @@ identities in the journal are not rewritten. Version or inode matches alone do
 not qualify; changed content, unsafe journal permissions or links, active update
 ownership, and unfinished rollback remain refusals.
 
+Symlink launchers may have different recorded permission modes (for example,
+`0755` and `0700`) if their targets and required identities still match. Regular-file
+launcher modes and package-tree integrity checks remain enforced.
+
 If a manual installation has replaced the candidate with a newer version, repair
 verifies that installation's manifest, dist inventories, entry targets, and launchers
 before archiving the old operation as `superseded-by-manual-install`. Old package

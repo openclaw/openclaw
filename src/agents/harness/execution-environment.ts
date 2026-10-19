@@ -441,9 +441,9 @@ export async function preparePluginHarnessToolPolicies(
               ...params,
               modelProvider: webSearchModel.provider,
               modelId: webSearchModel.model,
-              agentId: params.sandboxAgentId ?? resolveSessionAgentId(params),
-              sessionKey:
-                params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId,
+              // An independent policy session can belong to another agent than the execution.
+              agentId: sandbox.classificationAgentId,
+              sessionKey: sandbox.classificationSessionKey || params.sessionId,
               messageProvider: params.messageChannel ?? params.messageProvider,
               sandboxToolPolicy:
                 params.sandbox !== undefined

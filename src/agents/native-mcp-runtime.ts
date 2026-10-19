@@ -27,7 +27,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import type { McpElicitationHandler } from "./mcp-client-elicitation.js";
 
-export type NativeMcpCallbackOptions = { signal: AbortSignal };
+type NativeMcpCallbackOptions = { signal: AbortSignal };
 export type NativeMcpClientContext = {
   /** Identity of the native client's capability lifecycle, shared by identical snapshots. */
   readonly capabilityContext: object;

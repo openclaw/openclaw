@@ -2,6 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import type { CiaoService } from "@homebridge/ciao";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  registerUncaughtExceptionHandler,
+  registerUnhandledRejectionHandler,
+} from "openclaw/plugin-sdk/runtime";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { classifyCiaoProcessError } from "./ciao.js";
@@ -23,15 +27,6 @@ type GatewayBonjourAdvertiseOpts = {
   minimal?: boolean;
 };
 
-type UncaughtExceptionHandler = (error: unknown) => boolean;
-type UnhandledRejectionHandler = (reason: unknown) => boolean;
-
-type BonjourAdvertiserDeps = {
-  logger?: Pick<PluginLogger, "info" | "warn" | "debug">;
-  registerUncaughtExceptionHandler: (handler: UncaughtExceptionHandler) => () => void;
-  registerUnhandledRejectionHandler: (handler: UnhandledRejectionHandler) => () => void;
-};
-
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
   "failed probing with reason: Error: Can't probe for a service which is announced already.";
 
@@ -41,12 +36,6 @@ const CIAO_SELF_PROBE_RETRY_FRAGMENT =
 // polls) is not in that set, so ciao logs a full warning stack trace per send.
 const CIAO_MDNS_SOCKET_ERROR_FRAGMENT = "Encountered MDNS socket error on socket";
 const CIAO_ENODEV_SOCKET_ERROR_FRAGMENT = "send ENODEV";
-
-const defaultLogger = {
-  info: (_msg: string) => {},
-  warn: (_msg: string) => {},
-  debug: (_msg: string) => {},
-};
 
 function isContainerEnvironment() {
   if (process.env.FLY_MACHINE_ID?.trim() && process.env.FLY_APP_NAME?.trim()) {
@@ -158,17 +147,12 @@ function installCiaoConsoleNoiseFilter(): () => void {
 
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
-  deps: BonjourAdvertiserDeps,
+  logger: Pick<PluginLogger, "info" | "warn">,
 ): Promise<GatewayBonjourAdvertiser> {
   if (isDisabledByEnv()) {
     return { stop: async () => {} };
   }
 
-  const logger = {
-    info: deps.logger?.info ?? defaultLogger.info,
-    warn: deps.logger?.warn ?? defaultLogger.warn,
-    debug: deps.logger?.debug ?? defaultLogger.debug,
-  };
   let restoreConsoleLog: () => void = () => {};
   let cleanupUnhandledRejection: (() => void) | undefined;
   let cleanupUncaughtException: (() => void) | undefined;
@@ -199,8 +183,8 @@ export async function startGatewayBonjourAdvertiser(
       }
       return true;
     };
-    cleanupUnhandledRejection = deps.registerUnhandledRejectionHandler(handleCiaoProcessError);
-    cleanupUncaughtException = deps.registerUncaughtExceptionHandler(handleCiaoProcessError);
+    cleanupUnhandledRejection = registerUnhandledRejectionHandler(handleCiaoProcessError);
+    cleanupUncaughtException = registerUncaughtExceptionHandler(handleCiaoProcessError);
 
     const hostnameRaw =
       process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || resolveSystemMdnsHostname() || "openclaw";

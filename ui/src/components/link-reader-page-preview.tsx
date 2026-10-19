@@ -3,6 +3,7 @@ import type { ControlUiLinkPreview } from "../../../src/gateway/control-ui-contr
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createPreviewRenderer } from "./link-reader-preview-root.ts";
+import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 import "../styles/link-hovercard.css";
 
@@ -43,6 +44,7 @@ const renderPageContent = createPreviewRenderer<PagePreview>((props) => {
           <span>{host()}</span>
         </span>
         <a
+          ref={createHovercardControlRef()}
           class="link-hovercard__open"
           href={props.value.href}
           target="_blank"

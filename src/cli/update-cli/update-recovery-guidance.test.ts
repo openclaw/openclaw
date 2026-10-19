@@ -19,7 +19,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
 import { recordUpdateResultNextAction } from "./update-command-result.js";
 import { refuseUnsettledDoctorRecovery } from "./update-command-service-recovery.js";
-import { publishUpdateCommandTerminalResult } from "./update-command-terminal.js";
+import { publishUpdateCommandTerminalResultForTest as publishUpdateCommandTerminalResult } from "./update-command-terminal.test-support.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 

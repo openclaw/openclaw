@@ -116,7 +116,6 @@ export const sharedVerifiedInferenceConfig = {
   },
 } satisfies OpenClawConfig;
 
-export let sharedVerifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
 let sharedFixture: Awaited<ReturnType<typeof makeFixtureImpl>>;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
@@ -321,7 +320,7 @@ beforeAll(() => {
 
 beforeEach(async () => {
   sharedFixture = await makeFixture(sharedVerifiedInferenceConfig);
-  sharedVerifiedInference = mocks.sharedVerifiedInference = sharedFixture.binding;
+  mocks.sharedVerifiedInference = sharedFixture.binding;
   mocks.readConfigFileSnapshot.mockResolvedValue(sharedSnapshot());
 });
 
@@ -373,7 +372,7 @@ export const fakeOverviewLoader =
 
 export { expectDefined } from "@openclaw/normalization-core";
 export { hashSystemAgentOperation } from "./operator-approval.js";
-export type { OpenClawConfig, SystemAgentVerifiedInferenceBinding };
+export type { OpenClawConfig };
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { classifySystemAgentApprovalText } from "./operator-approval.js";
 export { SystemAgentWizardAnswerError } from "./chat-engine.js";

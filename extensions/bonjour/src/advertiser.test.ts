@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => ({
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
-    debug: vi.fn(),
   },
 }));
 const {
@@ -70,23 +69,22 @@ function mockCiaoService(params?: {
 }
 
 vi.mock("@homebridge/ciao", () => ({ getResponder }));
+vi.mock("openclaw/plugin-sdk/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime")>()),
+  registerUncaughtExceptionHandler: mocks.registerUncaughtExceptionHandler,
+  registerUnhandledRejectionHandler: mocks.registerUnhandledRejectionHandler,
+}));
 
 const { startGatewayBonjourAdvertiser } = await import("./advertiser.js");
 
 afterAll(() => {
   vi.doUnmock("@homebridge/ciao");
+  vi.doUnmock("openclaw/plugin-sdk/runtime");
   vi.resetModules();
 });
 
 const startAdvertiser = (opts: Partial<Parameters<typeof startGatewayBonjourAdvertiser>[0]> = {}) =>
-  startGatewayBonjourAdvertiser(
-    { gatewayPort: 18789, sshPort: 2222, ...opts },
-    {
-      logger,
-      registerUncaughtExceptionHandler,
-      registerUnhandledRejectionHandler,
-    },
-  );
+  startGatewayBonjourAdvertiser({ gatewayPort: 18789, sshPort: 2222, ...opts }, logger);
 
 describe("gateway bonjour advertiser", () => {
   type ServiceCall = {

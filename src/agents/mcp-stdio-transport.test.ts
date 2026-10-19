@@ -12,7 +12,7 @@ import { OwnedStdioCleanupError, type OwnedStdioProcess } from "../process/owned
 import {
   connectMcpClient,
   disposeMcpClient,
-  McpClientConnectTimeoutError,
+  ensureMcpSessionConnected,
 } from "./mcp-client-lifecycle.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import {
@@ -229,15 +229,33 @@ describe("OpenClawStdioClientTransport", () => {
       await cleanupScope.run(async () => {
         const controller = new AbortController();
         const initializeWritten = once(fixture.stdin, "readable");
-        const connecting = connectMcpClient({
-          client,
-          transport,
-          timeoutMs: trigger === "timed-out" ? 50 : 5_000,
-          signal: controller.signal,
-        });
+        const connecting =
+          trigger === "timed-out"
+            ? ensureMcpSessionConnected(
+                {
+                  client,
+                  transport,
+                  serverName: "doctor-mcp-proof",
+                  retiring: false,
+                  connected: false,
+                },
+                50,
+              )
+            : connectMcpClient({
+                client,
+                transport,
+                timeoutMs: 5_000,
+                signal: controller.signal,
+              });
         const rejected =
           trigger === "timed-out"
-            ? expect(connecting).rejects.toBeInstanceOf(McpClientConnectTimeoutError)
+            ? expect(connecting).rejects.toMatchObject({
+                message:
+                  'MCP server "doctor-mcp-proof" timed out: did not complete initialize within 0.05s',
+                cause: expect.objectContaining({
+                  message: "MCP server connection timed out after 50ms",
+                }),
+              })
             : expect(connecting).rejects.toThrow("fixture initialization failed");
         await initializeWritten;
         const initialize = readRequest(fixture.stdin);

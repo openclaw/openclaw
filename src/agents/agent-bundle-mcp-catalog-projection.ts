@@ -37,7 +37,7 @@ export function projectBundleMcpCatalogFailure(
   };
 }
 
-export function projectBundleMcpCatalogTools({
+function projectBundleMcpCatalogTools({
   normalizedTools,
   deniedToolNames,
   serverName,

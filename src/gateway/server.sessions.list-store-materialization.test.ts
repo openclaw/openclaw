@@ -9,10 +9,6 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-/**
- * Session listing keeps whole-store materialization, sharing refreshes, and
- * transcript projection work bounded at their owning storage boundaries.
- */
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -103,20 +99,13 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
     }
     await replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
       { type: "session", version: 3, id: sessionId, cwd: "/tmp" },
-      {
-        type: "message",
-        id: "question",
-        parentId: null,
-        timestamp: "2026-06-19T12:00:01.000Z",
-        message: { role: "user", content: `Title ${agentId}`, timestamp: 1 },
-      },
-      {
-        type: "message",
-        id: "reply",
-        parentId: "question",
-        timestamp: "2026-06-19T12:00:02.000Z",
-        message: { role: "assistant", content: `Reply ${agentId}`, timestamp: 2 },
-      },
+      ...(["user", "assistant"] as const).map((role, turn) => ({
+        type: "message" as const,
+        id: turn ? "reply" : "question",
+        parentId: turn ? "question" : null,
+        timestamp: `2026-06-19T12:00:0${turn + 1}.000Z`,
+        message: { role, content: `${turn ? "Reply" : "Title"} ${agentId}`, timestamp: turn + 1 },
+      })),
     ]);
   }
 
@@ -145,14 +134,7 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
       );
 
       expect(result.ok).toBe(true);
-      expect(result.payload?.sessions).toHaveLength(agentIds.length);
-      expect(
-        result.payload?.sessions.map(({ agentId, derivedTitle, lastMessagePreview }) => ({
-          agentId,
-          derivedTitle,
-          lastMessagePreview,
-        })),
-      ).toEqual(
+      expect(result.payload?.sessions).toMatchObject(
         agentIds.map((agentId) => ({
           agentId,
           derivedTitle: `Title ${agentId}`,
@@ -188,9 +170,6 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     agentId: target.agentId ?? "main",
     path: target.path,
   });
-  const stored = database.db.prepare("SELECT session_key FROM session_nodes LIMIT 1").get() as {
-    session_key: string;
-  };
   const fullEntries = sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath });
   expect(fullEntries).toHaveLength(1);
   expect(fullEntries[0]?.entry.skillsSnapshot).toBeDefined();
@@ -227,7 +206,7 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     projection = await createSessionRowProjection({ cfg });
     expect(projectionReads).toHaveBeenCalled();
     projectionReads.mockClear();
-    const resident = projection.describe({ agentId: "main", key: stored.session_key });
+    const resident = projection.describe({ agentId: "main", key: fullEntries[0]!.sessionKey });
     expect(resident?.storedEntry?.sessionId).toBe("sess-main");
     expect(resident?.storedEntry?.skillsSnapshot).toBeUndefined();
     expect(resident?.storedEntry?.systemPromptReport).toBeUndefined();
@@ -275,7 +254,7 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     projection: "list",
     storePath,
   });
-  expect(listEntries).toHaveLength(1);
-  expect(listEntries[0]?.entry.skillsSnapshot).toBeUndefined();
-  expect(listEntries[0]?.entry.systemPromptReport).toBeUndefined();
+  expect(listEntries.map(({ entry }) => [entry.skillsSnapshot, entry.systemPromptReport])).toEqual([
+    [undefined, undefined],
+  ]);
 });
