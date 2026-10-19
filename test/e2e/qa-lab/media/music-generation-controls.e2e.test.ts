@@ -198,21 +198,17 @@ describe("music generation controls QA product proof", () => {
             action: "list",
           })) as ToolResult;
           const listedProviders = detailsOf(listed).providers as Array<Record<string, unknown>>;
-          const primaryListing = listedProviders.find((entry) => entry.id === fixture.primary.id);
-          const fallbackListing = listedProviders.find((entry) => entry.id === fixture.fallback.id);
-
-          expect(primaryListing).toMatchObject({
-            configured: true,
-            defaultModel: "song-v1",
-            models: ["song-v1"],
-            modes: ["generate"],
-          });
-          expect(fallbackListing).toMatchObject({
-            configured: true,
-            defaultModel: "beat-v2",
-            models: ["beat-v2"],
-            modes: ["generate"],
-          });
+          for (const [id, model] of [
+            [fixture.primary.id, "song-v1"],
+            [fixture.fallback.id, "beat-v2"],
+          ]) {
+            expect(listedProviders.find((entry) => entry.id === id)).toMatchObject({
+              configured: true,
+              defaultModel: model,
+              models: [model],
+              modes: ["generate"],
+            });
+          }
           expect(textOf(listed)).toContain(
             "capabilities: modes=generate, maxDurationSeconds=60, lyrics, instrumental, duration, format, supportedFormats=mp3/wav",
           );

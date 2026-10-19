@@ -95,28 +95,18 @@ function handleTargetRequest(request: IncomingMessage, response: ServerResponse)
 }
 
 async function expectNoPublishedMediaFiles(stateDir: string): Promise<void> {
-  const mediaDir = path.join(stateDir, "media");
-  const files: string[] = [];
-
-  const visit = async (directory: string): Promise<void> => {
-    const entries = await fs.readdir(directory, { withFileTypes: true }).catch((error: unknown) => {
+  const entries = await fs
+    .readdir(path.join(stateDir, "media"), {
+      withFileTypes: true,
+      recursive: true,
+    })
+    .catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return [];
       }
       throw error;
     });
-    for (const entry of entries) {
-      const entryPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        await visit(entryPath);
-      } else {
-        files.push(path.relative(mediaDir, entryPath));
-      }
-    }
-  };
-
-  await visit(mediaDir);
-  expect(files.toSorted()).toStrictEqual([]);
+  expect(entries.filter((entry) => !entry.isDirectory())).toStrictEqual([]);
 }
 
 describe("media guarded fetch product boundaries", () => {
@@ -158,9 +148,8 @@ describe("media guarded fetch product boundaries", () => {
 
   it("revalidates redirect targets and strips sensitive cross-origin headers", async () => {
     const stateDir = tempDirs.make("openclaw-media-safe-redirect-");
-
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const blocked = await saveRemoteMedia({
+    const redirect = (subdir: string, allowedOrigins: string[]) =>
+      saveRemoteMedia({
         url: `${sourceOrigin}/redirect`,
         requestInit: {
           headers: {
@@ -171,9 +160,14 @@ describe("media guarded fetch product boundaries", () => {
           },
         },
         maxBytes: 64,
-        subdir: "blocked-redirect",
-        ssrfPolicy: { allowedOrigins: [sourceOrigin] },
-      }).catch((caught: unknown) => caught);
+        subdir,
+        ssrfPolicy: { allowedOrigins },
+      });
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const blocked = await redirect("blocked-redirect", [sourceOrigin]).catch(
+        (caught: unknown) => caught,
+      );
 
       expect(blocked).toBeInstanceOf(MediaFetchError);
       expect(blocked).toMatchObject({
@@ -185,20 +179,7 @@ describe("media guarded fetch product boundaries", () => {
       await expectNoPublishedMediaFiles(stateDir);
 
       sourceRequests.length = 0;
-      const saved = await saveRemoteMedia({
-        url: `${sourceOrigin}/redirect`,
-        requestInit: {
-          headers: {
-            Accept: "text/plain",
-            Authorization: "Bearer private-token",
-            Cookie: "session=private",
-            "X-Api-Key": "private-key",
-          },
-        },
-        maxBytes: 64,
-        subdir: "safe-redirect",
-        ssrfPolicy: { allowedOrigins: [sourceOrigin, targetOrigin] },
-      });
+      const saved = await redirect("safe-redirect", [sourceOrigin, targetOrigin]);
 
       expect(sourceRequests[0]?.headers.authorization).toBe("Bearer private-token");
       expect(targetRequests).toHaveLength(1);
@@ -215,31 +196,17 @@ describe("media guarded fetch product boundaries", () => {
     const allowedOrigins = [sourceOrigin];
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await expect(
-        saveRemoteMedia({
-          url: `${sourceOrigin}/oversized-file`,
-          maxBytes: 16,
-          subdir: "oversized-file",
-          ssrfPolicy: { allowedOrigins },
-        }),
-      ).rejects.toMatchObject({
-        name: "MediaFetchError",
-        code: "max_bytes",
-      });
-      await expectNoPublishedMediaFiles(stateDir);
-
-      await expect(
-        saveRemoteMedia({
-          url: `${sourceOrigin}/oversized-stream`,
-          maxBytes: 16,
-          subdir: "oversized-stream",
-          ssrfPolicy: { allowedOrigins },
-        }),
-      ).rejects.toMatchObject({
-        name: "MediaFetchError",
-        code: "max_bytes",
-      });
-      await expectNoPublishedMediaFiles(stateDir);
+      for (const subdir of ["oversized-file", "oversized-stream"]) {
+        await expect(
+          saveRemoteMedia({
+            url: `${sourceOrigin}/${subdir}`,
+            maxBytes: 16,
+            subdir,
+            ssrfPolicy: { allowedOrigins },
+          }),
+        ).rejects.toMatchObject({ name: "MediaFetchError", code: "max_bytes" });
+        await expectNoPublishedMediaFiles(stateDir);
+      }
     });
   });
 });

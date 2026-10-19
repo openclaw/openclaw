@@ -1,22 +1,15 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import path from "node:path";
+import { text } from "node:stream/consumers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  createQaBusState,
-  createQaChannelTransport,
-  startQaBusServer,
-  createQaGatewayChild,
-  startQaMockOpenAiServer,
   TINY_PNG_BASE64,
   type MockOpenAiRequestSnapshot,
 } from "../../../../extensions/qa-lab/api.js";
 import { resolveRuntimePolicySessionKey } from "../../../../src/auto-reply/reply/runtime-policy-session-key.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
+import { readMockRequests, useMediaGateway } from "./media-gateway.test-support.js";
 
-const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const IMAGE_MODEL_REF = "openai/gpt-image-1";
 const REQUEST_TEXT =
@@ -32,14 +25,6 @@ const REQUESTER_SESSION_KEY = resolveRuntimePolicySessionKey({
     SenderId: CONVERSATION.id,
   },
 });
-
-async function readRequestBody(request: IncomingMessage) {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
 
 function writeJson(response: ServerResponse, status: number, body: unknown) {
   response.writeHead(status, { "content-type": "application/json" });
@@ -68,7 +53,7 @@ async function startControlledImageProvider() {
         writeJson(response, 404, { error: "not found" });
         return;
       }
-      const body = JSON.parse(await readRequestBody(request)) as Record<string, unknown>;
+      const body = JSON.parse(await text(request)) as Record<string, unknown>;
       requests.push(body);
       if (released) {
         complete(response);
@@ -114,57 +99,26 @@ function configureImageProvider(
   if (!openAiProvider) {
     throw new Error("openai image provider is missing from QA gateway config");
   }
-  return {
-    ...config,
-    agents: {
-      ...config.agents,
-      defaults: {
-        ...config.agents?.defaults,
-        mediaModels: {
-          ...config.agents?.defaults?.mediaModels,
-          image: { primary: IMAGE_MODEL_REF },
-        },
-      },
-    },
-    models: {
-      ...config.models,
-      providers: {
-        ...config.models?.providers,
-        openai: {
-          ...openAiProvider,
-          baseUrl: `${imageProviderBaseUrl}/v1`,
-          request: {
-            ...openAiProvider.request,
-            allowPrivateNetwork: true,
-          },
-        },
-      },
-    },
-  };
-}
-
-async function readMockRequests(baseUrl: string): Promise<MockOpenAiRequestSnapshot[]> {
-  const response = await fetch(`${baseUrl}/debug/requests`);
-  if (!response.ok) {
-    throw new Error(`mock request log failed with HTTP ${response.status}`);
-  }
-  return (await response.json()) as MockOpenAiRequestSnapshot[];
+  const defaults = ((config.agents ??= {}).defaults ??= {});
+  (defaults.mediaModels ??= {}).image = { primary: IMAGE_MODEL_REF };
+  openAiProvider.baseUrl = `${imageProviderBaseUrl}/v1`;
+  (openAiProvider.request ??= {}).allowPrivateNetwork = true;
+  return config;
 }
 
 async function waitForToolOutput(baseUrl: string, needle: string) {
-  let matched: MockOpenAiRequestSnapshot | undefined;
-  await vi.waitFor(
+  return vi.waitFor(
     async () => {
-      matched = (await readMockRequests(baseUrl)).find(
+      const matched = (await readMockRequests(baseUrl)).find(
         (request) =>
           request.allInputText.includes("IMAGE_TASK_LIFECYCLE") &&
           request.toolOutput.includes(needle),
       );
       expect(matched).toBeDefined();
+      return matched as MockOpenAiRequestSnapshot;
     },
     { interval: 50, timeout: 30_000 },
   );
-  return matched as MockOpenAiRequestSnapshot;
 }
 
 async function readImageTaskStatus(gateway: {
@@ -179,52 +133,16 @@ async function readImageTaskStatus(gateway: {
 }
 
 describe("image generation task lifecycle through QA-channel", () => {
-  const cleanups: Array<() => Promise<void>> = [];
-
-  afterEach(async () => {
-    const errors: unknown[] = [];
-    for (const cleanup of cleanups.splice(0).toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length > 1) {
-      throw new AggregateError(errors, "image generation lifecycle cleanup failed");
-    }
-  });
+  const fixture = useMediaGateway();
 
   it("deduplicates requests and labels internal completion provenance", async () => {
-    const state = createQaBusState();
-    const transport = createQaChannelTransport(state);
-    const bus = await startQaBusServer({ state });
-    cleanups.push(() => bus.stop());
-
-    const mock = await startQaMockOpenAiServer();
-    cleanups.push(() => mock.stop());
-
     const imageProvider = await startControlledImageProvider();
-    cleanups.push(() => imageProvider.stop());
-
-    const gatewayOwner = createQaGatewayChild();
-    cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
-    const gateway = await gatewayOwner.start({
-      repoRoot: REPO_ROOT,
-      command: createQaPreparedRepoCliCommand(REPO_ROOT),
-      providerBaseUrl: `${mock.baseUrl}/v1`,
-      providerMode: "mock-openai",
+    fixture.track(() => imageProvider.stop());
+    const { state, transport, mock, gateway } = await fixture.start({
       primaryModel: MODEL_REF,
       alternateModel: MODEL_REF,
-      transport,
-      transportBaseUrl: bus.baseUrl,
-      controlUiEnabled: false,
       mutateConfig: (config) => configureImageProvider(config, imageProvider.baseUrl),
     });
-    await transport.waitReady({ gateway });
 
     const sendExactRequest = () =>
       transport.sendInbound({
@@ -257,8 +175,7 @@ describe("image generation task lifecycle through QA-channel", () => {
             (message) =>
               message.direction === "outbound" &&
               message.conversation.id === CONVERSATION.id &&
-              message.attachments !== undefined &&
-              message.attachments.some(
+              message.attachments?.some(
                 (attachment) =>
                   attachment.kind === "image" &&
                   attachment.mimeType === "image/png" &&
@@ -317,8 +234,7 @@ describe("image generation task lifecycle through QA-channel", () => {
         (message) =>
           message.direction === "outbound" &&
           message.conversation.id === CONVERSATION.id &&
-          message.attachments !== undefined &&
-          message.attachments.some((attachment) => attachment.kind === "image"),
+          message.attachments?.some((attachment) => attachment.kind === "image"),
       );
     expect(completionOutcomes).toHaveLength(1);
   }, 180_000);

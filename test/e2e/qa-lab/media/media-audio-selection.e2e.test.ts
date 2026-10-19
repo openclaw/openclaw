@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 import type { OpenClawConfig } from "../../../../src/config/types.js";
+import type {
+  MediaUnderstandingAttachmentsConfig,
+  MediaUnderstandingModelConfig,
+} from "../../../../src/config/types.tools.js";
 import { applyMediaUnderstanding } from "../../../../src/media-understanding/apply.js";
 import { MIN_AUDIO_FILE_BYTES } from "../../../../src/media-understanding/defaults.constants.js";
 import type { MediaUnderstandingProvider } from "../../../../src/media-understanding/types.js";
@@ -21,9 +25,8 @@ async function writeAudioFixture(dir: string, name: string, fill: number): Promi
 }
 
 function createSelectionConfig(
-  attachments: NonNullable<
-    NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>["audio"]
-  >["attachments"],
+  attachments: MediaUnderstandingAttachmentsConfig | undefined,
+  fallbackModels: MediaUnderstandingModelConfig[] = [],
 ): OpenClawConfig {
   return {
     models: {
@@ -37,7 +40,10 @@ function createSelectionConfig(
     },
     tools: {
       media: {
-        models: [{ provider: "qa-stt", model: "fixture-stt", capabilities: ["audio"] }],
+        models: [
+          { provider: "qa-stt", model: "fixture-stt", capabilities: ["audio"] },
+          ...fallbackModels,
+        ],
         audio: {
           enabled: true,
           attachments,
@@ -45,6 +51,10 @@ function createSelectionConfig(
       },
     },
   };
+}
+
+function audioAttempt(type: "cli" | "provider", provider: string, model: string) {
+  return { type, provider, model, outcome: "success" };
 }
 
 function createAudioProvider(seenFileNames: string[]): MediaUnderstandingProvider {
@@ -105,29 +115,25 @@ describe("QA media audio selection product proof", () => {
       { path: preflightAudio, contentType: "audio/ogg", transcribed: true },
     ];
 
-    const firstModeCalls: string[] = [];
-    const firstModeCtx: MsgContext = { Body: "", media };
-    await applyMediaUnderstanding({
-      ctx: firstModeCtx,
-      cfg: createSelectionConfig({ mode: "first", prefer: "last", maxAttachments: 3 }),
-      providers: { "qa-stt": createAudioProvider(firstModeCalls) },
-      processingMode: "audio-only",
-      workspaceDir: dir,
-    });
+    const select = async (mode: "first" | "all", maxAttachments: number) => {
+      const calls: string[] = [];
+      const ctx: MsgContext = { Body: "", media };
+      await applyMediaUnderstanding({
+        ctx,
+        cfg: createSelectionConfig({ mode, prefer: "last", maxAttachments }),
+        providers: { "qa-stt": createAudioProvider(calls) },
+        processingMode: "audio-only",
+        workspaceDir: dir,
+      });
+      return { calls, ctx };
+    };
+    const { calls: firstModeCalls, ctx: firstModeCtx } = await select("first", 3);
 
     expect(firstModeCalls).toEqual(["third.ogg"]);
     expect(firstModeCtx.MediaUnderstanding?.map((output) => output.attachmentIndex)).toEqual([3]);
     expect(firstModeCtx.Transcript).toBe("transcript:third.ogg");
 
-    const allModeCalls: string[] = [];
-    const allModeCtx: MsgContext = { Body: "", media };
-    await applyMediaUnderstanding({
-      ctx: allModeCtx,
-      cfg: createSelectionConfig({ mode: "all", prefer: "last", maxAttachments: 2 }),
-      providers: { "qa-stt": createAudioProvider(allModeCalls) },
-      processingMode: "audio-only",
-      workspaceDir: dir,
-    });
+    const { calls: allModeCalls, ctx: allModeCtx } = await select("all", 2);
 
     expect(allModeCalls).toEqual(["third.ogg", "second.ogg"]);
     expect(allModeCtx.MediaUnderstanding?.map((output) => output.attachmentIndex)).toEqual([3, 2]);
@@ -163,31 +169,14 @@ describe("QA media audio selection product proof", () => {
       Body: "",
       media: [{ path: audioPath, contentType: "audio/wav" }],
     };
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          "qa-stt": {
-            apiKey: "qa-test-key", // pragma: allowlist secret
-            baseUrl: "https://qa.invalid",
-            models: [],
-          },
-        },
+    const cfg = createSelectionConfig(undefined, [
+      {
+        type: "cli",
+        command: executable.command,
+        args: [executable.markerPath, "{{MediaPath}}"],
+        capabilities: ["audio"],
       },
-      tools: {
-        media: {
-          models: [
-            { provider: "qa-stt", model: "fixture-stt", capabilities: ["audio"] },
-            {
-              type: "cli",
-              command: executable.command,
-              args: [executable.markerPath, "{{MediaPath}}"],
-              capabilities: ["audio"],
-            },
-          ],
-          audio: { enabled: true },
-        },
-      },
-    };
+    ]);
 
     await applyMediaUnderstanding({
       ctx,
@@ -229,25 +218,13 @@ describe("QA media audio selection product proof", () => {
           attachmentIndex: 0,
           attempts: [
             {
-              type: "provider",
-              provider: "qa-stt",
-              model: "fixture-stt",
+              ...audioAttempt("provider", "qa-stt", "fixture-stt"),
               outcome: "failed",
               reason: expect.stringContaining("intentional provider failure"),
             },
-            {
-              type: "cli",
-              provider: cliProvider,
-              model: executable.command,
-              outcome: "success",
-            },
+            audioAttempt("cli", cliProvider, executable.command),
           ],
-          chosen: {
-            type: "cli",
-            provider: cliProvider,
-            model: executable.command,
-            outcome: "success",
-          },
+          chosen: audioAttempt("cli", cliProvider, executable.command),
         },
       ],
     });

@@ -1,18 +1,8 @@
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  createQaBusState,
-  createQaChannelTransport,
-  type MockOpenAiRequestSnapshot,
-  startQaBusServer,
-  createQaGatewayChild,
-  startQaMockOpenAiServer,
-} from "../../../../extensions/qa-lab/api.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
+import { describe, expect, it } from "vitest";
+import type { MockOpenAiRequestSnapshot } from "../../../../extensions/qa-lab/api.js";
+import { readMockRequests, useMediaGateway } from "./media-gateway.test-support.js";
 
-const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const ACTIVE_MODEL_ID = "gpt-5.6-luna";
 const ACTIVE_MODEL_REF = `mock-openai/${ACTIVE_MODEL_ID}`;
 const IMAGE_MODEL_ID = "gpt-5.6-luna-alt";
@@ -43,46 +33,10 @@ function configureVisionOffload(config: OpenClawConfig): OpenClawConfig {
     throw new Error(`active QA model is missing from provider catalog: ${ACTIVE_MODEL_ID}`);
   }
 
-  return {
-    ...config,
-    agents: {
-      ...config.agents,
-      defaults: {
-        ...config.agents?.defaults,
-        imageModel: { primary: IMAGE_MODEL_REF },
-      },
-    },
-    models: {
-      ...config.models,
-      providers: {
-        ...config.models?.providers,
-        "mock-openai": {
-          ...provider,
-          models,
-        },
-      },
-    },
-    tools: {
-      ...config.tools,
-      media: {
-        ...config.tools?.media,
-        image: {
-          ...config.tools?.media?.image,
-          prompt: IMAGE_PROMPT,
-        },
-      },
-    },
-  };
-}
-
-async function readMockRequests(baseUrl: string, after: number) {
-  const response = await fetch(`${baseUrl}/debug/requests?after=${after}`);
-  if (!response.ok) {
-    throw new Error(
-      `mock request log failed with HTTP ${response.status}: ${await response.text()}`,
-    );
-  }
-  return (await response.json()) as MockOpenAiRequestSnapshot[];
+  ((config.agents ??= {}).defaults ??= {}).imageModel = { primary: IMAGE_MODEL_REF };
+  provider.models = models;
+  (((config.tools ??= {}).media ??= {}).image ??= {}).prompt = IMAGE_PROMPT;
+  return config;
 }
 
 function compactRequestShapes(requests: MockOpenAiRequestSnapshot[]) {
@@ -106,46 +60,14 @@ function readInputRoles(request: MockOpenAiRequestSnapshot) {
 }
 
 describe("QA-channel vision offload", () => {
-  const cleanups: Array<() => Promise<void>> = [];
-
-  afterEach(async () => {
-    const errors: unknown[] = [];
-    for (const cleanup of cleanups.splice(0).toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length > 0) {
-      throw new AggregateError(errors, "vision channel offload cleanup failed");
-    }
-  });
+  const fixture = useMediaGateway();
 
   it("summarizes an image before the text-only active model replies once", async () => {
-    const state = createQaBusState();
-    const transport = createQaChannelTransport(state);
-    const bus = await startQaBusServer({ state });
-    cleanups.push(() => bus.stop());
-
-    const mock = await startQaMockOpenAiServer();
-    cleanups.push(() => mock.stop());
-
-    const gatewayOwner = createQaGatewayChild();
-    cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
-    const gateway = await gatewayOwner.start({
-      repoRoot: REPO_ROOT,
-      command: createQaPreparedRepoCliCommand(REPO_ROOT),
-      providerBaseUrl: `${mock.baseUrl}/v1`,
-      providerMode: "mock-openai",
+    const { state, transport, mock, gateway } = await fixture.start({
       primaryModel: ACTIVE_MODEL_REF,
       alternateModel: IMAGE_MODEL_REF,
-      transport,
-      transportBaseUrl: bus.baseUrl,
-      controlUiEnabled: false,
       mutateConfig: configureVisionOffload,
     });
-    await transport.waitReady({ gateway });
 
     const cursorResponse = await fetch(`${mock.baseUrl}/debug/request-cursor`);
     const cursorBody = (await cursorResponse.json()) as { cursor?: unknown };
@@ -197,11 +119,15 @@ describe("QA-channel vision offload", () => {
     if (!imageRequest || !activeModelRequest) {
       throw new Error(requestDiagnostics);
     }
-    expect(imageRequest.model, requestDiagnostics).toBe(IMAGE_MODEL_ID);
-    expect(imageRequest.imageInputCount, requestDiagnostics).toBe(1);
+    expect(imageRequest, requestDiagnostics).toMatchObject({
+      model: IMAGE_MODEL_ID,
+      imageInputCount: 1,
+    });
     expect(readInputRoles(imageRequest), requestDiagnostics).toEqual(["developer", "user"]);
-    expect(activeModelRequest.model, requestDiagnostics).toBe(ACTIVE_MODEL_ID);
-    expect(activeModelRequest.imageInputCount, requestDiagnostics).toBe(0);
+    expect(activeModelRequest, requestDiagnostics).toMatchObject({
+      model: ACTIVE_MODEL_ID,
+      imageInputCount: 0,
+    });
     expect(readInputRoles(activeModelRequest), requestDiagnostics).toEqual([
       "developer",
       "user",

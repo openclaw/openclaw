@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import {
   createServer,
-  request as httpRequest,
   type IncomingHttpHeaders,
   type Server,
   type ServerResponse,
@@ -10,6 +9,7 @@ import {
 import net, { type AddressInfo, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openaiMediaUnderstandingProvider } from "../../../../extensions/openai/api.js";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
@@ -28,6 +28,7 @@ type RequestObservation = {
   remotePort: number | undefined;
   url: string | undefined;
 };
+type ProxyRequest = Pick<RequestObservation, "method" | "url">;
 
 type LoopbackServer = {
   server: Server;
@@ -68,24 +69,7 @@ async function closeServer(handle: LoopbackServer): Promise<void> {
   }
   handle.server.closeAllConnections?.();
   await new Promise<void>((resolve, reject) => {
-    handle.server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
-function collectRequestBody(request: NodeJS.ReadableStream): Promise<Buffer> {
-  return new Promise<Buffer>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer | string) => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-    request.on("end", () => resolve(Buffer.concat(chunks)));
-    request.on("error", reject);
+    handle.server.close((error) => (error ? reject(error) : resolve()));
   });
 }
 
@@ -94,7 +78,7 @@ function withRequestBody(
   response: ServerResponse,
   handle: (body: Buffer) => void,
 ): void {
-  void collectRequestBody(request)
+  void buffer(request)
     .then(handle)
     .catch((error: unknown) => {
       response.destroy(error instanceof Error ? error : new Error(String(error)));
@@ -120,74 +104,17 @@ async function startProviderServer(observations: RequestObservation[]): Promise<
 }
 
 async function startForwardProxy(
-  observations: RequestObservation[],
+  observations: ProxyRequest[],
   upstreamLocalPorts: Set<number>,
 ): Promise<LoopbackServer> {
-  const server = createServer((request, response) => {
-    withRequestBody(request, response, (body) => {
-      observations.push({
-        body,
-        headers: request.headers,
-        method: request.method,
-        remotePort: request.socket.remotePort,
-        url: request.url,
-      });
-
-      let target: URL;
-      try {
-        target = new URL(request.url ?? "");
-      } catch {
-        response.writeHead(400, { connection: "close" });
-        response.end("absolute-form proxy URL required");
-        return;
-      }
-
-      const upstream = httpRequest(
-        {
-          hostname: target.hostname,
-          port: target.port,
-          method: request.method,
-          path: `${target.pathname}${target.search}`,
-          headers: {
-            ...request.headers,
-            connection: "close",
-            host: target.host,
-            "x-qa-proxy-hop": "audio-media-understanding",
-          },
-        },
-        (upstreamResponse) => {
-          response.writeHead(upstreamResponse.statusCode ?? 502, {
-            ...upstreamResponse.headers,
-            connection: "close",
-          });
-          upstreamResponse.pipe(response);
-        },
-      );
-      upstream.on("error", (error) => {
-        response.writeHead(502, { "content-type": "text/plain", connection: "close" });
-        response.end(error.message);
-      });
-      upstream.on("socket", (socket) => {
-        const recordPort = () => {
-          if (socket.localPort) {
-            upstreamLocalPorts.add(socket.localPort);
-          }
-        };
-        if (socket.connecting) {
-          socket.once("connect", recordPort);
-        } else {
-          recordPort();
-        }
-      });
-      upstream.end(body);
-    });
+  // This proof requires CONNECT tunneling; reject accidental direct HTTP forwarding.
+  const server = createServer((_request, response) => {
+    response.writeHead(400, { connection: "close" });
+    response.end("CONNECT required");
   });
   server.on("connect", (request, clientSocket, head) => {
     observations.push({
-      body: Buffer.alloc(0),
-      headers: request.headers,
       method: request.method,
-      remotePort: (clientSocket as Socket).remotePort,
       url: request.url,
     });
     let target: URL;
@@ -262,7 +189,7 @@ async function createAudioContext(
 
 describe("media.audio-proxy-and-limit-handling", () => {
   it("routes provider audio through the proxy and rejects oversized audio before network IO", async () => {
-    const proxyRequests: RequestObservation[] = [];
+    const proxyRequests: ProxyRequest[] = [];
     const providerRequests: RequestObservation[] = [];
     const proxyUpstreamPorts = new Set<number>();
     const provider = await startProviderServer(providerRequests);
@@ -289,25 +216,13 @@ describe("media.audio-proxy-and-limit-handling", () => {
             providers: { openai: openaiMediaUnderstandingProvider },
           });
 
-          const acceptedEvidence = JSON.stringify({
-            decisions: accepted.ctx.MediaUnderstandingDecisions,
-            providerRequests: providerRequests.map((request) => ({
-              method: request.method,
-              remotePort: request.remotePort,
-              url: request.url,
-            })),
-            proxyRequests: proxyRequests.map((request) => ({
-              method: request.method,
-              url: request.url,
-            })),
-          });
-          expect(accepted.ctx.Transcript, acceptedEvidence).toBe("proxied audio transcript");
-          expect(proxyRequests).toHaveLength(1);
-          expect(providerRequests).toHaveLength(1);
-          expect(proxyRequests[0]?.method).toBe("CONNECT");
-          expect(proxyRequests[0]?.url).toBe(new URL(provider.url).host);
-          expect(providerRequests[0]?.method).toBe("POST");
-          expect(providerRequests[0]?.url).toBe("/v1/audio/transcriptions");
+          expect(accepted.ctx.Transcript).toBe("proxied audio transcript");
+          expect(proxyRequests).toMatchObject([
+            { method: "CONNECT", url: new URL(provider.url).host },
+          ]);
+          expect(providerRequests).toMatchObject([
+            { method: "POST", url: "/v1/audio/transcriptions" },
+          ]);
           expect(providerRequests[0]?.headers["content-type"]).toContain("multipart/form-data");
           expect(providerRequests[0]?.body.toString("utf8")).toContain("gpt-4o-transcribe");
           expect(proxyUpstreamPorts.has(providerRequests[0]?.remotePort ?? -1)).toBe(true);

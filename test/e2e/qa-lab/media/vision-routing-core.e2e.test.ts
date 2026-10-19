@@ -77,10 +77,11 @@ function imageDecision(ctx: MsgContext) {
 }
 
 function occurrenceCount(value: string | undefined, needle: string): number {
-  if (value === undefined) {
-    return 0;
-  }
-  return value.split(needle).length - 1;
+  return value === undefined ? 0 : value.split(needle).length - 1;
+}
+
+function providerAttempt(provider: string, model: string, outcome: string) {
+  return { type: "provider", provider, model, outcome };
 }
 
 describe("core vision routing product proof", () => {
@@ -96,9 +97,7 @@ describe("core vision routing product proof", () => {
     const cfg = {
       agents: {
         defaults: {
-          imageModel: {
-            primary: `${FALLBACK_PROVIDER}/${FALLBACK_MODEL}`,
-          },
+          imageModel: { primary: `${FALLBACK_PROVIDER}/${FALLBACK_MODEL}` },
         },
       },
       models: {
@@ -131,25 +130,15 @@ describe("core vision routing product proof", () => {
 
     const decision = imageDecision(ctx);
     expect(decision.outcome).toBe("skipped");
+    const skipped = {
+      ...providerAttempt(ACTIVE_PROVIDER, ACTIVE_VISION_MODEL, "skipped"),
+      reason: "primary model supports vision natively",
+    };
     expect(decision.attachments).toEqual([
       {
         attachmentIndex: 0,
-        attempts: [
-          {
-            type: "provider",
-            provider: ACTIVE_PROVIDER,
-            model: ACTIVE_VISION_MODEL,
-            outcome: "skipped",
-            reason: "primary model supports vision natively",
-          },
-        ],
-        chosen: {
-          type: "provider",
-          provider: ACTIVE_PROVIDER,
-          model: ACTIVE_VISION_MODEL,
-          outcome: "skipped",
-          reason: "primary model supports vision natively",
-        },
+        attempts: [skipped],
+        chosen: skipped,
       },
     ]);
     expect(ctx.MediaUnderstanding).toBeUndefined();
@@ -183,16 +172,8 @@ describe("core vision routing product proof", () => {
       tools: {
         media: {
           models: [
-            {
-              provider: PRIMARY_PROVIDER,
-              model: PRIMARY_MODEL,
-              capabilities: ["image"],
-            },
-            {
-              provider: FALLBACK_PROVIDER,
-              model: FALLBACK_MODEL,
-              capabilities: ["image"],
-            },
+            { provider: PRIMARY_PROVIDER, model: PRIMARY_MODEL, capabilities: ["image"] },
+            { provider: FALLBACK_PROVIDER, model: FALLBACK_MODEL, capabilities: ["image"] },
           ],
         },
       },
@@ -236,25 +217,14 @@ describe("core vision routing product proof", () => {
     expect(decision.outcome).toBe("success");
     expect(decision.attachments[0]?.attempts).toEqual([
       expect.objectContaining({
-        type: "provider",
-        provider: PRIMARY_PROVIDER,
-        model: PRIMARY_MODEL,
-        outcome: "failed",
+        ...providerAttempt(PRIMARY_PROVIDER, PRIMARY_MODEL, "failed"),
         reason: expect.stringContaining("primary vision unavailable"),
       }),
-      {
-        type: "provider",
-        provider: FALLBACK_PROVIDER,
-        model: FALLBACK_MODEL,
-        outcome: "success",
-      },
+      providerAttempt(FALLBACK_PROVIDER, FALLBACK_MODEL, "success"),
     ]);
-    expect(decision.attachments[0]?.chosen).toEqual({
-      type: "provider",
-      provider: FALLBACK_PROVIDER,
-      model: FALLBACK_MODEL,
-      outcome: "success",
-    });
+    expect(decision.attachments[0]?.chosen).toEqual(
+      providerAttempt(FALLBACK_PROVIDER, FALLBACK_MODEL, "success"),
+    );
     expect(ctx.MediaUnderstanding).toEqual([
       {
         kind: "image.description",
