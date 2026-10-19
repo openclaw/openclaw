@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, onCleanup, onSettled } from "solid-js";
+import { onCleanup } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import type { ChatDetailsDesktopSectionId } from "./chat-details-types.ts";
 import "../../../styles/chat/details-desktop.css";
 
@@ -22,61 +23,58 @@ export function createDetailsDesktopReveal(
   let body!: HTMLDivElement;
   let content!: HTMLDivElement;
   let animation: Animation | undefined;
-  let ready = false;
   let keyboard = false;
-  // Effect/animation callbacks must not evaluate lazy JSX prop getters without an owner.
-  let presentation: readonly [expanded: boolean, presented: boolean] = [false, false];
+  // Layout callbacks consume the prepared snapshot without evaluating lazy JSX props.
+  let presentation: readonly [expanded: boolean, presented: boolean] | undefined;
   const finish = () => {
     animation?.cancel();
     animation = undefined;
-    disclosure.open = presentation[0];
+    disclosure.open = presentation?.[0] ?? false;
     body.style.height = "";
     body.style.overflow = "";
   };
-  const transition = () => {
-    const [expanded, presented] = presentation;
-    const from = body.getBoundingClientRect().height;
-    animation?.cancel();
-    animation = undefined;
-    if (!ready || !presented || keyboard) {
-      keyboard = false;
-      finish();
-      return;
-    }
-    // Keep the closing body paintable until its height settles. It is already inert.
-    disclosure.open = true;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const to = expanded ? content.getBoundingClientRect().height : 0;
-    body.style.height = `${to}px`;
-    body.style.overflow = "hidden";
-    animation = body.animate(
-      reduced
-        ? [{ opacity: expanded ? 0 : 1 }, { opacity: expanded ? 1 : 0 }]
-        : [{ height: `${from}px` }, { height: `${to}px` }],
-      { duration: reduced ? 100 : 300, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
-    );
-    animation.onfinish = finish;
-  };
-  createEffect(read, (current, previous) => {
-    presentation = current;
-    // Presentation restores the saved choice immediately; it is not a user disclosure change.
-    if (!previous || current[1] !== previous[1] || !current[1]) {
-      keyboard = false;
-      finish();
-    } else if (current[0] !== previous[0]) {
-      transition();
-    }
-  });
-  onSettled(() => {
-    ready = true;
-    const resize = new ResizeObserver(() => {
-      if (animation && presentation[0]) {
-        transition();
+  createLayoutMeasurement(
+    read,
+    (current) => {
+      if (!current) {
+        return undefined;
       }
-    });
-    resize.observe(content);
-    return () => resize.disconnect();
-  });
+      const previous = presentation;
+      presentation = current;
+      const [expanded, presented] = current;
+      // Restore presentation and keyboard access before the next paint.
+      if (!previous || presented !== previous[1] || !presented || keyboard) {
+        keyboard = false;
+        return finish;
+      }
+      if (expanded === previous[0] && !(animation && expanded)) {
+        return undefined;
+      }
+      // Read the in-flight geometry before cancelling its animation.
+      const from = body.getBoundingClientRect().height;
+      // Native details must expose its content before measuring the opening destination.
+      if (expanded) {
+        disclosure.open = true;
+      }
+      const to = expanded ? content.getBoundingClientRect().height : 0;
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      return () => {
+        animation?.cancel();
+        // Keep the closing body paintable until its height settles. It is already inert.
+        disclosure.open = true;
+        body.style.height = `${to}px`;
+        body.style.overflow = "hidden";
+        animation = body.animate(
+          reduced
+            ? [{ opacity: expanded ? 0 : 1 }, { opacity: expanded ? 1 : 0 }]
+            : [{ height: `${from}px` }, { height: `${to}px` }],
+          { duration: reduced ? 100 : 300, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
+        );
+        animation.onfinish = finish;
+      };
+    },
+    { targets: () => [content], changeTiming: "sync" },
+  );
   onCleanup(() => animation?.cancel());
   return {
     details: (element: HTMLDetailsElement) => {
