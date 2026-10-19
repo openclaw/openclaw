@@ -48,6 +48,7 @@ const fixture: unknown = JSON.parse(
 if (!isRecord(fixture) || fixture.format !== "openclaw-team-shape-v1") {
   throw new Error("Expected generated team-shape fixture; never use live state");
 }
+const fixtureNow = Number(fixture.now);
 const port = integer(values.port, "--port", 40000);
 if (port > 65535) {
   throw new Error("--port must be between 40000 and 65535");
@@ -116,7 +117,6 @@ async function seed() {
       if (!baseline || baseline.files.length !== 0) {
         throw new Error("Synthetic session must start with a captured clean checkout baseline");
       }
-      const now = Number(fixture.now);
       const databaseOptions = { agentId: "main", env };
       agentDb.runOpenClawAgentWriteTransaction((database) => {
         if (entries.readExactSessionEntryRow(database, sessionKey)) {
@@ -124,8 +124,8 @@ async function seed() {
         }
         entries.writeSessionEntry(database, sessionKey, {
           sessionId,
-          createdAt: now,
-          updatedAt: now,
+          createdAt: fixtureNow,
+          updatedAt: fixtureNow,
           createdVia: "operator",
           lifecycleRevision: "history-diff-fixture-v1",
           visibility: "shared",
@@ -178,7 +178,7 @@ async function seed() {
             type: "session",
             version: 3,
             id: sessionId,
-            timestamp: new Date(now).toISOString(),
+            timestamp: new Date(fixtureNow).toISOString(),
           });
         }
         for (const [index, message] of messages.entries()) {
@@ -187,8 +187,8 @@ async function seed() {
             type: "message",
             id,
             parentId,
-            timestamp: new Date(now + turn).toISOString(),
-            message: { ...message, timestamp: now + turn },
+            timestamp: new Date(fixtureNow + turn).toISOString(),
+            message: { ...message, timestamp: fixtureNow + turn },
           });
           parentId = id;
         }
