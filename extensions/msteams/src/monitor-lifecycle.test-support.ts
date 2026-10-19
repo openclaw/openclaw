@@ -4,27 +4,12 @@ import type { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-target
 import { vi } from "vitest";
 import type { createMSTeamsActivityHandler as CreateMSTeamsActivityHandler } from "./monitor-handler.js";
 import { getMSTeamsIngressMockState } from "./monitor-ingress-mock.test-support.js";
+import type {
+  resolveMSTeamsTeamsConfig,
+  resolveMSTeamsUserAllowlist,
+} from "./resolve-allowlist.js";
 
-type MSTeamsUserResolution = {
-  input: string;
-  resolved: boolean;
-  id?: string;
-};
-
-type ResolveMSTeamsTeamsConfigMock = (params: {
-  cfg: unknown;
-  teamIdMode: "bot-framework" | "graph";
-  teams: Record<string, unknown>;
-}) => Promise<{
-  teams: Record<string, unknown>;
-  mapping: string[];
-  unresolved: string[];
-}>;
-
-type ResolveMSTeamsUserAllowlistMock = (params: {
-  cfg: unknown;
-  entries: string[];
-}) => Promise<MSTeamsUserResolution[]>;
+type RouteHandler = (req: Request, res: Response) => void | Promise<void>;
 
 const { createDeferred, routeState } = await vi.hoisted(async () => {
   const extensionShared = await import("openclaw/plugin-sdk/extension-shared");
@@ -72,12 +57,7 @@ const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
       process: processSdkActivity,
       initialize: vi.fn(async () => {
         const adapter = options?.httpServerAdapter as
-          | {
-              registerRoute?: (
-                path: string,
-                handler: (req: Request, res: Response) => void | Promise<void>,
-              ) => void;
-            }
+          | { registerRoute?: (path: string, handler: RouteHandler) => void }
           | undefined;
         const endpoint = options?.messagingEndpoint;
         if (adapter?.registerRoute && typeof endpoint === "string") {
@@ -110,9 +90,7 @@ const ssoTokenStore = vi.hoisted(() => ({
   remove: vi.fn(async () => false),
 }));
 
-vi.mock("@microsoft/teams.apps", () => ({
-  ExpressAdapter: vi.fn(),
-}));
+vi.mock("@microsoft/teams.apps", () => ({ ExpressAdapter: vi.fn() }));
 
 vi.mock("./monitor-handler.js", () => ({
   isMSTeamsInvokeAuthorized: ({ invokeKind }: { invokeKind: string }) =>
@@ -120,17 +98,15 @@ vi.mock("./monitor-handler.js", () => ({
   createMSTeamsActivityHandler,
 }));
 
-vi.mock("./file-consent-invoke.js", () => ({
-  runMSTeamsFileConsentInvokeHandler,
-}));
+vi.mock("./file-consent-invoke.js", () => ({ runMSTeamsFileConsentInvokeHandler }));
 
 const resolveAllowlistMocks = vi.hoisted(() => ({
-  resolveMSTeamsTeamsConfig: vi.fn<ResolveMSTeamsTeamsConfigMock>(async ({ teams }) => ({
+  resolveMSTeamsTeamsConfig: vi.fn<typeof resolveMSTeamsTeamsConfig>(async ({ teams }) => ({
     teams,
     mapping: [],
     unresolved: [],
   })),
-  resolveMSTeamsUserAllowlist: vi.fn<ResolveMSTeamsUserAllowlistMock>(async () => []),
+  resolveMSTeamsUserAllowlist: vi.fn<typeof resolveMSTeamsUserAllowlist>(async () => []),
 }));
 
 vi.mock("./resolve-allowlist.js", async (importOriginal) => ({
@@ -140,17 +116,13 @@ vi.mock("./resolve-allowlist.js", async (importOriginal) => ({
 }));
 
 vi.mock("./sdk.js", () => ({
-  loadMSTeamsSdkWithAuth: (creds?: unknown, options?: Record<string, unknown>) =>
-    loadMSTeamsSdkWithAuth(creds, options),
+  loadMSTeamsSdkWithAuth,
   createMSTeamsTokenProvider: () => ({
     getAccessToken: vi.fn().mockResolvedValue("mock-token"),
   }),
   createMSTeamsExpressAdapter: vi.fn(
     async (expressApp: { post: (...args: unknown[]) => void }) => ({
-      registerRoute: (
-        path: string,
-        handler: (req: Request, res: Response) => void | Promise<void>,
-      ) => expressApp.post(path, handler),
+      registerRoute: (path: string, handler: RouteHandler) => expressApp.post(path, handler),
       start: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn().mockResolvedValue(undefined),
     }),
@@ -161,24 +133,15 @@ vi.mock("./runtime.js", () => ({
   getOptionalMSTeamsRuntime: () => null,
   getMSTeamsRuntime: () => ({
     logging: {
-      getChildLogger: () => ({
-        info: vi.fn(),
-        error: vi.fn(),
-        warn: vi.fn(),
-        debug: vi.fn(),
-      }),
+      getChildLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
     },
     channel: {
-      text: {
-        resolveTextChunkLimit: () => 4000,
-      },
+      text: { resolveTextChunkLimit: () => 4000 },
     },
   }),
 }));
 
-vi.mock("./sso-token-store.js", () => ({
-  createMSTeamsSsoTokenStoreFs: () => ssoTokenStore,
-}));
+vi.mock("./sso-token-store.js", () => ({ createMSTeamsSsoTokenStoreFs: () => ssoTokenStore }));
 
 export function resetMSTeamsMonitorMocks() {
   vi.clearAllMocks();

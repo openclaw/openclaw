@@ -1,4 +1,3 @@
-// Microsoft Teams tests cover durable admission, replay, taxonomy, and redelivery dedupe.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +6,7 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import * as channelOutbound from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
@@ -111,6 +111,20 @@ async function waitForVerdict(
     },
     { timeout: 5_000 },
   );
+}
+
+async function withRunningIngress(
+  queue: IngressQueue,
+  dispatch: IngressDispatch,
+  run: (ingress: ReturnType<typeof makeIngress>) => Promise<void>,
+) {
+  const ingress = makeIngress(queue, dispatch);
+  ingress.start();
+  try {
+    await run(ingress);
+  } finally {
+    await ingress.stop();
+  }
 }
 
 afterEach(() => {
@@ -264,11 +278,9 @@ describe("Microsoft Teams durable ingress", () => {
       const dispatch = vi.fn(async (_activity, lifecycle) => {
         await lifecycle.onAdopted();
       });
-      const ingress = makeIngress(queue, dispatch);
       const first = activity({ id: "bot-framework-redelivery", text: "original" });
       const redelivery = activity({ id: "bot-framework-redelivery", text: "redelivered copy" });
-      ingress.start();
-      try {
+      await withRunningIngress(queue, dispatch, async (ingress) => {
         await ingress.accept(first);
         await waitForVerdict(queue, "bot-framework-redelivery", "completed");
         await ingress.accept(redelivery);
@@ -278,9 +290,7 @@ describe("Microsoft Teams durable ingress", () => {
         });
         expect(dispatch).toHaveBeenCalledTimes(1);
         expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ text: "original" });
-      } finally {
-        await ingress.stop();
-      }
+      });
     });
   });
 
@@ -315,14 +325,10 @@ describe("Microsoft Teams durable ingress", () => {
         { laneKey: "conversation-1" },
       );
       const dispatch = vi.fn();
-      const ingress = makeIngress(queue, dispatch);
-      ingress.start();
-      try {
+      await withRunningIngress(queue, dispatch, async () => {
         await waitForVerdict(queue, "activity-malformed", "failed");
         expect(dispatch).not.toHaveBeenCalled();
-      } finally {
-        await ingress.stop();
-      }
+      });
     });
   });
 
@@ -331,9 +337,7 @@ describe("Microsoft Teams durable ingress", () => {
       const dispatch = vi.fn(async () => {
         throw Object.assign(new Error("invalid Bot Framework credentials"), { statusCode: 401 });
       });
-      const ingress = makeIngress(queue, dispatch);
-      ingress.start();
-      try {
+      await withRunningIngress(queue, dispatch, async (ingress) => {
         await ingress.accept(activity({ id: "activity-auth-failed" }));
         await waitForVerdict(queue, "activity-auth-failed", "failed");
         expect(dispatch).toHaveBeenCalledTimes(1);
@@ -342,18 +346,13 @@ describe("Microsoft Teams durable ingress", () => {
         if (verdict.kind === "failed") {
           expect(verdict.record.reason).toBe("authentication-failed");
         }
-      } finally {
-        await ingress.stop();
-      }
+      });
     });
   });
 
   it("caps active deliveries across repeated drain pumps", async () => {
     await withQueue(async (queue) => {
-      let releaseDeliveries: (() => void) | undefined;
-      const deliveryGate = new Promise<void>((resolve) => {
-        releaseDeliveries = resolve;
-      });
+      const deliveryGate = createDeferred<void>();
       let active = 0;
       let maxActive = 0;
       const dispatch = vi.fn(async (_activity, lifecycle) => {
@@ -361,7 +360,7 @@ describe("Microsoft Teams durable ingress", () => {
         maxActive = Math.max(maxActive, active);
         await lifecycle.onAdopted();
         try {
-          await deliveryGate;
+          await deliveryGate.promise;
         } finally {
           active -= 1;
         }
@@ -397,11 +396,11 @@ describe("Microsoft Teams durable ingress", () => {
           expect.objectContaining({ id: "activity-concurrency-8", laneKey: "lane-8" }),
         ]);
 
-        releaseDeliveries?.();
+        deliveryGate.resolve();
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(9));
         expect(maxActive).toBe(8);
       } finally {
-        releaseDeliveries?.();
+        deliveryGate.resolve();
         await ingress.stop();
       }
     });
@@ -409,15 +408,12 @@ describe("Microsoft Teams durable ingress", () => {
 
   it("waits for active delivery to finish before stopping", async () => {
     await withQueue(async (queue) => {
-      let releaseDelivery: (() => void) | undefined;
-      const deliveryGate = new Promise<void>((resolve) => {
-        releaseDelivery = resolve;
-      });
+      const deliveryGate = createDeferred<void>();
       let deliverySignal: AbortSignal | undefined;
       const ingress = makeIngress(queue, async (_activity, lifecycle) => {
         deliverySignal = lifecycle.abortSignal;
         await lifecycle.onAdopted();
-        await deliveryGate;
+        await deliveryGate.promise;
       });
       ingress.start();
       await ingress.accept(activity({ id: "activity-stop" }));
@@ -433,7 +429,7 @@ describe("Microsoft Teams durable ingress", () => {
       expect(stopped).toBe(false);
       expect(deliverySignal?.aborted).toBe(false);
 
-      releaseDelivery?.();
+      deliveryGate.resolve();
       await stopping;
       expect(stopped).toBe(true);
     });
@@ -443,19 +439,16 @@ describe("Microsoft Teams durable ingress", () => {
     vi.useFakeTimers();
     try {
       await withQueue(async (queue) => {
-        let markDeliveryStarted!: () => void;
-        const deliveryStarted = new Promise<void>((resolve) => {
-          markDeliveryStarted = resolve;
-        });
+        const deliveryStarted = createDeferred<void>();
         let deliverySignal: AbortSignal | undefined;
         const ingress = makeIngress(queue, async (_activity, lifecycle) => {
           deliverySignal = lifecycle.abortSignal;
-          markDeliveryStarted();
+          deliveryStarted.resolve();
           await new Promise<void>(() => {});
         });
         ingress.start();
         await ingress.accept(activity({ id: "activity-stop-timeout" }));
-        await deliveryStarted;
+        await deliveryStarted.promise;
 
         const stopping = ingress.stop();
         expect(deliverySignal?.aborted).toBe(false);
@@ -473,18 +466,15 @@ describe("Microsoft Teams durable ingress", () => {
     vi.useFakeTimers();
     try {
       await withQueue(async (queue) => {
-        let markDeliveryStarted!: () => void;
-        const deliveryStarted = new Promise<void>((resolve) => {
-          markDeliveryStarted = resolve;
-        });
+        const deliveryStarted = createDeferred<void>();
         const dispatch = vi.fn(async () => {
-          markDeliveryStarted();
+          deliveryStarted.resolve();
           await new Promise<void>(() => {});
         });
         const ingress = makeIngress(queue, dispatch);
         ingress.start();
         await ingress.accept(activity({ id: "activity-terminal-stop" }));
-        await deliveryStarted;
+        await deliveryStarted.promise;
 
         const firstStop = ingress.stop();
         expect(ingress.stop()).toBe(firstStop);

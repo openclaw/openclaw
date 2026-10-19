@@ -1,4 +1,3 @@
-// Msteams tests cover outbound plugin behavior.
 import assert from "node:assert/strict";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
@@ -28,16 +27,28 @@ vi.mock("./polls.js", () => ({
 import { msteamsPlugin } from "./channel.js";
 import { msteamsOutbound } from "./outbound.js";
 
-const cfg = {
+const cfg: OpenClawConfig = { channels: { msteams: { appId: "resolved-app-id" } } };
+const defaultTarget = { cfg, to: "conversation:abc" };
+const sendResult = (messageId: string, conversationId = "conv-1") => ({
+  messageId,
+  conversationId,
+});
+const accountConfig = (account: string): OpenClawConfig => ({
   channels: {
-    msteams: {
-      appId: "resolved-app-id",
-    },
+    msteams: { defaultAccount: account, accounts: { [account]: { appId: "support-app" } } },
   },
-} as OpenClawConfig;
+});
 
 const { sendText, sendMedia, sendPayload, sendPoll, renderPresentation } = msteamsOutbound;
 assert(sendText && sendMedia && sendPayload && sendPoll && renderPresentation);
+
+const render = (payload: Parameters<typeof renderPresentation>[0]["payload"]) => {
+  return renderPresentation({
+    payload,
+    presentation: payload.presentation!,
+    ctx: { ...defaultTarget, text: payload.text ?? "", mediaUrl: payload.mediaUrl, payload },
+  });
+};
 
 describe("msteamsOutbound cfg threading", () => {
   beforeEach(() => {
@@ -46,33 +57,21 @@ describe("msteamsOutbound cfg threading", () => {
     mocks.sendPollMSTeams.mockReset();
     mocks.createPoll.mockReset();
     mocks.createMSTeamsPollStoreState.mockReset().mockReturnValue({ createPoll: mocks.createPoll });
-    mocks.sendMessageMSTeams.mockResolvedValue({
-      messageId: "msg-1",
-      conversationId: "conv-1",
-    });
+    mocks.sendMessageMSTeams.mockResolvedValue(sendResult("msg-1"));
     mocks.sendPollMSTeams.mockResolvedValue({
       pollId: "poll-1",
-      messageId: "msg-poll-1",
-      conversationId: "conv-1",
+      ...sendResult("msg-poll-1"),
     });
-    mocks.sendAdaptiveCardMSTeams.mockResolvedValue({
-      messageId: "msg-card-1",
-      conversationId: "conv-card-1",
-    });
+    mocks.sendAdaptiveCardMSTeams.mockResolvedValue(sendResult("msg-card-1", "conv-card-1"));
     mocks.createPoll.mockResolvedValue(undefined);
   });
 
   it.each([{ configuredLimit: 6000, expectedLimit: 4000 }])(
     "resolves the same capped $configuredLimit-character limit for lightweight and runtime outbound",
     ({ configuredLimit, expectedLimit }) => {
-      const configuredCfg = {
-        channels: {
-          msteams: {
-            appId: "resolved-app-id",
-            textChunkLimit: configuredLimit,
-          },
-        },
-      } as OpenClawConfig;
+      const configuredCfg: OpenClawConfig = {
+        channels: { msteams: { appId: "resolved-app-id", textChunkLimit: configuredLimit } },
+      };
       const params = { cfg: configuredCfg, fallbackLimit: configuredLimit };
 
       expect(msteamsPlugin.outbound?.resolveEffectiveTextChunkLimit?.(params)).toBe(expectedLimit);
@@ -98,12 +97,7 @@ describe("msteamsOutbound cfg threading", () => {
       expectedPeerKind: "direct",
     },
   ])("$title", async ({ target, peerKind, threadId, expectedTarget, expectedPeerKind }) => {
-    await sendText({
-      cfg,
-      to: target,
-      text: peerKind,
-      threadId,
-    });
+    await sendText({ cfg, to: target, text: peerKind, threadId });
 
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
       accountId: "default",
@@ -118,26 +112,11 @@ describe("msteamsOutbound cfg threading", () => {
       title: "Deploy",
       blocks: [
         { type: "text" as const, text: "Finished" },
-        {
-          type: "buttons" as const,
-          buttons: [{ label: "Open", value: "open" }],
-        },
+        { type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] },
       ],
     };
-    const payload = {
-      text: "Deploy finished",
-      presentation,
-    };
-    const rendered = await renderPresentation({
-      payload,
-      presentation,
-      ctx: {
-        cfg,
-        to: "conversation:abc",
-        text: "Deploy finished",
-        payload,
-      },
-    });
+    const payload = { text: "Deploy finished", presentation };
+    const rendered = await render(payload);
 
     expect(rendered?.presentation).toBe(presentation);
     expect(rendered?.channelData?.msteams).toEqual({
@@ -190,10 +169,7 @@ describe("msteamsOutbound cfg threading", () => {
             },
             {
               label: "Hosted widget",
-              action: {
-                type: "web-app" as const,
-                widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
-              },
+              action: { type: "web-app" as const, widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
             },
             {
               label: "Allow",
@@ -210,30 +186,13 @@ describe("msteamsOutbound cfg threading", () => {
       ],
     };
     const payload = { presentation };
-    const rendered = await renderPresentation({
-      payload,
-      presentation,
-      ctx: {
-        cfg,
-        to: "conversation:abc",
-        text: "",
-        payload,
-      },
-    });
+    const rendered = await render(payload);
 
     const card = (rendered?.channelData?.msteams as { presentationCard?: unknown } | undefined)
       ?.presentationCard as { actions?: unknown[] } | undefined;
     expect(card?.actions).toEqual([
-      {
-        type: "Action.OpenUrl",
-        title: "Review",
-        url: "https://example.com/review",
-      },
-      {
-        type: "Action.OpenUrl",
-        title: "Open app",
-        url: "https://example.com/app",
-      },
+      { type: "Action.OpenUrl", title: "Review", url: "https://example.com/review" },
+      { type: "Action.OpenUrl", title: "Open app", url: "https://example.com/app" },
     ]);
     expect(JSON.stringify(card)).not.toContain("approval-1");
     expect(JSON.stringify(card)).not.toContain("/approve");
@@ -246,11 +205,11 @@ describe("msteamsOutbound cfg threading", () => {
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(failure);
     mocks.sendMessageMSTeams
-      .mockResolvedValueOnce({ messageId: "msg-first", conversationId: "conv-1" })
-      .mockResolvedValueOnce({ messageId: "msg-second", conversationId: "conv-1" });
+      .mockResolvedValueOnce(sendResult("msg-first"))
+      .mockResolvedValueOnce(sendResult("msg-second"));
     const text = "x".repeat(8001);
     await expect(
-      sendPayload({ cfg, to: "conversation:abc", text, payload: { text }, onDeliveryResult }),
+      sendPayload({ ...defaultTarget, text, payload: { text }, onDeliveryResult }),
     ).rejects.toMatchObject({
       code: "CHANNEL_PARTIAL_DELIVERY",
       cause: failure,
@@ -267,8 +226,7 @@ describe("msteamsOutbound cfg threading", () => {
   it("combines earlier payload receipts with a native partial delivery once", async () => {
     const failure = new Error("second activity failed");
     const child = {
-      messageId: "msg-child",
-      conversationId: "conv-1",
+      ...sendResult("msg-child"),
       receipt: createMessageReceiptFromOutboundResults({
         results: [{ channel: "msteams", messageId: "msg-child", conversationId: "conv-1" }],
         kind: "media",
@@ -280,7 +238,7 @@ describe("msteamsOutbound cfg threading", () => {
       visibleReplySent: true,
     });
     mocks.sendMessageMSTeams
-      .mockResolvedValueOnce({ messageId: "msg-first", conversationId: "conv-1" })
+      .mockResolvedValueOnce(sendResult("msg-first"))
       .mockImplementationOnce(async ({ onDeliveryResult }) => {
         await onDeliveryResult?.(child);
         throw partial;
@@ -288,7 +246,7 @@ describe("msteamsOutbound cfg threading", () => {
     const onDeliveryResult = vi.fn();
     const text = "x".repeat(4001);
     await expect(
-      sendPayload({ cfg, to: "conversation:abc", text, payload: { text }, onDeliveryResult }),
+      sendPayload({ ...defaultTarget, text, payload: { text }, onDeliveryResult }),
     ).rejects.toMatchObject({
       code: "CHANNEL_PARTIAL_DELIVERY",
       cause: failure,
@@ -313,7 +271,7 @@ describe("msteamsOutbound cfg threading", () => {
     });
     mocks.sendMessageMSTeams.mockRejectedValueOnce(refusal);
     await expect(
-      sendPayload({ cfg, to: "conversation:abc", text: "hello", payload: { text: "hello" } }),
+      sendPayload({ ...defaultTarget, text: "hello", payload: { text: "hello" } }),
     ).rejects.toBe(refusal);
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledOnce();
   });
@@ -324,12 +282,11 @@ describe("msteamsOutbound cfg threading", () => {
       workspaceDir: "/approved/workspace",
     };
     mocks.sendMessageMSTeams
-      .mockResolvedValueOnce({ messageId: "msg-media-1", conversationId: "conv-media" })
-      .mockResolvedValueOnce({ messageId: "msg-media-2", conversationId: "conv-media" });
+      .mockResolvedValueOnce(sendResult("msg-media-1", "conv-media"))
+      .mockResolvedValueOnce(sendResult("msg-media-2", "conv-media"));
 
     const result = await sendPayload({
-      cfg,
-      to: "conversation:abc",
+      ...defaultTarget,
       text: "album",
       payload: {
         text: "album",
@@ -340,25 +297,22 @@ describe("msteamsOutbound cfg threading", () => {
       mediaLocalRoots: ["/unapproved/workspace"],
     });
 
-    expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(1, {
+    const mediaOptions = {
       accountId: "default",
-      cfg,
-      to: "conversation:abc",
+      ...defaultTarget,
+      mediaAccess,
+      mediaLocalRoots: ["/unapproved/workspace"],
+      mediaReadFile: undefined,
+    };
+    expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(1, {
+      ...mediaOptions,
       text: "album",
       mediaUrl: "one.png",
-      mediaAccess,
-      mediaLocalRoots: ["/unapproved/workspace"],
-      mediaReadFile: undefined,
     });
     expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(2, {
-      accountId: "default",
-      cfg,
-      to: "conversation:abc",
+      ...mediaOptions,
       text: "",
       mediaUrl: "reports/two.png",
-      mediaAccess,
-      mediaLocalRoots: ["/unapproved/workspace"],
-      mediaReadFile: undefined,
     });
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledTimes(2);
     expect(mocks.sendMessageMSTeams.mock.calls[0]?.[0]?.mediaAccess).toBe(mediaAccess);
@@ -378,17 +332,7 @@ describe("msteamsOutbound cfg threading", () => {
         blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
       },
     };
-    const rendered = await renderPresentation({
-      payload,
-      presentation: payload.presentation,
-      ctx: {
-        cfg,
-        to: "conversation:abc",
-        text: "photo",
-        mediaUrl: "file:///tmp/photo.png",
-        payload,
-      },
-    });
+    const rendered = await render(payload);
 
     expect(rendered).toBeNull();
   });
@@ -396,15 +340,8 @@ describe("msteamsOutbound cfg threading", () => {
   it.each(["media", "payload"] as const)(
     "passes the configured account to injected %s delivery",
     async (kind) => {
-      const accountCfg: OpenClawConfig = {
-        channels: {
-          msteams: {
-            defaultAccount: "support",
-            accounts: { support: { appId: "support-app" } },
-          },
-        },
-      };
-      const send = vi.fn(async () => ({ messageId: "injected-id", conversationId: "conv-1" }));
+      const accountCfg = accountConfig("support");
+      const send = vi.fn(async () => sendResult("injected-id"));
       const ctx = {
         cfg: accountCfg,
         to: "conversation:abc",
@@ -425,23 +362,13 @@ describe("msteamsOutbound cfg threading", () => {
   );
 
   it("forwards resolved channel thread ids to poll sends", async () => {
-    const accountCfg: OpenClawConfig = {
-      channels: {
-        msteams: {
-          defaultAccount: "support-team",
-          accounts: { "support-team": { appId: "support-app" } },
-        },
-      },
-    };
+    const accountCfg = accountConfig("support-team");
     await sendPoll({
       cfg: accountCfg,
       accountId: "Support Team",
       to: "conversation:19:channel@thread.tacv2",
       threadId: "poll-thread-root",
-      poll: {
-        question: "Ship it?",
-        options: ["Yes", "No"],
-      },
+      poll: { question: "Ship it?", options: ["Yes", "No"] },
     });
 
     expect(mocks.sendPollMSTeams).toHaveBeenCalledWith({
