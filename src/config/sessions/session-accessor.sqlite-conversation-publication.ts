@@ -15,6 +15,7 @@ import {
   stageSqliteCommittedPublication,
   stageSqliteTransactionState,
 } from "../../infra/sqlite-post-commit.js";
+import { resolveDatabasePathKey } from "../../infra/sqlite-worker-identity.js";
 import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
@@ -343,7 +344,7 @@ export function retainConversationWorkerPublication(
         kind: "pending",
         operation,
         databaseIdentity,
-        databasePath: receipts?.[0]?.source.canonicalPath ?? databasePath,
+        databasePath: receipts?.[0]?.source.canonicalPath ?? resolveDatabasePathKey(databasePath),
         receipts,
       });
       unsubscribe = conversationPublication.subscribeFacts((change) => {

@@ -20,7 +20,10 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime
 import { retainConversationBindingFacts } from "./conversation-binding-facts.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import { captureConversationBindingFacts } from "./conversation-registry.js";
-import { conversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
+import {
+  conversationPublication,
+  retainConversationWorkerPublication,
+} from "./session-accessor.sqlite-conversation-publication.js";
 import {
   patchSessionEntryCore,
   replaceSessionEntry,
@@ -615,5 +618,36 @@ it("matches an absent conversation capture key to the writer receipt canonicalPa
   } finally {
     unsubscribe();
     binding.release();
+  }
+});
+
+it("refuses an absent-store capture during receipt-less publication through a directory alias", () => {
+  const root = tempDirs.make("conversation-pending-alias-");
+  const directory = path.join(root, "store");
+  const alias = path.join(root, "alias");
+  fs.mkdirSync(directory);
+  fs.symlinkSync(directory, alias, "junction");
+  const databasePath = path.join(alias, "agent.sqlite");
+  const canonicalPath = resolveDatabasePathKey(databasePath);
+  expect(databasePath).not.toBe(canonicalPath);
+  expect(fs.existsSync(databasePath)).toBe(false);
+  const publication = retainConversationWorkerPublication("file:1:2", databasePath);
+  publication.begin();
+  const binding = retainConversationBindingFacts(["pending-conversation"], canonicalPath);
+  binding.acknowledge({ catalogues: [], associations: [], windows: [], nodes: [] });
+  const sql = observeMainThreadSql();
+  try {
+    expect(() => binding.currentSessionKey("pending-conversation")).toThrow(
+      "Conversation binding publication is unavailable",
+    );
+    publication.settle([], true);
+    expect(() => binding.currentSessionKey("pending-conversation")).toThrow(
+      "Conversation binding publication is unavailable",
+    );
+    sql.expectIdle();
+  } finally {
+    publication.settle();
+    binding.release();
+    sql.restore();
   }
 });
