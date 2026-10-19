@@ -60,6 +60,8 @@ function nativeMessage(id: string, content: string, extra: Partial<DiscordE2eNat
 function expectEvidence(rows: Record<string, unknown>[], expected: Record<string, unknown>[]) {
   expect(rows).toEqual(expect.arrayContaining(expected.map((row) => expect.objectContaining(row))));
 }
+const rejects = (promise: Promise<unknown>, error?: string) =>
+  expect(promise).rejects.toThrow(error);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessions: DiscordChannelE2eSession[] = [];
 afterEach(async () => {
@@ -122,13 +124,11 @@ function fixture(options: { manageThreads?: boolean; missingPermissions?: boolea
             message_reference: z.object({ message_id: z.string() }).optional(),
           })
           .parse(JSON.parse(z.string().parse(init?.body)));
-        const message = {
-          id: String(nextId++),
+        const message = nativeMessage(String(nextId++), body.content, {
           channel_id: target,
           author: { id: driverId },
-          content: body.content,
           message_reference: body.message_reference,
-        };
+        });
         messages.set(message.id, message);
         return Response.json(message);
       }
@@ -183,9 +183,9 @@ function fixture(options: { manageThreads?: boolean; missingPermissions?: boolea
     messages,
     mutations,
     fetcher,
-    async finish() {
+    async finish(error?: string) {
       await session.stop();
-      await session.cleanup();
+      await (error ? rejects(session.cleanup(), error) : session.cleanup());
     },
     loseLease: () => {
       leaseActive = false;
@@ -226,16 +226,11 @@ describe("Discord agent E2E authority and evidence", () => {
     );
     await f.driver.doctor();
     await f.driver.read({ messageId: unrelated });
-    await expect(f.driver.edit({ messageId: unrelated, text: "changed" })).rejects.toThrow(
-      "unowned",
-    );
-    await expect(f.driver.delete({ messageId: unrelated })).rejects.toThrow("unowned");
-    await expect(f.driver.react({ messageId: unrelated, emoji: "fixture" })).rejects.toThrow(
-      "unowned",
-    );
-    await expect(f.driver.send({ threadId: unrelated, text: "foreign thread" })).rejects.toThrow(
-      "not created",
-    );
+    const d = f.driver;
+    await rejects(d.edit({ messageId: unrelated, text: "changed" }), "unowned");
+    await rejects(d.delete({ messageId: unrelated }), "unowned");
+    await rejects(d.react({ messageId: unrelated, emoji: "fixture" }), "unowned");
+    await rejects(d.send({ threadId: unrelated, text: "foreign thread" }), "not created");
     const own = await f.driver.send({ text: "owned" });
     await f.finish();
     expect(f.messages.has(own.id)).toBe(false);
@@ -246,10 +241,10 @@ describe("Discord agent E2E authority and evidence", () => {
   it("reports missing native permissions as failures instead of skipping lifecycle operations", async () => {
     const f = fixture({ missingPermissions: true });
     const result = await f.driver.doctor();
-    expect(result.ok).toBe(false);
-    expect(result.capabilities.unavailable).toEqual([
-      expect.objectContaining({ reason: expect.stringContaining("missing ViewChannel") }),
-    ]);
+    expect(result).toMatchObject({
+      ok: false,
+      capabilities: { unavailable: [{ reason: expect.stringContaining("missing ViewChannel") }] },
+    });
     expect(f.mutations).toEqual([]);
   });
 
@@ -264,15 +259,13 @@ describe("Discord agent E2E authority and evidence", () => {
       return await response.promise;
     });
     const sending = f.driver.send({ text: "racing abort" });
-    const rejected = expect(sending).rejects.toThrow("scenario cancelled");
+    const rejected = rejects(sending, "scenario cancelled");
     await started.promise;
     f.controller.abort(new Error("scenario cancelled"));
     f.messages.set(id, nativeMessage(id, "racing abort", { author: { id: driverId } }));
     response.resolve(Response.json(f.messages.get(id)));
     await rejected;
-    await expect(f.driver.send({ text: "after cancellation" })).rejects.toThrow(
-      "scenario cancelled",
-    );
+    await rejects(f.driver.send({ text: "after cancellation" }), "scenario cancelled");
     await f.finish();
     expect(f.messages.has(id)).toBe(false);
     expectEvidence(await f.evidence(), [{ source: "cleanup", ok: true }]);
@@ -282,7 +275,7 @@ describe("Discord agent E2E authority and evidence", () => {
     const f = fixture();
     const trigger = await f.driver.send({ text: "owned trigger", mention: true });
     await f.session.stop();
-    await expect(f.driver.send({ text: "too late" })).rejects.toThrow();
+    await rejects(f.driver.send({ text: "too late" }));
     const id = "623456789012345678";
     const lateReply = nativeMessage(id, "shutdown reply", {
       message_reference: { message_id: trigger.id },
@@ -301,7 +294,7 @@ describe("Discord agent E2E authority and evidence", () => {
     const trigger = await f.driver.send({ text: `reply with ${marker}`, mention: true });
     const thread = await f.driver.thread({ name: "owned thread", messageId: trigger.id });
     const waiting = f.driver.waitForReply({ afterMessageId: trigger.id, textIncludes: marker });
-    const rejected = expect(waiting).rejects.toThrow("closed (1006)");
+    const rejected = rejects(waiting, "closed (1006)");
     await vi.advanceTimersByTimeAsync(0);
     const reply = nativeMessage("623456789012345678", marker);
     const unrelated: DiscordE2eNativeMessage[] = [
@@ -322,11 +315,9 @@ describe("Discord agent E2E authority and evidence", () => {
     socketHarness.current!.emit("close", 1006);
     await vi.advanceTimersByTimeAsync(100);
     await rejected;
-    await f.session.stop();
-    await expect(f.session.cleanup()).rejects.toThrow("closed (1006)");
+    await f.finish("closed (1006)");
 
-    expect(f.messages.has(trigger.id)).toBe(false);
-    expect(f.messages.has(reply.id)).toBe(false);
+    expect([f.messages.has(trigger.id), f.messages.has(reply.id)]).toEqual([false, false]);
     expect(unrelated.every((message) => f.messages.has(message.id))).toBe(true);
     const deletions = f.mutations.filter((row) => row.method === "DELETE");
     expect(deletions).toEqual(
@@ -346,10 +337,9 @@ describe("Discord agent E2E authority and evidence", () => {
       new Error("connection lost after Discord accepted the request"),
     );
     const before = f.fetcher.mock.calls.length;
-    await expect(f.driver.send({ text: "uncertain" })).rejects.toThrow("connection lost");
+    await rejects(f.driver.send({ text: "uncertain" }), "connection lost");
     expect(f.fetcher.mock.calls.length - before).toBe(1);
-    await f.session.stop();
-    await expect(f.session.cleanup()).rejects.toThrow("cleanup incomplete");
+    await f.finish("cleanup incomplete");
     expect(f.mutations).toEqual([]);
     expect((await f.evidence()).find((row) => row.source === "cleanup")).toMatchObject({
       ok: false,
@@ -386,23 +376,17 @@ describe("Discord agent E2E authority and evidence", () => {
     f.emit("MESSAGE_DELETE", { id: sutReplyId });
     socketHarness.current!.emit("close", 4004);
     expect(() => f.driver.assertActive()).toThrow("closed");
-    await f.session.stop();
-    await expect(f.session.cleanup()).rejects.toThrow("closed");
+    await f.finish("closed");
     const evidence = await f.evidence();
+    const sutMessage = { actor: "sut", messageId: sutReplyId };
     expectEvidence(evidence, [
       {
+        ...sutMessage,
         kind: "MESSAGE_UPDATE",
-        actor: "sut",
-        messageId: sutReplyId,
         triggerMessageId: trigger.id,
         text: "UNIQUE_MARKER",
       },
-      {
-        kind: "MESSAGE_DELETE",
-        actor: "sut",
-        messageId: sutReplyId,
-        deletedText: "UNIQUE_MARKER",
-      },
+      { ...sutMessage, kind: "MESSAGE_DELETE", deletedText: "UNIQUE_MARKER" },
       {
         kind: "MESSAGE_REACTION_ADD",
         actor: "sut",
@@ -452,11 +436,8 @@ describe("Discord agent E2E authority and evidence", () => {
     const message = await f.driver.send({ text: "owned but expired" });
     const writesBefore = f.mutations.length;
     f.loseLease();
-    await expect(f.driver.edit({ messageId: message.id, text: "forbidden" })).rejects.toThrow(
-      "lease expired",
-    );
-    await f.session.stop();
-    await expect(f.session.cleanup()).rejects.toThrow("cleanup incomplete");
+    await rejects(f.driver.edit({ messageId: message.id, text: "forbidden" }), "lease expired");
+    await f.finish("cleanup incomplete");
     expect(f.mutations).toHaveLength(writesBefore);
     expect(f.messages.has(message.id)).toBe(true);
   });

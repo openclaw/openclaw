@@ -79,23 +79,22 @@ describe("discord live qa runtime", () => {
   it("forwards Discord Requests through the guarded QA endpoint and preserves null responses", async () => {
     const received: Array<{ authorization?: string; body: string; method?: string; url?: string }> =
       [];
-    const server = createServer((request, response) => {
+    const server = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
-      request.on("data", (chunk: Buffer) => chunks.push(chunk));
-      request.on("end", () => {
-        received.push({
-          authorization: request.headers.authorization,
-          body: Buffer.concat(chunks).toString("utf8"),
-          method: request.method,
-          url: request.url,
-        });
-        if (request.method === "DELETE") {
-          response.writeHead(204).end();
-          return;
-        }
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ ok: true }));
+      for await (const chunk of request) {
+        chunks.push(chunk);
+      }
+      received.push({
+        authorization: request.headers.authorization,
+        body: Buffer.concat(chunks).toString("utf8"),
+        method: request.method,
+        url: request.url,
       });
+      if (request.method === "DELETE") {
+        response.writeHead(204).end();
+      } else {
+        response.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
+      }
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
@@ -121,8 +120,7 @@ describe("discord live qa runtime", () => {
           method: "DELETE",
         }),
       );
-      expect(deleteResponse.status).toBe(204);
-      expect(deleteResponse.body).toBeNull();
+      expect(deleteResponse).toMatchObject({ status: 204, body: null });
       expect(received).toEqual([
         {
           authorization: "Bot qa-token",
@@ -154,22 +152,16 @@ describe("discord live qa runtime", () => {
     ).toEqual(credentials);
   });
 
-  it("fails when a required Discord QA env var is missing", () => {
+  it.each([
+    ["SUT_APPLICATION_ID", undefined, "OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID"],
+    ["GUILD_ID", "qa-guild", "OPENCLAW_QA_DISCORD_GUILD_ID must be a Discord snowflake."],
+  ])("rejects invalid Discord QA %s", (key, value, error) => {
     expect(() =>
       testing.resolveDiscordQaRuntimeEnv({
         ...runtimeEnv,
-        OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID: undefined,
+        [`OPENCLAW_QA_DISCORD_${key}`]: value,
       }),
-    ).toThrow("OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID");
-  });
-
-  it("fails when Discord IDs are not snowflakes", () => {
-    expect(() =>
-      testing.resolveDiscordQaRuntimeEnv({
-        ...runtimeEnv,
-        OPENCLAW_QA_DISCORD_GUILD_ID: "qa-guild",
-      }),
-    ).toThrow("OPENCLAW_QA_DISCORD_GUILD_ID must be a Discord snowflake.");
+    ).toThrow(error);
   });
 
   it("parses Discord pooled credential payloads", () => {
@@ -179,11 +171,9 @@ describe("discord live qa runtime", () => {
   it("rejects Discord pooled credential payloads with bad snowflakes", () => {
     expect(() =>
       testing.parseDiscordQaCredentialPayload({
-        guildId,
+        ...credentials,
+        voiceChannelId: undefined,
         channelId: "channel",
-        driverBotToken: "driver",
-        sutBotToken: "sut",
-        sutApplicationId: sutId,
       }),
     ).toThrow("Discord credential payload_CHANNEL_ID must be a Discord snowflake.");
   });
@@ -192,27 +182,21 @@ describe("discord live qa runtime", () => {
     const baseCfg: OpenClawConfig = {
       plugins: {
         allow: ["memory-core", "qa-channel"],
-        entries: {
-          "memory-core": { enabled: true },
-          "qa-channel": { enabled: true },
-        },
+        entries: { "memory-core": { enabled: true }, "qa-channel": { enabled: true } },
       },
       channels: {
-        "qa-channel": {
-          enabled: true,
-          baseUrl: "http://127.0.0.1:43123",
-          botUserId: "openclaw",
-          botDisplayName: "OpenClaw QA",
-          allowFrom: ["*"],
-        },
+        "qa-channel": { enabled: true },
       },
     };
 
     const next = testing.buildDiscordQaConfig(baseCfg, accountConfig);
 
-    expect(next.plugins?.allow).toContain("discord");
-    expect(next.plugins?.entries?.discord).toEqual({ enabled: true });
+    expect(next.plugins).toMatchObject({
+      allow: expect.arrayContaining(["discord"]),
+      entries: { discord: { enabled: true } },
+    });
     expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
+    const mentionAccess = { requireMention: true, users: [driverId] };
     expect(next.channels?.discord).toEqual({
       enabled: true,
       defaultAccount: "sut",
@@ -224,15 +208,8 @@ describe("discord live qa runtime", () => {
           groupPolicy: "allowlist",
           guilds: {
             [guildId]: {
-              requireMention: true,
-              users: [driverId],
-              channels: {
-                [channelId]: {
-                  enabled: true,
-                  requireMention: true,
-                  users: [driverId],
-                },
-              },
+              ...mentionAccess,
+              channels: { [channelId]: { enabled: true, ...mentionAccess } },
             },
           },
         },
@@ -252,9 +229,10 @@ describe("discord live qa runtime", () => {
       autoJoin: [],
     });
     const guild = account?.guilds?.[guildId];
-    expect(guild?.channels?.[channelId]?.users).toEqual([driverId]);
-    expect(guild?.channels?.[voiceChannelId]?.users).toEqual([sutId]);
-    expect(guild?.users).toEqual([driverId]);
+    expect(guild).toMatchObject({
+      users: [driverId],
+      channels: { [channelId]: { users: [driverId] }, [voiceChannelId]: { users: [sutId] } },
+    });
     expect(next.tools?.alsoAllow).toContain("transcripts");
     expect(next.agents?.entries?.qa?.tools?.alsoAllow).toContain("transcripts");
   });
@@ -269,9 +247,12 @@ describe("discord live qa runtime", () => {
       statusReactions: { enabled: true },
     });
     const discordAccount = next.channels?.discord?.accounts?.sut;
-    expect(discordAccount?.allowBots).toBe(true);
-    expect(discordAccount?.guilds?.[guildId]?.requireMention).toBe(false);
-    expect(discordAccount?.guilds?.[guildId]?.channels?.[channelId]?.requireMention).toBe(false);
+    expect(discordAccount).toMatchObject({
+      allowBots: true,
+      guilds: {
+        [guildId]: { requireMention: false, channels: { [channelId]: { requireMention: false } } },
+      },
+    });
   });
 
   it("normalizes observed Discord messages", () => {
@@ -447,36 +428,23 @@ describe("discord live qa runtime", () => {
   });
 
   it("discovers the first visible Discord voice channel for the voice smoke", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json([
-          { id: "123456789012345678", name: "general", position: 0, type: 0 },
-          { id: "523456789012345678", name: "qa-voice", position: 1, type: 2 },
-          { id: "623456789012345678", name: "stage", position: 2, type: 13 },
-        ]),
-      ),
+    mockResponses(
+      Response.json([
+        { id: guildId, name: "general", position: 0, type: 0 },
+        { id: voiceChannelId, name: "qa-voice", position: 1, type: 2 },
+        { id: "623456789012345678", name: "stage", position: 2, type: 13 },
+      ]),
     );
 
-    const voiceChannel = await testing.resolveDiscordQaVoiceChannel({
-      token: "token",
-      guildId: "123456789012345678",
-    });
-    expect(voiceChannel.id).toBe("523456789012345678");
-    expect(voiceChannel.name).toBe("qa-voice");
+    const voiceChannel = await testing.resolveDiscordQaVoiceChannel({ token: "token", guildId });
+    expect(voiceChannel).toMatchObject({ id: voiceChannelId, name: "qa-voice" });
   });
 
   it("normalizes missing current Discord voice state to null", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => Response.json({ message: "Unknown Voice State" }, { status: 404 })),
-    );
+    mockResponses(Response.json({ message: "Unknown Voice State" }, { status: 404 }));
 
     await expect(
-      testing.getCurrentDiscordVoiceState({
-        token: "token",
-        guildId: "123456789012345678",
-      }),
+      testing.getCurrentDiscordVoiceState({ token: "token", guildId }),
     ).resolves.toBeNull();
   });
 
