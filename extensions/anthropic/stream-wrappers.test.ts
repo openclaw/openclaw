@@ -1,6 +1,5 @@
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { calculateUsageCost } from "@openclaw/llm-core";
-// Anthropic tests cover stream wrappers plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { type Model, streamSimple } from "openclaw/plugin-sdk/llm";
@@ -36,156 +35,114 @@ afterAll(() => {
   configureAiTransportHost(initialTransportHost);
 });
 
-function runWrapper(apiKey: string | undefined): Record<string, string> | undefined {
-  const captured: { headers?: Record<string, string> } = {};
-  const base: StreamFn = (_model, _context, options) => {
-    captured.headers = options?.headers;
-    return {} as never;
-  };
-  const wrapper = createAnthropicBetaHeadersWrapper(base, [CONTEXT_1M_BETA]);
-  void wrapper(
-    { provider: "anthropic", id: "claude-opus-4-6" } as never,
-    {} as never,
-    { apiKey } as never,
-  );
-  return captured.headers;
-}
-
-function createPayloadCapturingBaseStream(captured: {
+type Captured = {
   headers?: Record<string, string>;
+  model?: Parameters<StreamFn>[0];
   payload?: Record<string, unknown>;
   options?: Parameters<StreamFn>[2];
-}): StreamFn {
-  return (model, _context, options) => {
-    captured.headers = options?.headers;
-    captured.options = options;
-    const payload = {} as Record<string, unknown>;
-    options?.onPayload?.(payload as never, model as never);
+};
+type WrapperFactory = (base: StreamFn) => StreamFn | undefined;
+function runCaptured(
+  createWrapper: WrapperFactory,
+  model: Partial<Parameters<StreamFn>[0]> = {},
+  options: Parameters<StreamFn>[2] = {},
+) {
+  const captured: Captured = {};
+  const base: StreamFn = (target, _context, opts) => {
+    captured.headers = opts?.headers;
+    captured.options = opts;
+    captured.model = target;
+    const payload: Record<string, unknown> = {};
+    opts?.onPayload?.(payload as never, target);
     captured.payload = payload;
     return {} as never;
   };
-}
-
-function runComposedAnthropicProviderStream(apiKey: string, modelId = "claude-sonnet-4-6") {
-  const captured: { headers?: Record<string, string>; payload?: Record<string, unknown> } = {};
-  const wrapped = wrapAnthropicProviderStream({
-    streamFn: createPayloadCapturingBaseStream(captured),
-    modelId,
-    extraParams: { context1m: true, serviceTier: "auto" },
-  } as never);
-
-  void wrapped?.(
-    { provider: "anthropic", api: "anthropic-messages", id: modelId } as never,
+  void createWrapper(base)?.(
+    {
+      provider: "anthropic",
+      api: "anthropic-messages",
+      id: "claude-sonnet-4-6",
+      ...model,
+    } as never,
     {} as never,
-    { apiKey } as never,
+    options,
   );
   return captured;
+}
+
+function runWrapper(apiKey: string | undefined) {
+  return runCaptured(
+    (base) => createAnthropicBetaHeadersWrapper(base, [CONTEXT_1M_BETA]),
+    { id: "claude-opus-4-6" },
+    { apiKey },
+  ).headers;
+}
+
+function runProviderWrapper(
+  extraParams: Record<string, unknown>,
+  apiKey = "sk-ant-api03-test-key",
+  modelId = "claude-sonnet-4-6",
+) {
+  return runCaptured(
+    (streamFn) => wrapAnthropicProviderStream({ streamFn, modelId, extraParams } as never),
+    { id: modelId },
+    { apiKey },
+  );
 }
 
 function runPayloadWrapper(
+  params: Pick<Partial<Parameters<StreamFn>[0]>, "provider" | "api" | "baseUrl"> & {
+    apiKey?: string;
+  },
+  createWrapper: WrapperFactory,
+) {
+  const { apiKey, ...model } = params;
+  return runCaptured(createWrapper, model, { apiKey }).payload;
+}
+
+function runNativeFastModeWrapper(
   params: {
     apiKey?: string;
-    provider?: string;
-    api?: string;
     baseUrl?: string;
-  },
-  createWrapper: (base: StreamFn) => StreamFn,
-): Record<string, unknown> | undefined {
-  const captured: { payload?: Record<string, unknown> } = {};
-  const wrapper = createWrapper(createPayloadCapturingBaseStream(captured));
-  void wrapper(
+    enabled?: boolean;
+    headers?: Record<string, string>;
+    cost?: Parameters<StreamFn>[0]["cost"];
+  } = {},
+) {
+  return runCaptured(
+    (base) => createAnthropicFastModeWrapper(base, params.enabled ?? true),
     {
-      provider: params.provider ?? "anthropic",
-      api: params.api ?? "anthropic-messages",
+      id: "claude-opus-5",
       baseUrl: params.baseUrl,
-      id: "claude-sonnet-4-6",
-    } as never,
-    {} as never,
-    { apiKey: params.apiKey } as never,
+      cost: params.cost ?? { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    },
+    { apiKey: params.apiKey ?? "sk-ant-api03-test-key", headers: params.headers },
   );
-  return captured.payload;
 }
 
-function runNativeFastModeWrapper(params?: {
-  apiKey?: string;
-  provider?: string;
-  api?: string;
-  baseUrl?: string;
-  enabled?: boolean;
-  headers?: Record<string, string>;
-  modelId?: string;
-  cost?: Parameters<StreamFn>[0]["cost"];
-}) {
-  const captured: {
+function runCompactionProviderWrapper(
+  params: {
+    apiKey?: string;
+    modelId?: string;
+    extraParams?: Record<string, unknown>;
     headers?: Record<string, string>;
-    model?: Parameters<StreamFn>[0];
-    payload?: Record<string, unknown>;
-  } = {};
-  const base: StreamFn = (model, _context, options) => {
-    captured.headers = options?.headers;
-    captured.model = model;
-    const payload = {} as Record<string, unknown>;
-    options?.onPayload?.(payload as never, model as never);
-    captured.payload = payload;
-    return {} as never;
-  };
-  const wrapper = createAnthropicFastModeWrapper(base, params?.enabled ?? true);
-  void wrapper(
+  } = {},
+) {
+  const modelId = params.modelId ?? "claude-sonnet-4-6";
+  return runCaptured(
+    (streamFn) =>
+      wrapAnthropicProviderStream({
+        streamFn,
+        modelId,
+        extraParams: params.extraParams ?? {},
+      } as never),
+    { id: modelId, baseUrl: "https://api.anthropic.com/v1", contextWindow: 200_000 },
     {
-      provider: params?.provider ?? "anthropic",
-      api: params?.api ?? "anthropic-messages",
-      baseUrl: params?.baseUrl,
-      id: params?.modelId ?? "claude-opus-5",
-      cost: params?.cost ?? { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    } as never,
-    {} as never,
-    {
-      apiKey: params?.apiKey ?? "sk-ant-api03-test-key",
-      headers: params?.headers,
-    } as never,
+      apiKey: params.apiKey ?? "sk-ant-api03-test-key",
+      headers: params.headers,
+      onPayload: (generated: unknown) => Object.assign(generated as Record<string, unknown>, {}),
+    },
   );
-  return captured;
-}
-
-function runCompactionProviderWrapper(params?: {
-  apiKey?: string;
-  provider?: string;
-  api?: string;
-  baseUrl?: string;
-  modelId?: string;
-  extraParams?: Record<string, unknown>;
-  headers?: Record<string, string>;
-  payload?: Record<string, unknown>;
-}) {
-  const captured: {
-    headers?: Record<string, string>;
-    payload?: Record<string, unknown>;
-    options?: Parameters<StreamFn>[2];
-  } = {};
-  const modelId = params?.modelId ?? "claude-sonnet-4-6";
-  const wrapped = wrapAnthropicProviderStream({
-    streamFn: createPayloadCapturingBaseStream(captured),
-    modelId,
-    extraParams: params?.extraParams ?? {},
-  } as never);
-  const payload = params?.payload ?? {};
-  void wrapped?.(
-    {
-      provider: params?.provider ?? "anthropic",
-      api: params?.api ?? "anthropic-messages",
-      baseUrl: params?.baseUrl ?? "https://api.anthropic.com/v1",
-      id: modelId,
-      contextWindow: 200_000,
-    } as never,
-    {} as never,
-    {
-      apiKey: params?.apiKey ?? "sk-ant-api03-test-key",
-      headers: params?.headers,
-      onPayload: (generated: unknown) =>
-        Object.assign(generated as Record<string, unknown>, payload),
-    } as never,
-  );
-  return captured;
 }
 
 describe("anthropic stream wrappers", () => {
@@ -201,7 +158,7 @@ describe("anthropic stream wrappers", () => {
   });
 
   it("composes the anthropic provider stream chain from extra params", () => {
-    const captured = runComposedAnthropicProviderStream("sk-ant-api-123");
+    const captured = runProviderWrapper({ context1m: true, serviceTier: "auto" }, "sk-ant-api-123");
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
     expect(captured.payload).toMatchObject({ service_tier: "auto" });
   });
@@ -337,17 +294,9 @@ describe("anthropic stream wrappers", () => {
   });
 
   it("preserves OAuth-required betas when legacy context-1m is the only configured beta", () => {
-    const captured: { headers?: Record<string, string> } = {};
-    const wrapped = wrapAnthropicProviderStream({
-      streamFn: createPayloadCapturingBaseStream(captured),
-      modelId: "claude-sonnet-4-6",
-      extraParams: { anthropicBeta: [CONTEXT_1M_BETA] },
-    } as never);
-
-    void wrapped?.(
-      { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
-      {} as never,
-      { apiKey: "sk-ant-oat01-oauth-token" } as never,
+    const captured = runProviderWrapper(
+      { anthropicBeta: [CONTEXT_1M_BETA] },
+      "sk-ant-oat01-oauth-token",
     );
 
     expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
@@ -441,21 +390,10 @@ describe("anthropic stream wrappers", () => {
   });
 
   it("lets explicit service tier configuration override fast mode", () => {
-    const captured: { headers?: Record<string, string>; payload?: Record<string, unknown> } = {};
-    const wrapped = wrapAnthropicProviderStream({
-      streamFn: createPayloadCapturingBaseStream(captured),
-      modelId: "claude-opus-5",
-      extraParams: { fastMode: true, serviceTier: "standard_only" },
-    } as never);
-
-    void wrapped?.(
-      {
-        provider: "anthropic",
-        api: "anthropic-messages",
-        id: "claude-opus-5",
-      } as never,
-      {} as never,
-      { apiKey: "sk-ant-api03-test-key" } as never,
+    const captured = runProviderWrapper(
+      { fastMode: true, serviceTier: "standard_only" },
+      undefined,
+      "claude-opus-5",
     );
 
     expect(captured.headers?.["anthropic-beta"] ?? "").not.toContain("fast-mode");
