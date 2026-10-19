@@ -2,12 +2,9 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { describe, expect, it } from "vitest";
 import { tlonRuntimeOutbound } from "../channel.runtime.js";
 import { ensureUrbitChannelOpen, scryUrbitPath } from "./channel-ops.js";
-
-const lookupLoopback = (async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
 
 async function listen(server: ReturnType<typeof createServer>): Promise<string> {
   await new Promise<void>((resolve, reject) => {
@@ -55,7 +52,6 @@ describe("Urbit channel-ops transport body cleanup", () => {
           ship: "zod",
           channelId: "channel-proof",
           ssrfPolicy: { allowPrivateNetwork: true },
-          lookupFn: lookupLoopback,
         },
         { createBody: [], createAuditContext: "tlon-channel-ops-create-proof" },
       );
@@ -88,7 +84,6 @@ describe("Urbit channel-ops transport body cleanup", () => {
             baseUrl,
             cookie: "urbauth-~zod=proof",
             ssrfPolicy: { allowPrivateNetwork: true },
-            lookupFn: lookupLoopback,
           },
           { path: "/chat/inbox.json", auditContext: "tlon-scry-proof" },
         ),

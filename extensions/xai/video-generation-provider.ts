@@ -251,7 +251,6 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
       // Validate provider/model mode constraints before auth or HTTP setup so
       // unsupported 1.5 requests cannot be submitted and billed accidentally.
       const { body, endpoint, mode } = prepareCreateRequest(req);
-      const fetchFn = fetch;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveProviderApiKeyHttpRequestConfig({
           req,
@@ -280,7 +279,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
           deadline,
           defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
         }),
-        fetchFn,
+        fetchFn: fetch,
         allowPrivateNetwork,
         dispatcherPolicy,
       });
@@ -321,10 +320,8 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
                 deadline: pollDeadline,
                 defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
               }),
-              defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
               allowPrivateNetwork,
               dispatcherPolicy,
-              fetchFn,
             });
             try {
               return readXaiStatusResponse(await readXaiVideoJson(pollResponse));
@@ -350,10 +347,8 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
             deadline,
             defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
           }),
-          defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
           allowPrivateNetwork,
           dispatcherPolicy,
-          fetchFn,
           maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         });
         return {

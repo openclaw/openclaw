@@ -2,16 +2,28 @@ import { EventEmitter, once } from "node:events";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
-import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
+import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime-api.js";
-import {
-  createMattermostConnectOnce,
-  type MattermostWebSocketFactory,
-} from "./monitor-websocket.js";
+import { createMattermostConnectOnce } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
 
-class FakeWebSocket extends EventEmitter implements ReturnType<MattermostWebSocketFactory> {
+const createWebSocket = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>();
+  return {
+    ...actual,
+    WebSocket: Object.assign(
+      vi.fn(function (...args: ConstructorParameters<typeof actual.WebSocket>) {
+        return createWebSocket(...args) ?? new actual.WebSocket(...args);
+      }),
+      actual.WebSocket,
+    ),
+  };
+});
+
+class FakeWebSocket extends EventEmitter {
   readonly sent: string[] = [];
   pingCalls = 0;
   closeCalls = 0;
@@ -45,13 +57,15 @@ function createConnection(
   socket: FakeWebSocket | undefined,
   options: Partial<Parameters<typeof createMattermostConnectOnce>[0]> = {},
 ) {
+  if (socket) {
+    createWebSocket.mockReturnValue(socket);
+  }
   return createMattermostConnectOnce({
     wsUrl: "wss://example.invalid/api/v4/websocket",
     botToken: "token",
     runtime: testRuntime(),
     nextSeq: () => 1,
     onPosted: async () => {},
-    ...(socket ? { webSocketFactory: () => socket } : {}),
     ...options,
   });
 }
@@ -112,6 +126,7 @@ const postEnvelope = (post: Record<string, unknown>, event = "posted") =>
   JSON.stringify({ event, data: { post: JSON.stringify(post) } });
 
 beforeEach(() => {
+  createWebSocket.mockReset();
   vi.useRealTimers();
 });
 afterEach(() => {
@@ -119,17 +134,17 @@ afterEach(() => {
 });
 
 it("backs off across attempts when authentication never completes", async () => {
+  createWebSocket.mockImplementation(() => {
+    const socket = new FakeWebSocket();
+    queueMicrotask(() => {
+      socket.emit("open");
+      socket.emitClose(1006);
+    });
+    return socket;
+  });
   const connectOnce = createConnection(undefined, {
     botToken: "revoked-token",
     nextSeq: sequence(),
-    webSocketFactory: () => {
-      const socket = new FakeWebSocket();
-      queueMicrotask(() => {
-        socket.emit("open");
-        socket.emitClose(1006);
-      });
-      return socket;
-    },
   });
 
   const connectErrors: string[] = [];
@@ -186,28 +201,28 @@ it("retries when first attempt errors before open and next attempt succeeds", as
   const patches: Array<Record<string, unknown>> = [];
   const sockets: FakeWebSocket[] = [];
 
+  createWebSocket.mockImplementation(() => {
+    const socket = new FakeWebSocket();
+    const attempt = sockets.length;
+    sockets.push(socket);
+    queueMicrotask(() => {
+      if (attempt === 0) {
+        socket.emit("error", new Error("boom"));
+        socket.emitClose(1006, "connection refused");
+        return;
+      }
+      socket.emit("open");
+      expect(patches).not.toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
+      socket.emit("message", authOkFrame(1));
+      expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
+      socket.emitClose(1000);
+    });
+    return socket;
+  });
   const connectOnce = createConnection(undefined, {
     nextSeq: sequence(),
     statusSink: (patch) => {
       patches.push(patch as Record<string, unknown>);
-    },
-    webSocketFactory: () => {
-      const socket = new FakeWebSocket();
-      const attempt = sockets.length;
-      sockets.push(socket);
-      queueMicrotask(() => {
-        if (attempt === 0) {
-          socket.emit("error", new Error("boom"));
-          socket.emitClose(1006, "connection refused");
-          return;
-        }
-        socket.emit("open");
-        expect(patches).not.toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
-        socket.emit("message", authOkFrame(1));
-        expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
-        socket.emitClose(1000);
-      });
-      return socket;
     },
   });
 
@@ -332,16 +347,16 @@ it("hands posted envelopes to ingress raw without duplicate decoding", async () 
 });
 
 it("continues protocol keepalive when Mattermost responds with pong", async () => {
-  const { socket, connected } = startTimedMonitor({ pingIntervalMs: 100, pongTimeoutMs: 25 });
+  const { socket, connected } = startTimedMonitor();
 
-  await vi.advanceTimersByTimeAsync(100);
+  await vi.advanceTimersByTimeAsync(30_000);
   expect(socket.pingCalls).toBe(1);
 
   socket.emit("pong", Buffer.alloc(0));
-  await vi.advanceTimersByTimeAsync(25);
+  await vi.advanceTimersByTimeAsync(10_000);
   expect(socket.terminateCalls).toBe(0);
 
-  await vi.advanceTimersByTimeAsync(75);
+  await vi.advanceTimersByTimeAsync(20_000);
   expect(socket.pingCalls).toBe(2);
 
   socket.emitClose(1000);
@@ -355,24 +370,21 @@ it("terminates silent websocket drops when Mattermost misses pong timeout", asyn
       pollCount++;
       return 1000;
     },
-    healthCheckIntervalMs: 100,
-    pingIntervalMs: 50,
-    pongTimeoutMs: 25,
   });
 
   await vi.advanceTimersByTimeAsync(0);
   expect(pollCount).toBe(1);
 
-  await vi.advanceTimersByTimeAsync(50);
+  await vi.advanceTimersByTimeAsync(30_000);
   expect(socket).toMatchObject({ pingCalls: 1, terminateCalls: 0 });
 
-  await vi.advanceTimersByTimeAsync(25);
+  await vi.advanceTimersByTimeAsync(10_000);
   expect(socket.terminateCalls).toBe(1);
   expect(runtime.error).toHaveBeenCalledWith("mattermost websocket pong timeout — reconnecting");
 
-  await vi.advanceTimersByTimeAsync(500);
+  await vi.advanceTimersByTimeAsync(60_000);
   expect(socket.pingCalls).toBe(1);
-  expect(pollCount).toBe(1);
+  expect(pollCount).toBe(2);
 
   socket.emitClose(1006);
   await connected;
@@ -384,12 +396,12 @@ it("does not terminate when getBotUpdateAt throws", async () => {
       .fn<() => Promise<number>>()
       .mockResolvedValueOnce(1000)
       .mockRejectedValue(new Error("network error")),
-    healthCheckIntervalMs: 100,
   });
+  socket.ping = () => void socket.emit("pong", Buffer.alloc(0));
 
   await vi.advanceTimersByTimeAsync(0);
 
-  await vi.advanceTimersByTimeAsync(100);
+  await vi.advanceTimersByTimeAsync(30_000);
   expect(socket.terminateCalls).toBe(0);
   expect(runtime.error).toHaveBeenCalledWith(
     "mattermost: health check error: Error: network error",
@@ -406,18 +418,18 @@ it("keeps polling when the initial getBotUpdateAt call fails", async () => {
       .mockRejectedValueOnce(new Error("network error"))
       .mockResolvedValueOnce(1000)
       .mockResolvedValue(2000),
-    healthCheckIntervalMs: 100,
   });
+  socket.ping = () => void socket.emit("pong", Buffer.alloc(0));
 
   await vi.advanceTimersByTimeAsync(0);
   expect(runtime.error).toHaveBeenCalledWith(
     "mattermost: failed to get initial update_at: Error: network error",
   );
 
-  await vi.advanceTimersByTimeAsync(100);
+  await vi.advanceTimersByTimeAsync(30_000);
   expect(socket.terminateCalls).toBe(0);
 
-  await vi.advanceTimersByTimeAsync(100);
+  await vi.advanceTimersByTimeAsync(30_000);
   expect(socket.terminateCalls).toBe(1);
   expect(runtime.log).toHaveBeenCalledWith(
     "mattermost: bot account updated (update_at changed: 1000 → 2000) — reconnecting",
@@ -437,18 +449,18 @@ it("does not overlap health checks when a prior poll is still running", async ()
         resolvers.push(resolve);
       });
     },
-    healthCheckIntervalMs: 100,
   });
+  socket.ping = () => void socket.emit("pong", Buffer.alloc(0));
 
   await vi.advanceTimersByTimeAsync(0);
   expect(pollCount).toBe(1);
 
-  await vi.advanceTimersByTimeAsync(300);
+  await vi.advanceTimersByTimeAsync(90_000);
   expect(pollCount).toBe(1);
 
   resolvers[0]?.(1000);
   await vi.advanceTimersByTimeAsync(0);
-  await vi.advanceTimersByTimeAsync(100);
+  await vi.advanceTimersByTimeAsync(30_000);
   expect(pollCount).toBe(2);
 
   socket.emitClose(1000);
@@ -461,17 +473,17 @@ it("returns control to reconnect after a stalled handshake", async () => {
   const runtime = testRuntime();
   const reconnectDelays: number[] = [];
   const connectErrors: string[] = [];
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/websocket-runtime")>(
+    "openclaw/plugin-sdk/websocket-runtime",
+  );
+  createWebSocket.mockImplementation((url, options) => {
+    expect(options.handshakeTimeout).toBe(30_000);
+    return new actual.WebSocket(url, { ...options, handshakeTimeout: 200 });
+  });
   const connectOnce = createConnection(undefined, {
     wsUrl: stalledServer.url,
     runtime,
     nextSeq: () => 1,
-    webSocketFactory: (url, options) => {
-      expect(options.handshakeTimeout).toBe(30_000);
-      return new WebSocket(url, {
-        ...options,
-        handshakeTimeout: 200,
-      }) as ReturnType<MattermostWebSocketFactory>;
-    },
   });
 
   const abort = new AbortController();
