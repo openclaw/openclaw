@@ -464,7 +464,7 @@ describe("skill mutations", () => {
   it("reserves the shared operation while agent refresh is pending", async () => {
     const { state, request } = createState();
     request.mockResolvedValue(statusReport());
-    const agents = createDeferred<void>();
+    const agents = createDeferred();
     const loadAgents = vi.fn(() => agents.promise);
     const overlappingLoadAgents = vi.fn(async () => undefined);
     const refresh = refreshSkills(state, loadAgents);
@@ -881,4 +881,3 @@ describe("reconcileSkillsAgentId", () => {
     expect(state.skillOperation).toEqual({ kind: "clawhub", ref: "calendar" });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

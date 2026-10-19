@@ -139,6 +139,20 @@ it("handles pending request reuse, expiry, and per-account limits", async () => 
   });
 });
 
+it("persists a channel-derived approval entry from request metadata", async () => {
+  const fixture = pairingStoreFixture("demo-a", pairingEnv);
+  const request = await fixture.upsert("alice", DEFAULT_ACCOUNT_ID, {
+    proofEntry: "fixture-entry",
+  });
+  await expect(
+    fixture.approve({
+      code: request.code,
+      resolveApprovalStoreEntry: ({ meta }) => meta?.proofEntry ?? null,
+    }),
+  ).resolves.toMatchObject({ id: "alice" });
+  await expect(fixture.allow()).resolves.toEqual(["fixture-entry"]);
+});
+
 it("approves and dismisses account-scoped requests by opaque id", async () => {
   const env = pairingEnv;
   await upsert("shared-sender", "alpha");

@@ -37,8 +37,8 @@ export function pairingStoreFixture(
     list: (account?: string, assertCurrent?: () => void) =>
       listChannelPairingRequests(channel, env, account, assertCurrent),
     allow: (account = accountId) => readChannelAllowFromStore(channel, env, account),
-    upsert: (id: string, account = accountId) =>
-      upsertChannelPairingRequest({ ...scope, id, accountId: account }),
+    upsert: (id: string, account = accountId, meta?: Record<string, string>) =>
+      upsertChannelPairingRequest({ ...scope, id, accountId: account, meta }),
     add: (entry: string, targetEnv = env) =>
       addChannelAllowFromStoreEntry({ ...scope, entry, env: targetEnv }),
     remove: (entry: string) => removeChannelAllowFromStoreEntry({ ...scope, entry }),

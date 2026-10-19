@@ -126,12 +126,20 @@ it("preserves July keyed dreaming state when retired JSON files remain", async (
     lastContentLine: 3,
   };
   const recall = {
+    key,
     path: memoryPath,
     startLine: 1,
     endLine: 1,
     source: "memory",
+    snippet: "Move backups to S3 Glacier.",
     recallCount: 1,
+    totalScore: 0.9,
+    maxScore: 0.9,
+    queryHashes: ["hash-a"],
+    firstRecalledAt: timestamp,
+    lastRecalledAt: timestamp,
   };
+  const phase = { key, lightHits: 1, remHits: 2, lastLightAt: timestamp, lastRemAt: timestamp };
   const fixtures = [
     [state.DREAMING_DAILY_INGESTION_NAMESPACE, memoryPath, daily],
     [state.DREAMING_SESSION_INGESTION_FILES_NAMESPACE, sessionKey, session],
@@ -141,7 +149,7 @@ it("preserves July keyed dreaming state when retired JSON files remain", async (
       { scope: sessionKey, index: 0, hashes: ["seen-a", "seen-b"] },
     ],
     [state.SHORT_TERM_RECALL_NAMESPACE, key, recall],
-    [state.SHORT_TERM_PHASE_SIGNAL_NAMESPACE, key, { remHits: 2 }],
+    [state.SHORT_TERM_PHASE_SIGNAL_NAMESPACE, key, phase],
   ] satisfies Array<[string, string, object]>;
   // Persist the v2026.7.1-beta.1 envelope independently of today's workspace writer.
   const normalizedWorkspace = path.resolve(workspaceDir).replace(/\\/g, "/");
@@ -172,7 +180,8 @@ it("preserves July keyed dreaming state when retired JSON files remain", async (
   });
   const { entries: recalls } = await readRecallStore(workspaceDir, timestamp);
   const { entries: phases } = await readPhaseSignalStore(workspaceDir, timestamp);
-  expect([recalls[key]?.recallCount, phases[key]?.remHits]).toEqual([1, 2]);
+  expect(recalls[key]).toMatchObject(recall);
+  expect(phases[key]).toMatchObject(phase);
   const updated = { mtimeMs: 3, size: 43 };
   await writeDailyIngestionState(workspaceDir, {
     version: 1,

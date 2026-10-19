@@ -50,7 +50,7 @@ function Card(props: { label: string; kind?: string; children: JSX.Element }) {
     </section>
   );
 }
-type FixtureChoice<T> = T extends unknown ? Omit<T, "options"> : never;
+type FixtureChoice<T> = T extends unknown ? Omit<T, "options" | "ariaLabel"> : never;
 function ChoiceRow(
   props: FixtureChoice<SettingsSegmentedProps<string, JSX.Element>> & {
     title: string;

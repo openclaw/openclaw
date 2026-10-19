@@ -46,7 +46,17 @@ describe("assertSkillReviewRunSucceeded", () => {
       { isError: true, text: "⚠️ skill_workshop failed: View it first." },
       { toolErrorWarning: { toolName: "skill_workshop" } },
     );
-    review({}, [warning]).not.toThrow();
+    review(
+      {
+        toolSummary: {
+          calls: 3,
+          tools: ["sessions_yield", "skill_workshop"],
+          failures: 1,
+          unresolvedError: { toolName: "skill_workshop" },
+        },
+      },
+      [warning],
+    ).not.toThrow();
   });
 
   it("fails on model or runtime errors", () => {

@@ -50,7 +50,7 @@ export function useSelectionEffects() {
   afterEach(() => unsubscribe());
   return {
     lifecycleEvents,
-    expectNoSelectionEffects() {
+    expectNoSelectionEffects: () => {
       expect(lifecycleEvents).toEqual([]);
       for (const effect of [
         mocks.effects.triggerSessionPatchHook,
