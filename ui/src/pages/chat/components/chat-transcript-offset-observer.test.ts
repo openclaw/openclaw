@@ -11,7 +11,7 @@ it.each([false, true])(
     const state = new TranscriptOffsetState();
     if (pending) {
       state.pendingScrollOffset = { offset: 200, stableFrames: 0, zeroMaxFrames: 0 };
-      state.maintenanceScrollOffset = 100;
+      state.maintenanceScroll = { offset: 100, pending: false };
     }
     const element = document.createElement("div");
     const readGeometry = vi.fn(() => 100);
@@ -30,12 +30,12 @@ it("keeps maintenance and active commands owned until the committed viewport set
     clientHeight: { value: 200 },
     scrollHeight: { value: 1000 },
   });
-  state.maintenanceScrollOffset = 900;
+  state.maintenanceScroll = { offset: 900, pending: false };
   element.scrollTop = 800;
   expect(isTranscriptProgrammaticScroll(state, element)).toBe(true);
   element.scrollTop = 400;
   expect(isTranscriptProgrammaticScroll(state, element)).toBe(false);
-  state.maintenanceScrollOffset = null;
+  state.maintenanceScroll = null;
   state.scrollCommand = { behavior: "smooth", target: "end" };
   expect(isTranscriptProgrammaticScroll(state, element)).toBe(true);
   element.scrollTop = 800;

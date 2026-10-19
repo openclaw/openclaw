@@ -10,6 +10,7 @@ export class TranscriptPrependAnchor {
   committedMessageRows: ReadonlyMap<string, string> = new Map();
   private firstMessageKey: string | undefined;
   private pending: (ChatTranscriptPrependAnchor & { measured: boolean }) | null = null;
+  private frame: number | null = null;
 
   constructor(private readonly messageElements: ReadonlyMap<string, HTMLElement>) {}
 
@@ -69,7 +70,7 @@ export class TranscriptPrependAnchor {
     measureRows: () => boolean,
   ): boolean {
     const anchor = this.pending;
-    if (!anchor) {
+    if (!anchor || this.frame !== null) {
       return false;
     }
     const changed = measureRows();
@@ -93,9 +94,24 @@ export class TranscriptPrependAnchor {
     }
   }
 
+  /** Let native scrolling and the virtualizer's reconciliation run before another commit. */
+  scheduleReconcile(reconcile: () => void): void {
+    if (this.frame !== null) {
+      return;
+    }
+    this.frame = requestAnimationFrame(() => {
+      this.frame = null;
+      reconcile();
+    });
+  }
+
   /** Retire pending restoration when the reader or another command takes over. */
   clear(): void {
     this.pending = null;
+    if (this.frame !== null) {
+      cancelAnimationFrame(this.frame);
+      this.frame = null;
+    }
   }
 
   /** Drop projection identity when the owning session is disposed. */
@@ -171,14 +187,17 @@ function restoreTranscriptPrependAnchor(
     return false;
   }
   const maxOffset = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
-  const offset = Math.max(0, Math.min(maxOffset, scrollElement.scrollTop + delta));
+  const before = scrollElement.scrollTop;
+  const offset = Math.max(0, Math.min(maxOffset, before + delta));
   // A retained message can become unreachable at an edge when provisional rows retire.
   // Reissuing that clamped correction would keep the measurement loop alive forever.
-  if (Math.abs(offset - scrollElement.scrollTop) <= 1) {
+  if (Math.abs(offset - before) <= 1) {
     return false;
   }
   // Commit one measured message target through the scroll owner. This also
   // retires deferred row corrections already represented by the measured DOM.
   virtualizer.scrollToOffset(offset, { behavior: "instant" });
-  return true;
+  // WebKit can defer or ignore an otherwise reachable command. An attempted
+  // write without native progress must not keep the measurement loop alive.
+  return scrollElement.scrollTop !== before;
 }

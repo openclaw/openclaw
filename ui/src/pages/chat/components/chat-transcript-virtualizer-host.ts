@@ -355,7 +355,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       )
     ) {
       this.offsetState.syncNativeOffset?.();
-      this.invalidate();
+      this.prependAnchor.scheduleReconcile(() => this.connected && this.invalidate());
     }
     if (!this.initialPositionPending || (this.contentReady && this.rowKeys.length === 0)) {
       applyPendingScrollOffset(this.scrollRestoreHost);
@@ -383,7 +383,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.expandedAssistantMessages.clear();
     this.expandedAssistantMessages = new Map();
     this.offsetState.scrollCommand = null;
-    this.offsetState.maintenanceScrollOffset = null;
+    this.offsetState.maintenanceScroll = null;
     this.prependAnchor.clear();
     this.offsetState.touching = false;
     this.offsetState.touchScrolling = false;
