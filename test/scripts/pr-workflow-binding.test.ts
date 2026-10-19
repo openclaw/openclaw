@@ -40,7 +40,7 @@ function fixture() {
   git(["update-ref", "refs/remotes/origin/main", source]);
   const record = {
     version: 1,
-    repository: "github.com/fixture/repo",
+    repository: "https://github.com/fixture/repo.git",
     owner: realpathSync(join(root, ".git")),
     pr: "123",
     source,
@@ -70,6 +70,60 @@ function fixture() {
 }
 
 describe.skipIf(process.platform === "win32")("native workflow binding storage", () => {
+  it.each([
+    {
+      remote: "writer@example.invalid:Org/repo.git",
+      changed: "other@example.invalid:Org/repo.git",
+      identity: '["scp","writer","example.invalid","Org/repo.git"]',
+    },
+    {
+      remote: "example.invalid:Org/repo.git",
+      changed: "other.invalid:Org/repo.git",
+      identity: '["scp","","example.invalid","Org/repo.git"]',
+    },
+    {
+      remote: "example.invalid:Org/repo.git",
+      changed: "example.invalid:org/repo.git",
+      identity: '["scp","","example.invalid","Org/repo.git"]',
+    },
+    {
+      remote: "example.invalid:Org/repo.git",
+      changed: "example.invalid:/Org/repo.git",
+      identity: '["scp","","example.invalid","Org/repo.git"]',
+    },
+    {
+      remote: "ssh://writer@example.invalid:2222/Org/repo.git",
+      changed: "ssh://writer@example.invalid:2223/Org/repo.git",
+      identity: "ssh://writer@example.invalid:2222/Org/repo.git",
+    },
+    {
+      remote: "https://example.invalid:8443/Org/repo.git",
+      changed: "https://example.invalid:8444/Org/repo.git",
+      identity: "https://example.invalid:8443/Org/repo.git",
+    },
+  ])(
+    "binds $remote without accepting a different endpoint $changed",
+    ({ remote, changed, identity }) => {
+      const f = fixture();
+      f.git(["remote", "set-url", "origin", remote]);
+      const admitted = f.run("workflow-admit", f.source, "");
+      expect(admitted.status, admitted.stderr).toBe(0);
+      expect(f.run("workflow-read").stdout).toBe(`${admitted.stdout}\t${f.source}\n`);
+      f.git(["remote", "set-url", "origin", changed]);
+      expect(f.run("workflow-read").status).toBe(1);
+      expect(f.git(["rev-parse", ref])).toBe(admitted.stdout);
+      expect(JSON.parse(f.git(["show", `${ref}:binding.json`])).repository).toBe(identity);
+    },
+  );
+
+  it("resolves a bare relative local origin without treating it as a URL", () => {
+    const f = fixture();
+    f.git(["remote", "set-url", "origin", "."]);
+    const admitted = f.run("workflow-admit", f.source, "");
+    expect(admitted.status, admitted.stderr).toBe(0);
+    expect(JSON.parse(f.git(["show", `${ref}:binding.json`])).repository).toBe(f.root);
+  });
+
   it("retains the selected source across main advancement and exact admission reuse", () => {
     const f = fixture();
     const admitted = f.run("workflow-admit", f.source, "");

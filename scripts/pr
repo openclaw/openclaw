@@ -108,6 +108,7 @@ pr_batch_wrapper_git() {
 import { spawnSync } from "node:child_process";
 import { fstatSync, lstatSync, readSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 const [binary, operation, repository, revision, ...paths] = process.argv.slice(2);
 function git(directory, args, input) {
   const result = spawnSync(binary, ["-C", directory, ...args], {
@@ -125,10 +126,14 @@ try {
     const run = args => git(repository, args).toString("utf8").trim();
     const owner = realpathSync(run(["rev-parse", "--path-format=absolute", "--git-common-dir"]));
     const remote = run(["remote", "get-url", "origin"]);
-    const url = /^(?:\.?\.?\/|\/)/.test(remote) ? null : new URL(remote.replace(/^git@([^:]+):/, "ssh://git@$1/"));
-    const identity = !url ? realpathSync(resolve(repository, remote)) : url.protocol === "file:"
-      ? realpathSync(decodeURIComponent(url.pathname))
-      : `${url.hostname.toLowerCase()}/${url.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, "").toLowerCase()}`;
+    const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(remote) ? new URL(remote) : null;
+    const scp = !url && /^(?:([^/@:]+)@)?(\[[^\]]+\]|[^/:]+):(.+)$/.exec(remote);
+    // SCP paths can be relative to an SSH user's home. Preserve that transport,
+    // user, path case and URL ports instead of conflating different endpoints.
+    const identity = url ? url.protocol === "file:"
+      ? realpathSync(fileURLToPath(url)) : url.href
+      : scp ? JSON.stringify(["scp", scp[1] ?? "", scp[2].toLowerCase(), scp[3]])
+      : realpathSync(resolve(repository, remote));
     if (!identity || url && (url.username && url.protocol !== "ssh:" || url.password)) throw new Error("Invalid repository identity");
     const read = () => {
       const symbolic = spawnSync(binary, ["-C", repository, "symbolic-ref", "--quiet", ref], { stdio: "ignore" });
@@ -148,18 +153,25 @@ try {
           record.version !== 1 || record.pr !== revision || record.owner !== owner || record.repository !== identity ||
           !oid.test(record.source) || parents[0] !== record.source ||
           run(["cat-file", "-t", record.source]) !== "commit") throw new Error("Workflow binding identity mismatch");
-      run(["merge-base", "--is-ancestor", record.source, "refs/remotes/origin/main"]);
       return { oid: listing, source: record.source };
     };
+    const requireSource = (source, anchor = "refs/remotes/origin/main") => {
+      if (!oid.test(source)) throw new Error("Invalid workflow source");
+      run(["merge-base", "--is-ancestor", source, anchor]);
+    };
     const current = read();
-    if (operation === "workflow-read") {
+    if (operation === "workflow-read" || operation === "workflow-inspect") {
+      if (current && operation === "workflow-read") requireSource(current.source);
       if (current) process.stdout.write(`${current.oid}\t${current.source}\n`);
     } else if (operation === "workflow-context-write") {
-      const [source, binding, creator] = paths;
-      if (!oid.test(source) || (current?.oid ?? "") !== binding || current && current.source !== source ||
+      const [source, binding, creator, bootstrapFlag] = paths;
+      const bootstrap = bootstrapFlag === "1";
+      if (!oid.test(source) || (current?.oid ?? "") !== binding || !bootstrap && current && current.source !== source ||
           !/^[1-9][0-9]*$/.test(creator)) throw new Error("Workflow selection changed before handoff");
-      run(["merge-base", "--is-ancestor", source, "refs/remotes/origin/main"]);
-      process.stdout.write(JSON.stringify({ version: 1, owner, repository: identity, pr: revision, source, binding, creator }));
+      if (bootstrap) {
+        if (source !== run(["rev-parse", "--verify", "HEAD^{commit}"])) throw new Error("Canonical bootstrap changed");
+      } else requireSource(source);
+      process.stdout.write(JSON.stringify({ version: 1, owner, repository: identity, pr: revision, source, binding, creator, bootstrap }));
     } else if (operation === "workflow-context-read") {
       const held = fstatSync(8);
       if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o777) !== 0o400 || held.nlink !== 0 ||
@@ -171,22 +183,48 @@ try {
       const selection = JSON.parse(bytes.toString("utf8"));
       const supervised = selection.creator === paths[1] && process.env.OPENCLAW_PR_DEDICATED_PROCESS_GROUP === "1" &&
         process.env.OPENCLAW_PR_LOCK_NOTIFY_FD === "3" && process.env.OPENCLAW_PR_LOCK_SUPERVISOR_PID === paths[1];
-      if (JSON.stringify(Object.keys(selection).sort()) !== JSON.stringify(["binding", "creator", "owner", "pr", "repository", "source", "version"]) ||
+      if (JSON.stringify(Object.keys(selection).sort()) !== JSON.stringify(["binding", "bootstrap", "creator", "owner", "pr", "repository", "source", "version"]) ||
           selection.version !== 1 || selection.owner !== owner || selection.repository !== identity || selection.pr !== revision ||
+          typeof selection.bootstrap !== "boolean" ||
           !oid.test(selection.source) || (selection.creator !== paths[0] && !supervised) ||
-          selection.binding !== (current?.oid ?? "") || current && current.source !== selection.source) {
+          selection.binding !== (current?.oid ?? "") || !selection.bootstrap && current && current.source !== selection.source) {
         throw new Error("Workflow selection changed across handoff");
       }
-      run(["merge-base", "--is-ancestor", selection.source, "refs/remotes/origin/main"]);
-      process.stdout.write(`${selection.binding || "-"}\t${selection.source}\n`);
+      if (!selection.bootstrap) requireSource(selection.source);
+      process.stdout.write(`${selection.binding || "-"}\t${selection.source}\t${selection.bootstrap ? "1" : "0"}\n`);
+    } else if (operation === "workflow-cold-select") {
+      const [bootstrap, expected, main] = paths;
+      if (!oid.test(bootstrap) || !oid.test(main) || (current?.oid ?? "") !== expected) {
+        throw new Error("Workflow binding changed during cold acquisition");
+      }
+      let selected;
+      if (current) {
+        requireSource(current.source, main);
+        selected = current.source;
+      } else {
+        const ancestry = spawnSync(binary, ["-C", repository, "merge-base", "--is-ancestor", bootstrap, main],
+          { stdio: "ignore", env: { ...process.env, GIT_NO_LAZY_FETCH: "1" } });
+        if (ancestry.error || ancestry.signal || ![0, 1].includes(ancestry.status)) throw new Error("Cannot qualify canonical bootstrap");
+        selected = ancestry.status === 0 ? bootstrap : main;
+      }
+      const closure = source => {
+        const inventory = run(["show", `${source}:scripts/pr-lib/wrapper-components.txt`]).split("\n");
+        return git(repository, ["ls-tree", "-r", "-z", "--full-tree", source, "--", "scripts/pr", "scripts/pr-lib", ...inventory]);
+      };
+      // Loaded helpers belong to the captured bootstrap, even if files move
+      // during acquisition. Compare immutable closures before admitting it.
+      if (!closure(bootstrap).equals(closure(selected))) {
+        throw new Error(`Cold workflow source differs from the running canonical wrapper ${bootstrap}; selected source ${selected}`);
+      }
+      process.stdout.write(selected);
     } else if (operation === "workflow-admit") {
-      const [source, expected] = paths;
+      const [source, expected, anchor = "refs/remotes/origin/main"] = paths;
       if (!oid.test(source) || (current?.oid ?? "") !== expected || current && current.source !== source) {
         throw new Error("Workflow binding changed before admission");
       }
+      requireSource(source, anchor);
       if (current) process.stdout.write(current.oid);
       else {
-        run(["merge-base", "--is-ancestor", source, "refs/remotes/origin/main"]);
         const record = JSON.stringify({ version: 1, repository: identity, owner, pr: revision, source });
         const blob = git(repository, ["hash-object", "-w", "--stdin"], record).toString().trim();
         const tree = git(repository, ["mktree"], `100644 blob ${blob}\tbinding.json\n`).toString().trim();
@@ -197,6 +235,7 @@ try {
       }
     } else if (operation === "workflow-retire") {
       if (!current || current.oid !== paths[0]) throw new Error("Workflow binding changed before completion");
+      requireSource(current.source, paths[1]);
       run(["update-ref", "--no-deref", "-d", ref, current.oid]);
     } else throw new Error("Unknown workflow operation");
   } else if (operation === "differences") {
@@ -259,8 +298,10 @@ EOF_WRAPPER_GIT
 PR_WORKFLOW_PR=""
 PR_WORKFLOW_BINDING_OID=""
 PR_WORKFLOW_SOURCE_REVISION=""
+PR_WORKFLOW_BOOTSTRAP=0
+PR_WORKFLOW_TRUST_ANCHOR="refs/remotes/origin/main"
 pr_read_workflow_binding() {
-  local classification binding
+  local classification binding tracking_status=0
   classification=$(pr_subcommand_classification "$requested_subcommand" 2>/dev/null || true)
   [ "$classification" = landing ] || return 0
   case "$requested_subcommand" in gc | lock-recover) return 0 ;; esac
@@ -268,12 +309,31 @@ pr_read_workflow_binding() {
   PR_WORKFLOW_PR="$2"
   if [ -n "${OPENCLAW_PR_WORKFLOW_CONTEXT:-}" ]; then
     binding=$(pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" "$PR_WORKFLOW_PR" "$$" "$PPID") || return 1
+    IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION PR_WORKFLOW_BOOTSTRAP <<< "$binding"
   else
-    binding=$(pr_batch_wrapper_git workflow-read "$canonical_repo_root" "$PR_WORKFLOW_PR") || return 1
+    if pr_git -C "$canonical_repo_root" symbolic-ref -q refs/remotes/origin/main >/dev/null 2>&1; then
+      echo "Refusing a symbolic main tracking ref for workflow selection." >&2
+      return 1
+    fi
+    pr_git -C "$canonical_repo_root" show-ref --verify --quiet refs/remotes/origin/main || tracking_status=$?
+    if [ "$tracking_status" -eq 1 ] && [ "$script_self" = "$canonical_repo_root/scripts/pr" ]; then
+      # Only canonical code may bootstrap. A retained record is data until the
+      # locked acquisition authenticates its source against canonical main.
+      binding=$(pr_batch_wrapper_git workflow-inspect "$canonical_repo_root" "$PR_WORKFLOW_PR") || return 1
+      IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
+      PR_WORKFLOW_SOURCE_REVISION=$(pr_git -C "$canonical_repo_root" rev-parse --verify 'HEAD^{commit}') || return 1
+      PR_WORKFLOW_BOOTSTRAP=1
+    else
+      [ "$tracking_status" -le 1 ] || return 1
+      binding=$(pr_batch_wrapper_git workflow-read "$canonical_repo_root" "$PR_WORKFLOW_PR") || return 1
+      IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
+    fi
   fi
-  IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
   [ "$PR_WORKFLOW_BINDING_OID" != - ] || PR_WORKFLOW_BINDING_OID=""
-  if [ -n "${OPENCLAW_PR_WORKFLOW_CONTEXT:-}" ]; then
+  if [ "$PR_WORKFLOW_BOOTSTRAP" = 1 ]; then
+    [ "$script_self" = "$canonical_repo_root/scripts/pr" ] || return 1
+  fi
+  if [ -n "${OPENCLAW_PR_WORKFLOW_CONTEXT:-}" ] || [ "$PR_WORKFLOW_BOOTSTRAP" = 1 ]; then
     verify_pr_workflow_source "$PR_WORKFLOW_SOURCE_REVISION" "$script_parent_dir/.." || return 1
   fi
 }
@@ -292,7 +352,7 @@ hold_pr_workflow_selection() {
   local context
   context=$(mktemp "${TMPDIR:-/tmp}/openclaw-pr-selection.XXXXXX") || return 1
   if ! pr_batch_wrapper_git workflow-context-write "$canonical_repo_root" "$PR_WORKFLOW_PR" \
-    "$1" "$PR_WORKFLOW_BINDING_OID" "$$" > "$context" || ! chmod 400 "$context"; then
+    "$1" "$PR_WORKFLOW_BINDING_OID" "$$" "$PR_WORKFLOW_BOOTSTRAP" > "$context" || ! chmod 400 "$context"; then
     rm -f "$context"
     return 1
   fi
@@ -307,11 +367,42 @@ hold_pr_workflow_selection() {
 admit_pr_workflow_binding() {
   [ -n "$PR_WORKFLOW_PR" ] || return 0
   [ "$PR_WORKFLOW_PR" = "$1" ] && [ -n "$PR_WORKFLOW_SOURCE_REVISION" ] || return 1
+  local qualification_ref="" main=""
+  if [ "$PR_WORKFLOW_BOOTSTRAP" = 1 ]; then
+    qualification_ref="refs/openclaw/pr-workflow-qualification/$1/$PR_OPERATION_LOCK_OWNER_OID"
+    local ref_status=0 symbolic_status=0 selected
+    pr_git -C "$canonical_repo_root" symbolic-ref -q "$qualification_ref" >/dev/null 2>&1 || symbolic_status=$?
+    [ "$symbolic_status" -eq 1 ] || { echo "Refusing symbolic or unreadable qualification ref: $qualification_ref." >&2; return 1; }
+    pr_git -C "$canonical_repo_root" show-ref --verify --quiet "$qualification_ref" || ref_status=$?
+    [ "$ref_status" -eq 1 ] || { echo "Workflow qualification ref already exists; preserve $qualification_ref." >&2; return 1; }
+    mark_pr_operation_side_effects_started || return 1
+    if ! fetch_canonical_main "$qualification_ref"; then
+      echo "Cold workflow acquisition failed; inspect $qualification_ref before any cleanup." >&2
+      return 1
+    fi
+    main=$(pr_git -C "$canonical_repo_root" rev-parse --verify "$qualification_ref^{commit}") || return 1
+    PR_WORKFLOW_TRUST_ANCHOR="$main"
+    if ! selected=$(pr_batch_wrapper_git workflow-cold-select "$canonical_repo_root" "$1" \
+      "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$main"); then
+      echo "Cold workflow qualification failed; use the admitted source from a qualified checkout. Preserving $qualification_ref." >&2
+      return 1
+    fi
+    verify_pr_workflow_source "$PR_WORKFLOW_SOURCE_REVISION" "$script_parent_dir/.." || return 1
+    PR_WORKFLOW_SOURCE_REVISION="$selected"
+  fi
   # Verify again under the operation lock: initial selection may have waited
   # behind another command, and only admitted bytes may mint a lasting pin.
   verify_pr_workflow_source "$PR_WORKFLOW_SOURCE_REVISION" "$script_parent_dir/.." || return 1
+  pr_operation_lock_owner_is_current "$canonical_repo_root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+  mark_pr_operation_side_effects_started || return 1
   PR_WORKFLOW_BINDING_OID=$(pr_batch_wrapper_git workflow-admit "$canonical_repo_root" "$1" \
-    "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID") || return 1
+    "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$PR_WORKFLOW_TRUST_ANCHOR") || return 1
+  if [ -n "$qualification_ref" ]; then
+    # Preserve acquisition evidence until admission succeeds; retire only our
+    # captured value, never a changed qualification ref.
+    pr_operation_lock_owner_is_current "$canonical_repo_root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+    pr_git -C "$canonical_repo_root" update-ref --no-deref -d "$qualification_ref" "$main" || return 1
+  fi
   exec 8<&-
   unset OPENCLAW_PR_WORKFLOW_CONTEXT
 }
@@ -445,7 +536,7 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
   canonical_repo_root="$(dirname "$common_git_dir")"
   canonical_self="$canonical_repo_root/scripts/$(basename "${BASH_SOURCE[0]}")"
   pr_read_workflow_binding "$@"
-  if [ -x "$canonical_self" ] && { [ "$script_self" != "$canonical_self" ] || [ -n "$PR_WORKFLOW_PR" ]; }; then
+  if [ "$PR_WORKFLOW_BOOTSTRAP" != 1 ] && [ -x "$canonical_self" ] && { [ "$script_self" != "$canonical_self" ] || [ -n "$PR_WORKFLOW_PR" ]; }; then
     linked_inventory=$(pr_git -C "$script_parent_dir" show HEAD:scripts/pr-lib/wrapper-components.txt)
     while IFS= read -r wrapper_component; do
       pr_wrapper_components+=("$wrapper_component")
@@ -991,9 +1082,14 @@ main() {
     local locked_pr="${1-}"
     acquire_pr_operation_lock "$locked_pr"
     begin_pr_operation_validation_phase
-    admit_pr_workflow_binding "$locked_pr"
     # Temp-backed shell redirections must fail while the supervisor can auto-release.
     validate_pr_temp_storage
+    if [ "$PR_WORKFLOW_BOOTSTRAP" = 1 ] && [ "$cmd" = prepare-push ] && [ "${2:-}" = --resume-crabbox-run ]; then
+      echo "Publisher resume requires an authenticated workflow source; restore its main tracking anchor before resuming. No acquisition attempted." >&2
+      return 1
+    fi
+    [ -z "$PR_WORKFLOW_PR" ] || ensure_gh_api_auth
+    admit_pr_workflow_binding "$locked_pr"
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 131' QUIT

@@ -1460,7 +1460,7 @@ merge_outcome_require_cleanup_absent() {
 retire_pr_workflow_binding() {
   [ -n "${PR_WORKFLOW_BINDING_OID:-}" ] || return 0
   [ "$PR_WORKFLOW_PR" = "$1" ] || return 1
-  pr_batch_wrapper_git workflow-retire "$canonical_repo_root" "$1" "$PR_WORKFLOW_BINDING_OID" || return 1
+  pr_batch_wrapper_git workflow-retire "$canonical_repo_root" "$1" "$PR_WORKFLOW_BINDING_OID" "${PR_WORKFLOW_TRUST_ANCHOR:-refs/remotes/origin/main}" || return 1
   PR_WORKFLOW_BINDING_OID=""
 }
 
