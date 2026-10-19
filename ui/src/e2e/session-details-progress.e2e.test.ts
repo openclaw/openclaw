@@ -456,7 +456,7 @@ suite.define(() => {
         await page.reload();
         await trigger.waitFor();
         await trigger.click();
-        expect(await progress.count()).toBe(1);
+        await expect.poll(() => progress.count()).toBe(1);
         expect(await page.locator('[data-progress-card-placement="composer"]').count()).toBe(0);
         await gateway.waitForRequest("progressCard.get");
         const settingsPage = await page.context().newPage();
