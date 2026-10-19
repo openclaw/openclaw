@@ -113,7 +113,7 @@ describe("memory session candidate exclusions", () => {
         expect(result.fallbackScanRequired).toBe(false);
         results = result.rows;
       }
-      expect(results.map((row) => row.id).sort()).toEqual(["memory", "ordinary"]);
+      expect(results.map((row) => row.id).toSorted()).toEqual(["memory", "ordinary"]);
     },
   );
 });

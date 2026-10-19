@@ -1,4 +1,4 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, readErrorName } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
   resolveUserPath,
@@ -9,15 +9,19 @@ import {
   type MemorySearchResult,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { WorkerTaskError } from "openclaw/plugin-sdk/process-runtime";
 import { scoreExactPathTieForTemporalDecay } from "./hybrid.js";
 import {
   runMemoryCuratedCandidates,
   runMemoryKeywordSearch,
   runMemoryRecallMetadata,
+  runMemoryVectorFallback,
 } from "./manager-cpu-worker-runtime.js";
 import { MemoryProviderLifecycle } from "./manager-provider-lifecycle.js";
-import type { MemoryRecallData } from "./manager-retrieval-read.js";
+import type { MemoryRecallData, MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
+import { admitMemoryVectorIndex, searchMemoryVectorIndex } from "./manager-search-knn.js";
 import type { MemoryKeywordWorkerQuery } from "./manager-search-types.js";
+import { searchVector } from "./manager-search-vector.js";
 import { prepareExactPathMatcher, type ExactPathSpecificity } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
 import {
@@ -32,6 +36,7 @@ const EXACT_PATH_CANDIDATE_LIMIT = 200;
 const log = createSubsystemLogger("memory");
 
 export type MemoryRetrievalResult = MemorySearchResult & { sourceMtime?: number };
+type VectorSearchHit = MemoryRetrievalResult & { id: string };
 
 export type KeywordSearchHit = MemoryRetrievalResult & {
   id: string;
@@ -98,7 +103,7 @@ function compareKeywordSearchHits(
   return a.path.localeCompare(b.path) || a.startLine - b.startLine || a.id.localeCompare(b.id);
 }
 
-export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
+export abstract class MemorySearchRetrieval extends MemoryProviderLifecycle {
   async listTriggerCandidates(opts?: {
     limit?: number;
     activeProjectKeys?: string[];
@@ -460,5 +465,118 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       }) =>
         Object.assign({ path, startLine, endLine, score, textScore, snippet, source }, metadata),
     );
+  }
+
+  protected handleRetrievalError(
+    kind: "FTS keyword" | "vector",
+    error: unknown,
+    signal?: AbortSignal,
+  ): [] {
+    signal?.throwIfAborted();
+    if (error instanceof WorkerTaskError && error.code === "overloaded") {
+      throw error;
+    }
+    if (readErrorName(error) === "DatabaseSearchCapabilityUnavailableError") {
+      throw error;
+    }
+    log.warn(`memory search: ${kind} query failed: ${formatErrorMessage(error)}`);
+    return [];
+  }
+
+  protected async searchVector(
+    queryVec: number[],
+    limit: number,
+    sourceFilterList: MemorySource[],
+    providerIdentity: { model: string; aliases: string[] },
+    indexState: MemoryRetrievalIndexState,
+    keywordCandidateIds: string[],
+    excludedSessionPaths: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<{ results: VectorSearchHit[]; candidates: VectorSearchHit[] }> {
+    const query = {
+      providerModel: providerIdentity.model,
+      providerModelAliases: providerIdentity.aliases,
+      queryVec,
+      limit,
+      snippetMaxChars: SNIPPET_MAX_CHARS,
+    };
+    const readVectorRows = (candidateIds?: string[]) =>
+      runMemoryVectorFallback(
+        { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
+        {
+          ...query,
+          candidateIds,
+          limit: candidateIds?.length ?? limit,
+          sourceFilter: this.buildSourceFilter(undefined, sourceFilterList, excludedSessionPaths),
+        },
+        signal,
+      );
+    let results: Awaited<ReturnType<typeof readVectorRows>>;
+    if (this.publishedDatabase.admission?.engine === "postgres") {
+      results = await readVectorRows();
+      this.vector.available = true;
+      this.vector.semanticAvailable = true;
+      this.vector.dims = queryVec.length;
+      this.vector.loadError = undefined;
+    } else {
+      const vectorIndex = admitMemoryVectorIndex({
+        databasePath: resolveUserPath(this.settings.store.databasePath),
+      });
+      results = await searchVector({
+        ...query,
+        signal,
+        ensureVectorReady: async () => {
+          // Recovery can carry a large exclusion set. Use the existing worker scan
+          // until cleanup removes it rather than exceed the native subprocess limit.
+          if (excludedSessionPaths.length > 0) {
+            return false;
+          }
+          if (!this.vector.enabled) {
+            return false;
+          }
+          if (
+            indexState.vectorState.state === "incomplete" ||
+            indexState.vectorState.state === "unverified"
+          ) {
+            this.markConfiguredSourcesForFullReindex();
+            return false;
+          }
+          return indexState.vectorState.state === "complete";
+        },
+        runFallback: readVectorRows,
+        runVectorKnn: async (request, knnSignal) => {
+          const response = await searchMemoryVectorIndex(
+            vectorIndex.capability,
+            vectorIndex.index,
+            request,
+            {
+              extensionPath: this.vector.extensionPath,
+              signal: knnSignal,
+            },
+          );
+          if (!response.fallbackScanRequired) {
+            this.vector.available = true;
+            this.vector.semanticAvailable = true;
+            this.vector.dims = queryVec.length;
+            this.vector.loadError = undefined;
+          }
+          return response;
+        },
+        sourceFilterVec: this.buildSourceFilter("c", sourceFilterList, excludedSessionPaths),
+      });
+    }
+    // Keyword candidates outside the vector window still need their stored
+    // similarity; treating an unqueried vector as zero loses rare-term answers.
+    const candidates = [...results];
+    const scoredIds = new Set(candidates.map((entry) => entry.id));
+    const missingIds = keywordCandidateIds.filter((id) => !scoredIds.has(id));
+    if (missingIds.length > 0) {
+      results.push(
+        ...(await readVectorRows(missingIds).catch((error: unknown) =>
+          this.handleRetrievalError("vector", error, signal),
+        )),
+      );
+    }
+    return { results: await this.attachRecallMetadata(results, signal), candidates };
   }
 }

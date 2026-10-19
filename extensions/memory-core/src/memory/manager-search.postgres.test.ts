@@ -315,13 +315,19 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
         const result = await fixture.keyword(query);
         expect(result.body.error).toBeUndefined();
         expect(result.path.error).toBeUndefined();
-        expect(result.body.rows.map((row) => row.source).sort()).toEqual(["memory", "sessions"]);
+        expect(result.body.rows.map((row) => row.source).toSorted()).toEqual([
+          "memory",
+          "sessions",
+        ]);
         if (text === "recall") {
-          expect(result.path.rows.map((row) => row.source).sort()).toEqual(["memory", "sessions"]);
+          expect(result.path.rows.map((row) => row.source).toSorted()).toEqual([
+            "memory",
+            "sessions",
+          ]);
         }
       }
       const result = await fixture.vector(vectorQuery({ sourceFilter, limit: 2 }));
-      expect(result.rows.map((row) => row.source).sort()).toEqual(["memory", "sessions"]);
+      expect(result.rows.map((row) => row.source).toSorted()).toEqual(["memory", "sessions"]);
       expect(
         result.rows.some((row) => row.source === "sessions" && row.path === "memory/recall.md"),
       ).toBe(false);

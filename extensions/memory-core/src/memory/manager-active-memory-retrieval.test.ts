@@ -175,6 +175,7 @@ describe("Active Memory historical search eligibility", () => {
       const beforeSources = validSources();
       const embeddingBatches = fixture.provider.embedBatchCalls;
       const releaseCleanup = createDeferred<void>();
+      // oxlint-disable-next-line typescript/unbound-method -- apply below preserves the intercepted database owner.
       const deleteSource = MemoryIndexDatabase.prototype.deleteSource;
       const cleanup = vi
         .spyOn(MemoryIndexDatabase.prototype, "deleteSource")
