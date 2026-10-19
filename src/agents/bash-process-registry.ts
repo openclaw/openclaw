@@ -397,6 +397,17 @@ export function settleExecSessionFinalization(session: ProcessSession): void {
   }
 }
 
+/** Publish accepted Stop while cleanup still owns the terminal transition. */
+export function markCancellationRequested(session: ProcessSession) {
+  if (session.cancellationRequested) {
+    return;
+  }
+  session.cancellationRequested = true;
+  if (session.backgrounded) {
+    queueProcessChange(session);
+  }
+}
+
 /** Marks a running session as reconnectable after the exec call returns. */
 export function markBackgrounded(session: ProcessSession) {
   if (!session.backgrounded) {

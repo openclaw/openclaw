@@ -137,13 +137,15 @@ class ProcessObservation {
       if (!isRecord(payload)) {
         return;
       }
-      const accessChanged =
+      const sessionChanged =
         event === "sessions.changed" &&
-        ["delete", "reset", "sharing", "profile-identity"].includes(String(payload.reason));
+        ["delete", "reset", "sharing", "profile-identity", "placement"].includes(
+          String(payload.reason),
+        );
       if (
-        (event !== "sessions.processes.changed" && !accessChanged) ||
+        (event !== "sessions.processes.changed" && !sessionChanged) ||
         (typeof payload.sessionKey !== "string" &&
-          !(accessChanged && payload.sessionKey === undefined)) ||
+          !(sessionChanged && payload.sessionKey === undefined)) ||
         (payload.agentId !== undefined && typeof payload.agentId !== "string") ||
         this.error ||
         !this.current(this.generation) ||

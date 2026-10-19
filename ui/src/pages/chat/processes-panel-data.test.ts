@@ -195,7 +195,8 @@ describe("process panel observation ownership", () => {
     expect(f.data.snapshot.rows[0]?.tail).toBe("Compiling");
   });
 
-  it("rejects a stale Stop callback and pins the current process incarnation", async () => {
+  it("refreshes placement changes and rejects Stop callbacks for the previous process", async () => {
+    vi.useFakeTimers();
     let current = process();
     const f = fixture((method) =>
       method === "sessions.processes.list" ? page(current) : { requested: true },
@@ -204,7 +205,13 @@ describe("process panel observation ownership", () => {
     await f.data.refresh();
     const previous = f.data.snapshot.rows[0]!;
     current = process("replacement");
-    await f.data.refresh();
+    f.connection.publishEvent("sessions.changed", {
+      reason: "placement",
+      sessionKey: key,
+      agentId: "main",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.data.snapshot.rows[0]?.instanceId).toBe("replacement");
     await f.data.stop(previous);
     expect(f.request.mock.calls.filter(([method]) => method === "sessions.processes.stop")).toEqual(
       [],

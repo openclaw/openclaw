@@ -119,22 +119,33 @@ it.each([true, false])(
       expect(runWorkerDescriptor).toHaveBeenCalledOnce();
       expect(record.pendingOutput).toEqual([{ stream: "stdout", text: "Build is running\n" }]);
       expect(record.terminalPollObserved).toBeUndefined();
-      appendOutput(record, "stdout", "Build output after the turn\n");
       await vi.advanceTimersByTimeAsync(5_000);
       expect(changes).toHaveLength(processChanges ? 1 : 0);
+      expect(
+        await request("stopping", {
+          ...binding,
+          requestId: "stopping",
+          operation: { action: "list" },
+        }),
+      ).toMatchObject({
+        result: { processes: [{ processId: record.id, status: "running", canStop: false }] },
+      });
+      appendOutput(record, "stdout", "Build output after the turn\n");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(changes).toHaveLength(processChanges ? 2 : 0);
       const other = createProcessSessionFixture({ id: "another-owner", backgrounded: true });
       other.scopeKey = "worker:another-session";
       other.agentId = record.agentId;
       addSession(other);
       appendOutput(other, "stdout", "Unrelated output\n");
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(changes).toHaveLength(processChanges ? 1 : 0);
+      expect(changes).toHaveLength(processChanges ? 2 : 0);
       appendOutput(record, "stdout", "Build progressed after the turn\n");
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(changes).toHaveLength(processChanges ? 2 : 0);
+      expect(changes).toHaveLength(processChanges ? 3 : 0);
       markExited(record, 0, null, "completed");
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(changes).toHaveLength(processChanges ? 3 : 0);
+      expect(changes).toHaveLength(processChanges ? 4 : 0);
     } finally {
       markExited(record, 0, null, "completed");
       input.end();
