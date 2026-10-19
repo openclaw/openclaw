@@ -425,7 +425,11 @@ function DetailsCard(props: CardProps) {
       data-progress-card-placement="details"
       data-desktop-details={props.desktopDetails ? "" : undefined}
     >
-      <summary ref={disclosure.summary} class="task-progress-details__summary">
+      <summary
+        ref={disclosure.summary}
+        class="task-progress-details__summary"
+        aria-label={`${view().stepLabel}. ${view().outcomeLabel ?? view().countLabel}`}
+      >
         <span class="task-progress-details__heading">
           <span class="task-progress-details__title">{t("sessionProgressCard.composerTitle")}</span>
           <span class="task-progress-details__chevron" aria-hidden="true">
