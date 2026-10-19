@@ -183,6 +183,12 @@ async function mountAccounts(
   );
   return {
     accounts,
+    query: <T extends Element = HTMLElement>(selector: string) =>
+      accounts.querySelector<T>(selector),
+    click: (selector: string) => button(accounts, selector).click(),
+    enter: (selector: string, value: string) => input(accounts, selector, value),
+    enabled: (selector: string) =>
+      waitForSolid(() => expect(button(accounts, selector).disabled).toBe(false)),
     unmount: view.unmount,
     setProfileId(value: string) {
       profileId = value;
@@ -292,8 +298,8 @@ it("refreshes accounts and their saved default when another client changes authe
       ],
     },
   );
-  const currentAccount = () =>
-    harness.accounts.querySelector(".profile-auth-link-unlink")?.getAttribute("aria-label");
+  const { accounts, query, request } = harness;
+  const currentAccount = () => query(".profile-auth-link-unlink")?.getAttribute("aria-label");
   expect(currentAccount()).toContain(connectedAccount.label);
   harness.emitEvent({
     type: "event",
@@ -301,15 +307,15 @@ it("refreshes accounts and their saved default when another client changes authe
     payload: { authChanged: false },
   });
   flush();
-  expect(harness.request).toHaveBeenCalledTimes(1);
+  expect(request).toHaveBeenCalledTimes(1);
 
   harness.emitEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
   await waitForSolid(() => expect(currentAccount()).toContain(work.label));
-  expect(harness.accounts.querySelectorAll(".profile-auth-account-select")).toHaveLength(1);
+  expect(accounts.querySelectorAll(".profile-auth-account-select")).toHaveLength(1);
 
   harness.unmount();
   harness.emitEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-  expect(harness.request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledTimes(2);
 });
 
 it("lets a writer choose a retained account for new chats and clear the default without removing it", async () => {
@@ -331,29 +337,28 @@ it("lets a writer choose a retained account for new chats and clear the default 
     },
     { accounts: [connectedAccount, work] },
   );
-  expect(harness.accounts.querySelector(".profile-auth-link-input")).toBeNull();
-  expect(harness.accounts.textContent).toContain(connectedAccount.label);
-  expect(harness.accounts.textContent).toContain(work.label);
-  expect(harness.accounts.textContent).not.toContain(work.authProfileId);
-  button(harness.accounts, `[data-auth-profile-id="${work.authProfileId}"]`).click();
+  const { accounts, query, click, enabled, request } = harness;
+  expect(query(".profile-auth-link-input")).toBeNull();
+  expect(accounts.textContent).toContain(connectedAccount.label);
+  expect(accounts.textContent).toContain(work.label);
+  expect(accounts.textContent).not.toContain(work.authProfileId);
+  click(`[data-auth-profile-id="${work.authProfileId}"]`);
   await waitForSolid(() =>
-    expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.notices.selected")),
+    expect(accounts.textContent).toContain(t("profilePage.modelAccounts.notices.selected")),
+  );
+  await enabled(".profile-auth-link-unlink");
+  expect(query('[data-auth-profile-id="openai:personal"]')).not.toBeNull();
+  click(".profile-auth-link-unlink");
+  await waitForSolid(() =>
+    expect(accounts.textContent).toContain(t("profilePage.modelAccounts.notices.cleared")),
   );
   await waitForSolid(() =>
-    expect(button(harness.accounts, ".profile-auth-link-unlink").disabled).toBe(false),
+    expect(accounts.querySelectorAll(".profile-auth-account-select")).toHaveLength(2),
   );
-  expect(harness.accounts.querySelector('[data-auth-profile-id="openai:personal"]')).not.toBeNull();
-  button(harness.accounts, ".profile-auth-link-unlink").click();
-  await waitForSolid(() =>
-    expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.notices.cleared")),
+  expect(query(".profile-auth-link-unlink")).toBeNull();
+  expect(request.mock.calls.some(([method]) => method.startsWith("users.authConnect."))).toBe(
+    false,
   );
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelectorAll(".profile-auth-account-select")).toHaveLength(2),
-  );
-  expect(harness.accounts.querySelector(".profile-auth-link-unlink")).toBeNull();
-  expect(
-    harness.request.mock.calls.some(([method]) => method.startsWith("users.authConnect.")),
-  ).toBe(false);
 });
 
 it("loads retained accounts one page at a time without dropping earlier choices", async () => {
@@ -370,15 +375,16 @@ it("loads retained accounts one page at a time without dropping earlier choices"
       ],
     },
   );
-  expect(harness.accounts.textContent).not.toContain(first.authProfileId);
-  button(harness.accounts, ".profile-auth-accounts-more").click();
+  const { accounts, query, click, request } = harness;
+  expect(accounts.textContent).not.toContain(first.authProfileId);
+  click(".profile-auth-accounts-more");
   await waitForSolid(() =>
-    expect(harness.accounts.querySelectorAll(".profile-auth-account-select")).toHaveLength(2),
+    expect(accounts.querySelectorAll(".profile-auth-account-select")).toHaveLength(2),
   );
-  expect(harness.accounts.textContent).toContain(first.authProfileId);
-  expect(harness.accounts.textContent).toContain(second.authProfileId);
-  expect(harness.accounts.querySelector(".profile-auth-accounts-more")).toBeNull();
-  expect(harness.request).toHaveBeenCalledWith("users.listModelAccounts", {
+  expect(accounts.textContent).toContain(first.authProfileId);
+  expect(accounts.textContent).toContain(second.authProfileId);
+  expect(query(".profile-auth-accounts-more")).toBeNull();
+  expect(request).toHaveBeenCalledWith("users.listModelAccounts", {
     profileId: "profile-1",
     cursor: "page-2",
   });
@@ -390,16 +396,17 @@ it.each(["connection", "profile"] as const)(
     const harness = await mountAccounts(async () => {
       throw new Error("Unexpected account mutation");
     });
+    const { accounts, click, enabled, request } = harness;
     const old = createDeferred<UsersListModelAccountsResult>();
-    harness.request.mockImplementationOnce(async () => old.promise);
-    button(harness.accounts, ".profile-auth-accounts-refresh").click();
+    request.mockImplementationOnce(async () => old.promise);
+    click(".profile-auth-accounts-refresh");
     if (scope === "connection") {
       harness.emit("reconnecting");
       harness.emit("connected");
     } else {
       harness.setProfileId("profile-2");
     }
-    expect(harness.request).toHaveBeenLastCalledWith("users.listModelAccounts", {
+    expect(request).toHaveBeenLastCalledWith("users.listModelAccounts", {
       profileId: scope === "connection" ? "profile-1" : "profile-2",
     });
     old.resolve({
@@ -409,10 +416,8 @@ it.each(["connection", "profile"] as const)(
     });
     await vi.advanceTimersByTimeAsync(0);
     flush();
-    expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
-    await waitForSolid(() =>
-      expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
-    );
+    expect(accounts.textContent).not.toContain(connectedAccount.label);
+    await enabled(".profile-auth-add-account");
   },
 );
 
@@ -429,20 +434,21 @@ it("lets an admin link and unlink an existing model account", async () => {
     },
     { scopes: ["operator.write", "operator.admin"] },
   );
-  expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.empty"));
-  const linkInput = await input(harness.accounts, ".profile-auth-link-input", "openai:personal");
-  button(harness.accounts, ".profile-auth-link-submit").click();
-  await waitForSolid(() => expect(harness.accounts.textContent).toContain(connectedAccount.label));
-  expect(harness.request).toHaveBeenCalledWith("users.linkAuthProfile", {
+  const { accounts, click, enter, request } = harness;
+  expect(accounts.textContent).toContain(t("profilePage.modelAccounts.empty"));
+  const linkInput = await enter(".profile-auth-link-input", "openai:personal");
+  click(".profile-auth-link-submit");
+  await waitForSolid(() => expect(accounts.textContent).toContain(connectedAccount.label));
+  expect(request).toHaveBeenCalledWith("users.linkAuthProfile", {
     profileId: "profile-1",
     authProfileId: "openai:personal",
   });
   expect(linkInput.value).toBe("");
-  button(harness.accounts, ".profile-auth-link-unlink").click();
+  click(".profile-auth-link-unlink");
   await waitForSolid(() =>
-    expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.empty")),
+    expect(accounts.textContent).toContain(t("profilePage.modelAccounts.empty")),
   );
-  expect(harness.request).toHaveBeenCalledWith("users.unlinkAuthProfile", {
+  expect(request).toHaveBeenCalledWith("users.unlinkAuthProfile", {
     profileId: "profile-1",
     provider: "openai",
   });
@@ -457,6 +463,7 @@ it("polls one authorization at a time and uses its recorded outcome", async () =
     polls += 1;
     return polls === 1 ? exchanging.promise : connectedResult;
   });
+  const { accounts, query, request } = harness;
   await harness.start();
   await vi.advanceTimersByTimeAsync(2_000);
   expect(polls).toBe(1);
@@ -466,38 +473,32 @@ it("polls one authorization at a time and uses its recorded outcome", async () =
     status: "pending",
     step: { id: "saving", type: "progress", executor: "gateway", message: "Saving account…" },
   });
-  await waitForSolid(() => expect(harness.accounts.textContent).toContain("Saving account…"));
-  expect(button(harness.accounts, ".profile-auth-connect-cancel").disabled).toBe(false);
+  await waitForSolid(() => expect(accounts.textContent).toContain("Saving account…"));
+  expect(button(accounts, ".profile-auth-connect-cancel").disabled).toBe(false);
   await vi.advanceTimersByTimeAsync(2_000);
   flush();
-  expect(harness.accounts.textContent).toContain(connectedAccount.label);
-  expect(harness.accounts.querySelector(".model-accounts-notice")?.textContent).toContain(
-    "Account added.",
-  );
-  expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull();
+  expect(accounts.textContent).toContain(connectedAccount.label);
+  expect(query(".model-accounts-notice")?.textContent).toContain("Account added.");
+  expect(query(".model-accounts-flow")).toBeNull();
   await vi.advanceTimersByTimeAsync(10_000);
   expect(polls).toBe(2);
   expect(
-    harness.request.mock.calls.filter(([method]) => method === "users.listModelAccounts"),
+    request.mock.calls.filter(([method]) => method === "users.listModelAccounts"),
   ).toHaveLength(2);
 });
 
-it.each([
-  {
-    result: { status: "failed", reason: "identity" } as const,
-    message: "profilePage.modelAccounts.connectErrors.identity",
-  },
-])("shows a terminal $result.status result and stops polling", async ({ result, message }) => {
-  const harness = await mountAccounts(async () => result);
+it("shows a terminal identity failure and stops polling", async () => {
+  const harness = await mountAccounts(async () => ({ status: "failed", reason: "identity" }));
+  const { accounts, query, request } = harness;
   await harness.start();
   await vi.advanceTimersByTimeAsync(2_000);
   flush();
-  expect(harness.accounts.textContent).toContain(t(message));
-  expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull();
-  expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false);
+  expect(accounts.textContent).toContain(t("profilePage.modelAccounts.connectErrors.identity"));
+  expect(query(".model-accounts-flow")).toBeNull();
+  expect(button(accounts, ".profile-auth-add-account").disabled).toBe(false);
   await vi.advanceTimersByTimeAsync(10_000);
   expect(
-    harness.request.mock.calls.filter(([method]) => method === "users.authConnect.status"),
+    request.mock.calls.filter(([method]) => method === "users.authConnect.status"),
   ).toHaveLength(2);
 });
 
@@ -513,33 +514,28 @@ it("waits for cancellation and ignores a late completion from the cancelled atte
     }
     throw new Error(`unexpected method: ${method}`);
   });
+  const { accounts, query, click, enter, request } = harness;
   await harness.start();
-  await input(
-    harness.accounts,
-    ".wizard-step__form input",
-    "http://localhost:1455/auth/callback?code=code&state=1",
-  );
-  button(harness.accounts, '.wizard-step__form button[type="submit"]').click();
+  await enter(".wizard-step__form input", "http://localhost:1455/auth/callback?code=code&state=1");
+  click('.wizard-step__form button[type="submit"]');
   await waitForSolid(() =>
-    expect(harness.request).toHaveBeenCalledWith("users.authConnect.answer", expect.anything()),
+    expect(request).toHaveBeenCalledWith("users.authConnect.answer", expect.anything()),
   );
-  button(harness.accounts, ".profile-auth-connect-cancel").click();
+  click(".profile-auth-connect-cancel");
   flush();
-  expect(harness.request).toHaveBeenCalledWith("users.authConnect.cancel", {
+  expect(request).toHaveBeenCalledWith("users.authConnect.cancel", {
     profileId: "profile-1",
     connectId: "connect-1",
   });
-  expect(harness.accounts.querySelector(".model-accounts-flow")).not.toBeNull();
+  expect(query(".model-accounts-flow")).not.toBeNull();
   cancellation.resolve({ status: "cancelled" });
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull(),
-  );
+  await waitForSolid(() => expect(query(".model-accounts-flow")).toBeNull());
   completion.resolve(connectedResult);
   await vi.advanceTimersByTimeAsync(0);
   flush();
-  expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.notices.cancelled"));
-  expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
-  expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false);
+  expect(accounts.textContent).toContain(t("profilePage.modelAccounts.notices.cancelled"));
+  expect(accounts.textContent).not.toContain(connectedAccount.label);
+  expect(button(accounts, ".profile-auth-add-account").disabled).toBe(false);
 });
 
 it("retains account data and sign-in input through a blip, but resets them for another client", async () => {
@@ -547,65 +543,55 @@ it("retains account data and sign-in input through a blip, but resets them for a
     accounts: [connectedAccount],
     scopes: ["operator.write", "operator.admin"],
   });
-  await input(harness.accounts, ".profile-auth-link-input", "openai:draft");
+  const { accounts, query, enter, enabled, request } = harness;
+  await enter(".profile-auth-link-input", "openai:draft");
   await harness.start();
-  await input(harness.accounts, ".wizard-step__form input", "https://example.test/callback");
+  await enter(".wizard-step__form input", "https://example.test/callback");
   harness.emit("reconnecting");
   flush();
-  expect(harness.accounts.textContent).toContain(connectedAccount.label);
-  expect(harness.accounts.querySelector<HTMLInputElement>(".profile-auth-link-input")?.value).toBe(
-    "openai:draft",
-  );
-  expect(harness.accounts.querySelector<HTMLInputElement>(".wizard-step__form input")?.value).toBe(
+  expect(accounts.textContent).toContain(connectedAccount.label);
+  expect(query<HTMLInputElement>(".profile-auth-link-input")?.value).toBe("openai:draft");
+  expect(query<HTMLInputElement>(".wizard-step__form input")?.value).toBe(
     "https://example.test/callback",
   );
-  expect(button(harness.accounts, '.wizard-step__form button[type="submit"]').disabled).toBe(true);
-  const requestsBeforeHello = harness.request.mock.calls.length;
+  expect(button(accounts, '.wizard-step__form button[type="submit"]').disabled).toBe(true);
+  const requestsBeforeHello = request.mock.calls.length;
   harness.emitSnapshot({ phase: "connected", selfUser: undefined });
   await vi.advanceTimersByTimeAsync(2_000);
   flush();
-  expect(harness.accounts.querySelector<HTMLInputElement>(".wizard-step__form input")?.value).toBe(
+  expect(query<HTMLInputElement>(".wizard-step__form input")?.value).toBe(
     "https://example.test/callback",
   );
-  expect(button(harness.accounts, '.wizard-step__form button[type="submit"]').disabled).toBe(true);
-  expect(harness.request).toHaveBeenCalledTimes(requestsBeforeHello);
+  expect(button(accounts, '.wizard-step__form button[type="submit"]').disabled).toBe(true);
+  expect(request).toHaveBeenCalledTimes(requestsBeforeHello);
   harness.emitSnapshot({ selfUser: { id: "profile-1", name: "Ada" } });
-  await waitForSolid(() =>
-    expect(button(harness.accounts, '.wizard-step__form button[type="submit"]').disabled).toBe(
-      false,
-    ),
-  );
-  expect(harness.accounts.querySelector<HTMLInputElement>(".wizard-step__form input")?.value).toBe(
+  await enabled('.wizard-step__form button[type="submit"]');
+  expect(query<HTMLInputElement>(".wizard-step__form input")?.value).toBe(
     "https://example.test/callback",
   );
   harness.emit("connected", true);
   flush();
-  expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull();
-  expect(harness.accounts.querySelector<HTMLInputElement>(".profile-auth-link-input")?.value).toBe(
-    "",
-  );
+  expect(query(".model-accounts-flow")).toBeNull();
+  expect(query<HTMLInputElement>(".profile-auth-link-input")?.value).toBe("");
   harness.unmount();
 });
 
 it("does not apply an old poll after replacing the connection and starting a new attempt", async () => {
   const oldPoll = createDeferred<UsersAuthConnectStatusResult>();
   const harness = await mountAccounts(async () => oldPoll.promise);
+  const { accounts, query, enabled } = harness;
   await harness.start();
   await vi.advanceTimersByTimeAsync(2_000);
   harness.emit("reconnecting");
   harness.emit("connected", true);
-  await waitForSolid(() =>
-    expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
-  );
+  await enabled(".profile-auth-add-account");
   await harness.start();
   oldPoll.resolve(connectedResult);
   await vi.advanceTimersByTimeAsync(0);
   flush();
-  expect(
-    harness.accounts.querySelector<HTMLAnchorElement>(".wizard-step__external-link")?.href,
-  ).toContain("state=2");
-  expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
-  expect(harness.accounts.querySelector(".model-accounts-flow")).not.toBeNull();
+  expect(query<HTMLAnchorElement>(".wizard-step__external-link")?.href).toContain("state=2");
+  expect(accounts.textContent).not.toContain(connectedAccount.label);
+  expect(query(".model-accounts-flow")).not.toBeNull();
 });
 
 it("keeps a failed status check visible and lets the person retry it", async () => {
@@ -616,30 +602,30 @@ it("keeps a failed status check visible and lets the person retry it", async () 
     }
     return connectedResult;
   });
+  const { accounts, query, click } = harness;
   await harness.start();
   await vi.advanceTimersByTimeAsync(2_000);
   flush();
-  expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
-    "Gateway disconnected",
-  );
+  expect(query('[role="alert"]')?.textContent).toContain("Gateway disconnected");
   await vi.advanceTimersByTimeAsync(10_000);
   expect(polls).toBe(1);
-  button(harness.accounts, ".profile-auth-connect-check").click();
-  await waitForSolid(() => expect(harness.accounts.textContent).toContain(connectedAccount.label));
-  expect(harness.accounts.querySelector('[role="alert"]')).toBeNull();
+  click(".profile-auth-connect-check");
+  await waitForSolid(() => expect(accounts.textContent).toContain(connectedAccount.label));
+  expect(query('[role="alert"]')).toBeNull();
 });
 
 it("stops at the operation deadline without pretending an unknown attempt expired", async () => {
   const harness = await mountAccounts(async () => ({ status: "pending" }), { expiresInMs: 2_500 });
+  const { accounts, query, request } = harness;
   await harness.start();
   await vi.advanceTimersByTimeAsync(5_000);
   flush();
-  expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.statusTimedOut"));
-  expect(harness.accounts.querySelector(".model-accounts-flow")).not.toBeNull();
-  expect(button(harness.accounts, ".profile-auth-connect-cancel").disabled).toBe(false);
+  expect(accounts.textContent).toContain(t("profilePage.modelAccounts.statusTimedOut"));
+  expect(query(".model-accounts-flow")).not.toBeNull();
+  expect(button(accounts, ".profile-auth-connect-cancel").disabled).toBe(false);
   await vi.advanceTimersByTimeAsync(10_000);
   expect(
-    harness.request.mock.calls.filter(([method]) => method === "users.authConnect.status"),
+    request.mock.calls.filter(([method]) => method === "users.authConnect.status"),
   ).toHaveLength(3);
 });
 
@@ -697,46 +683,39 @@ it("adds a catalog-provided account through its masked auth step without provide
         "wss://synthetic-user:synthetic-password@test.invalid/control?token=synthetic-query#synthetic-fragment",
     },
   );
-  expect(harness.accounts.querySelector('input[type="password"]')).toBeNull();
-  expect(harness.accounts.textContent).toContain("wss://test.invalid/control");
-  expect(harness.accounts.innerHTML).not.toContain("synthetic-");
+  const { accounts, query, click, enter, request } = harness;
+  expect(query('input[type="password"]')).toBeNull();
+  expect(accounts.textContent).toContain("wss://test.invalid/control");
+  expect(accounts.innerHTML).not.toContain("synthetic-");
   await harness.start("xai");
-  expect(harness.accounts.textContent).toContain("Use your own API key.");
-  const noteButton = button(harness.accounts, ".wizard-step__actions button.primary");
+  expect(accounts.textContent).toContain("Use your own API key.");
+  const noteButton = button(accounts, ".wizard-step__actions button.primary");
   noteButton.click();
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelector('input[type="password"]')).not.toBeNull(),
-  );
+  await waitForSolid(() => expect(query('input[type="password"]')).not.toBeNull());
   noteButton.click();
   expect(
-    harness.request.mock.calls.filter(([method]) => method === "users.authConnect.answer"),
+    request.mock.calls.filter(([method]) => method === "users.authConnect.answer"),
   ).toHaveLength(1);
-  expect(harness.request).toHaveBeenCalledWith("users.authConnect.start", {
+  expect(request).toHaveBeenCalledWith("users.authConnect.start", {
     profileId: "profile-1",
     provider: "xai",
     method: "api-key",
   });
-  const credential = await input(harness.accounts, 'input[type="password"]', "invalid");
-  button(harness.accounts, '.wizard-step__form button[type="submit"]').click();
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
-      validationError,
-    ),
-  );
+  const credential = await enter('input[type="password"]', "invalid");
+  click('.wizard-step__form button[type="submit"]');
+  await waitForSolid(() => expect(query('[role="alert"]')?.textContent).toContain(validationError));
   await waitForSolid(() => expect(credential.disabled).toBe(false));
-  await input(harness.accounts, 'input[type="password"]', "synthetic-grok-key");
+  await enter('input[type="password"]', "synthetic-grok-key");
   await vi.advanceTimersByTimeAsync(2_000);
   flush();
   expect(credential.value).toBe("synthetic-grok-key");
-  expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(validationError);
-  button(harness.accounts, '.wizard-step__form button[type="submit"]').click();
+  expect(query('[role="alert"]')?.textContent).toContain(validationError);
+  click('.wizard-step__form button[type="submit"]');
   await waitForSolid(() => expect(credential.disabled).toBe(true));
   expect(credential.value).toBe("");
   saving.resolve();
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull(),
-  );
-  expect(harness.accounts.querySelector('input[type="password"]')).toBeNull();
-  expect(harness.accounts.querySelector('[role="alert"]')).toBeNull();
-  expect(harness.accounts.textContent).toContain(account.label);
+  await waitForSolid(() => expect(query(".model-accounts-flow")).toBeNull());
+  expect(query('input[type="password"]')).toBeNull();
+  expect(query('[role="alert"]')).toBeNull();
+  expect(accounts.textContent).toContain(account.label);
 });
