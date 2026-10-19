@@ -138,7 +138,7 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
       const remoteKey = normalizeRemoteClientKey(clientIp ?? req.socket?.remoteAddress);
       const localRequest =
         !proxyHintsPresent && typeof clientIp === "string" && isLoopbackHost(remoteKey);
-      if (!localRequest && allowRemoteViewer !== true) {
+      if (!localRequest && !allowRemoteViewer) {
         respondText(res, 404, "Diff not found");
         return true;
       }

@@ -58,8 +58,12 @@ async function withDiffsServer(run: (base: string) => Promise<void>): Promise<vo
   }
 }
 
-async function fetchServed(base: string, path: string, method = "GET"): Promise<ServedResponse> {
-  const response = await fetch(`${base}${path}`, { method });
+async function fetchServed(
+  base: string,
+  requestPath: string,
+  method = "GET",
+): Promise<ServedResponse> {
+  const response = await fetch(`${base}${requestPath}`, { method });
   const body = await response.arrayBuffer();
   return {
     status: response.status,

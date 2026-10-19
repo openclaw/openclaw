@@ -192,7 +192,9 @@ describe("public voice send owns waveform cleanup", () => {
         "Discord voice message payload",
       );
       const attachments = body.attachments;
-      if (!Array.isArray(attachments)) throw new Error("Expected Discord voice attachments");
+      if (!Array.isArray(attachments)) {
+        throw new Error("Expected Discord voice attachments");
+      }
       const attachment = requireRecord(attachments[0], "Discord voice attachment");
       expect(attachment.duration_secs).toBe(1.25);
       const waveform = typeof attachment.waveform === "string" ? attachment.waveform : "";

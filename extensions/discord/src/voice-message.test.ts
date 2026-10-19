@@ -70,7 +70,9 @@ beforeEach(() => {
     );
   runFfmpegMock.mockReset().mockImplementation(async (args) => {
     const output = args.at(-1);
-    if (!output) throw new Error("Missing ffmpeg output path");
+    if (!output) {
+      throw new Error("Missing ffmpeg output path");
+    }
     await fs.writeFile(output, args.includes("pcm_s16le") ? Buffer.alloc(512) : Buffer.from("ogg"));
   });
 });
@@ -170,7 +172,9 @@ describe("sendVoiceMessageDiscord conversion", () => {
     "re-encodes .$extension input with bounded ffmpeg execution",
     async ({ extension, probeOutput }) => {
       const { rest, post } = fixture();
-      if (probeOutput) runFfprobeMock.mockResolvedValueOnce(probeOutput);
+      if (probeOutput) {
+        runFfprobeMock.mockResolvedValueOnce(probeOutput);
+      }
       await sendVoice(rest, 1, "/tmp/input." + extension);
       expect(runFfprobeMock).toHaveBeenCalledTimes(probeOutput ? 2 : 1);
       expect(runFfmpegMock).toHaveBeenCalledTimes(2);

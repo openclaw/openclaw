@@ -88,7 +88,9 @@ describe("sendVoiceMessageDiscord", () => {
       );
     mediaMocks.ffmpeg.mockReset().mockImplementation(async (args) => {
       const output = args.at(-1);
-      if (!output) throw new Error("Missing waveform output");
+      if (!output) {
+        throw new Error("Missing waveform output");
+      }
       await fs.writeFile(output, Buffer.alloc(512));
     });
   });
@@ -152,7 +154,9 @@ describe("sendVoiceMessageDiscord", () => {
           authorized = false;
         },
         assertPlatformSendAuthorized: () => {
-          if (!authorized) throw new Error("voice send authority revoked");
+          if (!authorized) {
+            throw new Error("voice send authority revoked");
+          }
         },
       }),
     ).rejects.toThrow("voice send authority revoked");

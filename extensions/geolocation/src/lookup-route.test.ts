@@ -144,14 +144,14 @@ describe("geolocation lookup route", () => {
   });
 
   it("answers unresolvable ranges without consulting the database", async () => {
-    const loadDatabase = vi.fn();
+    const databaseLoader = vi.fn();
 
     for (const ip of ["100.64.1.5", "192.168.1.20", "10.0.0.4", "127.0.0.1", "169.254.1.1"]) {
-      const out = await lookup({ loadDatabase }, ip);
+      const out = await lookup({ loadDatabase: databaseLoader }, ip);
       expect(out.status, ip).toBe(200);
       expect(out.body.found, ip).toBe(false);
     }
 
-    expect(loadDatabase).not.toHaveBeenCalled();
+    expect(databaseLoader).not.toHaveBeenCalled();
   });
 });
