@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,10 +33,12 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
   let state: OpenClawTestState;
   let cfg: OpenClawConfig;
   let observer: DatabaseSync;
+  let initial: Awaited<ReturnType<typeof acquireManager>>;
   const managers = new Set<RegisteredMemorySearchManager>();
   const sessionId = "memory-revision";
   const sessionKey = `agent:main:chat:${sessionId}`;
   const memoryPath = `sessions/main/${sessionId}.jsonl`;
+  const fts = "memory_index_chunks_fts";
   const scope = () => ({
     agentId: "main",
     sessionId,
@@ -43,7 +46,6 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
     storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
   });
   const events = (color: string) => [
-    { type: "session", id: sessionId, version: 3 },
     {
       type: "message",
       id: "preference",
@@ -55,13 +57,11 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
   const published = () => ({
     source: observer.prepare("SELECT * FROM memory_index_sources WHERE path = ?").all(memoryPath),
     chunks: observer.prepare("SELECT * FROM memory_index_chunks WHERE path = ?").all(memoryPath),
-    fts: observer.prepare("SELECT * FROM memory_index_chunks_fts WHERE path = ?").all(memoryPath),
+    fts: observer.prepare(`SELECT * FROM ${fts} WHERE path = ?`).all(memoryPath),
   });
   const matches = (word: string) =>
     observer
-      .prepare(
-        "SELECT text FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ? AND path = ?",
-      )
+      .prepare(`SELECT text FROM ${fts} WHERE ${fts} MATCH ? AND path = ?`)
       .all(word, memoryPath);
 
   async function expectRecall(
@@ -83,9 +83,7 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
       purpose: "cli",
       inspectSources,
     });
-    if (!manager?.sync) {
-      throw new Error(error ?? "Expected a synchronizable memory manager");
-    }
+    assert(manager?.sync, error ?? "Expected a synchronizable memory manager");
     managers.add(manager);
     return { manager, sync: manager.sync.bind(manager) };
   }
@@ -129,6 +127,9 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
       },
     });
     observer = new DatabaseSync(scope().storePath, { readOnly: true });
+    initial = await acquireManager();
+    await initial.sync({ force: true });
+    expect(matches("violet")).toHaveLength(1);
   });
 
   afterEach(async () => {
@@ -146,18 +147,14 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
   it.each([false, true])(
     "replaces stale recall after a closed-manager equal-size rewrite (legacy hash: %s)",
     async (legacy) => {
-      const original = await acquireManager();
-      await original.sync({ force: true });
-      expect(matches("violet")).toHaveLength(1);
+      const original = initial;
       if (legacy) {
         const entry = await buildSessionEntry(sessionKey, {
           ...scope(),
           updatedAtMs: 1,
           sessionKind: "interactive",
         });
-        if (!entry) {
-          throw new Error("Expected the previously indexed session export");
-        }
+        assert(entry, "Expected the previously indexed session export");
         runOpenClawAgentWriteTransaction(
           ({ db }) => {
             db.prepare(
@@ -195,19 +192,15 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
   it.each([false, true])(
     "preserves published recall across a cold rebuild (damaged archive: %s)",
     async (damaged) => {
-      const { manager, sync } = await acquireManager();
-      await sync({ force: true });
+      const { manager, sync } = initial;
       const before = published();
-      expect(matches("violet")).toHaveLength(1);
       const canonical = loadTranscriptEventsSync(scope());
       expect(await runSessionColdStorageMaintenance({ config: cfg })).toEqual({
         archivedTranscripts: 1,
         externalizedTranscripts: 0,
       });
       const cold = readSessionColdTranscript(observer, sessionId);
-      if (!cold) {
-        throw new Error("Expected an archived canonical transcript");
-      }
+      assert(cold, "Expected an archived canonical transcript");
       expect(() => loadTranscriptEventsSync(scope())).toThrow(/cold storage/);
       const archivePath = resolveSessionColdArchivePath(scope().storePath, cold.archive_name);
       const archive = await fs.readFile(archivePath);
@@ -221,13 +214,9 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
       }
 
       // Automatic rebuilds retry after the documented 30-second failure cooldown.
-      const retryClock = damaged
-        ? vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000)
-        : undefined;
-      try {
+      {
+        using _ = damaged ? vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000) : undefined;
         await sync(damaged ? undefined : { force: true });
-      } finally {
-        retryClock?.mockRestore();
       }
       await expectRecall(manager, "violet");
       expect(loadTranscriptEventsSync(scope())).toEqual(canonical);

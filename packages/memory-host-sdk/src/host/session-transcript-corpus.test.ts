@@ -88,45 +88,74 @@ function pauseDirectoryDiscovery(sessionsDir: string) {
 }
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
-  it("reuses writable admission without entry reads while observing committed corpus changes", async () => {
-    await withCorpusState(async (state) => {
-      const sessionKey = "agent:main:corpus-admission";
-      const scope = { sessionKey, storePath: path.join(state.sessionsDir(), "sessions.json") };
-      await upsertSessionEntryCore(scope, { sessionId: "corpus-admission", updatedAt: 1 });
-
-      const commands: string[] = [];
-      // oxlint-disable-next-line typescript/unbound-method -- call preserves the intercepted worker receiver.
-      const nativePost = Worker.prototype.postMessage;
-      using _ = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-        this: Worker,
-        request,
-        transferList,
-      ) {
-        if (
-          isRecord(request) &&
-          request.type === "execute" &&
-          request.input instanceof Uint8Array
+  it.each([false, true])(
+    "observes committed and admitted-raw corpus changes (readOnly: %s)",
+    async (readOnly) => {
+      await withCorpusState(async (state) => {
+        const storePath = path.join(state.sessionsDir(), "sessions.json");
+        const { sessionKey, expected } = await seedSession(storePath, "corpus-admission");
+        const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+        const { db } = database;
+        const commands: string[] = [];
+        // oxlint-disable-next-line typescript/unbound-method -- call preserves the intercepted worker receiver.
+        const nativePost = Worker.prototype.postMessage;
+        using _ = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+          this: Worker,
+          request,
+          transferList,
         ) {
-          const command: unknown = deserialize(request.input);
-          if (isRecord(command) && typeof command.type === "string") {
-            commands.push(command.type);
+          if (
+            isRecord(request) &&
+            request.type === "execute" &&
+            request.input instanceof Uint8Array
+          ) {
+            const command: unknown = deserialize(request.input);
+            if (isRecord(command) && typeof command.type === "string") {
+              commands.push(command.type);
+            }
           }
-        }
-        nativePost.call(this, request, transferList);
-      });
-      const options = { includeContentRevision: false };
-      await expect(listCorpus("main", options)).resolves.toEqual([
-        expect.objectContaining({ sessionKey, sessionKind: "interactive" }),
-      ]);
+          nativePost.call(this, request, transferList);
+        });
 
-      await upsertSessionEntryCore(scope, { heartbeatIsolatedBaseSessionKey: "agent:main:main" });
-      await expect(listCorpus("main", options)).resolves.toEqual([
-        expect.objectContaining({ sessionKey, sessionKind: "heartbeat" }),
-      ]);
-      expect(commands).toContain("session.entry.patch.commit");
-      expect(commands.filter((command) => command === "session.entry.read")).toEqual([]);
-    });
-  });
+        const options = { includeContentRevision: false, readOnly };
+        await expect(listCorpus("main", options)).resolves.toEqual([
+          { ...expected, sessionKind: "interactive" },
+        ]);
+        const validity = () =>
+          db.prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?").get(sessionKey)
+            ?.entry_valid;
+        if (readOnly) {
+          runSqliteImmediateTransactionSync(db, () => seedCanonicalSessionValidation(database));
+          db.prepare(
+            "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.heartbeatIsolatedBaseSessionKey', ?), entry_valid = 0 WHERE session_key = ?",
+          ).run("agent:main:main", sessionKey);
+          expect(validity()).toBe(0);
+        } else {
+          await upsertSessionEntryCore(
+            { sessionKey, storePath },
+            { heartbeatIsolatedBaseSessionKey: "agent:main:main" },
+          );
+        }
+        await expect(listCorpus("main", options)).resolves.toEqual([
+          { ...expected, ...(readOnly ? {} : { updatedAtMs: expect.any(Number) }) },
+        ]);
+        if (readOnly) {
+          expect(validity()).toBe(0);
+          expect(db.isOpen).toBe(true);
+          expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", env: state.env })?.db).toBe(db);
+          runSqliteImmediateTransactionSync(db, () => {
+            markCanonicalSessionValidationPending(database, [sessionKey]);
+          });
+          await closeOpenClawAgentDatabasesAsync(state.stateDir);
+          expect(db.isOpen).toBe(false);
+          await expect(listCorpus("main", options)).rejects.toThrow("openclaw doctor --fix");
+        } else {
+          expect(commands).toContain("session.entry.patch.commit");
+          expect(commands.filter((command) => command === "session.entry.read")).toEqual([]);
+        }
+      });
+    },
+  );
 
   it("discovers the caller's configured store without a global runtime snapshot", async () => {
     await withCorpusState(async (state) => {
@@ -269,41 +298,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       });
     },
   );
-
-  it("preserves admitted metadata parsing when readonly corpus discovery crosses the worker", async () => {
-    await withCorpusState(async (state) => {
-      const storePath = path.join(state.sessionsDir(), "sessions.json");
-      const { sessionKey, expected } = await seedSession(storePath, "admitted-corpus");
-      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      const { db } = database;
-      const options = { readOnly: true, includeContentRevision: false };
-      await expect(listCorpus("main", options)).resolves.toEqual([
-        { ...expected, sessionKind: "interactive" },
-      ]);
-
-      // Raw metadata edits preserve the original admitted reader's parsing contract.
-      runSqliteImmediateTransactionSync(db, () => seedCanonicalSessionValidation(database));
-      db.prepare(
-        "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.heartbeatIsolatedBaseSessionKey', ?), entry_valid = 0 WHERE session_key = ?",
-      ).run("agent:main:main", sessionKey);
-      const validity = () =>
-        db.prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?").get(sessionKey)
-          ?.entry_valid;
-      expect(validity()).toBe(0);
-      await expect(listCorpus("main", options)).resolves.toEqual([expected]);
-      expect(validity()).toBe(0);
-      expect(db.isOpen).toBe(true);
-      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", env: state.env })?.db === db).toBe(
-        true,
-      );
-      runSqliteImmediateTransactionSync(db, () => {
-        markCanonicalSessionValidationPending(database, [sessionKey]);
-      });
-      await closeOpenClawAgentDatabasesAsync(state.stateDir);
-      expect(db.isOpen).toBe(false);
-      await expect(listCorpus("main", options)).rejects.toThrow("openclaw doctor --fix");
-    });
-  });
 
   it("reads worker content revisions without claiming an agent database lease", async () => {
     await withCorpusState(async (state) => {
