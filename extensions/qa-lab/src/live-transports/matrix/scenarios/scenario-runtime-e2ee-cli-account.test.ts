@@ -17,22 +17,20 @@ vi.mock("./scenario-runtime-e2ee-cli-runtime.js", () => ({
 vi.mock("../substrate/client.js", () => ({
   createMatrixQaClient: () => ({
     registerWithToken: async () => ({
-      accessToken: "account-test-token",
-      deviceId: "OWNER",
+      ...account("OWNER", "account-test-token"),
       password: "test-password",
-      userId: "@owner:matrix-qa.test",
     }),
-    loginWithPassword: async () => ({
-      accessToken: "cli-test-token",
-      deviceId: "CLI",
-      userId: "@owner:matrix-qa.test",
-    }),
+    loginWithPassword: async () => account("CLI", "cli-test-token"),
   }),
 }));
 vi.mock("../substrate/fault-proxy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../substrate/fault-proxy.js")>()),
   startMatrixQaFaultProxy: vi.fn(),
 }));
+
+function account(deviceId: string, accessToken: string) {
+  return { deviceId, accessToken, userId: "@owner:matrix-qa.test" };
+}
 
 describe("Matrix CLI bootstrap failure evidence and ownership", () => {
   let root: string;
@@ -88,6 +86,13 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     bootstrapError = "Matrix room key backup is not usable",
     executionFailure?: Error,
   ) {
+    const output = () => ({
+      stdout: JSON.stringify({
+        success: false,
+        bootstrap: { success: false, error: bootstrapError },
+      }),
+      stderr: "",
+    });
     mocks.createRuntime.mockImplementation(async () => ({
       rootDir: root,
       dispose,
@@ -96,13 +101,7 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
         endStdin: () => {},
         kill: () => {},
         writeStdin: async () => {},
-        output: () => ({
-          stdout: JSON.stringify({
-            success: false,
-            bootstrap: { success: false, error: bootstrapError },
-          }),
-          stderr: "",
-        }),
+        output,
         waitForOutput: async () => {
           throw new Error("unexpected waitForOutput");
         },
@@ -120,29 +119,18 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
           if (executionFailure) {
             throw executionFailure;
           }
-          return {
-            args,
-            exitCode: 7,
-            stdout: JSON.stringify({
-              success: false,
-              bootstrap: { success: false, error: bootstrapError },
-            }),
-            stderr: "",
-          };
+          return { args, exitCode: 7, ...output() };
         },
       }),
     }));
   }
 
-  it.each([{ methods: ["GET"] }])(
-    "rejects CLI failure without POST evidence: %j",
-    async ({ methods }) => {
-      configureCli(methods);
-      await expect(run()).rejects.toThrow("did not attempt faulted room-key backup creation");
-      expect(closed).toBe(true);
-      expect(dispose).toHaveBeenCalledOnce();
-    },
-  );
+  it("rejects CLI failure without POST evidence", async () => {
+    configureCli(["GET"]);
+    await expect(run()).rejects.toThrow("did not attempt faulted room-key backup creation");
+    expect(closed).toBe(true);
+    expect(dispose).toHaveBeenCalledOnce();
+  });
 
   it("accepts POST plus backup failure and rejects an unrelated CLI failure", async () => {
     configureCli(["GET", "POST"]);
@@ -164,18 +152,15 @@ describe("Matrix CLI bootstrap failure evidence and ownership", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
-  it.each([undefined])(
-    "retains construction rejection %s before proxy cleanup failure",
-    async (failure) => {
-      proxyCleanupFailure = new Error("proxy stop failed");
-      mocks.createRuntime.mockRejectedValueOnce(failure);
-      await expect(run()).rejects.toMatchObject({
-        cause: failure,
-        errors: [failure, proxyCleanupFailure],
-      });
-      expect(closed).toBe(true);
-    },
-  );
+  it("retains undefined construction rejection before proxy cleanup failure", async () => {
+    proxyCleanupFailure = new Error("proxy stop failed");
+    mocks.createRuntime.mockRejectedValueOnce(undefined);
+    await expect(run()).rejects.toMatchObject({
+      cause: undefined,
+      errors: [undefined, proxyCleanupFailure],
+    });
+    expect(closed).toBe(true);
+  });
 
   it("preserves an undefined cleanup rejection", async () => {
     configureCli(["POST"]);

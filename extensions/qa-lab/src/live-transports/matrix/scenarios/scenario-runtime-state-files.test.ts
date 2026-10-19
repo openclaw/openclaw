@@ -1,4 +1,3 @@
-// Qa Matrix tests cover persisted runtime state probes.
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -39,28 +38,34 @@ describe("Matrix QA persisted state probes", () => {
     return stateDir;
   }
 
-  async function seedSyncStore(params: {
+  async function seedSyncStore({
+    root,
+    metadata = identity,
+    source = "sqlite",
+    legacyMetadata = false,
+    cursor = "other-cursor",
+  }: {
     root: string;
-    metadata: typeof identity;
-    source: "json" | "sqlite";
+    metadata?: typeof identity;
+    source?: "json" | "sqlite";
     legacyMetadata?: boolean;
-    cursor: string;
+    cursor?: string;
   }) {
-    await mkdir(params.root, { recursive: true });
-    if (params.legacyMetadata) {
-      await writeFile(path.join(params.root, "storage-meta.json"), JSON.stringify(params.metadata));
+    await mkdir(root, { recursive: true });
+    if (legacyMetadata) {
+      await writeFile(path.join(root, "storage-meta.json"), JSON.stringify(metadata));
     } else {
-      openStore(params.root, "storage-meta").register("current", params.metadata);
+      openStore(root, "storage-meta").register("current", metadata);
     }
-    const savedSync = { nextBatch: params.cursor, accountData: [], roomsData: {} };
-    if (params.source === "json") {
-      await writeFile(path.join(params.root, "bot-storage.json"), JSON.stringify({ savedSync }));
+    const savedSync = { nextBatch: cursor, accountData: [], roomsData: {} };
+    if (source === "json") {
+      await writeFile(path.join(root, "bot-storage.json"), JSON.stringify({ savedSync }));
       return;
     }
     // These are the persisted sync-cache rows produced by the Matrix store;
     // real plugin-state writes exercise account-local SQLite discovery.
     const data = JSON.stringify(savedSync);
-    const store = openStore(params.root, "sync-cache");
+    const store = openStore(root, "sync-cache");
     store.register("current:sync:fixture:0", { kind: "sync-chunk", index: 0, data });
     store.register("current:meta", {
       kind: "meta",
@@ -70,6 +75,13 @@ describe("Matrix QA persisted state probes", () => {
       syncDigest: createHash("sha256").update(data).digest("hex"),
     });
   }
+
+  const waitForCursor = (stateDir: string, timeoutMs = 1_000) =>
+    waitForMatrixSyncStoreWithCursor({ context, stateDir, timeoutMs });
+  const expectNoCursor = (stateDir: string) =>
+    expect(waitForCursor(stateDir, 20)).rejects.toThrow(
+      "timed out waiting for Matrix sync store cursor",
+    );
 
   afterEach(async () => {
     resetPluginStateStoreForTests();
@@ -85,15 +97,8 @@ describe("Matrix QA persisted state probes", () => {
       await seedSyncStore({
         root: other,
         metadata: { ...identity, [field]: "other" },
-        source: "sqlite",
-        cursor: "other-cursor",
       });
-      await seedSyncStore({
-        root: target,
-        metadata: identity,
-        source: "sqlite",
-        cursor: "target-cursor",
-      });
+      await seedSyncStore({ root: target, cursor: "target-cursor" });
       for (const root of [other, target]) {
         openStore(root, "idb-snapshot").register("crypto-sentinel", { preserved: root });
       }
@@ -112,9 +117,10 @@ describe("Matrix QA persisted state probes", () => {
       });
       const unrelatedSyncRows = openStore(other, "sync-cache").entries();
       await rewriteMatrixSyncStoreCursor({ ...selected, cursor: "rewritten-cursor" });
-      await expect(
-        waitForMatrixSyncStoreWithCursor({ ...identity, context, stateDir, timeoutMs: 1_000 }),
-      ).resolves.toEqual({ ...selected, cursor: "rewritten-cursor" });
+      await expect(waitForCursor(stateDir)).resolves.toEqual({
+        ...selected,
+        cursor: "rewritten-cursor",
+      });
       expect(openStore(other, "sync-cache").entries()).toEqual(unrelatedSyncRows);
       await deleteMatrixSyncStoreCursor(selected);
       expect(openStore(target, "sync-cache").entries()).toEqual([]);
@@ -136,11 +142,8 @@ describe("Matrix QA persisted state probes", () => {
         metadata: { ...identity, accountId: "other" },
         source,
         legacyMetadata: source === "json",
-        cursor: "other-cursor",
       });
-      await expect(
-        waitForMatrixSyncStoreWithCursor({ context, stateDir, timeoutMs: 20 }),
-      ).rejects.toThrow("timed out waiting for Matrix sync store cursor");
+      await expectNoCursor(stateDir);
     },
   );
 
@@ -153,12 +156,9 @@ describe("Matrix QA persisted state probes", () => {
         root,
         metadata: { ...identity, userId: "@other:matrix-qa.test" },
         source,
-        cursor: "other-cursor",
       });
       await writeFile(path.join(root, "storage-meta.json"), JSON.stringify(identity));
-      await expect(
-        waitForMatrixSyncStoreWithCursor({ context, stateDir, timeoutMs: 20 }),
-      ).rejects.toThrow("timed out waiting for Matrix sync store cursor");
+      await expectNoCursor(stateDir);
     },
   );
 
@@ -172,7 +172,6 @@ describe("Matrix QA persisted state probes", () => {
       for (const root of [path.join(stateDir, "aa-too-deep", ...levels, "extra"), linked]) {
         await seedSyncStore({
           root,
-          metadata: identity,
           source,
           legacyMetadata: true,
           cursor: "excluded-cursor",
@@ -181,14 +180,11 @@ describe("Matrix QA persisted state probes", () => {
       await symlink(linked, path.join(stateDir, "aa-linked"), "junction");
       await seedSyncStore({
         root: target,
-        metadata: identity,
         source,
         legacyMetadata: true,
         cursor: "legacy-cursor",
       });
-      await expect(
-        waitForMatrixSyncStoreWithCursor({ context, stateDir, timeoutMs: 1_000 }),
-      ).resolves.toMatchObject({
+      await expect(waitForCursor(stateDir)).resolves.toMatchObject({
         cursor: "legacy-cursor",
         source,
         pathname: path.join(
@@ -200,8 +196,7 @@ describe("Matrix QA persisted state probes", () => {
   );
 
   it("observes inbound dedupe entries committed through the core claimable dedupe", async () => {
-    const stateDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-dedupe-"));
-    tempDirs.push(stateDir);
+    const stateDir = await createStateDir();
     const accountRoot = path.join(stateDir, "matrix", "accounts", "sut", "server", "token");
     const eventId = "$event";
     const roomId = "!room:matrix-qa.test";

@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertMatrixQaCliBackupRestoreFailed } from "./scenario-runtime-e2ee-destructive-recovery.js";
 import { mutateMatrixQaCliStateLoss } from "./scenario-runtime-e2ee-state.js";
 import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
-import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 const destructiveScenarioMocks = vi.hoisted(() => ({
   createMatrixQaClient: vi.fn(),
@@ -97,9 +96,7 @@ import {
 } from "./scenario-runtime-e2ee-destructive.js";
 
 function createDisposableOwner(params: {
-  backupVersion: string;
   cleanupOrder?: string[];
-  encodedRecoveryKey: string;
   failCleanup?: boolean;
   label: string;
 }) {
@@ -107,7 +104,7 @@ function createDisposableOwner(params: {
     bootstrapOwnDeviceVerification: vi.fn(async () => ({
       success: true,
       verification: {
-        backupVersion: params.backupVersion,
+        backupVersion: `${params.label}-backup`,
         crossSigningVerified: true,
         verified: true,
       },
@@ -120,7 +117,7 @@ function createDisposableOwner(params: {
       return {};
     }),
     getRecoveryKey: vi.fn(async () => ({
-      encodedPrivateKey: params.encodedRecoveryKey,
+      encodedPrivateKey: `${params.label}-recovery-key`,
       keyId: `${params.label}-key`,
     })),
     sendTextMessage: vi.fn(async () => `$${params.label}-seed`),
@@ -133,26 +130,8 @@ function createDisposableOwner(params: {
   };
 }
 
-function createWrongAccountContext(): MatrixQaScenarioContext {
-  const context = {
-    baseUrl: "http://127.0.0.1:28123",
-    driverAccessToken: "unused-driver-token",
-    driverUserId: "@unused-driver:matrix-qa.test",
-    observedEvents: [],
-    observerAccessToken: "must-not-read",
-    observerDeviceId: "must-not-read",
-    observerPassword: "must-not-read",
-    observerUserId: "must-not-read",
-    outputDir: "/tmp/matrix-qa-output",
-    registrationToken: "registration-token",
-    roomId: "!unused:matrix-qa.test",
-    sutAccessToken: "unused-sut-token",
-    sutUserId: "@unused-sut:matrix-qa.test",
-    syncState: {},
-    timeoutMs: 30_000,
-    topology: { rooms: [] },
-  } as unknown as MatrixQaScenarioContext;
-  return new Proxy(context, {
+function createWrongAccountContext() {
+  return new Proxy(createMatrixQaE2eeTestContext(), {
     get(target, property, receiver) {
       if (typeof property === "string" && property.startsWith("observer")) {
         throw new Error(`observer credential read: ${property}`);
@@ -167,7 +146,7 @@ beforeEach(() => {
 });
 
 describe("Matrix sync-state loss driver readiness", () => {
-  it.each([false])("awaits target room sync before sending (sync fails=%s)", async (fails) => {
+  it("awaits target room sync before sending", async () => {
     const order: string[] = [];
     const account = {
       accessToken: "replacement-token",
@@ -181,9 +160,6 @@ describe("Matrix sync-state loss driver readiness", () => {
       waitForJoinedMember: vi.fn(async () => {
         order.push("wait");
         await Promise.resolve();
-        if (fails) {
-          throw new Error("membership sync failed");
-        }
         order.push("synced");
       }),
       sendTextMessage: vi.fn(async () => {
@@ -219,14 +195,14 @@ describe("Matrix sync-state loss driver readiness", () => {
     });
 
     await expect(runMatrixQaE2eeSyncStateLossCryptoIntactScenario(context)).rejects.toThrow(
-      fails ? "membership sync failed" : "send reached",
+      "send reached",
     );
     expect(driver.waitForJoinedMember).toHaveBeenCalledWith({
       roomId,
       timeoutMs: context.timeoutMs,
       userId: account.userId,
     });
-    expect(order).toEqual(fails ? ["wait"] : ["wait", "synced", "send"]);
+    expect(order).toEqual(["wait", "synced", "send"]);
     expect(driver.stop).toHaveBeenCalledOnce();
     expect(destructiveScenarioMocks.replaceMatrixQaGatewayMatrixAccount).toHaveBeenLastCalledWith(
       expect.objectContaining({ accountId: "sut", accountConfig: { enabled: true } }),
@@ -272,62 +248,53 @@ describe.each([
   { name: "empty backup", run: runMatrixQaE2eeHistoryExistsBackupEmptyScenario },
   { name: "deleted device", run: runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario },
 ])("Matrix destructive $name setup ownership", ({ run }) => {
-  it.each(["runtime"] as const)(
-    "releases acquired resources when recovery %s construction fails",
-    async (step) => {
-      const cleanupOrder: string[] = [];
-      const failure = new Error(`${step} construction failed`);
-      const owner = {
-        ...createDisposableOwner({
-          backupVersion: "owner-backup",
-          cleanupOrder,
-          encodedRecoveryKey: "owner-recovery-key",
-          label: "owner",
-        }),
-        resetRoomKeyBackup: vi.fn(async () => ({ success: true, createdVersion: "fresh-backup" })),
-      };
-      owner.getRecoveryKey
-        .mockResolvedValueOnce({ encodedPrivateKey: "owner-recovery-key", keyId: "owner-key" })
-        .mockResolvedValue({ encodedPrivateKey: "fresh-recovery-key", keyId: "fresh-key" });
-      destructiveScenarioMocks.createMatrixQaClient.mockReturnValue({
-        registerWithToken: async () => ({
-          accessToken: "owner-token",
-          deviceId: "OWNER",
-          password: "owner-password",
-          userId: "@owner:matrix-qa.test",
-        }),
-        createPrivateRoom: async () => "!owner:matrix-qa.test",
-        loginWithPassword: destructiveScenarioMocks.loginMatrixQaRecoveryDevice,
-      });
-      destructiveScenarioMocks.createMatrixQaE2eeScenarioClient.mockResolvedValue(owner);
-      destructiveScenarioMocks.loginMatrixQaRecoveryDevice.mockResolvedValue({
-        accessToken: "recovery-token",
-        deviceId: "RECOVERY",
+  it("releases acquired resources when recovery runtime construction fails", async () => {
+    const cleanupOrder: string[] = [];
+    const failure = new Error("runtime construction failed");
+    const owner = {
+      ...createDisposableOwner({
+        cleanupOrder,
+        label: "owner",
+      }),
+      resetRoomKeyBackup: vi.fn(async () => ({ success: true, createdVersion: "fresh-backup" })),
+    };
+    owner.getRecoveryKey
+      .mockResolvedValueOnce({ encodedPrivateKey: "owner-recovery-key", keyId: "owner-key" })
+      .mockResolvedValue({ encodedPrivateKey: "fresh-recovery-key", keyId: "fresh-key" });
+    destructiveScenarioMocks.createMatrixQaClient.mockReturnValue({
+      registerWithToken: async () => ({
+        accessToken: "owner-token",
+        deviceId: "OWNER",
+        password: "owner-password",
         userId: "@owner:matrix-qa.test",
-      });
-      destructiveScenarioMocks.createMatrixQaRecoveryCliRuntime.mockRejectedValueOnce(failure);
-      await expect(run(createMatrixQaE2eeTestContext({ gatewayRuntimeEnv: {} }))).rejects.toBe(
-        failure,
-      );
-      expect(cleanupOrder).toEqual(["owner:stop", "owner:delete:RECOVERY"]);
-    },
-  );
+      }),
+      createPrivateRoom: async () => "!owner:matrix-qa.test",
+      loginWithPassword: destructiveScenarioMocks.loginMatrixQaRecoveryDevice,
+    });
+    destructiveScenarioMocks.createMatrixQaE2eeScenarioClient.mockResolvedValue(owner);
+    destructiveScenarioMocks.loginMatrixQaRecoveryDevice.mockResolvedValue({
+      accessToken: "recovery-token",
+      deviceId: "RECOVERY",
+      userId: "@owner:matrix-qa.test",
+    });
+    destructiveScenarioMocks.createMatrixQaRecoveryCliRuntime.mockRejectedValueOnce(failure);
+    await expect(run(createMatrixQaE2eeTestContext({ gatewayRuntimeEnv: {} }))).rejects.toBe(
+      failure,
+    );
+    expect(cleanupOrder).toEqual(["owner:stop", "owner:delete:RECOVERY"]);
+  });
 });
 
 describe("Matrix wrong-account recovery-key isolation", () => {
   it("uses disposable source and target owners without reading observer credentials", async () => {
     const cleanupOrder: string[] = [];
     const sourceOwner = createDisposableOwner({
-      backupVersion: "source-backup",
       cleanupOrder,
-      encodedRecoveryKey: "source-recovery-key",
       failCleanup: true,
       label: "source",
     });
     const targetOwner = createDisposableOwner({
-      backupVersion: "target-backup",
       cleanupOrder,
-      encodedRecoveryKey: "target-recovery-key",
       failCleanup: true,
       label: "target",
     });
@@ -419,7 +386,7 @@ describe("Matrix destructive E2EE backup failure assertions", () => {
     error: string;
     failureKind: Parameters<typeof assertMatrixQaCliBackupRestoreFailed>[1]["failureKind"];
     exitCode?: number;
-    rejection?: string;
+    rejection: string;
   }>([
     {
       name: "requires a nonzero CLI exit",
@@ -449,10 +416,6 @@ describe("Matrix destructive E2EE backup failure assertions", () => {
         { payload: { backup, backupVersion: "1", error, success: false }, result: { exitCode } },
         { expectedBackupVersion: "1", failureKind, label: "restore" },
       );
-    if (rejection) {
-      expect(assertRestore).toThrow(rejection);
-    } else {
-      expect(assertRestore).not.toThrow();
-    }
+    expect(assertRestore).toThrow(rejection);
   });
 });
