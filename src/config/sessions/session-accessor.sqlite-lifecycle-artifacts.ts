@@ -315,41 +315,43 @@ function* planSessionLifecycleArtifactCleanupPages(
     );
     const removedSessionIds = new Set<string>();
     const entries: LifecycleArtifactCleanupPlan["entries"] = [];
-    const candidateEntries = readSessionEntryStore(database, {
-      sessionKeys: candidates.map((row) => row.session_key),
-    });
-    const foreignOwnedSessionIds = params.pluginOwnerId
-      ? new Set(
-          executeSqliteQuerySync(
-            database.db,
-            db
-              .selectFrom("session_windows")
-              .select("session_id")
-              .where("plugin_owner_id", "is not", null)
-              .where("plugin_owner_id", "!=", params.pluginOwnerId),
-          ).rows.map((row) => row.session_id),
-        )
-      : undefined;
-    for (const row of candidates) {
-      const entry = candidateEntries[row.session_key];
-      const sessionIds = uniqueStrings([
-        row.current_session_id,
-        ...(entry ? collectSessionStateIdsForEntry(entry) : []),
-      ]);
-      // Window ownership survives placeholder nodes and ownerless row projections; preserve
-      // the entire node when any referenced generation belongs to another plugin.
-      if (
-        (params.pluginOwnerId &&
-          entry?.pluginOwnerId &&
-          entry.pluginOwnerId !== params.pluginOwnerId) ||
-        sessionIds.some((sessionId) => foreignOwnedSessionIds?.has(sessionId))
-      ) {
-        continue;
+    if (candidates.length > 0) {
+      const candidateEntries = readSessionEntryStore(database, {
+        sessionKeys: candidates.map((row) => row.session_key),
+      });
+      const foreignOwnedSessionIds = params.pluginOwnerId
+        ? new Set(
+            executeSqliteQuerySync(
+              database.db,
+              db
+                .selectFrom("session_windows")
+                .select("session_id")
+                .where("plugin_owner_id", "is not", null)
+                .where("plugin_owner_id", "!=", params.pluginOwnerId),
+            ).rows.map((row) => row.session_id),
+          )
+        : undefined;
+      for (const row of candidates) {
+        const entry = candidateEntries[row.session_key];
+        const sessionIds = uniqueStrings([
+          row.current_session_id,
+          ...(entry ? collectSessionStateIdsForEntry(entry) : []),
+        ]);
+        // Window ownership survives placeholder nodes and ownerless row projections; preserve
+        // the entire node when any referenced generation belongs to another plugin.
+        if (
+          (params.pluginOwnerId &&
+            entry?.pluginOwnerId &&
+            entry.pluginOwnerId !== params.pluginOwnerId) ||
+          sessionIds.some((sessionId) => foreignOwnedSessionIds?.has(sessionId))
+        ) {
+          continue;
+        }
+        for (const sessionId of sessionIds) {
+          removedSessionIds.add(sessionId);
+        }
+        entries.push({ expectedEntry: entry, sessionKey: row.session_key });
       }
-      for (const sessionId of sessionIds) {
-        removedSessionIds.add(sessionId);
-      }
-      entries.push({ expectedEntry: entry, sessionKey: row.session_key });
     }
 
     if (diagnostics) {

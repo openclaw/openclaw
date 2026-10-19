@@ -11,6 +11,7 @@ import {
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { bootstrapApplication as createApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
+import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
 import * as gatewayStore from "./gateway-store.ts";
 import { autoPromptNotificationsOnSend } from "./notifications-auto-prompt.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
@@ -629,6 +630,7 @@ describe("bootstrapApplication", () => {
     darkMeta.name = "theme-color";
     darkMeta.media = "(prefers-color-scheme: dark)";
     document.head.append(style, meta, darkMeta);
+    bindControlUiDocumentHead({ themeColors: [meta, darkMeta], favicons: [] });
     saveSettings({ ...previousSettings, theme: "claw", themeMode: "light" });
     const runtime = bootstrapApplication();
 
@@ -666,6 +668,7 @@ describe("bootstrapApplication", () => {
       expect(meta.content).toBe("#123456");
     } finally {
       runtime.stop();
+      bindControlUiDocumentHead({ themeColors: [], favicons: [] });
       document.body.replaceChildren();
       expect(removeEventListener).toHaveBeenCalled();
       style.remove();

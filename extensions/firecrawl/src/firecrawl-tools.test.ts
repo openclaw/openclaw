@@ -55,8 +55,7 @@ describe("firecrawl tools", () => {
   let createFirecrawlWebSearchProvider: typeof import("./firecrawl-search-provider.js").createFirecrawlWebSearchProvider;
   let createFirecrawlFreeWebSearchProvider: typeof import("./firecrawl-search-provider.js").createFirecrawlFreeWebSearchProvider;
   let createFirecrawlWebFetchProvider: typeof import("./firecrawl-fetch-provider.js").createFirecrawlWebFetchProvider;
-  let createFirecrawlSearchTool: typeof import("./firecrawl-search-tool.js").createFirecrawlSearchTool;
-  let createFirecrawlScrapeTool: typeof import("./firecrawl-scrape-tool.js").createFirecrawlScrapeTool;
+  let captureFirecrawlTools: typeof import("./firecrawl-tools.test-support.js").captureFirecrawlTools;
   let runActualFirecrawlSearch: typeof import("./firecrawl-client.js").runFirecrawlSearch;
   let runActualFirecrawlScrape: typeof import("./firecrawl-client.js").runFirecrawlScrape;
   let ssrfMock: { mockRestore: () => void } | undefined;
@@ -66,8 +65,7 @@ describe("firecrawl tools", () => {
     ({ createFirecrawlWebFetchProvider } = await import("./firecrawl-fetch-provider.js"));
     ({ createFirecrawlWebSearchProvider } = await import("./firecrawl-search-provider.js"));
     ({ createFirecrawlFreeWebSearchProvider } = await import("./firecrawl-search-provider.js"));
-    ({ createFirecrawlSearchTool } = await import("./firecrawl-search-tool.js"));
-    ({ createFirecrawlScrapeTool } = await import("./firecrawl-scrape-tool.js"));
+    ({ captureFirecrawlTools } = await import("./firecrawl-tools.test-support.js"));
     ({
       runFirecrawlSearch: runActualFirecrawlSearch,
       runFirecrawlScrape: runActualFirecrawlScrape,
@@ -716,9 +714,7 @@ describe("firecrawl tools", () => {
       ok: true,
       params,
     }));
-    const tool = createFirecrawlSearchTool({
-      config: { env: "test" },
-    } as never);
+    const tool = captureFirecrawlTools({ env: { test: "true" } })("firecrawl_search");
     expect(tool.resultContentSource).toBe("network");
 
     const result = await tool.execute("call-1", {
@@ -735,7 +731,7 @@ describe("firecrawl tools", () => {
     });
 
     const expected = {
-      cfg: { env: "test" },
+      cfg: { env: { test: "true" } },
       query: "web search",
       count: 6,
       timeoutSeconds: 12,
@@ -758,9 +754,7 @@ describe("firecrawl tools", () => {
     "forwards exact standalone Firecrawl %s cancellation into its network owner",
     async (operation) => {
       const controller = new AbortController();
-      const api = { config: {} } as never;
-      const tool =
-        operation === "search" ? createFirecrawlSearchTool(api) : createFirecrawlScrapeTool(api);
+      const tool = captureFirecrawlTools()(`firecrawl_${operation}`);
       const args =
         operation === "search"
           ? { query: "standalone cancellation" }
@@ -816,9 +810,7 @@ describe("firecrawl tools", () => {
       },
     },
   ])("scrape tool $name", async ({ input, expected: params }) => {
-    const tool = createFirecrawlScrapeTool({
-      config: { env: "test" },
-    } as never);
+    const tool = captureFirecrawlTools({ env: { test: "true" } })("firecrawl_scrape");
     expect(tool.resultContentSource).toBe("network");
 
     const result = await tool.execute("call-1", {
@@ -827,7 +819,7 @@ describe("firecrawl tools", () => {
     });
 
     const expected = {
-      cfg: { env: "test" },
+      cfg: { env: { test: "true" } },
       url: "https://docs.openclaw.ai",
       ...params,
     };

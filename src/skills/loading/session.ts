@@ -82,9 +82,9 @@ function loadSkillsFromDirInternal(
   }
 
   const root = rootDir ?? dir;
-  const ig = addIgnoreRules(dir, root, ignoreMatcher);
 
   try {
+    const ig = addIgnoreRules(dir, root, ignoreMatcher);
     const entries = readdirSync(dir, { withFileTypes: true });
 
     const skillFile = entries.find((entry) => entry.name === "SKILL.md");

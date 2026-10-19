@@ -2,12 +2,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import {
-  resolveExistingPathsWithinRoot,
-  resolveExistingUploadPaths,
-  resolveStrictExistingUploadPaths,
-} from "./paths.js";
+import { resolveExistingPathsWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { describe, expect, it, vi } from "vitest";
+
+const pathFixture = vi.hoisted(() => ({ root: "" }));
+vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>()),
+  resolvePreferredOpenClawTmpDir: () => pathFixture.root,
+}));
+vi.mock("openclaw/plugin-sdk/text-utility-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/text-utility-runtime")>()),
+  get CONFIG_DIR() {
+    return pathFixture.root;
+  },
+}));
 
 async function createFixtureRoot(): Promise<{
   baseDir: string;
@@ -157,7 +165,7 @@ describe("resolveExistingPathsWithinRoot", () => {
 });
 
 type FixtureRoot = Awaited<ReturnType<typeof createFixtureRoot>>;
-type UploadPathResolver = typeof resolveExistingUploadPaths;
+type UploadPathResolver = "resolveExistingUploadPaths" | "resolveStrictExistingUploadPaths";
 type UploadPathScenario =
   | "inbound-relative"
   | "mixed-relative"
@@ -229,10 +237,11 @@ function registerUploadPathCases(resolver: UploadPathResolver, cases: UploadPath
   for (const [title, scenario, expectedError] of cases) {
     it(title, async () => {
       await withFixtureRoot(async (fixture) => {
+        pathFixture.root = fixture.baseDir;
+        vi.resetModules();
+        const resolve = (await import("./paths.js"))[resolver];
         const prepared = await prepareUploadPathCase(fixture, scenario);
-        const result = await resolver({
-          uploadDir: fixture.uploadsDir,
-          inboundMediaDir: fixture.inboundMediaDir,
+        const result = await resolve({
           requestedPaths: prepared.requestedPaths,
         });
         if (expectedError) {
@@ -252,7 +261,7 @@ function registerUploadPathCases(resolver: UploadPathResolver, cases: UploadPath
 }
 
 describe("resolveExistingUploadPaths", () => {
-  registerUploadPathCases(resolveExistingUploadPaths, [
+  registerUploadPathCases("resolveExistingUploadPaths", [
     [`falls back to ${sandboxRelative} paths after root validation`, "inbound-relative"],
     ["rejects nested inbound media URI references", "nested-uri", "Invalid media reference"],
     [
@@ -266,7 +275,7 @@ describe("resolveExistingUploadPaths", () => {
 });
 
 describe("resolveStrictExistingUploadPaths", () => {
-  registerUploadPathCases(resolveStrictExistingUploadPaths, [
+  registerUploadPathCases("resolveStrictExistingUploadPaths", [
     ["accepts mixed upload-root and inbound-media files at use time", "mixed-relative"],
     ["rejects files missing from both managed upload roots", "missing", nonSymlink],
   ]);
