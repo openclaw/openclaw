@@ -2561,6 +2561,27 @@ describe("before_tool_call requireApproval handling", () => {
     ]);
   });
 
+  it("reports a recorded single-phase timeout with its system attribution", async () => {
+    const onResolution = vi.fn();
+    setApproval({ onResolution });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id-immediate",
+      decision: null,
+      terminalReason: "timeout",
+      resolvedAtMs: 1_700_000_000_000,
+      resolver: { kind: "system" },
+    });
+
+    const result = await requestApproval();
+
+    expect(result).toHaveProperty("disposition", "timed_out");
+    expect(result).toHaveProperty("reason", "Approval timed out");
+    expect(onResolution).toHaveBeenCalledWith("timeout", {
+      resolvedAtMs: 1_700_000_000_000,
+      resolver: { kind: "system" },
+    });
+  });
+
   it.each([new Error("run cancelled"), "sessions_yield"])(
     "cancels approval and notifies the plugin when the run aborts: %s",
     async (abortReason) => {

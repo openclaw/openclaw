@@ -193,12 +193,12 @@ onResolution(decision, details) {
 }
 ```
 
-| `resolver.kind` | Meaning                                                                 |
-| --------------- | ----------------------------------------------------------------------- |
-| `device`        | A paired device resolved it; `id` is the device ID.                     |
-| `channel`       | A chat reviewer resolved it; `id` is `<channel>:<accountId>`.           |
-| `runtime`       | A Gateway client resolved it; `id` is the client's display name or ID.  |
-| `system`        | The Gateway ended it when the approval timed out.                       |
+| `resolver.kind` | Meaning                                                                |
+| --------------- | ---------------------------------------------------------------------- |
+| `device`        | A paired device resolved it; `id` is the device ID.                    |
+| `channel`       | A chat reviewer resolved it; `id` is `<channel>:<accountId>`.          |
+| `runtime`       | A Gateway client resolved it; `id` is the client's display name or ID. |
+| `system`        | The Gateway ended it when the approval timed out.                      |
 
 `details` is omitted when the Gateway did not record a resolution: embedded
 runs, cancellations before or during the request, requests with no approval

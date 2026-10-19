@@ -372,6 +372,7 @@ async function requestPluginToolApprovalDecision(
       decision?: unknown;
       deliveryRoute?: string;
       expiresAtMs?: number;
+      terminalReason?: unknown;
       resolvedAtMs?: unknown;
       resolver?: unknown;
     } = await withGatewayToolApprovalOwner(
@@ -414,7 +415,9 @@ async function requestPluginToolApprovalDecision(
     if (hasImmediateDecision) {
       decision = requestResult?.decision;
       details = readPluginApprovalResolutionDetails(requestResult);
-      if (decision === null) {
+      // A hosted single-phase request also ends with null on a recorded timeout,
+      // which falls through to the timeout outcome below.
+      if (decision === null && requestResult.terminalReason !== "timeout") {
         notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
         return pluginApprovalFailure(
           params.baseParams,

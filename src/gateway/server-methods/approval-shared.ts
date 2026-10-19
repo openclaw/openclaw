@@ -336,6 +336,8 @@ export async function handlePendingApprovalRequest<
         decision: projectedDecision,
         createdAtMs: params.record.createdAtMs,
         expiresAtMs: params.record.expiresAtMs,
+        // Single-phase callers see timeouts and no-route denials as the same null decision.
+        ...(params.record.terminalReason ? { terminalReason: params.record.terminalReason } : {}),
         ...projectApprovalResolutionAttribution(params.record),
       },
       undefined,

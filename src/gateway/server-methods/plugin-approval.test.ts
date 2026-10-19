@@ -546,8 +546,33 @@ describe("createPluginApprovalHandlers", () => {
         },
       );
       await invokeHandler(handlers, opts);
-      expect(expectResponseOk(opts.respond).decision).toBeNull();
+      const result = expectResponseOk(opts.respond);
+      expect(result.decision).toBeNull();
+      expect(result.terminalReason).toBe("no-route");
       expect(hasExecApprovalClients).toHaveBeenCalledWith(opts.client?.connId);
+    });
+
+    it("reports a single-phase timeout with its system attribution", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        { title: "Sensitive action", description: "Desc" },
+        { context: createApprovalContext({ hasExecApprovalClients: () => true }) },
+      );
+
+      const requestPromise = invokeHandler(handlers, opts);
+      await vi.waitFor(async () => {
+        expect(await manager.listPendingRecords()).toHaveLength(1);
+      });
+      const [pending] = await manager.listPendingRecords();
+      await manager.expire(pending!.id);
+      await requestPromise;
+
+      const result = expectResponseOk(opts.respond);
+      expect(result.decision).toBeNull();
+      expect(result.terminalReason).toBe("timeout");
+      expect(result.resolvedAtMs).toEqual(expect.any(Number));
+      expect(result.resolver).toEqual({ kind: "system" });
     });
 
     it("keeps plugin approvals pending when the originating chat can handle /approve directly", async () => {

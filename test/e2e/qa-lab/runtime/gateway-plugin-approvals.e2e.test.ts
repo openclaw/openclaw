@@ -163,10 +163,33 @@ it("delivers a generated request to a distinct reviewer and resolves one termina
     createdAtMs: expect.any(Number),
     expiresAtMs: expect.any(Number),
     terminalReason: "user",
+    // The legacy resolve method records the reviewer's client label, not a verified person.
+    resolvedAtMs: expect.any(Number),
+    resolver: { kind: "runtime", id: "plugin approval reviewer" },
   });
   const resolved = await waitForEvent("plugin.approval.resolved");
   expect({ id: resolved.id, decision: resolved.decision }).toEqual(decision);
   expect(terminalDecision.expiresAtMs).toBeGreaterThan(terminalDecision.createdAtMs);
 
   await expect(reviewer.request<ApprovalRecord[]>("plugin.approval.list", {})).resolves.toEqual([]);
+
+  // Single-phase requests end with a null decision on timeout; the recorded
+  // reason and system attribution distinguish it from a no-route denial.
+  const expired = await requester.request<ApprovalDecision>(
+    "plugin.approval.request",
+    {
+      pluginId: "qa-plugin",
+      title: "Allow fixture mutation",
+      description: "The QA fixture lets this request expire.",
+      allowedDecisions: ["allow-once"],
+      timeoutMs: 250,
+    },
+    { timeoutMs: 10_000 },
+  );
+  expect(expired).toMatchObject({
+    decision: null,
+    terminalReason: "timeout",
+    resolvedAtMs: expect.any(Number),
+    resolver: { kind: "system" },
+  });
 }, 120_000);
