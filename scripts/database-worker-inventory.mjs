@@ -1814,7 +1814,7 @@ const reviewedOperations = new Map([
       },
       {
         tier: "W",
-        operations: ["recordSessionStateEventInDatabase"],
+        operations: ["recordSessionStateEventsInDatabase"],
         evidence:
           "All producers await sessionState.record; the only direct production kernel callers are session-state-events.worker.ts and subagent-registry.store.worker.ts",
       },

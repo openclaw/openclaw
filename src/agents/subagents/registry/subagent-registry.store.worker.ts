@@ -11,10 +11,7 @@ import {
 } from "../../../infra/sqlite-worker-operation-admission.js";
 import type { WorkerTaskChannel } from "../../../infra/worker-task-server.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import {
-  recordSessionStateEventInDatabase,
-  type SessionStateNotice,
-} from "../../../sessions/session-state-events.kernel.js";
+import { recordSessionStateEventsInDatabase } from "../../../sessions/session-state-events.kernel.js";
 import { invalidateOpenClawStateRuntimeIntegrity } from "../../../state/openclaw-state-db-integrity-admission.js";
 import {
   assertStateReadSchema,
@@ -161,10 +158,7 @@ export const subagentRegistryOperations = {
       return context.write((writer): SubagentRegistryWriteReceipt => {
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
         writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
-        const notices: SessionStateNotice[] = [];
-        for (const { event, now } of terminalEvents) {
-          notices.push(...recordSessionStateEventInDatabase(writer.db, event, now).notices);
-        }
+        const { notices } = recordSessionStateEventsInDatabase(writer.db, terminalEvents);
         for (const [eventIndex, event] of terminalEvents.entries()) {
           requestSessionEntryCurrentAdmission(event.sessionEntryCurrentSource, {
             stage: "commit",

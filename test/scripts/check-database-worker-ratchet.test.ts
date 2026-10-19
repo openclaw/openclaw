@@ -202,7 +202,7 @@ function anotherFactory() {
   fs.mkdirSync(path.dirname(eventFile), { recursive: true });
   const eventSource = `
 import { executeSqliteQuerySync as query } from "./queries.js";
-function recordSessionStateEventInDatabase() {
+function recordSessionStateEventsInDatabase() {
   query(sql);
   const registeredWatcherKeys = notify
     ? query(sql).rows.map(() => query(sql))
@@ -228,7 +228,7 @@ function anotherRecorder() {
     operation: "createPlacementTurnClaimOps.releaseTurn",
   });
   expect(rows.find((row) => row.file === eventRelative && row.tier === "W")?.calls).toEqual(
-    Array(4).fill(expect.objectContaining({ operation: "recordSessionStateEventInDatabase" })),
+    Array(4).fill(expect.objectContaining({ operation: "recordSessionStateEventsInDatabase" })),
   );
   expect(
     rows.find((row) => row.file === eventRelative && row.tier === "T1")?.calls[0],
