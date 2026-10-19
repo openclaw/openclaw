@@ -27,6 +27,8 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     port: { type: "string", default: "41466" },
     clients: { type: "string", default: "42" },
+    "legacy-clients": { type: "string", default: "2" },
+    "client-profile": { type: "string", default: "web" },
     rounds: { type: "string", default: "20" },
     "interval-ms": { type: "string", default: "1000" },
     "start-at": { type: "string" },
@@ -44,6 +46,16 @@ if (!values["state-dir"] || !values.output) {
 const port = integer(values.port, "--port", 40000);
 assert(port <= 65535);
 const clients = integer(values.clients, "--clients", 3);
+const legacyClients = integer(values["legacy-clients"], "--legacy-clients", 0);
+assert(legacyClients <= clients, "--legacy-clients must not exceed --clients");
+assert(
+  ["web", "native"].includes(values["client-profile"]),
+  "--client-profile must be web or native",
+);
+assert(
+  values["client-profile"] !== "native" || legacyClients >= 2,
+  "the native profile keeps two legacy CLI controls",
+);
 const rounds = integer(values.rounds, "--rounds", 1);
 const interval = integer(values["interval-ms"], "--interval-ms", 250);
 assert(["churn", "traffic"].includes(values.scenario), "--scenario must be churn or traffic");
@@ -109,6 +121,12 @@ const phases: Record<
 let phase: (typeof phases)[string] | undefined;
 const received = new Map<number, PresenceEntry[]>();
 const observers: ReturnType<typeof createGatewayPresenceObserver>[] = [];
+const cohorts = new Map<
+  string,
+  { clientKind: string; version: string; capability: string; count: number }
+>();
+const socketTraffic = Array.from({ length: clients }, () => ({ frames: 0, bytes: 0 }));
+const firstPresenceModes = new Map<number, string>();
 let recoveryRequests = 0;
 let measured = false;
 let requests = 0;
@@ -232,13 +250,18 @@ async function runTraffic(actor: (typeof peers)[number], keys: string[], session
   assert(departed, "final actor must remain online");
   assert.equal(departed.watchedSessions?.length ?? 0, 0, "final actor must leave every session");
   assert.equal(recoveryRequests, 0, "the UI reducer must accept every delta without recovery");
+  assert.equal(
+    firstPresenceModes.size,
+    clients,
+    "every handshake must negotiate its presence format",
+  );
   assert.equal(failures.length, 0, failures.join("\n"));
   const frames = Object.values(wire).reduce((sum, counts) => sum + counts.frames, 0);
   const bytes = Object.values(wire).reduce((sum, counts) => sum + counts.bytes, 0);
   const report = {
     scenario: "traffic",
     clients,
-    legacyClients: 2,
+    legacyClients,
     rounds,
     intervalMs: interval,
     elapsedMs,
@@ -251,7 +274,8 @@ async function runTraffic(actor: (typeof peers)[number], keys: string[], session
         {
           framesPerMinute: (counts.frames * 60_000) / elapsedMs,
           bytesPerFrame: counts.bytes / Math.max(1, counts.frames),
-          bytesPerSocket: counts.bytes / (mode === "legacy" ? 2 : clients - 2),
+          bytesPerSocket:
+            counts.bytes / Math.max(1, mode === "legacy" ? legacyClients : clients - legacyClients),
         },
       ]),
     ),
@@ -260,20 +284,22 @@ async function runTraffic(actor: (typeof peers)[number], keys: string[], session
     bytesPerFrame: bytes / Math.max(1, frames),
     bytesPerSocket: bytes / clients,
     bytesPerSocketPerMinute: (bytes * 60_000) / elapsedMs / clients,
-    clientCohorts: [
-      { clientId: "openclaw-control-ui", version: "dev", capability: "legacy", count: 2 },
-      {
-        clientId: "openclaw-control-ui",
-        version: "dev",
-        capability: "presence-deltas",
-        count: clients - 2,
-      },
-    ],
+    clientCohorts: [...cohorts.values()],
+    ...(values["client-profile"] === "native"
+      ? {
+          nativeSockets: clients - 2,
+          nativeBytesPerSocket:
+            socketTraffic.slice(2).reduce((sum, counts) => sum + counts.bytes, 0) / (clients - 2),
+          nativeFramesPerSocket:
+            socketTraffic.slice(2).reduce((sum, counts) => sum + counts.frames, 0) / (clients - 2),
+        }
+      : {}),
     correctness: {
       checkedSockets: clients,
       reducerSockets: observers.length,
       recoveryRequests,
       finalDeparture: true,
+      negotiatedSockets: firstPresenceModes.size,
     },
     baselineOwnerLoads,
     cpuMs: (used.user + used.system) / 1000,
@@ -282,6 +308,7 @@ async function runTraffic(actor: (typeof peers)[number], keys: string[], session
       "Synthetic shared-owner clients; no external profile/avatar provider.",
       "Node heartbeat uses the operator system-event contract; node.hostStats is a separate event and is not replayed.",
       "Setup and final correctness flush are outside the measurement window.",
+      "Client kinds and versions are synthetic handshake metadata, not a production client inventory.",
     ],
   };
   writeFileSync(values.output!, JSON.stringify(report, null, 2) + "\n");
@@ -293,7 +320,7 @@ try {
   }
   let actorHello: HelloOk | undefined;
   for (let index = 0; index < clients; index++) {
-    const mode = index < 2 ? "legacy" : "delta";
+    const mode = index < legacyClients ? "legacy" : "delta";
     const observer =
       mode === "delta" && values.scenario === "traffic"
         ? createGatewayPresenceObserver({
@@ -330,6 +357,10 @@ try {
           challenge.resolve({ nonce: event.payload.nonce, ts: event.payload.ts });
         }
         if (event.event === "presence") {
+          assert(isRecord(event.payload), "presence must carry an object payload");
+          const observedMode = "version" in event.payload ? "presence-deltas" : "legacy";
+          assert.equal(observedMode, mode === "delta" ? "presence-deltas" : "legacy");
+          firstPresenceModes.set(index, observedMode);
           const normalized = observer?.receive(event);
           if (normalized) {
             received.set(index, (normalized.payload as { presence: PresenceEntry[] }).presence);
@@ -340,6 +371,8 @@ try {
             const bytes = Buffer.byteLength(JSON.stringify(event));
             traffic[mode].frames++;
             traffic[mode].bytes += bytes;
+            socketTraffic[index]!.frames++;
+            socketTraffic[index]!.bytes += bytes;
             if (values.scenario === "traffic" && isRecord(event.payload)) {
               const payload = event.payload;
               const wireMode =
@@ -384,6 +417,40 @@ try {
       keys.publicKey.export({ type: "spki", format: "pem" }),
     );
     const deviceId = createHash("sha256").update(Buffer.from(publicKey, "base64url")).digest("hex");
+    const nativeIdentity =
+      values["client-profile"] === "native"
+        ? index < 2
+          ? {
+              id: "cli",
+              platform: "darwin",
+              mode: "cli",
+              deviceFamily: "Mac",
+              modelIdentifier: "Synthetic CLI",
+            }
+          : [
+              {
+                id: "openclaw-macos",
+                platform: "darwin",
+                mode: "ui",
+                deviceFamily: "Mac",
+                modelIdentifier: "Mac16,9",
+              },
+              {
+                id: "openclaw-ios",
+                platform: "ios",
+                mode: "ui",
+                deviceFamily: "iPhone",
+                modelIdentifier: "iPhone17,1",
+              },
+              {
+                id: "openclaw-android",
+                platform: "android",
+                mode: "ui",
+                deviceFamily: "Android",
+                modelIdentifier: "Synthetic phone",
+              },
+            ][(index - 2) % 3]
+        : undefined;
     const identity = {
       id: "openclaw-control-ui",
       version: "dev",
@@ -394,6 +461,7 @@ try {
       ...(values.scenario === "traffic"
         ? { deviceFamily: "Mac", modelIdentifier: "Mac16,9", timeZone: "America/Los_Angeles" }
         : {}),
+      ...nativeIdentity,
     };
     const scopes =
       values.scenario === "traffic"
@@ -406,6 +474,27 @@ try {
             "operator.pairing",
           ]
         : ["operator.admin"];
+    if (nativeIdentity) {
+      // Synthetic native fixtures still pass the normal signed-device admission boundary.
+      const { requestDevicePairing } = await import("../../src/infra/device-pairing.js");
+      const { approveDevicePairing } = await import("../../src/infra/device-pairing-approval.js");
+      const pairing = await requestDevicePairing({
+        deviceId,
+        publicKey,
+        role: "operator",
+        scopes,
+        clientId: identity.id,
+        clientMode: identity.mode,
+        browserOrigin: `http://127.0.0.1:${port}`,
+        platform: identity.platform,
+        deviceFamily: identity.deviceFamily,
+        silent: false,
+      });
+      const approved = await approveDevicePairing(pairing.request.requestId, {
+        callerScopes: scopes,
+      });
+      assert.equal(approved?.status, "approved", "synthetic device pairing must be approved");
+    }
     const signed = buildDeviceAuthPayloadV3({
       deviceId,
       clientId: identity.id,
@@ -435,6 +524,16 @@ try {
       },
       caps: mode === "delta" ? ["presence-deltas"] : [],
     })) as HelloOk;
+    const capability = mode === "delta" ? "presence-deltas" : "legacy";
+    const cohortKey = `${identity.id}:${identity.version}:${capability}`;
+    const cohort = cohorts.get(cohortKey) ?? {
+      clientKind: identity.id,
+      version: identity.version,
+      capability,
+      count: 0,
+    };
+    cohort.count++;
+    cohorts.set(cohortKey, cohort);
     if (index === clients - 1) {
       actorHello = hello;
     }
@@ -517,19 +616,19 @@ try {
     assert.equal(failures.length, 0, failures.join("\n"));
     assert.equal(
       traffic.legacy.frames - churn.legacy.frames,
-      4,
+      legacyClients * 2,
       "both changes must reach legacy readers",
     );
     assert.equal(
       traffic.delta.frames - churn.delta.frames,
-      (clients - 2) * 2,
+      (clients - legacyClients) * 2,
       "both changes must reach delta readers",
     );
     const elapsedMs = performance.now() - started;
     const used = process.cpuUsage(cpu);
     const report = {
       clients,
-      legacyClients: 2,
+      legacyClients,
       rounds,
       intervalMs: interval,
       elapsedMs,

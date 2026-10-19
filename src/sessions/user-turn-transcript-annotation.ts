@@ -94,8 +94,11 @@ export function bindUserTurnTranscriptAnnotation(params: {
     if (fingerprint !== fields.mirrorSourceFingerprint) {
       throw new Error("native prompt annotation does not match admitted content");
     }
+    // The admission owns an exact key; cron base and run rows can share a session ID.
     const entryAuthority = await captureSessionEntryCurrentCheckAsyncInternal({
-      ...target,
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      storePath: target.storePath,
       fields: ["sessionId", "lifecycleRevision", "activeWriterRunId"],
       errorMessage: "current user admission is no longer available for native annotation",
     });

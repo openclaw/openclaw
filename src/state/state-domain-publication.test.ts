@@ -38,11 +38,9 @@ function domain(
   });
 }
 
-function observe(publication: ReturnType<typeof domain>, facts = false) {
+function observe(publication: ReturnType<typeof domain>) {
   const changes: StateDomainChange<Row>[] = [];
-  cleanup.push(
-    (facts ? publication.subscribeFacts : publication.subscribe)((change) => changes.push(change)),
-  );
+  cleanup.push(publication.subscribeFacts((change) => changes.push(change)));
   return changes;
 }
 
@@ -84,7 +82,7 @@ it("publishes committed facts under the domain's admitted source identity", () =
   const publication = domain(() => identity);
   const credential = { id: "credential", version: 2 };
   const captured = capture(() => write(credential, publication), publication);
-  const changes = observe(publication, true);
+  const changes = observe(publication);
   const pending = publication.begin({ identity, assertCurrent() {} });
   pending.committed(captured.receipt);
   pending.finish(true);
@@ -167,7 +165,7 @@ it.each([false, true])(
   },
 );
 
-it("installs all domains from a worker commit before notifying either domain", () => {
+it("installs all worker domains when their shared publication batch completes", () => {
   const { db, publication, capture, write, begin } = fixture();
   const sibling = domain();
   const captured = capture(() =>
@@ -177,7 +175,6 @@ it("installs all domains from a worker commit before notifying either domain", (
     }),
   );
   const installed = new Set<string>();
-  const observations: string[][] = [];
   for (const owner of [publication, sibling]) {
     cleanup.push(
       owner.subscribeFacts((change) => {
@@ -187,7 +184,6 @@ it("installs all domains from a worker commit before notifying either domain", (
           }
         }
       }),
-      owner.subscribe(() => observations.push([...installed].toSorted())),
     );
   }
   const first = begin();
@@ -195,13 +191,11 @@ it("installs all domains from a worker commit before notifying either domain", (
   batchStateDomainPublications(() => {
     first.committed(captured.receipt);
     second.committed(captured.result.receipt);
+    expect(installed.size).toBe(0);
   });
   first.finish(true);
   second.finish(true);
-  expect(observations).toEqual([
-    ["approval", "grant"],
-    ["approval", "grant"],
-  ]);
+  expect([...installed].toSorted()).toEqual(["approval", "grant"]);
 });
 
 it.each([true, false])(
@@ -217,7 +211,7 @@ it.each([true, false])(
     const observed = observe(publication);
     delayed.committed(captured.receipt);
     delayed.finish(true);
-    expect(observed).toMatchObject([
+    expect(observed.filter((change) => change.kind === "committed")).toMatchObject([
       { kind: "committed", receipt: { facts: new Map([["grant", { kind: "unknown" }]]) } },
     ]);
     expect(db.prepare("SELECT * FROM facts").all()).toEqual([]);
@@ -228,7 +222,7 @@ it.each([true, false])(
   "distinguishes a proven rollback from missing accepted commit evidence (pending=%s)",
   (publishPending) => {
     const { publication, begin } = fixture(publishPending);
-    const changes = observe(publication, true);
+    const changes = observe(publication);
     begin().finish(true, true);
     expect(kinds(changes)).toEqual(publishPending ? ["pending", "settled"] : []);
     changes.length = 0;
@@ -242,7 +236,7 @@ it.each([true, false])(
 it("invalidates installed facts when their publisher throws before completed settlement", () => {
   const { publication, capture, write, begin } = fixture();
   const captured = capture(() => write({ id: "grant", version: 1 }));
-  const changes = observe(publication, true);
+  const changes = observe(publication);
   const pending = begin();
   const failure = new Error("publication failed");
   expect(() =>

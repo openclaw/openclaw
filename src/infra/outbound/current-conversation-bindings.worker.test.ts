@@ -52,9 +52,10 @@ import {
 } from "./session-binding-service.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
 
-type CurrentConversationBindingPublication = Parameters<
-  Parameters<typeof publication.subscribe>[0]
->[0];
+type CurrentConversationBindingPublication = Extract<
+  Parameters<Parameters<typeof publication.subscribeFacts>[0]>[0],
+  { receipt: unknown }
+>;
 
 aroundEach(async (runTest) => {
   try {
@@ -125,7 +126,11 @@ function touch(binding: SessionBindingRecord, at: number) {
 
 function recordPublications() {
   const publications: CurrentConversationBindingPublication[] = [];
-  const unsubscribe = publication.subscribe((value) => publications.push(value));
+  const unsubscribe = publication.subscribeFacts((value) => {
+    if ("receipt" in value) {
+      publications.push(value);
+    }
+  });
   onTestFinished(unsubscribe);
   return publications;
 }

@@ -14,7 +14,7 @@ import {
   formatErrorMessage,
   isMissingPathError,
 } from "../infra/errors.js";
-import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
+import { setFatalErrorHook } from "../infra/fatal-error-hooks.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
 import {
@@ -149,7 +149,7 @@ type DiagnosticStabilityBundleFailureWriteOutcome =
   | { status: "written"; message: string; path: string }
   | { status: "failed"; message: string; error: unknown };
 
-let fatalHookUnsubscribe: (() => void) | null = null;
+let fatalHookInstalled = false;
 
 function normalizeReason(reason: string): string {
   return SAFE_REASON_CODE.test(reason) ? reason : "unknown";
@@ -913,18 +913,18 @@ export function writeDiagnosticStabilityBundleForFailureSync(
 export function installDiagnosticStabilityFatalHook(
   options: WriteDiagnosticStabilityBundleForFailureOptions = {},
 ): void {
-  if (fatalHookUnsubscribe) {
+  if (fatalHookInstalled) {
     return;
   }
-  fatalHookUnsubscribe = registerFatalErrorHook(({ reason, error }) => {
-    const result = writeDiagnosticStabilityBundleForFailureSync(reason, error, options);
-    return result.message;
+  fatalHookInstalled = true;
+  setFatalErrorHook(({ reason, error }) => {
+    return writeDiagnosticStabilityBundleForFailureSync(reason, error, options).message;
   });
 }
 
 export function uninstallDiagnosticStabilityFatalHook(): void {
-  fatalHookUnsubscribe?.();
-  fatalHookUnsubscribe = null;
+  setFatalErrorHook(undefined);
+  fatalHookInstalled = false;
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

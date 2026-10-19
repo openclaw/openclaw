@@ -91,6 +91,7 @@ export function subscribeSidebarAgentSessionCaches(
     }
   };
   synchronize();
+  // Prune removed-agent caches before publishing the owner update.
   return agents.subscribe(() => {
     synchronize();
     notify();

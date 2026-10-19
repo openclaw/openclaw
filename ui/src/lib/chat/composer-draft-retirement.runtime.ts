@@ -28,6 +28,7 @@ export async function retireDeletedComposerDrafts(
             resolve();
           }
         };
+        // Await recovery authority or connection retirement before deleting persisted drafts.
         unsubscribe = context.gateway.subscribe(onReady);
         onReady();
       }).finally(() => {

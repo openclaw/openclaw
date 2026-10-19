@@ -1,13 +1,15 @@
 import type { SessionsDiffResult } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
+import type { DiffReadTiming } from "../infra/diff-read-timing.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
 import type { GitCheckoutDiffInput } from "../infra/git-read-operations.js";
 
 export async function loadCheckoutDiff(
   params: GitCheckoutDiffInput & { sessionKey: string },
+  diffTiming?: DiffReadTiming,
 ): Promise<SessionsDiffResult> {
   const { sessionKey, ...input } = params;
-  const diff = await runGitReadOperation({ type: "checkout.diff", input });
+  const diff = await runGitReadOperation({ type: "checkout.diff", input }, { diffTiming });
   return { ...diff, sessionKey };
 }
 

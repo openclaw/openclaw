@@ -10,7 +10,6 @@ type SetSyncRequest = {
   acknowledged: boolean;
 };
 
-/** Active consumers own registrations; detached sets skip queued work. */
 export function createGatewaySetSyncLifecycle(
   gateway: ApplicationGateway,
   options: {
@@ -126,6 +125,7 @@ export function createGatewaySetSyncLifecycle(
       }
       attached = true;
       options.onAttach?.();
+      // Active consumers own registrations; detached sets skip queued work.
       stopSnapshots = gateway.subscribe(options.onSnapshot ?? schedule);
       stopEvents = options.onEvent ? gateway.subscribeEvents(options.onEvent) : null;
       if (typeof document !== "undefined") {

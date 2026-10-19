@@ -23,9 +23,7 @@ export function resolveGeneratedMediaMaxBytes(
   kind: GeneratedMediaKind,
 ) {
   const configured = cfg?.agents?.defaults?.mediaMaxMb;
-  return typeof configured === "number" && Number.isFinite(configured) && configured > 0
-    ? Math.floor(configured * MB)
-    : maxBytesForKind(kind);
+  return configured !== undefined ? Math.floor(configured * MB) : maxBytesForKind(kind);
 }
 
 /**

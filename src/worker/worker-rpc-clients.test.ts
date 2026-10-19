@@ -80,8 +80,6 @@ function connectionHarness() {
   let state: WorkerConnectionState = { kind: "ready", hello: HELLO };
   const ready = listeners<WorkerHelloOk>();
   const terminalError = listeners<Error>();
-  const inferenceEvent = listeners<WorkerInferenceEventFrame>();
-  const inferenceTerminal = listeners<WorkerInferenceTerminalFrame>();
   const waitForReady = vi.fn<WorkerConnection["waitForReady"]>(async () => HELLO);
   const commit = vi.fn<TranscriptRequest>();
   const send = vi.fn<LiveRequest>();
@@ -107,8 +105,7 @@ function connectionHarness() {
             throw new Error("Unexpected worker RPC in test");
         }
       },
-      onInferenceEvent: inferenceEvent.subscribe,
-      onInferenceTerminal: inferenceTerminal.subscribe,
+      onInferenceFrame: (_frame: WorkerInferenceEventFrame | WorkerInferenceTerminalFrame) => {},
     },
     onReady: ready.subscribe,
     onTerminalError: terminalError.subscribe,
@@ -125,13 +122,13 @@ function connectionHarness() {
       terminalError.emit(error);
     },
     emitInferenceEvent: (seq: number, event: WorkerInferenceEventFrame["payload"]["event"]) =>
-      inferenceEvent.emit({
+      connection.rpc.onInferenceFrame({
         type: "event",
         event: "worker.inference.event",
         payload: { ...INFERENCE_IDENTITY, seq, event },
       }),
     emitInferenceTerminal: (seq: number, outcome: WorkerInferenceTerminalOutcome) =>
-      inferenceTerminal.emit({
+      connection.rpc.onInferenceFrame({
         type: "event",
         event: "worker.inference.terminal",
         payload: { ...INFERENCE_IDENTITY, seq, outcome },
