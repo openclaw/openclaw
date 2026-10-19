@@ -482,7 +482,9 @@ describe("statusAllCommand diagnosis", () => {
       const actualGateway = await vi.importActual<typeof import("./gateway.js")>("./gateway.js");
       mocks.readFileTailLines.mockImplementation(actualGateway.readFileTailLines);
       const open = vi.spyOn(fs, "open").mockRejectedValue(
-        Object.assign(new Error("synthetic filesystem failure token=synthetic-private"), { code }),
+        Object.assign(new Error("synthetic filesystem failure token=synthetic-private"), {
+          code,
+        }),
       );
       try {
         const output = (await runStatusAllReport()).join("\n");
