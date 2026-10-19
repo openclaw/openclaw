@@ -290,13 +290,13 @@ suite.define(() => {
           );
           expect(
             await details.evaluate((root) => {
-              const card = root.querySelector(".session-progress-card")!;
+              const card = root.querySelector('[data-progress-card-placement="details"]')!;
               const group = root.querySelector(".chat-details__group")!;
               return [card, group].every((element) => {
                 const style = getComputedStyle(element);
                 return (
-                  style.borderTopWidth === "1px" &&
-                  style.borderTopStyle === "solid" &&
+                  style.borderTopWidth === (element === card ? "0px" : "1px") &&
+                  (element === card || style.borderTopStyle === "solid") &&
                   style.borderInlineStartWidth === "0px" &&
                   style.borderBottomWidth === "0px" &&
                   style.borderInlineEndWidth === "0px" &&
@@ -462,7 +462,7 @@ suite.define(() => {
         expect(await menu.locator('[role^="menuitem"]').count()).toBe(6);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
         await menu.locator('[data-value="hide"]').click();
-        await expect.poll(() => progress.count()).toBe(0);
+        await expect.poll(() => progress.count()).toBe(1);
         expect(await details.isVisible()).toBe(false);
         const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
         const showSetting = () =>
@@ -487,8 +487,9 @@ suite.define(() => {
         await page.reload();
         await trigger.waitFor();
         await trigger.click();
-        expect(await progress.count()).toBe(0);
-        expect(await gateway.getRequests("progressCard.get")).toHaveLength(0);
+        expect(await progress.count()).toBe(1);
+        expect(await page.locator('[data-progress-card-placement="composer"]').count()).toBe(0);
+        await gateway.waitForRequest("progressCard.get");
         const settingsPage = await page.context().newPage();
         await installMockGateway(settingsPage, { sessionKey });
         await settingsPage.goto(
@@ -504,6 +505,7 @@ suite.define(() => {
           })
           .first();
         await showRow.click();
+        await expect.poll(showSetting).not.toBe(false);
         await expect.poll(() => progress.isVisible()).toBe(true);
         await expect.poll(() => progress.getAttribute("open")).toBeNull();
         await settingsPage.close();
