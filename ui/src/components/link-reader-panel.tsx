@@ -1,8 +1,8 @@
 import { insert } from "@solidjs/web";
 import { createMemo, For, Repeat, onCleanup, onSettled } from "solid-js";
+import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { projectCallbackOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { createTabFocus } from "../lib/tabs.ts";

@@ -10,7 +10,8 @@ import {
 } from "@solidjs/signals";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ValueSignal } from "../board/provider-signals.ts";
-import { projectCallbackOwner, projectMutableSource, projectSource } from "./projection.ts";
+import { projectCallbackOwner } from "./callback-owner.ts";
+import { projectMutableSource, projectSource } from "./projection.ts";
 
 const disposals: Array<() => void> = [];
 afterEach(() => {

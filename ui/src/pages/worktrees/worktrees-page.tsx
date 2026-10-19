@@ -11,10 +11,10 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectCallbackOwner } from "../../lib/reactive/projection.ts";
 import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,

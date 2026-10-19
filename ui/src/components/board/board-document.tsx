@@ -20,9 +20,9 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectCallbackOwner } from "../../lib/reactive/projection.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { Icon } from "../solid/icon.tsx";

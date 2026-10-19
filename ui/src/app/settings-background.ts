@@ -9,15 +9,15 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 // Do not restore private artwork before hello identifies the viewer on this boot.
 let identity: { gateway: string; profileId: string } | null = null;
 let unpersisted: { key: string; value: BackgroundPreference | undefined } | null = null;
-let identityChanged: (() => void) | undefined;
+const identityListeners = new Set<() => void>();
 export function subscribeBackgroundPreferenceIdentity(listener: () => void): () => void {
-  identityChanged = listener;
-  return () => {
-    identityChanged = undefined;
-  };
+  identityListeners.add(listener);
+  return () => identityListeners.delete(listener);
 }
 function publishIdentity(): void {
-  identityChanged?.();
+  for (const listener of identityListeners) {
+    listener();
+  }
 }
 
 const PREFIX = "openclaw.control.background.v1:";
