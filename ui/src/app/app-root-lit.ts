@@ -1,7 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
+import { listen } from "../lib/reactive/listener.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
-
-export { connectLegacyApplicationContext } from "../lit/solid-bridge.ts";
 
 type RootElementAttributes = SolidJSX.HTMLAttributes<HTMLElement> & {
   [key: `prop:${string}`]: unknown;
@@ -32,7 +31,7 @@ export function createLegacyFocusEscape(close: () => void): (label: string) => H
       button = document.createElement("button");
       button.className = "btn btn--ghost";
       button.type = "button";
-      button.addEventListener("click", close);
+      listen(button, "click", close);
     }
     button.textContent = label;
     return button;

@@ -7,6 +7,11 @@ import type { Model } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
+import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
+import {
   attachModelProviderRuntimePluginHandle,
   resolveProviderRuntimePluginHandle,
 } from "../plugins/provider-hook-runtime.js";
@@ -193,8 +198,17 @@ async function prepareSimpleCompletionModelCore(
   let authStore: AuthProfileStore | undefined;
   let auth: ResolvedProviderAuth;
   try {
+    const pluginOwnedAuth =
+      resolveProviderAuthScope({
+        provider: initialModel.provider,
+        config: params.cfg,
+        workspaceDir,
+        pluginMetadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
+      }) === "plugin";
+    // Plugin-owned credentials must not depend on opening an agent store or its health state.
     authStore =
-      params.onAuthProfiles || params.bindAuthOwner || initialModel.provider === "openai"
+      !pluginOwnedAuth &&
+      (params.onAuthProfiles || params.bindAuthOwner || initialModel.provider === "openai")
         ? await ensureAuthProfileStoreAsync(params.agentDir, {
             readOnly: true,
             allowKeychainPrompt: false,
@@ -220,7 +234,9 @@ async function prepareSimpleCompletionModelCore(
         ? { allowAuthProfileFallback: false }
         : {}),
     } satisfies Parameters<typeof prepareAgentRuntimeAuth>[0];
-    await reconcileAuthProfileQuotaBlocks(authParams);
+    if (!pluginOwnedAuth) {
+      await reconcileAuthProfileQuotaBlocks(authParams);
+    }
     assertCurrent?.();
     params.signal?.throwIfAborted();
 
@@ -268,7 +284,7 @@ async function prepareSimpleCompletionModelCore(
       env: process.env,
     });
     const preparedAuth =
-      routeResolution?.kind === "routes" || params.onAuthProfiles
+      pluginOwnedAuth || routeResolution?.kind === "routes" || params.onAuthProfiles
         ? prepareAgentRuntimeAuth({ ...authParams, routeIntent })
         : undefined;
     const materializeModel = async ({
@@ -301,7 +317,7 @@ async function prepareSimpleCompletionModelCore(
             authProfileMode,
           }),
       })) ?? model;
-    if (preparedAuth && authStore) {
+    if (preparedAuth && (authStore || pluginOwnedAuth)) {
       const resolvedAuth = await resolvePreparedRuntimeAuthAttempts({
         attempts: preparedAuth.attempts,
         store: authStore,
@@ -323,13 +339,15 @@ async function prepareSimpleCompletionModelCore(
       });
       auth = resolvedAuth.auth;
       resolvedModel = resolvedAuth.model;
-      params.onAuthProfiles?.(authStore, [
-        ...new Set(
-          preparedAuth.attempts.flatMap((attempt) =>
-            attempt.kind === "profile" ? [attempt.profileId] : [],
+      if (authStore) {
+        params.onAuthProfiles?.(authStore, [
+          ...new Set(
+            preparedAuth.attempts.flatMap((attempt) =>
+              attempt.kind === "profile" ? [attempt.profileId] : [],
+            ),
           ),
-        ),
-      ]);
+        ]);
+      }
     } else {
       auth = await getApiKeyForModelCore({
         model: initialModel,
@@ -358,6 +376,7 @@ async function prepareSimpleCompletionModelCore(
     };
   }
 
+  resolvedModel = attachProviderAuthAuthority(resolvedModel, getProviderAuthAuthority(auth));
   let authValue = rawApiKey;
   if (rawApiKey) {
     const runtimeAuth = await prepareProviderRuntimeAuth({

@@ -103,7 +103,6 @@ describe("runHeartbeatOnce identity", () => {
         deps: {
           getReplyFromConfig: replySpy,
           slack: sendSlack,
-          getQueueSize: () => 0,
         },
       });
 
@@ -151,7 +150,7 @@ describe("runHeartbeatOnce identity", () => {
 
         const result = await runHeartbeatOnce({
           cfg,
-          deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0 },
+          deps: { getReplyFromConfig: replySpy },
         });
 
         expect(result.status).toBe("ran");
@@ -197,7 +196,7 @@ describe("runHeartbeatOnce identity", () => {
           source: "hook",
           intent: "immediate",
           reason: "hook:wake",
-          deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0 },
+          deps: { getReplyFromConfig: replySpy },
         });
       for (const [index, agentId] of ["alpha", "beta"].entries()) {
         expect((await run(agentId)).status).toBe("ran");
@@ -261,7 +260,6 @@ describe("runHeartbeatOnce", () => {
           deps: {
             getReplyFromConfig: replySpy,
             slack: sendSlack,
-            getQueueSize: () => 0,
             nowMs: () => 0,
           },
         });

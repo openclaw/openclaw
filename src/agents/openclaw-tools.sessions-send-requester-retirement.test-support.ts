@@ -1,4 +1,5 @@
-import { expect, it, vi, type MockInstance } from "vitest";
+import { expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -17,13 +18,16 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
 } from "./admitted-run-context.js";
+import type { EmbeddedAgentQueueHandle } from "./embedded-agent-runner/runs.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-} from "./embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+import {
+  createSessionsSendTestCaller,
+  setSessionsSendTestActiveRun,
+} from "./openclaw-tools.sessions-steering.test-support.js";
 import { announceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
 import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";
 import {
@@ -53,6 +57,7 @@ export function registerSessionsSendRequesterRetirementTests({
   callGatewayMock,
   calls,
   writeEntry,
+  writeFinal,
   settleSessionWork,
   drainRootWork,
 }: {
@@ -61,6 +66,7 @@ export function registerSessionsSendRequesterRetirementTests({
     MockInstance<(request: GatewayCall) => Promise<unknown>>;
   calls: GatewayCall[];
   writeEntry: (sessionKey: string, entry: SessionEntry, storePath?: string) => Promise<void>;
+  writeFinal: (sessionKey: string, runId: string, text: string) => Promise<void>;
   settleSessionWork: () => Promise<void>;
   drainRootWork: () => Promise<void>;
 }) {
@@ -87,7 +93,8 @@ export function registerSessionsSendRequesterRetirementTests({
       });
       await resetSubagentRegistryForTests();
       const childPending = createDeferredCore();
-      const terminalReply = { disposition: "visible", text: "Result after requester retirement" };
+      const fullReply = "Result after requester retirement";
+      const terminalReply = { disposition: "visible" as const, text: fullReply };
       callGatewayMock.mockImplementation(async (request: GatewayCall) => {
         calls.push(request);
         if (request.method === "agent" && request.params?.sessionKey === childSessionKey) {
@@ -100,6 +107,7 @@ export function registerSessionsSendRequesterRetirementTests({
         }
         if (request.method === "agent.wait" && request.params?.runId === runId) {
           await childPending.promise;
+          await writeFinal(childSessionKey, runId, fullReply);
           return { runId, status: "ok", startedAt: 1, endedAt: Date.now(), terminalReply };
         }
         if (request.method === "agent") {
@@ -140,7 +148,13 @@ export function registerSessionsSendRequesterRetirementTests({
           spawnMode: "session",
           expectsCompletionMessage: true,
         });
-        setActiveEmbeddedRun(childSessionId, handle, childSessionKey);
+        await setSessionsSendTestActiveRun(
+          childSessionId,
+          handle,
+          childSessionKey,
+          requesterSessionKey,
+          config,
+        );
       } else {
         await addSubagentRunForTests({
           runId: "retiring-original-child-run",
@@ -150,7 +164,11 @@ export function registerSessionsSendRequesterRetirementTests({
           expectsCompletionMessage: true,
           createdAt: 1,
           execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
-          completion: { required: true, resultText: "Original result" },
+          completion: {
+            required: true,
+            resultText: "Original result",
+            terminalReply: { disposition: "visible", text: "Original result" },
+          },
           delivery: { status: "delivered" },
           cleanupCompletedAt: 3,
         });
@@ -207,6 +225,7 @@ export function registerSessionsSendRequesterRetirementTests({
                 admittedRunContext,
                 agentId: "main",
                 sessionKey: requesterSessionKey,
+                requesterOrigin: createSessionsSendTestCaller(requesterSessionKey).requesterOrigin,
               }),
               () =>
                 createSessionsSendTool({
@@ -342,13 +361,15 @@ export function registerSessionsSendRequesterRetirementTests({
           throw new Error("Unexpected child completion wait");
         }
         await childrenPending[children.indexOf(child)]!.promise;
+        const fullReply = `Watched child result ${child.runId}`;
+        await writeFinal(child.childSessionKey, child.runId, fullReply);
         return {
           status: "ok",
           startedAt: 1,
           endedAt: Date.now(),
           terminalReply: {
             disposition: "visible",
-            text: `Watched child result ${child.runId}`,
+            text: fullReply,
           },
         };
       }

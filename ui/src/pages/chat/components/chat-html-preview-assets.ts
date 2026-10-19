@@ -1,6 +1,6 @@
 import type { SessionsFilesAssetsResult } from "@openclaw/gateway-protocol";
 import { defaultTreeAdapter, html, parse, type DefaultTreeAdapterTypes } from "parse5";
-import { SESSIONS_FILES_ASSETS_MAX_REFS } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
+import { SESSIONS_FILES_ASSETS_MAX_REFS } from "../../../../../packages/gateway-protocol/src/session-limits.js";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import { applyHtmlPreviewEdits, type HtmlPreviewEdit } from "./chat-html-preview-source.ts";
 

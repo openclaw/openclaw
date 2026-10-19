@@ -1,7 +1,7 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import { updatePickers, choosePickerValue } from "../test-helpers/select-picker.ts";
+import { updatePickers, openPicker, choosePickerValue } from "../test-helpers/select-picker.ts";
 import type { SelectPicker } from "./select-picker.ts";
 import { ModelPicker } from "./solid/model-picker.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
@@ -31,8 +31,7 @@ describe("ModelPicker", () => {
     await updatePickers(container);
     const picker = container.querySelector<SelectPicker>("openclaw-select-picker")!;
     const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
-    trigger.click();
-    await picker.updateComplete;
+    await openPicker(picker);
     const group = picker.querySelector<HTMLButtonElement>(".picker-select__group-toggle")!;
     group.click();
     flush();
@@ -42,19 +41,21 @@ describe("ModelPicker", () => {
     flush();
     await Promise.resolve();
     flush();
-    const icon = group.querySelector(".provider-brand-icon");
-    expect(icon).not.toBeNull();
     expect(trigger.disabled).toBe(true);
+    expect(picker.querySelector(".picker-select__group-toggle")).toBeNull();
     container.append(document.createElement("span"));
     // Deliver the registry's document-mutation observation, then settle its consumers.
     await Promise.resolve();
     flush();
-    expect(group.querySelector(".provider-brand-icon")).toBe(icon);
+    expect(picker.querySelector(".picker-select__group-toggle")).toBeNull();
 
     setDisabled(false);
     flush();
+    await openPicker(picker);
+    expect(
+      picker.querySelector(".picker-select__group-toggle")?.getAttribute("aria-expanded"),
+    ).toBe("true");
     await choosePickerValue(picker, "fixture/beta");
-    expect(group.getAttribute("aria-expanded")).toBe("true");
     expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/beta");
   });
 
@@ -72,6 +73,7 @@ describe("ModelPicker", () => {
       />
     ));
     await updatePickers(container);
+    await openPicker(container.querySelector("openclaw-select-picker")!);
     const rows = Array.from(container.querySelectorAll('[role="option"][data-value]'));
     expect(rows).toHaveLength(300);
     expect(rows.slice(0, 3).map((row) => row.getAttribute("data-value"))).toEqual([
@@ -100,6 +102,7 @@ describe("ModelPicker", () => {
       />
     ));
     await updatePickers(container);
+    await openPicker(container.querySelector("openclaw-select-picker")!);
 
     expect(
       container.querySelector('[role="option"][data-value=""] .picker-select__leading'),
@@ -128,6 +131,7 @@ describe("ModelPicker", () => {
       />
     ));
     await updatePickers(container);
+    await openPicker(container.querySelector("openclaw-select-picker")!);
 
     const customOption = Array.from(container.querySelectorAll('[role="option"]')).find(
       (option) => option.textContent?.trim() === "Custom model…",
@@ -174,8 +178,7 @@ describe("ModelPicker", () => {
     try {
       await updatePickers(host);
       const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
-      picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!.click();
-      await picker.updateComplete;
+      await openPicker(picker);
       const row = picker.querySelector<HTMLElement>(
         '[role="option"][data-value="openai/fixture-beta"]',
       )!;

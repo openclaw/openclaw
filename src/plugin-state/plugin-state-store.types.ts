@@ -92,6 +92,12 @@ export type PluginStateKeyRange = {
   order?: "asc" | "desc";
 };
 
+export type PluginStateKeyRangeParams = {
+  pluginId: string;
+  namespace: string;
+  valueFilter?: { path: string; equals: string };
+} & PluginStateKeyRange;
+
 export type PluginStateMoveEntries = {
   /** Bounded logical source namespace belonging to the same plugin. */
   namespace: string;

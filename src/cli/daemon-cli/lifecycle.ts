@@ -36,6 +36,7 @@ import { probePortUsage } from "../../infra/ports-probe.js";
 import { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createNullWriter } from "../../shared/null-writer.js";
 import { formatCliCommand } from "../command-format.js";
@@ -61,6 +62,7 @@ import {
 } from "./lifecycle-safe-restart.js";
 import { signalGatewayRestart } from "./lifecycle-unmanaged.js";
 import { createDaemonActionContext } from "./response.js";
+import { createGatewayRestartDeadline } from "./restart-health-deadline.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -68,11 +70,11 @@ import {
   renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
+  waitForGatewayHttpReadiness,
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
 import { renderGatewayServiceStartHints } from "./shared.js";
-import { verifyGatewayStartReadiness } from "./start-health.js";
 import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -307,14 +309,62 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         state,
         issues,
       }),
-    postStartCheck: ({ fail, warnings }) =>
-      verifyGatewayStartReadiness({
-        service,
-        expectedPort,
-        resolveContext: () => resolveGatewayLifecycleContext(service),
-        fail,
-        warnings,
-      }),
+    postStartCheck: async ({ fail, warnings }) => {
+      const { deadlineMs } = resolveGatewayStartupTiming();
+      const context = await resolveGatewayLifecycleContext(service);
+      const port = expectedPort ?? context.port;
+      const deadlineAt = performance.now() + deadlineMs;
+      const attempts = Math.ceil(deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS);
+      const healthDeadline = createGatewayRestartDeadline({ timeoutMs: deadlineMs });
+      const [health, readiness] = await Promise.all([
+        withCommandProcessScope(
+          () =>
+            waitForGatewayHealthyRestart({
+              service,
+              port,
+              attempts,
+              delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+              timeoutMs: deadlineMs,
+              deadline: healthDeadline,
+              deadlineOutcome: "snapshot",
+              env: context.env,
+              supervisorKeepsAlive: process.platform === "darwin",
+            }),
+          healthDeadline.signal,
+        ).finally(() => healthDeadline.dispose()),
+        waitForGatewayHttpReadiness({
+          config: context.config,
+          port,
+          attempts,
+          deadlineAt,
+          delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+        }),
+      ]);
+      if (health.healthy && readiness.healthz === 200 && readiness.readyz === 200) {
+        return;
+      }
+      warnings.push(...renderRestartDiagnostics(health));
+      warnings.push(
+        `Gateway HTTP readiness: /healthz=${readiness.healthz ?? "unreachable"}; ` +
+          `/readyz=${readiness.readyz ?? "unreachable"}.`,
+      );
+      if (health.waitOutcome === "still-starting") {
+        fail(
+          formatGatewayRestartFailure({
+            health,
+            port,
+            defaultTimeoutSeconds: Math.round(deadlineMs / 1000),
+          }).failMessage,
+          [formatCliCommand("openclaw gateway status --deep")],
+          "still-starting",
+        );
+        return;
+      }
+      fail(
+        `Gateway start timed out after ${Math.round(deadlineMs / 1000)}s waiting for /healthz and /readyz.`,
+        [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
+      );
+    },
     expectedPort,
     opts,
   });

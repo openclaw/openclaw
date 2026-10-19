@@ -4,6 +4,8 @@ import type {
   TranscriptTurnAdmission,
   TranscriptTurnBoundary,
 } from "../../config/sessions/transcript-entry-anchor.js";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 
 export type PendingContextEngineTurn = Readonly<{
@@ -186,6 +188,14 @@ async function commitPendingContextEngineTurn(params: {
       },
       isHeartbeat: payload.isHeartbeat,
       ...(payload.runtimeContext ? { runtimeContext: payload.runtimeContext } : {}),
+      runtimeSettings: buildContextEngineRuntimeSettings({
+        contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+        provider: payload.runtimeContext?.provider,
+        resolvedModel: payload.runtimeContext?.modelId,
+        promptTokenBudget: payload.runtimeContext?.tokenBudget,
+        selectedContextEngineId: params.engine.info.id,
+        contextEngineSelectionSource: params.engine.info.id === "legacy" ? "default" : "configured",
+      }),
     };
     params.store.assertReadable?.();
     const result = await params.engine.commitTurn?.(commonParams);

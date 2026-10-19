@@ -707,7 +707,7 @@ export async function prepareSlackMessage(params: {
   const hasBoundSession = Boolean(
     routing.runtimeBoundSessionKey || routing.configuredBindingSessionKey,
   );
-  const { configuredBinding, configuredBindingSessionKey } = routing;
+  const { configuredBinding } = routing;
   const isAssistantThreadMessage = Boolean(isDirectMessage && messageAssistantThreadContext);
   const shouldForceAssistantReplyThread = Boolean(
     assistantThreadContext?.threadTs &&
@@ -717,23 +717,12 @@ export async function prepareSlackMessage(params: {
     ? assistantThreadContext?.threadTs
     : undefined;
   const forcedReplyThreadTs = agentViewThreadTs ?? forcedAssistantReplyThreadTs;
-  if (routing.runtimeBinding && shouldLogVerbose()) {
-    logVerbose(
-      `slack: routed via bound conversation ${routing.runtimeBinding.conversation.conversationId} -> ${routing.runtimeBinding.targetSessionKey}`,
-    );
-  }
   if (configuredBinding) {
     const ensured = await ensureConfiguredBindingRouteReady({
       cfg,
       bindingResolution: configuredBinding,
     });
-    if (ensured.ok) {
-      if (shouldLogVerbose()) {
-        logVerbose(
-          `slack: using configured ACP binding for ${configuredBinding.record.conversation.conversationId} -> ${configuredBindingSessionKey}`,
-        );
-      }
-    } else {
+    if (!ensured.ok) {
       if (shouldLogVerbose()) {
         logVerbose(
           `slack: configured ACP binding unavailable for ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
@@ -1505,12 +1494,6 @@ export async function prepareSlackMessage(params: {
       originatingTo: preflightChannelTarget,
       messageThreadId: threadContext.messageThreadId,
     });
-  }
-
-  if (shouldLogVerbose()) {
-    logVerbose(
-      `slack inbound: account=${route.accountId} agent=${route.agentId} channel=${message.channel} message_ts=${message.ts ?? "unknown"} thread_ts=${effectiveMessageThreadId ?? "none"} from=${slackFrom} chat=${chatType} chars=${rawBody.length}`,
-    );
   }
 
   const updateLastRouteSessionKey = resolveInboundLastRouteSessionKey({ route, sessionKey });

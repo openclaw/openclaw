@@ -38,14 +38,6 @@ export async function getSubagentRunByChildSessionKey(
 }
 
 type RegistryTestApi = {
-  addSubagentRunForTests(entry: SubagentRunRecord): Promise<void>;
-  finalizeInterruptedSubagentRun(params: {
-    runId: string;
-    expectedEntry?: SubagentRunRecord;
-    error: string;
-    endedAt?: number;
-    suppressSessionEffects?: boolean;
-  }): Promise<number>;
   releaseSubagentRun(runId: string): Promise<void>;
   resetSubagentRegistryForTests(opts?: { persist?: boolean }): Promise<void>;
   testing: {
@@ -85,8 +77,13 @@ function createRegistryRunFixture(entry: SubagentRunRecordOverrides): SubagentRu
   return canonical;
 }
 
-export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
-  return getRegistryTestApi().addSubagentRunForTests(createRegistryRunFixture(entry));
+export async function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
+  const canonical = createRegistryRunFixture(entry);
+  const { mutateSubagentRuns } = await import("./subagent-registry-persistence.js");
+  await mutateSubagentRuns([canonical.runId], () => ({
+    value: undefined,
+    postimages: new Map([[canonical.runId, canonical]]),
+  }));
 }
 
 /** Read-only fixtures install canonical immutable rows without durable write admission. */
@@ -105,7 +102,8 @@ export async function finalizeInterruptedSubagentRun(params: {
   error: string;
   endedAt?: number;
 }) {
-  return await getRegistryTestApi().finalizeInterruptedSubagentRun(params);
+  const registry = await import("./subagent-registry.js");
+  return await registry.finalizeInterruptedSubagentRun(params);
 }
 
 export const testing = {

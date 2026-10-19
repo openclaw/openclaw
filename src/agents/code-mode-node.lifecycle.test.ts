@@ -82,6 +82,9 @@ const input = {
 let host: LegacyPluginSdkResourceHost;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 const run = () => host.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
+let stormTime = 0;
+const assignedWorkerId = () =>
+  (fixture.executions.at(-1)!.input as CodeModeNodeInput).gcAttribution!.workerId;
 
 beforeEach(() => {
   host = new LegacyPluginSdkResourceHost();
@@ -95,6 +98,86 @@ afterEach(async () => {
 });
 
 describe("Node Code Mode worker custody", () => {
+  it("retires a storming warm worker, bounds retirement admission, and replaces it on demand", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue((stormTime += 60_000));
+    const storm = channel("openclaw.code-mode.gc-storm");
+    try {
+      await run();
+      const retired = fixture.pools.at(-1)!;
+      const workerId = assignedWorkerId();
+      const count = fixture.pools.length;
+      storm.publish(workerId);
+      expect(retired.close).toHaveBeenCalledWith(undefined, "gc-storm");
+      expect(fixture.pools).toHaveLength(count);
+      expect(await run()).toMatchObject({ status: "completed" });
+      const replacement = fixture.pools.at(-1)!;
+      expect(replacement).not.toBe(retired);
+      const replacementId = assignedWorkerId();
+      storm.publish(replacementId);
+      expect(replacement.close).not.toHaveBeenCalled();
+      clock.mockReturnValue((stormTime += 60_000));
+      storm.publish(workerId);
+      expect(replacement.close).not.toHaveBeenCalled();
+      storm.publish(replacementId);
+      expect(replacement.close).toHaveBeenCalledWith(undefined, "gc-storm");
+      expect(storm.hasSubscribers).toBe(false);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each(["complete", "expire"] as const)(
+    "drains a storming worker without dropping its active or parked cell until %s",
+    async (settlement) => {
+      const clock = vi.spyOn(performance, "now").mockReturnValue((stormTime += 60_000));
+      try {
+        await run();
+        const pool = fixture.pools.at(-1)!;
+        const workerId = assignedWorkerId();
+        const started = createDeferred();
+        const parked = createDeferred<CodeModeWorkerThreadResult<undefined>>();
+        pool.run.mockImplementationOnce(async () => {
+          started.resolve();
+          return parked.promise;
+        });
+        const active = run();
+        await started.promise;
+        channel("openclaw.code-mode.gc-storm").publish(workerId);
+        expect(pool.close).not.toHaveBeenCalled();
+        parked.resolve({
+          status: "waiting",
+          continuation: undefined,
+          pendingRequests: [{ id: "bridge:yield:1", method: "yield", args: [] }],
+          canceledRequestIds: [],
+          settlementMode: { kind: "awaiting" },
+          output: fixture.completed.output,
+        });
+        const result = await active;
+        if (result.status !== "waiting") {
+          throw new Error("Expected a live continuation");
+        }
+        expect(pool.close).not.toHaveBeenCalled();
+        expect(await run()).toMatchObject({ status: "completed" });
+        expect(fixture.pools.at(-1)).not.toBe(pool);
+        if (settlement === "complete") {
+          expect(
+            await result.continuation.resume(
+              { kind: "resume", config: input.config, settledRequests: [] },
+              { timeoutMs: 1000 },
+            ),
+          ).toMatchObject({ status: "completed" });
+        } else {
+          // The existing continuation TTL owner expires parked work through dispose().
+          await result.continuation.dispose();
+        }
+        expect(pool.close).toHaveBeenCalledWith(undefined, "gc-storm");
+        expect(pool.isClosed).toBe(true);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   it("shares catalog bytes across cells while sending current execution limits", async () => {
     const catalog = Array.from({ length: 109 }, (_, i) => ({
       callableName: `tool_${i}`,

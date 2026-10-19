@@ -22,6 +22,7 @@ export type AppearanceBackgroundView = {
   onSource: (source: BackgroundPreference["source"]["kind"]) => void;
   onChange: (patch: Partial<BackgroundPreference>) => void;
   onChooseImage: () => void;
+  fileRef?: (element: HTMLInputElement) => void;
   onRemoveImage: () => void;
   onFile: (file: File) => void;
   onPreviewStart: (event: PointerEvent) => void;
@@ -220,6 +221,7 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
       </div>
       <input
         type="file"
+        ref={(element) => props.fileRef?.(element)}
         data-background-file
         hidden
         accept="image/jpeg,image/png,image/webp"

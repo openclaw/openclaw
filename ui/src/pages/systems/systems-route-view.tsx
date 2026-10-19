@@ -1,8 +1,8 @@
 import { Show } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { SystemsController, type SystemsRouteData } from "./systems-controller.ts";
 import { SystemsPage } from "./systems-page.tsx";
+import { createSystems, type Systems, type SystemsRouteData } from "./systems-state.ts";
 import "./systems-sidebar.tsx";
 
 /** Route rendering stays in the lazy page module, not in startup route metadata. */
@@ -14,10 +14,7 @@ export function renderSolid(props: SolidRouteProps<SystemsRouteData>) {
   );
 }
 
-const sidebarNodes = new WeakMap<
-  SystemsController,
-  HTMLElementTagNameMap["openclaw-systems-sidebar"]
->();
+const sidebarNodes = new WeakMap<Systems, HTMLElementTagNameMap["openclaw-systems-sidebar"]>();
 
 export function renderSidebar(data: SystemsRouteData | undefined) {
   if (!data) {
@@ -33,5 +30,5 @@ export function renderSidebar(data: SystemsRouteData | undefined) {
 }
 
 export function load(context: ApplicationContext): SystemsRouteData {
-  return { controller: new SystemsController(context) };
+  return { controller: createSystems(context) };
 }

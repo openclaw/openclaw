@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
@@ -13,6 +12,7 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
+import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
 async function openPanelMenu(container: HTMLElement) {
@@ -58,7 +58,10 @@ function createTerminalPane(client: GatewayBrowserClient) {
     row: GatewaySessionRow | undefined,
     workspace = createPaneHeaderWorkspaceFixture(state),
   ) => {
-    render(pane.renderPaneHeader(workspace, row, false, undefined, false, null), container);
+    renderPaneHeaderInto(
+      pane.renderPaneHeader(workspace, row, false, undefined, false, null),
+      container,
+    );
     flush();
   };
   return { pane, state, container, paint };

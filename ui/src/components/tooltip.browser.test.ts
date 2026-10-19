@@ -244,6 +244,70 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip pointer ownership", 
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("tooltip transition ownership", () => {
+  it("waits for the real opening transition before publishing completion, then hides on blur", async () => {
+    const { page } = await import("vitest/browser");
+    const f = await fixture();
+    const body = tooltipBody(f.tooltip);
+    body.style.setProperty("--control-ui-transition-fast", "200ms");
+    const outside = document.createElement("button");
+    outside.textContent = "Outside";
+    f.host.append(outside);
+    await page.elementLocator(outside).hover();
+    expect(f.trigger.matches(":hover")).toBe(false);
+    await expect.element(body).not.toBeVisible();
+    const shown = afterPhase(f.tooltip, "opened");
+    requestVisibility(f, "show");
+    let animation: Animation | undefined;
+    let rate = 1;
+    try {
+      await expect
+        .poll(() => {
+          if (!animation) {
+            animation = body
+              .getAnimations()
+              .find(
+                (candidate) =>
+                  candidate instanceof CSSTransition && candidate.playState === "running",
+              );
+            if (animation) {
+              rate = animation.playbackRate;
+              animation.playbackRate = 0;
+            }
+          }
+          return animation;
+        })
+        .toBeDefined();
+      const active = animation!;
+      await active.ready;
+      const { activeDuration } = active.effect!.getComputedTiming();
+      expect(activeDuration).toBeGreaterThan(0);
+      expect(Number.isFinite(activeDuration)).toBe(true);
+      active.currentTime = Number(activeDuration) / 2;
+      await frame();
+      expect(active.playState).toBe("running");
+      const { progress } = active.effect!.getComputedTiming();
+      expect(progress).toBeGreaterThan(0);
+      expect(progress).toBeLessThan(1);
+      expect(body.dataset.phase).toBe("opening");
+      expect(f.events).toEqual(["opening"]);
+    } finally {
+      if (animation) {
+        animation.playbackRate = rate;
+      }
+    }
+    await shown;
+    expect(f.events).toEqual(["opening", "opened"]);
+    expect(f.trigger.matches(":hover")).toBe(false);
+    expect(body.matches(":hover")).toBe(false);
+    expect(document.activeElement).toBe(f.trigger);
+    const hidden = afterPhase(f.tooltip, "closed");
+    f.trigger.blur();
+    expect(document.activeElement).not.toBe(f.trigger);
+    await hidden;
+    expect(f.events).toEqual(["opening", "opened", "closing", "closed"]);
+    await expectVisibility(f, false);
+  });
+
   it.each([false, true])(
     "keeps a keyboard-reopened tooltip visible after an interrupted hide (zero duration=%s)",
     async (zeroDuration) => {

@@ -76,6 +76,42 @@ experimental AOT compiler. Selecting `--compile-aot` with a Bun that lacks that
 capability stops with a diagnostic; it does not silently fall back to JIT or
 bytecode. An AOT artifact needs its own runtime and signing qualification.
 
+## Select embedded plugins
+
+By default, the builder embeds every plugin in the completed runtime build.
+Use one `--plugins` option with a comma-separated list of plugin manifest IDs to
+embed a selected set:
+
+```bash
+./standalone-compiler/bin/bun scripts/build-bun-standalone.mjs ./standalone-selected --plugins "$EMBEDDED_PLUGIN_IDS"
+```
+
+Set `EMBEDDED_PLUGIN_IDS` to the comma-separated IDs for the complete embedded
+set, including required core plugins. The list is
+independent of `--bytecode` or `--compile-aot`. Duplicate IDs are collapsed;
+unknown IDs and empty list elements fail before the runtime snapshot is copied.
+IDs come from `openclaw.plugin.json`, which can differ from the source directory
+name. The selected plugins must already be present in `dist/extensions`; run
+`pnpm build` first.
+
+An omitted plugin must have an npm or ClawHub installation route in the existing
+official external catalogs. Unpublished core plugins must remain embedded; the
+error names the plugin to add. The repository's source-only dev/QA plugin class
+is exempt. If a selected plugin declares `requiresPlugins`, include each required
+plugin too; the builder reports a missing dependency instead of expanding the
+selection silently. Desktop packaging owns its curated list and passes it through
+this same option.
+
+Omitted plugins contribute no entrypoints, plugin assets, or sidecar metadata.
+Their exclusively owned chunks and dependencies are removed; dependencies needed
+by retained code stay. Discovery sees only the selected set as bundled. Official
+channel and provider catalogs keep offering omitted plugins for installation,
+and configuration references receive the normal `openclaw plugins install`
+guidance. On-demand installs use the normal plugin installer and configured state
+directory; they do not modify the executable or its sidecar. Cached help for the
+full build is discarded so help reflects the selected artifact. The package-manager
+runtime in `runtime/npm/` is retained regardless of the plugin selection.
+
 ## Read the manifest
 
 `manifest.json` describes the output for packaging and verification. Its version
@@ -91,6 +127,7 @@ bytecode. An AOT artifact needs its own runtime and signing qualification.
 | `executable`    | Relative `path`, `sizeBytes`, and `sha256`.                                                                       |
 | `runtime`       | Relative `path`, `sizeBytes`, `sha256`, `fileCount`, `symlinkCount`, resource `categories`, and `sidecarPlugins`. |
 | `embedded`      | Counts for `workers`, `plugins`, `modules`, and `inlineWorkers`.                                                  |
+| `plugins`       | Sorted plugin ID arrays: `embedded` and `omitted`. The additive fields retain schema version `1`.                 |
 | `pruning`       | Resource `policy`, `removedFiles`, `removedBytes`, and `removedSymlinks`.                                         |
 | `macos`         | macOS only: `hardenedRuntime` and the selected mode's `entitlements` map.                                         |
 
@@ -175,6 +212,26 @@ hashes. Installed plugins keep their normal filesystem admission and loading
 rules and live in the configured state directory.
 
 Installed TypeScript plugins use the embedded Jiti loader and Babel transformer.
+On-demand plugin installs use the declared npm runtime in `runtime/npm/` through
+the standalone executable's Bun mode. This preserves npm registry authentication,
+configuration, lockfile integrity checks, and the installer's disabled lifecycle
+scripts without requiring a host Node, Bun, or npm installation. The manifest's
+`runtime.packageManager` records the npm version, entrypoint, file count, and bytes;
+the `packageManager` resource category includes its runtime dependencies and licenses.
+Documentation, source maps, and TypeScript declarations are excluded from this closure.
+Installed plugins resolve host SDK imports to the embedded image through the
+existing native plugin resolvers; host SDK JavaScript is not restored on disk.
+
+An installed plugin's `openclaw` peer can point to another copy of the same
+standalone artifact, such as the desktop bundle before its runtime is seeded.
+Peer admission compares the source commit, version, executable digest, and
+sidecar digest from the two manifests. It remains read-only; the running image
+supplies the SDK. Installing or explicitly repairing plugins rebinds their peer
+links to the selected runtime. If the original copy is removed or a new build is
+selected, run `openclaw doctor --fix` with the selected runtime before loading
+those plugins. Loose Node and Bun installations still require the selected host
+package path to match.
+
 The builder captures constant conditional-export resolutions before compilation;
 these modules remain lazy and do not require JavaScript in the sidecar.
 
@@ -203,6 +260,17 @@ builder embeds known worker and child programs. Plugins that use
 `process.execPath` to run arbitrary scripts or Bun flags need a separate runtime
 or their own standalone integration and qualification.
 
+The shared `cli-invocation.mjs` module owns OpenClaw CLI launch arguments for
+startup respawns, native hook relays, ACP and TUI launches, update helpers, and service launchers. A standalone invocation
+passes CLI arguments directly to the executable, including root options such as
+`--profile`; it does not prepend a script path or interpreter flags. A loose
+Node or Bun invocation retains its runtime flags and entry script. Standalone
+identity comes from the embedded runtime location or the adjacent manifest,
+not the executable's filename. Parent-bound startup respawns retain cancellation
+when their launcher exits: loose runtimes use a self-removing preload, while the
+compiled child consumes a private parent-PID environment marker. Neither signal
+is inherited by later detached update workers.
+
 ## Qualify an artifact before packaging
 
 CI covers the builder's inexpensive pure contracts: worker discovery, manifest
@@ -214,14 +282,26 @@ For each production-pinned JIT and bytecode artifact:
 1. Record compiler revision and checksum, OpenClaw commit, output sizes and
    hashes, and the mode-specific signing entitlements.
 2. Use isolated HOME, configuration, state, workspace, and temporary directories.
+   Pass the same explicit `--profile <isolated-name>` on every CLI launch,
+   including version/help, Doctor, Gateway commands, and agent turns. Keep normal
+   startup respawn and compile-cache behavior enabled.
    Reserve ports `19995` and `19996`; refuse to run if another process owns them.
    Sandbox Doctor so it cannot inspect or mutate the operator's live state or
    services.
 3. Run one strict trace campaign and at least four functional campaigns per
    mode. Exercise version/help, config set/get/validate, Doctor, Gateway
-   readiness, agent turns, and Gateway stop/restart. The trace must observe every
-   JavaScript VM and worker, reconcile worker creation receipts, and find no
-   disk JavaScript reads, resolutions, or cache entries on the exercised paths.
+   readiness, agent turns, and Gateway stop/restart. Exercise the running
+   Gateway's restart request through its current supervisor and verify the
+   replacement with health and another agent turn. For an external supervisor,
+   consume the exact-PID restart handoff before starting the replacement.
+   The trace must observe every JavaScript VM and worker, reconcile worker
+   creation receipts, and find no disk JavaScript reads, resolutions, or cache
+   entries on the exercised paths.
+   Include a real Codex-backed reply and a tool-using turn. Verify the tool's
+   result and observe the native hook child running `<executable> hooks relay`
+   without a loose entry script. Reuse native Codex login with
+   `appServer.homeScope: "user"`; keep OpenClaw state isolated and do not copy
+   credentials into the artifact or test state.
 4. Run the signed functional campaign with only the declared entitlements.
    Remove each declared entitlement in a separate negative control and record
    the concrete failure that makes it necessary. Drop entitlements with no
@@ -236,3 +316,50 @@ For each production-pinned JIT and bytecode artifact:
 Keep the commands, traces, manifests, signed-artifact identity, negative
 controls, and results with the qualification report. A different compiler,
 target, compilation mode, or native dependency set requires new evidence.
+
+### Sandboxed Doctor on macOS
+
+SQLite snapshot workers use an authenticated local broker at
+`<TMPDIR>/oc-br-*/resource.sock`. The shared snapshot owner uses this broker to
+retain native cleanup custody independently of the staging worker. Loose and
+standalone runtimes take the same path; embedded worker substitution does not
+introduce this socket. A sandbox's `(deny network*)` also denies Unix-domain IPC,
+even when file writes at the socket's path are allowed.
+
+After the network denial, allow only bind and connect within the isolated root:
+
+```scheme
+(allow network-bind
+  (local unix-socket (subpath (param "ISOLATED_ROOT"))))
+(allow network-outbound
+  (remote unix-socket (subpath (param "ISOLATED_ROOT"))))
+```
+
+Keep IP networking, the operator's home, Keychain, launchctl, and host SQLite
+libraries denied. Neither operation contacts an IP network service. Bun
+standalone cleanup reads process-group membership through macOS `libproc` without
+executing `/bin/ps`; no process-exec allowance for `ps` is needed.
+
+Doctor reports `SQLite (doctor process): <path> (<version>, extension loading enabled)`
+in its **Database engines** diagnostic, including for isolated profiles and
+host-managed installs. Packaging checks should assert that the path points to the
+artifact's `runtime/lib/libsqlite3.dylib`. This diagnostic describes the library
+selected by the Doctor process; it does not require host-service inspection.
+
+Use a short, canonical temporary root: Darwin limits Unix socket paths to 103
+bytes. The broker's fallback for longer paths is outside the isolated root and
+should remain denied by the verifier.
+
+The manual proof script clones the complete artifact into a fresh root and runs
+version, Gateway help, and Doctor with `--profile standalone-verify` and a
+60-second deadline. It keeps startup respawn enabled, so the checks also cover
+profile arguments crossing a compiled CLI relaunch:
+
+```bash
+node scripts/verify-standalone-doctor.mjs ./standalone-jit
+node scripts/verify-standalone-doctor.mjs ./standalone-jit --deny-local-ipc
+```
+
+The second command intentionally denies the broker socket and requires Doctor
+to exit with an error, without reporting completion or hanging. Run both commands
+for the signed JIT and bytecode artifacts.

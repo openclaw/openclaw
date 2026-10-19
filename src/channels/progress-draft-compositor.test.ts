@@ -43,6 +43,19 @@ describe("channel progress draft compositor", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["NO_REPLY", "_NO_REPLY_", "no_reply"])(
+    "forwards prepared literal commentary: %s",
+    async (text) => {
+      const { progress, update } = createProgress({
+        toolProgress: false,
+        label: false,
+        commentary: true,
+      });
+      expect(await progress.pushCommentaryProgress(text)).toBe(true);
+      expect(update.mock.lastCall?.[0]).toContain(text);
+    },
+  );
+
   it("keeps bounded operation state without a preamble or verbose tool log", async () => {
     const { progress, update } = createProgress(
       { toolProgress: false, label: false },
@@ -218,7 +231,7 @@ describe("channel progress draft compositor", () => {
     );
   });
 
-  it("updates cumulative id-less commentary in place across tools and ignores silent snapshots", async () => {
+  it("updates cumulative id-less commentary in place across tools and ignores directive-only snapshots", async () => {
     const { progress, update } = createProgress(
       { toolProgress: true, label: "Shelling", commentary: true },
       { commentaryLinePrefix: "💬 " },
@@ -234,9 +247,9 @@ describe("channel progress draft compositor", () => {
       "Exec",
     ]);
     const calls = update.mock.calls.length;
-    expect(
-      await progress.pushCommentaryProgress("[[reply_to_current]] _NO_REPLY_ [[audio_as_voice]]"),
-    ).toBe(false);
+    expect(await progress.pushCommentaryProgress("[[reply_to_current]] [[audio_as_voice]]")).toBe(
+      false,
+    );
     expect(update).toHaveBeenCalledTimes(calls);
     await progress.pushCommentaryProgress("Writing the patch next");
     expect(progress.getSnapshot().lines).toHaveLength(3);

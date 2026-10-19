@@ -16,7 +16,6 @@ export type LocalServiceDiagnostics = {
   spawnedAt?: number;
   readyAt?: number;
   lastHealthyAt?: number;
-  stdoutTail: string;
   stderrTail: string;
   lastExit?: LocalServiceExit;
 };

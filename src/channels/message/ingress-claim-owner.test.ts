@@ -28,19 +28,6 @@ describe("ingress claim owner", () => {
     ).toBe(false);
   });
 
-  it("does not treat fresh claims with the current pid and a different owner id as foreign", () => {
-    const now = Date.now();
-    expect(
-      isIngressClaimOwnedByOtherLiveProcess({
-        claim: {
-          ownerId: `${process.pid}:1:other-process`,
-          token: "test-auth-token",
-          claimedAt: now,
-        },
-      }),
-    ).toBe(false);
-  });
-
   it("does not treat a fresh foreign claim as live-owned when its pid is only a thread of this process", () => {
     const now = Date.now();
     // Incident shape: dead owner PID 9 is reused as a Linux TID of the new process.

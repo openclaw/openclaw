@@ -1,10 +1,13 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationPlacementStartup } from "../app/session-placement-startup.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import {
   pauseSessionPlacementRecovery,
   readSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
+
+registerSessionOrganizationEnglish();
 
 // Lazy action owners load these helpers before confirmation. Pause stays synchronous
 // without pulling the recovery schema validators into the initial page bundle.

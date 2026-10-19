@@ -53,7 +53,9 @@ env:
 
 jobs:
   preflight:
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &linux_runner_ubuntu >-
+      ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 15
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
@@ -160,7 +162,7 @@ jobs:
   install-smoke-fast:
     needs: [preflight]
     if: needs.preflight.outputs.run_fast_install_smoke == 'true' && needs.preflight.outputs.run_full_install_smoke != 'true'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 120
     env:
       DOCKER_BUILD_SUMMARY: "false"
@@ -367,7 +369,7 @@ jobs:
   root_dockerfile_image:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 60
     permissions:
       contents: read
@@ -522,7 +524,7 @@ jobs:
   root_dockerfile_image_ready:
     needs: [preflight, root_dockerfile_image]
     if: always() && needs.preflight.result == 'success' && needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 5
     permissions:
       contents: read
@@ -540,7 +542,7 @@ jobs:
   qr_package_install_smoke:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 30
     steps:
       - name: Checkout CLI
@@ -557,7 +559,7 @@ jobs:
   root_dockerfile_smokes:
     needs: [preflight, root_dockerfile_image, root_dockerfile_image_ready]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 90
     env:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
@@ -746,7 +748,7 @@ jobs:
   installer_smoke_candidate_payload:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 75
     outputs:
       artifact_digest: ${{ steps.payload_upload.outputs.artifact-digest }}
@@ -940,7 +942,7 @@ jobs:
   installer_smoke_update_image:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 45
     outputs:
       archive_sha256: ${{ steps.image_artifact.outputs.archive_sha256 }}
@@ -1022,7 +1024,7 @@ jobs:
   installer_smoke_nonroot_image:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 45
     outputs:
       archive_sha256: ${{ steps.image_artifact.outputs.archive_sha256 }}
@@ -1104,7 +1106,7 @@ jobs:
   installer_smoke_update:
     needs: [preflight, installer_smoke_candidate_payload, installer_smoke_update_image]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 120
     env:
       DOCKER_BUILD_SUMMARY: "false"
@@ -1339,7 +1341,7 @@ jobs:
   installer_smoke_nonroot:
     needs: [preflight, installer_smoke_candidate_payload, installer_smoke_nonroot_image]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 60
     env:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
@@ -1512,7 +1514,7 @@ jobs:
         installer_smoke_nonroot,
       ]
     if: always() && needs.preflight.result == 'success' && needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 5
     steps:
       - name: Verify installer smoke groups
@@ -1547,7 +1549,7 @@ jobs:
   bun_global_install_smoke:
     needs: [preflight, installer_smoke_candidate_payload]
     if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 60
     steps:
       - name: Setup supported Node runtime
@@ -1611,7 +1613,7 @@ jobs:
   bun_only_runtime_smoke:
     needs: [preflight, installer_smoke_candidate_payload]
     if: needs.preflight.outputs.run_full_install_smoke == 'true' && inputs.run_bun_only_runtime_smoke && !inputs.allow_frozen_target_scenario_omissions
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     # Advisory until the listed Bun blockers land: failures stay visible without gating releases.
     continue-on-error: true
     timeout-minutes: 20
@@ -1662,7 +1664,7 @@ jobs:
   docker-e2e-fast:
     needs: [preflight]
     if: needs.preflight.outputs.run_fast_install_smoke == 'true' || needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 12
     env:
       DOCKER_BUILD_SUMMARY: "false"

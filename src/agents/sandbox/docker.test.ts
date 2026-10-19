@@ -1,5 +1,3 @@
-// Docker image tests cover sandbox image inspection and actionable setup errors
-// without invoking a real Docker daemon.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -10,22 +8,58 @@ type SpawnCall = {
   args: string[];
 };
 
-const spawnState = vi.hoisted(() => ({
-  calls: [] as SpawnCall[],
-  imageExists: true,
-  inspectError: "",
-  infoAvailable: { docker: false, podman: false },
-  podmanConnections: "[]\n",
-  podmanInfo: "true\tfalse\t\t5.0.0\n",
-  podmanMachines: "[]\n",
-  podmanClientVersion: "podman version 5.0.0\n",
-  podmanVersionExitCode: 0,
-  executionError: undefined as Error | undefined,
-  transportFailure: false,
-  transportExitCode: 0,
-  plainExitWithoutStderr: false,
-  commandResult: undefined as { code: number; stdout: string; stderr: string } | undefined,
-}));
+const { spawnState, freshSpawnState } = vi.hoisted(() => {
+  const makeState = () => ({
+    calls: [] as SpawnCall[],
+    imageExists: true,
+    inspectError: "",
+    infoAvailable: { docker: false, podman: false },
+    podmanConnections: "[]\n",
+    podmanInfo: "true\tfalse\t\t5.0.0\n",
+    podmanMachines: "[]\n",
+    podmanClientVersion: "podman version 5.0.0\n",
+    podmanVersionExitCode: 0,
+    executionError: undefined as Error | undefined,
+    transportFailure: false,
+    transportExitCode: 0,
+    commandResult: undefined as { code: number; stdout: string; stderr: string } | undefined,
+  });
+  return { spawnState: makeState(), freshSpawnState: makeState };
+});
+
+function processResult(code = 0, stdout = "", stderr = "") {
+  return {
+    failed: code !== 0,
+    isCanceled: false,
+    exitCode: code,
+    stdout: Buffer.from(stdout),
+    stderr: Buffer.from(stderr),
+  };
+}
+const defaultMachine = {
+  Name: "podman-machine-default",
+  Running: true,
+  IdentityPath: "/tmp/podman-machine-default",
+  Port: 60000,
+  RemoteUsername: "core",
+};
+function machineInfo(overrides: Partial<typeof defaultMachine> = {}) {
+  return { ...defaultMachine, ...overrides };
+}
+function selectConnection(Name: string, URI: string, Identity?: string, isDefault = true) {
+  spawnState.podmanConnections = JSON.stringify([
+    { Name, URI, Identity, ...(isDefault ? { Default: true } : {}) },
+  ]);
+}
+function selectMachine(label: string, port: number) {
+  const Name = `podman-machine-${label}`;
+  const Identity = `/tmp/${label}-machine-key`;
+  const URI = `ssh://core@127.0.0.1:${port}/run/user/501/podman/podman.sock`;
+  selectConnection(Name, URI, Identity);
+  spawnState.podmanMachines = JSON.stringify([
+    machineInfo({ Name, Port: port, IdentityPath: Identity }),
+  ]);
+}
 
 async function spawnDockerProcess(commandAndArgs: string[]) {
   const [command = "", ...args] = commandAndArgs;
@@ -43,25 +77,9 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
       stderr: Buffer.alloc(0),
     });
   }
-  if (spawnState.plainExitWithoutStderr) {
-    return {
-      failed: true,
-      isCanceled: false,
-      exitCode: 1,
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-    };
-  }
-
   if (spawnState.commandResult) {
     const { code, stdout, stderr } = spawnState.commandResult;
-    return {
-      failed: code !== 0,
-      isCanceled: false,
-      exitCode: code,
-      stdout: Buffer.from(stdout),
-      stderr: Buffer.from(stderr),
-    };
+    return processResult(code, stdout, stderr);
   }
 
   let code = 0;
@@ -92,13 +110,7 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     code = 1;
     stderr = `unexpected docker args: ${args.join(" ")}`;
   }
-  return {
-    failed: code !== 0,
-    isCanceled: false,
-    exitCode: code,
-    stdout: Buffer.from(stdout),
-    stderr: Buffer.from(stderr),
-  };
+  return processResult(code, stdout, stderr);
 }
 
 vi.mock("../../process/exec.js", async (importOriginal) => ({
@@ -106,14 +118,7 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   spawnCommand: spawnDockerProcess,
 }));
 
-let dockerSandboxEngine: typeof import("./docker.js").DOCKER_SANDBOX_ENGINE;
-let ensureContainerImage: typeof import("./docker.js").ensureContainerImage;
-let execDockerRaw: typeof import("./docker.js").execDockerRaw;
-let execContainerRaw: typeof import("./docker.js").execContainerRaw;
-let podmanSandboxEngine: typeof import("./docker.js").PODMAN_SANDBOX_ENGINE;
-let resolvePodmanSandboxRuntimeInfo: typeof import("./docker.js").resolvePodmanSandboxRuntimeInfo;
-let validateSandboxContainerEngineTarget: typeof import("./docker.js").validateSandboxContainerEngineTarget;
-let bindPodmanSandboxEngine: typeof import("./docker.js").bindPodmanSandboxEngine;
+let docker: typeof import("./docker.js");
 
 beforeAll(async () => {
   vi.resetModules();
@@ -121,32 +126,12 @@ beforeAll(async () => {
     ...(await importOriginal<typeof import("../../process/exec.js")>()),
     spawnCommand: spawnDockerProcess,
   }));
-  const dockerModule = await import("./docker.js");
-  ({ ensureContainerImage, execDockerRaw, execContainerRaw } = dockerModule);
-  dockerSandboxEngine = dockerModule.DOCKER_SANDBOX_ENGINE;
-  resolvePodmanSandboxRuntimeInfo = dockerModule.resolvePodmanSandboxRuntimeInfo;
-  validateSandboxContainerEngineTarget = dockerModule.validateSandboxContainerEngineTarget;
-  bindPodmanSandboxEngine = dockerModule.bindPodmanSandboxEngine;
-  podmanSandboxEngine = dockerModule.PODMAN_SANDBOX_ENGINE;
+  docker = await import("./docker.js");
 });
 
 beforeEach(() => {
   // Hoisted fault state survives module resets and must not reach the next case.
-  spawnState.calls.length = 0;
-  spawnState.imageExists = true;
-  spawnState.inspectError = "";
-  spawnState.infoAvailable.docker = false;
-  spawnState.infoAvailable.podman = false;
-  spawnState.podmanConnections = "[]\n";
-  spawnState.podmanInfo = "true\tfalse\t\t5.0.0\n";
-  spawnState.podmanMachines = "[]\n";
-  spawnState.podmanClientVersion = "podman version 5.0.0\n";
-  spawnState.podmanVersionExitCode = 0;
-  spawnState.executionError = undefined;
-  spawnState.transportFailure = false;
-  spawnState.transportExitCode = 0;
-  spawnState.plainExitWithoutStderr = false;
-  spawnState.commandResult = undefined;
+  Object.assign(spawnState, freshSpawnState());
 });
 
 describe("resolvePodmanSandboxRuntimeInfo", () => {
@@ -154,31 +139,14 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
     spawnState.infoAvailable.podman = true;
   });
 
-  it.each([false])("allows Podman Machine connections (rootless=%s)", async (rootless) => {
-    const uri = rootless
-      ? "ssh://core@127.0.0.1:60000/run/user/501/podman/podman.sock"
-      : "ssh://root@127.0.0.1:60000/run/podman/podman.sock";
-    spawnState.podmanInfo = `${rootless}\ttrue\t\t5.0.0\n`;
-    spawnState.podmanConnections = JSON.stringify([
-      {
-        Name: `podman-machine-default${rootless ? "" : "-root"}`,
-        URI: uri,
-        Identity: "/tmp/podman-machine-default",
-        Default: true,
-      },
-    ]);
-    spawnState.podmanMachines = JSON.stringify([
-      {
-        Name: "podman-machine-default",
-        Running: true,
-        IdentityPath: "/tmp/podman-machine-default",
-        Port: 60000,
-        RemoteUsername: "core",
-      },
-    ]);
-    await expect(resolvePodmanSandboxRuntimeInfo()).resolves.toEqual({
+  it("allows rootful Podman Machine connections", async () => {
+    const uri = "ssh://root@127.0.0.1:60000/run/podman/podman.sock";
+    spawnState.podmanInfo = "false\ttrue\t\t5.0.0\n";
+    selectConnection("podman-machine-default-root", uri, "/tmp/podman-machine-default");
+    spawnState.podmanMachines = JSON.stringify([machineInfo()]);
+    await expect(docker.resolvePodmanSandboxRuntimeInfo()).resolves.toEqual({
       machine: true,
-      rootless,
+      rootless: false,
       version: "5.0.0",
       target: {
         key: expect.stringMatching(/^machine:[a-f0-9]{32}$/u),
@@ -187,88 +155,49 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
     });
   });
 
-  it.each([
-    {
-      client: "podman-remote.exe version 4.8.0-dev",
-      server: "4.7.2",
-      host: "",
-      name: "named",
-      selected: "named",
-    },
-  ])(
-    "pins the $selected endpoint selected by client $client (server $server, host '$host', name '$name')",
-    async ({ client, server, host, name, selected }) => {
-      spawnState.podmanInfo = `true\ttrue\t/tmp/fallback.sock\t${server}\n`;
-      spawnState.podmanClientVersion = `${client}\n`;
-      spawnState.podmanConnections = JSON.stringify([
-        { Name: "named", URI: "unix:///tmp/named.sock", Default: true },
-      ]);
-      await withEnvAsync({ CONTAINER_CONNECTION: name, CONTAINER_HOST: host }, async () => {
-        const runtime = await resolvePodmanSandboxRuntimeInfo();
-        expect(runtime).toMatchObject({
-          machine: false,
-          rootless: true,
-          version: server,
-          target: { globalArgs: ["--url", `unix:///tmp/${selected}.sock`] },
-        });
-        expect(spawnState.calls.filter((call) => call.args[0] === "--version")).toEqual([
-          { command: "podman", args: ["--version"] },
-        ]);
-        spawnState.commandResult = { code: 0, stdout: "container", stderr: "" };
-        await execContainerRaw(bindPodmanSandboxEngine(runtime.target), ["inspect", "container"]);
-        expect(spawnState.calls.at(-1)).toEqual({
-          command: "podman",
-          args: ["--url", `unix:///tmp/${selected}.sock`, "inspect", "container"],
-        });
+  it("pins the named endpoint using client rather than server precedence", async () => {
+    spawnState.podmanInfo = "true\ttrue\t/tmp/fallback.sock\t4.7.2\n";
+    spawnState.podmanClientVersion = "podman-remote.exe version 4.8.0-dev\n";
+    selectConnection("named", "unix:///tmp/named.sock");
+    await withEnvAsync({ CONTAINER_CONNECTION: "named", CONTAINER_HOST: "" }, async () => {
+      const runtime = await docker.resolvePodmanSandboxRuntimeInfo();
+      expect(runtime).toMatchObject({
+        machine: false,
+        rootless: true,
+        version: "4.7.2",
+        target: { globalArgs: ["--url", "unix:///tmp/named.sock"] },
       });
-    },
-  );
+      expect(spawnState.calls.filter((call) => call.args[0] === "--version")).toEqual([
+        { command: "podman", args: ["--version"] },
+      ]);
+      spawnState.commandResult = { code: 0, stdout: "container", stderr: "" };
+      await docker.execContainerRaw(docker.bindPodmanSandboxEngine(runtime.target), [
+        "inspect",
+        "container",
+      ]);
+      expect(spawnState.calls.at(-1)).toEqual({
+        command: "podman",
+        args: ["--url", "unix:///tmp/named.sock", "inspect", "container"],
+      });
+    });
+  });
 
   it.each([
-    {
-      name: "missing",
-      host: "unix:///tmp/host.sock",
-      version: "podman version 5.0.0",
-      code: 0,
-      remote: false,
-      error: /could not be identified/u,
-    },
-    {
-      name: "remote",
-      host: "  ",
-      version: "podman version 5.0.0",
-      code: 0,
-      remote: true,
-      error: /active Podman connection is remote/u,
-    },
-    {
-      name: "named",
-      host: "unix:///tmp/host.sock",
-      version: "podman version 5.0.0",
-      code: 125,
-      remote: false,
-      error: /Unset either CONTAINER_HOST or CONTAINER_CONNECTION/u,
-    },
-  ])(
-    "rejects unresolvable selection $name ($host, $version, $code)",
-    async ({ name, host, version, code, remote, error }) => {
-      spawnState.podmanInfo = "true\ttrue\t/tmp/fallback.sock\t4.7.2\n";
-      spawnState.podmanClientVersion = `${version}\n`;
-      spawnState.podmanVersionExitCode = code;
-      spawnState.podmanConnections = JSON.stringify([
-        {
-          Name: remote ? "remote" : "named",
-          URI: remote
-            ? "ssh://example.test/run/user/1000/podman/podman.sock"
-            : "unix:///tmp/named.sock",
-          Default: true,
-        },
-      ]);
-      await withEnvAsync({ CONTAINER_CONNECTION: name, CONTAINER_HOST: host }, async () => {
-        await expect(resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(error);
-      });
-    },
-  );
+    ["missing", "unix:///tmp/host.sock", 0, /could not be identified/u],
+    ["remote", "  ", 0, /active Podman connection is remote/u],
+    ["named", "unix:///tmp/host.sock", 125, /Unset either CONTAINER_HOST or CONTAINER_CONNECTION/u],
+  ] as const)("rejects unresolvable selection %s (%s, %s)", async (name, host, code, error) => {
+    spawnState.podmanInfo = "true\ttrue\t/tmp/fallback.sock\t4.7.2\n";
+    spawnState.podmanVersionExitCode = code;
+    const remote = name === "remote";
+    selectConnection(
+      remote ? "remote" : "named",
+      remote ? "ssh://example.test/run/user/1000/podman/podman.sock" : "unix:///tmp/named.sock",
+    );
+    await withEnvAsync({ CONTAINER_CONNECTION: name, CONTAINER_HOST: host }, async () => {
+      await expect(docker.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(error);
+    });
+  });
 
   it.each(["4.7.2", "4.8.0"])(
     "keeps the selected Machine identity for client %s and validates that Machine",
@@ -278,20 +207,13 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
       const hostWins = client === "4.7.2";
       spawnState.podmanClientVersion = `podman version ${client}\n`;
       spawnState.podmanInfo = "true\ttrue\t\t4.7.2\n";
-      spawnState.podmanConnections = JSON.stringify([
-        {
-          Name: "podman-machine-default",
-          URI: uri,
-          Identity: hostWins ? "/tmp/losing-named-key" : identity,
-        },
-      ]);
-      const machine = {
-        Name: "podman-machine-default",
-        Running: true,
-        IdentityPath: identity,
-        Port: 60000,
-        RemoteUsername: "core",
-      };
+      selectConnection(
+        "podman-machine-default",
+        uri,
+        hostWins ? "/tmp/losing-named-key" : identity,
+        false,
+      );
+      const machine = machineInfo({ IdentityPath: identity });
       spawnState.podmanMachines = JSON.stringify([machine]);
       await withEnvAsync(
         {
@@ -300,12 +222,12 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
           CONTAINER_SSHKEY: hostWins ? identity : "/tmp/losing-host-key",
         },
         async () => {
-          await expect(resolvePodmanSandboxRuntimeInfo()).resolves.toMatchObject({
+          await expect(docker.resolvePodmanSandboxRuntimeInfo()).resolves.toMatchObject({
             machine: true,
             target: { globalArgs: ["--url", uri, "--identity", identity] },
           });
           spawnState.podmanMachines = JSON.stringify([{ ...machine, Running: false }]);
-          await expect(resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
+          await expect(docker.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
             /active Podman connection is remote/u,
           );
         },
@@ -315,14 +237,9 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
 
   it("revalidates the active Podman connection on every resolution", async () => {
     spawnState.podmanInfo = "true\tfalse\t\t5.0.0\n";
-    spawnState.podmanConnections = JSON.stringify([
-      {
-        Name: "saved-remote",
-        URI: "ssh://example.test/run/user/1000/podman/podman.sock",
-        Default: true,
-      },
-    ]);
-    await expect(resolvePodmanSandboxRuntimeInfo()).resolves.toEqual({
+    const remoteUri = "ssh://example.test/run/user/1000/podman/podman.sock";
+    selectConnection("saved-remote", remoteUri);
+    await expect(docker.resolvePodmanSandboxRuntimeInfo()).resolves.toEqual({
       machine: false,
       rootless: true,
       version: "5.0.0",
@@ -331,141 +248,100 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
 
     expect(spawnState.calls.some((call) => call.args[0] === "system")).toBe(false);
     spawnState.podmanInfo = "true\ttrue\t\t5.0.0\n";
-    spawnState.podmanConnections = JSON.stringify([
-      {
-        Name: "remote",
-        URI: "ssh://example.test/run/user/1000/podman/podman.sock",
-        Default: true,
-      },
-    ]);
+    selectConnection("remote", remoteUri);
 
-    await expect(resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
+    await expect(docker.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
       /active Podman connection is remote/u,
     );
   });
 
   it("rejects a different allowed Podman Machine after a runtime target is recorded", async () => {
     spawnState.podmanInfo = "true\ttrue\t\t5.0.0\n";
-    spawnState.podmanConnections = JSON.stringify([
-      {
-        Name: "podman-machine-first",
-        URI: "ssh://core@127.0.0.1:60001/run/user/501/podman/podman.sock",
-        Identity: "/tmp/first-machine-key",
-        Default: true,
-      },
-    ]);
-    spawnState.podmanMachines = JSON.stringify([
-      {
-        Name: "podman-machine-first",
-        Running: true,
-        IdentityPath: "/tmp/first-machine-key",
-        Port: 60001,
-        RemoteUsername: "core",
-      },
-    ]);
-    const first = await resolvePodmanSandboxRuntimeInfo();
+    selectMachine("first", 60001);
+    const first = await docker.resolvePodmanSandboxRuntimeInfo();
 
-    spawnState.podmanConnections = JSON.stringify([
-      {
-        Name: "podman-machine-second",
-        URI: "ssh://core@127.0.0.1:60002/run/user/501/podman/podman.sock",
-        Identity: "/tmp/second-machine-key",
-        Default: true,
-      },
-    ]);
-    spawnState.podmanMachines = JSON.stringify([
-      {
-        Name: "podman-machine-second",
-        Running: true,
-        IdentityPath: "/tmp/second-machine-key",
-        Port: 60002,
-        RemoteUsername: "core",
-      },
-    ]);
+    selectMachine("second", 60002);
 
     await expect(
-      validateSandboxContainerEngineTarget(podmanSandboxEngine, first.target),
+      docker.validateSandboxContainerEngineTarget(docker.PODMAN_SANDBOX_ENGINE, first.target),
     ).rejects.toThrow(/active Podman connection changed/u);
   });
 });
 
-describe("ensureContainerImage", () => {
-  it.each([
-    {
-      engine: "docker",
-      image: DEFAULT_SANDBOX_IMAGE,
-      stderr: "",
-      error: `Sandbox image not found: ${DEFAULT_SANDBOX_IMAGE}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:bookworm-slim.`,
-    },
-    {
-      engine: "podman",
-      image: DEFAULT_SANDBOX_IMAGE,
-      stderr: "",
-      error: `podman build -t ${DEFAULT_SANDBOX_IMAGE} -f scripts/docker/sandbox/Dockerfile .`,
-    },
-    {
-      engine: "docker",
-      image: DEFAULT_SANDBOX_IMAGE,
-      stderr:
-        "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
-      error: "Docker daemon is not available",
-    },
-    {
-      engine: "docker",
-      image: DEFAULT_SANDBOX_IMAGE,
-      stderr: "permission denied",
-      error: "Failed to inspect sandbox image: permission denied",
-    },
-    {
-      engine: "docker",
-      image: "example/custom:latest",
-      stderr: "",
-      error: "Sandbox image not found: example/custom:latest. Build or pull it first.",
-    },
-  ])(
-    "reports $engine image inspection failure: $error",
-    async ({ engine, image, stderr, error }) => {
-      spawnState.imageExists = false;
-      spawnState.inspectError = stderr;
-      const result = ensureContainerImage(
-        engine === "docker" ? dockerSandboxEngine : podmanSandboxEngine,
-        image,
-      );
-      if (engine === "docker" && image === DEFAULT_SANDBOX_IMAGE && !stderr) {
-        await expect(result).rejects.toBeInstanceOf(Error);
-        await expect(result).rejects.toMatchObject({ message: error });
-      } else {
-        await expect(result).rejects.toThrow(error);
-      }
-      expect(spawnState.calls).toEqual([{ command: engine, args: ["image", "inspect", image] }]);
-    },
-  );
-});
+it.each([
+  [
+    "docker",
+    DEFAULT_SANDBOX_IMAGE,
+    "",
+    `Sandbox image not found: ${DEFAULT_SANDBOX_IMAGE}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:trixie-slim.`,
+  ],
+  [
+    "podman",
+    DEFAULT_SANDBOX_IMAGE,
+    "",
+    `podman build -t ${DEFAULT_SANDBOX_IMAGE} -f scripts/docker/sandbox/Dockerfile .`,
+  ],
+  [
+    "docker",
+    DEFAULT_SANDBOX_IMAGE,
+    "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
+    "Docker daemon is not available",
+  ],
+  [
+    "docker",
+    DEFAULT_SANDBOX_IMAGE,
+    "permission denied",
+    "Failed to inspect sandbox image: permission denied",
+  ],
+  [
+    "docker",
+    "example/custom:latest",
+    "",
+    "Sandbox image not found: example/custom:latest. Build or pull it first.",
+  ],
+] as const)(
+  "ensureContainerImage reports %s image inspection failure (%s, %s): %s",
+  async (engine, image, stderr, error) => {
+    spawnState.imageExists = false;
+    spawnState.inspectError = stderr;
+    const result = docker.ensureContainerImage(
+      engine === "docker" ? docker.DOCKER_SANDBOX_ENGINE : docker.PODMAN_SANDBOX_ENGINE,
+      image,
+    );
+    if (engine === "docker" && image === DEFAULT_SANDBOX_IMAGE && !stderr) {
+      await expect(result).rejects.toBeInstanceOf(Error);
+      await expect(result).rejects.toMatchObject({ message: error });
+    } else {
+      await expect(result).rejects.toThrow(error);
+    }
+    expect(spawnState.calls).toEqual([{ command: engine, args: ["image", "inspect", image] }]);
+  },
+);
 
 describe("execDockerRaw", () => {
   it("preserves canonical wrapper execution errors", async () => {
     spawnState.executionError = new Error("docker execution failed");
 
     await expect(
-      execDockerRaw(["image", "inspect", DEFAULT_SANDBOX_IMAGE], { allowFailure: true }),
+      docker.execDockerRaw(["image", "inspect", DEFAULT_SANDBOX_IMAGE], { allowFailure: true }),
     ).rejects.toThrow("docker execution failed");
   });
 
   it("rejects transport failures even when Docker exits 7", async () => {
     spawnState.transportFailure = true;
     spawnState.transportExitCode = 7;
-    await expect(execDockerRaw(["version"], { allowFailure: true })).rejects.toThrow(
+    await expect(docker.execDockerRaw(["version"], { allowFailure: true })).rejects.toThrow(
       "docker stream failed",
     );
   });
 
   it("does not include raw container arguments when stderr is empty", async () => {
-    spawnState.plainExitWithoutStderr = true;
+    spawnState.commandResult = { code: 1, stdout: "", stderr: "" };
     const secret = "sandbox-secret-value";
 
-    const error = await execDockerRaw(["create", "--env", `TOKEN=${secret}`]).catch(
-      (caught: unknown) => caught,
-    );
+    const error = await docker
+      .execDockerRaw(["create", "--env", `TOKEN=${secret}`])
+      .catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("Docker command failed (exit 1)");

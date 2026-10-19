@@ -13,7 +13,7 @@ import {
   createBrowserClient,
   TestBrowserPanelHost,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
+import { createBrowserPanelOperations } from "./browser-panel-operation-ownership.ts";
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -47,7 +47,7 @@ describe("session browser requests", () => {
       if (surface === "dashboard" || surface === "session-dashboard") {
         host.dashboardTarget = { ...dashboard, sessionScoped: surface === "session-dashboard" };
       }
-      const ownership = new BrowserPanelOperationOwnership(host);
+      const ownership = createBrowserPanelOperations(host);
       const client = ownership.captureClient();
       if (!client) {
         throw new Error("Expected a live panel client");

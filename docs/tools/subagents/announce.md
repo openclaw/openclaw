@@ -41,6 +41,14 @@ building nested completion findings, preventing stale prior-run child
 outputs from leaking into the current announce. Announce replies preserve
 thread/topic routing when available on channel adapters.
 
+When a completion or settle turn has only a source-bound `message` grant, it can
+send the completed work's photos and files using `media`, `attachments`, or media
+directives, with or without text. Normal outbound media validation still applies,
+including local-file roots. The grant cannot change the destination, channel,
+account, or thread, or perform actions other than `send`. Explicit `replyTo` stays
+limited to the current message or thread; inline reply and audio directives remain
+restricted. See [message tool access](/tools#configure-access-and-approvals).
+
 After `sessions_yield`, the frozen batch waits for its own children and their
 descendants to settle. A still-running child from an earlier requester turn does
 not delay that batch's result; the earlier batch retains its own completion wake.
@@ -144,7 +152,11 @@ Announce context is normalized to a stable internal event block:
 
 The result is the child's complete visible final answer for the completed run,
 including ACP-backed runs and CLI fallback transcripts. A later turn in the same
-child session does not replace that run's answer.
+child session does not replace that run's answer. Once cleanup and requester obligations
+have settled, the in-memory registry keeps a short task preview and lifecycle
+metadata. Full task and result text remain in SQLite and are loaded for selected
+reads or later mutations. Pending delivery, suspended delivery, cancellation, and
+yielded work keep their payloads until those obligations settle.
 
 If completion receipts for the same run arrive out of order, the receipt with
 the newer producer end time owns the reply. Equal end times retain the first

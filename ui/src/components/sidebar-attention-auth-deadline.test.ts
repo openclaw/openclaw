@@ -8,7 +8,7 @@ import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-sta
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createStore } from "./sidebar-attention-store.test-support.ts";
-import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
+import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 
 let store: SidebarAttentionStore | undefined;
 afterEach(() => {
@@ -52,7 +52,7 @@ function setup(expiresInMs?: number) {
   );
   const harness = createGatewayHarness(client);
   store = createStore(harness.gateway);
-  store.activate(SidebarAttentionStoreController);
+  store.activate(SidebarAttentionStoreOwner);
   return {
     authRequest,
     client,

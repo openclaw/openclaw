@@ -1,3 +1,4 @@
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import pLimit from "p-limit";
 import type { openLocalFileSafely } from "../infra/fs-safe.js";
 import { LruCache } from "../infra/lru-cache.js";
@@ -92,10 +93,7 @@ export async function readImageThumbnailFromFile(
   const { dev, ino } = opened.exactIdentity;
   const cacheKey = `${opened.realPath}\0${dev}:${ino}\0${opened.stat.ctimeMs}\0${opened.stat.mtimeMs}\0${opened.stat.size}\0${width}`;
   return await resolveManagedImageThumbnail(cacheKey, async () => {
-    const source = await opened.handle.readFile();
-    if (maxBytes !== undefined && source.byteLength > maxBytes) {
-      throw new Error("Managed image exceeds the preview byte limit");
-    }
+    const source = await readFileHandleBounded(opened.handle, maxBytes ?? Infinity);
     return await encodeImageThumbnail(source, width);
   });
 }

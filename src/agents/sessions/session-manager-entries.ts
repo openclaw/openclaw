@@ -65,7 +65,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendCompactionAsync. Supported through 2026-12-31. */
+  /** @deprecated Await appendCompactionAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendCompaction(
     summary: string,
     firstKeptEntryId: string,
@@ -102,7 +102,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendResetBoundaryAsync. Supported through 2026-12-31. */
+  /** @deprecated Await appendResetBoundaryAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendResetBoundary(reason: ResetReason, firstKeptEntryId?: string): string {
     prepareSessionManagerSync("appendResetBoundary", this.persistenceTarget, this);
     const entry: ResetEntry = this.createEntry({
@@ -125,7 +125,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendCustomEntryAsync. Supported through 2026-12-31. */
+  /** @deprecated Await appendCustomEntryAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendCustomEntry(customType: string, data?: unknown): string {
     prepareSessionManagerSync("appendCustomEntry", this.persistenceTarget, this);
     const entry: CustomEntry = this.createEntry({
@@ -147,7 +147,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendSessionInfoAsync. Supported through 2026-12-31. */
+  /** @deprecated Await appendSessionInfoAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendSessionInfo(name: string): string {
     prepareSessionManagerSync("appendSessionInfo", this.persistenceTarget, this);
     const entry: SessionInfoEntry = this.createEntry({
@@ -174,7 +174,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendCustomMessageEntryAsync. Supported through 2026-12-31. */
+  /** @deprecated Await appendCustomMessageEntryAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendCustomMessageEntry(
     customType: string,
     content: string | (TextContent | ImageContent)[],
@@ -246,7 +246,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     });
   }
 
-  /** @deprecated Await appendLeafControlAsync. Supported through 2026-12-31. */
+  /** @deprecated Await appendLeafControlAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendLeafControl(params: LeafControlSelection): SessionLeafControl {
     prepareSessionManagerSync("appendLeafControl", this.persistenceTarget, this);
     return this.appendLeafControlSync(params);
@@ -307,7 +307,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
-  /** @deprecated Await appendLabelChangeAsync. Supported through 2026-12-31. */
+  /** @deprecated Await appendLabelChangeAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendLabelChange(targetId: string, label: string | undefined): string {
     prepareSessionManagerSync("appendLabelChange", this.persistenceTarget, this);
     this.assertTranscriptViewAvailable();
@@ -350,7 +350,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     });
   }
 
-  /** @deprecated Await branchAsync. Supported through 2026-12-31. */
+  /** @deprecated Await branchAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   branch(branchFromId: string): void {
     prepareSessionManagerSync("branch", this.persistenceTarget, this);
     this.branchSync(branchFromId);
@@ -411,7 +411,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     });
   }
 
-  /** @deprecated Await branchWithSummaryAsync. Supported through 2026-12-31. */
+  /** @deprecated Await branchWithSummaryAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   branchWithSummary(
     branchFromId: string | null,
     summary: string,

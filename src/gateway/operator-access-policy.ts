@@ -262,6 +262,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     return {
       assertCurrent,
       signal,
+      requiredPolicyPlugin: requiredPlugin,
       gatewayAccessGrant: original?.authority.grantId
         ? Object.freeze({ pluginId: original.pluginId, grantId: original.authority.grantId })
         : authorities.length === 0

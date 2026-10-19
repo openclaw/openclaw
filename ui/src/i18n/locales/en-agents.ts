@@ -2,8 +2,6 @@
 export const agentChip = {
   menuLabel: "Agent menu",
   agents: "Agents",
-  search: "Find an agent…",
-  noMatches: "No matching agents",
   showAll: "Show all",
   seeAllAgents: "See all agents",
   namedSettings: "{name} settings",
@@ -29,21 +27,4 @@ export const agentScope = {
 export const pinning = {
   pinToSwitcher: "Pin to switcher",
   unpinFromSwitcher: "Unpin from switcher",
-};
-
-export const identity = {
-  title: "Identity",
-  subtitle: "Name, emoji, and avatar shown in chats and the sidebar.",
-  name: "Display name",
-  namePlaceholder: "Agent name",
-  emoji: "Emoji",
-  chooseEmoji: "Choose emoji",
-  searchEmoji: "Search emoji…",
-  noEmojiMatches: "No matching emoji",
-  chooseImage: "Choose image…",
-  replaceImage: "Replace image…",
-  imageUnusable: "That image can't be used. Pick an image file up to 2 MB.",
-  imageTooDetailed:
-    "That image is too detailed to store as an avatar. Try a simpler image, or set a workspace image path with openclaw agents set-identity --agent <id> --avatar <path>.",
-  fileHint: "Saving mirrors identity fields to IDENTITY.md; configured values take precedence.",
 };

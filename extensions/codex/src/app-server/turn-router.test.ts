@@ -250,7 +250,7 @@ describe("CodexAppServerTurnRouter", () => {
     vi.useFakeTimers();
     vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createHarness();
-    let setExecutionTimeoutMs: ((timeoutMs: number) => void) | undefined;
+    let setExecutionTimeoutMs: ((timeoutMs: number | null) => void) | undefined;
     const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
       threadId: "released",
       onRequest: (_request, _scope, _signal, setTimeoutMs) => {
@@ -340,7 +340,7 @@ describe("CodexAppServerTurnRouter", () => {
         params: { threadId: "thread-2", turn: { id: "turn-2", status: "completed", items: [] } },
         threadId: "thread-2",
         turnId: "turn-2",
-        completedTurn: { id: "turn-2", status: "completed", items: [], itemsView: "full" },
+        completedTurn: { id: "turn-2", status: "completed", items: [] },
       },
       { threadId: "thread-2", turnId: "turn-2" },
     );

@@ -30,18 +30,17 @@ import { buildGuardedModelFetch } from "./host-policy.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
+  iterateSseFrames,
   mergeTransportHeaders,
 } from "./transport-stream-shared.js";
 import {
   createAbortError as createNamedAbortError,
-  readResponseTextSnippet,
+  readAnthropicMessagesErrorSnippet,
   resolveModelHeaderSentinels,
   streamFragmentError,
 } from "./transport-utils.js";
 
-const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
-const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
 // Mirror the fetch sanitizer cap here because compatible routes such as Kimi
 // bypass that layer; without a parser-local guard, partial frames grow forever.
 const ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
@@ -133,39 +132,24 @@ async function* parseAnthropicSseBody(
   signal?: AbortSignal,
 ): AsyncIterable<Record<string, unknown>> {
   const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let completed = false;
-  // CRLF must remain one line ending even when the delimiter expression backtracks.
-  const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
-  let scanOffset = 0;
   try {
-    while (!completed) {
-      const { done, value } = await readAnthropicSseChunk(reader, signal);
-      completed = done;
-      buffer += decoder.decode(value, { stream: !done });
-      delimiter.lastIndex = scanOffset;
-      for (;;) {
-        const boundary = delimiter.exec(buffer);
-        if (!boundary && (!completed || !buffer)) {
-          break;
-        }
-        const frameEnd = boundary?.index ?? buffer.length;
-        assertAnthropicSsePendingBufferWithinLimit(frameEnd);
-        const frame = boundary ? buffer.slice(0, frameEnd) : buffer.trim();
-        buffer = boundary ? buffer.slice(frameEnd + boundary[0].length) : "";
-        delimiter.lastIndex = 0;
-        const data = frame
-          .split(/\r\n|\n|\r/)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trimStart())
-          .join("\n");
-        if (data && data !== "[DONE]") {
-          yield parseAnthropicSseEventData(data);
-        }
+    for await (const { frame, terminated } of iterateSseFrames(
+      async () => {
+        const chunk = await readAnthropicSseChunk(reader, signal);
+        completed = chunk.done;
+        return chunk;
+      },
+      (pending) => assertAnthropicSsePendingBufferWithinLimit(pending.length),
+    )) {
+      const data = (terminated ? frame : frame.trim())
+        .split(/\r\n|\n|\r/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      if (data && data !== "[DONE]") {
+        yield parseAnthropicSseEventData(data);
       }
-      assertAnthropicSsePendingBufferWithinLimit(buffer.length);
-      scanOffset = Math.max(0, buffer.length - 3);
     }
   } finally {
     if (!completed) {
@@ -183,16 +167,7 @@ async function* parseAnthropicSseBody(
 
 async function readAnthropicMessagesErrorBody(response: Response): Promise<unknown> {
   try {
-    const text =
-      (await readResponseTextSnippet(response, {
-        maxBytes: ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES,
-        maxChars: ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES,
-        chunkTimeoutMs: ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS,
-        onIdleTimeout: ({ chunkTimeoutMs }) =>
-          new Error(
-            `Anthropic Messages error response stalled: no data received for ${chunkTimeoutMs}ms`,
-          ),
-      })) ?? "";
+    const text = (await readAnthropicMessagesErrorSnippet(response)) ?? "";
     try {
       // Keep complete JSON for structured redaction; clipping first erases useful errors.
       return JSON.parse(text);

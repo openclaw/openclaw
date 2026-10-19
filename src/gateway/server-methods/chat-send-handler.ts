@@ -76,6 +76,7 @@ export async function handleTrustedInternalChatSend(
     | "prepareAssistantTranscriptMessage"
     | "beforeDispatch"
     | "stageCreatedInput"
+    | "restartResume"
   >,
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {

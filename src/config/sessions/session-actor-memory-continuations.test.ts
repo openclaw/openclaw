@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { reconcileHarnessCompletionDelivery } from "../../agents/agent-harness-completion-delivery.js";
 import { createHarnessCompletionSourceAssertion } from "../../agents/agent-harness-completion-recovery.js";
 import type {
@@ -26,12 +26,12 @@ import {
   assertSessionPendingInputLifetimeCurrent,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { commitMemory, readMemory } from "./session-actor-memory-publication.test-support.js";
 import {
   acquireSessionActorStorage,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
-import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import type { SessionMetadataOperations } from "./session-manager-write-contract.js";
 import { listSessionPendingInputs } from "./session-pending-input-history.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
@@ -69,12 +69,31 @@ afterEach(() => {
   memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
 });
 
-function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
-  if (outcome.kind !== "committed") {
-    throw new Error(JSON.stringify(outcome));
-  }
-  return outcome.value;
-}
+const completionClaim = (): HarnessCompletionRecovery => ({
+  taskId: "child-task",
+  taskRunId: "child-task",
+  taskStatus: "succeeded",
+  sourceRunId: "announce:child",
+  requesterSessionKey: scope.sessionKey,
+  requesterAgentId: scope.agentId,
+  sessionId: scope.sessionId,
+});
+const makePendingOwner = (
+  inputId: string,
+  idempotencyKey: string,
+  messageJson: string,
+): SessionPendingInputOwner => ({
+  ...scope,
+  inputId,
+  transcriptInputId: inputId,
+  idempotencyKey,
+  messageJson,
+  lifecycleGeneration: getAgentEventLifecycleGeneration(),
+  databasePath: scope.storePath,
+  workerDatabasePath: scope.storePath,
+  assertCurrent() {},
+  finish() {},
+});
 
 async function fixture(patch: Partial<SessionEntry> = {}) {
   const owner = memorySessionActorOwners.get({ agentId: scope.agentId, path: scope.storePath });
@@ -84,22 +103,14 @@ async function fixture(patch: Partial<SessionEntry> = {}) {
       authority,
       create: true,
     });
-    if (!binding) {
-      throw new Error("Expected memory session acquisition");
-    }
+    assert(binding, "Expected memory session acquisition");
     return binding;
   };
   const binding = await acquire();
   const storage = binding.actor.storage!;
-  committed(
-    await storage.mutate(
-      {
-        type: "session.entry.create",
-        input: { entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true, ...patch } },
-      },
-      authority,
-    ),
-  );
+  await commitMemory(storage, "session.entry.create", {
+    entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true, ...patch },
+  });
   const append = async (
     event: ResetEntry | (Omit<SessionMessageEntry, "message"> & { message: unknown }),
   ) => {
@@ -119,9 +130,7 @@ async function fixture(patch: Partial<SessionEntry> = {}) {
     }
     const current = await acquire();
     try {
-      return committed(
-        await current.actor.storage!.mutate({ type: "session.metadata.append", input }, authority),
-      );
+      return await commitMemory(current.actor.storage!, "session.metadata.append", input);
     } finally {
       await current.actor.release();
     }
@@ -130,18 +139,11 @@ async function fixture(patch: Partial<SessionEntry> = {}) {
     const current = await acquire();
     try {
       const entry = current.actor.snapshot(authority)?.entry;
-      if (!entry) {
-        throw new Error("Expected current memory entry");
-      }
-      return committed(
-        await current.actor.storage!.mutate(
-          {
-            type: "session.entry.replace",
-            input: { expected: entry, entry: { ...entry, ...next } },
-          },
-          authority,
-        ),
-      );
+      assert(entry, "Expected current memory entry");
+      return await commitMemory(current.actor.storage!, "session.entry.replace", {
+        expected: entry,
+        entry: { ...entry, ...next },
+      });
     } finally {
       await current.actor.release();
     }
@@ -208,48 +210,26 @@ describe("memory continuation adapters", () => {
       idempotencyKey,
       timestamp: 1,
     });
-    const expected = await storage.read(
-      {
-        type: "session.pendingInput.read",
-        input: { ...scope, kind: "stage", idempotencyKey, trackCompletion: true },
-      },
-      authority,
-    );
-    if (expected.kind !== "stage") {
-      throw new Error("Expected pending stage");
-    }
-    committed(
-      await storage.mutate(
-        {
-          type: "session.pendingInput.mutate",
-          input: {
-            ...scope,
-            kind: "stage",
-            idempotencyKey,
-            trackCompletion: true,
-            expected,
-            inputId: "pending-input",
-            messageJson,
-            runId: "pending",
-            requestHash: "hash",
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          },
-        },
-        authority,
-      ),
-    );
-    const pendingOwner: SessionPendingInputOwner = {
+    const expected = await readMemory(storage, "session.pendingInput.read", {
       ...scope,
-      inputId: "pending-input",
-      transcriptInputId: "pending-input",
+      kind: "stage",
       idempotencyKey,
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      databasePath: scope.storePath,
-      workerDatabasePath: scope.storePath,
+      trackCompletion: true,
+    });
+    assert(expected.kind === "stage", "Expected pending stage");
+    await commitMemory(storage, "session.pendingInput.mutate", {
+      ...scope,
+      kind: "stage",
+      idempotencyKey,
+      trackCompletion: true,
+      expected,
+      inputId: "pending-input",
       messageJson,
-      assertCurrent() {},
-      finish() {},
-    };
+      runId: "pending",
+      requestHash: "hash",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    });
+    const pendingOwner = makePendingOwner("pending-input", idempotencyKey, messageJson);
     registerSessionPendingInputOwner(pendingOwner);
     try {
       await runWithSessionActorStorage(binding, async () => {
@@ -285,23 +265,16 @@ describe("memory continuation adapters", () => {
   it("settles input through the store adapter without losing an intervening session patch", async () => {
     const { owner, binding, replace } = await fixture();
     const idempotencyKey = "store:user";
-    const pendingOwner: SessionPendingInputOwner = {
-      ...scope,
-      inputId: "store-input",
-      transcriptInputId: "store-input",
+    const pendingOwner = makePendingOwner(
+      "store-input",
       idempotencyKey,
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      databasePath: scope.storePath,
-      workerDatabasePath: scope.storePath,
-      messageJson: JSON.stringify({
+      JSON.stringify({
         role: "user",
         content: "stored",
         idempotencyKey,
         timestamp: 1,
       }),
-      assertCurrent() {},
-      finish() {},
-    };
+    );
     registerSessionPendingInputOwner(pendingOwner);
     const guard = () => assertSessionPendingInputLifetimeCurrent(pendingOwner);
     const store = await runWithSessionActorStorage(binding, () =>
@@ -310,9 +283,7 @@ describe("memory continuation adapters", () => {
     try {
       const read = { ...scope, idempotencyKey, kind: "stage" as const, trackCompletion: true };
       const expected = await store.read(read);
-      if (expected.kind !== "stage") {
-        throw new Error("Expected pending stage");
-      }
+      assert(expected.kind === "stage", "Expected pending stage");
       const identity = {
         ...scope,
         idempotencyKey,
@@ -374,9 +345,7 @@ describe("memory continuation adapters", () => {
     await binding.actor.release();
     const target = scope;
     const receipt = await stageSessionPendingInput(target, options);
-    if (!receipt?.completeAsync) {
-      throw new Error("Expected complete input custody");
-    }
+    assert(receipt?.completeAsync, "Expected complete input custody");
     try {
       expect(
         await readSessionPendingInputReceiptsInWorker(scope, { runIds: ["recorded"] }),
@@ -440,15 +409,7 @@ describe("memory continuation adapters", () => {
   it.each(["human", "reset"])(
     "rechecks an unbound completion source after an in-process %s write",
     async (change) => {
-      const claim: HarnessCompletionRecovery = {
-        taskId: "child-task",
-        taskRunId: "child-task",
-        taskStatus: "succeeded",
-        sourceRunId: "announce:child",
-        requesterSessionKey: scope.sessionKey,
-        requesterAgentId: scope.agentId,
-        sessionId: scope.sessionId,
-      };
+      const claim = completionClaim();
       const { binding, append } = await fixture({
         restartRecoveryHarnessCompletion: claim,
         restartRecoveryDeliverySourceRunId: claim.sourceRunId,
@@ -504,15 +465,7 @@ describe("memory continuation adapters", () => {
   );
 
   it("requires confirmed terminal delivery and blocks a submitted input after its claim is lost", async () => {
-    const claim: HarnessCompletionRecovery = {
-      taskId: "child-task",
-      taskRunId: "child-task",
-      taskStatus: "succeeded",
-      sourceRunId: "announce:child",
-      requesterSessionKey: scope.sessionKey,
-      requesterAgentId: scope.agentId,
-      sessionId: scope.sessionId,
-    };
+    const claim = completionClaim();
     const { binding, append, replace } = await fixture();
     const request = { ...scope, sourceRunId: claim.sourceRunId };
     await runWithSessionActorStorage(binding, async () => {

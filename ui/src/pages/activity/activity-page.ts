@@ -1,24 +1,18 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { insert } from "@solidjs/web";
-import { createComponent, createEffect, createSignal, onCleanup } from "solid-js";
+import { createComponent, createEffect } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { ActivityPageController } from "./activity-page-controller.ts";
+import { createActivityPageState } from "./activity-page-state.ts";
 import { ActivityPageView } from "./activity-page-view.tsx";
 
 export function ActivityPage(props: { routeLocation?: RouteLocation }) {
   const host = document.createElement("openclaw-activity-page");
-  const context = useApplication();
-  const [revision, setRevision] = createSignal(0);
-  const controller = new ActivityPageController(() => setRevision((value) => value + 1));
-  createEffect(
-    () => context,
-    (value) => controller.connect(value),
-  );
+  const page = createActivityPageState(useApplication());
+  // Route changes drive the Activity request owner without remounting the page.
   createEffect(
     () => props.routeLocation,
-    (location) => controller.setRouteLocation(location),
+    (location) => page.setRouteLocation(location),
   );
-  onCleanup(() => controller.dispose());
-  insert(host, createComponent(ActivityPageView, { controller, revision, host }));
+  insert(host, createComponent(ActivityPageView, { page }));
   return host;
 }

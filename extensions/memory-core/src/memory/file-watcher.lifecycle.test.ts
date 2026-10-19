@@ -56,12 +56,20 @@ describe("Memory observation lifecycle", () => {
       agentId = "main",
       workspaceDir = state.workspaceDir,
       images = false,
-    }: { agentId?: string; workspaceDir?: string; images?: boolean } = {},
+      runInBackgroundContext = AsyncLocalStorage.snapshot(),
+    }: {
+      agentId?: string;
+      workspaceDir?: string;
+      images?: boolean;
+      runInBackgroundContext?: ConstructorParameters<
+        typeof MemoryFileWatcher
+      >[0]["runInBackgroundContext"];
+    } = {},
   ) {
     const onDirty = vi.fn();
     const onUnavailable = vi.fn();
     const watcher = new MemoryFileWatcher({
-      runInBackgroundContext: AsyncLocalStorage.snapshot(),
+      runInBackgroundContext,
       workspaceDir,
       agentId,
       settings: {
@@ -126,6 +134,9 @@ describe("Memory observation lifecycle", () => {
       ),
     );
     await Promise.all(agents.map(({ watcher }) => watcher.start()));
+    for (const { onDirty } of agents) {
+      onDirty.mockClear();
+    }
     const shared = observer.observations.filter((entry) =>
       entry.options.scopes.some((scope) => path.resolve(entry.root.rootDir, scope.path) === extra),
     );
@@ -167,6 +178,53 @@ describe("Memory observation lifecycle", () => {
     expect(observer.observations).toHaveLength(4);
   });
 
+  it.each([
+    [false, false],
+    [true, true],
+    [true, false],
+  ])("retains the shared baseline for image policies %s then %s", async (images, peerImages) => {
+    const first = owner(undefined, 0, [], { images });
+    await first.watcher.start();
+    const entry = observer.observations[0]!;
+    const peer = owner(undefined, 0, [], { agentId: "peer", images: peerImages });
+    await peer.watcher.start();
+    expect(observer.observations).toHaveLength(1);
+    expect(entry.setScopes).not.toHaveBeenCalled();
+    expect(first.onDirty).not.toHaveBeenCalled();
+    expect(peer.onDirty).toHaveBeenCalledOnce();
+    expect(peer.watcher.health()[0]?.state).toBe("ready");
+
+    await peer.watcher.close();
+    expect(entry.setScopes).not.toHaveBeenCalled();
+    expect(entry.close).not.toHaveBeenCalled();
+    entry.dirty();
+    expect(first.onDirty).toHaveBeenCalledOnce();
+    expect(peer.onDirty).toHaveBeenCalledOnce();
+  });
+
+  it("rebaselines changed file kinds even when the shared scopes stay the same", async () => {
+    const text = owner();
+    await text.watcher.start();
+    const entry = observer.observations[0]!;
+    const scopes = entry.options.scopes;
+    const image = {
+      path: path.relative(entry.root.rootDir, path.join(state.workspaceDir, "memory", "photo.png")),
+      kind: "file" as const,
+    };
+    expect(entry.options.exclude?.(image)).toBe(true);
+    const media = owner(undefined, 0, [], { agentId: "media", images: true });
+    await media.watcher.start();
+    expect(entry.options.scopes).toEqual(scopes);
+    expect(entry.setScopes).toHaveBeenCalledOnce();
+    expect(entry.options.exclude?.(image)).toBe(false);
+    entry.dirty([{ path: image.path, type: "content" }]);
+    expect(text.onDirty).not.toHaveBeenCalled();
+    expect(media.onDirty).toHaveBeenCalledOnce();
+    await media.watcher.close();
+    expect(entry.setScopes).toHaveBeenCalledTimes(2);
+    expect(entry.options.exclude?.(image)).toBe(true);
+  });
+
   it("does not share a replaced root with an agent admitted to the new directory", async () => {
     const parent = state.path("shared");
     const notes = path.join(parent, "notes");
@@ -177,12 +235,115 @@ describe("Memory observation lifecycle", () => {
     await fs.mkdir(notes, { recursive: true });
     const replacement = owner(undefined, 0, [notes], { agentId: "replacement" });
     await replacement.watcher.start();
+    replacement.onDirty.mockClear();
     const entries = observer.observations.filter((entry) => entry.root.rootDir === parent);
     expect(entries).toHaveLength(2);
     entries[1]!.dirty([{ path: "notes/new.md", type: "content" }]);
     expect(replacement.onDirty).toHaveBeenCalledOnce();
     expect(original.onDirty).not.toHaveBeenCalled();
     expect(replacement.onUnavailable).not.toHaveBeenCalled();
+  });
+
+  it.each(["invalidate", "health", "unavailable"] as const)(
+    "retires rejected %s delivery without stranding a shared peer or retrying",
+    async (notification) => {
+      let accepting = true;
+      const failure = new Error("plugin instance retired");
+      const retired = owner(undefined, 0, [], {
+        runInBackgroundContext: (run) => {
+          if (!accepting) {
+            throw failure;
+          }
+          return run();
+        },
+      });
+      const healthy = owner(undefined, 0, [], { agentId: "healthy" });
+      await retired.watcher.start();
+      await healthy.watcher.start();
+      expect(observer.observations).toHaveLength(1);
+      const shared = observer.observations[0]!;
+      accepting = false;
+      try {
+        expect(() => {
+          if (notification === "invalidate") {
+            shared.dirty();
+          } else {
+            shared.health({ state: notification === "health" ? "ready" : "unavailable" });
+          }
+        }).not.toThrow();
+      } finally {
+        accepting = true;
+      }
+      expect(retired.onUnavailable).toHaveBeenCalledOnce();
+      expect(retired.onDirty).toHaveBeenCalledOnce();
+      expect(retired.watcher.health()).toEqual([]);
+      if (notification !== "unavailable") {
+        expect(healthy.onUnavailable).not.toHaveBeenCalled();
+        expect(shared.close).not.toHaveBeenCalled();
+      }
+
+      // Cleanup may enter the owner again; that must not restart ordinary observation.
+      const recovered = createDeferred<void>();
+      if (notification === "unavailable") {
+        observer.created = () => recovered.resolve();
+      }
+      await vi.advanceTimersByTimeAsync(20_000);
+      if (notification === "unavailable") {
+        await recovered.promise;
+      }
+      expect(observer.observations).toHaveLength(notification === "unavailable" ? 2 : 1);
+      expect(retired.watcher.health()).toEqual([]);
+      expect(retired.onChange).not.toHaveBeenCalled();
+      const before = healthy.onDirty.mock.calls.length;
+      observer.observations.at(-1)!.dirty();
+      expect(healthy.onDirty).toHaveBeenCalledTimes(before + 1);
+      expect(retired.onDirty).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("joins physical retirement failures after background admission closes", async () => {
+    let accepting = true;
+    const physical = createDeferred<void>();
+    observer.closeBarrier = physical.promise;
+    const { watcher } = owner(undefined, 0, [], {
+      runInBackgroundContext: (run) => {
+        if (!accepting) {
+          throw new Error("plugin instance retired");
+        }
+        return run();
+      },
+    });
+    await watcher.start();
+    accepting = false;
+    try {
+      expect(() => observer.observations[0]!.dirty()).not.toThrow();
+    } catch (error) {
+      physical.resolve();
+      throw error;
+    } finally {
+      accepting = true;
+    }
+    let settled = false;
+    const closing = watcher.close().finally(() => {
+      settled = true;
+    });
+    const failure = new Error("physical teardown failed");
+    const rejected = expect(closing).rejects.toMatchObject({ errors: [failure] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    physical.reject(failure);
+    await rejected;
+  });
+
+  it("preserves errors from an admitted notification callback", async () => {
+    const { watcher, onDirty, onUnavailable } = owner();
+    await watcher.start();
+    const failure = new Error("admitted callback failed");
+    onDirty.mockImplementationOnce(() => {
+      throw failure;
+    });
+    expect(() => observer.observations[0]!.dirty()).toThrow(failure);
+    expect(onUnavailable).not.toHaveBeenCalled();
   });
 
   it("unions shared scopes and exclusions without widening an agent's selections", async () => {
@@ -198,6 +359,7 @@ describe("Memory observation lifecycle", () => {
       (observation) => observation.root.rootDir === path.dirname(notes),
     )!;
     expect(observer.observations).toHaveLength(2);
+    expect(entry.setScopes).toHaveBeenCalledOnce();
     expect(entry.options.scopes.map((scope) => scope.path).toSorted()).toEqual(["images", "notes"]);
     const image = { path: "notes/photo.png", kind: "file" as const };
     expect(entry.options.exclude?.(image)).toBe(false);
@@ -210,6 +372,7 @@ describe("Memory observation lifecycle", () => {
     expect(text.onDirty).toHaveBeenCalledOnce();
     expect(media.onDirty).toHaveBeenCalledTimes(4);
     await media.watcher.close();
+    expect(entry.setScopes).toHaveBeenCalledTimes(2);
     expect(entry.options.exclude?.(image)).toBe(true);
     expect(entry.close).not.toHaveBeenCalled();
   });

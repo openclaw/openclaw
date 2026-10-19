@@ -218,6 +218,12 @@ describe("routeReply", () => {
     );
   });
 
+  it("drops payloads with recorded silence", async () => {
+    await expectSlackNoDelivery(
+      setReplyPayloadMetadata({ text: SILENT_REPLY_TOKEN }, { silentReply: true }),
+    );
+  });
+
   it("records a channel transform veto before transport or mirroring", async () => {
     const messaging = {
       transformReplyPayload: vi.fn(function (this: unknown) {

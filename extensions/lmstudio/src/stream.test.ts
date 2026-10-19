@@ -451,7 +451,7 @@ describe("lmstudio stream wrapper", () => {
     }, controller.signal);
   });
 
-  it("keeps increasing preload backoff across expired consecutive failures", async () => {
+  it("bounds failed preload retries without blocking inference or dropping tools", async () => {
     prepareLmstudioModelForInferenceMock.mockRejectedValue(new Error("out of memory"));
     const baseStream = buildDoneStreamFn();
     const wrapped = createWrappedLmstudioStream(baseStream);
@@ -476,11 +476,11 @@ describe("lmstudio stream wrapper", () => {
     expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(1);
     expectEnsureLoadedFields({ requestedContextLength: undefined });
 
-    nowSpy.mockReturnValue(baseTime + 5_001);
+    nowSpy.mockReturnValue(baseTime + 59_999);
     await collectEvents(runWrappedLmstudioStream(wrapped, {}));
-    expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(2);
+    expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(1);
 
-    nowSpy.mockReturnValue(baseTime + 10_001);
+    nowSpy.mockReturnValue(baseTime + 60_000);
     expectSingleDoneEvent(
       await collectEvents(runWrappedLmstudioStream(wrapped, {}, undefined, { tools })),
     );
@@ -493,17 +493,17 @@ describe("lmstudio stream wrapper", () => {
       expect(requireRecord(call?.[1], "base stream context").tools).toEqual(tools);
     }
 
-    nowSpy.mockReturnValue(baseTime + 15_002);
+    nowSpy.mockReturnValue(baseTime + 119_999);
+    await collectEvents(runWrappedLmstudioStream(wrapped, {}));
+    expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(2);
+
+    nowSpy.mockReturnValue(baseTime + 120_000);
     await collectEvents(runWrappedLmstudioStream(wrapped, {}));
     expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(3);
 
-    nowSpy.mockReturnValue(baseTime + 30_002);
+    nowSpy.mockReturnValue(baseTime + 179_999);
     await collectEvents(runWrappedLmstudioStream(wrapped, {}));
     expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(3);
-
-    nowSpy.mockReturnValue(baseTime + 35_003);
-    await collectEvents(runWrappedLmstudioStream(wrapped, {}));
-    expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(4);
     expect(baseStream).toHaveBeenCalledTimes(6);
   });
 

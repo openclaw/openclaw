@@ -1,13 +1,15 @@
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/composer.css";
-import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import "./chat-comment-pins.tsx";
 import { CommentPreviewChip, CommentPreviewRow } from "./chat-comment-preview.tsx";
-import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.ts";
+import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.tsx";
+import { createTranscriptMessageElements } from "./chat-transcript-message-elements.ts";
 
 const longSelection = "Selected passage with enough words to exceed a compact preview. ".repeat(8);
 const longComment =
@@ -57,6 +59,7 @@ function mountComments(count: number, top: number) {
     ),
     { container },
   );
+  flush();
   return container.querySelector<HTMLElement>(".chat-selection-annotations__chip")!;
 }
 
@@ -103,6 +106,17 @@ function contrast(element: HTMLElement) {
 }
 
 describe("annotation chip and hovercard", () => {
+  it("keeps comment rows adjacent for list numbering and spacing", () => {
+    mountComments(3, 430);
+    const list = container.querySelector(".chat-comment-preview__list")!;
+    expect(list.querySelectorAll(":scope > .chat-comment-preview__item")).toHaveLength(3);
+    const following = list.querySelectorAll<HTMLElement>(
+      ".chat-comment-preview__item + .chat-comment-preview__item",
+    );
+    expect(following).toHaveLength(2);
+    expect(getComputedStyle(following[0]!).marginTop).toBe("12px");
+  });
+
   it.each([1440, 390])(
     "reads the final line of a long comment by keyboard (%ipx)",
     async (width) => {
@@ -410,10 +424,21 @@ describe("comment pins", () => {
     const before = bubble("before");
     const source = bubble("source");
     const after = bubble("after");
+    const messageElements = createTranscriptMessageElements(() => undefined);
+    messageElements.forKey("source")(source);
+    onTestFinished(() => messageElements.dispose());
     const pins = document.createElement("openclaw-chat-comment-pins") as HTMLElement & {
       attachments: ChatAttachment[];
       sessionKey: string;
+      transcript: {
+        messageElements: typeof messageElements;
+        contentElement: HTMLDivElement;
+      };
       updateComplete: Promise<unknown>;
+    };
+    pins.transcript = {
+      messageElements,
+      contentElement: thread.querySelector<HTMLDivElement>(".chat-thread-inner")!,
     };
     pins.attachments = [
       {

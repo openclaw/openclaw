@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
+import {
+  readMigrationArtifactIdentity,
+  type MigrationArtifactVerification,
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   canonicalMigrationFilePath,
   hasSymbolicLinkInDirectoryPath,
@@ -20,6 +23,7 @@ export function recordDoctorMigrationBackups(
   backupId: string,
   inventory: readonly { path: string; identity: fs.BigIntStats; archivePath: string }[],
   versionPhase = false,
+  verification?: MigrationArtifactVerification,
 ): void {
   const runId = `startup-migration-${backupId}`;
   const manifestPath = path.join(resolveSessionSqliteMigrationRunsDir(env), `${runId}.json`);
@@ -39,7 +43,7 @@ export function recordDoctorMigrationBackups(
         sourcePath: source,
         archivePath,
         artifact: {
-          identity: readMigrationArtifactIdentity(archivePath),
+          identity: readMigrationArtifactIdentity(archivePath, 1n, undefined, verification),
           classification: "repair-original" as const,
           reason: versionPhase ? "pre-version-migration-backup" : "pre-startup-migration-backup",
           dependencies: [],

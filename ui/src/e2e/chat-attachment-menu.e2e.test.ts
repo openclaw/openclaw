@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { FileChooser, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -21,6 +21,46 @@ async function choose(page: Page, kind: string) {
   return pending;
 }
 
+async function capturePickerGeometry(page: Page) {
+  await page.addInitScript(() => {
+    document.addEventListener(
+      "click",
+      (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || input.type !== "file") {
+          return;
+        }
+        const trigger = input
+          .closest(".agent-chat__composer-shell")!
+          .querySelector(".agent-chat__input-btn--attach")!;
+        input.dataset.pickerGeometry = JSON.stringify({
+          input: input.getBoundingClientRect().toJSON(),
+          trigger: trigger.getBoundingClientRect().toJSON(),
+        });
+      },
+      true,
+    );
+  });
+}
+
+async function expectPickerAtPlusButton(chooser: FileChooser) {
+  const geometry = await chooser.element().evaluate((input) => {
+    if (!(input instanceof HTMLInputElement)) {
+      throw new Error("Expected the file chooser to belong to an HTML input");
+    }
+    // SAFETY: The capture listener above writes both DOMRect snapshots before click activation.
+    return JSON.parse(input.dataset.pickerGeometry!) as {
+      input: { left: number; top: number; width: number; height: number };
+      trigger: { left: number; top: number; width: number; height: number };
+    };
+  });
+  expect(geometry.trigger.width).toBeGreaterThan(0);
+  expect(geometry.trigger.height).toBeGreaterThan(0);
+  for (const axis of ["left", "top", "width", "height"] as const) {
+    expect(geometry.input[axis]).toBeCloseTo(geometry.trigger[axis], 1);
+  }
+}
+
 suite.define(() => {
   it.each(["chat", "new"])("positions the upload input at the plus button in %s", async (route) => {
     const fixture = attachmentBrowserFixtures.find(
@@ -30,25 +70,7 @@ suite.define(() => {
       { userAgent: fixture.userAgent, hasTouch: true, viewport: { width: 390, height: 844 } },
       async ({ page }) => {
         await installAttachmentBrowserIdentity(page, fixture);
-        await page.addInitScript(() => {
-          document.addEventListener(
-            "click",
-            (event) => {
-              const input = event.target;
-              if (!(input instanceof HTMLInputElement) || input.type !== "file") {
-                return;
-              }
-              const trigger = input
-                .closest(".agent-chat__composer-shell")!
-                .querySelector(".agent-chat__input-btn--attach")!;
-              input.dataset.pickerGeometry = JSON.stringify({
-                input: input.getBoundingClientRect().toJSON(),
-                trigger: trigger.getBoundingClientRect().toJSON(),
-              });
-            },
-            true,
-          );
-        });
+        await capturePickerGeometry(page);
         await installMockGateway(page, { historyMessages: [] });
         await page.goto(suite.server.baseUrl + route);
         for (const viewport of [
@@ -61,22 +83,49 @@ suite.define(() => {
           const pending = page.waitForEvent("filechooser");
           await page.locator('.agent-chat__attach-menu-option[data-value="file"]').click();
           const chooser = await pending;
-          const geometry = await chooser.element().evaluate((input) => {
-            if (!(input instanceof HTMLInputElement)) {
-              throw new Error("Expected the file chooser to belong to an HTML input");
-            }
-            // SAFETY: The capture listener above writes both DOMRect snapshots before click activation.
-            return JSON.parse(input.dataset.pickerGeometry!) as {
-              input: { left: number; top: number; width: number; height: number };
-              trigger: { left: number; top: number; width: number; height: number };
-            };
-          });
-          expect(geometry.trigger.width).toBeGreaterThan(0);
-          expect(geometry.trigger.height).toBeGreaterThan(0);
-          for (const axis of ["left", "top", "width", "height"] as const) {
-            expect(geometry.input[axis]).toBeCloseTo(geometry.trigger[axis], 1);
-          }
+          await expectPickerAtPlusButton(chooser);
           expect(await chooser.element().getAttribute("tabindex")).toBe("-1");
+          await chooser.setFiles([]);
+        }
+      },
+    );
+  });
+
+  it.each(["chat", "new"])("refreshes camera fallback picker geometry in %s", async (route) => {
+    const fixture = attachmentBrowserFixtures.find((candidate) => candidate.name === "iOS Chrome")!;
+    await suite.withPage(
+      { userAgent: fixture.userAgent, hasTouch: true, viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installAttachmentBrowserIdentity(page, fixture);
+        await capturePickerGeometry(page);
+        await page.addInitScript(() => {
+          Object.defineProperty(navigator, "mediaDevices", {
+            configurable: true,
+            value: undefined,
+          });
+        });
+        await installMockGateway(page, { historyMessages: [] });
+        await page.goto(suite.server.baseUrl + route);
+        const trigger = page.getByRole("button", { name: "Add attachment", exact: true });
+        const camera = page.locator("openclaw-chat-camera-capture");
+        for (const [width, height, action] of [
+          [390, 844, "Upload photo"],
+          [320, 568, "Upload photo"],
+          [932, 430, "Use device camera"],
+        ] as const) {
+          // First-use upload, then a prior Photo selection followed by composer re-layout.
+          if (width === 320) {
+            const chooser = await choose(page, "photo");
+            await expectPickerAtPlusButton(chooser);
+            await chooser.setFiles([]);
+          }
+          await page.setViewportSize({ width, height });
+          await trigger.click();
+          await page.getByRole("menuitem", { name: "Take photo", exact: true }).click();
+          const pending = page.waitForEvent("filechooser");
+          await camera.getByRole("button", { name: action, exact: true }).click();
+          const chooser = await pending;
+          await expectPickerAtPlusButton(chooser);
           await chooser.setFiles([]);
         }
       },

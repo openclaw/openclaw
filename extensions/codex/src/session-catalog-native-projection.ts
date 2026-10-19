@@ -1,5 +1,5 @@
-import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { isJsonObject, type JsonObject, type CodexThread } from "./app-server/protocol.js";
 import { detachCodexCatalogString } from "./session-catalog-limits.js";
 import {

@@ -308,11 +308,11 @@ it.each([
       assert(input.executor && input.runId && input.root);
       assert.equal(fs.realpathSync(input.root),fs.realpathSync(new URL('../',import.meta.url)));
       ${sourceLoader}
-      const {readUpdateDatabaseGenerations}=await import(${JSON.stringify(databaseGenerationsUrl.href)});
+      const {readUpdatePhysicalDatabaseGenerations}=await import(${JSON.stringify(databaseGenerationsUrl.href)});
       const custody=await acquireCustody('sqlite-maintenance');
       try {
         const expected=input.databaseGenerations;
-        const fromGenerations=expected && readUpdateDatabaseGenerations(Object.keys(expected));
+        const fromGenerations=expected && await readUpdatePhysicalDatabaseGenerations(Object.keys(expected));
         const unchanged=expected && isDeepStrictEqual(fromGenerations,expected);
         let result;
         if (${!initialFailure} && !fs.existsSync(${JSON.stringify(initialDoctor)})) {
@@ -333,7 +333,7 @@ it.each([
           result=${JSON.stringify(scenario === "verification" ? { status: "ok" } : { status: "error", maintenanceRefusal: { kind: "data-at-risk", reason: "incomplete-migration" } })};
           process.exitCode=${scenario === "verification" ? 0 : 1};
         }
-        if(expected) result.databaseWrites={unchanged,fromGenerations,generations:readUpdateDatabaseGenerations(Object.keys(expected))};
+        if(expected) result.databaseWrites={unchanged,fromGenerations,generations:await readUpdatePhysicalDatabaseGenerations(Object.keys(expected))};
         fs.writeFileSync(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH,JSON.stringify(result));
       } finally {
         await custody.release();
@@ -824,8 +824,16 @@ it.each([
             expect(readDatabase(snapshot)).toEqual(file === shared ? before.shared : before.agent);
           }
           const preserved = { shared: readDatabase(shared), agent: readDatabase(agent) };
+          if (preservesMigrated) {
+            expect(execution.result.recovery).toMatchObject({
+              serviceRestartSafe: false,
+              dataAtRisk: "state-migrated-no-rollback",
+            });
+          }
           await expect(finalize()).rejects.toMatchObject({
-            result: { reason: "state-migrated-no-rollback" },
+            result: {
+              reason: preservesMigrated ? "post-update-failed" : "state-migrated-no-rollback",
+            },
           });
           expect({ shared: readDatabase(shared), agent: readDatabase(agent) }).toEqual(preserved);
           const active = JSON.parse(
@@ -853,11 +861,17 @@ it.each([
           if (preservesMigrated) {
             expect(record).toMatchObject({
               status: "failed",
-              reason: "state-migrated-no-rollback",
-              verification: { serviceRunning: true, readyz: true, runningVersion: "2.0.0" },
+              reason: "post-update-failed",
+              verification: {
+                serviceRunning: true,
+                readyz: true,
+                runningVersion: "2.0.0",
+                recovery: { serviceRestartSafe: true, service: "healthy", version: "2.0.0" },
+              },
             });
+            expect(record.verification.recovery).not.toHaveProperty("dataAtRisk");
             expect(renderUpdateRunReport(record).lines.join("\n")).toContain(
-              "running on the preserved migrated state",
+              "running on the retained state",
             );
           }
           return;

@@ -109,6 +109,43 @@ async function fixture(initialReceipt?: CodexNativeSubagentSubmission) {
 }
 
 describe("native subagent submission receipts in the binding store", () => {
+  it("retains recorded completion across native resume without mutating incoming facts", async () => {
+    const { store, owner } = await fixture();
+    const assignment = {
+      runId: "codex-thread:child-thread",
+      childThreadId: "child-thread",
+      nativeTurnId: "original-turn",
+      nativeParentThreadId: binding.threadId,
+      owner,
+    };
+    const recordedCompletion = {
+      childThreadId: assignment.childThreadId,
+      status: "succeeded" as const,
+      statusLabel: "recorded_task_result" as const,
+      result: "Preserve the recorded result",
+    };
+    await store.mutate(
+      identity,
+      {
+        kind: "record-native-subagent-assignment",
+        owner,
+        assignment: { ...assignment, recordedCompletion },
+      },
+      currentAuthority,
+    );
+    const resumed = { ...assignment, nativeTurnId: "resumed-turn" };
+    await store.mutate(
+      identity,
+      { kind: "record-native-subagent-assignment", owner, assignment: resumed },
+      currentAuthority,
+    );
+
+    expect(await store.readNativeSubagentAssignments?.(identity, owner)).toEqual([
+      { ...resumed, recordedCompletion },
+    ]);
+    expect(resumed).not.toHaveProperty("recordedCompletion");
+  });
+
   it.each([
     { nativeTurnId: "child-turn-b", reverse: false, discoverTurn: false },
     { nativeTurnId: "resumed-turn", reverse: false, discoverTurn: false },

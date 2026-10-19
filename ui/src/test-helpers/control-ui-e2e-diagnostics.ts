@@ -11,6 +11,15 @@ import { captureControlUiE2eRendererStall } from "./control-ui-e2e-renderer-stal
 const CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT = 200;
 const controlUiE2ePageDiagnostics = new WeakMap<Page, ControlUiE2eDiagnosticEvent[]>();
 const controlUiE2eUnhandledRejectionPages = new WeakSet<Page>();
+const controlUiE2eFailureFacts = new WeakMap<Page, Record<string, boolean | number | null>>();
+
+/** Callers supply fixed diagnostic keys and scalar facts, never user content or identifiers. */
+export function recordControlUiE2eFailureFacts(
+  page: Page,
+  facts: Record<string, boolean | number | null>,
+): void {
+  controlUiE2eFailureFacts.set(page, { ...controlUiE2eFailureFacts.get(page), ...facts });
+}
 type ControlUiE2ePageLifecycle = {
   registeredAt: string;
   firstCrashAt: string | null;
@@ -229,7 +238,7 @@ type ControlUiE2eFailureDiagnosticsOptions = {
   label: string;
   pageErrors?: string[];
   pageEvents?: ControlUiE2eDiagnosticEvent[];
-  modelResponses?: { list?: unknown; authStatus?: unknown };
+  modelResponses?: { list?: unknown; snapshot?: unknown; authStatus?: unknown };
 };
 
 function summarizeRecordedModelResponses(
@@ -237,9 +246,8 @@ function summarizeRecordedModelResponses(
 ) {
   const list = asOptionalRecord(responses.list);
   const auth = asOptionalRecord(responses.authStatus);
-  const catalog = asOptionalRecord(list?.payload);
+  const snapshot = asOptionalRecord(responses.snapshot);
   const health = asOptionalRecord(auth?.payload);
-  const models = Array.isArray(catalog?.models) ? catalog.models : undefined;
   const profiles = Array.isArray(health?.providers)
     ? health.providers.flatMap((provider) => {
         const record = asOptionalRecord(provider);
@@ -260,25 +268,36 @@ function summarizeRecordedModelResponses(
       ]),
     );
   };
+  const catalogCounts = (payload: unknown) => {
+    const catalog = asOptionalRecord(payload);
+    const models = Array.isArray(catalog?.models) ? catalog.models : undefined;
+    return {
+      models: models?.length ?? null,
+      available:
+        models?.filter((model) => asOptionalRecord(model)?.available === true).length ?? null,
+      unavailable:
+        models?.filter((model) => asOptionalRecord(model)?.available === false).length ?? null,
+      unknownAvailability:
+        models?.filter((model) => typeof asOptionalRecord(model)?.available !== "boolean").length ??
+        null,
+      pendingProviders: Array.isArray(catalog?.pendingProviders)
+        ? catalog.pendingProviders.length
+        : null,
+      providerOutcomes: statusCounts(catalog?.providerOutcomes, [
+        "ready",
+        "auth-rejected",
+        "unavailable",
+      ]),
+    };
+  };
   return {
     listSeen: responses.list !== undefined,
     listOk: typeof list?.ok === "boolean" ? list.ok : null,
-    models: models?.length ?? null,
-    available:
-      models?.filter((model) => asOptionalRecord(model)?.available === true).length ?? null,
-    unavailable:
-      models?.filter((model) => asOptionalRecord(model)?.available === false).length ?? null,
-    unknownAvailability:
-      models?.filter((model) => typeof asOptionalRecord(model)?.available !== "boolean").length ??
-      null,
-    pendingProviders: Array.isArray(catalog?.pendingProviders)
-      ? catalog.pendingProviders.length
-      : null,
-    providerOutcomes: statusCounts(catalog?.providerOutcomes, [
-      "ready",
-      "auth-rejected",
-      "unavailable",
-    ]),
+    ...catalogCounts(list?.payload),
+    snapshot: {
+      seen: responses.snapshot !== undefined,
+      ...catalogCounts(asOptionalRecord(snapshot?.payload)?.catalog),
+    },
     authSeen: responses.authStatus !== undefined,
     authOk: typeof auth?.ok === "boolean" ? auth.ok : null,
     profiles: statusCounts(profiles, ["ok", "expiring", "expired", "missing", "static"]),
@@ -611,6 +630,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
     rendererStall: await captureControlUiE2eRendererStall(page, rendererRead),
     models,
     gatewayRpc: controlUiRpcDiagnostics.get(page) ?? [],
+    scenarioFacts: controlUiE2eFailureFacts.get(page) ?? null,
     frameDepthCounts,
     route: {
       pathname: knownRoute ? pathForRoute(knownRoute) : null,

@@ -1,21 +1,31 @@
-// Slack tests cover draft stream plugin behavior.
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
 import { createSlackDraftStream } from "./draft-stream.js";
 
 type DraftStreamParams = Parameters<typeof createSlackDraftStream>[0];
-type DraftSendFn = NonNullable<DraftStreamParams["send"]>;
-type DraftEditFn = NonNullable<DraftStreamParams["edit"]>;
-type DraftRemoveFn = NonNullable<DraftStreamParams["remove"]>;
-type DraftWarnFn = NonNullable<DraftStreamParams["warn"]>;
-type MockCalls<TArgs extends readonly unknown[]> = { mock: { calls: TArgs[] } };
+type DraftSendFn = typeof import("./send.js").sendMessageSlack;
+type DraftEditFn = typeof import("./actions.js").editSlackMessage;
+type DraftRemoveFn = typeof import("./actions.js").deleteSlackMessage;
 
-const TEST_CFG = {};
+const transport = vi.hoisted(() => ({
+  send: vi.fn<DraftSendFn>(),
+  edit: vi.fn<DraftEditFn>(),
+  editRendered: vi.fn<typeof import("./actions.js").editSlackRenderedMessage>(),
+  remove: vi.fn<DraftRemoveFn>(),
+}));
 
-function mockCalls<TArgs extends readonly unknown[]>(fn: unknown): TArgs[] {
-  return (fn as MockCalls<TArgs>).mock.calls;
-}
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
+  sendMessageSlack: transport.send,
+}));
+vi.mock("./actions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./actions.js")>()),
+  editSlackMessage: transport.edit,
+  editSlackRenderedMessage: transport.editRendered,
+  deleteSlackMessage: transport.remove,
+}));
 
 function slackDraftSendResult(messageId: string, channelId = "C123") {
   return {
@@ -29,107 +39,108 @@ function slackDraftSendResult(messageId: string, channelId = "C123") {
 }
 
 function createDraftStreamHarness(
-  params: {
-    accountId?: string;
-    maxChars?: number;
+  params: Pick<DraftStreamParams, "accountId" | "maxChars" | "eventScope" | "identity"> & {
     threadTs?: string;
     send?: DraftSendFn;
-    edit?: DraftEditFn;
-    eventScope?: DraftStreamParams["eventScope"];
-    identity?: DraftStreamParams["identity"];
     remove?: DraftRemoveFn;
-    warn?: DraftWarnFn;
   } = {},
 ) {
-  const send = params.send ?? vi.fn<DraftSendFn>(async () => slackDraftSendResult("111.222"));
-  const edit = params.edit ?? vi.fn<DraftEditFn>(async () => {});
-  const remove = params.remove ?? vi.fn<DraftRemoveFn>(async () => {});
-  const warn = params.warn ?? vi.fn<DraftWarnFn>();
+  const send = transport.send
+    .mockReset()
+    .mockImplementation(params.send ?? (async () => slackDraftSendResult("111.222")));
+  const edit = transport.edit.mockReset().mockImplementation(async () => {});
+  const editRendered = transport.editRendered.mockReset().mockImplementation(async () => {});
+  const remove = transport.remove.mockReset().mockImplementation(params.remove ?? (async () => {}));
+  const warn = vi.fn<NonNullable<DraftStreamParams["warn"]>>();
   const stream = createSlackDraftStream({
     target: "channel:C123",
-    cfg: TEST_CFG,
+    cfg: {},
     token: "xoxb-test",
     accountId: params.accountId,
-    conversationChannelId: "C123",
     throttleMs: 250,
     maxChars: params.maxChars,
     eventScope: params.eventScope,
     identity: params.identity,
     resolveThreadTs: params.threadTs ? () => params.threadTs : undefined,
-    send,
-    edit,
-    remove,
     warn,
   });
-  return { stream, send, edit, remove, warn };
+  return { stream, send, edit, editRendered, remove, warn };
+}
+
+function publish(
+  stream: ReturnType<typeof createSlackDraftStream>,
+  update: Parameters<typeof stream.update>[0],
+) {
+  stream.update(update);
+  return stream.flush();
+}
+
+function humanMessage(
+  messageTs: string,
+  overrides: Partial<Parameters<typeof noteSlackDraftConversationMessage>[0]> = {},
+) {
+  noteSlackDraftConversationMessage({
+    channelId: "C123",
+    threadTs: "100.000",
+    userId: "U_OWNER",
+    messageTs,
+    ...overrides,
+  });
+}
+
+function rotatingSend() {
+  return vi
+    .fn<DraftSendFn>()
+    .mockResolvedValueOnce(slackDraftSendResult("100.100"))
+    .mockResolvedValueOnce(slackDraftSendResult("100.300"));
 }
 
 describe("createSlackDraftStream", () => {
   it("waits for a complete preamble when a human reply rotates the draft", async () => {
     const { stream, send, edit } = createDraftStreamHarness({ threadTs: "100.000" });
-    stream.update("_I’ll check the report._");
-    await stream.flush();
+    await publish(stream, "_I’ll check the report._");
 
     // The partial was admitted while a preview existed. A human can retire
     // that preview before the throttled transport gets to publish the edit.
-    noteSlackDraftConversationMessage({
-      channelId: "C123",
-      threadTs: "100.000",
-      messageTs: "112.000",
-      userId: "U_HUMAN",
-    });
-    stream.update({ text: "_the_", allowNewMessage: false });
-    await stream.flush();
+    humanMessage("112.000", { userId: "U_HUMAN" });
+    await publish(stream, { text: "_the_", allowNewMessage: false });
     expect(send).toHaveBeenCalledTimes(1);
     expect(edit).not.toHaveBeenCalled();
 
-    stream.update({ text: "_then I’ll check the key releases._", allowNewMessage: true });
-    await stream.flush();
+    await publish(stream, { text: "_then I’ll check the key releases._", allowNewMessage: true });
     expect(send).toHaveBeenCalledTimes(2);
-    expect(mockCalls<Parameters<DraftSendFn>>(send).at(-1)?.[1]).toBe(
-      "_then I’ll check the key releases._",
-    );
+    expect(vi.mocked(send).mock.calls.at(-1)?.[1]).toBe("_then I’ll check the key releases._");
   });
 
   it("uses the enterprise event client for draft writes", async () => {
     const client = {} as NonNullable<DraftStreamParams["eventScope"]>["client"];
-    const eventScope = {
-      teamId: "T_TEST",
-      client,
-    };
+    const eventScope = { teamId: "T_TEST", client };
     const identity = { username: "test-agent", iconEmoji: ":robot_face:" };
     const text = "a".repeat(4205);
     const { stream, send, edit, remove, warn } = createDraftStreamHarness({ eventScope, identity });
 
-    stream.update(text);
-    await stream.flush();
-    stream.update("hello world");
-    await stream.flush();
+    await publish(stream, text);
+    await publish(stream, "hello world");
     await stream.clear();
 
-    expect(send).toHaveBeenCalledWith(
-      "channel:C123",
-      text,
-      expect.objectContaining({ eventScope, identity, token: "xoxb-test" }),
-    );
-    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls).toMatchObject([
+      ["channel:C123", text, { eventScope, identity, token: "xoxb-test" }],
+    ]);
     expect(warn).not.toHaveBeenCalled();
-    expect(edit).toHaveBeenCalledWith(
+    expect(edit.mock.calls).toContainEqual([
       "C123",
       "111.222",
       "hello world",
       expect.objectContaining({ client }),
-    );
+    ]);
     expect(remove).toHaveBeenCalledWith("C123", "111.222", expect.objectContaining({ client }));
   });
 
   it("does not send duplicate text", async () => {
     const { stream, send, edit } = createDraftStreamHarness();
 
-    stream.update("same");
-    await stream.flush();
-    stream.update("same");
-    await stream.flush();
+    await publish(stream, "same");
+    await publish(stream, "same");
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(edit).toHaveBeenCalledTimes(0);
@@ -139,31 +150,17 @@ describe("createSlackDraftStream", () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const accountId = `throttled-${rotation}-rotation`;
-    const send = vi
-      .fn<DraftSendFn>()
-      .mockResolvedValueOnce(slackDraftSendResult("100.100"))
-      .mockResolvedValueOnce(slackDraftSendResult("100.300"));
-    const { stream, edit } = createDraftStreamHarness({
-      accountId,
-      threadTs: "100.000",
-      send,
-    });
+    const send = rotatingSend();
+    const { stream, edit } = createDraftStreamHarness({ accountId, threadTs: "100.000", send });
     try {
-      stream.update("first preview");
-      await stream.flush();
+      await publish(stream, "first preview");
       stream.update("queued old preview");
       await vi.advanceTimersByTimeAsync(100);
 
       if (rotation === "turn") {
         stream.forceNewMessage();
       } else {
-        noteSlackDraftConversationMessage({
-          accountId,
-          channelId: "C123",
-          threadTs: "100.000",
-          messageTs: "100.200",
-          userId: "U_HUMAN",
-        });
+        humanMessage("100.200", { accountId, userId: "U_HUMAN" });
       }
       stream.update("replacement preview");
       expect(send).toHaveBeenCalledOnce();
@@ -184,19 +181,14 @@ describe("createSlackDraftStream", () => {
   });
 
   it("drains past a failed preview and retries only the retained failure", async () => {
-    const send = vi
-      .fn<DraftSendFn>()
-      .mockResolvedValueOnce(slackDraftSendResult("100.100"))
-      .mockResolvedValueOnce(slackDraftSendResult("100.300"));
+    const send = rotatingSend();
     const remove = vi.fn<DraftRemoveFn>(async () => {});
     remove.mockRejectedValueOnce(new Error("cleanup failed"));
     const { stream } = createDraftStreamHarness({ send, remove });
-    const removedMessageIds = () =>
-      mockCalls<Parameters<DraftRemoveFn>>(remove).map(([, messageId]) => messageId);
+    const removedMessageIds = () => vi.mocked(remove).mock.calls.map(([, messageId]) => messageId);
 
     for (const text of ["first", "second"]) {
-      stream.update(text);
-      await stream.flush();
+      await publish(stream, text);
       stream.forceNewMessage();
     }
     await stream.dropDetachedMessages();
@@ -208,62 +200,30 @@ describe("createSlackDraftStream", () => {
 
   it("drains previews detached during an in-flight removal", async () => {
     const accountId = "detach-during-drop";
-    let finishFirstRemove: (() => void) | undefined;
-    const firstRemove = new Promise<void>((resolve) => {
-      finishFirstRemove = resolve;
-    });
-    const send = vi
-      .fn<DraftSendFn>()
-      .mockResolvedValueOnce(slackDraftSendResult("100.100"))
-      .mockResolvedValueOnce(slackDraftSendResult("100.300"));
+    const firstRemove = createDeferred<void>();
+    const send = rotatingSend();
     const remove = vi
       .fn<DraftRemoveFn>()
-      .mockImplementationOnce(async () => await firstRemove)
+      .mockImplementationOnce(() => firstRemove.promise)
       .mockResolvedValueOnce(undefined);
-    const { stream } = createDraftStreamHarness({
-      accountId,
-      threadTs: "100.000",
-      send,
-      remove,
-    });
+    const { stream } = createDraftStreamHarness({ accountId, threadTs: "100.000", send, remove });
 
-    stream.update("_first card_");
-    await stream.flush();
-    noteSlackDraftConversationMessage({
-      accountId,
-      channelId: "C123",
-      threadTs: "100.000",
-      messageTs: "100.200",
-      userId: "U_OWNER",
-    });
+    await publish(stream, "_first card_");
+    humanMessage("100.200", { accountId });
 
     const dropping = stream.dropDetachedMessages();
-    await vi.waitFor(() => {
-      expect(remove).toHaveBeenCalledOnce();
-    });
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledOnce());
 
-    stream.update("_second card_");
-    await stream.flush();
-    noteSlackDraftConversationMessage({
-      accountId,
-      channelId: "C123",
-      threadTs: "100.000",
-      messageTs: "100.400",
-      userId: "U_OWNER",
-    });
+    await publish(stream, "_second card_");
+    humanMessage("100.400", { accountId });
 
-    finishFirstRemove?.();
+    firstRemove.resolve();
     await dropping;
 
-    expect(remove).toHaveBeenCalledTimes(2);
-    expect(remove).toHaveBeenNthCalledWith(1, "C123", "100.100", {
-      token: "xoxb-test",
-      accountId,
-    });
-    expect(remove).toHaveBeenNthCalledWith(2, "C123", "100.300", {
-      token: "xoxb-test",
-      accountId,
-    });
+    expect(remove.mock.calls).toEqual([
+      ["C123", "100.100", { token: "xoxb-test", accountId }],
+      ["C123", "100.300", { token: "xoxb-test", accountId }],
+    ]);
   });
 
   it("keeps simultaneous Enterprise Grid conversations isolated by workspace", async () => {
@@ -272,10 +232,7 @@ describe("createSlackDraftStream", () => {
       teamId: "T_FIRST",
       client: {} as NonNullable<DraftStreamParams["eventScope"]>["client"],
     };
-    const send = vi
-      .fn<DraftSendFn>()
-      .mockResolvedValueOnce(slackDraftSendResult("100.100"))
-      .mockResolvedValueOnce(slackDraftSendResult("100.300"));
+    const send = rotatingSend();
     const { stream, edit } = createDraftStreamHarness({
       accountId,
       eventScope,
@@ -283,72 +240,37 @@ describe("createSlackDraftStream", () => {
       send,
     });
 
-    stream.update("_first workspace_");
-    await stream.flush();
-    noteSlackDraftConversationMessage({
-      accountId,
-      teamId: "T_SECOND",
-      channelId: "C123",
-      threadTs: "100.000",
-      messageTs: "100.200",
-      userId: "U_OTHER_WORKSPACE",
-    });
-    stream.update("_still in the first workspace_");
-    await stream.flush();
+    await publish(stream, "_first workspace_");
+    humanMessage("100.200", { accountId, teamId: "T_SECOND", userId: "U_OTHER_WORKSPACE" });
+    await publish(stream, "_still in the first workspace_");
 
     expect(send).toHaveBeenCalledOnce();
     expect(edit).toHaveBeenCalledOnce();
 
-    noteSlackDraftConversationMessage({
-      accountId,
-      teamId: "T_FIRST",
-      channelId: "C123",
-      threadTs: "100.000",
-      messageTs: "100.200",
-      userId: "U_OWNER",
-    });
-    stream.update("_after the real interruption_");
-    await stream.flush();
+    humanMessage("100.200", { accountId, teamId: "T_FIRST" });
+    await publish(stream, "_after the real interruption_");
 
-    expect(send).toHaveBeenCalledTimes(2);
-    expect(stream.messageId()).toBe("100.300");
+    expect([send.mock.calls.length, stream.messageId()]).toEqual([2, "100.300"]);
   });
 
   it("ignores older, duplicate, unrelated, and bot-authored conversation events", async () => {
     const accountId = "irrelevant-events";
-    const { stream, send, edit } = createDraftStreamHarness({
-      accountId,
-      threadTs: "100.000",
-    });
+    const { stream, send, edit } = createDraftStreamHarness({ accountId, threadTs: "100.000" });
 
-    stream.update("_still working_");
-    await stream.flush();
+    await publish(stream, "_still working_");
 
     for (const event of [
-      { channelId: "C123", threadTs: "100.000", messageTs: "111.111", userId: "U_OWNER" },
-      { channelId: "C123", threadTs: "100.000", messageTs: "111.222", userId: "U_OWNER" },
-      { channelId: "C123", threadTs: "200.000", messageTs: "111.333", userId: "U_OWNER" },
-      { channelId: "C_OTHER", threadTs: "100.000", messageTs: "111.333", userId: "U_OWNER" },
-      {
-        channelId: "C123",
-        threadTs: "100.000",
-        messageTs: "111.333",
-        userId: "U_BOT",
-        botUserId: "U_BOT",
-      },
-      {
-        channelId: "C123",
-        threadTs: "100.000",
-        messageTs: "111.333",
-        userId: "U_OTHER_BOT",
-        botId: "B_OTHER",
-      },
+      { messageTs: "111.111" },
+      { messageTs: "111.222" },
+      { threadTs: "200.000" },
+      { channelId: "C_OTHER" },
+      { userId: "U_BOT", botUserId: "U_BOT" },
+      { userId: "U_OTHER_BOT", botId: "B_OTHER" },
     ]) {
-      noteSlackDraftConversationMessage({ accountId, ...event });
+      humanMessage("111.333", { accountId, ...event });
     }
 
-    stream.update("_latest update_");
-    await stream.flush();
+    await publish(stream, "_latest update_");
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(edit).toHaveBeenCalledOnce();
@@ -360,16 +282,9 @@ describe("createSlackDraftStream", () => {
     const { stream, edit } = createDraftStreamHarness({ accountId, threadTs: "100.000" });
     const finalize = vi.fn(async () => {});
 
-    stream.update("_nearly finished_");
-    await stream.flush();
+    await publish(stream, "_nearly finished_");
     await stream.seal();
-    noteSlackDraftConversationMessage({
-      accountId,
-      channelId: "C123",
-      threadTs: "100.000",
-      messageTs: "111.333",
-      userId: "U_OWNER",
-    });
+    humanMessage("111.333", { accountId });
 
     await expect(stream.finalizeMessage("111.222", finalize)).resolves.toBe(false);
     expect(finalize).not.toHaveBeenCalled();
@@ -379,31 +294,29 @@ describe("createSlackDraftStream", () => {
   it("stops when text exceeds max chars", async () => {
     const { stream, send, edit, warn } = createDraftStreamHarness({ maxChars: 5 });
 
-    stream.update("123456");
-    await stream.flush();
-    stream.update("ok");
-    await stream.flush();
+    await publish(stream, "123456");
+    await publish(stream, "ok");
 
     expect(send).not.toHaveBeenCalled();
     expect(edit).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps mention-safe rendered text through the supplied edit owner", async () => {
-    const { stream, send, edit } = createDraftStreamHarness();
+  it("keeps mention-safe rendered text through the rendered edit owner", async () => {
+    const { stream, send, edit, editRendered } = createDraftStreamHarness();
     const native = "<@U0456EFGH> <#C0456EFGH> <!here>";
     const escaped = "&lt;@U0456EFGH&gt; &lt;#C0456EFGH&gt; &lt;!here&gt;";
 
-    stream.update({ text: `first ${native}`, escapeMentions: true });
-    await stream.flush();
-    stream.update({ text: `second ${native}`, escapeMentions: true });
-    await stream.flush();
+    await publish(stream, { text: `first ${native}`, escapeMentions: true });
+    await publish(stream, { text: `second ${native}`, escapeMentions: true });
 
-    const sent = mockCalls<Parameters<DraftSendFn>>(send)[0]!;
+    const sent = vi.mocked(send).mock.calls[0]!;
     expect(sent[1]).toContain(escaped);
     expect(sent[1]).not.toContain(native);
     expect(sent[2]).toEqual(expect.objectContaining({ textIsSlackMrkdwn: true }));
-    const edited = mockCalls<Parameters<DraftEditFn>>(edit)[0]!;
+    expect(edit).not.toHaveBeenCalled();
+    expect(editRendered).toHaveBeenCalledOnce();
+    const edited = vi.mocked(editRendered).mock.calls[0]!;
     expect(edited[2]).toContain(escaped);
     expect(edited[2]).not.toContain(native);
   });

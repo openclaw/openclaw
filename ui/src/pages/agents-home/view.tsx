@@ -2,18 +2,16 @@ import { For, Show } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context-types.ts";
-import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import type { agentRosterCards } from "../../lib/agents/roster-activity.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerAvatarGatewayReset } from "../../lib/identity-avatar-context.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
 import type { ClawCatalogEntry } from "./claws-catalog-client.ts";
 import { ClawsExplore } from "./claws-explore.tsx";
@@ -72,6 +70,7 @@ export function AgentsHomeView(props: AgentsHomeProps) {
     <>
       <div class="agents-home__header">
         <SettingsPageHeader
+          stacked
           title={title()}
           subtitle={subtitle()}
           actions={
@@ -142,19 +141,14 @@ export function AgentsHomeView(props: AgentsHomeProps) {
           <For each={props.cards} keyed={(card) => card.id}>
             {(card) => (
               <a
-                class="agents-home__card"
+                class="agents-home__card oc-card"
                 data-agent-id={card().id}
                 href={card().target.href}
                 onClick={(event) => navigate(event, "chat", card().target.options)}
               >
                 <div class="agents-home__identity">
                   <div class="agents-home__avatar" aria-hidden="true">
-                    <LitContent
-                      render={() => {
-                        avatarContext.revision();
-                        return renderAgentIdentityAvatar(card());
-                      }}
-                    />
+                    <AgentIdentityAvatar agent={(avatarContext.revision(), card())} />
                   </div>
                   <div class="agents-home__name">
                     <h2>{card().name}</h2>
@@ -162,30 +156,13 @@ export function AgentsHomeView(props: AgentsHomeProps) {
                       <p>{card().role}</p>
                     </Show>
                   </div>
-                </div>
-                <Show when={card().model}>
-                  <span class="agents-home__model" title={card().model}>
-                    {card().model}
+                  <span class="btn btn--sm agents-home__open oc-action oc-action-secondary">
+                    {t("agentsHome.openChat")}
                   </span>
-                </Show>
-                <div class="agents-home__activity">
-                  <Show
-                    when={card().activeNow}
-                    fallback={
-                      card().lastActiveAt
-                        ? t("agentsHome.lastActive", {
-                            time: formatRelativeTimestamp(card().lastActiveAt),
-                          })
-                        : t("agentsHome.neverActive")
-                    }
-                  >
-                    <span class="agents-home__working">{t("agentsHome.working")}</span>
-                  </Show>
                 </div>
                 <p class="agents-home__preview" title={card().preview ?? ""}>
                   {card().preview || t("agentsHome.noMessage")}
                 </p>
-                <span class="btn primary agents-home__open">{t("agentsHome.openChat")}</span>
               </a>
             )}
           </For>

@@ -47,6 +47,8 @@ type NodePool = {
   url: string;
   memoryLimitBytes: number;
   lifetime?: NodePoolLifetime;
+  draining?: true;
+  onGcStorm: (workerId: unknown) => void;
 };
 type NodePoolLifetime = { scheduler: GatewaySchedulerScope; pools: Set<NodePool> };
 type NodeInput = CodeModeExecutorStartInput | CodeModeExecutorResumeInput;
@@ -78,6 +80,8 @@ const poolLifetimes = new WeakMap<LegacyPluginSdkResourceHost, NodePoolLifetime>
 let nextPoolId = 0;
 const MAX_IDLE_POOLS = 4;
 const memoryPressure = channel("openclaw.memory.critical");
+const gcStorm = channel("openclaw.code-mode.gc-storm");
+let nextGcStormRetirementAt = 0;
 
 function removeIdlePool(owner: NodePool): void {
   for (const job of idlePools.get(owner) ?? []) {
@@ -109,9 +113,10 @@ function retireIdlePools(): void {
 
 async function closePool(owner: NodePool, reason: WorkerRetirementReason): Promise<void> {
   removeIdlePool(owner);
+  gcStorm.unsubscribe(owner.onGcStorm);
   // Native slots retain custody until exit; keep their owner through pending or failed cleanup.
   retiringPools.add(owner);
-  await owner.tasks.close(undefined, reason);
+  await owner.tasks.close(undefined, owner.draining ? "gc-storm" : reason);
   retiringPools.delete(owner);
   owner.lifetime?.pools.delete(owner);
 }
@@ -187,6 +192,16 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
     lifetime,
     url: workerUrl.href,
     memoryLimitBytes,
+    onGcStorm(workerId) {
+      if (workerId !== owner.id || owner.draining || performance.now() < nextGcStormRetirementAt) {
+        return;
+      }
+      // Admit at most one draining worker per minute; later detector windows retry the rest.
+      nextGcStormRetirementAt = performance.now() + 60_000;
+      owner.draining = true;
+      // Only the lifecycle owner knows whether an idle task slot holds a continuation.
+      retireIdlePool(owner);
+    },
     tasks: new WorkerTaskPool({
       workerUrl,
       workerClass: "singleton",
@@ -206,12 +221,17 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
       },
     }),
   };
+  gcStorm.subscribe(owner.onGcStorm);
   lifetime?.pools.add(owner);
   return owner;
 }
 
 async function releasePool(owner: NodePool): Promise<void> {
   const { lifetime } = owner;
+  if (owner.draining) {
+    await closePool(owner, "gc-storm");
+    return;
+  }
   if (!lifetime || lifetime.scheduler.signal.aborted || owner.tasks.isClosed) {
     await closePool(owner, lifetime?.scheduler.signal.aborted ? "shutdown" : "dispose");
     return;

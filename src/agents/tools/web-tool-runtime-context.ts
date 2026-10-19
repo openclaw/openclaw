@@ -24,8 +24,7 @@ export function resolveWebToolRuntimeContext<Kind extends WebProviderKind>(param
     (runtimeMetadata?.selectedProvider ?? runtimeMetadata?.providerConfigured) || "";
   if (!providerSelectionId) {
     const configuredProvider = config?.tools?.web?.[params.kind]?.provider;
-    providerSelectionId =
-      typeof configuredProvider === "string" ? configuredProvider.trim().toLowerCase() : "";
+    providerSelectionId = configuredProvider?.trim().toLowerCase() ?? "";
   }
   return {
     config,

@@ -422,6 +422,10 @@ available.
 - Output: WAV for regular TTS attachments, Opus for voice-note targets, PCM for Talk/telephony
 - Voice-note output: Google PCM is wrapped as WAV and transcoded to 48 kHz Opus with `ffmpeg`
 
+Malformed or oversized successful TTS responses are reported without automatically
+submitting another Google synthesis request. Transient network failures, HTTP 5xx
+responses, and responses with no audio retain one automatic retry.
+
 OpenClaw sends Gemini 3.8 TTS through the Interactions API
 (`POST /v1beta/interactions`) with `store: false`. Google also documents 3.8 on
 `generateContent`; Interactions is OpenClaw's routing choice, not a model
@@ -656,7 +660,8 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
     this route; use `google-generative-ai` for that feature.
 
     Interrupted text replies use the normal transient-error retry and failover
-    policy. Malformed completed tool-call arguments remain rejected.
+    policy. Malformed streaming JSON fails the request instead of silently
+    dropping content. Malformed completed tool-call arguments remain rejected.
 
   </Accordion>
 

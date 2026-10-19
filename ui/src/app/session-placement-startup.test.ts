@@ -297,20 +297,24 @@ describe("application session placement startup", () => {
           phase,
           targetKind: target.kind,
         });
-        expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+        expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
       }
       expect(published).toHaveBeenCalledTimes(publishedBeforePlacementChanges);
       expect(request).not.toHaveBeenCalledWith("sessions.describe", expect.anything());
 
       dispatch.resolve({ placement: createStartupPlacement("active", 5) });
       await vi.waitFor(() => {
-        expect(request).toHaveBeenCalledWith("sessions.send", {
-          key: input.recovery.sessionKey,
-          agentId: input.recovery.agentId,
-          message: input.recovery.message,
-          attachments: undefined,
-          idempotencyKey: input.recovery.messageId,
-        });
+        expect(request).toHaveBeenCalledWith(
+          "sessions.send",
+          {
+            key: input.recovery.sessionKey,
+            agentId: input.recovery.agentId,
+            message: input.recovery.message,
+            attachments: undefined,
+            idempotencyKey: input.recovery.messageId,
+          },
+          expect.anything(),
+        );
       });
       expect(startup.get(input.recovery.sessionKey)).toBeNull();
       expect(chatSubmissions.readInitial(input.recovery.sessionKey, client)).toMatchObject({
@@ -521,7 +525,7 @@ describe("application session placement startup", () => {
       });
       expect(sessions.invalidate).toHaveBeenCalledOnce();
       expect(sessions.refresh).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+      expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
       startup.dispose();
       const reloaded = createApplicationPlacementStartup(dependencies);
       reloaded.resumeRecovery();
@@ -541,17 +545,21 @@ describe("application session placement startup", () => {
         agentId: input.recovery.agentId,
         ...wire,
       });
-      expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+      expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
       retryDispatch.resolve({ placement: createStartupPlacement("active", 2) });
       await vi.waitFor(() => expect(reloaded.get(input.recovery.sessionKey)).toBeNull());
       expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
-      expect(request).toHaveBeenLastCalledWith("sessions.send", {
-        key: input.recovery.sessionKey,
-        agentId: input.recovery.agentId,
-        message,
-        attachments,
-        idempotencyKey: input.recovery.messageId,
-      });
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.send",
+        {
+          key: input.recovery.sessionKey,
+          agentId: input.recovery.agentId,
+          message,
+          attachments,
+          idempotencyKey: input.recovery.messageId,
+        },
+        expect.anything(),
+      );
       expect(chatSubmissions.readInitial(input.recovery.sessionKey, client)).not.toBeNull();
       expect(
         readSessionPlacementRecovery(
@@ -723,6 +731,7 @@ describe("application session placement startup", () => {
       expect(newRequest).toHaveBeenCalledWith(
         "sessions.send",
         expect.objectContaining({ idempotencyKey: input.recovery.messageId }),
+        expect.anything(),
       );
     });
     expect(startup.get(input.recovery.sessionKey)).toBeNull();

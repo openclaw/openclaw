@@ -1,25 +1,31 @@
-// Memory Core tests cover manager provider lifecycle fallback behavior.
 import { describe, expect, it, vi } from "vitest";
+import type { EmbeddingProvider } from "./embeddings.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import type { MemoryIndexManager } from "./manager.js";
 
-const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
+const memoryIndex = await import("./index.js");
 
 describe("memory index", () => {
-  const fixture = createManagerIndexFixture({
-    getMemorySearchManager,
-    closeAllMemorySearchManagers,
-  });
+  const fixture = createManagerIndexFixture(memoryIndex);
   const { provider: providerFixture } = fixture;
   const { createConfig: createCfg, getFreshManager, getPersistentManager } = fixture;
-
-  it("returns to the primary after a query outage without rebuilding its index", async () => {
-    const cfg = createCfg({ fallback: "fallback-provider" });
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-    const initial = await manager.search("alpha");
-    expect(initial).toEqual(
+  const fieldsOf = (manager: Awaited<ReturnType<typeof getFreshManager>>) =>
+    manager as unknown as { provider: EmbeddingProvider | null; providerInitialized: boolean };
+  const failedProvider = (id: string, model: string): EmbeddingProvider => {
+    const fail = async (): Promise<never> => {
+      throw providerFixture.createLocalWorkerExitError();
+    };
+    return { id, model, embed: fail, embedBatch: fail, close: async () => {} };
+  };
+  const expectAlpha = (results: Awaited<ReturnType<MemoryIndexManager["search"]>>) =>
+    expect(results).toEqual(
       expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
     );
+
+  it("returns to the primary after a query outage without rebuilding its index", async () => {
+    const manager = await getPersistentManager(createCfg({ fallback: "fallback-provider" }));
+    await manager.sync({ reason: "test" });
+    expectAlpha(await manager.search("alpha"));
     const indexedInputs = [...providerFixture.embeddedBatchTexts];
 
     providerFixture.beforeEmbedQuery = async () => {
@@ -38,9 +44,7 @@ describe("memory index", () => {
         manager.search("alpha concurrent recovery"),
       ]);
       for (const results of recovered) {
-        expect(results).toEqual(
-          expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
-        );
+        expectAlpha(results);
       }
       expect(manager.status().provider).toBe("mock");
       expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
@@ -92,9 +96,7 @@ describe("memory index", () => {
   });
 
   it("reports the adopted fallback provider when the published index belongs to it", async () => {
-    // A previous run fell back, so the published index carries the fallback provider's
-    // identity. Search adopts it; a deep status probe on a fresh manager must describe the
-    // same provider instead of the configured primary.
+    // Status must adopt the published fallback identity just as search does.
     const publishCfg = createCfg({
       provider: "fallback-provider",
       model: "fallback-provider-embed",
@@ -116,11 +118,11 @@ describe("memory index", () => {
     const status = statusManager.status();
 
     expect(probe.ok).toBe(true);
-    expect(status.provider).toBe("fallback-provider");
-    expect(status.model).toBe("fallback-provider-embed");
-    expect(status.custom?.providerState).toMatchObject({ mode: "fallback-active" });
-    // The index is readable by the provider search uses, so it must not be reported as a
-    // configuration mismatch that an operator would answer with a forced rebuild.
+    expect(status).toMatchObject({
+      provider: "fallback-provider",
+      model: "fallback-provider-embed",
+      custom: { providerState: { mode: "fallback-active" } },
+    });
     expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
   });
 
@@ -140,53 +142,27 @@ describe("memory index", () => {
   });
 
   it("rebuilds with fallback provider during explicit identity repair", async () => {
-    const oldCfg = createCfg({
-      model: "old-embed",
-    });
-    const oldManager = await getFreshManager(oldCfg);
+    const oldManager = await getFreshManager(createCfg({ model: "old-embed" }));
     await oldManager.sync({ reason: "test", force: true });
     await oldManager.close?.();
 
-    const cfg = createCfg({
-      model: "new-embed",
-      fallback: "fallback-provider",
+    const manager = await getFreshManager(
+      createCfg({ model: "new-embed", fallback: "fallback-provider" }),
+    );
+    expect(manager.status().dirty).toBe(true);
+    const fields = fieldsOf(manager);
+    fields.providerInitialized = true;
+    fields.provider = failedProvider("mock", "new-embed");
+
+    await manager.sync({ reason: "cli" });
+
+    expect(manager.status()).toMatchObject({
+      dirty: false,
+      provider: "fallback-provider",
+      model: "fallback-provider-embed",
     });
-    const manager = await getFreshManager(cfg);
-    try {
-      expect(manager.status().dirty).toBe(true);
-      const fields = manager as unknown as {
-        providerInitialized: boolean;
-        provider: {
-          id: string;
-          model: string;
-          embed: (text: string) => Promise<number[]>;
-          embedBatch: (texts: string[]) => Promise<number[][]>;
-          close: () => Promise<void>;
-        };
-      };
-      fields.providerInitialized = true;
-      fields.provider = {
-        id: "mock",
-        model: "new-embed",
-        embed: async () => {
-          throw providerFixture.createLocalWorkerExitError();
-        },
-        embedBatch: async () => {
-          throw providerFixture.createLocalWorkerExitError();
-        },
-        close: async () => {},
-      };
-
-      await manager.sync({ reason: "cli" });
-
-      expect(manager.status().dirty).toBe(false);
-      expect(manager.status().provider).toBe("fallback-provider");
-      expect(manager.status().model).toBe("fallback-provider-embed");
-      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-      await expect(manager.search("alpha")).resolves.not.toStrictEqual([]);
-    } finally {
-      await manager.close?.();
-    }
+    expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    await expect(manager.search("alpha")).resolves.not.toStrictEqual([]);
   });
 
   it("adopts a configured fallback index published by detached maintenance", async () => {
@@ -245,33 +221,10 @@ describe("memory index", () => {
   });
 
   it("reinitializes the configured provider after probe-time local degradation", async () => {
-    const cfg = createCfg({
-      fallback: "fallback-provider",
-    });
-    const manager = await getPersistentManager(cfg);
+    const manager = await getPersistentManager(createCfg({ fallback: "fallback-provider" }));
 
     await manager.sync({ reason: "test" });
-    (
-      manager as unknown as {
-        provider: {
-          id: string;
-          model: string;
-          embed: () => Promise<number[]>;
-          embedBatch: () => Promise<number[][]>;
-          close: () => Promise<void>;
-        };
-      }
-    ).provider = {
-      id: "local",
-      model: "mock-embed",
-      embed: async () => {
-        throw providerFixture.createLocalWorkerExitError();
-      },
-      embedBatch: async () => {
-        throw providerFixture.createLocalWorkerExitError();
-      },
-      close: async () => {},
-    };
+    fieldsOf(manager).provider = failedProvider("local", "mock-embed");
     const callsBeforeSearch = providerFixture.providerCalls.length;
 
     await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({
@@ -285,13 +238,7 @@ describe("memory index", () => {
     expect(
       providerFixture.providerCalls.slice(callsBeforeSearch).map((call) => call.provider),
     ).toContain("openai");
-    expect(
-      (
-        manager as unknown as {
-          provider: { id: string } | null;
-        }
-      ).provider?.id,
-    ).toBe("mock");
+    expect(fieldsOf(manager).provider?.id).toBe("mock");
   });
 
   it("clears identity dirty after status resolves the indexed fallback provider", async () => {
@@ -354,78 +301,53 @@ describe("memory index", () => {
   });
 
   it("exposes already-created local runtime facts without probing embeddings", async () => {
-    const cfg = createCfg({});
-    const manager = await getFreshManager(cfg, "status");
-    try {
-      const getRuntimeFacts = vi.fn(() => ({
-        engine: "llama.cpp" as const,
-        state: "ready" as const,
-        backend: "cuda" as const,
-        buildType: "prebuilt" as const,
-        deviceNames: ["NVIDIA Test GPU"],
-        offload: {
-          supported: true,
-          offloadedLayers: 24,
-          totalLayers: 24,
-        },
-        context: {
-          requestedSize: 4096,
-        },
-      }));
-      const provider = {
-        id: "local",
-        model: "test-model.gguf",
-        embed: vi.fn(async () => [1, 0, 0, 0]),
-        embedBatch: vi.fn(async (texts: string[]) => texts.map(() => [1, 0, 0, 0])),
-      };
-      Object.defineProperty(provider, Symbol.for("openclaw.localEmbeddingRuntimeFacts"), {
-        value: getRuntimeFacts,
-      });
-      const fields = manager as unknown as {
-        provider: typeof provider | null;
-      };
-      fields.provider = provider;
+    const manager = await getFreshManager(createCfg({}), "status");
+    const getRuntimeFacts = vi.fn(() => ({
+      engine: "llama.cpp" as const,
+      state: "ready" as const,
+      backend: "cuda" as const,
+      buildType: "prebuilt" as const,
+      deviceNames: ["NVIDIA Test GPU"],
+      offload: { supported: true, offloadedLayers: 24, totalLayers: 24 },
+      context: { requestedSize: 4096 },
+    }));
+    const provider: EmbeddingProvider = {
+      id: "local",
+      model: "test-model.gguf",
+      embed: vi.fn(async () => [1, 0, 0, 0]),
+      embedBatch: vi.fn<EmbeddingProvider["embedBatch"]>(async (texts) =>
+        texts.map(() => [1, 0, 0, 0]),
+      ),
+    };
+    Object.defineProperty(provider, Symbol.for("openclaw.localEmbeddingRuntimeFacts"), {
+      value: getRuntimeFacts,
+    });
+    fieldsOf(manager).provider = provider;
 
-      expect(manager.status().custom?.llamaCppRuntime).toMatchObject({
-        state: "ready",
-        backend: "cuda",
-        deviceNames: ["NVIDIA Test GPU"],
-        offload: {
-          offloadedLayers: 24,
-          totalLayers: 24,
-        },
-        context: {
-          requestedSize: 4096,
-        },
-      });
-      expect(getRuntimeFacts).toHaveBeenCalledTimes(1);
-    } finally {
-      await manager.close?.();
-    }
+    expect(manager.status().custom?.llamaCppRuntime).toMatchObject({
+      state: "ready",
+      backend: "cuda",
+      deviceNames: ["NVIDIA Test GPU"],
+      offload: { offloadedLayers: 24, totalLayers: 24 },
+      context: { requestedSize: 4096 },
+    });
+    expect(getRuntimeFacts).toHaveBeenCalledTimes(1);
   });
 
   it("fails fast instead of searching FTS when an explicit provider is unavailable", async () => {
     providerFixture.forceNoProvider = true;
 
-    const cfg = createCfg({
-      provider: "openai",
-      minScore: 0.35,
-    });
-    const manager = await getFreshManager(cfg);
-    try {
-      await expect(manager.search("Alpha")).rejects.toThrow(
-        /Memory search unavailable: embedding provider "openai" is configured but unavailable\.[\s\S]*agentId=main purpose=default[\s\S]*registeredMemoryEmbeddingProviders=openai-compatible/,
-      );
-      await expect(manager.sync({ reason: "test" })).rejects.toThrow(
-        /Memory sync unavailable: embedding provider "openai" is configured but unavailable\./,
-      );
-      providerFixture.forceNoProvider = false;
-      await manager.sync({ reason: "test", force: true });
-      const results = await manager.search("Alpha");
-      expect(results.length).toBeGreaterThan(0);
-    } finally {
-      await manager.close?.();
-    }
+    const manager = await getFreshManager(createCfg({ provider: "openai", minScore: 0.35 }));
+    await expect(manager.search("Alpha")).rejects.toThrow(
+      /Memory search unavailable: embedding provider "openai" is configured but unavailable\.[\s\S]*agentId=main purpose=default[\s\S]*registeredMemoryEmbeddingProviders=openai-compatible/,
+    );
+    await expect(manager.sync({ reason: "test" })).rejects.toThrow(
+      /Memory sync unavailable: embedding provider "openai" is configured but unavailable\./,
+    );
+    providerFixture.forceNoProvider = false;
+    await manager.sync({ reason: "test", force: true });
+    const results = await manager.search("Alpha");
+    expect(results.length).toBeGreaterThan(0);
   });
 
   it("fails fast instead of returning FTS when an explicit provider is lost at runtime", async () => {

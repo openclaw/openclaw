@@ -18,6 +18,7 @@ import { dispatchGatewayMethodInProcess } from "../../agents/subagents/announce/
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "../../agents/subagents/registry/subagent-registry-run-pause.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "../../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
@@ -101,9 +102,9 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
     const entry = expectDefined(subagentRuns.get(runId), `completed run ${runId}`);
     expect(entry).toMatchObject({
       execution: { status: "terminal", outcome: { status: "ok" } },
-      completion: { resultText },
       cleanupCompletedAt: expect.any(Number),
     });
+    expect(loadSubagentRegistryFromSqlite().get(runId)?.completion?.resultText).toBe(resultText);
   };
   const expectSharedRequesterCohort = (runIds: string[], batchRunIds: string[]) => {
     const wakes = runIds.map(
@@ -422,9 +423,6 @@ it.each(["runtime owner", "state source"] as const)(
       await closing;
       worker.mockRestore();
     }
-    const { loadSubagentRegistryFromSqlite } = await vi.importActual<
-      typeof import("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js")
-    >("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js");
     expect(loadSubagentRegistryFromSqlite().get(runId)?.requesterTurnYielded).toBe(true);
   },
 );

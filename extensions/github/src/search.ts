@@ -8,7 +8,8 @@ import {
   requiredString,
   withOptionalGitHubAuth,
 } from "./github-api.js";
-import { assertPublicGitHubRepository, type ControlUiGitHubPreviewIdentity } from "./preview.js";
+import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
+import { assertPublicGitHubRepository } from "./preview.js";
 import {
   quoteGitHubSearchKeywords,
   validGitHubSearchRepository,

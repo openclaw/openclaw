@@ -8,18 +8,17 @@ import {
 } from "../../config/control-ui-chunking.ts";
 
 describe("Control UI build chunking", () => {
-  it("keeps a shared decorator helper from pulling New Session into chat", async () => {
-    const chat = new URL("../pages/chat/chat-page-state.ts", import.meta.url).pathname;
-    const newSession = new URL("../pages/new-session/new-session-page-owner.ts", import.meta.url)
-      .pathname;
-    const entry = "\0decorator-route-fixture";
+  it("keeps the optional JSON5 parser outside the eager validation graph", async () => {
+    const zod = new URL("../../node_modules/zod/index.js", import.meta.url).pathname;
+    const json5 = new URL("../../node_modules/json5/dist/index.mjs", import.meta.url).pathname;
+    const entry = "\0config-parser-fixture";
     const sources = new Map([
       [
         entry,
-        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)});`,
+        `export { validate } from ${JSON.stringify(zod)}; export const warm = () => import(${JSON.stringify(json5)});`,
       ],
-      [chat, "const mark = (value: unknown) => value; @mark export class ChatPage {}"],
-      [newSession, "const mark = (value: unknown) => value; @mark export class NewSessionPage {}"],
+      [zod, "export const validate = () => true;"],
+      [json5, "export const parse = () => ({});"],
     ]);
     const result = await build({
       configFile: false,
@@ -27,7 +26,7 @@ describe("Control UI build chunking", () => {
       logLevel: "silent",
       plugins: [
         {
-          name: "decorator-route-fixture",
+          name: "config-parser-fixture",
           enforce: "pre",
           resolveId: (id) => (sources.has(id) ? id : null),
           load: (id) => sources.get(id) ?? null,
@@ -47,8 +46,8 @@ describe("Control UI build chunking", () => {
       throw new Error("Expected one in-memory build");
     }
     const chunks = result.output.filter((asset) => asset.type === "chunk");
-    const chatChunk = chunks.find((chunk) => chat in chunk.modules)!;
-    const newChunk = chunks.find((chunk) => newSession in chunk.modules)!;
+    const entryChunk = chunks.find((chunk) => chunk.isEntry)!;
+    const parserChunk = chunks.find((chunk) => json5 in chunk.modules)!;
     const dependencies = new Set<string>();
     const visit = (file: string) => {
       if (dependencies.has(file)) {
@@ -57,29 +56,37 @@ describe("Control UI build chunking", () => {
       dependencies.add(file);
       chunks.find((chunk) => chunk.fileName === file)?.imports.forEach(visit);
     };
-    visit(chatChunk.fileName);
-    expect(dependencies.has(newChunk.fileName)).toBe(false);
+    visit(entryChunk.fileName);
+    expect(dependencies.has(parserChunk.fileName)).toBe(false);
+    expect(entryChunk.dynamicImports).toContain(parserChunk.fileName);
   });
 
-  it("emits one measured shared stylesheet while keeping optional code lazy", async () => {
+  it("keeps routes and optional code lazy with one shared stylesheet", async () => {
     const modulePath = (relative: string) => new URL(relative, import.meta.url).pathname;
     const chat = modulePath("../pages/chat/chat-pane.tsx");
     const newSession = modulePath("../pages/new-session/new-session-page.tsx");
     const optional = modulePath("../components/assistant-panel-content.ts");
+    const devices = modulePath("../pages/devices/devices-page.tsx");
+    const sharedUi = modulePath("../components/select-picker-view.tsx");
     const sharedStyle = modulePath("../styles/mcp-app-extensions.css");
     const sidebarStyle = modulePath("../styles/sidebar-reorder.css");
     const entry = "\0cold-load-fixture";
     const sources = new Map([
       [
         entry,
-        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)});`,
+        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)});`,
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class Chat { label = label; } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
-      [newSession, `import ${JSON.stringify(sidebarStyle)}; export const ready = true;`],
+      [
+        newSession,
+        `import ${JSON.stringify(sidebarStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class NewSession { label = label; }`,
+      ],
       [optional, 'export const panel = "optional-panel";'],
+      [devices, 'export const page = "devices-page";'],
+      [sharedUi, 'export const label = "shared-ui";'],
       [sharedStyle, ".shared-fixture { color: red; }"],
       [sidebarStyle, ".sidebar-fixture { color: blue; }"],
     ]);
@@ -101,7 +108,18 @@ describe("Control UI build chunking", () => {
         rolldownOptions: {
           input: entry,
           preserveEntrySignatures: "allow-extension",
-          output: { codeSplitting: controlUiCodeSplitting, strictExecutionOrder: true },
+          output: {
+            codeSplitting: {
+              ...controlUiCodeSplitting,
+              // A stale capture must not pull a lazy page into the shared boot chunk.
+              groups: controlUiCodeSplitting.groups.map((group) =>
+                group.name === "control-ui-boot-shared"
+                  ? { ...group, test: (id: string) => id === devices || group.test(id) }
+                  : group,
+              ),
+            },
+            strictExecutionOrder: true,
+          },
         },
       },
     });
@@ -115,6 +133,22 @@ describe("Control UI build chunking", () => {
     expect(styles[0]).toMatchObject({ source: expect.stringContaining(".shared-fixture") });
     expect(styles[0]).toMatchObject({ source: expect.stringContaining(".sidebar-fixture") });
     const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const chatChunk = chunks.find((chunk) => chat in chunk.modules)!;
+    const newSessionChunk = chunks.find((chunk) => newSession in chunk.modules)!;
+    const staticImports = (fileName: string, visited = new Set<string>()): Set<string> => {
+      if (!visited.has(fileName)) {
+        visited.add(fileName);
+        for (const imported of chunks.find((chunk) => chunk.fileName === fileName)!.imports) {
+          staticImports(imported, visited);
+        }
+      }
+      return visited;
+    };
+    expect(staticImports(chatChunk.fileName)).not.toContain(newSessionChunk.fileName);
+    expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
+    const devicesChunk = chunks.find((chunk) => devices in chunk.modules)!;
+    expect(staticImports(chatChunk.fileName)).not.toContain(devicesChunk.fileName);
+    expect(staticImports(newSessionChunk.fileName)).not.toContain(devicesChunk.fileName);
     const deferred = chunks.find((chunk) => optional in chunk.modules)!;
     expect(deferred).toBeDefined();
     expect(chunks.filter((chunk) => chunk.imports.includes(deferred.fileName))).toHaveLength(0);
@@ -127,13 +161,13 @@ describe("Control UI build chunking", () => {
       maxSize: 1024 * 1024,
     });
     for (const [id, expected] of [
-      ["/repo/ui/node_modules/lit/index.js", "lit-runtime"],
-      ["/repo/ui/node_modules/lit-html/directives/repeat.js", "lit-runtime"],
-      ["/repo/ui/node_modules/highlight.js/lib/core.js", "markdown-runtime"],
-      [String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`, "markdown-runtime"],
+      ["/repo/ui/node_modules/highlight.js/lib/core.js", "markdown-highlight-runtime"],
+      ["/repo/ui/node_modules/markdown-it/dist/markdown-it.mjs", undefined],
+      ["/repo/ui/node_modules/entities/dist/esm/index.js", undefined],
+      [String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`, "markdown-highlight-runtime"],
       ["/tmp/openclaw-pnpm-node-modules/dompurify/dist/purify.es.mjs", "markdown-runtime"],
       ["/tmp/openclaw-pnpm-node-modules/zod/v4/core/schemas.js", "config-runtime"],
-      ["/tmp/openclaw-pnpm-node-modules/json5/dist/index.js", "config-runtime"],
+      ["/tmp/openclaw-pnpm-node-modules/json5/dist/index.js", "json5-runtime"],
       [
         "/tmp/openclaw-pnpm-node-modules/libphonenumber-js/max/exports/parsePhoneNumber.js",
         "phone-runtime",
@@ -148,6 +182,7 @@ describe("Control UI build chunking", () => {
         new URL("../styles/sidebar-update-card.css", import.meta.url).pathname,
         "sidebar-update-runtime",
       ],
+      [new URL("../pages/chat/route-entry.ts", import.meta.url).pathname, "chat-route-entry"],
       [new URL("../pages/cron/cron-page.tsx", import.meta.url).pathname, "cron-page"],
       [new URL("../pages/plugins/plugins-page.tsx", import.meta.url).pathname, "plugins-page"],
       [new URL("../components/markdown-parser.ts", import.meta.url).pathname, "markdown-runtime"],
@@ -160,20 +195,6 @@ describe("Control UI build chunking", () => {
       ["\0virtual:openclaw-control-ui-locale/ru", undefined],
     ] as const) {
       expect(controlUiStableChunkName(id), id).toBe(expected);
-    }
-    for (const [name, directive] of [
-      ["lit", "cache"],
-      ["lit-html", "cache"],
-      ["lit", "until"],
-      ["lit-html", "until"],
-      ["lit-html", "private-async-helpers"],
-    ]) {
-      expect(
-        controlUiStableChunkName(`/repo/node_modules/${name}/directives/${directive}.js`),
-      ).toBeUndefined();
-      expect(
-        controlUiStableChunkName(`C:\\repo\\node_modules\\${name}\\directives\\${directive}.js`),
-      ).toBeUndefined();
     }
   });
 
@@ -237,7 +258,7 @@ describe("Control UI build chunking", () => {
     ).toBe("node_modules/nanoid/index.browser.js");
     expect(
       controlUiBootManifestKey(
-        "/repo/node_modules/@awesome.me/webawesome/node_modules/nanoid/index.browser.js",
+        "/repo/node_modules/@example/control/node_modules/nanoid/index.browser.js",
       ),
     ).toBe("node_modules/nanoid/index.browser.js");
     expect(controlUiBootManifestKey("/repo/ui/src/main.ts?html-proxy&index=0.js")).not.toContain(

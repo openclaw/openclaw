@@ -18,8 +18,7 @@ export function canonicalModelAuthProviderId(provider: string): string {
 export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
   return (
     p.status === "missing" ||
-    (Array.isArray(p.profiles) &&
-      p.profiles.some((prof) => prof.type === "oauth" || prof.type === "token"))
+    p.profiles.some((prof) => prof.type === "oauth" || prof.type === "token")
   );
 }
 

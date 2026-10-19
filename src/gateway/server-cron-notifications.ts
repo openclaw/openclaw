@@ -1,4 +1,3 @@
-// Gateway cron notification delivery.
 // Sends announce and webhook notifications for cron completion/failure events.
 import {
   normalizeOptionalLowercaseString,
@@ -9,7 +8,7 @@ import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
+import { CronAgentSelectionRequiredError } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
@@ -443,7 +442,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
       normalizeOptionalString(params.job.agentId) ??
       normalizeOptionalString(params.routing.defaultAgentId);
     if (!requestedAgentId) {
-      throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+      throw new CronAgentSelectionRequiredError();
     }
     const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(requestedAgentId);
     if (params.mode === "webhook") {
@@ -576,8 +575,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     );
   }
 
-  // Script notify is carried as the completion summary, so its absence uses
-  // the same silent-summary suppression path as NO_REPLY output.
+  // Script notify is carried as the prepared completion summary.
   if (completionWebhookUrl && (completionSummary || params.evt.completionStatus === "failed")) {
     const payload = buildCronFinishedWebhookPayload(redactedWebhookEvent);
     // Detached sends own roots so suspension cannot snapshot mid-delivery.

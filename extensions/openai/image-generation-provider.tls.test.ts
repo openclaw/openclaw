@@ -153,10 +153,16 @@ it.each(["same-origin", "cross-origin", "redirect"])(
         serverName: "files.proxy.test",
       });
     }
-    expect(requests.at(-1)).toEqual({
+    const imageRequest = requests.at(-1);
+    expect(imageRequest).toMatchObject({
       path: "/image.png",
       certificate: route === "same-origin",
-      serverName: route === "same-origin" ? "files.proxy.test" : false,
     });
+    if (route === "same-origin") {
+      expect(imageRequest?.serverName).toBe("files.proxy.test");
+    } else {
+      // Undici omits IP SNI on Node and sends the destination IP on Bun.
+      expect([false, new URL(imageOrigin).hostname]).toContain(imageRequest?.serverName);
+    }
   },
 );

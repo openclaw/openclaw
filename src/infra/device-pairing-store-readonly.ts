@@ -14,6 +14,7 @@ import type {
   DevicePairingNodeSnapshot,
   DevicePairingReadCommand,
 } from "./device-pairing-read.types.js";
+import type { PairedDevice } from "./device-pairing.types.js";
 
 async function readPairing<Command extends DevicePairingReadCommand>(
   command: Command,
@@ -106,29 +107,31 @@ export async function listDevicePairingStoreRecordsReadOnly(baseDir?: string, cu
   return reply.list;
 }
 
-export async function loadPairedDevicePairingStoreRecordReadOnly(
+export function loadPairedDevicePairingStoreRecordReadOnly(deviceId: string, baseDir?: string) {
+  return readCurrentPairedDevice(deviceId, (device) => device, baseDir);
+}
+
+/** Run authorization without yielding after reading the committed publication. */
+export async function readCurrentPairedDevice<T>(
   deviceId: string,
+  read: (device: PairedDevice | null) => T,
   baseDir?: string,
-) {
+): Promise<T> {
   const context = captureOpenClawStateReadContext(
     resolveOpenClawStateSqlitePath(
       baseDir ? { ...process.env, OPENCLAW_STATE_DIR: baseDir } : process.env,
     ),
   );
-  const device = captureDevicePairingPublication(context.admission).readDevice(deviceId.trim());
-  if (device !== undefined) {
-    context.admission.assertCurrent();
-    return device;
+  let device = captureDevicePairingPublication(context.admission).readDevice(deviceId.trim());
+  if (device === undefined) {
+    await readPairing({ type: "devicePairing.lookup", deviceId: deviceId.trim() }, baseDir, true);
+    device = captureDevicePairingPublication(context.admission).readDevice(deviceId.trim());
+    if (device === undefined) {
+      throw new Error("Device pairing read publication was replaced");
+    }
   }
-  const { reply } = await readPairing(
-    { type: "devicePairing.lookup", deviceId: deviceId.trim() },
-    baseDir,
-    true,
-  );
-  if (!reply) {
-    return null;
-  }
-  return reply.device;
+  context.admission.assertCurrent();
+  return read(device);
 }
 
 export async function loadPendingDevicePairingStoreRecordReadOnly(

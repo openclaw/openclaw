@@ -35,7 +35,6 @@ import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { controlUiPluginDistributionsPlugin } from "./config/control-ui-plugin-distributions.ts";
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
-import { controlUiWebAwesomePageRulePlugin } from "./config/control-ui-web-awesome-page-rule.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -514,7 +513,13 @@ export async function refreshControlUiBuildOutput(
   // Embed only build-owned HTML, never a fetched Gateway document (which may
   // contain identity, route metadata, or an HTTP login response). The measured
   // route graph also warms assets loaded before the first worker controls a tab.
+  const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
+    path.join(here, "src/app-route-paths.ts"),
+    { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } },
+  );
   const offlineShell = {
+    routes: routes.APP_ROUTE_PATHS,
+    routePrefixes: routes.APP_ROUTE_OFFLINE_PREFIXES,
     html: fs.readFileSync(path.join(buildOutDir, "index.html"), "utf8"),
     // Public fonts and theme styles are selected at runtime by preferences.
     // Keep this bounded build inventory, not all lazy pages, locales, or plugins.
@@ -686,6 +691,18 @@ function collectControlUiPublicAssets(publicDir: string): { paths: string[]; has
   return { paths, hash: hash.digest("hex") };
 }
 
+export function controlUiRuntimeDefines(
+  command: "serve" | "build" | undefined,
+  buildInfo: ControlUiBuildInfo,
+) {
+  return {
+    "globalThis.OPENCLAW_UI_DEV_SERVER": JSON.stringify(command === "serve"),
+    ...(command === "serve"
+      ? { "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo) }
+      : {}),
+  };
+}
+
 export default function controlUiViteConfig(
   options: { outDir?: string; command?: "serve" | "build"; buildInfo?: ControlUiBuildInfo } = {},
 ): UserConfig {
@@ -731,9 +748,7 @@ export default function controlUiViteConfig(
       },
     },
     define: {
-      ...(options.command === "serve"
-        ? { "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo) }
-        : {}),
+      ...controlUiRuntimeDefines(options.command, buildInfo),
       "globalThis.OPENCLAW_UI_DEV_GATEWAY": devGateway
         ? JSON.stringify(devGateway.gateway)
         : "undefined",
@@ -741,11 +756,11 @@ export default function controlUiViteConfig(
     publicDir: path.resolve(here, "public"),
     css: {
       postcss: {
-        plugins: [controlUiHoverGuardPlugin(), controlUiWebAwesomePageRulePlugin()],
+        plugins: [controlUiHoverGuardPlugin()],
       },
     },
     optimizeDeps: {
-      include: ["ipaddr.js", "lit/directives/repeat.js", ...commonJsOptimizeDeps],
+      include: ["ipaddr.js", ...commonJsOptimizeDeps],
     },
     resolve: {
       alias: [

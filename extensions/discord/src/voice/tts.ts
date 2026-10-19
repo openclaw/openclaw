@@ -51,11 +51,11 @@ export async function synthesizeVoiceReplyAudio(params: {
     channel: "discord",
     overrides: directive.overrides,
   };
-  const streamResult = await runtime.tts.textToSpeechStream?.({
+  const streamResult = await runtime.tts.textToSpeechStream({
     ...request,
     disableFallback: true,
   });
-  if (streamResult?.success && streamResult.audioStream) {
+  if (streamResult.success && streamResult.audioStream) {
     return {
       status: "ok" as const,
       mode: "stream" as const,
@@ -64,10 +64,9 @@ export async function synthesizeVoiceReplyAudio(params: {
       speakText,
     };
   }
-  const streamFailure =
-    streamResult && !streamResult.success
-      ? streamResult.attempts?.findLast((attempt) => attempt.outcome === "failed")
-      : undefined;
+  const streamFailure = !streamResult.success
+    ? streamResult.attempts?.findLast((attempt) => attempt.outcome === "failed")
+    : undefined;
 
   const result = await runtime.tts.textToSpeech(request);
   if (!result.success || !result.audioPath) {

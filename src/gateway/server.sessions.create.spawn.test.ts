@@ -18,7 +18,7 @@ import {
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -216,7 +216,7 @@ test("sessions.create rejects a replaced required spawn parent before child crea
   const { createGatewaySession } = await import("./session-create-service.js");
   const parentMutationStarted = createDeferredCore();
   const replaceParent = createDeferredCore();
-  const replacing = runExclusiveSessionLifecycleMutation("create", {
+  const replacing = runSessionMutation({
     scope: storePath,
     identities: [parentSessionKey, parent.sessionId],
     run: async () => {

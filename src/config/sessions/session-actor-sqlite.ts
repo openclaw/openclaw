@@ -49,6 +49,7 @@ export type SessionActorTransport = {
       native: NativeAdmission,
       grant: () => boolean,
     ) => void,
+    concurrentBoardReads?: "transcript-only",
   ): Promise<T>;
   /** Read-only committed evidence; follow-up work runs after releasing the command FIFO. */
   afterCommitted?<Value extends SessionActorPhaseResults[SessionActorPhase]>(
@@ -389,6 +390,13 @@ export function createSqliteSessionActorExecutor(
             transfer.accept(publication.transfer);
           }
         }),
+        (name === "appendTranscriptEvent" || name === "appendToolResult") &&
+          "append" in captured &&
+          captured.append !== undefined &&
+          captured.append.initialization === undefined &&
+          !captured.reducers?.length
+          ? "transcript-only"
+          : undefined,
       );
     } catch (error) {
       // A transport timeout is not native settlement. The accepted callback keeps

@@ -35,11 +35,7 @@ function readAzureSpeechEnvRegion(): string | undefined {
 
 function normalizeAzureSpeechProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw =
-    asOptionalRecord(providers?.["azure-speech"]) ??
-    asOptionalRecord(providers?.azure) ??
-    asOptionalRecord(rawConfig["azure-speech"]) ??
-    asOptionalRecord(rawConfig.azure);
+  const raw = asOptionalRecord(providers?.["azure-speech"]) ?? asOptionalRecord(providers?.azure);
   const region = trimToUndefined(raw?.region) ?? readAzureSpeechEnvRegion();
   const endpoint =
     trimToUndefined(raw?.endpoint) ?? trimToUndefined(process.env.AZURE_SPEECH_ENDPOINT);

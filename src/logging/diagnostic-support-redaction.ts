@@ -18,7 +18,8 @@ const PAYLOAD_SUPPORT_FIELD_RE =
   /(?:body|chat|content|detail|error|header|instruction|message|payload|prompt|result|text|tool|transcript)/iu;
 const IDENTIFIER_SUPPORT_FIELD_RE =
   /(?:account[-_]?id|chat[-_]?id|conversation[-_]?id|email|message[-_]?id|phone|thread[-_]?id|user[-_]?id|username)/iu;
-const PRIVATE_MAP_SUPPORT_FIELD_RE = /^(?:accounts|chats|conversations|messages|threads|users)$/iu;
+const PRIVATE_MAP_SUPPORT_FIELD_RE =
+  /^(?:accounts|chats|conversations|dms|messages|threads|users)$/iu;
 const CONFIG_PRIVATE_FIELD_RE =
   /(?:allow[-_]?from|allow[-_]?to|deny[-_]?from|deny[-_]?to|blocked[-_]?from|blocked[-_]?users|owner[-_]?id|sender[-_]?id|recipient[-_]?id)/iu;
 const SENSITIVE_COMMAND_ARG_RE =
@@ -51,6 +52,8 @@ const TRUNCATED_SUPPORT_FIELD = "<truncated>";
 export type SupportRedactionContext = {
   env: NodeJS.ProcessEnv;
   stateDir: string;
+  /** Shared only within one export; raw identifiers and their mapping never leave memory. */
+  identifierKeys?: Map<string, string>;
 };
 
 type RedactSupportStringOptions = {
@@ -89,9 +92,22 @@ function sanitizeSecretRefForSupport(value: Record<string, unknown>): Record<str
   return sanitized;
 }
 
-function privateMapEntryLabel(key: string): string {
-  const normalized = key.toLowerCase();
-  return normalized.endsWith("s") ? normalized.slice(0, -1) : normalized;
+function sanitizeSupportKey(
+  key: string,
+  redaction: SupportRedactionContext,
+  privateMap: boolean,
+): string {
+  // Reserve the placeholder namespace so literal keys cannot overwrite redacted entries.
+  if (!privateMap && !key.startsWith("<identifier#") && redactTextForSupport(key) === key) {
+    return key;
+  }
+  const identifiers = (redaction.identifierKeys ??= new Map<string, string>());
+  let placeholder = identifiers.get(key);
+  if (placeholder === undefined) {
+    placeholder = `<identifier#${identifiers.size + 1}>`;
+    identifiers.set(key, placeholder);
+  }
+  return placeholder;
 }
 
 function createSupportRecord(): Record<string, unknown> {
@@ -540,7 +556,7 @@ export function redactPublicSupportDiagnosticLine(
   );
   const causes = (
     lines.match(
-      /\b(?:GLIBC_\d{1,3}(?:\.\d{1,3}){1,2} not found|[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|SQLite (?:snapshot hash mismatch|file generation (?:changed while reading|did not stabilize)|source did not stabilize|WAL commit (?:header is unavailable or changing|publication could not be verified))|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
+      /\b(?:GLIBC_\d{1,3}(?:\.\d{1,3}){1,2} not found|[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|SQLite (?:snapshot (?:hash|size) mismatch|file generation (?:changed while reading|did not stabilize)|source did not stabilize|WAL commit (?:header is unavailable or changing|publication could not be verified))|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
     ) ?? []
   ).map((cause) => cause.replace(/^permission denied$/u, "Permission denied"));
   // Candidate admission's existing text protocol carries only these fixed validation lines.
@@ -645,16 +661,9 @@ function sanitizeSupportValue(
     return { count: countOwnObjectEntries(record) };
   }
   const sanitized = createSupportRecord();
-  let privateEntryIndex = 0;
-  const redactEntryKeys = config && privateMap;
-  const privateEntryLabel = redactEntryKeys ? privateMapEntryLabel(key) : "";
   const { count, entries } = limitedSupportObjectEntries(record);
   for (const { key: entryKey, value: entryValue } of entries) {
-    let outputKey = entryKey;
-    if (redactEntryKeys) {
-      privateEntryIndex += 1;
-      outputKey = `<redacted-${privateEntryLabel}-${privateEntryIndex}>`;
-    }
+    const outputKey = sanitizeSupportKey(entryKey, redaction, privateMap);
     sanitized[outputKey] =
       !config && isPrivateSupportField(entryKey)
         ? "<redacted>"

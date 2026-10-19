@@ -12,12 +12,12 @@ export function testApiLifecycleFixtureFiles(repoRoot: string): Record<string, s
         ? `
 // Check during collection before imports can overwrite the previous generation.
 const remainingKeys = [
-  "openclaw.staleAuthOrderTestApi",
+  "openclaw.codexRouteSessionRepairTestApi",
   "openclaw.bashProcessRegistryTestApi",
   "openclaw.diagnosticRunActivityTestApi",
 ].filter((key) => Object.hasOwn(globalThis, Symbol.for(key)));
 expect(remainingKeys, "completed-file test API publications").toEqual([]);
-for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.staleAuthOrderTestApi"]) {
+for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.codexRouteSessionRepairTestApi"]) {
   expect(Reflect.get(globalThis, key)).toBe("foreign");
   Reflect.deleteProperty(globalThis, key);
 }
@@ -30,7 +30,7 @@ expect(redactPriorValues(priorError, () => "***")).toBe(priorError);
 import { createRequire } from "node:module";
 import { afterAll, describe, expect, it } from "vitest";
 ${observeCleanup}
-const { repairStaleConfiguredAuthOrders } = await import(${sourcePath("commands/doctor/shared/stale-auth-order.test-support.ts")});
+const { repairCodexSessionStoreRoutes } = await import(${sourcePath("commands/doctor/shared/codex-route-session-repair.test-support.ts")});
 const registry = await import(${sourcePath("agents/bash-process-registry.ts")});
 const { resetProcessRegistryForTests } = await import(${sourcePath("agents/bash-process-registry.test-support.ts")});
 const { createProcessSessionFixture } = await import(${sourcePath("agents/bash-process-registry.test-helpers.ts")});
@@ -66,11 +66,7 @@ describe("${generation} test API consumers", () => {
     native.api.resetActiveCronTaskRunsForTests();
     expect(nativeCron.abortActiveCronTaskRuns()).toBe(0);
     expect(controller.signal.aborted).toBe(false);
-    const cfg = { auth: { order: { "fixture-provider": [] } } };
-    expect(repairStaleConfiguredAuthOrders({ cfg, stores: [] })).toEqual({
-      config: cfg,
-      changes: [],
-    });
+    expect(repairCodexSessionStoreRoutes({ store: {} })).toEqual([]);
   }
   it.each(["first test", "second test"])("keeps test API consumers usable in %s", async () => {
     await verifyConsumers();
@@ -129,7 +125,7 @@ try {
 }
 `;
   files["foreign/extensions/google/vertex-adc.ts"] = `
-for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.staleAuthOrderTestApi"]) {
+for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.codexRouteSessionRepairTestApi"]) {
   Reflect.set(globalThis, key, "foreign");
 }
 `;

@@ -218,11 +218,19 @@ async function captureFinalStatus(
         );
         return isRecord(observation) ? observation.frame : undefined;
       };
+      const snapshot = observations.findLast(
+        (entry) =>
+          isRecord(entry) &&
+          entry.action === "browser-event" &&
+          isRecord(entry.frame) &&
+          entry.frame.event === "models.snapshot",
+      );
       await captureControlUiE2eFailureDiagnostics(page, {
         error: error instanceof Error ? error : new Error("Quota final-status failure"),
         label: "quota-final-status",
         modelResponses: {
           list: latestResponse("models.list"),
+          snapshot: isRecord(snapshot) ? snapshot.frame : undefined,
           authStatus: latestResponse("models.authStatus"),
         },
       });

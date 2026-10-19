@@ -119,7 +119,10 @@ describe("catalog worker capture custody", () => {
         (candidate) => candidate.threadId === workerCaptures[0]!.threadId,
       );
       expect(worker).toBeDefined();
-      expect(worker?.resourceLimits).toMatchObject({ maxOldGenerationSizeMb: 512 });
+      expect(worker?.resourceLimits).toMatchObject({
+        maxOldGenerationSizeMb: 512,
+        maxYoungGenerationSizeMb: 32,
+      });
       const terminate = worker!.terminate.bind(worker!);
       const resume = () => allowExit.resolve();
       signal.addEventListener("abort", resume, { once: true });

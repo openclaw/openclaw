@@ -1,3 +1,4 @@
+import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { A2UI_PATH, isA2uiPath } from "./a2ui-shared.js";
@@ -59,7 +60,7 @@ export async function handleA2uiHttpRequestWithRootResolver(
   res.setHeader("Cache-Control", "no-store");
 
   if (mime === "text/html") {
-    const buf = await result.handle.readFile({ encoding: "utf8" });
+    const buf = (await readFileHandleBounded(result.handle, Infinity)).toString("utf8");
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     if (req.method === "HEAD") {
       res.setHeader("Content-Length", String(Buffer.byteLength(buf)));
@@ -76,6 +77,6 @@ export async function handleA2uiHttpRequestWithRootResolver(
     res.end();
     return true;
   }
-  res.end(await result.handle.readFile());
+  res.end(await readFileHandleBounded(result.handle, Infinity));
   return true;
 }

@@ -159,15 +159,14 @@ export function registerCopilotActiveRun(params: {
       params.abortActiveSession();
     },
   };
-  setActiveEmbeddedRun(
+  const attachment = setActiveEmbeddedRun(
     params.input.sessionId,
     activeRunHandle,
     params.input.sessionKey,
     params.input.sessionFile,
     params.agentId,
   );
-  params.input.replyOperation?.attachBackend(activeRunHandle);
-  return activeRunHandle;
+  return { handle: activeRunHandle, attachment };
 }
 
 async function waitForPersistenceReceipt(
@@ -175,7 +174,7 @@ async function waitForPersistenceReceipt(
   requestedTimeoutMs: number | undefined,
 ): Promise<void> {
   const timeoutMs =
-    typeof requestedTimeoutMs === "number" &&
+    requestedTimeoutMs !== undefined &&
     Number.isFinite(requestedTimeoutMs) &&
     requestedTimeoutMs > 0
       ? requestedTimeoutMs

@@ -1,19 +1,24 @@
+import { dynamic } from "@solidjs/web";
 import type { Component } from "solid-js";
-import { createEffect, createMemo, createSignal, Show, untrack } from "solid-js";
+import { createMemo, Show, untrack } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { ExecApprovalCard } from "../../components/exec-approval-card-solid.tsx";
+import { createSkillFileHovercard } from "../../components/skill-file-hovercard.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
+import { projectPresentation } from "../../lib/reactive/presentation.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
-import { LitContent, solidContent, emptyLegacyContent } from "../../lit/solid-content.tsx";
+import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
@@ -22,25 +27,27 @@ import {
   renderChatComposerNotices as ChatComposerNoticesView,
   renderChatTopbarNotices as ChatTopbarNotices,
 } from "./chat-view-notices.tsx";
+import { subscribeAsyncQuestionState } from "./components/chat-async-question.ts";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
 import {
   ComposerQuestionDock,
-  resolveComposerQuestionPanel,
+  createComposerQuestionPanel,
 } from "./components/chat-composer-question.tsx";
 import { ComposerQueue } from "./components/chat-composer-regions.tsx";
 import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import { ChatComposer } from "./components/chat-composer.tsx";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
-import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
-import { renderChatSelectionAnnotations } from "./components/chat-selection-annotations.ts";
-import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
-import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
+import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
+import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
+import { ChatSessionSuggestions } from "./components/chat-session-suggestions.solid.tsx";
+import { ChatSwarmProgress } from "./components/chat-swarm-progress.solid.tsx";
 import { ChatTaskSuggestionTray } from "./components/chat-task-suggestions.tsx";
 import {
-  renderTranscriptSearch,
+  getTranscriptState,
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
+import { TranscriptSearch } from "./components/chat-transcript-search.tsx";
 import "../../components/resizable-divider.ts";
 export type { ChatProps } from "./chat-view-frame.ts";
 
@@ -49,10 +56,18 @@ type ChatViewInput = {
   frame: ChatViewFrame;
   presented: boolean;
   application?: ApplicationContext;
+  bindTranscriptViewport: (element: HTMLDivElement) => () => void;
+  getTranscriptElement: () => HTMLDivElement | null;
 };
 
 function ChatTranscript(input: ChatViewInput) {
-  return <ChatThread props={input.frame.threadProps} transcript={input.props.transcript} />;
+  return (
+    <ChatThread
+      props={input.frame.threadProps}
+      transcript={input.props.transcript}
+      bindViewport={input.bindTranscriptViewport}
+    />
+  );
 }
 
 function ChatFooterContent(input: ChatViewInput) {
@@ -101,6 +116,7 @@ function ChatFooterContent(input: ChatViewInput) {
               approval: input.props.inlineApproval!,
               sourceSession: input.frame.approvalSourceSession,
               busy: input.props.approvalBusy === true,
+              connected: input.props.connected,
               canGrant: input.props.approvalCanGrant,
               error: input.props.approvalErrors?.get(input.props.inlineApproval!.id) ?? null,
               variant: "inline",
@@ -110,40 +126,35 @@ function ChatFooterContent(input: ChatViewInput) {
         </div>
       </Show>
       <Show when={!input.props.detailsEnabled}>
-        <LitContent
-          value={renderChatPullRequests({
-            pullRequests: input.props.pullRequests ?? [],
-            gateway: input.props.pullRequestsGateway,
-            sessionId: input.props.pullRequestsSessionId,
-            sessionKey: scopedSessionArtifactKey(
-              input.props.sessionKey,
-              input.props.currentAgentId ?? undefined,
-            ),
-            presented: input.props.presented ?? true,
-            branch: input.props.pullRequestsBranch,
-            branchDismissed: input.props.pullRequestsBranchDismissed,
-            status: input.props.pullRequestsStatus ?? "ready",
-            onDismiss: (pullRequest) => input.props.onDismissPullRequest?.(pullRequest),
-            onDismissBranch: input.props.onDismissPullRequestsBranch,
-            onOpenSessionDiff: input.props.onOpenSessionDiff,
-            publication: input.props.githubPublication,
-          })}
+        <ChatPullRequests
+          pullRequests={input.props.pullRequests ?? []}
+          gateway={input.props.pullRequestsGateway}
+          sessionId={input.props.pullRequestsSessionId}
+          sessionKey={scopedSessionArtifactKey(
+            input.props.sessionKey,
+            input.props.currentAgentId ?? undefined,
+          )}
+          presented={input.props.presented ?? true}
+          branch={input.props.pullRequestsBranch}
+          branchDismissed={input.props.pullRequestsBranchDismissed}
+          status={input.props.pullRequestsStatus ?? "ready"}
+          onDismiss={(pullRequest) => input.props.onDismissPullRequest?.(pullRequest)}
+          onDismissBranch={input.props.onDismissPullRequestsBranch}
+          onOpenSessionDiff={input.props.onOpenSessionDiff}
+          publication={input.props.githubPublication}
         />
       </Show>
-      <LitContent
-        value={renderChatSessionSuggestions({
-          suggestions: input.props.sessionSuggestions ?? [],
-          role: input.props.sessionSuggestionRole,
-          busyIds: input.props.sessionSuggestionBusyIds ?? new Set(),
-          archived: input.props.sessionSuggestionsArchived === true,
-          canResolve: input.props.canResolveSessionSuggestions === true,
-          onResolve: (suggestion, resolution) =>
-            input.props.onResolveSessionSuggestion?.(suggestion, resolution),
-        })}
+      <ChatSessionSuggestions
+        suggestions={input.props.sessionSuggestions ?? []}
+        role={input.props.sessionSuggestionRole}
+        busyIds={input.props.sessionSuggestionBusyIds ?? new Set()}
+        archived={input.props.sessionSuggestionsArchived === true}
+        canResolve={input.props.canResolveSessionSuggestions === true}
+        onResolve={(suggestion, resolution) =>
+          input.props.onResolveSessionSuggestion?.(suggestion, resolution)
+        }
       />
-      <Show when={input.props.swarm}>
-        <LitContent value={renderChatSwarmProgress(input.props.swarm!)} />
-      </Show>
+      <Show when={input.props.swarm}>{(swarm) => <ChatSwarmProgress {...swarm()} />}</Show>
       <Show when={input.application}>
         <openclaw-plugin-contributions
           prop:kind="composer"
@@ -160,7 +171,7 @@ function ChatComposerView(input: ChatViewInput) {
   return (
     <ChatComposer
       {...input.props}
-      renderRevision={input.frame}
+      getTranscriptElement={input.getTranscriptElement}
       progressCard={input.props.detailsEnabled ? null : input.props.progressCard}
       progressCardInitialLoading={
         input.props.detailsEnabled ? false : input.props.progressCardInitialLoading
@@ -169,7 +180,6 @@ function ChatComposerView(input: ChatViewInput) {
       displayQueue={input.frame.displayQueue}
       footerContent={<ChatFooterContent {...input} />}
       notices={<ChatComposerNoticesView {...input.props} />}
-      onRequestUpdate={input.frame.requestUpdate}
       onToggleRealtimeTalk={
         input.props.suggestionComposer ? undefined : input.props.onToggleRealtimeTalk
       }
@@ -179,19 +189,23 @@ function ChatComposerView(input: ChatViewInput) {
 }
 
 function ChatComposerCompanion(input: ChatViewInput) {
+  // The companion belongs to this pane's lifetime; replacement panes mount a new owner.
+  const initialPaneId = untrack(() => input.props.paneId);
+  const questionPanel = createComposerQuestionPanel(
+    () => ({
+      ...input.props,
+      asyncQuestions: input.frame.asyncQuestions,
+      getTranscriptElement: input.getTranscriptElement,
+    }),
+    getChatComposerState(initialPaneId),
+  );
   return (
     <div class="chat-footer__context">
       <ChatFooterContent {...input} />
       <div class="agent-chat__composer-notices">
         <ChatComposerNoticesView {...input.props} />
       </div>
-      <ComposerQuestionDock
-        panel={resolveComposerQuestionPanel(
-          { ...input.props, asyncQuestions: input.frame.asyncQuestions },
-          getChatComposerState(input.props.paneId),
-          input.frame.requestUpdate,
-        )}
-      />
+      <ComposerQuestionDock panel={questionPanel()} />
       <ComposerQueue
         composer={{ ...input.props, displayQueue: input.frame.displayQueue }}
         showAbortableUi={
@@ -200,18 +214,21 @@ function ChatComposerCompanion(input: ChatViewInput) {
         }
       />
       <Show when={!input.props.suggestionComposer}>
-        <LitContent
-          value={renderChatSelectionAnnotations({ ...input.props, disabled: !input.props.canSend })}
-        />
+        <ChatSelectionAnnotations {...input.props} disabled={!input.props.canSend} />
       </Show>
-      <LitContent value={input.props.composerRecovery ?? emptyLegacyContent} />
+      <Show when={input.props.composerRecovery}>
+        {(recovery) => {
+          const Recovery = dynamic(() => recovery().component);
+          return <Recovery {...recovery()} />;
+        }}
+      </Show>
     </div>
   );
 }
 
 /** Plugin mountDefault creates a separate root and must carry its application scope. */
 function ChatSurfaceContent(input: { view: Component<ChatViewInput>; viewProps: ChatViewInput }) {
-  const View = untrack(() => input.view);
+  const View = dynamic(() => input.view);
   return (
     <Show when={input.viewProps.application} keyed fallback={<View {...input.viewProps} />}>
       {(application) => (
@@ -235,36 +252,21 @@ function ChatSurface(input: {
   viewProps: ChatViewInput;
   view: Component<ChatViewInput>;
   companion?: Component<ChatViewInput>;
+  replacementRef?: (element: HTMLElement) => void | (() => void);
 }) {
-  const app = useOptionalApplication();
-  const runtime = projectSource(app?.plugins, {
-    read: (source) => source,
-    subscribe: (source, publish) => source?.subscribe(publish) ?? (() => {}),
-    equality: "revision",
-  });
-  const selected = createMemo(() =>
-    runtime.read()?.selectedReplacement(input.binding["prop:surface"]),
-  );
   return (
-    <Show when={selected()} fallback={<input.view {...input.viewProps} />}>
-      <openclaw-plugin-view
-        {...input.binding}
-        prop:presented={input.viewProps.presented}
-        data-plugin-composer={input.binding["prop:surface"] === "composer" ? "" : undefined}
-        prop:defaultView={solidContent(ChatSurfaceContent, {
-          view: input.view,
-          viewProps: input.viewProps,
-        })}
-        prop:replacementCompanion={
-          input.companion
-            ? solidContent(ChatSurfaceContent, {
-                view: input.companion,
-                viewProps: input.viewProps,
-              })
-            : undefined
-        }
-      />
-    </Show>
+    <PluginSurface
+      surface={input.binding["prop:surface"]}
+      props={input.binding["prop:props"]}
+      presented={input.viewProps.presented}
+      replacementRef={input.replacementRef}
+      renderDefault={() => <ChatSurfaceContent view={input.view} viewProps={input.viewProps} />}
+      renderCompanion={() => (
+        <Show when={input.companion} keyed>
+          {(View) => <ChatSurfaceContent view={View} viewProps={input.viewProps} />}
+        </Show>
+      )}
+    />
   );
 }
 
@@ -281,30 +283,82 @@ export function ChatView(input: { props: ChatProps; application?: ApplicationCon
 }
 
 function ChatContent(input: { props: ChatProps }) {
-  const application = useOptionalApplication();
-  const frame = createMemo(() => createChatViewFrame(input.props));
-  const [presentationRevision, setPresentationRevision] = createSignal(0, { ownedWrite: true });
-  createEffect(
-    () => input.props.presented,
-    (binding) => {
-      if (typeof binding !== "object") {
-        return undefined;
+  // Composer sizing needs the viewport even before the virtualizer has rows.
+  let transcriptViewport: HTMLDivElement | undefined;
+  const bindTranscriptViewport = (element: HTMLDivElement) => {
+    transcriptViewport = element;
+    return () => {
+      if (transcriptViewport === element) {
+        transcriptViewport = undefined;
       }
-      const notify = () => setPresentationRevision((value) => value + 1);
-      binding.owner.addEventListener(PRESENTATION_CHANGED_EVENT, notify);
-      return () => binding.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, notify);
-    },
-  );
-  const presented = () => {
-    presentationRevision();
-    const binding = input.props.presented;
-    return typeof binding === "object" ? binding.isPresented() : (binding ?? true);
+    };
   };
+  const getTranscriptElement = () => (transcriptViewport?.isConnected ? transcriptViewport : null);
+  let replacementComposer: HTMLElement | undefined;
+  const registerReplacementComposer = (element: HTMLElement) => {
+    replacementComposer = element;
+    return () => {
+      if (replacementComposer === element) {
+        replacementComposer = undefined;
+      }
+    };
+  };
+  const application = useOptionalApplication();
+  const gateway = application && projectGateway(application.gateway);
+  const skillFileHovercard = createSkillFileHovercard({
+    get client() {
+      return gateway?.read().snapshot.client ?? null;
+    },
+    get agentId() {
+      return input.props.currentAgentId ?? undefined;
+    },
+    get sessionKey() {
+      return input.props.sessionKey;
+    },
+    onOpenFile: (file, line) =>
+      input.props.onOpenSidebar?.({
+        kind: "file",
+        ...file,
+        name: "SKILL.md",
+        language: "markdown",
+        line,
+      }),
+  });
+  const presentation = createMemo(() => projectPresentation(input.props.presented ?? true));
+  const transcriptVisibility = createMemo(() =>
+    projectPresentation(input.props.transcriptVisible ?? true),
+  );
+  const presented = () => presentation().read();
+  const paneId = createMemo(() => input.props.paneId);
+  const questions = createMemo(() =>
+    projectSource(getTranscriptState(paneId()), {
+      read: (state) => state.asyncQuestionRevision,
+      subscribe: subscribeAsyncQuestionState,
+      equality: "revision",
+    }),
+  );
+  const questionRevision = createParkedProjection(
+    () => questions().read(),
+    () => transcriptVisibility().read(),
+    paneId,
+  );
+  const frame = createMemo(() => {
+    questionRevision();
+    return createChatViewFrame(input.props, (replacement) => {
+      const target =
+        replacement && replacementComposer?.isConnected
+          ? replacementComposer
+          : getChatComposerState(input.props.paneId).composerTextarea;
+      target?.focus({ preventScroll: true });
+    });
+  });
   const viewProps = () => ({
     props: input.props,
     frame: frame(),
     presented: presented(),
     application,
+    bindTranscriptViewport,
+    getTranscriptElement,
   });
   const historyMessage = () => {
     const state = frame().historyLoadState;
@@ -323,7 +377,6 @@ function ChatContent(input: { props: ChatProps }) {
           const state = input.props.historyState;
           if (state && getChatHistoryLoadState(state).phase === "failed") {
             input.props.onRefresh();
-            state.requestUpdate?.();
           }
         }}
       >
@@ -371,13 +424,16 @@ function ChatContent(input: { props: ChatProps }) {
         }
         if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.transcriptSearch, event)) {
           event.preventDefault();
-          toggleTranscriptSearch(input.props.paneId, frame().requestUpdate, event);
+          toggleTranscriptSearch(input.props.paneId, event, frame().threadProps.onFocusComposer);
         }
       }}
     >
       <Show when={!input.props.suggestionComposer}>
         <ChatCommentController
           paneId={input.props.paneId}
+          onFocusComposer={frame().threadProps.onFocusComposer}
+          visiblePin={(id) => getTranscriptState(input.props.paneId).commentPins?.visiblePin(id)}
+          resolveSourceRange={frame().resolveCommentSource}
           props={input.props}
           disabled={!input.props.canSend}
           sessionKey={input.props.sessionKey}
@@ -400,12 +456,14 @@ function ChatContent(input: { props: ChatProps }) {
                     prop:presented={presented()}
                   />
                 </Show>
-                <LitContent
-                  value={renderTranscriptSearch(input.props.paneId, frame().requestUpdate)}
-                />
-                <div class="chat-main__conversation-frame">
+                <TranscriptSearch search={getTranscriptState(input.props.paneId).search} />
+                <div
+                  class="chat-main__conversation-frame"
+                  ref={[elementRef(input.props.onConversationFrameRef)]}
+                >
                   <div
                     class="chat-main__conversation"
+                    ref={skillFileHovercard}
                     onWheel={(event) =>
                       forwardChatWheelToTranscript(event, input.props.transcript.scrollElement)
                     }
@@ -467,7 +525,7 @@ function ChatContent(input: { props: ChatProps }) {
                         <ChatTaskSuggestionTray view={input.props} />
                       </div>
                     </Show>
-                    <div class="chat-footer">
+                    <div class="chat-footer" ref={[elementRef(input.props.onFooterElementRef)]}>
                       <ChatSurface
                         binding={{
                           "prop:surface": "composer",
@@ -487,6 +545,7 @@ function ChatContent(input: { props: ChatProps }) {
                         viewProps={viewProps()}
                         view={ChatComposerView}
                         companion={ChatComposerCompanion}
+                        replacementRef={registerReplacementComposer}
                       />
                     </div>
                   </div>

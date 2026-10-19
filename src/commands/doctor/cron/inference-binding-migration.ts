@@ -42,6 +42,7 @@ import {
 } from "../../../cron/session-target.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
+import { resolveProviderAuthProfileId } from "../../../plugins/provider-runtime.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { isUserModelAuthProfileId } from "../../../state/user-model-account-id.js";
@@ -188,12 +189,38 @@ export async function maybeRepairCronInferenceBindings(params: {
           agentId,
           agentDir: selected.owner.agentDir,
           workspaceDir: selected.owner.workspaceDir,
-          authProfileStore: store,
+          // A rate-limit cooldown only defers the usual account; recording around it would make
+          // a temporary fallback permanent. Disabled and blocked accounts stay excluded.
+          authProfileStore: {
+            ...store,
+            usageStats: Object.fromEntries(
+              Object.entries(store.usageStats ?? {}).map(
+                ([
+                  profileId,
+                  {
+                    cooldownUntil: _until,
+                    cooldownReason: _reason,
+                    cooldownModel: _model,
+                    ...stats
+                  },
+                ]) => [profileId, stats],
+              ),
+            ),
+          },
           sessionAuthProfileId: explicitProfileId,
           sessionAuthProfileSource: explicitProfileId ? "user" : undefined,
           ...(explicitProfileId
             ? { requiredAuthProfileId: explicitProfileId, allowAuthProfileFallback: false }
             : {}),
+          // Same hook as a run, so the first attempt is the account an unbound run used.
+          resolveProviderPreferredProfileId: (context) =>
+            resolveProviderAuthProfileId({
+              provider: selected.provider,
+              config: cfg,
+              workspaceDir: selected.owner.workspaceDir,
+              env,
+              context,
+            }),
         });
         // Synthetic, env and provider-config routes have no stored account to record; the
         // runtime keeps such a job on that key and refuses it once a stored account is eligible.
@@ -291,20 +318,34 @@ export async function maybeRepairCronInferenceBindings(params: {
             continue;
           }
         }
-        if (candidates.length !== 1) {
+        // Several eligible accounts: record the one a run would take now. With auth.order that is the
+        // account every earlier run used; without it, runs rotated by last use. The log names the others.
+        const plannedProfileId =
+          currentAuth.attempts[0]?.kind === "profile"
+            ? currentAuth.attempts[0].profileId
+            : undefined;
+        const candidate =
+          candidates.length === 1
+            ? candidates[0]
+            : explicitProfileId
+              ? undefined
+              : candidates.find((c) => c.profileId === plannedProfileId);
+        if (!candidate) {
           throw new Error(
             candidates.length > 1
               ? `More than one inference account is eligible: ${candidates.map((c) => c.profileId).join(", ")}.`
-              : "No available stored inference account can be retained; environment/provider-config keys have no durable account ownership.",
+              : "No available stored inference account can be retained.",
           );
         }
-        const candidate = candidates[0]!;
+        const alternatives = candidates
+          .filter((c) => c.profileId !== candidate.profileId)
+          .map((c) => c.profileId);
         if (isUserModelAuthProfileId(candidate.profileId)) {
           throw new Error(
             "A personal inference account requires explicit adoption by its authorized owner.",
           );
         }
-        const description = `Automation ${label}: retain ${candidate.profileId} for ${modelRef}; model/default/fallback selections stay unchanged.`;
+        const description = `Automation ${label}: retain ${candidate.profileId} for ${modelRef}; model/default/fallback selections stay unchanged.${alternatives.length > 0 ? ` Also eligible: ${alternatives.join(", ")}; to change, run openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef}@<profileId>`)}.` : ""}`;
         if (!params.shouldRepair) {
           warnings.push(
             `${description} Run openclaw doctor --fix to record its inference account.`,

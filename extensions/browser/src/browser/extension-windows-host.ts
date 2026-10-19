@@ -23,7 +23,7 @@ import {
   runWindowsManagement,
   WindowsManagementTransportError,
 } from "./extension-windows-management.js";
-import { createWindowsNativePlatform } from "./extension-windows-platform.js";
+import { windowsNativePlatform as ops } from "./extension-windows-platform.js";
 
 const products: Array<[ChromeProduct, string]> = [
   ["chrome", "Google Chrome"],
@@ -58,8 +58,8 @@ async function selectedContext(
   const env = process.env;
   const stateDir = stateDirOverride ?? resolveStateDir(env);
   return nativeWindowsContextSchema.parse({
-    nodePath: await createWindowsNativePlatform().realpath(process.execPath),
-    cliPath: await createWindowsNativePlatform().realpath(await resolveCliPath(pluginRoot)),
+    nodePath: await ops.realpath(process.execPath),
+    cliPath: await ops.realpath(await resolveCliPath(pluginRoot)),
     stateDir,
     configPath: resolveConfigPath(env, stateDir),
     browserProfile: profile,
@@ -69,7 +69,6 @@ async function executableFor(
   pluginRoot: string | undefined,
   explicit: string | undefined,
 ): Promise<string> {
-  const ops = createWindowsNativePlatform();
   const identity = await ops.identity();
   const candidates = explicit
     ? [explicit]
@@ -207,10 +206,7 @@ async function operate(params: {
     params.signal?.throwIfAborted();
     let browserProfile: string | undefined;
     if (response.installation) {
-      const owned = await readWindowsNativeGeneration(
-        response.installation.manifestPath,
-        createWindowsNativePlatform(),
-      );
+      const owned = await readWindowsNativeGeneration(response.installation.manifestPath);
       if (
         JSON.stringify(owned.installation) !== JSON.stringify(response.installation) ||
         owned.binding.mode !== "native-windows-cli" ||
@@ -304,5 +300,5 @@ export async function validateWindowsNativeContext(params: {
     throw new Error("Missing bound browser profile");
   }
   const context = await selectedContext(profile, undefined, params.stateDir);
-  return await admitWindowsNativeRuntime(params, context, createWindowsNativePlatform());
+  return await admitWindowsNativeRuntime(params, context);
 }

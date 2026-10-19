@@ -1,8 +1,9 @@
-// Wizard server-method tests cover stable lifecycle errors for process-local sessions.
 import fs from "node:fs/promises";
+import { setImmediate } from "node:timers/promises";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { WizardStartResult } from "../../../packages/gateway-protocol/src/schema/wizard.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -25,6 +26,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import type { WizardSession } from "../../wizard/session.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
 
 const setupTargetLock = vi.hoisted(() => ({
@@ -63,9 +65,7 @@ import { systemAgentHandlers } from "./system-agent.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 import { type SetupWizardRunner, wizardHandlers } from "./wizard.js";
 
-afterEach(() => {
-  __setFsSafeTestHooksForTest(undefined);
-});
+afterEach(() => __setFsSafeTestHooksForTest(undefined));
 
 type WizardTestContext = Pick<
   GatewayRequestContext,
@@ -73,54 +73,85 @@ type WizardTestContext = Pick<
 >;
 
 function createWizardContext(wizardRunner: WizardTestContext["wizardRunner"]): WizardTestContext {
-  const wizardSessions: WizardTestContext["wizardSessions"] = new Map();
-  return {
-    wizardSessions,
-    wizardRunner,
-    findRunningWizard: () => null,
-    purgeWizardSession: (sessionId: string) => wizardSessions.delete(sessionId),
-  };
+  return { ...createWizardSessionTracker(), wizardRunner };
+}
+function getSession(context: WizardTestContext, id: string | undefined) {
+  return expectDefined(
+    context.wizardSessions.get(expectDefined(id, "wizard session id")),
+    "admitted wizard session",
+  );
 }
 
-function readSuccessfulResponse(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
+function readSuccessfulResponse(respond: ReturnType<typeof vi.fn>): Partial<WizardStartResult> {
   expect(respond).toHaveBeenCalledOnce();
   const [ok, result] = respond.mock.calls[0] ?? [];
   expect(ok).toBe(true);
-  expect(result).toBeDefined();
-  return result as Record<string, unknown>;
+  return expectDefined(result, "wizard result") as Partial<WizardStartResult>;
 }
 
 async function invokeWizard(
-  method: "wizard.start" | "wizard.next",
+  method: string,
   params: Record<string, unknown>,
   context: WizardTestContext,
-): Promise<Record<string, unknown>> {
-  const respond = vi.fn();
-  const handler = expectDefined(wizardHandlers[method], `wizardHandlers[${method}] test invariant`);
-  await handler({ params, respond, context } as never);
-  return readSuccessfulResponse(respond);
+): Promise<Partial<WizardStartResult>> {
+  return readSuccessfulResponse(await callWizard(method, params, context));
 }
 
-async function cancelWizardSessions(
-  sessions: Map<string, import("../../wizard/session.js").WizardSession>,
+async function callWizard(
+  method: string,
+  params: Record<string, unknown>,
+  context: WizardTestContext,
+  respond = vi.fn(),
 ) {
+  await expectDefined(wizardHandlers[method], method)({ params, respond, context } as never);
+  return respond;
+}
+
+async function startWizard(context: WizardTestContext) {
+  const result = await invokeWizard("wizard.start", { mode: "local" }, context);
+  expect(result).toMatchObject({ status: "running" });
+  return result;
+}
+
+function expectBusy(respond: ReturnType<typeof vi.fn>, extra = {}) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code: "UNAVAILABLE",
+      details: { code: "SETUP_ADMISSION_BUSY" },
+      ...extra,
+    }),
+  );
+}
+
+function expectStatus(respond: ReturnType<typeof vi.fn>, status: string) {
+  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ status }), undefined);
+}
+
+function suspendedWizard(runnerSettled: Promise<void>, terminal = "done") {
+  return createWizardContext(async (_opts, _runtime, prompter) => {
+    prompter.progress("working");
+    await runnerSettled;
+    if (terminal === "error") {
+      throw new Error("Provider rejected sign-in");
+    }
+  });
+}
+
+async function cancelWizardSessions(sessions: Map<string, WizardSession>) {
   for (const session of sessions.values()) {
     session.cancel();
     await whenAdmittedWizardSessionSettled(session);
   }
 }
 
-describe("wizard session lookup", () => {
-  it.each([
-    { method: "wizard.next", params: { sessionId: "expired" } },
-    { method: "wizard.cancel", params: { sessionId: "expired" } },
-    { method: "wizard.status", params: { sessionId: "expired" } },
-  ] as const)("returns structured details from $method", async ({ method, params }) => {
+it.each(["wizard.next", "wizard.cancel", "wizard.status"] as const)(
+  "returns structured details from %s",
+  async (method) => {
+    const params = { sessionId: "expired" };
     const respond = vi.fn();
-    const handler = expectDefined(
-      wizardHandlers[method],
-      `wizardHandlers[${method}] test invariant`,
-    );
+    const handler = expectDefined(wizardHandlers[method], method);
 
     await handler({
       req: { type: "req", id: "wizard-missing", method, params },
@@ -137,8 +168,8 @@ describe("wizard session lookup", () => {
       message: "wizard not found",
       details: { code: "WIZARD_NOT_FOUND" },
     });
-  });
-});
+  },
+);
 
 describe("hosted wizard runtime isolation", () => {
   it.each([
@@ -146,7 +177,7 @@ describe("hosted wizard runtime isolation", () => {
     { flow: "channels", cancel: false },
     { flow: "channels", cancel: true },
   ] as const)(
-    "wizard.start keeps $flow plugin resources separate from Gateway boot until the runner settles (cancel=$cancel)",
+    "$flow isolates plugin resources until settlement (cancel=$cancel)",
     async ({ flow, cancel }) => {
       await using bootCache = createPluginCache({ kind: "process" });
       const metadataSnapshot = createPluginMetadataSnapshotFixture();
@@ -167,7 +198,6 @@ describe("hosted wizard runtime isolation", () => {
         metadata: ReturnType<typeof getCurrentPluginMetadataSnapshot>;
         registry: ReturnType<typeof getPluginRuntimeGenerationRegistry>;
       }>();
-      const tracker = createWizardSessionTracker();
       const runner = async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
         const cache = getPluginCache();
         cache.instances.add(wizardInstance);
@@ -180,7 +210,7 @@ describe("hosted wizard runtime isolation", () => {
         await finishPostWrite.promise;
         events.push(readWizard());
       };
-      const context = { ...tracker, wizardRunner: runner, channelWizardRunner: runner };
+      const context = { ...createWizardContext(runner), channelWizardRunner: runner };
 
       try {
         const start = await withPluginRuntimeGenerationScope(
@@ -198,22 +228,15 @@ describe("hosted wizard runtime isolation", () => {
           },
         );
         expect(start).toMatchObject({ status: "running", done: false });
-        const session = expectDefined(
-          tracker.wizardSessions.get(String(start.sessionId)),
-          "hosted wizard session",
-        );
+        const session = getSession(context, start.sessionId);
         const scope = await observed.promise;
         expect(scope.cache).not.toBe(bootCache);
-        expect(scope.metadata).toBeUndefined();
-        expect(scope.registry).toBeUndefined();
+        expect(scope).toMatchObject({ metadata: undefined, registry: undefined });
 
         if (cancel) {
-          const respond = vi.fn();
-          await expectDefined(
-            wizardHandlers["wizard.cancel"],
-            "wizard.cancel test invariant",
-          )({ params: { sessionId: start.sessionId }, respond, context } as never);
-          expect(readSuccessfulResponse(respond)).toMatchObject({ status: "cancelled" });
+          expect(
+            await invokeWizard("wizard.cancel", { sessionId: start.sessionId }, context),
+          ).toMatchObject({ status: "cancelled" });
         }
 
         expect(events).toEqual([]);
@@ -225,7 +248,7 @@ describe("hosted wizard runtime isolation", () => {
         expect(readBoot()).toBe("gateway available");
       } finally {
         finishPostWrite.resolve();
-        await cancelWizardSessions(tracker.wizardSessions);
+        await cancelWizardSessions(context.wizardSessions);
         await wizardInstance.dispose();
       }
     },
@@ -240,50 +263,28 @@ describe("hosted wizard runtime isolation", () => {
       const processExit = vi.spyOn(process, "exit").mockImplementation((code) => {
         throw new Error(`Gateway process exit ${code}`);
       });
-      const tracker = createWizardSessionTracker();
-      const runner = async (runtime: RuntimeEnv, prompter: WizardPrompter) => {
+      const runner = async (_opts: unknown, runtime: RuntimeEnv, prompter: WizardPrompter) => {
         await prompter.outro("wizard complete");
         runtime.exit(exitCode);
       };
-      const context = {
-        ...tracker,
-        wizardRunner: async (_opts: unknown, runtime: RuntimeEnv, prompter: WizardPrompter) =>
-          runner(runtime, prompter),
-        channelWizardRunner: async (
-          _opts: unknown,
-          runtime: RuntimeEnv,
-          prompter: WizardPrompter,
-        ) => runner(runtime, prompter),
-      };
+      const context = { ...createWizardContext(runner), channelWizardRunner: runner };
 
       try {
-        const startRespond = vi.fn();
-        await expectDefined(
-          wizardHandlers["wizard.start"],
-          "wizard.start test invariant",
-        )({
-          params: flow === "channels" ? { flow } : { mode: "local" },
-          respond: startRespond,
+        const start = await invokeWizard(
+          "wizard.start",
+          flow === "channels" ? { flow } : { mode: "local" },
           context,
-        } as never);
-        expect(startRespond).toHaveBeenCalledOnce();
-        const [, start] = startRespond.mock.calls[0] ?? [];
+        );
         expect(start).toMatchObject({ done: false, status: "running" });
 
-        const nextRespond = vi.fn();
-        await expectDefined(
-          wizardHandlers["wizard.next"],
-          "wizard.next test invariant",
-        )({
-          params: {
+        const result = await invokeWizard(
+          "wizard.next",
+          {
             sessionId: start.sessionId,
-            answer: { stepId: start.step.id, value: null },
+            answer: { stepId: expectDefined(start.step, "wizard step").id, value: null },
           },
-          respond: nextRespond,
           context,
-        } as never);
-        expect(nextRespond).toHaveBeenCalledOnce();
-        const [, result] = nextRespond.mock.calls[0] ?? [];
+        );
         expect(result).toMatchObject({ done: true, status });
         if (exitCode !== 0) {
           expect(result.error).toContain(String(exitCode));
@@ -305,71 +306,30 @@ describe("wizard setup ownership", () => {
       await releaseStructured.promise;
     });
     await structuredStarted.promise;
-    const tracker = createWizardSessionTracker();
     const wizardRunner = vi.fn(async (_opts, _runtime, prompter: WizardPrompter) => {
       await prompter.note("ready");
     });
-    const context = { ...tracker, wizardRunner };
+    const context = createWizardContext(wizardRunner);
 
-    const blockedRespond = vi.fn();
-    await expectDefined(
-      wizardHandlers["wizard.start"],
-      "wizard.start test invariant",
-    )({
-      params: { mode: "local" },
-      respond: blockedRespond,
-      context,
-    } as never);
+    const blockedRespond = await callWizard("wizard.start", { mode: "local" }, context);
     try {
-      expect(blockedRespond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE", details: { code: "SETUP_ADMISSION_BUSY" } }),
-      );
+      expectBusy(blockedRespond);
       expect(wizardRunner).not.toHaveBeenCalled();
     } finally {
       releaseStructured.resolve();
       await structured;
     }
 
-    const admittedRespond = vi.fn();
-    await expectDefined(
-      wizardHandlers["wizard.start"],
-      "wizard.start test invariant",
-    )({
-      params: { mode: "local" },
-      respond: admittedRespond,
-      context,
-    } as never);
-    expect(admittedRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
-    const session = expectDefined(
-      [...tracker.wizardSessions.values()][0],
-      "admitted classic setup session",
-    );
+    await startWizard(context);
+    const session = getSession(context, context.wizardSessions.keys().next().value);
     session.cancel();
     await whenAdmittedWizardSessionSettled(session);
   });
 
   it("makes structured setup retry while a classic runner owns admission, then releases", async () => {
     const runnerSettled = createDeferred();
-    const tracker = createWizardSessionTracker();
-    const context = {
-      ...tracker,
-      wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
-        prompter.progress("working");
-        await runnerSettled.promise;
-      },
-    };
-    const startRespond = vi.fn();
-    await expectDefined(
-      wizardHandlers["wizard.start"],
-      "wizard.start test invariant",
-    )({
-      params: { mode: "local" },
-      respond: startRespond,
-      context,
-    } as never);
-    expect(startRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
+    const context = suspendedWizard(runnerSettled.promise);
+    await startWizard(context);
 
     const activateRespond = vi.fn();
     await expectDefined(
@@ -377,22 +337,12 @@ describe("wizard setup ownership", () => {
       "openclaw.setup.activate test invariant",
     )({ params: { kind: "claude-cli" }, respond: activateRespond } as never);
     try {
-      expect(activateRespond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          retryable: true,
-          details: { code: "SETUP_ADMISSION_BUSY" },
-        }),
-      );
+      expectBusy(activateRespond, { retryable: true });
     } finally {
       runnerSettled.resolve();
-      const session = expectDefined(
-        [...tracker.wizardSessions.values()][0],
-        "active classic setup session",
+      await whenAdmittedWizardSessionSettled(
+        getSession(context, context.wizardSessions.keys().next().value),
       );
-      await whenAdmittedWizardSessionSettled(session);
     }
     const structuredTask = vi.fn(async () => "ok");
     await expect(runExclusiveSystemAgentSetupActivation(structuredTask)).resolves.toBe("ok");
@@ -402,24 +352,10 @@ describe("wizard setup ownership", () => {
   it("retains gateway work admission between requests until the wizard settles", async () => {
     resetGatewayWorkAdmission();
     const runnerSettled = createDeferred();
-    const tracker = createWizardSessionTracker();
-    const context = {
-      ...tracker,
-      wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
-        prompter.progress("working");
-        await runnerSettled.promise;
-      },
-    };
+    const context = suspendedWizard(runnerSettled.promise);
 
     try {
-      await runWithGatewayIndependentRootWorkAdmission(async () => {
-        const respond = vi.fn();
-        await expectDefined(
-          wizardHandlers["wizard.start"],
-          "wizard.start test invariant",
-        )({ params: { mode: "local" }, respond, context } as never);
-        expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
-      });
+      await runWithGatewayIndependentRootWorkAdmission(() => startWizard(context));
 
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       runnerSettled.resolve();
@@ -435,14 +371,7 @@ describe("wizard setup ownership", () => {
   it("cleans up detached wizard owners when setup lock release fails", async () => {
     resetGatewayWorkAdmission();
     const runnerSettled = createDeferred();
-    const tracker = createWizardSessionTracker();
-    const context = {
-      ...tracker,
-      wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
-        prompter.progress("working");
-        await runnerSettled.promise;
-      },
-    };
+    const context = suspendedWizard(runnerSettled.promise);
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
       unhandledRejections.push(reason);
@@ -453,22 +382,15 @@ describe("wizard setup ownership", () => {
     try {
       let sessionId = "";
       await runWithGatewayIndependentRootWorkAdmission(async () => {
-        const respond = vi.fn();
-        await expectDefined(
-          wizardHandlers["wizard.start"],
-          "wizard.start test invariant",
-        )({ params: { mode: "local" }, respond, context } as never);
-        sessionId = String(respond.mock.calls[0]?.[1]?.sessionId ?? "");
+        const start = await invokeWizard("wizard.start", { mode: "local" }, context);
+        sessionId = start.sessionId ?? "";
       });
       expect(sessionId).not.toBe("");
       expect(getActiveGatewayRootWorkCount()).toBe(1);
 
-      const cancelRespond = vi.fn();
-      await expectDefined(
-        wizardHandlers["wizard.cancel"],
-        "wizard.cancel test invariant",
-      )({ params: { sessionId }, respond: cancelRespond, context } as never);
-      expect(cancelRespond.mock.calls[0]?.[1]).toMatchObject({ status: "cancelled" });
+      expect(await invokeWizard("wizard.cancel", { sessionId }, context)).toMatchObject({
+        status: "cancelled",
+      });
 
       const releaseError = new Error("setup lock release failed");
       __setFsSafeTestHooksForTest({
@@ -478,18 +400,13 @@ describe("wizard setup ownership", () => {
         },
       });
       runnerSettled.resolve();
-      const session = expectDefined(
-        tracker.wizardSessions.get(sessionId),
-        "cancelled setup session",
-      );
+      const session = getSession(context, sessionId);
       await expect(whenAdmittedWizardSessionSettled(session)).rejects.toBe(releaseError);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await setImmediate();
 
       expect.soft(unhandledRejections).toEqual([]);
       expect.soft(getActiveGatewayRootWorkCount()).toBe(0);
-      expect.soft(tracker.wizardSessions.has(sessionId)).toBe(false);
+      expect.soft(context.wizardSessions.has(sessionId)).toBe(false);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
       __setFsSafeTestHooksForTest(undefined);
@@ -503,76 +420,29 @@ describe("wizard setup ownership", () => {
 
   it("blocks a replacement wizard until the cancelled runner settles", async () => {
     const runnerSettled = createDeferred();
-    const tracker = createWizardSessionTracker();
-    const context = {
-      ...tracker,
-      wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
-        prompter.progress("working");
-        await runnerSettled.promise;
-      },
-    };
+    const context = suspendedWizard(runnerSettled.promise);
+    const start = await startWizard(context);
 
-    const startRespond = vi.fn();
-    await expectDefined(
-      wizardHandlers["wizard.start"],
-      "wizard.start test invariant",
-    )({
-      params: { mode: "local" },
-      respond: startRespond,
+    const cancelRespond = await callWizard(
+      "wizard.cancel",
+      { sessionId: start.sessionId },
       context,
-    } as never);
-    const [, start] = startRespond.mock.calls[0] ?? [];
-    expect(start).toMatchObject({ status: "running" });
-
-    const cancelRespond = vi.fn();
-    await expectDefined(
-      wizardHandlers["wizard.cancel"],
-      "wizard.cancel test invariant",
-    )({
-      params: { sessionId: start.sessionId },
-      respond: cancelRespond,
-      context,
-    } as never);
-    expect(cancelRespond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "cancelled" }),
-      undefined,
     );
+    expectStatus(cancelRespond, "cancelled");
 
-    const blockedRespond = vi.fn();
-    await expectDefined(
-      wizardHandlers["wizard.start"],
-      "wizard.start test invariant",
-    )({
-      params: { mode: "local" },
-      respond: blockedRespond,
-      context,
-    } as never);
+    const blockedRespond = await callWizard("wizard.start", { mode: "local" }, context);
     try {
-      expect(blockedRespond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE", details: { code: "SETUP_ADMISSION_BUSY" } }),
-      );
+      expectBusy(blockedRespond);
     } finally {
       runnerSettled.resolve();
       await vi.waitFor(() => {
-        expect(tracker.wizardSessions.has(start.sessionId)).toBe(false);
+        expect(context.wizardSessions.has(String(start.sessionId))).toBe(false);
       });
     }
 
-    const replacementRespond = vi.fn();
-    await expectDefined(
-      wizardHandlers["wizard.start"],
-      "wizard.start test invariant",
-    )({
-      params: { mode: "local" },
-      respond: replacementRespond,
-      context,
-    } as never);
-    expect(replacementRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
+    await startWizard(context);
 
-    await cancelWizardSessions(tracker.wizardSessions);
+    await cancelWizardSessions(context.wizardSessions);
   });
 
   it.each([
@@ -586,31 +456,12 @@ describe("wizard setup ownership", () => {
     const setupTargetLockReleaseReached = createDeferred();
     setupTargetLock.beforeRelease = releaseSetupTargetLock.promise;
     setupTargetLock.releaseReached = setupTargetLockReleaseReached.resolve;
-    const tracker = createWizardSessionTracker();
-    const context = {
-      ...tracker,
-      wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
-        prompter.progress("working");
-        await runnerSettled.promise;
-        if (terminal === "error") {
-          throw new Error("Provider rejected sign-in");
-        }
-      },
-    };
-    let admittedSession: import("../../wizard/session.js").WizardSession | undefined;
+    const context = suspendedWizard(runnerSettled.promise, terminal);
+    let admittedSession: WizardSession | undefined;
 
     try {
-      const startRespond = vi.fn();
-      await expectDefined(
-        wizardHandlers["wizard.start"],
-        "wizard.start test invariant",
-      )({ params: { mode: "local" }, respond: startRespond, context } as never);
-      const [, start] = startRespond.mock.calls[0] ?? [];
-      expect(start).toMatchObject({ status: "running" });
-      admittedSession = expectDefined(
-        tracker.wizardSessions.get(start.sessionId),
-        "admitted classic setup session",
-      );
+      const start = await startWizard(context);
+      admittedSession = getSession(context, start.sessionId);
 
       runnerSettled.resolve();
       await setupTargetLockReleaseReached.promise;
@@ -622,19 +473,14 @@ describe("wizard setup ownership", () => {
       const replacementRespond = vi.fn();
       let replacementStart: Promise<void> | undefined;
       const statusRespond = vi.fn(() => {
-        replacementStart = Promise.resolve(
-          expectDefined(
-            wizardHandlers["wizard.start"],
-            "wizard.start test invariant",
-          )({ params: { mode: "local" }, respond: replacementRespond, context } as never),
-        );
+        replacementStart = callWizard(
+          "wizard.start",
+          { mode: "local" },
+          context,
+          replacementRespond,
+        ).then(() => {});
       });
-      const statusTask = Promise.resolve(
-        expectDefined(
-          wizardHandlers[method],
-          `${method} test invariant`,
-        )({ params: { sessionId: start.sessionId }, respond: statusRespond, context } as never),
-      );
+      const statusTask = callWizard(method, { sessionId: start.sessionId }, context, statusRespond);
 
       await Promise.resolve();
       expect(statusRespond).not.toHaveBeenCalled();
@@ -643,23 +489,15 @@ describe("wizard setup ownership", () => {
       await vi.waitFor(() => expect(replacementStart).toBeDefined());
       await replacementStart;
 
-      expect(statusRespond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: terminal }),
-        undefined,
-      );
-      expect(replacementRespond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "running" }),
-        undefined,
-      );
+      expectStatus(statusRespond, terminal);
+      expectStatus(replacementRespond, "running");
     } finally {
       runnerSettled.resolve();
       releaseSetupTargetLock.resolve();
       if (admittedSession) {
         await whenAdmittedWizardSessionSettled(admittedSession);
       }
-      await cancelWizardSessions(tracker.wizardSessions);
+      await cancelWizardSessions(context.wizardSessions);
       setupTargetLock.beforeRelease = undefined;
       setupTargetLock.releaseReached = undefined;
     }
@@ -694,48 +532,31 @@ describe("wizard setup ownership", () => {
   });
 });
 
-describe("wizard step serialization", () => {
-  it("strips a sensitive initial value from wizard.start", async () => {
-    const context = createWizardContext(async (_opts, _runtime, prompter) => {
-      await prompter.text({
-        message: "Bot token",
-        sensitive: true,
-        initialValue: "123456:REAL-SECRET",
-      });
+it.each([false, true])("redacts sensitive defaults after plain step=%s", async (afterPlain) => {
+  const context = createWizardContext(async (_opts, _runtime, prompter) => {
+    if (afterPlain) {
+      await prompter.text({ message: "Display name", initialValue: "OpenClaw" });
+    }
+    await prompter.text({
+      message: "Bot token",
+      sensitive: true,
+      initialValue: "123456:REAL-SECRET",
     });
-    const result = await invokeWizard("wizard.start", {}, context);
-    expect(result.step).toMatchObject({ sensitive: true });
-    expect(result.step).not.toHaveProperty("initialValue");
-    await cancelWizardSessions(context.wizardSessions);
   });
-
-  it("keeps a plain default but strips the next sensitive one from wizard.next", async () => {
-    const context = createWizardContext(async (_opts, _runtime, prompter) => {
-      await prompter.text({
-        message: "Display name",
-        initialValue: "OpenClaw",
-      });
-      await prompter.text({
-        message: "Bot token",
-        sensitive: true,
-        initialValue: "123456:REAL-SECRET",
-      });
-    });
-    const startResult = await invokeWizard("wizard.start", {}, context);
-    expect(startResult.step).toMatchObject({ initialValue: "OpenClaw" });
-    const sessionId = startResult.sessionId;
-    expect(typeof sessionId).toBe("string");
-
-    const params = {
-      sessionId,
-      answer: {
-        stepId: (startResult.step as { id: string }).id,
-        value: "Renamed",
+  let result = await invokeWizard("wizard.start", {}, context);
+  if (afterPlain) {
+    expect(result.step).toMatchObject({ initialValue: "OpenClaw" });
+    expect(typeof result.sessionId).toBe("string");
+    result = await invokeWizard(
+      "wizard.next",
+      {
+        sessionId: result.sessionId,
+        answer: { stepId: expectDefined(result.step, "wizard step").id, value: "Renamed" },
       },
-    };
-    const nextResult = await invokeWizard("wizard.next", params, context);
-    expect(nextResult.step).toMatchObject({ sensitive: true });
-    expect(nextResult.step).not.toHaveProperty("initialValue");
-    await cancelWizardSessions(context.wizardSessions);
-  });
+      context,
+    );
+  }
+  expect(result.step).toMatchObject({ sensitive: true });
+  expect(result.step).not.toHaveProperty("initialValue");
+  await cancelWizardSessions(context.wizardSessions);
 });

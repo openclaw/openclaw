@@ -91,6 +91,8 @@ export function createSessionActorWithExecutor(params: {
       phase?.pending.delete(promise);
     };
     void promise.then(settled, settled);
+    // Keep dispatch in this try and convert operation() throws to rejections:
+    // adoptRun restores cleanup custody on synchronous throws because no write has started.
     try {
       const work = executor.retain ? executor.retain(operation) : operation();
       void work.then(retained.resolve, retained.reject);

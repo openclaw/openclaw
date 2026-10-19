@@ -15,16 +15,6 @@ type LocalShellDeps = {
   };
   openOverlay: (component: Component) => OverlayHandle;
   closeOverlay: (handle: OverlayHandle) => void;
-  createSelector?: (
-    items: SelectItem[],
-    maxVisible: number,
-  ) => Component & {
-    onSelect?: (item: SelectItem) => void;
-    onCancel?: () => void;
-  };
-  getCwd?: () => string | undefined;
-  env?: NodeJS.ProcessEnv;
-  maxOutputChars?: number;
 };
 
 export function createLocalShellRunner(deps: LocalShellDeps) {
@@ -35,10 +25,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   const supervisor = getProcessSupervisor();
   const scopeKey = `tui-local:${randomUUID()}`;
   const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
-  const createSelector = deps.createSelector ?? createSearchableSelectList;
-  const getCwd = deps.getCwd ?? tryProcessCwd;
-  const env = deps.env ?? process.env;
-  const maxChars = deps.maxOutputChars ?? 40_000;
+  const maxChars = 40_000;
 
   const ensureLocalExecAllowed = async (): Promise<boolean> => {
     if (closing || permission !== "unasked") {
@@ -53,7 +40,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         "This runs commands on YOUR machine (not the gateway) and may delete files or reveal secrets.",
       );
       deps.chatLog.addSystem("Select Yes/No (arrows + Enter), Esc to cancel.");
-      const selector = createSelector(
+      const selector = createSearchableSelectList(
         [
           { value: "no", label: "No" },
           { value: "yes", label: "Yes" },
@@ -108,7 +95,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     }
 
     // A shell command's meaning depends on its directory; never retarget it implicitly.
-    const cwd = getCwd();
+    const cwd = tryProcessCwd();
     if (!cwd) {
       deps.chatLog.addSystem(
         "local shell: working directory was deleted; cd to an existing directory first",
@@ -131,7 +118,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         command: cmd,
         scopeKey,
         cwd,
-        env: { ...env, OPENCLAW_SHELL: "tui-local" },
+        env: { ...process.env, OPENCLAW_SHELL: "tui-local" },
         captureOutput: false,
         onStdout: (chunk) => {
           stdout = sliceUtf16Safe(stdout + chunk, -maxChars);

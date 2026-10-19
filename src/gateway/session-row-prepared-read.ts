@@ -39,6 +39,7 @@ export type SessionRowReadView = {
     options?: records.SnapshotOptions,
   ): ReturnType<typeof records.present>;
   selectEntries(query: { key: string }): records.EntryRow[];
+  readonly physicalPaths: (locator: string, agentId?: string) => readonly string[];
   readonly state: {
     cfg: OpenClawConfig;
     policyConfig: OpenClawConfig;
@@ -116,13 +117,13 @@ export function readPreparedSessionRows<T>(
         }
       }
     }
-    // Native custody and deletion admission remain authoritative until the memory owner moves.
     if (row && !owner.isCurrent(row)) {
       throw new Error("Session changed while preparing its description; retry the request");
     }
   }
   // Targeted materialization may refresh the owner's metadata context. Capture its final facts.
   const preparedState = owner.state;
+  const physicalPaths = owner.physicalPaths;
   state = {
     cfg: preparedState.cfg,
     policyConfig: preparedState.policyConfig,
@@ -176,6 +177,10 @@ export function readPreparedSessionRows<T>(
         return rows;
       }
       return owner.selectEntries(query);
+    },
+    get physicalPaths() {
+      assertActive();
+      return physicalPaths;
     },
     get state() {
       assertActive();

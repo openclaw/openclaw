@@ -120,7 +120,7 @@ describe("nvidia provider catalog", () => {
       init: { headers: expect.any(Headers) },
       lookupFn: expect.any(Function),
       policy: { allowedHostnames: ["assets.ngc.nvidia.com"] },
-      signal: expect.any(AbortSignal),
+      signal: undefined,
       timeoutMs: expect.any(Number),
       url: NVIDIA_FEATURED_MODELS_URL,
       requireHttps: true,

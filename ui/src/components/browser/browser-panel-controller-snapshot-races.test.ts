@@ -12,11 +12,10 @@ import {
   stubScreenshotMedia,
   TestBrowserPanelHost,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
 
 setupBrowserPanelTestCleanup();
 
-describe("BrowserPanelController superseded tab snapshots", () => {
+describe("BrowserPanel superseded tab snapshots", () => {
   it("reads page geometry while the screenshot body is downloading", async () => {
     stubScreenshotMedia();
     const body = createDeferred<Blob>();
@@ -131,7 +130,7 @@ describe("BrowserPanelController superseded tab snapshots", () => {
       throw new Error(`Unexpected replacement browser route: ${envelope.path}`);
     });
     const host = new TestBrowserPanelHost(old.client);
-    const controller = new BrowserPanelController(host);
+    const controller = host.createPanel();
     const originalView = createView("active-tab", activeUrl);
     controller.activeTargetId = "active-tab";
     controller.view = originalView;

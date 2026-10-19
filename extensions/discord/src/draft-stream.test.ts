@@ -1,55 +1,45 @@
-// Discord tests cover draft stream plugin behavior.
 import { MessageFlags, Routes } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createDiscordDraftStream } from "./draft-stream.js";
 
-function createDraftRest() {
-  return {
-    post: vi.fn(async () => ({ id: "1001" })),
-    patch: vi.fn(async () => undefined),
-    delete: vi.fn(async () => undefined),
-  };
-}
-
-function createDraftStream(
-  rest: ReturnType<typeof createDraftRest>,
+function createHarness(
   options: Partial<Omit<Parameters<typeof createDiscordDraftStream>[0], "rest">> = {},
+  ids?: string[],
+  remove = vi.fn(async () => undefined),
 ) {
-  return createDiscordDraftStream({
+  const post = vi.fn<() => Promise<{ id: string }>>();
+  if (ids) {
+    for (const id of ids) {
+      post.mockResolvedValueOnce({ id });
+    }
+  } else {
+    post.mockResolvedValue({ id: "1001" });
+  }
+  const rest = { post, patch: vi.fn(async () => undefined), delete: remove };
+  const stream = createDiscordDraftStream({
     rest: rest as never,
     channelId: "c1",
     throttleMs: 250,
     ...options,
   });
+  return { rest, stream };
 }
 
-function createCurrentPreviewHarness(remove = vi.fn(async () => undefined)) {
-  const rest = {
-    post: vi.fn().mockResolvedValueOnce({ id: "1001" }).mockResolvedValueOnce({ id: "1002" }),
-    patch: vi.fn(async () => undefined),
-    delete: remove,
-  };
-  const warn = vi.fn();
-  const stream = createDraftStream(rest, {
-    warn,
-  });
-  return { rest, stream, warn };
+async function flushText(stream: ReturnType<typeof createDiscordDraftStream>, text: string) {
+  stream.update(text);
+  await stream.flush();
+}
+
+function previewBody(content: string, extra = {}) {
+  return { body: { content, allowed_mentions: { parse: [] }, ...extra } };
 }
 
 describe("createDiscordDraftStream", () => {
   it("moves the visible draft to a newly adopted thread", async () => {
-    const rest = {
-      post: vi.fn().mockResolvedValueOnce({ id: "1101" }).mockResolvedValueOnce({ id: "1102" }),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDraftStream(rest, {
-      channelId: "parent",
-    });
+    const { rest, stream } = createHarness({ channelId: "parent" }, ["1101", "1102"]);
 
-    stream.update("working");
-    await stream.flush();
+    await flushText(stream, "working");
     stream.update("working harder");
     await stream.retarget("thread-1");
 
@@ -62,20 +52,10 @@ describe("createDiscordDraftStream", () => {
   });
 
   it("keeps the parent draft when the thread replacement cannot be created", async () => {
-    const rest = {
-      post: vi
-        .fn()
-        .mockResolvedValueOnce({ id: "1101" })
-        .mockRejectedValueOnce(new Error("thread post failed")),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDraftStream(rest, {
-      channelId: "parent",
-    });
+    const { rest, stream } = createHarness({ channelId: "parent" }, ["1101"]);
+    rest.post.mockRejectedValueOnce(new Error("thread post failed"));
 
-    stream.update("working");
-    await stream.flush();
+    await flushText(stream, "working");
 
     await expect(stream.retarget("thread-1")).rejects.toThrow("retarget replacement failed");
     expect(rest.delete).not.toHaveBeenCalled();
@@ -85,13 +65,9 @@ describe("createDiscordDraftStream", () => {
   });
 
   it("holds answer deltas below minInitialChars but sends a complete progress update", async () => {
-    const rest = createDraftRest();
-    const stream = createDraftStream(rest, {
-      minInitialChars: 5,
-    });
+    const { rest, stream } = createHarness({ minInitialChars: 5 });
 
-    stream.update("hey");
-    await stream.flush();
+    await flushText(stream, "hey");
 
     expect(rest.post).not.toHaveBeenCalled();
     expect(stream.messageId()).toBeUndefined();
@@ -100,35 +76,26 @@ describe("createDiscordDraftStream", () => {
     await stream.flush();
     expect(rest.post).toHaveBeenCalledTimes(1);
     await stream.deleteCurrentMessage();
-    stream.update("hey");
-    await stream.flush();
+    await flushText(stream, "hey");
     expect(rest.post).toHaveBeenCalledTimes(1);
   });
 
   it("sends a reply preview, then edits the same message on later flushes", async () => {
-    const rest = createDraftRest();
-    const stream = createDraftStream(rest, {
-      replyToMessageId: () => "  parent-1  ",
-    });
+    const { rest, stream } = createHarness({ replyToMessageId: () => "  parent-1  " });
 
-    stream.update("first draft");
-    await stream.flush();
-    stream.update("second draft");
-    await stream.flush();
+    await flushText(stream, "first draft");
+    await flushText(stream, "second draft");
 
-    expect(rest.post).toHaveBeenCalledWith(Routes.channelMessages("c1"), {
-      body: {
-        content: "first draft",
-        allowed_mentions: { parse: [] },
-        message_reference: {
-          message_id: "parent-1",
-          fail_if_not_exists: false,
-        },
-      },
-    });
-    expect(rest.patch).toHaveBeenCalledWith(Routes.channelMessage("c1", "1001"), {
-      body: { content: "second draft", allowed_mentions: { parse: [] } },
-    });
+    expect(rest.post).toHaveBeenCalledWith(
+      Routes.channelMessages("c1"),
+      previewBody("first draft", {
+        message_reference: { message_id: "parent-1", fail_if_not_exists: false },
+      }),
+    );
+    expect(rest.patch).toHaveBeenCalledWith(
+      Routes.channelMessage("c1", "1001"),
+      previewBody("second draft"),
+    );
     expect(stream.messageId()).toBe("1001");
   });
 
@@ -142,16 +109,14 @@ describe("createDiscordDraftStream", () => {
         await finishDelete.promise;
         return undefined;
       });
-      const { rest, stream } = createCurrentPreviewHarness(remove);
+      const { rest, stream } = createHarness({}, ["1001", "1002"], remove);
 
-      stream.update("original preview");
-      await stream.flush();
+      await flushText(stream, "original preview");
       const deleting = stream[method]();
       await deleteStarted.promise;
       await stream[method]();
       stream.forceNewMessage();
-      stream.update("replacement preview");
-      await stream.flush();
+      await flushText(stream, "replacement preview");
       finishDelete.resolve();
       await deleting;
 
@@ -161,42 +126,26 @@ describe("createDiscordDraftStream", () => {
   );
 
   it("suppresses link embeds in preview creates and edits when requested", async () => {
-    const rest = createDraftRest();
-    const stream = createDraftStream(rest, {
-      suppressEmbeds: true,
-    });
+    const { rest, stream } = createHarness({ suppressEmbeds: true });
 
-    stream.update("https://example.com");
-    await stream.flush();
-    stream.update("https://example.com/final");
-    await stream.flush();
+    await flushText(stream, "https://example.com");
+    await flushText(stream, "https://example.com/final");
 
-    expect(rest.post).toHaveBeenCalledWith(Routes.channelMessages("c1"), {
-      body: {
-        content: "https://example.com",
-        allowed_mentions: { parse: [] },
-        flags: MessageFlags.SuppressEmbeds,
-      },
-    });
-    expect(rest.patch).toHaveBeenCalledWith(Routes.channelMessage("c1", "1001"), {
-      body: {
-        content: "https://example.com/final",
-        allowed_mentions: { parse: [] },
-        flags: MessageFlags.SuppressEmbeds,
-      },
-    });
+    expect(rest.post).toHaveBeenCalledWith(
+      Routes.channelMessages("c1"),
+      previewBody("https://example.com", { flags: MessageFlags.SuppressEmbeds }),
+    );
+    expect(rest.patch).toHaveBeenCalledWith(
+      Routes.channelMessage("c1", "1001"),
+      previewBody("https://example.com/final", { flags: MessageFlags.SuppressEmbeds }),
+    );
   });
 
   it("stops previewing and warns once text exceeds the configured limit", async () => {
-    const rest = createDraftRest();
     const warn = vi.fn();
-    const stream = createDraftStream(rest, {
-      maxChars: 5,
-      warn,
-    });
+    const { rest, stream } = createHarness({ maxChars: 5, warn });
 
-    stream.update("123456");
-    await stream.flush();
+    await flushText(stream, "123456");
 
     expect(rest.post).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith("discord stream preview stopped (text length 6 > 5)");
@@ -204,19 +153,12 @@ describe("createDiscordDraftStream", () => {
   });
 
   it("starts a new preview after a cleared turn is re-armed", async () => {
-    const rest = {
-      post: vi.fn().mockResolvedValueOnce({ id: "1001" }).mockResolvedValueOnce({ id: "1002" }),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDraftStream(rest);
+    const { rest, stream } = createHarness({}, ["1001", "1002"]);
 
-    stream.update("first draft");
-    await stream.flush();
+    await flushText(stream, "first draft");
     await stream.clear();
     stream.forceNewMessage();
-    stream.update("queued turn draft");
-    await stream.flush();
+    await flushText(stream, "queued turn draft");
 
     expect(rest.post).toHaveBeenCalledTimes(2);
     expect(rest.delete).toHaveBeenCalledTimes(1);

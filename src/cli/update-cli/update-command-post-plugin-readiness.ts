@@ -1,3 +1,4 @@
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
@@ -79,7 +80,6 @@ export async function applyPostPluginUpdateReadiness(params: {
   includeOptionalInspections?: boolean;
 }): Promise<PostCorePluginUpdateResult> {
   const args = [
-    params.entryPath,
     "doctor",
     "--lint",
     "--json",
@@ -92,7 +92,7 @@ export async function applyPostPluginUpdateReadiness(params: {
   const startedAt = Date.now();
   const doctorLint: UpdateStepResult = {
     name: "post-plugin-doctor-lint",
-    command: args.slice(1).join(" "),
+    command: args.join(" "),
     cwd: params.root,
     durationMs: 0,
     exitCode: null,
@@ -103,24 +103,27 @@ export async function applyPostPluginUpdateReadiness(params: {
   let executionFailure: string | undefined;
   let report: ReturnType<typeof parseUpdateDoctorLintReport>;
   try {
-    execution = await runUtf8CommandWithTimeout(
-      [params.nodeRunner ?? resolveNodeRunner(), ...args],
-      {
-        cwd: params.root,
-        timeoutMs: params.timeoutMs,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        input: "",
-        maxOutputBytes: 4 * 1024 * 1024,
-        outputCapture: "head",
-        terminateOnOutputLimit: true,
-        baseEnv,
-        env: {
-          OPENCLAW_UPDATE_IN_PROGRESS: "1",
-          [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
-        },
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: params.nodeRunner ?? resolveNodeRunner(),
+      entryPath: params.entryPath,
+      execArgv: [],
+      args,
+    });
+    execution = await runUtf8CommandWithTimeout([invocation.command, ...invocation.args], {
+      cwd: params.root,
+      timeoutMs: params.timeoutMs,
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+      input: "",
+      maxOutputBytes: 4 * 1024 * 1024,
+      outputCapture: "head",
+      terminateOnOutputLimit: true,
+      baseEnv,
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
       },
-    );
+    });
     if (execution.cleanup === "uncertain") {
       throw new CommandProcessCleanupError();
     }

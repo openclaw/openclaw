@@ -11,7 +11,10 @@ import {
   type OpenClawConfig,
   persistProviderApiKey,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-onboard";
+import {
+  applyAgentDefaultMediaModel,
+  type ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_PIXVERSE_REGION,
@@ -56,22 +59,7 @@ function applyPixVerseConfig(
       },
     },
   };
-  if (next.agents?.defaults?.mediaModels?.video) {
-    return next;
-  }
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        mediaModels: {
-          ...next.agents?.defaults?.mediaModels,
-          video: { primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF },
-        },
-      },
-    },
-  };
+  return applyAgentDefaultMediaModel(next, "video", PIXVERSE_DEFAULT_VIDEO_MODEL_REF);
 }
 
 async function runPixVerseApiKeyAuth(ctx: ProviderAuthContext): Promise<PixVerseAuthResult> {

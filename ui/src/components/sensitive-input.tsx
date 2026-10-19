@@ -3,7 +3,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./tooltip.ts";
 
-export type SensitiveInputProps = {
+type SensitiveInputProps = {
   id: string;
   value: string;
   revealed: boolean;

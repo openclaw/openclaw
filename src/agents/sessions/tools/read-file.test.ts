@@ -56,6 +56,8 @@ it.each([
   "plugin.db-shm",
   "plugin.db-journal",
   "PLUGIN.DB-SHM",
+  "agent.sqlite.memory-reindex-11111111-2222-3333-4444-555555555555",
+  "agent.sqlite.memory-reindex-11111111-2222-3333-4444-555555555555-shm",
   "state/custom-storage",
 ])("isolates the SQLite-relevant target %s", async (name) => {
   const filePath = path.join(root, name);

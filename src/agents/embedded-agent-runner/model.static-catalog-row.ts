@@ -18,6 +18,7 @@ export function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): Provi
     contextWindows: row.contextWindows?.map((option) => ({ ...option })),
     contextWindowDefault: row.contextWindowDefault,
     contextTokens: row.contextTokens,
+    ...(row.parameterCount !== undefined ? { parameterCount: row.parameterCount } : {}),
     maxTokens: row.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
     thinkingLevelMap: row.thinkingLevelMap ? { ...row.thinkingLevelMap } : undefined,
     headers: row.headers,

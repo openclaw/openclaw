@@ -112,23 +112,29 @@ it("preserves inherited transport deadlines and explicit unbounded requests", as
   }
 });
 
-it("rejects shared readers when their connection is cleared", async () => {
+it("clears every live deadline and refresh shape across invalidation", async () => {
   const fixture = protocolFixture();
   const first = loadModelCatalog(fixture.client, scope);
   invalidateModelCatalogCache(fixture.client);
-  const queued = loadModelCatalog(fixture.client, scope);
-  const rejected = expect(queued).rejects.toHaveProperty("name", "AbortError");
-  const activeRejected = expect(first).rejects.toHaveProperty("name", "AbortError");
+  const readers = [
+    first,
+    loadModelCatalog(fixture.client, scope),
+    loadModelCatalog(fixture.client, { ...scope, refresh: true }),
+    loadModelCatalog(fixture.client, { ...scope, timeoutMs: null }),
+    loadModelCatalog(fixture.client, { ...scope, timeoutMs: 100 }),
+  ];
+  const rejected = readers.map((reader) =>
+    expect(reader).rejects.toHaveProperty("name", "AbortError"),
+  );
   try {
     clearModelCatalogCache(fixture.client);
-    await rejected;
+    await Promise.all(rejected);
     fixture.respond(0, stale);
-    await activeRejected;
-    expect(fixture.sent).toHaveLength(1);
+    expect(fixture.sent).toHaveLength(4);
     expect(peekModelCatalog(fixture.client, scope)).toBeUndefined();
   } finally {
     fixture.close();
-    await Promise.allSettled([first, queued]);
+    await Promise.allSettled(readers);
   }
 });
 

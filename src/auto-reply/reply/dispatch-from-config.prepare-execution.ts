@@ -1,5 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { shouldSuppressLocalExecApprovalPromptAsync } from "../../channels/plugins/exec-approval-local.js";
 import { formatPlanChecklistLines } from "../../channels/streaming.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -161,7 +162,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   }) => {
     if (
       params.replyOptions?.progressRequiresReply === true &&
-      state.replyOperationRunState.replyCompletion?.expectation !== "required"
+      !isRequiredReplyExpectation(state.replyOperationRunState.replyCompletion?.expectation)
     ) {
       return false;
     }

@@ -1,28 +1,27 @@
-import { html, nothing, render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LitContent } from "../lit/solid-content.tsx";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { renderDecisionModelPicker } from "./decision-model-picker.ts";
-import { renderModelPicker, type ModelPickerOption } from "./model-picker.ts";
-import { renderPicker, type SelectPicker } from "./select-picker.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
+import { Picker, type SelectPicker } from "./select-picker.ts";
+import { DecisionModelPicker } from "./solid/decision-model-picker.tsx";
+import {
+  ModelPicker,
+  type ModelPickerOption,
+  type ModelPickerParams,
+} from "./solid/model-picker.tsx";
 import { SettingsRow } from "./solid/settings-ui.tsx";
 import "../styles/base.css";
 import "../styles/settings-controls.css";
 import "../styles/settings.css";
 
-const hosts: HTMLElement[] = [];
-
 afterEach(async () => {
-  for (const host of hosts.splice(0)) {
-    render(nothing, host);
-  }
+  cleanupSolid();
   document.body.replaceChildren();
   await Promise.resolve();
 });
 
 function mountHost(style = "") {
   const host = document.createElement("div");
-  hosts.push(host);
   host.style.cssText = style;
   document.body.append(host);
   return host;
@@ -36,19 +35,136 @@ function fixtureModels(labels: string[]): ModelPickerOption[] {
   }));
 }
 
-async function mountModel(
-  params: Omit<Parameters<typeof renderModelPicker>[0], "label" | "onChange">,
-  style: string,
-) {
+async function mountModel(params: Omit<ModelPickerParams, "label" | "onChange">, style: string) {
   const host = mountHost(style);
   const onChange = vi.fn();
-  render(renderModelPicker({ label: "Model", onChange, ...params }), host);
+  mountSolid(() => <ModelPicker label="Model" onChange={onChange} {...params} />, {
+    container: host,
+  });
   const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
   await picker.updateComplete;
   return { picker, onChange };
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout", () => {
+  it("reveals keyboard highlights without untracked reactive reads", async () => {
+    const warning = vi.spyOn(console, "warn");
+    try {
+      const { page, userEvent } = await import("vitest/browser");
+      await page.viewport(1280, 844);
+      const { picker, onChange } = await mountModel(
+        {
+          value: "fixture/model-0",
+          options: Array.from({ length: 30 }, (_, index) => ({
+            value: `fixture/model-${index}`,
+            label: `Model ${index}`,
+          })),
+        },
+        "width:240px;margin:24px",
+      );
+      await page.getByRole("button", { name: "Model: Model 0", exact: true }).click();
+      await userEvent.keyboard("{ArrowUp}");
+      const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+      const last = picker.querySelector<HTMLElement>('[data-value="fixture/model-29"]')!;
+      await expect.poll(() => last.hasAttribute("data-active")).toBe(true);
+      await expect.poll(() => list.scrollTop).toBeGreaterThan(0);
+      expect(last.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        list.getBoundingClientRect().bottom + 1,
+      );
+      const end = list.scrollHeight - list.clientHeight;
+      for (const [top, fadeStart, fadeEnd] of [
+        [0, false, true],
+        [1, true, true],
+        [end - 2, true, true],
+        [end - 1, true, false],
+      ] as const) {
+        list.scrollTop = top;
+        list.dispatchEvent(new Event("scroll"));
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+        expect(list.scrollTop).toBe(top);
+        expect(last.hasAttribute("data-active")).toBe(true);
+        expect(list.hasAttribute("data-fade-start")).toBe(fadeStart);
+        expect(list.hasAttribute("data-fade-end")).toBe(fadeEnd);
+        expect(onChange).not.toHaveBeenCalled();
+      }
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+      expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/model-0");
+      expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it.each([undefined, "submenu"] as const)(
+    "resolves writing direction on opening without reading closed picker styles (%s)",
+    async (variant) => {
+      const { userEvent } = await import("vitest/browser");
+      const computedStyle = vi.spyOn(window, "getComputedStyle");
+      try {
+        const [direction, setDirection] = createSignal<"ltr" | "rtl">("ltr");
+        const [placement, setPlacement] = createSignal<"top" | "bottom">("bottom");
+        const host = mountHost();
+        mountSolid(
+          () => (
+            <div dir={direction()}>
+              <Picker
+                params={{
+                  label: "Submenu",
+                  value: "one",
+                  options: [{ value: "one", label: "One" }],
+                  variant,
+                  placement: placement(),
+                  onChange() {},
+                }}
+              />
+            </div>
+          ),
+          { container: host },
+        );
+        const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
+        await picker.updateComplete;
+        const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
+        const hostStyleReads = () =>
+          computedStyle.mock.calls.filter(([element]) => element === picker);
+        expect(hostStyleReads()).toHaveLength(0);
+
+        setDirection("rtl");
+        setPlacement("top");
+        flush();
+        await picker.updateComplete;
+        expect(hostStyleReads()).toHaveLength(0);
+        const trigger = picker.querySelector<HTMLButtonElement>("button")!;
+        trigger.focus();
+        await userEvent.keyboard(variant === "submenu" ? "{ArrowLeft}" : "{ArrowDown}");
+        await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+        expect(menu.dataset.placement).toBe(variant === "submenu" ? "left-start" : "top-start");
+        expect(getComputedStyle(menu).direction).toBe("rtl");
+
+        setDirection("ltr");
+        setPlacement("bottom");
+        flush();
+        await picker.updateComplete;
+        expect(menu.dataset.placement).toBe(variant === "submenu" ? "right-start" : "bottom-start");
+        await userEvent.keyboard("{Escape}");
+        computedStyle.mockClear();
+        setDirection("rtl");
+        setPlacement("top");
+        flush();
+        await picker.updateComplete;
+        expect(hostStyleReads()).toHaveLength(0);
+        await userEvent.keyboard(variant === "submenu" ? "{ArrowLeft}" : "{ArrowDown}");
+        await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+        expect(menu.dataset.placement).toBe(variant === "submenu" ? "left-start" : "top-start");
+        await userEvent.keyboard(variant === "submenu" ? "{ArrowRight}" : "{Escape}");
+        await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+      } finally {
+        computedStyle.mockRestore();
+      }
+    },
+  );
+
   it.each([
     { width: 1280, direction: "ltr" },
     { width: 390, direction: "ltr" },
@@ -66,47 +182,47 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         label: `Model ${index}`,
       }));
       const onChange = vi.fn();
-      const shared = html`${renderPicker({
-        label: "Shared",
-        value: "fixture/model-0",
-        options,
-        searchable: true,
-        onChange,
-      })}`;
+      const Shared = () => (
+        <Picker
+          params={{
+            label: "Shared",
+            value: "fixture/model-0",
+            options,
+            searchable: true,
+            onChange,
+          }}
+        />
+      );
       mountSolid(
         () => (
           <>
             <SettingsRow
               title="Primary"
               control={
-                <LitContent
-                  value={renderModelPicker({
-                    label: "Primary",
-                    value: "fixture/model-0",
-                    options,
-                    onChange,
-                  })}
+                <ModelPicker
+                  label="Primary"
+                  value="fixture/model-0"
+                  options={options}
+                  onChange={onChange}
                 />
               }
             />
             <SettingsRow
               title="Decision"
               control={
-                <LitContent
-                  value={renderDecisionModelPicker({
-                    id: "alignment-decision",
-                    models: [
-                      { provider: "fixture", id: "one", name: "Decision one", pluginId: "fixture" },
-                    ],
-                    value: "fixture/one",
-                    disabled: false,
-                    onChange,
-                  })}
+                <DecisionModelPicker
+                  id="alignment-decision"
+                  models={[
+                    { provider: "fixture", id: "one", name: "Decision one", pluginId: "fixture" },
+                  ]}
+                  value="fixture/one"
+                  disabled={false}
+                  onChange={onChange}
                 />
               }
             />
-            <SettingsRow title="Shared" control={<LitContent value={shared} />} />
-            <LitContent value={shared} />
+            <SettingsRow title="Shared" control={<Shared />} />
+            <Shared />
             <SettingsRow
               title="Value"
               control={
@@ -195,7 +311,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     name: string;
     width: number;
     style: string;
-    params: Omit<Parameters<typeof renderModelPicker>[0], "label" | "onChange">;
+    params: Omit<ModelPickerParams, "label" | "onChange">;
     selected: string;
     sizing: "custom" | "viewport" | "trigger" | "wrap";
   }>([
@@ -336,33 +452,35 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     };
     const utilityChange = vi.fn();
     const primaryChange = vi.fn();
-    render(
-      html`
-        ${renderModelPicker({
-          id: "saved-utility",
-          label: "Utility Model",
-          value: unavailable.value,
-          options: [
-            { value: "__openclaw_automatic_utility__", label: "Auto" },
-            { value: "", label: "Disabled" },
-            ...available,
-            unavailable,
-          ],
-          onChange: utilityChange,
-        })}
-        ${renderModelPicker({
-          id: "available-primary",
-          label: "Model",
-          value: "fixture/global-three",
-          options: [
-            { value: "", label: "Select a model", disabled: true },
-            ...available,
-            unavailable,
-          ],
-          onChange: primaryChange,
-        })}
-      `,
-      host,
+    mountSolid(
+      () => (
+        <>
+          <ModelPicker
+            id="saved-utility"
+            label="Utility Model"
+            value={unavailable.value}
+            options={[
+              { value: "__openclaw_automatic_utility__", label: "Auto" },
+              { value: "", label: "Disabled" },
+              ...available,
+              unavailable,
+            ]}
+            onChange={utilityChange}
+          />
+          <ModelPicker
+            id="available-primary"
+            label="Model"
+            value="fixture/global-three"
+            options={[
+              { value: "", label: "Select a model", disabled: true },
+              ...available,
+              unavailable,
+            ]}
+            onChange={primaryChange}
+          />
+        </>
+      ),
+      { container: host },
     );
     await Promise.all(
       [...host.querySelectorAll<SelectPicker>("openclaw-select-picker")].map(
@@ -436,21 +554,25 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       await page.viewport(width, 844);
       const host = mountHost("position:fixed;right:12px;top:32px;width:90px");
       const onChange = vi.fn();
-      const renderDecision = (value: string) =>
-        render(
-          html`${renderDecisionModelPicker({
-              id: "decisions",
-              models: [
+      const [value, setValue] = createSignal("alpha/one");
+      mountSolid(
+        () => (
+          <>
+            <DecisionModelPicker
+              id="decisions"
+              models={[
                 { provider: "alpha", id: "one", name: "Alpha decision model", pluginId: "alpha" },
                 { provider: "beta", id: "two", name: "Beta decision model", pluginId: "beta" },
-              ],
-              value,
-              disabled: false,
-              onChange,
-            })}<button id="after-picker">Next field</button>`,
-          host,
-        );
-      renderDecision("alpha/one");
+              ]}
+              value={value()}
+              disabled={false}
+              onChange={onChange}
+            />
+            <input id="after-picker" aria-label="Next field" />
+          </>
+        ),
+        { container: host },
+      );
       const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
       await picker.updateComplete;
       let trigger = page.getByRole("button", {
@@ -478,7 +600,8 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       )) {
         expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth);
       }
-      renderDecision("beta/two");
+      setValue("beta/two");
+      flush();
       await picker.updateComplete;
       trigger = page.getByRole("button", {
         name: "Decision Model: Beta decision model",
@@ -491,7 +614,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       expect(onChange).not.toHaveBeenCalled();
       await userEvent.keyboard("{Tab}{Tab}");
       await expect
-        .element(page.getByRole("button", { name: "Next field", exact: true }))
+        .element(page.getByRole("textbox", { name: "Next field", exact: true }))
         .toHaveFocus();
       await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
       expect(onChange).not.toHaveBeenCalled();

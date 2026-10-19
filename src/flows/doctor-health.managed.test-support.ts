@@ -10,6 +10,7 @@ import { collectSecurityWarnings } from "../commands/doctor-security.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ServiceInspectionError } from "../daemon/service-inspection-error.js";
+import { seedCompletedRuntimePinMigration } from "../daemon/test-helpers/service-audit-runtime-pin.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import {
@@ -30,6 +31,8 @@ import {
   migrateLegacyWorkspaceState,
 } from "../infra/state-migrations.workspace-setup.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
+import { runUtf8CommandWithTimeout } from "../process/exec.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
   claimOpenClawAgentDatabaseLease,
@@ -65,6 +68,7 @@ type DoctorManagedRepairOutcome =
   | "update-parent-stopped"
   | "update-legacy"
   | "repair-failed"
+  | "repair-cancelled"
   | "store-close-failed"
   | "config-refused"
   | "workspace-cleanup-failed"
@@ -82,6 +86,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         // These cases own managed agent repair after shared-state initialization.
         materializeSharedStateDatabase(state.env);
+        await seedCompletedRuntimePinMigration(state.env);
         const interactive = outcome.startsWith("interactive-");
         const declined = outcome === "interactive-declined";
         const clean = declined || outcome.startsWith("clean-") || outcome.startsWith("update-");
@@ -186,6 +191,8 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         });
         const agentBefore = fs.readFileSync(initial.path);
         const events: string[] = [];
+        const work = new AsyncWorkScope();
+        const cancellation = new DOMException("CLI stopping (SIGTERM)", "AbortError");
         const initiallyStopped =
           outcome.startsWith("clean-stopped-") || outcome === "update-no-restart-stopped";
         const inconclusiveActivation =
@@ -198,7 +205,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         if (initiallyStopped) {
           releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
         }
-        const pid = outcome === "ancestor-blocked" ? process.pid : 4200;
+        const pid = outcome === "ancestor-blocked" ? process.pid : process.pid + 1;
         mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
         const packageRoot = process.cwd();
         mocks.packageRoot.mockReturnValue(packageRoot);
@@ -215,6 +222,14 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
         });
         const restart = vi.fn(async () => {
+          if (outcome === "repair-cancelled") {
+            const child = await runUtf8CommandWithTimeout(
+              [process.execPath, "-e", 'process.stdout.write("restored")'],
+              {},
+            );
+            expect(child.code).toBe(0);
+            expect(child.stdout).toBe("restored");
+          }
           events.push("restart");
           if (outcome === "ready" || outcome === "interactive-ready") {
             for (const agentId of ["main", "research"]) {
@@ -226,7 +241,11 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           // A refusal before schema convergence restores the captured service,
           // whose prior runtime already served this state. Other cases prove that
           // the candidate can reopen every migrated database before health passes.
-          if (outcome !== "repair-failed" && outcome !== "config-refused") {
+          if (
+            outcome !== "repair-failed" &&
+            outcome !== "repair-cancelled" &&
+            outcome !== "config-refused"
+          ) {
             for (const agentId of ["main", "research"]) {
               const reopened = openOpenClawAgentDatabase({ agentId, env: state.env });
               expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
@@ -288,6 +307,10 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
           if (outcome === "repair-failed") {
             throw new Error("synthetic migration failure");
+          }
+          if (outcome === "repair-cancelled") {
+            work.beginClose(cancellation);
+            throw cancellation;
           }
           if (outcome === "config-refused") {
             ctx.configWriteRefusal = "validation";
@@ -409,11 +432,13 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
           }
           mocks.restartedHealthy = outcome !== "restart-unhealthy";
-          const run = runDoctorHealthFlow(runtime, {
-            ...(interactive || inspectionOnly ? {} : { repair: true }),
-            force,
-            ...(interactive ? {} : { nonInteractive: true }),
-          });
+          const inspect = () =>
+            runDoctorHealthFlow(runtime, {
+              ...(interactive || inspectionOnly ? {} : { repair: true }),
+              force,
+              ...(interactive ? {} : { nonInteractive: true }),
+            });
+          const run = outcome === "repair-cancelled" ? work.track(inspect) : inspect();
           if (outcome === "update-no-restart") {
             await expect(run).rejects.toThrow("update parent");
             expect(events).toEqual([]);
@@ -450,6 +475,9 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
           if (outcome === "repair-failed") {
             await expect(run).rejects.toThrow("synthetic migration failure");
+          } else if (outcome === "repair-cancelled") {
+            await expect(run).rejects.toBe(cancellation);
+            await work.drain();
           } else if (outcome === "config-refused") {
             await run;
             expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -492,6 +520,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             outcome === "ready" ||
             archiveVerification ||
             outcome === "repair-failed" ||
+            outcome === "repair-cancelled" ||
             outcome === "store-close-failed" ||
             outcome === "config-refused" ||
             outcome === "workspace-cleanup-failed" ||

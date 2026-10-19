@@ -1,6 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isSummaryProviderError } from "../../../packages/agent-core/src/harness/types.js";
-import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import type { CompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
@@ -8,7 +7,6 @@ import { hasModelFallbackStop } from "../failover-error.js";
 import { extractFailoverHttpStatus } from "../failover/retry-evidence.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
-const MAX_COMPACTION_REASON_DETAIL_CHARS = 100;
 const COMPACTION_PROVIDER_4XX = new Set([400, 401, 403, 429]);
 const COMPACTION_PROVIDER_5XX = new Set([500, 502, 503, 504]);
 const COMPACTION_TEXT_REASONS: ReadonlyArray<
@@ -134,16 +132,4 @@ export function isBenignCompactionSkipResult(result: {
     isBenignCompactionSkipReason(result.reason) ||
     (result.ok && classifyCompactionReason(result.reason) === "no_compactable_entries")
   );
-}
-
-export function formatUnknownCompactionReasonDetail(reason?: string): string | undefined {
-  const sanitized = sanitizeForLog((reason ?? "").replace(/\s+/g, " "))
-    .trim()
-    .replace(/[^A-Za-z0-9._:@/+~-]+/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  if (!sanitized) {
-    return undefined;
-  }
-  return sanitized.slice(0, MAX_COMPACTION_REASON_DETAIL_CHARS);
 }

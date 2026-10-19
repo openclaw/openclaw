@@ -9,6 +9,7 @@ import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js
 import { runCommandWithTimeout } from "../process/exec.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
+import { DoctorMaintenanceRefusalError } from "./update-doctor-result.js";
 import { createUpdateRun } from "./update-run-ledger.js";
 import {
   advanceFixtureRemote,
@@ -687,60 +688,81 @@ describe("Git checkout execution", () => {
     expect(await git(root, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe("origin/main");
   });
 
-  it.each(["head-error", "head-mismatch", "ui-missing"] as const)(
-    "retains the candidate after migration starts: %s",
-    async (failure) => {
-      const targetSha = await advanceRemote();
-      const stateFile = path.join(directory, "operator-state");
-      await fs.writeFile(stateFile, "old state");
-      let migrated = false;
-      const execute = runCommand;
-      runCommand = (argv, options) => {
-        if (migrated && argv[2] === root && argv[3] === "rev-parse" && argv[4] === "HEAD") {
-          if (failure === "head-error") {
-            return Promise.resolve({ code: 1, stdout: "", stderr: "HEAD unavailable" });
-          }
-          if (failure === "head-mismatch") {
-            return Promise.resolve({ code: 0, stdout: beforeSha, stderr: "" });
-          }
+  it.each([
+    "doctor-failed",
+    "doctor-threw",
+    "doctor-data-at-risk",
+    "head-error",
+    "head-mismatch",
+    "ui-missing",
+  ] as const)("retains the candidate after migration starts: %s", async (failure) => {
+    const targetSha = await advanceRemote();
+    const stateFile = path.join(directory, "operator-state");
+    await fs.writeFile(stateFile, "old state");
+    let migrated = false;
+    const execute = runCommand;
+    runCommand = (argv, options) => {
+      if (migrated && argv[2] === root && argv[3] === "rev-parse" && argv[4] === "HEAD") {
+        if (failure === "head-error") {
+          return Promise.resolve({ code: 1, stdout: "", stderr: "HEAD unavailable" });
         }
-        return execute(argv, options);
-      };
-      const result = await update({
-        runGitDoctor: async (doctorRoot) => {
-          expect(stopped).toBe(true);
-          await expectRuntime(doctorRoot, targetSha);
-          migrated = true;
-          await fs.writeFile(stateFile, "migrated state");
-          if (failure === "ui-missing") {
-            await fs.rm(path.join(root, "dist", "control-ui"), { recursive: true });
-          }
-          return {
-            name: "openclaw doctor",
-            command: "CLI activation doctor",
-            cwd: doctorRoot,
-            durationMs: 0,
-            exitCode: 0,
-          };
-        },
-      });
-      expect(result).toMatchObject({
-        status: "error",
-        reason: {
-          "head-error": "head-verification-failed",
-          "head-mismatch": "target-sha-mismatch",
-          "ui-missing": "ui-assets-missing",
-        }[failure],
-        recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
-      });
-      expect(result.steps.some((step) => step.name.startsWith("git-rollback-"))).toBe(false);
-      expect(await fs.readFile(stateFile, "utf8")).toBe("migrated state");
-      expect(await git(root, "rev-parse", "HEAD")).toBe(targetSha);
-      expect(
-        JSON.parse(await fs.readFile(path.join(root, "dist", "build-info.json"), "utf8")),
-      ).toMatchObject({ buildId: targetSha });
-    },
-  );
+        if (failure === "head-mismatch") {
+          return Promise.resolve({ code: 0, stdout: beforeSha, stderr: "" });
+        }
+      }
+      return execute(argv, options);
+    };
+    const result = await update({
+      runGitDoctor: async (doctorRoot) => {
+        expect(stopped).toBe(true);
+        await expectRuntime(doctorRoot, targetSha);
+        migrated = true;
+        await fs.writeFile(stateFile, "migrated state");
+        if (failure === "doctor-threw") {
+          throw new Error("Doctor failed after writing state");
+        }
+        if (failure === "doctor-data-at-risk") {
+          throw new DoctorMaintenanceRefusalError("State is unreadable", {
+            kind: "data-at-risk",
+            reason: "unreadable-state",
+          });
+        }
+        if (failure === "ui-missing") {
+          await fs.rm(path.join(root, "dist", "control-ui"), { recursive: true });
+        }
+        return {
+          name: "openclaw doctor",
+          command: "CLI activation doctor",
+          cwd: doctorRoot,
+          durationMs: 0,
+          exitCode: failure === "doctor-failed" ? 1 : 0,
+        };
+      },
+    });
+    expect(result).toMatchObject({
+      status: "error",
+      reason: {
+        "doctor-failed": "doctor-failed",
+        "doctor-threw": "unexpected-error",
+        "doctor-data-at-risk": "unexpected-error",
+        "head-error": "head-verification-failed",
+        "head-mismatch": "target-sha-mismatch",
+        "ui-missing": "ui-assets-missing",
+      }[failure],
+      recovery: {
+        serviceRestartSafe: false,
+        reason: "state-migration-started",
+        dataAtRisk:
+          failure === "doctor-data-at-risk" ? "unreadable-state" : "state-migrated-no-rollback",
+      },
+    });
+    expect(result.steps.some((step) => step.name.startsWith("git-rollback-"))).toBe(false);
+    expect(await fs.readFile(stateFile, "utf8")).toBe("migrated state");
+    expect(await git(root, "rev-parse", "HEAD")).toBe(targetSha);
+    expect(
+      JSON.parse(await fs.readFile(path.join(root, "dist", "build-info.json"), "utf8")),
+    ).toMatchObject({ buildId: targetSha });
+  });
 
   it.each(["build", "locked worktree creation"] as const)(
     "settles cancelled candidate %s before returning",

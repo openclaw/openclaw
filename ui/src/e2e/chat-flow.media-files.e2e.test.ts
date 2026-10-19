@@ -162,7 +162,7 @@ suite.define(() => {
     }
   });
 
-  it("renders a managed image through an artifact-scoped ticket", async () => {
+  it("shares a managed image across historical URLs through one artifact-scoped ticket", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const attachmentId = crypto.randomUUID();
@@ -185,17 +185,15 @@ suite.define(() => {
       historyMessages: [
         {
           role: "assistant",
-          content: [
-            {
-              type: "image",
-              artifactId,
-              url: imageUrl,
-              alt: "Ticketed generated image",
-              mimeType: "image/png",
-              width: 1,
-              height: 1,
-            },
-          ],
+          content: Array.from({ length: 3 }, (_, alias) => ({
+            type: "image",
+            artifactId,
+            url: `${imageUrl}?mediaTicket=historical-${alias}`,
+            alt: `Ticketed generated image ${alias + 1}`,
+            mimeType: "image/png",
+            width: 1,
+            height: 1,
+          })),
           timestamp: Date.now(),
         },
       ],
@@ -216,20 +214,23 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const image = page.getByAltText("Ticketed generated image");
-      await image.waitFor({ state: "visible", timeout: 10_000 });
+      const images = page.getByAltText(/^Ticketed generated image \d$/u);
+      await expect.poll(() => images.count()).toBe(3);
       await expect
         .poll(() =>
-          image.evaluate((element) =>
-            element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
+          images.evaluateAll((elements) =>
+            elements.map((element) =>
+              element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
+            ),
           ),
         )
-        .toBe(1);
+        .toEqual([1, 1, 1]);
       const request = await gateway.waitForRequest("artifacts.download");
       expect(request.params).toMatchObject({
         sessionKey: "agent:main:main",
         artifactId,
       });
+      expect(await gateway.getRequests("artifacts.download")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);
     }

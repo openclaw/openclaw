@@ -83,6 +83,29 @@ By default, the listener binds every loopback address resolved for the redirect
 hostname. `bindHostname` adds a loopback host. Use `bindOnlyHostname` instead to
 preserve a provider's exact Node bind host (`localhost`, `127.0.0.1`, or `::1`).
 
+## Declare physical credential ownership
+
+Normal providers use agent-scoped profiles and configured provider credentials by
+default. A provider whose credentials are protected plugin-global settings can
+declare `authScope: "plugin"` on its canonical `modelCatalog.providers` entry and
+its runtime provider definition. These declarations must agree; unavailable or
+disabled executables must not turn a plugin credential request into an agent-profile
+lookup.
+
+Plugin scope uses the selected live provider's synchronous `resolveSyntheticAuth`
+hook. Read the existing host-prepared plugin secret input there; do not resolve cold
+SecretRefs or copy them into agent auth stores. The common owner rechecks instance,
+hook identity and credential revision around that read. Cached/restored synthetic
+bearer results cannot replace live authority. Explicit or preferred profile pins
+are rejected before the hook, with no environment or `models.providers` fallback.
+
+A declared no-auth marker establishes credential eligibility only. It does not establish service
+health, successful inference, or verified local model artifacts. Catalog readiness
+uses this same live source and treats missing prepared evidence as unknown or
+unavailable, never as an implicit profile grant. Existing agent-scoped providers
+retain their normal account precedence. Tool preparations that explicitly exclude
+plugin auth also exclude agent-credential fallback for plugin-scoped providers.
+
 ## Handle model access after sign-in
 
 Existing consumers of `runModelsAuthLoginFlow` from
@@ -149,6 +172,13 @@ a saved policy is not proof that the running Gateway applied it.
 
 ## Submit JSON requests
 
+Bundled Bearer-key providers use `resolveProviderApiKeyHttpRequestConfig` from
+`openclaw/plugin-sdk/provider-http` to resolve current credentials and HTTP
+request policy together. Pass `req`, `provider`, `missingApiKeyMessage`, and the
+usual HTTP configuration options. JSON content type is the default; set
+`jsonContentType: false` for multipart or other non-JSON requests. Provider-specific
+endpoints, extra headers, and request overrides remain plugin-owned.
+
 Use `postJsonResponse` from `openclaw/plugin-sdk/provider-http` when a JSON POST
 returns a complete JSON response. It uses the guarded POST transport, checks the
 HTTP status, reads bounded JSON, and releases the transport before returning or
@@ -166,6 +196,14 @@ the caller explicitly supplies the existing retry options.
 Keep `postJsonRequest` for streaming or binary responses, custom response/error
 parsers, and code that needs to retain the response transport. Those callers
 must release it in `finally`.
+
+Use `fetchWithProviderHttpGuard` from `openclaw/plugin-sdk/provider-http` when
+the provider owns its request admission, response parsing, and release lifetime.
+It accepts guarded-fetch options and returns the response and `release` callback.
+Always release in `finally`. Eligible direct requests share the host's bounded
+provider connection pool after fresh DNS and SSRF validation on every request.
+Proxy and custom TLS routes retain their existing transport policy. Plugins do
+not retain or close the shared pool; the Gateway owns its shutdown.
 
 ## Walkthrough
 
@@ -341,6 +379,13 @@ must release it in `finally`.
       },
     });
     ```
+
+    Auth callbacks return an authoring `configPatch` that the host applies.
+    A plugin-owned setup flow that applies its own result should use
+    `applyProviderAuthConfigPatch(config, result.configPatch, result)` from
+    `openclaw/plugin-sdk/provider-auth`. It preserves the host's merge semantics,
+    including individual header deletions and `replaceDefaultModels`; do not
+    shallow-spread an auth patch into runtime config.
 
     `registerModelCatalogProvider` is the newer control-plane catalog surface
     for list/help/picker UI, covering `text`, `voice`, `image_generation`,
@@ -580,6 +625,22 @@ This keeps shared request shaping and output normalization active, including
 MiMo reasoning replay and final-answer handling. Without the flag, a replacement
 stream keeps the existing behavior of taking ownership of those compatibility
 policies. Returning the original stream or no wrapper also preserves them.
+
+Bundled adapters share `wrapProviderPayloadHook` and `mapAssistantMessageStream`
+through the existing private `provider-stream-shared` seam. Payload composition
+runs defaults before the caller hook and wire constraints after its result settles;
+each adapter keeps its own replacement/null policy. The stream mapper preserves
+synchronous returns without importing the embedded runner. These are bundled
+implementation helpers, not new third-party SDK contracts.
+
+`applyOpenAICompletionsToolReasoning` shares the native tools/reasoning wire
+policy with pass-through adapters through that private seam. Callers qualify
+the endpoint and normalize vendor-prefixed model IDs before applying it.
+
+Injected-client adapters also reuse the Anthropic thinking and output-cap owners
+through the private `provider-transport-runtime` seam. Client creation and
+provider-specific defaults stay with the adapter; the shared request builder
+owns sampling restrictions and cache-marker budgeting.
 
 Local provider transports can report a transient wait through the optional
 `StreamOptions.onProviderWait` callback. Pass `"response"` while waiting for a

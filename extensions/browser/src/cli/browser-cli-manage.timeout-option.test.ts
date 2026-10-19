@@ -38,7 +38,7 @@ describe("browser manage timeout option", () => {
     });
 
     const request = findBrowserManageCall(path);
-    expect(request?.[1]).toEqual(expect.objectContaining({ timeout: "70000" }));
+    expect(request?.[1]).toEqual(expect.objectContaining({ timeout: "190000" }));
     expect(request?.[2].timeoutMs).toBe(60000);
   });
 
@@ -51,7 +51,7 @@ describe("browser manage timeout option", () => {
 
     const startCall = findBrowserManageCall("/start");
     expect(startCall?.[2].query).toEqual({ profile: "work", headless: "true" });
-    expect(startCall?.[1].timeout).toBe("70000");
+    expect(startCall?.[1].timeout).toBe("190000");
     expect(startCall?.[2].timeoutMs).toBe(60000);
     expect(findBrowserManageCall("/")?.[2].timeoutMs).toBe(60000);
   });
@@ -64,7 +64,7 @@ describe("browser manage timeout option", () => {
 
     const request = findBrowserManageCall(path);
     expect(request?.[2].timeoutMs).toBe(30000);
-    expect(request?.[1].timeout).toBe("40000");
+    expect(request?.[1].timeout).toBe("160000");
   });
 
   it("rejects invalid authored timeouts before dispatch", async () => {
@@ -94,7 +94,7 @@ describe("browser manage timeout option", () => {
       const request = findBrowserManageCall(route);
       const timeoutMs = route === "/snapshot" ? 10000 : 60000;
       expect(request?.[2].timeoutMs).toBe(timeoutMs);
-      expect(request?.[1].timeout).toBe(String(timeoutMs + 10_000));
+      expect(request?.[1].timeout).toBe(String(timeoutMs + 130_000));
     }
     expect(
       getBrowserManageGatewayMock().mock.calls.filter((call) => call[2].path === "/snapshot"),
@@ -108,7 +108,7 @@ describe("browser manage timeout option", () => {
     for (const route of ["/stop", "/"]) {
       const request = findBrowserManageCall(route);
       expect(request?.[2].timeoutMs).toBe(60000);
-      expect(request?.[1].timeout).toBe("70000");
+      expect(request?.[1].timeout).toBe("190000");
     }
   });
 });

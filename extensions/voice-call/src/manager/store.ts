@@ -42,13 +42,11 @@ type PersistedCallRecord = {
 };
 
 type CallRecordStateStores = {
-  events: PluginStateKeyedStore<CallRecordEventMeta>;
-  chunks: PluginStateKeyedStore<CallRecordEventChunk>;
+  events: PluginStateKeyedStore<CallRecordEventMeta, 2>;
+  chunks: PluginStateKeyedStore<CallRecordEventChunk, 2>;
 };
 
-type CallRecordChunkResults = Awaited<
-  ReturnType<NonNullable<CallRecordStateStores["chunks"]["lookupMany"]>>
->;
+type CallRecordChunkResults = Awaited<ReturnType<CallRecordStateStores["chunks"]["lookupMany"]>>;
 
 function createCallRecordStateStores(
   storePath: string,
@@ -60,12 +58,12 @@ function createCallRecordStateStores(
   }
   const env = { ...process.env, OPENCLAW_STATE_DIR: storePath };
   return {
-    events: state.openKeyedStore<CallRecordEventMeta>({
+    events: state.openKeyedStoreV2<CallRecordEventMeta>({
       namespace: CALL_RECORD_EVENTS_NAMESPACE,
       maxEntries: CALL_RECORD_EVENT_META_MAX_ENTRIES,
       env,
     }),
-    chunks: state.openKeyedStore<CallRecordEventChunk>({
+    chunks: state.openKeyedStoreV2<CallRecordEventChunk>({
       namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
       maxEntries: CALL_RECORD_CHUNK_MAX_ENTRIES,
       env,
@@ -184,7 +182,7 @@ async function pruneCallRecordEvents(
   incomingEntries = 0,
 ): Promise<void> {
   const retainedLimit = Math.max(0, MAX_CALL_RECORD_EVENTS - incomingEntries);
-  if (stores.events.count && (await stores.events.count()) <= retainedLimit) {
+  if ((await stores.events.count()) <= retainedLimit) {
     return;
   }
   const rows = await stores.events.entries();
@@ -193,12 +191,9 @@ async function pruneCallRecordEvents(
   }
   const sorted = rows.toSorted((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
   for (const row of sorted.slice(0, rows.length - retainedLimit)) {
-    const meta = await stores.events.lookup(row.key);
     await stores.events.delete(row.key);
-    if (meta) {
-      for (let index = 0; index < meta.chunkCount; index += 1) {
-        await stores.chunks.delete(buildChunkKey(row.key, index));
-      }
+    for (let index = 0; index < row.value?.chunkCount; index += 1) {
+      await stores.chunks.delete(buildChunkKey(row.key, index));
     }
   }
 }
@@ -211,24 +206,20 @@ function isValidCallRecordChunkCount(chunkCount: number): boolean {
   );
 }
 
-async function readCallRecordEvent(
-  stores: CallRecordStateStores,
-  eventKey: string,
+function readCallRecordEvent(
   meta: CallRecordEventMeta,
-  records?: CallRecordChunkResults,
-): Promise<CallRecord | null> {
+  records: CallRecordChunkResults,
+): CallRecord | null {
   if (!isValidCallRecordChunkCount(meta.chunkCount)) {
     return null;
   }
   const chunks: Buffer[] = [];
   for (let index = 0; index < meta.chunkCount; index += 1) {
-    const result = records?.[index];
+    const result = records[index];
     if (result && !result.ok) {
       throw result.error;
     }
-    const chunk = records
-      ? result?.value
-      : await stores.chunks.lookup(buildChunkKey(eventKey, index));
+    const chunk = result?.value;
     if (!chunk || chunk.index !== index) {
       return null;
     }
@@ -252,7 +243,7 @@ async function readCallRecordEvents(stores: CallRecordStateStores): Promise<Call
   let chunkOffset = 0;
   let chunkRecords: CallRecordChunkResults | undefined;
   for (const [entryIndex, entry] of entries.entries()) {
-    if (entryIndex >= batchEnd && stores.chunks.lookupMany) {
+    if (entryIndex >= batchEnd) {
       const keys: string[] = [];
       for (let next = entryIndex; ; next++) {
         const row = entries[next];
@@ -275,9 +266,8 @@ async function readCallRecordEvents(stores: CallRecordStateStores): Promise<Call
       chunkRecords = keys.length > 0 ? await stores.chunks.lookupMany(keys) : undefined;
       chunkOffset = 0;
     }
-    // Published hosts without lookupMany keep their point-read path.
-    const records = chunkRecords?.slice(chunkOffset, chunkOffset + entry.value.chunkCount);
-    const call = await readCallRecordEvent(stores, entry.key, entry.value, records);
+    const records = chunkRecords?.slice(chunkOffset, chunkOffset + entry.value.chunkCount) ?? [];
+    const call = readCallRecordEvent(entry.value, records);
     if (chunkRecords) {
       chunkOffset += entry.value.chunkCount;
     }

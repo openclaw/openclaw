@@ -2,14 +2,10 @@ import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import { isDiscordThreadChannelType } from "./channel-type.js";
 import { resolveDiscordRest } from "./client.js";
-import {
-  getChannel,
-  getCurrentUser,
-  getGuild,
-  getGuildMember,
-  getThreadMember,
-  type RequestClient,
-} from "./internal/discord.js";
+import { getGuild, getGuildMember } from "./internal/api.guild.js";
+import { getChannel, getThreadMember } from "./internal/api.messages.js";
+import { getCurrentUser } from "./internal/api.users.js";
+import type { RequestClient } from "./internal/rest.js";
 import type { DiscordPermissionsSummary, DiscordReactOpts } from "./send.types.js";
 
 const PERMISSION_ENTRIES = Object.entries(PermissionFlagsBits).filter(

@@ -1,8 +1,7 @@
 import { on, once } from "node:events";
-import type { DatabaseSync } from "node:sqlite";
 import type { MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync-cache-state.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
 import { onSqliteWalCheckpoint } from "../../infra/sqlite-wal-checkpoint.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -132,7 +131,7 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
       0,
       data.plan.databaseOptions,
       async (openedDatabase) => {
-        let transactionDatabase: DatabaseSync | undefined;
+        let transactionDatabase: EngineConnection | undefined;
         try {
           return mutateSessionColdTranscriptInWorker(
             data.plan,
@@ -206,7 +205,7 @@ export async function runReclamationWorkerPort(
 ): Promise<{ cleanupWarnings: string[]; settled: boolean }> {
   let reclaimSqliteSessionInTransaction: typeof import("./session-accessor.sqlite-reclamation.js").reclaimSqliteSessionInTransaction;
   let claim: OpenClawAgentDatabaseClaim | undefined;
-  let retainedDatabase: DatabaseSync | undefined;
+  let retainedDatabase: EngineConnection | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
   let operationId = pooledTask?.operationId ?? 0;
   let failureCleanup: Awaited<ReturnType<typeof settleReclamationDatabase>> | undefined;
@@ -284,7 +283,7 @@ export async function runReclamationWorkerPort(
               request.type === "canonical-validation" &&
               !request.initializeCanonicalValidation
             ) {
-              const prepare = (database: { agentId: string; db: DatabaseSync }) => {
+              const prepare = (database: { agentId: string; db: EngineConnection }) => {
                 const batch = canonical.readPendingCanonicalSessionValidationBatch(
                   database,
                   request,
@@ -413,7 +412,7 @@ export async function runReclamationWorkerPort(
                   return reclaimed;
                 } finally {
                   checkpointResultOwnedByRequest = false;
-                  clearNodeSqliteKyselyCacheForDatabase(database.db);
+                  clearNodeSqliteKyselyCacheForDatabase(sqlPublicationAnchor(database.db));
                 }
               },
               assertExpectedSource,
@@ -447,16 +446,6 @@ export async function runReclamationWorkerPort(
       );
       if (response.type === "closed") {
         port.postMessage(response);
-        if (pooledTask) {
-          const [release]: unknown[] = await once(port, "message");
-          if (
-            !isRecord(release) ||
-            release.type !== "release" ||
-            release.operationId !== operationId
-          ) {
-            throw new Error("Canonical validation task received an invalid close release");
-          }
-        }
         port.close();
         return response;
       }

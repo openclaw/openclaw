@@ -23,6 +23,11 @@ import type {
   PluginMetadataRegistryView,
   PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.types.js";
+import {
+  resolvePluginOwnedProviderAuthWith,
+  resolveProviderAuthScope,
+  type ProviderAuthScopeLookup,
+} from "./provider-auth-scope.js";
 import { hasConfiguredModelProvider } from "./provider-config-owner.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
@@ -673,7 +678,16 @@ function* resolveSyntheticAuthProviders(
   }
 }
 
+export function resolvePluginOwnedProviderAuth(
+  params: ProviderAuthScopeLookup & { profileId?: string; preferredProfile?: string },
+) {
+  return resolvePluginOwnedProviderAuthWith(params, resolveProviderRuntimePlugin);
+}
+
 export function resolveProviderSyntheticAuthWithPlugin(params: ProviderSyntheticAuthParams) {
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return resolvePluginOwnedProviderAuth(params);
+  }
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   if (captured) {
     return captured.result ?? undefined;
@@ -708,6 +722,9 @@ export async function prepareProviderSyntheticAuthWithPlugin(
   params: ProviderSyntheticAuthPreparationParams,
 ) {
   params.signal?.throwIfAborted();
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return resolvePluginOwnedProviderAuth(params);
+  }
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   if (captured) {
     return captured.result ?? undefined;
@@ -716,6 +733,10 @@ export async function prepareProviderSyntheticAuthWithPlugin(
 }
 
 function resolveExternalSyntheticAuthProviders(params: ProviderSyntheticAuthParams) {
+  // Instance-owned credentials cannot become transferable worker bearer facts.
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return [];
+  }
   const providers = [...resolveSyntheticAuthProviders(params)];
   return providers.some((provider) => provider.prepareSyntheticAuth) ? providers : [];
 }
@@ -725,6 +746,9 @@ export async function prepareProviderExternalAuthWithPlugin(
   params: ProviderSyntheticAuthPreparationParams,
 ) {
   params.signal?.throwIfAborted();
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return resolvePluginOwnedProviderAuth(params);
+  }
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   return captured
     ? (captured.result ?? undefined)

@@ -87,10 +87,7 @@ export function capturePreparedModelRuntimeCatalog(
     ...capturedNative,
     readPublishedModels: () => models,
     routeModelResolutionMemo: cached.memo,
-    createStores: () => {
-      const { authStorage, modelRegistry } = snapshot.createStores();
-      return { authStorage, modelRegistry: modelRegistry.fork(authStorage, models) };
-    },
+    createStores: (publishedModels = models) => snapshot.createStores(publishedModels),
   });
   copyPreparedModelRuntimeAuthBindings(snapshot, captured);
   admittedCatalogs.set(captured, cached.admittedCatalog);

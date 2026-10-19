@@ -23,6 +23,7 @@ import {
   type AttachedChatWorkContext,
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
+import type { SessionRestartResume } from "../../config/sessions/restart-resume.js";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -62,6 +63,7 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
+  restartResume?: SessionRestartResume;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   chatSendReceivedAtMs: number;
@@ -95,6 +97,7 @@ export function normalizeChatSendRequest(params: {
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
   goalResume?: SessionGoalOperation & { action: "resume" };
+  restartResume?: SessionRestartResume;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult | Promise<NormalizeChatSendRequestResult> {
   const chatSendReceivedAtMs = performance.now();
@@ -299,6 +302,7 @@ export function normalizeChatSendRequest(params: {
       ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
       : {}),
     ...(params.goalResume ? { goalOperation: params.goalResume } : {}),
+    ...(params.restartResume ? { restartResume: params.restartResume } : {}),
     explicitOrigin: explicitOriginResult.value,
     inboundMessage: modelMessage,
     ...(workContext ? { workContext } : {}),

@@ -231,6 +231,33 @@ describe("compileMemoryWikiVault", () => {
     expect(maxActivePageReads).toBeLessThanOrEqual(16);
   });
 
+  it("rejects publication when a source changes after its compiled bytes were read", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: { render: { createBacklinks: false, createDashboards: false } },
+    });
+    const sourcePath = path.join(rootDir, "sources", "edited.md");
+    await fs.writeFile(sourcePath, "# Before\n", "utf8");
+    const readFile = fs.readFile.bind(fs);
+    let edited = false;
+    vi.spyOn(fs, "readFile").mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+      const value = await readFile(...args);
+      if (args[0] === sourcePath && !edited) {
+        edited = true;
+        await fs.writeFile(sourcePath, "# After\n", "utf8");
+      }
+      return value;
+    });
+
+    await expect(compileMemoryWikiVault(config)).rejects.toThrow(
+      "vault changed while its compiled cache was being published",
+    );
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+    await expect(readMemoryWikiDashboardState(config)).resolves.toEqual({ state: "failed" });
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("# After\n");
+  });
+
   it("does not rewrite empty source pages into related-only stubs", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -279,6 +306,39 @@ describe("compileMemoryWikiVault", () => {
     expect(firstEntity).toContain("[Alpha](../sources/alpha.md)");
     expect(firstEntity).not.toContain("### Related Pages");
     expect(sourcePage).not.toContain("### Referenced By");
+  });
+
+  it("records backlinks from shortest-path, heading, and block wikilinks", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: { vault: { renderMode: "obsidian" } },
+    });
+
+    await writePage(path.join(rootDir, "entities", "brad-groux.md"), {
+      frontmatter: { pageType: "entity", id: "entity.brad-groux", title: "Brad Groux" },
+      body: "# Brad Groux\n",
+    });
+    await writePage(path.join(rootDir, "concepts", "teams-rollout.md"), {
+      frontmatter: { pageType: "concept", id: "concept.teams-rollout", title: "Teams Rollout" },
+      body: "# Teams Rollout\n\nOwned by [[brad-groux]].\n",
+    });
+    await writePage(path.join(rootDir, "concepts", "release-train.md"), {
+      frontmatter: { pageType: "concept", id: "concept.release-train", title: "Release Train" },
+      body: "# Release Train\n\nSee [[entities/brad-groux#Responsibilities|Brad]].\n",
+    });
+    await writePage(path.join(rootDir, "concepts", "block-reference.md"), {
+      frontmatter: { pageType: "concept", id: "concept.block-reference", title: "Block Reference" },
+      body: "# Block Reference\n\nSee [[brad-groux#^block]].\n",
+    });
+
+    await compileMemoryWikiVault(config);
+
+    const brad = await fs.readFile(path.join(rootDir, "entities", "brad-groux.md"), "utf8");
+    expect(brad).toContain("### Referenced By");
+    expect(brad).toContain("- [[concepts/block-reference|Block Reference]]");
+    expect(brad).toContain("- [[concepts/release-train|Release Train]]");
+    expect(brad).toContain("- [[concepts/teams-rollout|Teams Rollout]]");
   });
 
   it("writes agent directory, relationship, provenance, and privacy reports", async () => {

@@ -43,6 +43,13 @@ export function decodeRun(row: UpdateRuns) {
   if (record.origin.admission) {
     record.admission = record.origin.admission;
   }
+  if (record.verification.recovery?.serviceRestartSafe === false) {
+    const dataAtRisk = record.steps.find((step) => step.step === "finalize:data-at-risk")
+      ?.failureFacts?.[0]?.code;
+    if (dataAtRisk) {
+      record.verification.recovery.dataAtRisk = dataAtRisk;
+    }
+  }
   return record;
 }
 

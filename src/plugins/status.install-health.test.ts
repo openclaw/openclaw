@@ -255,7 +255,7 @@ describe("plugin inventory install health", () => {
       ? scenario === "clawhub-package-selector-fallback"
         ? `clawhub:${clawhubPackage}`
         : `clawhub:${clawhubPackage}@1.0.0`
-      : packageName;
+      : `npm:${packageName}`;
     const index = loadInstalledPluginIndex({
       config,
       env,

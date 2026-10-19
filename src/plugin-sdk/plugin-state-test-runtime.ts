@@ -10,6 +10,9 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import type { PluginStateOperationModule } from "../plugin-state/plugin-state-store.native-binding.js";
 
+export { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
+export { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
+
 let fixturePackageRoot: string | undefined;
 const fixtureOperationModules = new Map<string, PluginStateOperationModule>();
 

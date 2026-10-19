@@ -52,14 +52,16 @@ it.each([false, true])(
       );
       writeContext.track(persistence);
       captured.resolve({ admitted, writeContext, persistence });
-      return { payloads: [{ text: "Answer" }], meta: { durationMs: 0 } };
+      return {
+        payloads: [{ text: "Answer" }],
+        meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "Answer" } },
+      };
     });
     const controller = new AbortController();
     const sessionKey = `agent:main:talk-terminal-${abort}`;
     const runner = createTalkClientAgentConsultRunner({
       config,
       context: {
-        chatAbortControllers: new Map(),
         logGateway: createSubsystemLogger("test/talk-terminal-writes"),
       },
       sessionTarget: {

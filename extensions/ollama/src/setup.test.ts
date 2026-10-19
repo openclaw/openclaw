@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
@@ -41,6 +42,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 function createOllamaFetchMock(params: {
   tags?: string[];
+  tagModels?: Array<{ name: string; size?: number }>;
+  fallbackCapabilities?: boolean;
   show?: Record<string, number | undefined>;
   capabilities?: Record<string, string[] | undefined>;
   pullResponse?: Response;
@@ -53,7 +56,9 @@ function createOllamaFetchMock(params: {
       if (params.tagsError) {
         throw params.tagsError;
       }
-      return jsonResponse({ models: (params.tags ?? []).map((name) => ({ name })) });
+      return jsonResponse({
+        models: params.tagModels ?? (params.tags ?? []).map((name) => ({ name })),
+      });
     }
     if (url.endsWith("/api/show")) {
       const body = JSON.parse(requestBodyText(init?.body)) as { model?: string };
@@ -61,14 +66,17 @@ function createOllamaFetchMock(params: {
       const capabilities = body.model
         ? params.capabilities === undefined
           ? ["tools"]
-          : params.capabilities[body.model]
-        : undefined;
+          : (params.capabilities[body.model] ??
+            (params.fallbackCapabilities ? ["tools"] : undefined))
+        : params.fallbackCapabilities
+          ? ["tools"]
+          : undefined;
       return jsonResponse({
         ...(contextWindow ? { model_info: { "llama.context_length": contextWindow } } : {}),
         ...(capabilities ? { capabilities } : {}),
       });
     }
-    if (url.endsWith("/api/me")) {
+    if (url.endsWith("/api/me") && !params.fallbackCapabilities) {
       return params.meResponse ?? jsonResponse({});
     }
     if (url.endsWith("/api/pull")) {
@@ -97,19 +105,42 @@ function createLocalPrompter(overrides: Partial<WizardPrompter> = {}): WizardPro
   } as unknown as WizardPrompter;
 }
 
-function createCloudLocalPrompter(): WizardPrompter {
-  return {
+const createCloudLocalPrompter = () =>
+  createLocalPrompter({
     select: vi.fn().mockResolvedValueOnce("cloud-local"),
-    text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-    note: vi.fn(async () => undefined),
-  } as unknown as WizardPrompter;
-}
+  });
 
 function createDefaultOllamaConfig(primary: string) {
   return {
     agents: { defaults: { model: { primary } } },
     models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
   };
+}
+
+function configure(
+  opts: Parameters<typeof configureOllamaNonInteractive>[0]["opts"] = {},
+  nextConfig: Parameters<typeof configureOllamaNonInteractive>[0]["nextConfig"] = {},
+  runtime: RuntimeEnv = createRuntimeSpies(),
+) {
+  return configureOllamaNonInteractive({
+    nextConfig,
+    opts: { customBaseUrl: "http://127.0.0.1:11434", ...opts },
+    runtime,
+  });
+}
+
+function ensurePulled(model: string, prompter: WizardPrompter) {
+  return ensureOllamaModelPulled({ config: createDefaultOllamaConfig(model), model, prompter });
+}
+
+function pendingResponse(signal: AbortSignal | null | undefined, message: string) {
+  return new Promise<Response>((_resolve, reject) => {
+    if (!signal) {
+      reject(new Error(message));
+      return;
+    }
+    signal.addEventListener("abort", () => reject(abortReasonAsError(signal)), { once: true });
+  });
 }
 
 describe("ollama setup", () => {
@@ -337,29 +368,19 @@ describe("ollama setup", () => {
     const tags = Array.from({ length: 201 }, (_, index) => `model-${index}`);
     const capabilities = Object.fromEntries(tags.map((name) => [name, ["generate"]]));
     const baseFetch = createOllamaFetchMock({ tags, capabilities });
-    let markScanStarted!: () => void;
-    const scanStarted = new Promise<void>((resolve) => {
-      markScanStarted = resolve;
-    });
+    const scanStarted = createDeferred<void>();
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const body = init?.body ? (JSON.parse(requestBodyText(init.body)) as { model?: string }) : {};
       if (!requestUrl(input).endsWith("/api/show") || body.model !== "model-200") {
         return await baseFetch(input, init);
       }
-      markScanStarted();
-      return await new Promise<Response>((_resolve, reject) => {
-        const signal = init?.signal;
-        if (!signal) {
-          reject(new Error("expected tools scan abort signal"));
-          return;
-        }
-        signal.addEventListener("abort", () => reject(abortReasonAsError(signal)), { once: true });
-      });
+      scanStarted.resolve();
+      return await pendingResponse(init?.signal, "expected tools scan abort signal");
     });
     vi.stubGlobal("fetch", fetchMock);
 
     const setup = promptAndConfigureOllama({ cfg: {}, prompter, signal: controller.signal });
-    await scanStarted;
+    await scanStarted.promise;
     controller.abort();
 
     await expect(setup).rejects.toMatchObject({ name: "AbortError" });
@@ -377,28 +398,18 @@ describe("ollama setup", () => {
       tags: ["llama3:8b"],
       capabilities: { "llama3:8b": ["generate"] },
     });
-    let markPullStarted!: () => void;
-    const pullStarted = new Promise<void>((resolve) => {
-      markPullStarted = resolve;
-    });
+    const pullStarted = createDeferred<void>();
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (!requestUrl(input).endsWith("/api/pull")) {
         return await baseFetch(input, init);
       }
-      markPullStarted();
-      return await new Promise<Response>((_resolve, reject) => {
-        const signal = init?.signal;
-        if (!signal) {
-          reject(new Error("expected pull abort signal"));
-          return;
-        }
-        signal.addEventListener("abort", () => reject(abortReasonAsError(signal)), { once: true });
-      });
+      pullStarted.resolve();
+      return await pendingResponse(init?.signal, "expected pull abort signal");
     });
     vi.stubGlobal("fetch", fetchMock);
 
     const setup = promptAndConfigureOllama({ cfg: {}, prompter, signal: controller.signal });
-    await pullStarted;
+    await pullStarted.promise;
     controller.abort();
 
     await expect(setup).rejects.toThrow("Failed to download recommended Ollama model");
@@ -420,11 +431,7 @@ describe("ollama setup", () => {
         });
         vi.stubGlobal("fetch", fetchMock);
 
-        await ensureOllamaModelPulled({
-          config: createDefaultOllamaConfig("ollama/gemma4"),
-          model: "ollama/gemma4",
-          prompter,
-        });
+        await ensurePulled("ollama/gemma4", prompter);
 
         expect(fetchMock).toHaveBeenCalledTimes(2);
         expect(mockCallArg(fetchMock, 1)).toContain("/api/pull");
@@ -458,11 +465,7 @@ describe("ollama setup", () => {
         });
         vi.stubGlobal("fetch", fetchMock);
 
-        const pullPromise = ensureOllamaModelPulled({
-          config: createDefaultOllamaConfig("ollama/gemma4"),
-          model: "ollama/gemma4",
-          prompter,
-        }).catch((err: unknown) => err);
+        const pullPromise = ensurePulled("ollama/gemma4", prompter).catch((err: unknown) => err);
 
         await vi.waitFor(() => expect(mockCallArg(fetchMock, 1)).toContain("/api/pull"));
 
@@ -499,11 +502,7 @@ describe("ollama setup", () => {
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
 
-      await ensureOllamaModelPulled({
-        config: createDefaultOllamaConfig("ollama/kimi-k2.5:cloud"),
-        model: "ollama/kimi-k2.5:cloud",
-        prompter,
-      });
+      await ensurePulled("ollama/kimi-k2.5:cloud", prompter);
 
       expect(fetchMock).not.toHaveBeenCalled();
     });
@@ -530,11 +529,7 @@ describe("ollama setup", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      configureOllamaNonInteractive({
-        nextConfig: {},
-        opts: { customBaseUrl: "https://ollama.com", customModelId: "kimi-k3" },
-        runtime: createRuntimeSpies(),
-      }),
+      configure({ customBaseUrl: "https://ollama.com", customModelId: "kimi-k3" }),
     ).rejects.toThrow("--auth-choice ollama-cloud");
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -549,14 +544,7 @@ describe("ollama setup", () => {
     vi.stubGlobal("fetch", fetchMock);
     const runtime: RuntimeEnv = createRuntimeSpies();
 
-    const result = await configureOllamaNonInteractive({
-      nextConfig: {},
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11434",
-        customModelId: "  OLLAMA/llama3.2:latest  ",
-      },
-      runtime,
-    });
+    const result = await configure({ customModelId: "  OLLAMA/llama3.2:latest  " }, {}, runtime);
 
     const pullRequest = mockCallArg(fetchMock, 1, 1) as RequestInit | undefined;
     expect(JSON.parse(requestBodyText(pullRequest?.body))).toEqual({ model: "llama3.2:latest" });
@@ -582,14 +570,7 @@ describe("ollama setup", () => {
     vi.stubGlobal("fetch", fetchMock);
     const runtime: RuntimeEnv = createRuntimeSpies();
 
-    const result = await configureOllamaNonInteractive({
-      nextConfig: {},
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11434",
-        customModelId: modelId,
-      },
-      runtime,
-    });
+    const result = await configure({ customModelId: modelId }, {}, runtime);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toContain(modelId);
@@ -606,14 +587,11 @@ describe("ollama setup", () => {
     const nextConfig = {};
 
     await expect(
-      configureOllamaNonInteractive({
+      configure(
+        { customBaseUrl: "http://127.0.0.1:11435", customModelId: "llama3.2:latest" },
         nextConfig,
-        opts: {
-          customBaseUrl: "http://127.0.0.1:11435",
-          customModelId: "llama3.2:latest",
-        },
         runtime,
-      }),
+      ),
     ).rejects.toThrow(
       [
         "Ollama could not be reached at http://127.0.0.1:11435.",
@@ -672,37 +650,9 @@ describe("checkOllamaCloudAuth", () => {
   });
 });
 
-function createNonInteractiveFetchMock(params: {
-  tags: string[];
-  tagModels?: Array<{ name: string; size?: number }>;
-  show?: Record<string, number | undefined>;
-  capabilities?: Record<string, string[] | undefined>;
-  pullResponse?: Response;
-}) {
-  return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = requestUrl(input);
-    if (url.endsWith("/api/tags")) {
-      return jsonResponse({
-        models: params.tagModels ?? params.tags.map((name) => ({ name })),
-      });
-    }
-    if (url.endsWith("/api/show")) {
-      const body = JSON.parse(requestBodyText(init?.body)) as { model?: string };
-      const contextWindow = body.model ? params.show?.[body.model] : undefined;
-      const capabilities = body.model
-        ? (params.capabilities?.[body.model] ?? ["tools"])
-        : ["tools"];
-      return jsonResponse({
-        ...(contextWindow ? { model_info: { "llama.context_length": contextWindow } } : {}),
-        capabilities,
-      });
-    }
-    if (url.endsWith("/api/pull")) {
-      return params.pullResponse ?? new Response('{"status":"success"}\n', { status: 200 });
-    }
-    throw new Error(`Unexpected fetch: ${url}`);
-  });
-}
+const createNonInteractiveFetchMock = (
+  params: Parameters<typeof createOllamaFetchMock>[0] & { tags: string[] },
+) => createOllamaFetchMock({ ...params, fallbackCapabilities: true });
 
 describe("Ollama non-interactive onboarding", () => {
   afterEach(() => {
@@ -721,11 +671,7 @@ describe("Ollama non-interactive onboarding", () => {
     const runtime: RuntimeEnv = createRuntimeSpies();
     const nextConfig = { agents: { defaults: { model: { primary: "ollama/qwen3:1.7b" } } } };
     await expect(
-      configureOllamaNonInteractive({
-        nextConfig,
-        opts: { customBaseUrl: "http://127.0.0.1:11434", customModelId: "embedding-model" },
-        runtime,
-      }),
+      configure({ customModelId: "embedding-model" }, nextConfig, runtime),
     ).rejects.toThrow(
       "Ollama model embedding-model only supports embeddings. Choose a chat model instead.",
     );
@@ -751,14 +697,7 @@ describe("Ollama non-interactive onboarding", () => {
     const nextConfig = {};
 
     await expect(
-      configureOllamaNonInteractive({
-        nextConfig,
-        opts: {
-          customBaseUrl: "http://127.0.0.1:11434",
-          customModelId: "missing-model",
-        },
-        runtime,
-      }),
+      configure({ customModelId: "missing-model" }, nextConfig, runtime),
     ).rejects.toThrow(
       [
         "No Ollama chat models are available at http://127.0.0.1:11434.",
@@ -797,16 +736,7 @@ describe("Ollama non-interactive onboarding", () => {
         },
       },
     };
-    const pending = configureOllamaNonInteractive({
-      nextConfig,
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11434",
-        customModelId: "missing-model",
-      },
-      runtime,
-    });
-
-    const result = await pending;
+    const result = await configure({ customModelId: "missing-model" }, nextConfig, runtime);
     expect(runtime.error).toHaveBeenCalledWith("Download failed: disk full");
     expect(result.agents?.defaults?.model).toEqual({
       primary: "ollama/qwen2.5-coder:7b",
@@ -838,11 +768,7 @@ describe("Ollama non-interactive onboarding", () => {
     vi.stubGlobal("fetch", fetchMock);
     const runtime: RuntimeEnv = createRuntimeSpies();
 
-    const result = await configureOllamaNonInteractive({
-      nextConfig: {},
-      opts: { customBaseUrl: "http://127.0.0.1:11434" },
-      runtime,
-    });
+    const result = await configure({}, {}, runtime);
 
     expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).not.toContain(
       "http://127.0.0.1:11434/api/pull",
@@ -860,14 +786,7 @@ describe("Ollama non-interactive onboarding", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await configureOllamaNonInteractive({
-      nextConfig: {},
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11434",
-        customModelId: modelId,
-      },
-      runtime: createRuntimeSpies(),
-    });
+    const result = await configure({ customModelId: modelId });
 
     expect(result.agents?.defaults?.model).toEqual({ primary: `ollama/${modelId}` });
     expect(

@@ -52,7 +52,7 @@ jobs:
         run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
       - name: Run Codex dated TODO sweep
-        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
         env:
           DATED_TODO_SWEEP_DATE: ${{ steps.sweep-date.outputs.date }}
         with:
@@ -129,7 +129,7 @@ jobs:
       # full granted set, matching the proven Barnacle fallback workflow.
       - name: Create Barnacle app token
         if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # zizmor: ignore[github-app] v3
         id: app-token
         continue-on-error: true
         with:
@@ -137,7 +137,7 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
 
       - name: Create fallback Barnacle app token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # zizmor: ignore[github-app] v3
         id: app-token-fallback
         if: (github.event_name != 'workflow_dispatch' || !inputs.dry_run) && steps.app-token.outcome == 'failure'
         with:

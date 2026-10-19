@@ -1,5 +1,6 @@
 import type { ChannelToolSend } from "openclaw/plugin-sdk/channel-contract";
 import { stripChannelTargetPrefix } from "openclaw/plugin-sdk/channel-core";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
@@ -87,7 +88,7 @@ export function resolveMSTeamsAutoThreadId(params: {
     currentMessagingTarget?: string;
     currentGraphChannelId?: string;
     currentThreadTs?: string;
-    replyToMode?: "off" | "first" | "all" | "batched";
+    replyToMode?: ReplyToMode;
     hasRepliedRef?: { value: boolean };
   };
 }): string | undefined {

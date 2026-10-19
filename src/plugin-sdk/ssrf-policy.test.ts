@@ -241,6 +241,7 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
     ["NAT64-embedded IPv4 loopback", "64:ff9b::127.0.0.1", 6],
     ["local-use NAT64", "64:ff9b:1:808:808:808:a9fe:a9fe", 6],
     ["ISATAP-embedded IPv4 loopback", "2001:4860:1::5efe:7f00:1", 6],
+    ["IPv4 unspecified", "0.0.0.0", 4],
   ] as const)("rejects a trusted private origin rebound to %s", async (_name, address, family) => {
     const baseUrl = "http://lan-llm.corp.internal:11434/v1";
     const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
@@ -253,22 +254,6 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
       }),
     ).rejects.toThrow(SsrFBlockedError);
   });
-
-  it.each([["IPv4 unspecified", "0.0.0.0", 4]] as const)(
-    "rejects a trusted private origin rebound to %s",
-    async (_name, address, family) => {
-      const baseUrl = "http://lan-llm.corp.internal:11434/v1";
-      const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
-      const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
-
-      await expect(
-        resolvePinnedHostnameWithPolicy("lan-llm.corp.internal", {
-          policy: policyForUrl,
-          lookupFn: createLookupFn([{ address, family }]),
-        }),
-      ).rejects.toThrow(SsrFBlockedError);
-    },
-  );
 
   it.each([
     ["localhost", "127.0.0.1", 4],

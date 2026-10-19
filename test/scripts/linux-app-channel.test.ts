@@ -978,6 +978,40 @@ it("publishes Windows with regular Linux bundles and reuses its immutable bytes"
   expect(f.mutations()).toHaveLength(writes);
 });
 
+it.each(["withdrawn", "replaced", "linux-missing"] as const)(
+  "advances past a previous publication whose Windows companion was %s",
+  (change) => {
+    const f = fixture(toolingRef, false, true);
+    succeeded(f.run("publish"));
+    const exe = "OpenClaw-2026.9.3-windows-x86_64.exe";
+    f.update((state) => {
+      const release = releaseFrom(state, tag);
+      if (change === "withdrawn") {
+        release.assets = release.assets.filter((entry) => entry.name !== exe);
+      } else if (change === "replaced") {
+        replaceAsset(state, tag, exe, Buffer.from("other bytes\n"));
+      } else {
+        release.assets = release.assets.filter(
+          (entry) => entry.name !== "OpenClaw-2026.9.3-amd64.deb",
+        );
+      }
+      state.calls = [];
+    });
+    f.addRelease(nextTag, true);
+    const previousChannel = f.bytes(channel, "latest.json");
+    const result = f.run("publish", nextTag);
+    if (change === "withdrawn") {
+      succeeded(result);
+      expect(f.bytes(channel, "latest.json")).toEqual(
+        f.bytes(nextTag, "OpenClaw-2026.9.4-linux.json"),
+      );
+    } else {
+      failed(result, "Published Linux asset changed");
+      expect(f.bytes(channel, "latest.json")).toEqual(previousChannel);
+    }
+  },
+);
+
 it("completes an interrupted Windows publication only from matching signed local inputs", () => {
   const f = fixture(toolingRef, false, true);
   succeeded(f.run("publish"));

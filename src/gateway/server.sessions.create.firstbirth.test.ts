@@ -37,6 +37,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   };
 });
 
+worker.gate = createWorkerSqliteIntegrityGate();
 const { openClient } = setupSessionCreateTestHarness();
 type CreateSessionReply = Awaited<ReturnType<typeof rpcReq<{ key: string; sessionId: string }>>>;
 
@@ -75,9 +76,8 @@ test.for(["new database", "interrupted empty database"])(
       await fs.writeFile(databasePath, "");
     }
 
-    const gate = createWorkerSqliteIntegrityGate(databasePath);
-    worker.gate = gate;
-    gate.arm();
+    const gate = worker.gate!;
+    gate.arm(databasePath);
     const nativeWorker = await openOpenClawAgentSqliteWorkerStoreV2<AgentWorkerFixtureOperations>(
       { agentId, path: databasePath },
       { version: 2, assertCurrent() {} },
@@ -211,7 +211,6 @@ test.for(["new database", "interrupted empty database"])(
       await nativeWorker.close();
       readCandidates.mockRestore();
       run.mockRestore();
-      worker.gate = undefined;
       await closeGatewayTestWebSocket(ws);
     }
   },

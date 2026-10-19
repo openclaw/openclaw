@@ -1,3 +1,4 @@
+import path from "node:path";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
 import {
@@ -9,6 +10,7 @@ import {
   listDurableSqliteTargetPathsForSessionStorePath,
   resolveSqliteTargetFromSessionStorePath,
 } from "../config/sessions/session-sqlite-target.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import {
   listUsageCountedTranscriptStats as collectTranscriptStats,
   resolveUsageCostTranscriptFiles,
@@ -44,14 +46,23 @@ function createNativeStorageUsageAccess(env?: NodeJS.ProcessEnv): UsageCostColle
 
 export function listUsageCountedTranscriptStats(
   agentId: string,
-  params: Pick<
-    Parameters<typeof collectTranscriptStats>[1],
-    "minMtimeMs" | "sessionsDir" | "storePath" | "env"
+  params: Partial<
+    Pick<
+      Parameters<typeof collectTranscriptStats>[1],
+      "minMtimeMs" | "sessionsDir" | "storePath" | "env"
+    >
   > = {},
 ) {
   return collectTranscriptStats(agentId, {
     ...createNativeStorageUsageAccess(params.env),
     ...params,
+    storePath: resolveSessionStorePathForScope({
+      agentId,
+      env: params.env,
+      storePath:
+        params.storePath ??
+        (params.sessionsDir ? path.join(params.sessionsDir, "sessions.json") : undefined),
+    }),
   });
 }
 

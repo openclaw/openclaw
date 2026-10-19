@@ -9,14 +9,9 @@ type AcpActiveTurnState = {
 
 const ACP_ACTIVE_TURN_STATE_KEY = Symbol.for("openclaw.acp.activeTurns");
 
-function getAcpActiveTurnState(): AcpActiveTurnState {
-  return resolveGlobalSingleton<AcpActiveTurnState>(ACP_ACTIVE_TURN_STATE_KEY, () => ({
-    activeTurnKeys: new Map<
-      string,
-      { token: symbol; sessionKey: string; ownerSessionKey?: string }
-    >(),
-  }));
-}
+const state = resolveGlobalSingleton<AcpActiveTurnState>(ACP_ACTIVE_TURN_STATE_KEY, () => ({
+  activeTurnKeys: new Map(),
+}));
 
 /** Registers the current turn and returns its ownership-checked release callback. */
 export function markAcpTurnActive(
@@ -27,7 +22,6 @@ export function markAcpTurnActive(
   }
   const actorKey = acpSessionActorKey(target);
   const owner = Symbol("acp-active-turn");
-  const state = getAcpActiveTurnState();
   state.activeTurnKeys.set(actorKey, {
     token: owner,
     sessionKey: target.sessionKey,
@@ -42,11 +36,11 @@ export function markAcpTurnActive(
 
 /** Number of currently owned ACP turns that must settle before restart. */
 export function getActiveAcpTurnCount(): number {
-  return getAcpActiveTurnState().activeTurnKeys.size;
+  return state.activeTurnKeys.size;
 }
 
 export function listActiveAcpSessionsForOwner(ownerSessionKey: string): string[] {
-  return [...getAcpActiveTurnState().activeTurnKeys.values()]
+  return [...state.activeTurnKeys.values()]
     .filter((turn) => turn.ownerSessionKey === ownerSessionKey)
     .map((turn) => turn.sessionKey);
 }

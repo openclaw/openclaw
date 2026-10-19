@@ -13,7 +13,6 @@ import {
   createOutboundPayloadPlan,
   createStructuredOutboundPayloadPlan,
 } from "../../infra/outbound/payloads.js";
-import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { buildAssistantReplyContent } from "./chat-assistant-content.js";
 import {
   buildTranscriptReplyTextFromInputs,
@@ -153,9 +152,9 @@ describe("selectChatSendFinalReplyInputs", () => {
   });
 
   it.each([
-    { caption: "matching", blockText: "done", expectedTexts: ["done"] },
-    { caption: "different", blockText: "preview", expectedTexts: ["preview", "done"] },
-  ])("retains duplicate command image metadata with $caption captions", (testCase) => {
+    { caption: "matching", blockText: "done" },
+    { caption: "different", blockText: "preview" },
+  ])("merges attachment metadata with $caption captions", ({ caption, blockText }) => {
     const mediaPath = path.resolve("media", "chart-01.png");
     const mediaUrl = pathToFileURL(mediaPath).href;
     const attachment = {
@@ -168,9 +167,9 @@ describe("selectChatSendFinalReplyInputs", () => {
       {
         kind: "block" as const,
         payload: {
-          text: testCase.blockText,
+          text: blockText,
           mediaUrl,
-          ...(testCase.caption === "matching" ? { trustedLocalMedia: true } : {}),
+          ...(caption === "matching" ? { trustedLocalMedia: true } : {}),
           attachments: [{ path: mediaPath, height: 480 }],
         },
       },
@@ -180,7 +179,7 @@ describe("selectChatSendFinalReplyInputs", () => {
           text: "done",
           mediaUrls: [mediaPath],
           attachments: [attachment],
-          ...(testCase.caption === "matching"
+          ...(caption === "matching"
             ? { sensitiveMedia: true, replyToId: "message-1" }
             : { audioAsVoice: true }),
         },
@@ -193,35 +192,29 @@ describe("selectChatSendFinalReplyInputs", () => {
       foldCommandBlocks: true,
       suppressReplies: false,
     });
-
-    expect(replies.map(({ attachments: _attachments, ...payload }) => payload)).toEqual(
-      testCase.caption === "matching"
-        ? [
+    const merged = {
+      text: blockText,
+      mediaUrl: undefined,
+      mediaUrls: [mediaUrl],
+      attachments: [{ ...attachment, path: mediaUrl, height: 480 }],
+      ...(caption === "matching"
+        ? { trustedLocalMedia: true, sensitiveMedia: true, replyToId: "message-1" }
+        : { audioAsVoice: true }),
+    };
+    expect(replies).toEqual(
+      caption === "matching"
+        ? [merged]
+        : [
+            merged,
             {
               text: "done",
               mediaUrl: undefined,
-              mediaUrls: [mediaUrl],
-              trustedLocalMedia: true,
-              sensitiveMedia: true,
-              replyToId: "message-1",
+              mediaUrls: undefined,
+              audioAsVoice: true,
+              attachments: [attachment],
             },
-          ]
-        : [
-            { text: "preview", mediaUrl: undefined, mediaUrls: [mediaUrl], audioAsVoice: true },
-            { text: "done", mediaUrl: undefined, mediaUrls: undefined, audioAsVoice: true },
           ],
     );
-    if (testCase.caption === "matching") {
-      expect(replies.flatMap((payload) => collectReplyMediaEntries(payload))).toMatchObject([
-        { url: mediaUrl, attachment: { name: "Quarterly chart.png", mimeType: "image/png" } },
-      ]);
-    }
-    expect(replies.map((payload) => payload.text)).toEqual(testCase.expectedTexts);
-    expect(replies.flatMap((payload) => payload.mediaUrls ?? [])).toEqual([mediaUrl]);
-    expect(replies[0]).toMatchObject({
-      mediaUrls: [mediaUrl],
-      attachments: [{ ...attachment, path: mediaUrl, height: 480 }],
-    });
     expect(deliveredReplies).toEqual(originalReplies);
   });
 });
@@ -233,20 +226,11 @@ function buildRawTranscriptReplyText(payloads: ReplyPayload[]): string {
 describe("buildTranscriptReplyTextFromInputs", () => {
   it.each([
     ...["NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP"].map((controlText) => ({
-      name: `suppressed ${controlText}`,
+      name: `literal ${controlText}`,
       payloads: [{ text: "First instruction" }, { text: controlText }, { text: "Done" }],
-      expected: "First instruction\n\nDone",
+      expected: `First instruction\n\n${controlText}\n\nDone`,
       project: true,
     })),
-    {
-      name: "split fenced-code indentation",
-      payloads: [
-        { text: "Here is the YAML:\n\n```yaml\nroot:\n" },
-        { text: "  nested:\n    value: true\n```" },
-      ],
-      expected: "Here is the YAML:\n\n```yaml\nroot:\n  nested:\n    value: true\n```",
-      project: false,
-    },
     {
       name: "CRLF boundaries and whitespace-only chunks",
       payloads: [

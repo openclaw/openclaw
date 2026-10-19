@@ -1,50 +1,25 @@
-import { createRenderEffect, onCleanup } from "solid-js";
+import { onCleanup } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
+import { registerChatPane } from "./chat-pane-elements.ts";
+import {
+  chatPaneProperties,
+  chatPanePropertyKeys,
+  type ChatPaneProps,
+} from "./chat-pane-inputs.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { ChatPaneRuntimeView } from "./chat-pane-runtime-view.tsx";
+import { createChatPaneView } from "./chat-pane-runtime-view.tsx";
+import type { ChatPaneInputChanges } from "./chat-pane-state-owner.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 
-type PaneProperty =
-  | "mcpAppLaunch"
-  | "paneId"
-  | "paneLabel"
-  | "presentationId"
-  | "chatMessagesBySession"
-  | "sessionSnapshotStore"
-  | "sessionKey"
-  | "routeLoadingSkeleton"
-  | "agentId"
-  | "inputRegion"
-  | "compact"
-  | "onBackToSubagents"
-  | "workContext"
-  | "visuallyPresented"
-  | "presented"
-  | "active"
-  | "draft"
-  | "focusComposer"
-  | "dashboardExpanded"
-  | "routeFace"
-  | "onFaceChange"
-  | "onFocusPane"
-  | "onPaneSessionChange"
-  | "onSessionDeleted"
-  | "narrow"
-  | "mergedChrome"
-  | "navDrawerOpen"
-  | "onboarding"
-  | "onOpenSplitView"
-  | "onSplitDown"
-  | "onSplitRight"
-  | "onClosePane"
-  | "boardProvider";
-export type ChatPaneProps = Pick<ChatPaneRuntime, PaneProperty>;
+export type { ChatPaneProps } from "./chat-pane-inputs.ts";
 type PaneMethods = Pick<
   ChatPaneRuntime,
   | "prepareForEviction"
   | "discardStagedAttachments"
   | "resumeStagedAttachments"
   | "captureNavigationFace"
+  | "focusComposerInput"
 >;
 type PaneFacts = Pick<
   ChatPaneRuntime,
@@ -54,49 +29,35 @@ type PaneFacts = Pick<
   | "conversationPresented"
   | "hasQueuedMessageEdit"
   | "runActivity"
+  | "composerReady"
 >;
-export type ChatPaneElement = SolidBridgeElement<ChatPaneProps, PaneMethods> & PaneFacts;
+export type ChatPaneElement = SolidBridgeElement<ChatPaneProps, PaneMethods> &
+  PaneFacts & {
+    readonly composerElement: HTMLTextAreaElement | null;
+    readonly headerElement: HTMLElement | null;
+  };
 const runtimes = new WeakMap<HTMLElement, ChatPaneRuntime>();
+const pendingInputs = new WeakSet<ChatPaneRuntime>();
 
-const properties = {
-  mcpAppLaunch: { default: undefined },
-  paneId: { default: "single" },
-  paneLabel: { default: undefined },
-  presentationId: { default: "single" },
-  chatMessagesBySession: { default: undefined },
-  sessionSnapshotStore: { default: undefined },
-  sessionKey: { default: "" },
-  routeLoadingSkeleton: { default: false },
-  agentId: { default: undefined },
-  inputRegion: { default: "page" as const },
-  compact: { default: false },
-  onBackToSubagents: { default: undefined },
-  workContext: { default: undefined },
-  visuallyPresented: { default: true },
-  presented: { default: true },
-  active: { default: false },
-  draft: { default: undefined },
-  focusComposer: { default: false },
-  dashboardExpanded: { default: false },
-  routeFace: { default: undefined },
-  onFaceChange: { default: undefined },
-  onFocusPane: { default: undefined },
-  onPaneSessionChange: { default: undefined },
-  onSessionDeleted: { default: undefined },
-  narrow: { default: false },
-  mergedChrome: { default: false },
-  navDrawerOpen: { default: false },
-  onboarding: { default: false },
-  onOpenSplitView: { default: undefined },
-  onSplitDown: { default: undefined },
-  onSplitRight: { default: undefined },
-  onClosePane: { default: undefined },
-  boardProvider: { default: undefined },
-} satisfies { [Key in keyof ChatPaneProps]-?: { default: ChatPaneProps[Key] } };
+function synchronizeInputs(runtime: ChatPaneRuntime, host: ChatPaneProps) {
+  // Publish a queued stream before the input change admits its next pane frame.
+  runtime.chatState.publishPendingRunState();
+  const changes: ChatPaneInputChanges = {
+    sessionKey: !Object.is(runtime.sessionKey, host.sessionKey),
+    inputRegion: !Object.is(runtime.inputRegion, host.inputRegion),
+    draft: !Object.is(runtime.draft, host.draft),
+    focusComposer: !Object.is(runtime.focusComposer, host.focusComposer),
+  };
+  Object.assign(runtime, Object.fromEntries(chatPanePropertyKeys.map((key) => [key, host[key]])));
+  if (runtime.isConnected) {
+    runtime.synchronizeInputs(changes);
+    runtime.refreshBoardSubscriptions();
+  }
+}
 
 export const ChatPaneView = defineSolidBridge<ChatPaneProps, PaneMethods>(
   "openclaw-chat-pane",
-  (props, element) => {
+  (_props, element) => {
     const runtime = new ChatPaneRuntime(element, useApplication());
     runtimes.set(element, runtime);
     const bridgeCompletion = Object.getOwnPropertyDescriptor(
@@ -108,7 +69,10 @@ export const ChatPaneView = defineSolidBridge<ChatPaneProps, PaneMethods>(
     }
     Object.defineProperty(element, "updateComplete", {
       configurable: true,
-      get: () => Promise.resolve(bridgeCompletion()).then(() => runtime.updateComplete),
+      get: () => {
+        const frame = runtime.updateComplete;
+        return Promise.resolve(bridgeCompletion()).then(() => frame);
+      },
     });
     for (const key of [
       "transcriptLoading",
@@ -117,32 +81,49 @@ export const ChatPaneView = defineSolidBridge<ChatPaneProps, PaneMethods>(
       "conversationPresented",
       "hasQueuedMessageEdit",
       "runActivity",
+      "composerReady",
     ] as const) {
       Object.defineProperty(element, key, { configurable: true, get: () => runtime[key] });
     }
-    createRenderEffect(
-      () =>
-        Object.fromEntries(Object.keys(properties).map((key) => [key, Reflect.get(props, key)])),
-      (next) => {
-        for (const [key, value] of Object.entries(next)) {
-          const previous = Reflect.get(runtime, key);
-          if (!Object.is(previous, value)) {
-            Reflect.set(runtime, key, value);
-            runtime.requestUpdate(key, previous);
-          }
-        }
+    Object.defineProperties(element, {
+      composerElement: {
+        configurable: true,
+        get: () => getChatComposerState(runtime.presentationId).composerTextarea,
       },
-    );
-    onCleanup(() => runtimes.delete(element));
-    return <ChatPaneRuntimeView runtime={runtime} />;
+      headerElement: { configurable: true, get: () => runtime.headerElement },
+    });
+    // The bridge owns input publication, including while this pane's frame is parked.
+    synchronizeInputs(runtime, element);
+    // Parent commit work discovers pane membership before child settled callbacks run.
+    const unregister = registerChatPane(element);
+    onCleanup(() => {
+      unregister();
+      runtimes.delete(element);
+    });
+    return createChatPaneView(runtime);
   },
   {
-    properties,
+    properties: chatPaneProperties,
+    propertyChanged: (host) => {
+      const runtime = runtimes.get(host);
+      if (!runtime || pendingInputs.has(runtime)) {
+        return;
+      }
+      pendingInputs.add(runtime);
+      queueMicrotask(() => {
+        pendingInputs.delete(runtime);
+        if (runtimes.get(host) === runtime) {
+          synchronizeInputs(runtime, host);
+        }
+      });
+      void runtime.awaitDomCommit();
+    },
     methods: {
       prepareForEviction: (host) => runtimes.get(host)?.prepareForEviction(),
       discardStagedAttachments: (host) => runtimes.get(host)?.discardStagedAttachments(),
       resumeStagedAttachments: (host) => runtimes.get(host)?.resumeStagedAttachments(),
       captureNavigationFace: (host) => runtimes.get(host)?.captureNavigationFace(),
+      focusComposerInput: (host) => runtimes.get(host)?.focusComposerInput() ?? false,
     },
   },
 );

@@ -31,6 +31,31 @@ const zoom = {
 const options = { durationSeconds: 12, fps: 25 };
 
 describe("planProofVideoRender", () => {
+  it("keeps annotations attached through zoom and speed changes while captions stay in the viewport", () => {
+    const plan = planProofVideoRender(
+      document([
+        caption,
+        zoom,
+        { kind: "speed", start: 4, end: 8, factor: 4 },
+        {
+          kind: "annotation",
+          start: 3,
+          end: 9,
+          image: "annotations/0.png",
+          annotations: [{ kind: "outline", rect: { x: 1100, y: 680, width: 100, height: 80 } }],
+        },
+      ]),
+      options,
+    );
+    expect(plan.inputs).toEqual(["annotations/0.png", "captions/0.png"]);
+    expect(plan.filterComplex).toContain(
+      "[timed][1:v]overlay=x=0:y=0:enable='gte(t,3)*lt(t,6)'[annotation1]",
+    );
+    expect(plan.filterComplex).toContain("[annotation1]zoompan");
+    expect(plan.filterComplex).toContain("[zoomed][2:v]overlay");
+    expect(plan.durationSeconds).toBe(9);
+  });
+
   it("remaps captions spanning a speed segment and preserves the remaining timeline", () => {
     const plan = planProofVideoRender(
       document([caption, { kind: "speed", start: 4, end: 8, factor: 4 }]),

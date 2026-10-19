@@ -1,17 +1,24 @@
 /* @vitest-environment jsdom */
 
 import { flush } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { queryWithin } from "./plugins-page.lifecycle-test-support.ts";
 import { createInspectResult, createPlugin, createResult } from "./plugins-page.test-support.ts";
 import { renderPluginSettingsDetail, type DetailProps } from "./settings-view.tsx";
 
 beforeEach(() => i18n.setLocale("en"));
-afterEach(() => {
-  document.body.replaceChildren();
-});
+
+function objectSchema(properties: Record<string, JsonSchema>): JsonSchema {
+  return { type: "object", additionalProperties: false, properties };
+}
+
+function setting(container: ParentNode, key: string) {
+  return container.querySelector(`[data-setting="${key}"]`)!;
+}
 
 function mount(overrides: Partial<DetailProps>) {
   const props: DetailProps = {
@@ -53,11 +60,9 @@ function mount(overrides: Partial<DetailProps>) {
     onRefresh: vi.fn(),
     ...overrides,
   };
-  const container = document.createElement("div");
-  document.body.append(container);
-  mountSolid(() => renderPluginSettingsDetail(props), { container });
+  const { container } = mountSolid(() => renderPluginSettingsDetail(props));
   flush();
-  return container;
+  return { container, find: queryWithin(container), props };
 }
 
 async function selectSettingAction(row: Element, value: "ask" | "reset") {
@@ -74,105 +79,78 @@ async function selectSettingAction(row: Element, value: "ask" | "reset") {
 }
 
 it("does not offer enablement or Settings for an uninstalled plugin", () => {
-  const container = mount({
+  const { find } = mount({
     result: createResult(createPlugin({ installed: false, state: "not-installed" })),
   });
-  expect(container.querySelector('[aria-label="Enable Workboard"]')).toBeNull();
-  expect(container.querySelector('[aria-label="Settings"]')).toBeNull();
+  expect(find('[aria-label="Enable Workboard"], [aria-label="Settings"]')).toBeNull();
 });
 
 it("does not dispatch enablement when setup is missing", () => {
-  const onSetEnabled = vi.fn();
-  const container = mount({
+  const { find, props } = mount({
     result: createResult(createPlugin({ state: "needs-setup" })),
-    onSetEnabled,
   });
-  const button = container.querySelector<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
-  expect(button).not.toBeNull();
+  const button = find<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
   expect(button.disabled || button.getAttribute("aria-disabled") === "true").toBe(true);
   button.click();
-  expect(onSetEnabled).not.toHaveBeenCalled();
+  expect(props.onSetEnabled).not.toHaveBeenCalled();
 });
 
-it("keeps disconnected plugin settings from dispatching enablement", () => {
-  const onSetEnabled = vi.fn();
-  const container = mount({ connected: false, canMutate: false, onSetEnabled });
-  expect(container.textContent).toContain("Connect");
-  expect(container.querySelector('[aria-label="Enable Workboard"]')).toBeNull();
-  expect(onSetEnabled).not.toHaveBeenCalled();
+it("retains disconnected plugin details without dispatching enablement", () => {
+  const { container, find, props } = mount({ connected: false, canMutate: false });
+  expect(container.textContent).toContain("Agent work queue and session handoff.");
+  expect(find("[inert]")).toBeNull();
+  const button = find<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
+  expect(button.disabled).toBe(true);
+  button.click();
+  expect(props.onSetEnabled).not.toHaveBeenCalled();
 });
 
 it("gives host permissions the setting menu and preserves configured, inherited, and read-only values", async () => {
-  const onPatch = vi.fn();
-  const onRemove = vi.fn();
-  const onAsk = vi.fn();
-  const props: Partial<DetailProps> = {
+  const { container, props } = mount({
     tab: "configuration",
     inspection: createInspectResult(),
+    onAskSetting: vi.fn(),
     configValue: { plugins: { entries: { workboard: { hooks: { timeoutMs: 5000 } } } } },
-    hostControlsSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        hooks: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            allowPromptInjection: { type: "boolean" },
-            allowConversationAccess: { type: "boolean" },
-            timeoutMs: { type: "integer", title: "Timeout", minimum: 1 },
-          },
-        },
-        llm: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            allowedModels: { type: "array", title: "Allowed models", items: { type: "string" } },
-          },
-        },
-      },
-    },
-    onConfigPatch: onPatch,
-    onConfigRemove: onRemove,
-    onAskSetting: onAsk,
-  };
-  const container = mount(props);
+    hostControlsSchema: objectSchema({
+      hooks: objectSchema({
+        allowPromptInjection: { type: "boolean" },
+        allowConversationAccess: { type: "boolean" },
+        timeoutMs: { type: "integer" },
+      }),
+      llm: objectSchema({
+        allowedModels: { type: "array", items: { type: "string" } },
+      }),
+    }),
+  });
   await Promise.resolve();
   flush();
-  const row = container.querySelector('[data-setting="hooks.allowPromptInjection"]')!;
-  expect(row).not.toBeNull();
+  const row = setting(container, "hooks.allowPromptInjection");
   expect(row.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true);
   expect(row.querySelector('[data-value="reset"]')?.hasAttribute("disabled")).toBe(true);
   await selectSettingAction(row, "ask");
-  expect(onAsk).toHaveBeenCalledWith(
+  const hooksPath = ["plugins", "entries", "workboard", "hooks"];
+  const path = [...hooksPath, "allowPromptInjection"];
+  expect(props.onAskSetting).toHaveBeenCalledWith(
     expect.objectContaining({
-      path: ["plugins", "entries", "workboard", "hooks", "allowPromptInjection"],
+      path,
       value: true,
       label: "Add context to prompts",
     }),
   );
   row.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
-  expect(onPatch).toHaveBeenCalledWith(
-    ["plugins", "entries", "workboard", "hooks", "allowPromptInjection"],
-    false,
-  );
-  await selectSettingAction(container.querySelector('[data-setting="hooks.timeoutMs"]')!, "reset");
-  expect(onRemove).toHaveBeenCalledWith(["plugins", "entries", "workboard", "hooks", "timeoutMs"]);
-  expect(
-    container.querySelector('[data-setting="llm.allowedModels"] .oc-menu-trigger'),
-  ).not.toBeNull();
-  expect(container.textContent).not.toContain("Declared capabilities");
-  expect(container.textContent).not.toContain("Your grants");
-  onPatch.mockClear();
-  const readOnly = mount({ ...props, canEditConfig: false });
+  expect(props.onConfigPatch).toHaveBeenCalledWith(path, false);
+  await selectSettingAction(setting(container, "hooks.timeoutMs"), "reset");
+  expect(props.onConfigRemove).toHaveBeenCalledWith([...hooksPath, "timeoutMs"]);
+  expect(setting(container, "llm.allowedModels").querySelector(".oc-menu-trigger")).not.toBeNull();
+  expect(container.textContent).not.toMatch(/Declared capabilities|Your grants/);
+  vi.mocked(props.onConfigPatch).mockClear();
+  const { container: readOnly } = mount({ ...props, canEditConfig: false });
   await Promise.resolve();
   flush();
-  const readOnlyInput = readOnly.querySelector<HTMLInputElement>(
-    '[data-setting="hooks.allowPromptInjection"] input',
-  )!;
+  const readOnlyInput = setting(readOnly, "hooks.allowPromptInjection").querySelector("input")!;
   expect(readOnlyInput.disabled).toBe(true);
   readOnlyInput.click();
-  expect(onPatch).not.toHaveBeenCalled();
+  expect(props.onConfigPatch).not.toHaveBeenCalled();
 });
 
 it("shows selected capabilities without a catalog", () => {
@@ -192,14 +170,12 @@ it("shows selected capabilities without a catalog", () => {
       ui: ["page"],
     },
   };
-  const container = mount({ inspection });
+  const { container } = mount({ inspection });
   const titles = [...container.querySelectorAll(".plugin-capabilities h2")].map(
     (heading) => heading.textContent,
   );
   expect(titles).toEqual(["Capabilities2", "Tools1"]);
   expect(container.textContent).toContain("Text to speech");
   expect(container.textContent).toContain("Pages");
-  expect(container.textContent).not.toContain("speechProviders:");
-  expect(container.textContent).not.toContain("sibling-");
-  expect(container.textContent).not.toContain("Video generation");
+  expect(container.textContent).not.toMatch(/speechProviders:|sibling-|Video generation/);
 });

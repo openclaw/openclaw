@@ -42,148 +42,78 @@ type MentionCase = {
   patterns?: string[];
   requireMention?: boolean;
   eventKind?: "location" | "postback";
-  expected: {
-    WasMentioned: boolean | undefined;
-    ExplicitlyMentionedBot: boolean | undefined;
-    GroupRequireMention: boolean | undefined;
-    ImplicitMentionKinds: string[] | undefined;
-  };
+  expected: ReturnType<typeof mentionFacts>;
 };
+
+function mentionFacts(
+  mentioned: boolean | undefined,
+  explicit: boolean | undefined,
+  required: boolean | undefined = mentioned === undefined ? undefined : true,
+  implicit: string[] | undefined = mentioned === undefined ? undefined : [],
+) {
+  return {
+    WasMentioned: mentioned,
+    ExplicitlyMentionedBot: explicit,
+    GroupRequireMention: required,
+    ImplicitMentionKinds: implicit,
+  };
+}
 
 const nativeBotMention: webhook.TextMessageContent["mention"] = {
   mentionees: [{ index: 0, length: 4, type: "user", userId: "bot", isSelf: true }],
 };
 
-const cases: MentionCase[] = [
-  {
-    name: "native bot mention in a group",
-    text: "@bot hello",
-    mention: nativeBotMention,
-    expected: {
-      WasMentioned: true,
-      ExplicitlyMentionedBot: true,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: [],
-    },
-  },
-  {
-    name: "native bot mention in a room",
+const mentionCase = (
+  name: string,
+  expected: MentionCase["expected"],
+  input: Omit<MentionCase, "name" | "expected"> = {},
+): MentionCase => ({ name, expected, ...input });
+
+const nativeInput = { text: "@bot hello", mention: nativeBotMention };
+const cases = [
+  mentionCase("native bot mention in a group", mentionFacts(true, true), nativeInput),
+  mentionCase("native bot mention in a room", mentionFacts(true, true), {
+    ...nativeInput,
     source: { type: "room", roomId: "room", userId: "sender" },
-    text: "@bot hello",
-    mention: nativeBotMention,
-    expected: {
-      WasMentioned: true,
-      ExplicitlyMentionedBot: true,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: [],
-    },
-  },
-  {
-    name: "native all-members mention",
+  }),
+  mentionCase("native all-members mention", mentionFacts(true, true), {
     text: "@all hello",
     mention: { mentionees: [{ index: 0, length: 4, type: "all" }] },
-    expected: {
-      WasMentioned: true,
-      ExplicitlyMentionedBot: true,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: [],
-    },
-  },
-  {
-    name: "configured pattern without a native mention",
+  }),
+  mentionCase("configured pattern without a native mention", mentionFacts(true, false), {
     text: "hello helper",
     patterns: ["\\bhelper\\b"],
-    expected: {
-      WasMentioned: true,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: [],
-    },
-  },
-  {
-    name: "quote of a message the bot sent",
+  }),
+  mentionCase("quote of a message the bot sent", mentionFacts(true, false, true, ["quoted_bot"]), {
     quote: true,
-    expected: {
-      WasMentioned: true,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: ["quoted_bot"],
+  }),
+  mentionCase(
+    "disabled quote policy in an always-on group",
+    mentionFacts(false, false, false, ["quoted_bot"]),
+    {
+      quote: true,
+      quotedBot: false,
+      requireMention: false,
     },
-  },
-  {
-    name: "disabled quote policy in an always-on group",
-    quote: true,
-    quotedBot: false,
+  ),
+  mentionCase("ordinary message in an always-on group", mentionFacts(false, false, false), {
     requireMention: false,
-    expected: {
-      WasMentioned: false,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: false,
-      ImplicitMentionKinds: ["quoted_bot"],
-    },
-  },
-  {
-    name: "ordinary message in an always-on group",
-    requireMention: false,
-    expected: {
-      WasMentioned: false,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: false,
-      ImplicitMentionKinds: [],
-    },
-  },
-  {
-    name: "mention of another member",
+  }),
+  mentionCase("mention of another member", mentionFacts(false, false, false), {
     text: "@pal hello",
-    mention: { mentionees: [{ index: 0, length: 4, type: "user", userId: "pal", isSelf: false }] },
     requireMention: false,
-    expected: {
-      WasMentioned: false,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: false,
-      ImplicitMentionKinds: [],
-    },
-  },
-  {
-    name: "authorized command bypass",
-    text: "/status",
-    expected: {
-      WasMentioned: true,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: [],
-    },
-  },
-  {
-    name: "non-text message without native mention metadata",
+    mention: { mentionees: [{ index: 0, length: 4, type: "user", userId: "pal", isSelf: false }] },
+  }),
+  mentionCase("authorized command bypass", mentionFacts(true, false), { text: "/status" }),
+  mentionCase("non-text message without native mention metadata", mentionFacts(false, false), {
     eventKind: "location",
-    expected: {
-      WasMentioned: false,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: [],
-    },
-  },
-  {
-    name: "direct message without group mention facts",
+  }),
+  mentionCase("direct message without group mention facts", mentionFacts(undefined, undefined), {
     source: { type: "user", userId: "sender" },
-    expected: {
-      WasMentioned: undefined,
-      ExplicitlyMentionedBot: undefined,
-      GroupRequireMention: undefined,
-      ImplicitMentionKinds: undefined,
-    },
-  },
-  {
-    name: "postback without message mention facts",
+  }),
+  mentionCase("postback without message mention facts", mentionFacts(undefined, undefined), {
     eventKind: "postback",
-    expected: {
-      WasMentioned: undefined,
-      ExplicitlyMentionedBot: undefined,
-      GroupRequireMention: undefined,
-      ImplicitMentionKinds: undefined,
-    },
-  },
+  }),
 ];
 
 describe("LINE admission facts on the dispatched turn", () => {

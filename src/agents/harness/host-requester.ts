@@ -12,10 +12,9 @@ export function buildHarnessHostRequester(
     | "memberRoleIds"
   >,
 ) {
+  const channel = attempt.messageChannel ?? attempt.messageProvider;
   return {
-    ...((attempt.messageChannel ?? attempt.messageProvider)
-      ? { channel: attempt.messageChannel ?? attempt.messageProvider ?? undefined }
-      : {}),
+    ...(channel ? { channel } : {}),
     ...(attempt.agentAccountId ? { accountId: attempt.agentAccountId } : {}),
     ...(attempt.senderId ? { senderId: attempt.senderId } : {}),
     ...(attempt.senderIsOwner !== undefined ? { senderIsOwner: attempt.senderIsOwner } : {}),

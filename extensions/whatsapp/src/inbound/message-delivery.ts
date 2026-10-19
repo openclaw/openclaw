@@ -12,12 +12,12 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import { defaultRuntime, createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
+import { logWhatsAppVerbose } from "../auto-reply/loggers.js";
 import { resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
-import { maybeResolveWhatsAppQuestionReaction } from "../question-reactions.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { formatError } from "../session.js";
 import {
@@ -61,13 +61,6 @@ function parseWhatsAppTimestampSeconds(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
-  if (!enabled) {
-    return;
-  }
-  defaultRuntime.log(message);
-}
-
 function recordAcceptedInboundActivity(accountId: string): void {
   recordChannelActivity({
     channel: "whatsapp",
@@ -98,7 +91,6 @@ type WhatsAppMessageDeliveryOptions = {
   debounceMs?: number;
   /** Bounded reconnect window for offline append auto-replies. */
   appendReplyWindow?: WhatsAppAppendReplyWindow;
-  /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
   onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
   durableInboundQueue?: WhatsAppDurableInboundQueue;
@@ -142,7 +134,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     socketSession,
     groupMetadata,
     parseTimestampSeconds: parseWhatsAppTimestampSeconds,
-    logVerbose: (message) => logWhatsAppVerbose(options.verbose, message),
   });
   const normalizeInboundMessage = messageNormalizer.normalize;
   const shouldSkipRecentOutboundEcho = messageNormalizer.shouldSkipRecentOutboundEcho;
@@ -429,18 +420,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     if (!inbound) {
       return "completed";
     }
-    if (
-      await maybeResolveWhatsAppQuestionReaction({
-        cfg: options.loadConfig?.() ?? options.cfg,
-        accountId: options.accountId,
-        msg,
-        senderId: inbound.senderE164 ?? inbound.from,
-        resolveReactionTargetJids,
-        logDebug: (message) => logWhatsAppVerbose(options.verbose, message),
-      })
-    ) {
-      return "completed";
-    }
     const readReceipt = buildReadReceiptTarget(inbound);
     const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
     if (context.skipStaleAppend === true) {
@@ -452,7 +431,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       msg,
       sock,
       mediaMaxMb: options.mediaMaxMb,
-      logVerbose: (message) => logWhatsAppVerbose(options.verbose, message),
     });
     if (!enriched) {
       await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);

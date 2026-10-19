@@ -32,9 +32,12 @@ suite.define(() => {
       });
       await page.clock.install();
       await page.goto(suite.server.baseUrl + "new");
+      const modelTrigger = page.locator("[data-chat-model-select]");
+      await modelTrigger.click();
       await page.locator('[data-chat-model-option="fixture/model-1999"]').waitFor({
         state: "attached",
       });
+      await modelTrigger.click();
       const input = page.locator(".new-session-page__message");
       await input.fill("Warmup ");
       await input.focus();

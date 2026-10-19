@@ -144,37 +144,29 @@ describe("Control UI doctor repair owner", () => {
     },
   );
 
-  it.each(["protocol-changes"])(
-    "forces the canonical owner to rebuild stale source assets: %s",
-    async (reason) => {
-      const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");
-      await fs.mkdir(path.dirname(indexPath), { recursive: true });
-      const buildId = reason === "protocol-changes" ? mocks.buildId : "older-build";
-      await fs.writeFile(
-        indexPath,
-        reason === "markerless"
-          ? "<html></html>"
-          : `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${buildId}-${"a".repeat(64)}"></html>`,
-      );
-      const prompter = createPrompter();
+  it("forces the canonical owner to rebuild source assets after protocol changes", async () => {
+    const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");
+    await fs.mkdir(path.dirname(indexPath), { recursive: true });
+    await fs.writeFile(
+      indexPath,
+      `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${mocks.buildId}-${"a".repeat(64)}"></html>`,
+    );
+    const prompter = createPrompter();
 
-      await maybeRepairUiProtocolFreshness(runtime, prompter);
+    await maybeRepairUiProtocolFreshness(runtime, prompter);
 
-      expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
-      expect(prompter.confirmAggressiveAutoFix).toHaveBeenCalledOnce();
-      expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledWith(runtime, {
-        root: mocks.root,
-        expectedBuildId: mocks.buildId,
-        force: true,
-        onBuildStart: expect.any(Function),
-      });
-      expect(mocks.note).toHaveBeenCalledWith("UI rebuild complete.", "UI");
-      expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("ui:build"), "UI Freshness");
-      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(
-        reason === "protocol-changes" ? 1 : 0,
-      );
-    },
-  );
+    expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
+    expect(prompter.confirmAggressiveAutoFix).toHaveBeenCalledOnce();
+    expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledWith(runtime, {
+      root: mocks.root,
+      expectedBuildId: mocks.buildId,
+      force: true,
+      onBuildStart: expect.any(Function),
+    });
+    expect(mocks.note).toHaveBeenCalledWith("UI rebuild complete.", "UI");
+    expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("ui:build"), "UI Freshness");
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
+  });
 
   it("reports owner-normalized build failures instead of claiming repair success", async () => {
     mocks.ensureControlUiAssetsBuilt.mockResolvedValueOnce({

@@ -88,7 +88,7 @@ jobs:
           echo "guidance-main-sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Run release-validation campaign skill
-        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VALIDATION_ARTIFACT_PATH: .artifacts/release-validation-campaign.json
@@ -157,7 +157,7 @@ jobs:
           path: .artifacts
 
       - name: Create Barnacle app token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # zizmor: ignore[github-app] v3
         id: app-token
         continue-on-error: true
         with:
@@ -165,7 +165,7 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
 
       - name: Create fallback Barnacle app token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # zizmor: ignore[github-app] v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:

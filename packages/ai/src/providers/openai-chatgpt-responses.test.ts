@@ -226,7 +226,7 @@ describe("streamOpenAICodexResponses transport", () => {
   });
 
   it("rotates cached websockets before the backend connection age limit", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     const startedAt = new Date("2026-07-03T00:00:00Z");
     vi.setSystemTime(startedAt);
     const sentConnectionIds: number[] = [];
@@ -705,6 +705,12 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(payload).toBeDefined();
     return payload ?? {};
   }
+  it("sends an explicit null reasoning summary", async () => {
+    expect(
+      await capturePayload(context, { reasoningEffort: "medium", reasoningSummary: null }),
+    ).toMatchObject({ reasoning: { effort: "medium", summary: null } });
+  });
+
   it("keeps tool controls when a tool schema is usable", async () => {
     const payload = await capturePayload({
       ...context,

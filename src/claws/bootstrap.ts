@@ -25,7 +25,6 @@ export async function seedClawPackageBootstrap(
   plan: ClawAddPlan,
   options: {
     nowMs?: number;
-    seedBootstrap?: typeof seedWorkspaceBootstrap;
     assertForwardCurrent?: () => void;
   } & ClawAddStateOptions = {},
 ): Promise<"seeded" | "already-seeded" | "consumed" | undefined> {
@@ -81,7 +80,7 @@ export async function seedClawPackageBootstrap(
     options.assertCurrent?.();
     options.assertForwardCurrent?.();
   };
-  return (options.seedBootstrap ?? seedWorkspaceBootstrap)({
+  return seedWorkspaceBootstrap({
     dir: plan.agent.workspace,
     content: read.buffer,
     ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),

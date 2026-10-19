@@ -80,10 +80,8 @@ export async function compactWithSafetyTimeout<T>(
 type ContextEngineCompactParams = Parameters<ContextEngine["compact"]>[0];
 
 /**
- * Every engine is bounded by one host window and receives the composed
- * timeout/caller cancellation signal. Only the built-in runtime delegate, reached
- * with that signal, refreshes the window while its model requests make progress,
- * up to the operation ceiling it also receives.
+ * Built-in delegation and engines declaring onProgress may refresh the host
+ * window. Both share the composed cancellation signal and finite ceiling.
  */
 export function compactContextEngineWithSafetyTimeout(
   contextEngine: Pick<ContextEngine, "compact" | "info">,
@@ -98,7 +96,13 @@ export function compactContextEngineWithSafetyTimeout(
         return contextEngine.compact(params);
       }
       compactionWatchdogs.set(compactionAbortSignal, { reset: resetTimeout, deadlineAt });
-      return contextEngine.compact({ ...params, abortSignal: compactionAbortSignal });
+      return contextEngine.compact({
+        ...params,
+        abortSignal: compactionAbortSignal,
+        ...(contextEngine.info.acceptedHostParams?.includes("onProgress")
+          ? { onProgress: resetTimeout }
+          : {}),
+      });
     },
     timeoutMs,
     abortSignal ? { abortSignal, deadlineAt } : { deadlineAt },

@@ -1,8 +1,5 @@
-import path from "node:path";
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { auth, type FetchLike } from "@modelcontextprotocol/client";
+import { describe, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -10,9 +7,9 @@ import {
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { readMcpOAuthStore } from "./mcp-oauth-store.js";
+import { withTempHome as withBaseTempHome } from "./mcp-oauth.test-harness.js";
 import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
-const SERVER_NAME = "Remote Docs";
 const SERVER_URL = "https://mcp.example.com/mcp";
 const ORIGINAL_METADATA_URL = "https://mcp.example.com/.well-known/oauth-protected-resource";
 const REPLACEMENT_METADATA_URL = "https://metadata.example/pr-metadata";
@@ -20,30 +17,8 @@ const ORIGINAL_ISSUER = "https://auth-old.example";
 const REPLACEMENT_ISSUER = "https://auth-new.example";
 const STORED_ACCESS = "stored-access";
 const STORED_REFRESH = "stored-refresh-secret";
-const IDENTITY = operatorMcpOAuthIdentity(SERVER_NAME, SERVER_URL);
-
-async function withTempHome<T>(
-  run: () => T | Promise<T>,
-  options: Parameters<typeof withBaseTempHome>[1],
-): Promise<T> {
-  return withBaseTempHome(async (home) => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    try {
-      return await run();
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
-  }, options);
-}
+const STORED_TOKENS = { access_token: STORED_ACCESS, refresh_token: STORED_REFRESH };
+const IDENTITY = operatorMcpOAuthIdentity("Remote Docs", SERVER_URL);
 
 function bodyText(body: BodyInit | null | undefined): string {
   if (typeof body === "string") {
@@ -52,12 +27,20 @@ function bodyText(body: BodyInit | null | undefined): string {
   return body instanceof URLSearchParams ? body.toString() : "";
 }
 
-function createOAuthNetwork(config: {
-  challengeMetadataUrl: string;
-  issuer: string;
-  mintedAccessToken: string;
-  registrationClientId?: string;
-}) {
+function createOAuthNetwork(
+  overrides: {
+    challengeMetadataUrl?: string;
+    issuer?: string;
+    mintedAccessToken?: string;
+    registrationClientId?: string;
+  } = {},
+) {
+  const config = {
+    challengeMetadataUrl: REPLACEMENT_METADATA_URL,
+    issuer: REPLACEMENT_ISSUER,
+    mintedAccessToken: "attacker-access",
+    ...overrides,
+  };
   const tokenRequests: Array<{ url: string; body: string }> = [];
   const registrationRequests: string[] = [];
   const fetchFn: FetchLike = async (input, init) => {
@@ -75,10 +58,7 @@ function createOAuthNetwork(config: {
       });
     }
     if (url.href === new URL(config.challengeMetadataUrl).href) {
-      return Response.json({
-        resource: SERVER_URL,
-        authorization_servers: [config.issuer],
-      });
+      return Response.json({ resource: SERVER_URL, authorization_servers: [config.issuer] });
     }
     if (url.href === `${config.issuer}/.well-known/oauth-authorization-server`) {
       return Response.json({
@@ -124,8 +104,7 @@ async function seedAuthorizedStore(
       resourceMetadataUrl: ORIGINAL_METADATA_URL,
     };
     const tokens = {
-      access_token: STORED_ACCESS,
-      refresh_token: STORED_REFRESH,
+      ...STORED_TOKENS,
       token_type: "Bearer",
       expires_in: expiresIn,
     };
@@ -140,11 +119,18 @@ async function seedAuthorizedStore(
   });
 }
 
-function buildOAuthFetch(fetchFn: FetchLike) {
-  return withMcpOAuthBearer({
-    fetchFn,
-    authFetchFn: fetchFn,
-    identity: IDENTITY,
+function originalNetwork() {
+  return createOAuthNetwork({
+    challengeMetadataUrl: ORIGINAL_METADATA_URL,
+    issuer: ORIGINAL_ISSUER,
+    mintedAccessToken: "rotated-access",
+  });
+}
+
+function request({ fetchFn }: ReturnType<typeof createOAuthNetwork>) {
+  return withMcpOAuthBearer({ fetchFn, authFetchFn: fetchFn, identity: IDENTITY })(SERVER_URL, {
+    method: "POST",
+    body: "{}",
   });
 }
 
@@ -152,308 +138,178 @@ function readStore() {
   return readMcpOAuthStore(IDENTITY.storeKey);
 }
 
-const TEMP_HOME_OPTIONS = {
-  skipSessionCleanup: true,
-  env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
-};
+function withTempHome<T>(run: (home: string) => T | Promise<T>, prefix: string) {
+  return withBaseTempHome(run, {
+    prefix,
+    skipSessionCleanup: true,
+    env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
+  });
+}
 
 describe("MCP OAuth refresh issuer binding", () => {
-  beforeEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-  });
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-  });
-
-  it("does not send the stored refresh token to a different issuer from a challenge", async () => {
-    await withTempHome(
-      async () => {
-        await seedAuthorizedStore("discovery-then-tokens");
-        const network = createOAuthNetwork({
-          challengeMetadataUrl: REPLACEMENT_METADATA_URL,
-          issuer: REPLACEMENT_ISSUER,
-          mintedAccessToken: "attacker-access",
-        });
-
-        await expect(
-          buildOAuthFetch(network.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
-        ).rejects.toThrow(/requires OAuth authorization/);
-
+  it.each(["discovery-then-tokens", "tokens-then-discovery"] as const)(
+    "binds issuer provenance and blocks rediscovery to another issuer (%s)",
+    async (order) => {
+      await withTempHome(async () => {
+        await seedAuthorizedStore(order);
+        expect((await readStore()).tokensAuthorizationServerUrl).toBe(
+          order === "tokens-then-discovery" ? undefined : ORIGINAL_ISSUER,
+        );
+        const network = createOAuthNetwork();
+        await expect(request(network)).rejects.toThrow(/requires OAuth authorization/);
         expect(network.tokenRequests).toEqual([]);
-        expect((await readStore()).tokens).toMatchObject({
-          access_token: STORED_ACCESS,
-          refresh_token: STORED_REFRESH,
-        });
-      },
-      { prefix: "openclaw-mcp-oauth-issuer-switch-", ...TEMP_HOME_OPTIONS },
-    );
-  });
-
+        expect((await readStore()).tokens).toMatchObject(STORED_TOKENS);
+        expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
+        if (order === "tokens-then-discovery") {
+          await closeOpenClawStateDatabaseAsync();
+          closeOpenClawStateDatabaseForTest();
+          expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
+        }
+      }, "openclaw-mcp-oauth-issuer-switch-");
+    },
+  );
   it("still refreshes when a new metadata URL resolves to the original issuer", async () => {
-    await withTempHome(
-      async () => {
-        await seedAuthorizedStore("discovery-then-tokens");
-        const network = createOAuthNetwork({
-          challengeMetadataUrl: REPLACEMENT_METADATA_URL,
-          issuer: ORIGINAL_ISSUER,
-          mintedAccessToken: "rotated-access",
-        });
+    await withTempHome(async () => {
+      await seedAuthorizedStore("discovery-then-tokens");
+      const network = createOAuthNetwork({
+        challengeMetadataUrl: REPLACEMENT_METADATA_URL,
+        issuer: ORIGINAL_ISSUER,
+        mintedAccessToken: "rotated-access",
+      });
 
-        const response = await buildOAuthFetch(network.fetchFn)(SERVER_URL, {
-          method: "POST",
-          body: "{}",
-        });
+      const response = await request(network);
 
-        expect(response.status).toBe(200);
-        expect(network.tokenRequests).toHaveLength(1);
-        expect(network.tokenRequests[0]?.url).toBe(`${ORIGINAL_ISSUER}/token`);
-        expect(network.tokenRequests[0]?.body).toContain(`refresh_token=${STORED_REFRESH}`);
-        expect((await readStore()).tokens?.access_token).toBe("rotated-access");
-      },
-      { prefix: "openclaw-mcp-oauth-issuer-same-", ...TEMP_HOME_OPTIONS },
-    );
+      expect(response.status).toBe(200);
+      expect(network.tokenRequests).toHaveLength(1);
+      expect(network.tokenRequests[0]?.url).toBe(`${ORIGINAL_ISSUER}/token`);
+      expect(network.tokenRequests[0]?.body).toContain(`refresh_token=${STORED_REFRESH}`);
+      expect((await readStore()).tokens?.access_token).toBe("rotated-access");
+    }, "openclaw-mcp-oauth-issuer-same-");
   });
 
   it.each([
-    {
-      variant: "an explicit default port",
-      issuer: "https://auth-old.example:443",
-    },
-    {
-      variant: "different host casing",
-      issuer: "https://AUTH-OLD.example",
-    },
-    {
-      variant: "a trailing slash",
-      issuer: "https://auth-old.example/",
-    },
+    ["an explicit default port", "https://auth-old.example:443"],
+    ["different host casing", "https://AUTH-OLD.example"],
+    ["a trailing slash", "https://auth-old.example/"],
   ])(
-    "does not disclose a refresh token when the issuer differs by $variant",
-    async ({ issuer }) => {
-      await withTempHome(
-        async () => {
-          await seedAuthorizedStore("discovery-then-tokens");
-          await withMcpOAuthProviderForTest(
-            {
-              identity: IDENTITY,
-            },
-            async (provider) => {
-              await provider.saveDiscoveryState?.({
-                authorizationServerUrl: issuer,
-                resourceMetadataUrl: REPLACEMENT_METADATA_URL,
-              });
-
-              expect(await provider.tokens()).toBeUndefined();
-            },
-          );
-          expect((await readStore()).tokens).toMatchObject({
-            access_token: STORED_ACCESS,
-            refresh_token: STORED_REFRESH,
+    "does not disclose a refresh token when the issuer differs by %s",
+    async (_variant, issuer) => {
+      await withTempHome(async () => {
+        await seedAuthorizedStore("discovery-then-tokens");
+        await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
+          await provider.saveDiscoveryState?.({
+            authorizationServerUrl: issuer,
+            resourceMetadataUrl: REPLACEMENT_METADATA_URL,
           });
-        },
-        { prefix: "openclaw-mcp-oauth-issuer-normalization-", ...TEMP_HOME_OPTIONS },
-      );
+
+          expect(await provider.tokens()).toBeUndefined();
+        });
+        expect((await readStore()).tokens).toMatchObject(STORED_TOKENS);
+      }, "openclaw-mcp-oauth-issuer-normalization-");
     },
   );
 
   it("refreshes an upgraded row whose issuer is recoverable from stored discovery", async () => {
-    await withTempHome(
-      async () => {
-        await seedAuthorizedStore("tokens-then-discovery", 0);
-        expect((await readStore()).tokensAuthorizationServerUrl).toBeUndefined();
-        expect((await readStore()).discoveryState?.authorizationServerUrl).toBe(ORIGINAL_ISSUER);
-        const network = createOAuthNetwork({
-          challengeMetadataUrl: ORIGINAL_METADATA_URL,
-          issuer: ORIGINAL_ISSUER,
-          mintedAccessToken: "rotated-access",
-        });
+    await withTempHome(async () => {
+      await seedAuthorizedStore("tokens-then-discovery", 0);
+      expect((await readStore()).tokensAuthorizationServerUrl).toBeUndefined();
+      expect((await readStore()).discoveryState?.authorizationServerUrl).toBe(ORIGINAL_ISSUER);
+      const network = originalNetwork();
 
-        const response = await buildOAuthFetch(network.fetchFn)(SERVER_URL, {
-          method: "POST",
-          body: "{}",
-        });
+      const response = await request(network);
 
-        expect(response.status).toBe(200);
-        expect(network.tokenRequests).toHaveLength(1);
-        expect(network.tokenRequests[0]?.url).toBe(`${ORIGINAL_ISSUER}/token`);
-        expect(network.tokenRequests[0]?.body).toContain(`refresh_token=${STORED_REFRESH}`);
-        expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
-      },
-      { prefix: "openclaw-mcp-oauth-issuer-upgrade-", ...TEMP_HOME_OPTIONS },
-    );
+      expect(response.status).toBe(200);
+      expect(network.tokenRequests).toHaveLength(1);
+      expect(network.tokenRequests[0]?.url).toBe(`${ORIGINAL_ISSUER}/token`);
+      expect(network.tokenRequests[0]?.body).toContain(`refresh_token=${STORED_REFRESH}`);
+      expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
+    }, "openclaw-mcp-oauth-issuer-upgrade-");
   });
 
   it.each([undefined, "replacement-client-id"])(
     "blocks an issuer-changing challenge after refresh (registration client: %s)",
     async (registrationClientId) => {
-      await withTempHome(
-        async () => {
-          await seedAuthorizedStore("tokens-then-discovery", 0);
-          const sameIssuer = createOAuthNetwork({
-            challengeMetadataUrl: ORIGINAL_METADATA_URL,
-            issuer: ORIGINAL_ISSUER,
-            mintedAccessToken: "rotated-access",
-          });
-          await buildOAuthFetch(sameIssuer.fetchFn)(SERVER_URL, { method: "POST", body: "{}" });
-          const refreshedStore = await readStore();
-          expect(refreshedStore.tokens).toMatchObject({
-            access_token: "rotated-access",
-            refresh_token: "rotated-refresh-secret",
-            issuer: ORIGINAL_ISSUER,
-          });
-          expect(refreshedStore.clientInformation).toMatchObject({
-            client_id: "stored-client-id",
-            issuer: ORIGINAL_ISSUER,
-          });
+      await withTempHome(async () => {
+        await seedAuthorizedStore("tokens-then-discovery", 0);
+        const sameIssuer = originalNetwork();
+        await request(sameIssuer);
+        const refreshedStore = await readStore();
+        expect(refreshedStore.tokens).toMatchObject({
+          access_token: "rotated-access",
+          refresh_token: "rotated-refresh-secret",
+          issuer: ORIGINAL_ISSUER,
+        });
+        expect(refreshedStore.clientInformation).toMatchObject({
+          client_id: "stored-client-id",
+          issuer: ORIGINAL_ISSUER,
+        });
 
-          const newIssuer = createOAuthNetwork({
-            challengeMetadataUrl: REPLACEMENT_METADATA_URL,
-            issuer: REPLACEMENT_ISSUER,
-            mintedAccessToken: "attacker-access",
-            registrationClientId,
-          });
-          await expect(
-            buildOAuthFetch(newIssuer.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
-          ).rejects.toThrow(/requires OAuth authorization/);
+        const newIssuer = createOAuthNetwork({ registrationClientId });
+        await expect(request(newIssuer)).rejects.toThrow(/requires OAuth authorization/);
 
-          expect(newIssuer.tokenRequests).toEqual([]);
-          expect(newIssuer.registrationRequests).toEqual([]);
-          const retainedStore = await readStore();
-          expect(retainedStore.tokens).toEqual(refreshedStore.tokens);
-          expect(retainedStore.clientInformation).toEqual(refreshedStore.clientInformation);
-          expect(retainedStore.tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
-        },
-        { prefix: "openclaw-mcp-oauth-issuer-upgrade-challenge-", ...TEMP_HOME_OPTIONS },
-      );
+        expect(newIssuer.tokenRequests).toEqual([]);
+        expect(newIssuer.registrationRequests).toEqual([]);
+        const retainedStore = await readStore();
+        expect(retainedStore.tokens).toEqual(refreshedStore.tokens);
+        expect(retainedStore.clientInformation).toEqual(refreshedStore.clientInformation);
+        expect(retainedStore.tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
+      }, "openclaw-mcp-oauth-issuer-upgrade-challenge-");
     },
   );
 
   it("allows explicit login to register with the replacement issuer", async () => {
-    await withTempHome(
-      async () => {
-        await seedAuthorizedStore("tokens-then-discovery", 0);
-        const original = createOAuthNetwork({
-          challengeMetadataUrl: ORIGINAL_METADATA_URL,
-          issuer: ORIGINAL_ISSUER,
-          mintedAccessToken: "rotated-access",
-        });
-        await buildOAuthFetch(original.fetchFn)(SERVER_URL, { method: "POST", body: "{}" });
-        const replacement = createOAuthNetwork({
-          challengeMetadataUrl: REPLACEMENT_METADATA_URL,
-          issuer: REPLACEMENT_ISSUER,
-          mintedAccessToken: "replacement-access",
-          registrationClientId: "replacement-client-id",
-        });
-        await expect(
-          buildOAuthFetch(replacement.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
-        ).rejects.toThrow(/requires OAuth authorization/);
+    await withTempHome(async () => {
+      await seedAuthorizedStore("tokens-then-discovery", 0);
+      const original = originalNetwork();
+      await request(original);
+      const replacement = createOAuthNetwork({
+        challengeMetadataUrl: REPLACEMENT_METADATA_URL,
+        issuer: REPLACEMENT_ISSUER,
+        mintedAccessToken: "replacement-access",
+        registrationClientId: "replacement-client-id",
+      });
+      await expect(request(replacement)).rejects.toThrow(/requires OAuth authorization/);
 
-        await withMcpOAuthProviderForTest(
-          { identity: IDENTITY, allowAuthorizationRedirect: true },
-          async (provider) => {
-            expect(
-              await auth(provider, {
-                serverUrl: SERVER_URL,
-                resourceMetadataUrl: new URL(REPLACEMENT_METADATA_URL),
-                fetchFn: replacement.fetchFn,
-              }),
-            ).toBe("REDIRECT");
-          },
-        );
-        expect(replacement.registrationRequests).toEqual([`${REPLACEMENT_ISSUER}/register`]);
-        expect(replacement.tokenRequests).toEqual([]);
-        expect((await readStore()).clientInformation).toMatchObject({
-          client_id: "replacement-client-id",
-          issuer: REPLACEMENT_ISSUER,
-        });
-      },
-      { prefix: "openclaw-mcp-oauth-issuer-explicit-login-", ...TEMP_HOME_OPTIONS },
-    );
-  });
-
-  it("binds legacy stored tokens to the pre-challenge issuer before rediscovery", async () => {
-    await withTempHome(
-      async () => {
-        await seedAuthorizedStore("tokens-then-discovery");
-        expect((await readStore()).tokensAuthorizationServerUrl).toBeUndefined();
-        const network = createOAuthNetwork({
-          challengeMetadataUrl: REPLACEMENT_METADATA_URL,
-          issuer: REPLACEMENT_ISSUER,
-          mintedAccessToken: "attacker-access",
-        });
-
-        await expect(
-          buildOAuthFetch(network.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
-        ).rejects.toThrow(/requires OAuth authorization/);
-
-        expect(network.tokenRequests).toEqual([]);
-        expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
-        expect((await readStore()).tokens).toMatchObject({
-          access_token: STORED_ACCESS,
-          refresh_token: STORED_REFRESH,
-        });
-      },
-      { prefix: "openclaw-mcp-oauth-issuer-legacy-", ...TEMP_HOME_OPTIONS },
-    );
+      await withMcpOAuthProviderForTest(
+        { identity: IDENTITY, allowAuthorizationRedirect: true },
+        async (provider) => {
+          expect(
+            await auth(provider, {
+              serverUrl: SERVER_URL,
+              resourceMetadataUrl: new URL(REPLACEMENT_METADATA_URL),
+              fetchFn: replacement.fetchFn,
+            }),
+          ).toBe("REDIRECT");
+        },
+      );
+      expect(replacement.registrationRequests).toEqual([`${REPLACEMENT_ISSUER}/register`]);
+      expect(replacement.tokenRequests).toEqual([]);
+      expect((await readStore()).clientInformation).toMatchObject({
+        client_id: "replacement-client-id",
+        issuer: REPLACEMENT_ISSUER,
+      });
+    }, "openclaw-mcp-oauth-issuer-explicit-login-");
   });
 
   it("fails closed for a token-only legacy store with no recoverable issuer", async () => {
-    await withTempHome(
-      async () => {
-        await withMcpOAuthProviderForTest(
-          {
-            identity: IDENTITY,
-          },
-          async (provider) => {
-            await provider.saveClientInformation?.({ client_id: "stored-client-id" });
-            await provider.saveTokens({
-              access_token: STORED_ACCESS,
-              refresh_token: STORED_REFRESH,
-              token_type: "Bearer",
-              expires_in: 3600,
-            });
-          },
-        );
-        expect((await readStore()).discoveryState).toBeUndefined();
-        expect((await readStore()).tokensAuthorizationServerUrl).toBeUndefined();
-        const network = createOAuthNetwork({
-          challengeMetadataUrl: REPLACEMENT_METADATA_URL,
-          issuer: REPLACEMENT_ISSUER,
-          mintedAccessToken: "attacker-access",
+    await withTempHome(async () => {
+      await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
+        await provider.saveClientInformation?.({ client_id: "stored-client-id" });
+        await provider.saveTokens({
+          access_token: STORED_ACCESS,
+          refresh_token: STORED_REFRESH,
+          token_type: "Bearer",
+          expires_in: 3600,
         });
+      });
+      expect((await readStore()).discoveryState).toBeUndefined();
+      expect((await readStore()).tokensAuthorizationServerUrl).toBeUndefined();
+      const network = createOAuthNetwork();
 
-        await expect(
-          buildOAuthFetch(network.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
-        ).rejects.toThrow(/OAuth authorization/);
+      await expect(request(network)).rejects.toThrow(/OAuth authorization/);
 
-        expect(network.tokenRequests).toEqual([]);
-        expect((await readStore()).tokens).toMatchObject({ refresh_token: STORED_REFRESH });
-      },
-      { prefix: "openclaw-mcp-oauth-issuer-tokenonly-", ...TEMP_HOME_OPTIONS },
-    );
-  });
-
-  it("persists bound issuer provenance across a store reload", async () => {
-    await withTempHome(
-      async () => {
-        await seedAuthorizedStore("tokens-then-discovery");
-        const network = createOAuthNetwork({
-          challengeMetadataUrl: REPLACEMENT_METADATA_URL,
-          issuer: REPLACEMENT_ISSUER,
-          mintedAccessToken: "attacker-access",
-        });
-
-        await expect(
-          buildOAuthFetch(network.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
-        ).rejects.toThrow(/OAuth authorization/);
-
-        await closeOpenClawStateDatabaseAsync();
-        closeOpenClawStateDatabaseForTest();
-        expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
-      },
-      { prefix: "openclaw-mcp-oauth-issuer-reload-", ...TEMP_HOME_OPTIONS },
-    );
+      expect(network.tokenRequests).toEqual([]);
+      expect((await readStore()).tokens).toMatchObject({ refresh_token: STORED_REFRESH });
+    }, "openclaw-mcp-oauth-issuer-tokenonly-");
   });
 });

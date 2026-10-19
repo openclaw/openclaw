@@ -209,7 +209,6 @@ export function createSubagentRegistryPublicApi(config: {
     if (!entry?.collect || entry.collectorCompletion) {
       throw new Error("collector run is unavailable");
     }
-    const next = structuredClone(state);
     await mutateSubagentRuns(
       [entry.runId],
       (rows) => {
@@ -224,8 +223,8 @@ export function createSubagentRegistryPublicApi(config: {
         if (
           current.structuredOutput?.structured !== undefined ||
           (current.structuredOutput?.invalidAttempts ?? 0) >= 2 ||
-          (next.structured === undefined &&
-            next.invalidAttempts !== (current.structuredOutput?.invalidAttempts ?? 0) + 1)
+          (state.structured === undefined &&
+            state.invalidAttempts !== (current.structuredOutput?.invalidAttempts ?? 0) + 1)
         ) {
           throw new SubagentRegistryMutationRejectedError(
             "collector output changed before publication",
@@ -233,7 +232,7 @@ export function createSubagentRegistryPublicApi(config: {
         }
         return {
           value: undefined,
-          postimages: new Map([[current.runId, { ...current, structuredOutput: next }]]),
+          postimages: new Map([[current.runId, { ...current, structuredOutput: state }]]),
         };
       },
       { runs, assertCurrent },

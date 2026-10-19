@@ -41,6 +41,59 @@ import * as threadOwnership from "./thread-ownership.js";
 setupRunAttemptTestHooks();
 
 describe("Codex attempt subscription recovery", () => {
+  it("reports an unavailable binding reader before admitting a native turn", async () => {
+    const prepare = runAttemptResources.prepareCodexAttemptResources;
+    vi.spyOn(runAttemptResources, "prepareCodexAttemptResources").mockImplementationOnce(
+      (prompt) => {
+        const resources = prepare(prompt);
+        vi.spyOn(
+          prompt.context.runtime.connection.bindingStore,
+          "prepareRead",
+        ).mockResolvedValueOnce(undefined);
+        return resources;
+      },
+    );
+    const register = vi.spyOn(codexNativeSubagentMonitorRuntime, "register");
+    const harness = createStartedThreadHarness();
+    const params = createParams(path.join(tempDir, "unavailable-reader.jsonl"), tempDir);
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+      "Codex native subagent binding reader is unavailable",
+    );
+    expect(register).not.toHaveBeenCalled();
+    expect(harness.requests.some(({ method }) => method === "turn/start")).toBe(false);
+  });
+
+  it("declines optional subscription retention when its binding reader is unavailable", async () => {
+    const captured =
+      createDeferred<ReturnType<typeof runAttemptResources.prepareCodexAttemptResources>>();
+    const prepare = runAttemptResources.prepareCodexAttemptResources;
+    vi.spyOn(runAttemptResources, "prepareCodexAttemptResources").mockImplementationOnce(
+      (prompt) => {
+        const resources = prepare(prompt);
+        captured.resolve(resources);
+        return resources;
+      },
+    );
+    const harness = createStartedThreadHarness();
+    const params = createParams(path.join(tempDir, "unavailable-retention.jsonl"), tempDir);
+    const run = runCodexAppServerAttempt(params);
+    await run.waitForTurnAccepted();
+    const resources = await captured.promise;
+    const prepareRead = vi
+      .spyOn(resources.prompt.context.runtime.connection.bindingStore, "prepareRead")
+      .mockResolvedValueOnce(undefined);
+    const publish = vi.spyOn(threadOwnership, "retainCodexAppServerBindingSubscription");
+    try {
+      await expect(resources.retainThreadSubscription()).resolves.toBe(false);
+      expect(publish).not.toHaveBeenCalled();
+    } finally {
+      prepareRead.mockRestore();
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    }
+  });
+
   it("revokes native submission custody when an unstamped parent session is replaced", async () => {
     // Worker preparation must not race this authority check's execution deadline.
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
@@ -159,20 +212,19 @@ describe("Codex attempt subscription recovery", () => {
   });
 
   it.each<{
-    nativeOwned: boolean;
     failureAt: "monitor" | "turn request";
     revoked?: "abort" | "host" | "binding" | "closed" | "expired" | "successor";
   }>([
-    { nativeOwned: true, failureAt: "turn request" },
-    { nativeOwned: true, failureAt: "monitor", revoked: "abort" },
-    { nativeOwned: true, failureAt: "monitor", revoked: "host" },
-    { nativeOwned: true, failureAt: "monitor", revoked: "binding" },
-    { nativeOwned: true, failureAt: "monitor", revoked: "closed" },
-    { nativeOwned: true, failureAt: "monitor", revoked: "expired" },
-    { nativeOwned: true, failureAt: "monitor", revoked: "successor" },
+    { failureAt: "turn request" },
+    { failureAt: "monitor", revoked: "abort" },
+    { failureAt: "monitor", revoked: "host" },
+    { failureAt: "monitor", revoked: "binding" },
+    { failureAt: "monitor", revoked: "closed" },
+    { failureAt: "monitor", revoked: "expired" },
+    { failureAt: "monitor", revoked: "successor" },
   ])(
-    "settles a warm claim after $failureAt failure (native: $nativeOwned, revoked: $revoked)",
-    async ({ nativeOwned, failureAt, revoked }) => {
+    "settles a native warm claim after $failureAt failure (revoked: $revoked)",
+    async ({ failureAt, revoked }) => {
       const sessionFile = path.join(tempDir, "subscription-session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const threadId = "thread-1";
@@ -191,21 +243,19 @@ describe("Codex attempt subscription recovery", () => {
           originalHost.assertActive();
         },
       };
-      if (nativeOwned) {
-        const native = threadStartResult(threadId);
-        await writeCodexAppServerBinding(sessionFile, {
-          threadId,
-          cwd: workspaceDir,
-          dynamicToolsFingerprint: "[]",
-          preserveNativeModel: true,
-          webSearchThreadConfigFingerprint: JSON.stringify({
-            "features.standalone_web_search": false,
-            web_search: "disabled",
-          }),
-          model: native.model,
-          modelProvider: native.modelProvider,
-        });
-      }
+      const native = threadStartResult(threadId);
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId,
+        cwd: workspaceDir,
+        dynamicToolsFingerprint: "[]",
+        preserveNativeModel: true,
+        webSearchThreadConfigFingerprint: JSON.stringify({
+          "features.standalone_web_search": false,
+          web_search: "disabled",
+        }),
+        model: native.model,
+        modelProvider: native.modelProvider,
+      });
       let turnCount = 0;
       const harness = createStartedThreadHarness(
         async (method) => {
@@ -218,7 +268,7 @@ describe("Codex attempt subscription recovery", () => {
           }
           return undefined;
         },
-        { persistedThreads: nativeOwned ? [threadId] : [] },
+        { persistedThreads: [threadId] },
       );
       const first = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
@@ -227,7 +277,7 @@ describe("Codex attempt subscription recovery", () => {
       const originalBinding = await readCodexAppServerBinding(sessionFile);
       expect(originalBinding).toMatchObject({
         threadId,
-        ...(nativeOwned ? { preserveNativeModel: true } : {}),
+        preserveNativeModel: true,
       });
       harness.requests.length = 0;
 

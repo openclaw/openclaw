@@ -1,30 +1,30 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, onCleanup } from "solid-js";
-import { observeScrollState } from "../../../components/scroll-state-observer.ts";
+import { Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
+import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { AttachmentPreviewChip } from "./chat-attachment-preview-chip.tsx";
 import type { CommentPreview } from "./chat-comment-preview.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 function scrollRef() {
-  let observation: ReturnType<typeof observeScrollState> | undefined;
-  onCleanup(() => observation?.disconnect());
-  return (element: HTMLElement) => {
-    observation?.disconnect();
-    observation = observeScrollState(element, (state) => {
+  const presented = useContext(ContentPresentation);
+  return createScrollStateRef(
+    (element, state) => {
       for (const key of ["scrollable", "atStart", "atEnd"] as const) {
         element.dataset[key] = String(state[key]);
       }
-    });
-  };
+    },
+    { presented },
+  );
 }
 
 export function CommentPreviewRow(props: { comment: CommentPreview; children?: JSX.Element }) {
+  const ref = scrollRef();
   return (
     <li class="chat-comment-preview__item">
       <div class="chat-comment-preview__body">
@@ -39,7 +39,7 @@ export function CommentPreviewRow(props: { comment: CommentPreview; children?: J
             tabindex={0}
             role="region"
             aria-label={t("chat.messages.annotationUserComment")}
-            ref={scrollRef()}
+            ref={ref}
           >
             {props.comment.comment}
           </div>
@@ -56,19 +56,21 @@ type ChipProps = {
   onReveal?: () => void;
   removal?: { onRemove: (event: Event) => void; disabled: boolean };
   elementRef?: (element: Element | undefined) => void;
+  previewRef?: (element: HTMLElement) => void;
+  triggerRef?: (element: HTMLButtonElement) => void;
 };
 
 export function CommentPreviewChip(props: ChipProps) {
+  const ref = scrollRef();
+  let trigger: HTMLButtonElement | undefined;
   return (
     <openclaw-tooltip
-      class={
-        props.removal
-          ? "chat-comment-preview chat-comment-preview--editable"
-          : "chat-comment-preview"
-      }
+      ref={props.previewRef}
+      class={["chat-comment-preview", { "chat-comment-preview--editable": Boolean(props.removal) }]}
       prop:placement="top-start"
       prop:autoSize={true}
       prop:describe={false}
+      prop:descriptionTarget={props.removal ? () => trigger ?? null : undefined}
       prop:openOnClick={true}
       prop:hoverDismissDelay={props.removal ? 200 : undefined}
     >
@@ -81,6 +83,7 @@ export function CommentPreviewChip(props: ChipProps) {
         onReveal={props.onReveal}
         onClick={props.onReveal}
         elementRef={props.elementRef}
+        triggerRef={[(element) => (trigger = element), props.triggerRef]}
         removal={
           props.removal
             ? { ...props.removal, label: t("chat.messages.removeAnnotations") }
@@ -93,55 +96,10 @@ export function CommentPreviewChip(props: ChipProps) {
         tabindex={0}
         role="region"
         aria-label={t("chat.messages.annotations")}
-        ref={scrollRef()}
+        ref={ref}
       >
         {props.children}
       </div>
     </openclaw-tooltip>
   );
-}
-
-function LegacyCommentRows(props: {
-  rows: ReadonlyArray<{ comment: CommentPreview; actions?: unknown }>;
-}) {
-  return (
-    <ol class="chat-comment-preview__list" role="list">
-      <For each={props.rows} keyed={false}>
-        {(row) => (
-          <CommentPreviewRow comment={row().comment}>
-            <LitContent value={row().actions} />
-          </CommentPreviewRow>
-        )}
-      </For>
-    </ol>
-  );
-}
-
-function LegacyCommentChip(props: ChipProps & { content: unknown }) {
-  return (
-    <CommentPreviewChip
-      count={props.count}
-      onReveal={props.onReveal}
-      removal={props.removal}
-      elementRef={props.elementRef}
-    >
-      <LitContent value={props.content} />
-    </CommentPreviewChip>
-  );
-}
-
-export function renderCommentPreviewRows(
-  rows: ReadonlyArray<{ comment: CommentPreview; actions?: unknown }>,
-) {
-  return solidContent(LegacyCommentRows, { rows });
-}
-
-export function renderCommentPreviewChip(
-  count: number,
-  content: unknown,
-  onReveal?: () => void,
-  removal?: ChipProps["removal"],
-  elementRef?: ChipProps["elementRef"],
-) {
-  return solidContent(LegacyCommentChip, { count, content, onReveal, removal, elementRef });
 }

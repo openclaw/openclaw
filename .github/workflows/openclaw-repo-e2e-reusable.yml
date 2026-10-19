@@ -62,7 +62,11 @@ env:
 jobs:
   build:
     name: Build repo E2E (${{ inputs.build_profile }})
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
+    runs-on: &linux_runner_xlarge >-
+      ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
+      'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
+      'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 90
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
@@ -126,7 +130,7 @@ jobs:
   test:
     name: Repo E2E (${{ matrix.name }})${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}
     needs: build
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
+    runs-on: *linux_runner_xlarge
     timeout-minutes: 90
     strategy:
       fail-fast: false

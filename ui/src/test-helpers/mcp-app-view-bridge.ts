@@ -3,6 +3,9 @@ import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import { mountView } from "../components/mcp-app-view.test-support.ts";
 import { i18n } from "../i18n/index.ts";
+import { createApplicationGateway } from "./application-context-fixtures.ts";
+import { createGatewayRequestMock, createTestGatewayClient } from "./gateway-client.ts";
+import { gatewayHelloForMethods } from "./gateway-methods.ts";
 
 export function createMcpBridgeFixture(bridgeMocks: {
   instances: Array<Record<string, unknown>>;
@@ -52,8 +55,8 @@ export function createMcpBridgeFixture(bridgeMocks: {
     const gatewayEventsReady = deferred();
     const gatewayEventsStopped = deferred();
     const unsubscribe = vi.fn();
-    const request = vi.fn(
-      async (_method: string, _params: Record<string, unknown>): Promise<unknown> => ({
+    const request = createGatewayRequestMock(() =>
+      Promise.resolve({
         sandboxUrl: "/mcp-app-sandbox?ticket=test",
         sandboxPort: 8444,
         html: "<!doctype html><button>Send</button>",
@@ -65,11 +68,24 @@ export function createMcpBridgeFixture(bridgeMocks: {
         ...payload,
       }),
     );
+    const { gateway, publish } = createApplicationGateway();
+    publish({
+      ...gateway.snapshot,
+      client: createTestGatewayClient(request),
+      phase: "connected",
+      hello: gatewayHelloForMethods(["mcp.app.view"]),
+    });
     const { view, unmount } = mountView(
       { sessionKey: "agent:main:main", viewId, title: "Parts library" },
       {
         gateway: {
-          snapshot: { client: { request }, phase: "connected" },
+          ...gateway,
+          get connectionRevision() {
+            return gateway.connectionRevision;
+          },
+          get snapshot() {
+            return gateway.snapshot;
+          },
           connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
           subscribeEvents(listener: (event: GatewayEventFrame) => void) {
             gatewayListeners.add(listener);
@@ -134,6 +150,8 @@ export function createMcpBridgeFixture(bridgeMocks: {
       },
       frame,
       request,
+      gateway,
+      publish,
       themeListeners,
       gatewayListeners,
       gatewayEventsStopped: gatewayEventsStopped.promise,

@@ -230,44 +230,6 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     await expect(watch.completion).resolves.toBe(true);
   });
 
-  it("waits for completed notification after an exact non-retry error", async () => {
-    const harness = createHarness();
-    const watch = watchTurn(
-      getCodexAppServerTurnRouter(harness.client),
-      "thread-native-error",
-      "turn-native-error",
-    );
-    const settled = vi.fn();
-    void watch.completion.then(settled);
-
-    harness.send({
-      method: "error",
-      params: {
-        threadId: "thread-native-error",
-        turnId: "turn-native-error",
-        error: { message: "retrying" },
-        willRetry: true,
-      },
-    });
-    await settleInput();
-    expect(settled).not.toHaveBeenCalled();
-
-    harness.send({
-      method: "error",
-      params: {
-        threadId: "thread-native-error",
-        turnId: "turn-native-error",
-        error: { message: "review setup failed" },
-        willRetry: false,
-      },
-    });
-    await settleInput();
-    expect(settled).not.toHaveBeenCalled();
-
-    harness.send(completedNotification("thread-native-error", "turn-native-error", "failed"));
-    await expect(watch.completion).resolves.toBe(true);
-  });
-
   it("keeps a hard completion deadline despite exact-turn progress", async () => {
     vi.useFakeTimers();
     const harness = createHarness();
@@ -292,19 +254,6 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     await vi.advanceTimersByTimeAsync(101);
     await expect(watch.completion).resolves.toBe(false);
     expect(settled).toHaveBeenCalledWith(false);
-  });
-
-  it("cancels a detached native-turn completion watch", async () => {
-    const harness = createHarness();
-    const watch = watchTurn(
-      getCodexAppServerTurnRouter(harness.client),
-      "thread-native-cancel",
-      "turn-native-cancel",
-    );
-
-    watch.cancel();
-
-    await expect(watch.completion).resolves.toBe(false);
   });
 
   it("settles detached native-turn watches on timeout and client close", async () => {
@@ -545,7 +494,7 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
         ...completed,
         threadId: "thread-closed-paused",
         turnId: "turn-current",
-        completedTurn: { id: "turn-current", status: "completed", items: [], itemsView: "full" },
+        completedTurn: { id: "turn-current", status: "completed", items: [] },
       },
     ];
     try {

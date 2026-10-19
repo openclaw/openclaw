@@ -3,7 +3,6 @@ import {
   crabboxCommandError,
   runCrabboxCommandWithCoordinatorRetry,
   sanitizeCrabboxNotice,
-  type CrabboxCommandRunner,
 } from "./crabbox-worker-command.js";
 import { parseInspectJson, type CrabboxLeaseLifetime } from "./crabbox-worker-inspect.js";
 import { heartbeatIntervalMs } from "./crabbox-worker-profile.js";
@@ -36,11 +35,7 @@ function providerDoesNotSupportHeartbeat(result: SpawnResult): boolean {
   );
 }
 
-export function createCrabboxHeartbeatManager(dependencies: {
-  runCommand: CrabboxCommandRunner;
-  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
-  warn: (message: string) => void;
-}) {
+export function createCrabboxHeartbeatManager(dependencies: { warn: (message: string) => void }) {
   const entries = new Map<string, HeartbeatEntry>();
   let disposed = false;
   const isCurrent = (entry: HeartbeatEntry) =>
@@ -98,8 +93,6 @@ export function createCrabboxHeartbeatManager(dependencies: {
           "--json",
         ],
         binary: entry.binary,
-        runCommand: dependencies.runCommand,
-        sleep: dependencies.sleep,
         signal: entry.controller.signal,
         timeoutMs: entry.heartbeatTimeoutMs,
       });

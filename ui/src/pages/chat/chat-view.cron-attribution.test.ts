@@ -18,7 +18,7 @@ function renderChatView(overrides: Partial<ChatProps>) {
   const props = createChatProps(overrides);
   onTestFinished(async () => {
     await vi.dynamicImportSettled();
-    props.transcript.hostDisconnected();
+    props.transcript.dispose();
     disposeChatView(container);
     resetChatViewState();
     resetTranscriptTestDom();

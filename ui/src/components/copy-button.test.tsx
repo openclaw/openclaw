@@ -1,8 +1,7 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { LitContent } from "../lit/solid-content.tsx";
-import { renderWorkspaceConflictNotice } from "../pages/chat/components/chat-workspace-conflict.ts";
+import { WorkspaceConflictNotice } from "../pages/chat/components/chat-workspace-conflict.tsx";
 import { DevicePairSetup } from "../pages/devices/view-pairing.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { WizardStepControls } from "./wizard-step-controls.tsx";
@@ -88,10 +87,8 @@ const surfaces = [
   {
     name: "workspace conflict command",
     View: (props: { text: string }) => (
-      <LitContent
-        value={renderWorkspaceConflictNotice({
-          conflict: { paths: [props.text], stagedResultRef: "refs/openclaw/worker-results/test" },
-        })}
+      <WorkspaceConflictNotice
+        conflict={{ paths: [props.text], stagedResultRef: "refs/openclaw/worker-results/test" }}
       />
     ),
     selector: ".chat-workspace-conflict-path-actions button",
@@ -110,6 +107,8 @@ describe("copy payload lifetime", () => {
     setText("second");
     flush();
     const current = container.querySelector<HTMLButtonElement>(surface.selector)!;
+    const label = current.querySelector("[data-copy-label]")!;
+    const idleLabel = label.textContent;
     expect(current.disabled).toBe(false);
     pending.reject(new Error("Synthetic clipboard rejection"));
     await vi.advanceTimersByTimeAsync(0);
@@ -120,5 +119,8 @@ describe("copy payload lifetime", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(writeText.mock.lastCall?.[0]).toContain("second");
     expect(current.dataset.copyState).toBe("copied");
+    expect(label.textContent).toBe("Copied!");
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(label.textContent).toBe(idleLabel);
   });
 });

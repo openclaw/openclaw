@@ -28,6 +28,7 @@ it("redacts caught execution errors before publishing repair warnings", async ()
   );
   const result = await applyPostPluginUpdateReadiness(params);
   expect(result.status).toBe("warning");
+  expect(result.doctorLint?.command).toBe("doctor --lint --json --severity-min error");
   expect(result.warnings?.[0]?.message).toContain("token=<redacted>");
   expect(JSON.stringify(result)).not.toContain("fixture-secret");
 });

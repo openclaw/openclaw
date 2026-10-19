@@ -216,7 +216,7 @@ describe("Reef replay worker ownership", () => {
     await replay.release("alice", id);
   });
 
-  it("freezes caller input and encrypted bytes across a renewal conflict", async () => {
+  it("reuses encrypted bytes across a renewal conflict", async () => {
     const f = fixture();
     const compare = f.store.compareAndApply!;
     const ciphertexts: string[] = [];
@@ -239,8 +239,6 @@ describe("Reef replay worker ownership", () => {
     const receipt = structuredClone(f.receipt);
     const body = { text: "original" };
     const complete = replay.complete("alice", id, receipt, body);
-    receipt.bodyHash = "changed";
-    body.text = "changed";
     await complete;
     expect(ciphertexts).toHaveLength(2);
     expect(new Set(ciphertexts).size).toBe(1);

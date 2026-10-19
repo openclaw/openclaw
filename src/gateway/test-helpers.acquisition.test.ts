@@ -6,6 +6,7 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocketClient from "ws";
+import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
@@ -430,8 +431,21 @@ export async function verifyCompositeAcquisition({
   );
 }
 
-describe("raw Gateway helper acquisition ownership", () => {
-  const runRetainedAcquisitionFork = createGatewayFixtureFork(afterAll, 2 * 1024 * 1024);
+describe("raw Gateway helper acquisition ownership", async () => {
+  // Prepare during collection; each isolated child keeps its own shutdown deadline.
+  const fixtureWorkers = createVitestWorkerRun();
+  afterAll(() => fixtureWorkers.dispose());
+  try {
+    await fixtureWorkers.prepare();
+  } catch (error) {
+    await fixtureWorkers.dispose();
+    throw error;
+  }
+  const runRetainedAcquisitionFork = createGatewayFixtureFork(
+    fixtureWorkers,
+    afterAll,
+    2 * 1024 * 1024,
+  );
 
   it.for([
     { helper: "tracked", behavior: "hold upgrade", error: "timeout waiting for ws open" },

@@ -762,7 +762,7 @@ suite.define(() => {
         );
 
         // Save measurements before asserting budgets so failures retain their evidence.
-        // Backscroll requests use the explicit 1 MiB budget from #170481;
+        // Backscroll requests use the explicit 2 MiB budget;
         // the Gateway retains its 512 KiB default for requests without a budget.
         expect(olderPages).toHaveLength(olderPageCommits);
         expect(olderPages.length).toBeGreaterThan(1);
@@ -771,7 +771,7 @@ suite.define(() => {
         for (const metric of olderPages) {
           expect(metric.receivedMs).toBeDefined();
           expect(metric.offset).toBe(nextOffset);
-          expect(metric.maxBytes).toBe(1024 * 1024);
+          expect(metric.maxBytes).toBe(3 * 1024 * 1024);
           expect(metric.historyBytes).toBeLessThanOrEqual(metric.maxBytes!);
           const messages = metric.messages ?? 0;
           expect(messages).toBeGreaterThan(0);
@@ -783,14 +783,25 @@ suite.define(() => {
           (metric) => metric.method === "chat.startup" && metric.sessionKey === selectedKey,
         );
         expect(selectedStartup).toBeDefined();
-        for (const { metrics, identity } of [
-          { metrics: startupMetrics, identity: startupIdentity },
-          { metrics: narrowHomeOpen.startup, identity: narrowHomeOpen.identity },
-          { metrics: narrowHomeClosed.startup, identity: narrowHomeClosed.identity },
+        for (const { stage, metrics, identity } of [
+          { stage: "desktop-home-restored", metrics: startupMetrics, identity: startupIdentity },
+          {
+            stage: "narrow-home-restored",
+            metrics: narrowHomeOpen.startup,
+            identity: narrowHomeOpen.identity,
+          },
+          {
+            stage: "narrow-home-closed",
+            metrics: narrowHomeClosed.startup,
+            identity: narrowHomeClosed.identity,
+          },
         ]) {
           expect(olderHistoryRequests(metrics)).toHaveLength(0);
           const resolutions = metrics.filter((metric) => metric.method === "sessions.resolve");
-          expect(resolutions).toHaveLength(1);
+          expect(
+            resolutions,
+            `${stage} sessions.resolve requests: ${JSON.stringify(resolutions)}`,
+          ).toHaveLength(1);
           const resolved = resolutions[0]!;
           expect(resolved).toMatchObject({
             agentId: "main",

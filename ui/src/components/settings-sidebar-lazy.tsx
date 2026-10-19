@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { For, onSettled, Show } from "solid-js";
 import { titleForRoute, visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import type { LazyRenderer } from "../app/lazy-renderer.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
@@ -6,46 +6,47 @@ import { t } from "../lib/reactive/i18n.ts";
 import type { SettingsSidebarProps } from "./settings-sidebar.tsx";
 import { Icon } from "./solid/icon.tsx";
 
-type SettingsSidebarModule = typeof import("./settings-sidebar.tsx");
-export type SettingsSidebarLoader = LazyRenderer<SettingsSidebarModule["renderSettingsSidebar"]>;
+type SettingsSidebarModule = typeof import("./settings-sidebar-shell.tsx");
+export type SettingsSidebarLoader = LazyRenderer<SettingsSidebarModule["ShellSettingsSidebar"]>;
+export type SettingsSidebarFallbackProps = Pick<
+  SettingsSidebarProps,
+  | "presentation"
+  | "activeRouteId"
+  | "connectionStatus"
+  | "footerStatus"
+  | "onExit"
+  | "nativeDeviceSettings"
+> & { canAdmin: boolean };
 
-export function LazySettingsSidebar(props: {
-  loader: SettingsSidebarLoader;
-  revision: number;
-  sidebarProps: SettingsSidebarProps;
-}) {
-  const state = createMemo(() => ({
-    revision: props.revision,
-    renderer: props.loader.renderer,
-    failed: props.loader.failed,
-  }));
-  createEffect(
-    () => !state().renderer && !state().failed,
-    (load) => {
-      if (load) {
-        props.loader.load();
-      }
-    },
-  );
+export function LazySettingsSidebar(
+  props: Parameters<SettingsSidebarModule["ShellSettingsSidebar"]>[0] & {
+    loader: SettingsSidebarLoader;
+  },
+) {
+  onSettled(() => {
+    if (!props.loader.renderer() && !props.loader.failed()) {
+      props.loader.load();
+    }
+  });
   return (
     <Show
-      when={state().renderer}
+      when={props.loader.renderer()}
       keyed
       fallback={
         <SettingsSidebarFallback
           sidebarProps={props.sidebarProps}
-          failed={state().failed}
+          failed={props.loader.failed()}
           retry={() => props.loader.retry()}
         />
       }
     >
-      {(View) => <View {...props.sidebarProps} />}
+      {(View) => <View host={props.host} sidebarProps={props.sidebarProps} />}
     </Show>
   );
 }
 
 function SettingsSidebarFallback(props: {
-  sidebarProps: SettingsSidebarProps;
+  sidebarProps: SettingsSidebarFallbackProps;
   failed: boolean;
   retry: () => void;
 }) {
@@ -116,9 +117,9 @@ function SettingsSidebarFallback(props: {
   );
 }
 
-function SettingsSidebarSkeleton(props: SettingsSidebarProps) {
+function SettingsSidebarSkeleton(props: SettingsSidebarFallbackProps) {
   const groups = () =>
-    visibleSettingsNavigationGroups(Boolean(props.canAdmin), props.nativeDeviceSettings ?? null);
+    visibleSettingsNavigationGroups(props.canAdmin, props.nativeDeviceSettings ?? null);
   return (
     <>
       <div class="settings-sidebar__agent" aria-hidden="true">

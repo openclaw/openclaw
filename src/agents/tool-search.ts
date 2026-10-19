@@ -1,4 +1,3 @@
-/** Tool Search catalog compaction for large OpenClaw, MCP, and client tool inventories. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
@@ -280,7 +279,6 @@ function resolveSearchParameters(searchDefaultLimit: number): AnyAgentTool["para
   return parameters;
 }
 
-/** Create Tool Search control tools for the current run/session context. */
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const runtime = new ToolSearchRuntime(ctx, config, { validateInput: true });

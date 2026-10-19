@@ -6,6 +6,7 @@ import {
   selectMessageActionRequesterIdentity,
 } from "../gateway/message-action-turn-capability.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../media/read-capability.js";
+import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -29,6 +30,7 @@ import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
+import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -276,6 +278,13 @@ function* resolveOpenClawPluginToolSteps(
   const resolveApiKeyForProvider = authProfileStore
     ? async (providerId: string): Promise<string | undefined> => {
         const cfg = resolveCurrentRuntimeConfig();
+        const workspaceDir = pluginToolInputs.context.workspaceDir;
+        // This preparation excludes plugin auth, including agent-profile substitutes.
+        if (
+          resolveProviderAuthScope({ provider: providerId, config: cfg, workspaceDir }) === "plugin"
+        ) {
+          return undefined;
+        }
         for (const profileId of resolveAuthProfileOrder({
           cfg,
           store: authProfileStore,
@@ -292,7 +301,6 @@ function* resolveOpenClawPluginToolSteps(
             return resolved.apiKey;
           }
         }
-        const workspaceDir = pluginToolInputs.context.workspaceDir;
         const runtimeLookup = createRuntimeProviderAuthLookup({
           cfg,
           workspaceDir,
@@ -340,6 +348,16 @@ function* resolveOpenClawPluginToolSteps(
   const assertRequestCurrent = params.options?.assertInvocationCurrent;
   const resolution = {
     ...pluginToolInputs,
+    bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
+      sandbox: params.options?.sandbox?.enabled ? params.options.sandbox : undefined,
+      skillsSnapshot: params.options?.pluginExecutionSkillsSnapshot,
+      signal: params.options?.abortSignal,
+      authority: params.options?.pluginExecutionAuthority,
+      modelContextWindowTokens: params.options?.modelContextWindowTokens,
+      preparedModelRuntime,
+      config: availabilityConfig,
+      agentId: pluginToolInputs.context.agentId,
+    }),
     context: {
       ...pluginToolInputs.context,
       ...(delivery ? { delivery } : {}),

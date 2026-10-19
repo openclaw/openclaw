@@ -17,7 +17,7 @@ import {
 } from "./provider-replay-context.js";
 import { sha256Hex } from "./transport-utils.js";
 
-type ReplayIdentity = { sessionId?: string; authProfileId?: string };
+type ReplayIdentity = NonNullable<Parameters<typeof buildProviderReplayContext>[1]>;
 type Projection = "transport" | "provider";
 const TOOL_CALL_PROVIDERS = new Set([
   "openai",

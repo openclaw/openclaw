@@ -4,13 +4,14 @@ import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
+import type { ProjectBrowserFocus } from "./draft-place-browser.ts";
 import { parentFolderDisplayName } from "./path.ts";
 import { SessionPicker } from "./picker.tsx";
 import { PlaceBrowser } from "./place-browser.tsx";
 import { disambiguate } from "./place-labels.ts";
 import { projectCloneInput } from "./project-chip.ts";
 import type { ProjectChipOptions } from "./project-chip.ts";
-export function ProjectChip(props: { params: ProjectChipOptions }) {
+export function ProjectChip(props: { params: ProjectChipOptions; focus?: ProjectBrowserFocus }) {
   const selectClone = (cloneUrl: string) =>
     props.params.onSelectRemoteProject({ identity: cloneUrl, cloneUrl });
   const triggerIcon = <Icon name={props.params.projectId ? "gitBranch" : "folder"} />;
@@ -43,7 +44,8 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
         props.params.pendingPlacement ||
         (!props.params.browseAvailable && !view().browseNeedsAdmin)
       }
-      ref={nativeListener("click", () => {
+      ref={(node) => props.focus && (props.focus.browse = node)}
+      onClick={() => {
         if (
           props.params.browseAvailable &&
           !props.params.submitting &&
@@ -51,7 +53,7 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
         ) {
           props.params.onBrowse();
         }
-      })}
+      }}
     >
       <span class="session-menu__check" aria-hidden="true" />
       <span class="session-menu__text">{t("newSession.browse")}</span>
@@ -72,10 +74,11 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
     >
       {props.params.browserOpen ? (
         <PlaceBrowser
+          pathRef={(node) => props.focus && (props.focus.path = node)}
           params={{
             browser: props.params.browser,
             id: "new-session-place-browser",
-            label: props.params.gatewayLabel,
+            label: props.params.browserLabel,
             registerProjectPath: props.params.registerProjectPath,
             registeringProject: props.params.registeringProject,
             onBack: props.params.onBrowserBack,
@@ -116,6 +119,24 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
               }}
               submitting={props.params.submitting || props.params.pendingPlacement}
             />
+          ) : undefined}
+          {props.params.onBrowseDevice && props.params.deviceBrowseLabel && !view().query ? (
+            <button
+              type="button"
+              class="session-menu__item"
+              data-value="browse-device"
+              aria-pressed="false"
+              disabled={props.params.submitting || props.params.pendingPlacement}
+              ref={nativeListener("click", () => props.params.onBrowseDevice?.())}
+            >
+              <span class="session-menu__check" aria-hidden="true" />
+              <span class="session-menu__text">
+                {t("newSession.browseDevice", { device: props.params.deviceBrowseLabel })}
+              </span>
+              <span class="new-session-page__menu-chevron" aria-hidden="true">
+                <Icon name="chevronRight" />
+              </span>
+            </button>
           ) : undefined}
           {props.params.workspace && props.params.state.showWorkspace ? (
             <SessionMenuItem

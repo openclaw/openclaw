@@ -32,6 +32,7 @@ export type OpenClawPluginToolOptions = Pick<
   | "fsPolicy"
   | "modelProvider"
   | "modelId"
+  | "modelContextWindowTokens"
   | "requesterSenderId"
   | "senderIsOwner"
   | "memoryAudience"
@@ -46,6 +47,10 @@ export type OpenClawPluginToolOptions = Pick<
   | "sandboxed"
   | "allowGatewaySubagentBinding"
   | "toolBindings"
+  | "sandbox"
+  | "abortSignal"
+  | "pluginExecutionSkillsSnapshot"
+  | "pluginExecutionAuthority"
 > & { activeProjectKeys?: readonly string[]; approvalReviewerDeviceId?: string };
 
 export function resolveOpenClawPluginToolInputs(params: {

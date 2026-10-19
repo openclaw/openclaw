@@ -61,12 +61,12 @@ const modelAuth = {
 };
 
 function createCodexTestRuntime(
-  current?: () => unknown,
+  current: () => unknown = () => ({}),
   stateStore = createCodexTestBindingStateStore(),
 ) {
   return {
     modelAuth,
-    ...(current ? { config: { current } } : {}),
+    config: { current },
     state: {
       openSyncKeyedStore: () => stateStore,
       openKeyedStoreV2: (
@@ -88,14 +88,17 @@ vi.mock("./src/app-server/side-question.js", () => ({
 }));
 
 function createCodexTestApi(overrides: Parameters<typeof createTestPluginApi>[0] = {}) {
+  const config = overrides.config ?? {
+    plugins: { entries: { codex: { config: overrides.pluginConfig } } },
+  };
   return createTestPluginApi({
     id: "codex",
     name: "Codex",
     source: "test",
-    config: {},
+    config,
     pluginConfig: {},
     ...overrides,
-    runtime: overrides.runtime ?? createCodexTestRuntime(),
+    runtime: overrides.runtime ?? createCodexTestRuntime(() => config),
   });
 }
 

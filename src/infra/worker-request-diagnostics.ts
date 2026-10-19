@@ -62,7 +62,6 @@ const coreCommands = new Set([
   "session.lifecycle.project",
   "session.maintenance.metadata",
   "session.maintenance.prepare",
-  "session.maintenance.release",
   "session.maintenance.finalize",
   "session.maintenance.size",
   "session.rowTranscript.backfill",

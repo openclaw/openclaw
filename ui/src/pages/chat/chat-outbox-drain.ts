@@ -9,7 +9,7 @@ import {
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -136,7 +136,7 @@ async function reconcileStoredChatOutboxHead(
             areUiSessionKeysEquivalent(session.key, outbox.sessionKey),
           )
         : undefined;
-    if (row && isSessionRunActive(row)) {
+    if (row && isSessionRunStateActive(row)) {
       return "blocked";
     }
   }
@@ -156,7 +156,6 @@ async function reconcileStoredChatOutboxHead(
   } catch (error) {
     if (isCurrent()) {
       surfaceChatDeliveryFailure(host, outbox.sessionKey, outbox.agentId, formatUiError(error));
-      host.requestUpdate?.();
     }
     return "blocked";
   }
@@ -608,7 +607,7 @@ export async function resumeStoredChatOutboxes(
     return;
   }
   // Refresh credential ownership; callers own frame-coalesced rendering.
-  chatOutboxOwner(host).syncHost(host, { requestUpdate: false });
+  chatOutboxOwner(host).syncHost(host, { notify: false });
   const eventScope = event ? readSessionChangedEvent(event.payload) : undefined;
   if (event && !eventScope) {
     return;

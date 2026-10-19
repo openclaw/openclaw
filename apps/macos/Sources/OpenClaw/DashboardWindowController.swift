@@ -719,7 +719,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // A cancelled provisional navigation never commits, so the prior
         // document survives and stays command-capable; clearing live state
         // here would queue native commands forever with no reload to flush.
-        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+        if self.documentHost.consumeDownloadPolicyInterruption(nsError) ||
+            (nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled)
+        {
             // A finish deferred for this successor belongs to the document that survives,
             // unless that is a failure page (about:blank HTML), which still needs a reload.
             if self.deferredFinishSourceID == self.notificationSourceID, !self.webView.isLoading,
@@ -1478,11 +1480,29 @@ extension DashboardWindowController {
         }
     }
 
+    func webView(_ webView: WKWebView, navigationAction _: WKNavigationAction, didBecome download: WKDownload) {
+        guard webView === self.webView else { download.cancel { _ in }
+            return
+        }
+        self.documentHost.adoptDownload(download)
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse _: WKNavigationResponse, didBecome download: WKDownload) {
+        guard webView === self.webView else { download.cancel { _ in }
+            return
+        }
+        self.documentHost.adoptDownload(download)
+    }
+
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
     {
+        if webView === self.webView, self.documentHost.shouldDownload(navigationResponse) {
+            decisionHandler(.download)
+            return
+        }
         if webView === self.webView,
            ControlUIDocumentHost.shouldShowDashboardResponseFailure(
                navigationResponse.response,

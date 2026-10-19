@@ -1,5 +1,7 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
+  inheritSessionGitContributorProfileIds,
+  isMainGitContributorScope,
   inheritSpawnSessionOwner,
   sessionPersonalProfileId,
   type SessionActor,
@@ -92,4 +94,67 @@ it("inherits only the requesting human's current owner, including canonical prof
       assignedAt: now ?? expect.any(Number),
     });
   }
+});
+
+const parent = {
+  inheritedGitContributorProfileIds: ["prior-inherited"],
+  participants: ["unrelated-a", "unrelated-b"].map((id) => ({
+    identity: { type: "profile" as const, id },
+    contributionCount: 1,
+    firstPromptedAt: 1,
+    lastPromptedAt: 1,
+  })),
+};
+
+describe("Git contributor source scope", () => {
+  it("uses the verified request, not a multiplexed main roster, for delegation", () => {
+    const source = {
+      agentId: "work",
+      config: { session: { mainKey: "home" } },
+      sessionKey: "agent:work:home",
+    };
+    expect(
+      inheritSessionGitContributorProfileIds(parent, {
+        ...source,
+        requesterProfileId: "requester-c",
+      }),
+    ).toEqual(["requester-c"]);
+    expect(inheritSessionGitContributorProfileIds(parent, source)).toBeUndefined();
+    expect(
+      inheritSessionGitContributorProfileIds(parent, {
+        ...source,
+        requesterProfileId: "requester-d",
+      }),
+    ).toEqual(["requester-d"]);
+    expect(isMainGitContributorScope({ ...source, sessionKey: "agent:other:home" })).toBe(false);
+    expect(
+      isMainGitContributorScope({
+        agentId: "work",
+        config: { session: { scope: "global" } },
+        sessionKey: "global",
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves authorized collaborative task and nested-delegation credit", () => {
+    const source = { agentId: "work", config: {}, sessionKey: "agent:work:dashboard:task" };
+    const inheritedGitContributorProfileIds = inheritSessionGitContributorProfileIds(
+      parent,
+      source,
+    );
+    expect(inheritedGitContributorProfileIds).toEqual([
+      "prior-inherited",
+      "unrelated-a",
+      "unrelated-b",
+    ]);
+    expect(
+      inheritSessionGitContributorProfileIds(
+        { inheritedGitContributorProfileIds },
+        { ...source, sessionKey: "agent:work:subagent:child" },
+      ),
+    ).toEqual(inheritedGitContributorProfileIds);
+    expect(
+      inheritSessionGitContributorProfileIds({ ...parent, incognito: true }, source),
+    ).toBeUndefined();
+  });
 });

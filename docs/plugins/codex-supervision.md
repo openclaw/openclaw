@@ -190,8 +190,9 @@ Open the **Codex** group in the normal sessions sidebar. It lists the same sessi
 grouped by host. **Load more sessions** appends the next page from each host that
 has older rows, and those appended rows survive the sidebar's periodic refresh.
 Each host appears as soon as its resident catalog is ready. The visible page
-reconciles after node-connectivity changes, when it regains focus, and at most
-every 30 seconds. A changed result gets a faster follow-up pass. Sessions created
+reconciles when the tab becomes visible again or reconnects, and every two minutes
+while visible. Hidden tabs pause discovery; explicit refreshes and catalog actions
+do not wait for the periodic refresh. Sessions created
 in Codex Desktop, the CLI, or another native client appear after the host's
 background directory reconciliation. Native events update threads driven by that
 Gateway without waiting for the periodic scan. Searches and pagination use the

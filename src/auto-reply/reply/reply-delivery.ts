@@ -9,7 +9,6 @@ import {
   isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
-import { isSilentReplyPayloadText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -47,14 +46,12 @@ export async function resolveReplyFailureVisibility(
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
   currentMessageId?: string;
-  silentToken?: string;
   trimLeadingWhitespace?: boolean;
   parseMode?: ReplyDirectiveParseMode;
   extractMarkdownImages?: boolean;
   extractMediaDirectives?: boolean;
-}): { payload: ReplyPayload; isSilent: boolean } {
+}): { payload: ReplyPayload } {
   const parseMode = params.parseMode ?? "always";
-  const silentToken = params.silentToken ?? SILENT_REPLY_TOKEN;
   const sourceText = params.payload.text ?? "";
 
   const shouldParse =
@@ -62,13 +59,11 @@ export function normalizeReplyPayloadDirectives(params: {
     (parseMode === "auto" &&
       (sourceText.includes("[[") ||
         (params.extractMediaDirectives !== false && /media:/i.test(sourceText)) ||
-        (params.extractMarkdownImages === true && /!\[[^\]]*]\(/.test(sourceText)) ||
-        sourceText.includes(silentToken)));
+        (params.extractMarkdownImages === true && /!\[[^\]]*]\(/.test(sourceText))));
 
   const parsed = shouldParse
     ? parseReplyDirectives(sourceText, {
         currentMessageId: params.currentMessageId,
-        silentToken,
         extractMarkdownImages: params.extractMarkdownImages,
         extractMediaDirectives: params.extractMediaDirectives,
       })
@@ -96,7 +91,6 @@ export function normalizeReplyPayloadDirectives(params: {
       }),
       parsed?.mediaFailures,
     ),
-    isSilent: parsed?.isSilent ?? false,
   };
 }
 
@@ -155,10 +149,7 @@ export function createBlockReplyDeliveryHandler(params: {
       return;
     }
     const { text, skip } = params.normalizeStreamingText(payload);
-    const isSilent =
-      getReplyPayloadMetadata(payload)?.silentReply === true ||
-      isSilentReplyText(payload.text, SILENT_REPLY_TOKEN) ||
-      (skip && isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN));
+    const isSilent = getReplyPayloadMetadata(payload)?.silentReply === true;
     if (
       skip &&
       !hasOutboundReplyContent({ ...payload, text: undefined }) &&

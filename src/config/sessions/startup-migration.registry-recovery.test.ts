@@ -4,13 +4,9 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { prepareAgentDeleteDatabases } from "../../agents/agent-delete-databases.js";
-import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
 import * as sessionDirs from "../../agents/session-dirs.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../../state/agent-deletion-journal-recovery.js";
 import { publishAgentDeletionJournalStatus } from "../../state/agent-deletion-journal-status.js";
 import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
@@ -28,7 +24,6 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
-import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -39,7 +34,8 @@ import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journ
 import { withEnvAsync } from "../../test-utils/env.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.native.js";
+import * as legacyMainMigration from "./legacy-main-session-migration.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import {
   readCanonicalSessionMainKey,
@@ -48,11 +44,13 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { reconcileSessionTranscriptIndexes } from "./session-transcript-reconcile.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
+import * as sessionTargets from "./targets.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
@@ -125,30 +123,30 @@ it("does not create a missing configured agent database during startup maintenan
     env,
   }).path;
 
+  vi.spyOn(legacyMainMigration, "migrateLegacyMainSessionKeys").mockResolvedValue({
+    armed: false,
+    changes: [],
+    complete: false,
+    ledgerComplete: false,
+    legacyAgentId: "main",
+    mainKey: "main",
+    outcomes: [{ kind: "not-armed" as const }],
+    warnings: [],
+  });
+  vi.spyOn(sessionTargets, "resolveAllAgentSessionStoreTargetsSync").mockReturnValue([
+    { agentId: "idle", storePath },
+  ]);
   await runSessionStartupMigration({
     cfg,
     env,
     log: { info: vi.fn(), warn: vi.fn() },
-    deps: {
-      migrateLegacyMainSessionKeys: vi.fn(async () => ({
-        armed: false,
-        changes: [],
-        complete: false,
-        ledgerComplete: false,
-        legacyAgentId: "main",
-        mainKey: "main",
-        outcomes: [{ kind: "not-armed" as const }],
-        warnings: [],
-      })),
-      resolveAllAgentSessionStoreTargetsSync: () => [{ agentId: "idle", storePath }],
-    },
   });
 
   expect(fs.existsSync(sqlitePath)).toBe(false);
 });
 
 it.each([false, true])(
-  "reconciles surviving stores while retained deleted stores stay fenced (cleanup completed: %s)",
+  "observes in-process deletion on the next startup and preserves surviving stores (cleanup completed: %s)",
   async (cleanupCompleted) => {
     const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-startup-deleted-agent-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -167,6 +165,11 @@ it.each([false, true])(
         { sessionId: `${agentId}-shared`, updatedAt: 1 },
       );
     }
+    await runSessionStartupMigration({
+      cfg,
+      env,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
     setCanonicalSqliteSessionMainKey(survivor, "previous");
     setCanonicalSqliteSessionMainKey(deleted, "previous");
     await closeOpenClawAgentDatabasesAsync(stateDir);
@@ -219,108 +222,6 @@ it.each([false, true])(
     );
   },
 );
-
-it("observes committed deletion before startup handoff after canonical database drainage", async () => {
-  const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-startup-journal-delivery-"));
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const storePath = path.join(stateDir, "shared.sqlite");
-  const options = { agentId: "alpha", env, path: storePath };
-  const cfg: OpenClawConfig = {
-    agents: { ownership: "explicit", entries: { alpha: {} } },
-    session: { store: storePath },
-  };
-  const database = openOpenClawAgentDatabase(options);
-  await replaceSessionEntry(
-    { agentId: "alpha", env, storePath, sessionKey: "agent:alpha:retained" },
-    { sessionId: "retained-session", updatedAt: 1 },
-  );
-  setCanonicalSqliteSessionMainKey(database, "previous");
-  await closeOpenClawAgentDatabasesAsync(stateDir);
-  closeOpenClawAgentDatabasesForTest();
-  expect(readAgentDatabaseAdmissionRefusal("alpha", { env })).toBeUndefined();
-
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const readiness = await import("./session-canonical-validation-readiness.js");
-  const certify = readiness.certifySessionCanonicalValidationPending;
-  let validationFinished = false;
-  const certification = vi
-    .spyOn(readiness, "certifySessionCanonicalValidationPending")
-    .mockImplementation(async (...args) => {
-      const result = await certify(...args);
-      validationFinished = true;
-      return result;
-    });
-  const originalRead = stateReads.executeExistingOpenClawStateRead;
-  let held = false;
-  const reading = vi
-    .spyOn(stateReads, "executeExistingOpenClawStateRead")
-    .mockImplementation(async (...args) => {
-      const reply = await originalRead(...args);
-      if (args[1].type === "agentDatabaseDeletion.snapshot" && validationFinished && !held) {
-        held = true;
-        entered.resolve();
-        await release.promise;
-      }
-      return reply;
-    });
-  const log = { info: vi.fn(), warn: vi.fn() };
-  const handoffs =
-    vi.fn<
-      (target: { agentId: string; path: string | undefined; stateDir: string | undefined }) => void
-    >();
-  const handoffDatabase = async (handoffOptions: OpenClawAgentDatabaseOptions) => {
-    handoffs({
-      agentId: handoffOptions.agentId,
-      path: handoffOptions.path,
-      stateDir: handoffOptions.env?.OPENCLAW_STATE_DIR,
-    });
-  };
-  const outcome = runSessionStartupMigration({ cfg, env, log, handoffDatabase }).then(
-    () => ({ ok: true as const }),
-    (error: unknown) => ({ ok: false as const, error }),
-  );
-  try {
-    await Promise.race([
-      entered.promise,
-      outcome.then((result) => {
-        throw new Error("Startup finished before the held native snapshot", {
-          cause: result.ok ? undefined : result.error,
-        });
-      }),
-    ]);
-    expect(handoffs).not.toHaveBeenCalled();
-    const agentDir = path.join(stateDir, "agents", "alpha", "agent");
-    await withAgentDeletion(
-      "alpha",
-      async (begin) => {
-        const deletion = await begin({
-          agentId: "alpha",
-          agentDir,
-          sessionsDir: path.join(stateDir, "agents", "alpha", "sessions"),
-          workspaceDir: path.join(stateDir, "workspace-alpha"),
-          databasePaths: [storePath],
-          deleteFiles: false,
-        });
-        await prepareAgentDeleteDatabases(cfg, "alpha", agentDir, { env });
-        await deletion.assertCurrentAsync();
-        await deletion.finish();
-      },
-      { env },
-    );
-    release.resolve();
-    expect(await outcome).toEqual({ ok: true });
-    expect(handoffs).not.toHaveBeenCalled();
-    expect(log.info).toHaveBeenCalledWith(
-      expect.stringContaining("skipping deleted agent database"),
-    );
-  } finally {
-    release.resolve();
-    await outcome;
-    reading.mockRestore();
-    certification.mockRestore();
-  }
-});
 
 it.each(["missing", "receipt-held", "malformed-receipt", "malformed-journal"])(
   "prepares and projects ordinary stores with %s deletion history",
@@ -469,22 +370,20 @@ it("re-registers durable lineage children before configured-only runtime reads",
       ),
     ).toBe(false);
 
+    vi.spyOn(legacyMainMigration, "migrateLegacyMainSessionKeys").mockResolvedValue({
+      armed: false,
+      changes: [],
+      complete: false,
+      ledgerComplete: false,
+      legacyAgentId: "main",
+      mainKey: "main",
+      outcomes: [{ kind: "not-armed" as const }],
+      warnings: [],
+    });
     await runSessionStartupMigration({
       cfg,
       env,
       log: { info: vi.fn(), warn: vi.fn() },
-      deps: {
-        migrateLegacyMainSessionKeys: vi.fn(async () => ({
-          armed: false,
-          changes: [],
-          complete: false,
-          ledgerComplete: false,
-          legacyAgentId: "main",
-          mainKey: "main",
-          outcomes: [{ kind: "not-armed" as const }],
-          warnings: [],
-        })),
-      },
     });
 
     expect(listOpenClawRegisteredAgentDatabases({ env })).toContainEqual(

@@ -63,7 +63,7 @@ env:
 jobs:
   trusted_identity:
     name: Resolve trusted dispatched workflow identity
-    runs-on: ubuntu-24.04
+    runs-on: &linux_runner_ubuntu ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -245,7 +245,7 @@ jobs:
     name: Build secretless Telegram candidate
     needs: trusted_identity
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 45
     permissions:
       actions: read
@@ -529,7 +529,7 @@ jobs:
     name: Attest verified Telegram candidate
     needs: [trusted_identity, build_candidate]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 20
     permissions:
       actions: read
@@ -753,7 +753,7 @@ jobs:
     name: Run isolated Telegram candidate
     needs: [trusted_identity, build_candidate, attest_candidate]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 60
     environment: qa-live-shared
     permissions:
@@ -2681,7 +2681,7 @@ jobs:
     name: Record Telegram release-check status
     needs: [trusted_identity, build_candidate, attest_candidate, run_telegram]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 5
     permissions:
       actions: read

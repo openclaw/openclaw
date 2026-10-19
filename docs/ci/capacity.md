@@ -218,7 +218,7 @@ Eligible `control-ui` rows request `blacksmith-16vcpu-ubuntu-2404`; the browser-
 
 In [run 35028248954, UI job 6/7](https://github.com/openclaw/openclaw/actions/runs/35028248954/job/104582299257), the six-shard Control UI plan requested the 16-class and reported four CPUs. Setup took about 3m45s before the test command. The job recorded 168 passing tests and three failures before cancellation about 25m07s after runner startup; a test completed three seconds before cancellation. The twelve-shard plan still needs native CI timing proof, and widening the plan does not resolve those assertions or guarantee completion within the unchanged deadline.
 
-The two real-Gateway rows request the 16-class for current targets and retain the 32-class for frozen or unclassified targets. The split adds one job and one possible registration when this proof lane is selected; ordinary PRs omit it. Current-target Blacksmith shard 1 has a 24-minute job budget for its serial fixtures and selected desktop transport proof; shard 2 has 25 minutes after its observed preparation and passing test phases exceeded 20 minutes. Other Blacksmith rows retain 20 minutes and hosted fallbacks retain 40. This scoped allowance adds no jobs, registrations, or workers and leaves test deadlines unchanged. It follows a confirmed 20-minute job timeout with 16 of 17 files complete in [run 38590548763](https://github.com/openclaw/openclaw/actions/runs/38590548763/job/115948443520); a natural run must establish whether the allowance is sufficient. The split does not change backend, contributor-trust, retry, or cache routing.
+The two real-Gateway rows request the 16-class for current targets and retain the 32-class for frozen or unclassified targets. The split adds one job and one possible registration when this proof lane is selected; ordinary PRs omit it. Blacksmith real-Gateway rows have a 30-minute job budget and hosted fallbacks retain 40 minutes. This scoped allowance adds no jobs, registrations, or workers and leaves test deadlines unchanged. It follows a confirmed 20-minute job timeout with 16 of 17 files complete in [run 38590548763](https://github.com/openclaw/openclaw/actions/runs/38590548763/job/115948443520); a natural run must establish whether the allowance is sufficient. The split does not change backend, contributor-trust, retry, or cache routing.
 
 The browser-extension row prepares only its native-host runtime JavaScript and assets through the existing `qaRuntime` build profile rather than rebuilding declarations and the Control UI. Both the nine-row ordinary plan and thirteen-row full-inventory plan stay inside the existing conservative registration bound. A failed-job-only retry retains its previously emitted matrix, including older plans with six Control UI shards. PR retries and hybrid push retries select hosted Ubuntu through live routing, so they may take longer; the existing 25-minute timeout is unchanged. Rerunning preflight selects eight Control UI shards for an ordinary known-inventory plan, or twelve for complete validation, plus the browser-extension row. Matrices emitted before worker metadata existed retain the two-worker fallback. Upstream push retries on the Blacksmith profile retain Blacksmith routing. The `max-parallel` ceiling stays 14 for historical targets without the named-project contract, which retain their previous width. Physical capacity must be checked separately from the registration bound.
 
@@ -250,6 +250,16 @@ baseline. Node runtime builds remain separate to preserve parallel startup and
 private-QA output variants. Checkout already fetches depth-one selected source;
 historical test prerequisites and revision-comparison inputs stay with their
 existing owners.
+
+Keep the full source checkout for UI E2E jobs. An October 16 blobless sparse
+checkout trial excluded 48.31 MiB of logical mobile/macOS app content, but its
+Blacksmith UI checkout took 56s and its hosted browser checkout 58s in
+[run 38866595993](https://github.com/openclaw/openclaw/actions/runs/38866595993).
+Full UI checkouts in that run took 22–38s. These small, unpaired samples did
+not qualify the trial for rollout and do not establish a billing delta.
+Future trials must include filtered fetch, lazy materialization, and harness
+export in complete checkout timing; omitted logical bytes are not transfer or
+cost savings.
 
 A Linux Testbox check on four CPUs, 15.4 GiB RAM, and Node 24.19.0 measured
 preparation plus joined cleanup at 8.43/9.44 seconds without reuse and 3.21/3.17
@@ -540,6 +550,18 @@ families, unqualified configs, builds, memory floors, and explicit large-runner
 anchors at their planned capacity. Resource-gated tooling tests remain outside
 this rule.
 RunsOn inherits the same hybrid choice for these retained Blacksmith jobs.
+The singleton `src/gateway/mcp-app-extension-runtime.test.ts` in `gateway-core`
+and `src/agents/cli-runner.helpers.test.ts` in `agents-core` also qualify under
+the same guards. Other files in those configs retain their planned capacity.
+At `137e7b2abc87`, a serial five-file replay through the production executor
+passed all 56 tests on both Bun (93.8 seconds) and Node (125.2 seconds) on a
+[16-class Testbox](https://github.com/openclaw/openclaw/actions/runs/39097664576).
+The machine supplied four CPUs and 15.42 GiB RAM. Whole-machine peak used memory
+was 5.00 GiB on Bun and 5.22 GiB on Node; both observed zero OOM kills and at most
+268 KiB of swap use. The replay included the selected embedded-agent and Gateway
+client siblings. Its infra file remains outside this rule: the current planner
+permits parallel execution without the required two-worker bound. These are
+capacity measurements; native billed savings still need post-merge observation.
 The isolated `attempt.llm-boundary.cache-stability.test.ts` selection also uses
 the 16-class when it is the group's only file and the same guards hold. A complete
 replay at `33488188fcab` passed all 19 tests in 105 seconds through the production
@@ -547,6 +569,13 @@ shard executor, using four CPUs, a 12-GiB memory limit, and no swap. Peak memory
 4.23 GiB with no OOMs. This qualifies that file only; any unqualified isolated
 sibling keeps the whole job at its planned capacity. Native latency and billed
 savings for this selection still need post-merge observation.
+The singleton `src/gateway/board-store.test.ts` selection also uses the 16-class
+when it is the job's only group, with two explicit workers and a two-worker
+fallback. Its 28-GiB worker-admission threshold remains intact. A complete replay
+at `ece4639ff930` passed all five tests and joined cleanup in 40.78 seconds on
+four CPUs and 15.42 GiB RAM. Maximum process RSS was 3.17 GiB; this is not an
+aggregate VM peak. This qualifies only that exact selection, not the database
+worker family or mixed jobs. Native billed savings still need observation.
 Ordinary self-hosted groups can share the existing promoted 32-class capacity
 across logical classes, and the existing group exchange fills stranded capacity.
 Hybrid packing keeps descending-cost initial placement when the completed plan
@@ -727,6 +756,11 @@ The refit seeks up to five completed scheduled `ci.yml` runs on `main` with a
 success or failure conclusion and parsed compact measurements from successful
 jobs. Scheduled CI owns main validation even when per-push test work is
 disabled, so skipped push runs cannot hide its measurements.
+UI file samples are excluded when the test file differs from the sampled main
+revision. Those files retain their existing prices until matching-source samples
+satisfy the normal independent-run and replacement-band rules. Excluded samples
+never supply evidence for pruning a changed file's price. Shared helper or product
+changes can still affect unchanged tests; these weights remain advisory.
 Cancelled, timed-out, neutral, and other workflow outcomes are excluded.
 Docs-only runs and unparseable logs do not fill that quota. Failed workflows
 supply positive timing samples only: their missing jobs never count as evidence

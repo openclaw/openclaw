@@ -1,13 +1,13 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 
-export function readSessionColdStorageInventory(database?: { db: DatabaseSync; path: string }) {
+export function readSessionColdStorageInventory(database?: { db: EngineConnection; path: string }) {
   if (!database) {
     return { hotTranscripts: 0, coldTranscripts: 0, embeddedArchiveBytes: 0 };
   }
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     database.db,
     () => {
       const db = getNodeSqliteKysely<DB>(database.db);

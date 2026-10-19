@@ -1,6 +1,6 @@
 import type { TranscriptSessionSummary } from "@openclaw/gateway-protocol";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, onSettled } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -11,7 +11,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { liveValue } from "../../lib/solid-dom.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../config/settings-targets.ts";
 import { MeetingSummary } from "./meeting-summary.tsx";
 import {
@@ -52,10 +52,16 @@ function transcriptSourceLabel(source: TranscriptSessionSummary["source"]) {
     .join(" · ");
 }
 
-function ReadError(props: { error: unknown; retry: () => void }) {
+function ReadError(props: {
+  error: unknown;
+  retry: () => void;
+  onFocusTarget?: (element: HTMLElement) => (() => void) | undefined;
+}) {
+  let element!: HTMLDivElement;
+  onSettled(() => props.onFocusTarget?.(element));
   const forbidden = () => isArchiveAccessDeniedError(props.error);
   return (
-    <div class="transcripts-notice" role="alert" tabindex="-1">
+    <div ref={(node) => (element = node)} class="transcripts-notice" role="alert" tabindex="-1">
       <h2>{t(forbidden() ? "transcripts.forbidden" : "transcripts.loadError")}</h2>
       <p>{forbidden() ? t("transcripts.forbiddenHint") : formatUiError(props.error)}</p>
       <button class="btn" onClick={() => props.retry()}>
@@ -75,6 +81,8 @@ function Loading(props: { label: string }) {
 }
 
 function FilterField(props: TranscriptsViewProps & { name: string; label: string; type?: string }) {
+  let input!: HTMLInputElement;
+  onSettled(() => (props.name === "query" ? props.onFocusTarget?.("search", input) : undefined));
   return (
     <label class="field">
       <span>{props.label}</span>
@@ -83,7 +91,7 @@ function FilterField(props: TranscriptsViewProps & { name: string; label: string
         type={props.type ?? "search"}
         aria-label={props.label}
         maxlength={TRANSCRIPT_QUERY_LIMIT}
-        ref={liveValue(() => props.drafts[props.name] ?? "")}
+        ref={[liveValue(() => props.drafts[props.name] ?? ""), (element) => (input = element)]}
         onInput={(event) => props.onDraft(props.name, event.currentTarget.value)}
       />
     </label>
@@ -303,6 +311,16 @@ function Library(props: TranscriptsViewProps) {
   );
 }
 
+function ReaderHeading(props: Pick<TranscriptsViewProps, "onFocusTarget"> & { title: string }) {
+  let heading!: HTMLHeadingElement;
+  onSettled(() => props.onFocusTarget?.("reader-title", heading));
+  return (
+    <h1 ref={(element) => (heading = element)} tabindex="-1">
+      {props.title}
+    </h1>
+  );
+}
+
 function Reader(props: TranscriptsViewProps) {
   const params = () => new URLSearchParams(props.search);
   const transcriptPage = () => props.reader.pages.at(-1);
@@ -332,7 +350,11 @@ function Reader(props: TranscriptsViewProps) {
         {t("transcripts.back")}
       </a>
       {props.reader.error ? (
-        <ReadError error={props.reader.error} retry={props.onReaderRetry} />
+        <ReadError
+          error={props.reader.error}
+          retry={props.onReaderRetry}
+          onFocusTarget={(element) => props.onFocusTarget?.("reader-error", element)}
+        />
       ) : null}
       {props.reader.loading && !tabPage() ? (
         <Loading
@@ -346,7 +368,10 @@ function Reader(props: TranscriptsViewProps) {
       {page() ? (
         <>
           <header class="transcripts-reader__header">
-            <h1 tabindex="-1">{page()!.session.title || page()!.session.sessionId}</h1>
+            <ReaderHeading
+              title={page()!.session.title || page()!.session.sessionId}
+              onFocusTarget={props.onFocusTarget}
+            />
             <p class="transcripts-caption">
               {page()!.session.providerName || page()!.session.providerId} ·{" "}
               <time datetime={page()!.session.startedAt}>

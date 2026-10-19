@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { EventEmitter, once } from "node:events";
 import { MessageChannel, type Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
@@ -58,6 +59,10 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
   fixture.capture.mockReturnValue(capture.promise);
   fixture.write.mockResolvedValue(["synthetic.heapprofile.json", "synthetic.cpuprofile.json"]);
   const now = vi.spyOn(performance, "now").mockReturnValue(0);
+  const retirements: unknown[] = [];
+  const onRetirement = (workerId: unknown) => retirements.push(workerId);
+  const storm = channel("openclaw.code-mode.gc-storm");
+  storm.subscribe(onRetirement);
   const previousUnhandled = process.listeners("unhandledRejection");
   const previousHandled = process.listeners("rejectionHandled");
   const worker = Object.assign(new EventEmitter(), {
@@ -122,6 +127,7 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
     await collect(9_999, 100);
     expect(fixture.warn).not.toHaveBeenCalled();
     await collect(10_000, 1);
+    expect(retirements).toEqual([]);
     await vi.waitFor(() => expect(fixture.warn).toHaveBeenCalledTimes(1));
     expect(fixture.warn.mock.calls[0]).toEqual([
       "Code Mode worker GC storm",
@@ -147,6 +153,7 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
     expect(JSON.stringify(fixture.warn.mock.calls)).not.toContain("private-session");
     await collect(20_000, 1000);
     expect(fixture.warn).toHaveBeenCalledTimes(1);
+    expect(retirements).toEqual([gcAttribution.workerId]);
 
     if (parked.status !== "waiting") {
       throw new Error("expected parked cell");
@@ -172,13 +179,14 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
     await collect(130_000, 1000, "incremental");
     expect(fixture.warn).toHaveBeenCalledTimes(2);
     await collect(140_000, 100);
+    expect(retirements).toEqual([gcAttribution.workerId, gcAttribution.workerId]);
     expect(fixture.warn).toHaveBeenCalledTimes(2);
     expect(fixture.capture).toHaveBeenCalledTimes(1);
     expect(getWorkerMessageMetrics()).toContainEqual(
       expect.objectContaining({
         kind: "memory",
         direction: "from_worker",
-        unmeasuredMessages: previousUnmeasured + 2,
+        unmeasuredMessages: previousUnmeasured + 4,
       }),
     );
     capture.resolve({
@@ -197,6 +205,8 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
     await collect(3_600_001, 0);
     fixture.tracing.mockReturnValue("v8");
     await collect(3_610_001, 101);
+    // A quiet window resets persistence; a later isolated storm cannot retire the worker.
+    expect(retirements).toHaveLength(2);
     await vi.waitFor(() => expect(fixture.warn).toHaveBeenCalledTimes(5));
     expect(fixture.warn.mock.calls[4]![1]).toMatchObject({
       activeCellCount: 0,
@@ -205,6 +215,7 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
     });
     expect(fixture.capture).toHaveBeenCalledTimes(1);
   } finally {
+    storm.unsubscribe(onRetirement);
     close();
     parent.port1.close();
     parent.port2.close();

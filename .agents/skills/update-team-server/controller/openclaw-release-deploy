@@ -39,7 +39,7 @@ clone_budget="${OPENCLAW_TEAM_CLONE_BUDGET:-600}"
 mirror_git_config=(-c gc.auto=0 -c maintenance.auto=false)
 build_budget="${OPENCLAW_TEAM_BUILD_BUDGET:-2400}"
 verification_budget="${OPENCLAW_TEAM_VERIFICATION_BUDGET:-600}"
-drain_budget="${OPENCLAW_TEAM_DRAIN_BUDGET:-600}"
+drain_budget="${OPENCLAW_TEAM_DRAIN_BUDGET:-30}"
 drain_poll_interval="${OPENCLAW_TEAM_DRAIN_POLL_INTERVAL:-5}"
 official_origin=https://github.com/openclaw/openclaw.git
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -87,10 +87,8 @@ rollback_armed=0
 predecessor_stopped=0
 restart_failed=0
 held_suspension=""
-suspension_request=""
 suspension_cleanup_only=0
 suspension_handoff_started=0
-suspension_prearm_renewal_attempted=0
 suspension_expiry=""
 suspension_state=""
 suspension_active_count=0
@@ -102,12 +100,11 @@ suspension_generation=""
 suspension_instance=""
 suspension_blockers=""
 suspension_write_custody=unknown
-custody_wait_budget=60
+custody_wait_budget=5
 # explicit operator waiver for terminal-persistence holders that never settle (dead runs).
 waive_terminal_persistence=0
 terminal_persistence_waiver_armed=0
 custody_wait_interval=2
-last_suspension_prepare=0
 previous_release=""
 previous_info=""
 candidate_release=""
@@ -758,41 +755,23 @@ retain_suspension_cleanup_offer() {
 
 request_suspension() {
 	local release="$1" request="$2" response parsed offered_lease offered_expiry _terminal_blocked
-	local failure_code failure_category failure_stage=initial
-	local expected_id="${held_suspension:-}" prior_expiry="${suspension_expiry:-}"
-	((suspension_cleanup_only == 0)) || { fail 'suspension offer is cleanup-only, not continued authority'; return 1; }
-	((suspension_handoff_started == 0)) || { fail 'cannot renew an attempted suspension handoff'; return 1; }
+	local failure_code failure_category
+	[[ -z "$held_suspension" ]] || { fail 'cannot replace an owned suspension'; return 1; }
 	if response="$(run_gateway "$release" gateway call gateway.suspend.prepare \
 		--params "$request" --json --timeout 30000)"; then
 		:
 	else
 		failure_code=$?
-		[[ -z "$expected_id" ]] || failure_stage=renewal
-		if [[ -n "$expected_id" ]]; then
-			suspension_cleanup_only=1
-			retain_suspension_cleanup_offer "$response"
-			printf 'SUSPENSION_RENEWAL_UNCERTAIN expected=%s cleanup=exact-observed-only\n' "$expected_id" >&2
-		fi
 		failure_category="$(proof_json suspension-prepare-failure "$response" "$failure_code" 2>/dev/null)" || failure_category=unclassified
-		printf 'SUSPENSION_PREPARE_FAILED stage=%s exit=%s category=%s\n' \
-			"$failure_stage" "$failure_code" "$failure_category" >&2
-		printf 'DEFERRED renewable preserve-only drain preparation unavailable or conflicting\n'
+		printf 'SUSPENSION_PREPARE_FAILED stage=initial exit=%s category=%s\n' \
+			"$failure_code" "$failure_category" >&2
+		printf 'DEFERRED preserve-only drain preparation unavailable or conflicting\n'
 		return 75
 	fi
-	last_suspension_prepare="$SECONDS"
-	[[ -z "$expected_id" ]] || suspension_cleanup_only=1
-	# An offered lease remains cleanup-only until the complete response and any
-	# renewal identity/expiry binding pass. A raced replacement never grants stop.
+	# An offered lease remains cleanup-only until its complete response passes.
 	retain_suspension_cleanup_offer "$response"
-	if [[ -n "$expected_id" ]]; then
-		if ! parsed="$(proof_json suspension-prepare "$response" "$expected_id" "$prior_expiry")"; then
-			printf 'SUSPENSION_RENEWAL_UNCERTAIN expected=%s cleanup=exact-observed-only\n' "$expected_id" >&2
-			printf 'DEFERRED renewable preserve-only drain lease changed, regressed, or expired blockers=%s\n' \
-				"$suspension_blockers"
-			return 75
-		fi
-	elif ! parsed="$(proof_json suspension-prepare "$response")"; then
-		printf 'DEFERRED renewable preserve-only drain lease malformed or expired\n'
+	if ! parsed="$(proof_json suspension-prepare "$response")"; then
+		printf 'DEFERRED preserve-only drain lease malformed or expired\n'
 		return 75
 	fi
 	read -r suspension_state offered_lease offered_expiry suspension_active_count suspension_retry_after_ms _terminal_blocked suspension_blockers suspension_write_custody <<<"$parsed"
@@ -808,10 +787,7 @@ request_suspension() {
 
 poll_suspension() {
 	local release="$1" response params parsed observed_expiry _terminal_blocked rpc_exit category
-	local timeout_ms=30000 rpc_budget="${OPENCLAW_TEAM_RPC_BUDGET:-45}"
-	if ((drain_deadline > 0)); then
-		timeout_ms=5000; rpc_budget=5
-	fi
+	local timeout_ms=5000 rpc_budget=5
 	params="$(proof suspension-lease-params "$held_suspension")" || {
 		printf 'SUSPENSION_POLL_FAILED stage=params method=gateway.suspend.status exit=%s\n' "$?" >&2
 		return 1
@@ -837,10 +813,14 @@ poll_suspension() {
 
 prepare_suspension() {
 	local release="$1" request request_id now_ms remaining_ms
-	local remaining_budget sleep_seconds renewal_wait retry_seconds poll_exit
+	local remaining_budget sleep_seconds retry_seconds poll_exit
 	if [[ ! "$drain_budget" =~ ^[1-9][0-9]*$ ]] || ((drain_budget > 3600)); then
 		fail 'preserve-only drain budget must be between 1 and 3600 seconds'
 		return 1
+	fi
+	if ((drain_budget > 30)); then
+		printf 'DRAIN_BUDGET_CAPPED requested=%s effective=30\n' "$drain_budget" >&2
+		drain_budget=30
 	fi
 	if [[ ! "$drain_poll_interval" =~ ^[1-9][0-9]*$ ]] || ((drain_poll_interval > 300)); then
 		fail 'preserve-only drain status poll interval must be between 1 and 300 seconds'
@@ -848,15 +828,14 @@ prepare_suspension() {
 	fi
 	suspension_release="$release"
 	((suspension_handoff_started == 0)) || [[ -z "$held_suspension" ]] || {
-		fail 'cannot prepare or renew an attempted suspension handoff'; return 1;
+		fail 'cannot prepare during an attempted suspension handoff'; return 1;
 	}
 	if [[ -z "$held_suspension" ]]; then
-		suspension_handoff_started=0; suspension_prearm_renewal_attempted=0; suspension_cleanup_only=0
+		suspension_handoff_started=0; suspension_cleanup_only=0
 	fi
 	drain_budget_elapsed=0
 	request_id="team-release-$$-$(date -u +%Y%m%dT%H%M%SZ)"
 	request="$(proof suspension-prepare-params "$request_id")" || return 1
-	suspension_request="$request"
 	drain_deadline=$((SECONDS + drain_budget))
 	if ! request_suspension "$release" "$request"; then
 		return 75
@@ -877,34 +856,14 @@ prepare_suspension() {
 		now_ms="$(proof suspension-now)" || return 1
 		remaining_ms=$((suspension_expiry - now_ms))
 		if ((remaining_ms <= 5000)); then
-			printf 'DEFERRED preserve-only Gateway drain lease expired before renewal blockers=%s\n' \
+			printf 'DEFERRED preserve-only Gateway drain lease expired before cutover blockers=%s\n' \
 				"$suspension_blockers"
 			return 75
-		fi
-		if ((remaining_ms <= 30000)); then
-			renewal_wait=$((3 - (SECONDS - last_suspension_prepare)))
-			if ((renewal_wait > 0)); then
-				if ((renewal_wait >= remaining_budget || remaining_ms <= (renewal_wait + 5) * 1000)); then
-					printf 'DEFERRED preserve-only Gateway drain cannot safely renew before its deadline blockers=%s\n' \
-						"$suspension_blockers"
-					return 75
-				fi
-				sleep "$renewal_wait"
-				continue
-			fi
-			if ! request_suspension "$release" "$request"; then
-				return 75
-			fi
-			continue
 		fi
 		retry_seconds=$(((suspension_retry_after_ms + 999) / 1000))
 		sleep_seconds="$drain_poll_interval"
 		if ((retry_seconds > sleep_seconds)); then
 			sleep_seconds="$retry_seconds"
-		fi
-		renewal_wait=$(((remaining_ms - 30000 + 999) / 1000))
-		if ((renewal_wait < sleep_seconds)); then
-			sleep_seconds="$renewal_wait"
 		fi
 		if ((sleep_seconds > remaining_budget)); then
 			sleep_seconds="$remaining_budget"
@@ -933,17 +892,17 @@ prepare_suspension() {
 			sleep "$sleep_seconds"
 			((SECONDS < drain_deadline)) || break
 			now_ms="$(proof suspension-now)" || return 1
-			# Re-enter the existing lease renewal owner instead of retrying past expiry.
-			((suspension_expiry - now_ms > 30000)) || break
+			# Leave time for exact-lease cleanup; the drain lease cannot be renewed.
+			((suspension_expiry - now_ms > 5000)) || break
 			if ((retry_seconds < 4)); then retry_seconds=$((retry_seconds * 2)); fi
 		done
 	done
-	drain_deadline=0
+	custody_wait_deadline=$((drain_deadline + custody_wait_budget))
+	drain_deadline="$custody_wait_deadline"
 	if [[ "$suspension_state" != READY ]]; then
 		# Write custody is transient (a protected final chat write in flight), so a single
 		# refusal on custody alone wastes the whole prepared release. Re-poll for a bounded
 		# window while the only refusal is held custody; every other refusal stays final.
-		custody_wait_deadline=$((SECONDS + custody_wait_budget))
 		until check_suspension; do
 			if [[ "$suspension_state" == DRAINING && "$suspension_write_custody" == held ]] &&
 				{ [[ ",$suspension_blockers," != *,terminal-persistence:* ]] || ((${waive_terminal_persistence:-0})); } &&
@@ -971,6 +930,7 @@ prepare_suspension() {
 			return 75
 		done
 	fi
+	drain_deadline=0
 	if [[ "$suspension_state" == DRAINING ]]; then
 		printf 'INTERRUPTING authorized after %s-second graceful drain activeCount=%s blockers=%s custody=%s\n' \
 			"$drain_budget" "$suspension_active_count" "$suspension_blockers" "$suspension_write_custody"
@@ -1015,24 +975,6 @@ arm_suspension_handoff() {
 	# Arming does not renew the lease. A refused or uncertain arm is resumed by the existing exit owner.
 	assert_protected_identity && assert_policy && check_suspension || return 1
 	printf 'HANDOFF_ARMED lease=%s expiresAtMs=%s pid=%s\n' "$held_suspension" "$suspension_expiry" "$suspension_pid"
-}
-
-renew_suspension_before_handoff() {
-	local now_ms
-	[[ -n "$held_suspension" && -n "$suspension_request" ]] &&
-		((suspension_handoff_started == 0 && suspension_prearm_renewal_attempted == 0)) || {
-		fail 'pre-arm renewal requires the original unarmed suspension request'; return 1;
-	}
-	recheck_generation "$suspension_scope" "$suspension_pid" "$suspension_generation" || return 1
-	now_ms="$(proof suspension-now)" || return 1
-	((suspension_expiry > now_ms)) || { fail 'pre-arm renewal refuses an expired original suspension'; return 1; }
-	suspension_prearm_renewal_attempted=1
-	request_suspension "$suspension_release" "$suspension_request" || return 1
-	if ! recheck_generation "$suspension_scope" "$suspension_pid" "$suspension_generation"; then
-		suspension_cleanup_only=1
-		printf 'SUSPENSION_RENEWAL_UNCERTAIN stage=generation lease=%s expiresAtMs=%s cleanup=exact-observed-only\n' "$held_suspension" "$suspension_expiry" >&2
-		return 1
-	fi
 }
 
 resume_suspension() {
@@ -3023,7 +2965,7 @@ publish_release() (
 	cp -a --reflink=auto "$build_directory/." "$staging"
 	chown -hR "$root_uid:$root_uid" "$staging"
 	proof manifest "$staging" "$target_sha" "$root_uid" "$frozen_main" >/dev/null
-	bounded 120 "$node_bin" --no-warnings "$release_lib" seal-tree "$staging"
+	"$node_bin" --no-warnings "$release_lib" seal-tree "$staging" 8>&- 9>&-
 	proof validate-release "$staging" "$target_sha" "$root_uid" sealed >/dev/null
 	[[ "$(proof stat-identity "$staging" | cut -d' ' -f1)" == "$(proof stat-identity "$releases_root" | cut -d' ' -f1)" ]] ||
 		fail 'candidate publication crosses filesystem devices'
@@ -3145,16 +3087,22 @@ activate_release() {
 	# its admitted predecessor through the ordinary activation owner.
 	old_instance="$(read_process_instance "$previous_release" "$old_pid")"
 	assert_frozen_predecessor "$old_instance"
+	# Sealed release audits belong before admission closes; the deployment lock
+	# excludes other pointer writers while the Gateway cannot modify these trees.
+	if [[ -L "$current_link" ]]; then
+		prior_current_sha="$(read_pointer "$current_link")" || return 1
+		prior_current_sha="${prior_current_sha##*/}"
+	fi
+	if [[ -L "$previous_link" ]]; then
+		prior_previous_sha="$(read_pointer "$previous_link")" || return 1
+		prior_previous_sha="${prior_previous_sha##*/}"
+	fi
 	suspension_instance="$old_instance"
 	if prepare_suspension "$previous_release"; then
 		:
 	else
 		suspension_result=$?
 		return "$suspension_result"
-	fi
-	if ! check_suspension; then
-		printf 'DEFERRED preserved Gateway suspension changed before activation\n'
-		return 75
 	fi
 	assert_protected_identity
 	assert_policy
@@ -3164,13 +3112,12 @@ activate_release() {
 		printf 'DEFERRED preserved Gateway suspension expired during compatibility proof\n'
 		return 75
 	fi
-	if [[ -L "$current_link" ]]; then
-		prior_current_sha="$(basename "$(read_pointer "$current_link")")"
-		[[ "$prior_current_sha" == "$predecessor_sha" ]] ||
+	if [[ "$prior_current_sha" != absent || -L "$current_link" ]]; then
+		[[ "$prior_current_sha" == "$predecessor_sha" && -L "$current_link" &&
+			"$(realpath "$current_link")" == "$previous_release" ]] || {
 			fail 'current release changed before journal publication'
-	fi
-	if [[ -L "$previous_link" ]]; then
-		prior_previous_sha="$(basename "$(read_pointer "$previous_link")")"
+			return 1
+		}
 	fi
 	set -- "$journal_file" "$previous_info" "$candidate_info" "$topology" \
 		"$old_pid" "$old_generation" "$old_instance" "$protected_identity" \
@@ -3983,12 +3930,21 @@ fi
 
 exec 9>"$lock_file"
 flock -n 9 || {
-		if [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == continue-frozen || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
+	if [[ "$mode" == deploy ]]; then
+		# Maintenance joins its descendants under this same lock; let it settle.
+		printf 'DEPLOY_LOCK_WAIT waiting up to 180 seconds for deployment or maintenance\n'
+		flock -w 180 -E 75 9 || {
+			lock_exit=$?
+			printf 'DEPLOY_LOCK_UNAVAILABLE exit=%s; retry after the current owner finishes\n' "$lock_exit" >&2
+			exit "$lock_exit"
+		}
+	elif [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == continue-frozen || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
 		fail 'bound maintenance action refused: canonical deployment lock is busy'
 		exit 1
+	else
+		printf 'SKIP another release deployment is running\n'
+		exit 0
 	fi
-	printf 'SKIP another release deployment is running\n'
-	exit 0
 }
 proof maintenance-idle "$ancestor_boundary" >/dev/null ||
 	fail 'scheduled maintenance has not settled; deployment admission refused'

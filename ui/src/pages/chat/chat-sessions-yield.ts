@@ -5,6 +5,7 @@ import {
   isToolResultContentType,
 } from "../../../../src/chat/tool-content.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
+import { t } from "../../i18n/index.ts";
 import type { ChatItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import {
   isStandaloneToolMessageForDisplay,
@@ -111,6 +112,18 @@ function scanSessionsYieldItems(
           timestamp: timestamp !== null && timestamp > 0 ? timestamp : null,
           ...(lastYield.runId ? { runId: lastYield.runId } : {}),
         };
+        const facts =
+          asRecord(lastYield.details) ?? safeParseJsonRecord(lastYield.outputText ?? "");
+        const acknowledgment =
+          typeof facts?.acknowledgment === "string" ? facts.acknowledgment.trim() : "";
+        if (acknowledgment || asRecord(lastYield.args)?.waitFor === "message") {
+          boundary.push({
+            kind: "notice",
+            key: `yield-status:${item.key}:${lastYield.id}`,
+            text: acknowledgment || t("chat.waitingForMessage"),
+            timestamp: timestamp ?? 0,
+          });
+        }
       }
       laterActivity = true;
     }
@@ -214,11 +227,12 @@ function scanSessionsYieldItems(
 
 /**
  * Keeps handoff calls out of tool details and separates a resumed run from the
- * run that handed off. The working indicator shows the wait itself.
+ * run that handed off. Message waits retain their public acknowledgment/status;
+ * child waits use the working indicator.
  *
  * `complete` is this projection of the same transcript before search hid any
  * rows. A resumed run's request and handoffs are facts of the whole transcript,
- * so its working status is taken from there, not from the matching rows.
+ * so working and waiting statuses are taken from there, not from the matching rows.
  */
 export function projectSessionsYieldItems(
   items: ChatItem[],
@@ -227,9 +241,15 @@ export function projectSessionsYieldItems(
 ): ChatItem[] {
   const projected = scanSessionsYieldItems(items, showToolCalls).items;
   const status = complete?.find(isTurnStatus);
-  return status
-    ? projected.map((item) => (isTurnStatus(item) && item.key === status.key ? status : item))
+  const completeKeys = complete && new Set(complete.map((item) => item.key));
+  const visible = completeKeys
+    ? projected.filter(
+        (item) => !item.key.startsWith("yield-status:") || completeKeys.has(item.key),
+      )
     : projected;
+  return status
+    ? visible.map((item) => (isTurnStatus(item) && item.key === status.key ? status : item))
+    : visible;
 }
 
 const pendingYieldByHistory = new WeakMap<readonly unknown[], PendingSessionsYield | null>();

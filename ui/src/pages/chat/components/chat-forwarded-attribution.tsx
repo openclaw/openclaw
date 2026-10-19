@@ -1,18 +1,18 @@
-import { createMemo, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import "./chat-attribution.css";
 import { pathForRoute } from "../../../app-route-paths.ts";
+import { registerSessionTitleTarget } from "../../../components/session-title-target-registration.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
-import { emptyLegacyContent, LitContent } from "../../../lit/solid-content.tsx";
-import { renderForwardedAvatar } from "../chat-avatar.ts";
+import { ForwardedAvatar, type ForwardedAvatarOptions } from "../chat-avatar-view.tsx";
 import { readAutomationRun } from "../chat-turn-boundary.ts";
 
 registerChatMessageMetadataEnglish();
 
-export type ForwardedAttributionOptions = Parameters<typeof renderForwardedAvatar>[1] & {
+export type ForwardedAttributionOptions = ForwardedAvatarOptions & {
   mainKey?: string;
   basePath?: string;
   linkSource?: boolean;
@@ -70,27 +70,77 @@ function forwardedSource(group: ForwardedGroup, opts: ForwardedAttributionOption
 
 type ForwardedSource = ReturnType<typeof forwardedSource>;
 
+function sessionTitleRefs() {
+  let target: HTMLElement;
+  let label: HTMLSpanElement;
+  onSettled(() =>
+    target.hasAttribute("data-session-key") ? registerSessionTitleTarget(target, label) : undefined,
+  );
+  return {
+    target: (element: HTMLElement) => {
+      target = element;
+    },
+    label: (element: HTMLSpanElement) => {
+      label = element;
+    },
+  };
+}
+
+function ForwardedSessionLink(props: { source: ForwardedSource; label: string }) {
+  const refs = sessionTitleRefs();
+  return (
+    <a
+      ref={refs.target}
+      class={[
+        "markdown-session-link",
+        {
+          "markdown-session-link--titled": Boolean(props.source.sourceLabel),
+          "markdown-session-link--agent": Boolean(
+            props.source.sourceIsOtherAgent && props.source.sourceIsMainSession,
+          ),
+        },
+      ]}
+      role="link"
+      tabindex="0"
+      data-session-key={props.source.linkableSourceKey}
+    >
+      <span ref={refs.label} class="session-label" textContent={props.label} />
+    </a>
+  );
+}
+
+function ForwardedSourceLabel(props: { source: ForwardedSource; label: string }) {
+  const refs = sessionTitleRefs();
+  return (
+    <span
+      ref={refs.target}
+      data-session-title-only={
+        props.source.sourceParsed && !props.source.cronJobId ? "" : undefined
+      }
+      data-session-key={
+        props.source.sourceParsed && !props.source.cronJobId
+          ? props.source.sourceSessionKey
+          : undefined
+      }
+      class={{ "markdown-session-link--titled": Boolean(props.source.sourceLabel) }}
+    >
+      <span ref={refs.label} class="session-label" textContent={props.label} />
+    </span>
+  );
+}
+
 function ForwardedLink(props: { source: ForwardedSource; basePath?: string }) {
   // The titler owns later label/href writes. Equal initial labels must not erase them.
   const initialLabel = createMemo(
     () => props.source.sourceLabel ?? props.source.linkableSourceKey ?? "",
   );
-  const linkClass = createMemo(
-    () =>
-      `markdown-session-link${props.source.sourceLabel ? " markdown-session-link--titled" : ""}${props.source.sourceIsOtherAgent && props.source.sourceIsMainSession ? " markdown-session-link--agent" : ""}`,
-  );
   return (
     <Show
       when={props.source.cronJobId && props.source.cronRunSessionId}
       fallback={
-        <a
-          class={linkClass()}
-          role="link"
-          tabindex="0"
-          data-session-key={props.source.linkableSourceKey}
-        >
-          <span class="session-label" textContent={initialLabel()} />
-        </a>
+        <Show when={props.source.linkableSourceKey} keyed>
+          {(_sessionKey) => <ForwardedSessionLink source={props.source} label={initialLabel()} />}
+        </Show>
       }
     >
       <a
@@ -117,17 +167,18 @@ export function ForwardedAttribution(props: {
   const initialPlainLabel = createMemo(
     () => source().sourceLabel ?? source().sourceSessionKey ?? "",
   );
-  const plainClass = createMemo(() =>
-    source().sourceLabel ? "markdown-session-link--titled" : undefined,
-  );
   const avatarAgentId = () =>
     source().sourceIsOtherAgent && props.options.updateCount === undefined
       ? source().sourceParsed?.agentId
       : undefined;
-  const avatar = createMemo(() => {
+  const hasAvatar = () => {
     const agentId = avatarAgentId();
-    return agentId ? renderForwardedAvatar(agentId, props.options) : emptyLegacyContent;
-  });
+    return Boolean(
+      agentId &&
+      (agentId === props.options.agentId ||
+        props.options.agents?.some((agent) => agent.id === agentId)),
+    );
+  };
   const from = () =>
     props.options.updateCount === undefined
       ? t("chat.messages.forwardedFrom")
@@ -147,6 +198,7 @@ export function ForwardedAttribution(props: {
         fallback={
           <Show
             when={source().sourceSessionKey}
+            keyed
             fallback={
               <span>
                 {props.options.updateCount === undefined
@@ -166,25 +218,19 @@ export function ForwardedAttribution(props: {
               </span>
             }
           >
-            <span>{from()}</span>{" "}
-            <Show when={source().sourceAgentPrefix}>
-              {(prefix) => (
-                <>
-                  <span>{prefix()} ·</span>{" "}
-                </>
-              )}
-            </Show>
-            <span
-              data-session-title-only={
-                source().sourceParsed && !source().cronJobId ? "" : undefined
-              }
-              data-session-key={
-                source().sourceParsed && !source().cronJobId ? source().sourceSessionKey : undefined
-              }
-              class={plainClass()}
-            >
-              <span class="session-label" textContent={initialPlainLabel()} />
-            </span>
+            {(_sessionKey) => (
+              <>
+                <span>{from()}</span>{" "}
+                <Show when={source().sourceAgentPrefix}>
+                  {(prefix) => (
+                    <>
+                      <span>{prefix()} ·</span>{" "}
+                    </>
+                  )}
+                </Show>
+                <ForwardedSourceLabel source={source()} label={initialPlainLabel()} />
+              </>
+            )}
           </Show>
         }
       >
@@ -194,9 +240,9 @@ export function ForwardedAttribution(props: {
           fallback={<ForwardedLink source={source()} basePath={props.options.basePath} />}
         >
           <span class="chat-reply-attribution__agent">
-            <Show when={avatar() !== emptyLegacyContent}>
+            <Show when={hasAvatar()}>
               <span class="chat-reply-attribution__agent-avatar" aria-hidden="true">
-                <LitContent value={avatar()} />
+                <ForwardedAvatar agentId={avatarAgentId()} options={props.options} />
               </span>
             </Show>
             <Show

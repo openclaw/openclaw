@@ -348,22 +348,22 @@ describe("createCopilotAgentHarness", () => {
         attempt: asFinalizationAttempt(params),
         settledAttempt: settledResult,
       }),
-    ).resolves.toEqual({ assistant: finalAssistant });
+    ).resolves.toEqual({
+      assistant: finalAssistant,
+      preparedTerminalReply: {
+        text: "final answer",
+        terminalReply: { disposition: "visible", text: "final answer" },
+      },
+    });
 
     expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(2);
     expect(mocks.runCopilotAttempt.mock.calls[1]?.[0]).toMatchObject({
-      disableTools: true,
       initialReplayState: { sdkSessionId: "sdk-session-finalize" },
       sessionId: "openclaw-session-finalize",
     });
     expect(mocks.runCopilotAttempt.mock.calls[1]?.[0]?.initialReplayState).not.toHaveProperty(
       "replayInvalid",
     );
-    expect(mocks.runCopilotAttempt.mock.calls[1]?.[0]).toMatchObject({
-      onAgentEvent: undefined,
-      onAssistantDelta: undefined,
-      onPartialReply: undefined,
-    });
     expect(mocks.runCopilotAttempt.mock.calls[1]?.[1]).toMatchObject({
       operation: "settled-tool-finalization",
       pool,

@@ -54,7 +54,6 @@ function buildFinalPayloads(
 ) {
   return buildReplyPayloads({
     isHeartbeat: false,
-    didLogHeartbeatStrip: false,
     blockStreamingEnabled: true,
     blockReplyPipeline: null,
     replyToMode: "off",
@@ -341,8 +340,8 @@ describe("createBlockReplyDeliveryHandler", () => {
   );
 
   it.each([
-    { name: "raw silence", text: "NO_REPLY", parsedSilent: false, expectWarning: false },
-    { name: "parsed silence", text: "", parsedSilent: true, expectWarning: false },
+    { name: "prepared literal marker", text: "NO_REPLY", parsedSilent: false, expectWarning: true },
+    { name: "recorded silence", text: "", parsedSilent: true, expectWarning: false },
     { name: "ordinary reply", text: "Caption", parsedSilent: false, expectWarning: true },
   ])(
     "preserves $name text policy during structured block normalization",

@@ -129,7 +129,11 @@ export function resolveExecApprovalsState(input: DevicesProps) {
   const allowlist = selectedAgent?.allowlist;
   return {
     ready,
-    disabled: !input.canAdmin || input.execApprovalsSaving || input.execApprovalsLoading,
+    disabled:
+      !input.connected ||
+      !input.canAdmin ||
+      input.execApprovalsSaving ||
+      input.execApprovalsLoading,
     dirty: input.execApprovalsDirty,
     loading: input.execApprovalsLoading,
     saving: input.execApprovalsSaving,
@@ -138,7 +142,7 @@ export function resolveExecApprovalsState(input: DevicesProps) {
     selectedScope,
     selectedAgent,
     agents,
-    allowlist: Array.isArray(allowlist) ? allowlist : [],
+    allowlist: allowlist ?? [],
     target,
     targetNodeId,
     targetNodes,
@@ -149,6 +153,7 @@ export function resolveExecApprovalsState(input: DevicesProps) {
     onLoad: input.onLoadExecApprovals,
     onSave: input.onSaveExecApprovals,
     canAdmin: input.canAdmin,
+    connected: input.connected,
   };
 }
 
@@ -167,7 +172,9 @@ export function ExecApprovals(props: ExecApprovalsState) {
   const rows = (
     <>
       {!props.canAdmin ? (
-        <SettingsRow title={t("devices.readOnly.adminRequired")} />
+        props.connected ? (
+          <SettingsRow title={t("devices.readOnly.adminRequired")} />
+        ) : undefined
       ) : (
         <>
           <ExecApprovalsTarget {...props} />
@@ -220,9 +227,7 @@ export function ExecApprovals(props: ExecApprovalsState) {
 }
 
 function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
-  const rules = createMemo(() =>
-    props.snapshot.enabled && Array.isArray(props.snapshot.rules) ? props.snapshot.rules : [],
-  );
+  const rules = createMemo(() => (props.snapshot.enabled ? props.snapshot.rules : []));
   const defaultAction = createMemo(() =>
     props.snapshot.enabled
       ? props.snapshot.defaultAction

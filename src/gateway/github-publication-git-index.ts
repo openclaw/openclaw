@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { hasErrnoCode, isErrno } from "../infra/errno.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
+import { statIfExists } from "../infra/path-existence.js";
 import { GitHubPublicationWorkspaceChangedError } from "./github-publication-failure.js";
 
 type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
@@ -62,18 +63,6 @@ async function sameFile(left: string, right: string): Promise<boolean> {
   }
 }
 
-async function pathExists(file: string): Promise<boolean> {
-  try {
-    await fs.stat(file);
-    return true;
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
-  }
-}
-
 async function writeDurableFile(file: string, contents: Buffer): Promise<void> {
   await fs.writeFile(file, contents, { flag: "w", mode: 0o600 });
   const handle = await fs.open(file, "r+");
@@ -109,11 +98,11 @@ export async function recoverGitHubPublicationBranchAndIndex(params: {
   const indexPath = path.resolve(params.cwd, rawIndexPath);
   const lockPath = `${indexPath}.lock`;
   const recoveryPath = publicationRecoveryPath(indexPath, params.requestId);
-  if (!(await pathExists(recoveryPath))) {
+  if ((await statIfExists(recoveryPath)) === undefined) {
     return;
   }
   const ownsLock = await sameFile(recoveryPath, lockPath);
-  if (!ownsLock && (await pathExists(lockPath))) {
+  if (!ownsLock && (await statIfExists(lockPath)) !== undefined) {
     throw new GitHubPublicationRecoveryPendingError(
       "GitHub publication workspace recovery is waiting for another Git operation.",
     );
@@ -275,7 +264,7 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
         await fs.rm(lockPath);
         params.assertCustody();
         await syncDirectory(path.dirname(indexPath));
-      } else if (await pathExists(lockPath)) {
+      } else if ((await statIfExists(lockPath)) !== undefined) {
         throw new Error("GitHub publication workspace index is locked by another operation.");
       }
       params.assertCurrent();

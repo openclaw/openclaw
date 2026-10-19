@@ -1,4 +1,4 @@
-import { createEffect, createSignal, getOwner, onCleanup, runWithOwner } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ControlUiHost,
@@ -8,11 +8,7 @@ import type {
 } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
-import {
-  renderLegacyTemplate,
-  solidContent,
-  SolidContentPresentation,
-} from "../lit/solid-content.tsx";
+import { ContentPresentation } from "../lib/solid/presentation.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
@@ -115,7 +111,7 @@ function mountSurface(
   );
   const view = mountSolid(
     () => (
-      <SolidContentPresentation value={contentPresented}>
+      <ContentPresentation value={contentPresented}>
         {initial?.surface === "composer" ? (
           <PluginSurface
             surface="composer"
@@ -143,7 +139,7 @@ function mountSurface(
             renderDefault={renderDefault}
           />
         )}
-      </SolidContentPresentation>
+      </ContentPresentation>
     ),
     { wrapper: provider.wrapper },
   );
@@ -175,47 +171,58 @@ afterEach(() => {
 });
 
 describe("native UI built-in delegation", () => {
-  it("updates and disposes a native default from a plugin effect without nested flushes", () => {
-    const warning = vi.spyOn(console, "warn");
-    const disposed = vi.fn();
-    const [label, setLabel] = createSignal("First");
-    function DefaultView(props: { label: string }) {
-      const button = document.createElement("button");
-      createEffect(
-        () => props.label,
-        (value) => {
-          button.textContent = value;
+  it.each(["native", "solid"])(
+    "coalesces %s property updates for the mounted plugin",
+    async (mode) => {
+      const updates: ControlUiViewContext<ControlUiSurfaceProps["workspace"]>[] = [];
+      const replacement: ControlUiReplacement<"workspace"> = {
+        id: "batched",
+        label: "Batched workspace",
+        surface: "workspace",
+        mount(container) {
+          container.textContent = "Synthetic workspace";
+          return { update: (context) => updates.push(context) };
         },
-      );
-      onCleanup(disposed);
-      return button;
-    }
-    const view = mountSolid(() => {
-      const owner = getOwner();
-      const target = document.createElement("div");
-      createEffect(label, (value) =>
-        runWithOwner(owner, () =>
-          renderLegacyTemplate(solidContent(DefaultView, { label: value }), target),
-        ),
-      );
-      onCleanup(() => renderLegacyTemplate(undefined, target));
-      return target;
-    });
-    const button = view.getByRole("button", { name: "First" });
-    setLabel("Second");
-    flush();
-    expect(view.getByRole("button", { name: "Second" })).toBe(button);
-    expect(
-      warning.mock.calls.flat().some((value) => String(value).includes("FLUSH_IN_EFFECT_CALLBACK")),
-    ).toBe(false);
-    view.unmount();
-    expect(button.isConnected).toBe(false);
-    expect(disposed).toHaveBeenCalledOnce();
-    expect(
-      warning.mock.calls.flat().some((value) => String(value).includes("RUN_WITH_DISPOSED_OWNER")),
-    ).toBe(false);
-    warning.mockRestore();
-  });
+      };
+      let view: HTMLElementTagNameMap["openclaw-plugin-view"];
+      let refresh: () => void;
+      let cleanup: () => void;
+      if (mode === "native") {
+        const mounted = mountView(replacement);
+        view = mounted.view;
+        refresh = () => {
+          view.props = { sessionKey: "main", agentId: "main", routeId: "activity" };
+          view.presented = false;
+          view.props = { sessionKey: "main", agentId: "main", routeId: "chat" };
+          view.presented = true;
+        };
+        cleanup = () => mounted.provider.remove();
+      } else {
+        const mounted = mountSurface(replacement);
+        view = mounted.host.querySelector("openclaw-plugin-view")!;
+        refresh = () => {
+          mounted.update();
+          mounted.update();
+          mounted.setPresented(false);
+          mounted.setPresented(true);
+        };
+        cleanup = mounted.unmount;
+      }
+      try {
+        await view.updateComplete;
+        flush();
+        updates.length = 0;
+        refresh();
+        await view.updateComplete;
+        flush();
+        expect(updates).toHaveLength(1);
+        expect(updates[0]?.props.routeId).toBe("chat");
+        expect(updates[0]?.presented).toBe(true);
+      } finally {
+        cleanup();
+      }
+    },
+  );
 
   it("gives delegated renderer mounts independent lifetimes and restores fallback after failure", async () => {
     const mounted: HTMLElement[] = [];
@@ -293,18 +300,42 @@ describe("native UI built-in delegation", () => {
     await vi.waitFor(() => expect(host.querySelector(".companion-action")).not.toBeNull());
   });
 
-  it("uses only built-in controls when a replacement composer fails", async () => {
-    const { host } = mountSurface({
-      id: "composer",
-      label: "Custom composer",
+  it("recovers the composer after a failed mount publishes an error", async () => {
+    const healthy: ControlUiReplacement<"composer"> = {
+      id: "healthy",
+      label: "Healthy composer",
       surface: "composer",
-      mount() {
-        throw new Error("Composer failed");
+      mount(container) {
+        container.textContent = "Healthy composer";
       },
+    };
+    const { host, select, reportError, listeners, unmount } = mountSurface(healthy);
+    // Runtime diagnostics publish synchronously from the failing plugin root.
+    reportError.mockImplementation(() => {
+      for (const notify of listeners) {
+        notify();
+      }
     });
-    await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
-    expect(host.querySelectorAll(".builtin-action")).toHaveLength(1);
-    expect(host.querySelector(".companion-action")).toBeNull();
+    try {
+      await vi.waitFor(() => expect(host.textContent).toContain("Healthy composer"));
+      select({
+        id: "failing",
+        label: "Failing composer",
+        surface: "composer",
+        mount() {
+          throw new Error("Composer failed");
+        },
+      });
+      await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
+      expect(host.querySelectorAll(".builtin-action")).toHaveLength(1);
+      expect(host.querySelector(".companion-action")).toBeNull();
+      select(healthy);
+      await vi.waitFor(() => expect(host.textContent).toContain("Healthy composer"));
+      expect(host.querySelector(".builtin-action")).toBeNull();
+      expect(host.querySelector("[role=alert]")).toBeNull();
+    } finally {
+      unmount();
+    }
   });
 
   it("restores host controls when a replacement stops delegating to the built-in", async () => {
@@ -641,7 +672,7 @@ describe("native UI built-in delegation", () => {
     const failure = new Error("Deferred page unavailable");
     let failUpdate = false;
     let invalidate = () => {};
-    const { host, reportError } = mountSurface({
+    const { host, reportError, listeners } = mountSurface({
       id: "deferred",
       label: "Deferred workspace",
       surface: "workspace",
@@ -672,6 +703,12 @@ describe("native UI built-in delegation", () => {
     expect(dispose).toHaveBeenCalledOnce();
     expect(reportError).toHaveBeenCalledExactlyOnceWith("review", failure);
     expect(view.querySelector("[role=alert]")?.textContent).toContain(failure.message);
+    for (const notify of listeners) {
+      notify();
+    }
+    await view.updateComplete;
+    expect(roots).toHaveLength(1);
+    expect(reportError).toHaveBeenCalledOnce();
     failUpdate = false;
     view.querySelector<HTMLButtonElement>("[role=alert] button")!.click();
     await view.updateComplete;
@@ -698,7 +735,10 @@ describe("native UI built-in delegation", () => {
     };
     const { view, provider, listeners, select, request } = mountView(replacement);
     const navigation = document.createElement("nav");
-    view.defaultView = navigation;
+    view.mountDefaultView = (target) => {
+      target.append(navigation);
+      return () => navigation.remove();
+    };
     await vi.waitFor(() => expect(roots).toHaveLength(1));
     select({ ...replacement });
     await vi.waitFor(() => expect(roots).toHaveLength(2));

@@ -7,7 +7,6 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  clearCommandLane,
   enqueueCommandInLane,
   getTotalQueueSize,
   setCommandLaneConcurrency,
@@ -226,7 +225,6 @@ describe("ownerless reservation and manual completion", () => {
     } finally {
       release.resolve();
       await blocker;
-      clearCommandLane(CommandLane.Cron);
     }
   });
 });
@@ -381,7 +379,6 @@ describe("ownerless skip transaction guards", () => {
     const job = commandJob("ownerless-live-receipt");
     const { state, storePath, events, execute } = await setupOwnerlessJob(job, () => owner);
     const prepared = prepareCronRunReceiptClaim({
-      observed: undefined,
       storePath,
       job,
       agentId: "ops",

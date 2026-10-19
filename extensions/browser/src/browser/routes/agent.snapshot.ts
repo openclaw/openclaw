@@ -80,7 +80,6 @@ async function saveBrowserMedia(buffer: Buffer, contentType: string, maxBytes: n
 async function saveBrowserScreenshot(capture: ScreenshotCapture, type: "png" | "jpeg") {
   const normalized = await normalizeBrowserScreenshot(capture.buffer, {
     maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-    maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   });
   const annotations = await rescaleAnnotationsForNormalization({
     annotations: capture.annotations,
@@ -430,9 +429,9 @@ export function registerBrowserAgentSnapshotRoutes(
               ...snapshot,
             });
           const snapshotOptions = {
-            interactive: plan.interactive ?? undefined,
-            compact: plan.compact ?? undefined,
-            maxDepth: plan.depth ?? undefined,
+            interactive: plan.interactive,
+            compact: plan.compact,
+            maxDepth: plan.depth,
           };
           const deltaFamily: SnapshotDeltaFamily | undefined =
             plan.format === "ai"

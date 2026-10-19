@@ -41,7 +41,12 @@ export function resolveRestartRecoverySteeringBlockReason(
   if (entry.restartRecoveryDeliveryToolCallId) {
     return "unresolved-terminal-tool";
   }
-  const normalizedSourceTurnId = normalizeOptionalString(sourceTurnId) ?? "";
+  const activeSourceTurnId = normalizeOptionalString(sourceTurnId) ?? "";
+  // The claim's own delivery run, such as a restart resend, continues the claim's source turn.
+  const normalizedSourceTurnId =
+    activeSourceTurnId && activeSourceTurnId === entry.restartRecoveryDeliveryRunId
+      ? (normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ?? activeSourceTurnId)
+      : activeSourceTurnId;
   const disposition = resolveRestartRecoveryTerminalDeliveryDisposition(entry, {
     sessionId,
     sourceTurnId: normalizedSourceTurnId,

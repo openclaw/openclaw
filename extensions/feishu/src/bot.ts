@@ -393,9 +393,6 @@ export async function handleFeishuMessage(params: {
   }
 
   if (event.message.message_type === "merge_forward") {
-    log(
-      `feishu[${account.accountId}]: processing merge_forward message, fetching full content via API`,
-    );
     try {
       const messageInfo = await getMessageFeishu({
         cfg,
@@ -450,15 +447,6 @@ export async function handleFeishuMessage(params: {
     }
   }
 
-  log(
-    `feishu[${account.accountId}]: received message from ${ctx.senderOpenId} in ${ctx.chatId} (${ctx.chatType})`,
-  );
-
-  if (ctx.mentionTargets && ctx.mentionTargets.length > 0) {
-    const names = ctx.mentionTargets.map((t) => t.name).join(", ");
-    log(`feishu[${account.accountId}]: detected @ forward request, targets: [${names}]`);
-  }
-
   const threadRoot = await prepareFeishuThreadRoot({ cfg, account, ctx, botOpenId, log });
   if (!threadRoot) {
     return;
@@ -496,9 +484,6 @@ export async function handleFeishuMessage(params: {
       if (hydratedThreadId) {
         ctx = { ...ctx, threadId: hydratedThreadId };
         effectiveThreadId = hydratedThreadId;
-        log(
-          `feishu[${account.accountId}]: hydrated topic thread_id=${hydratedThreadId} for message=${topicHydrationMessageId}`,
-        );
       }
     } catch (err) {
       log(
@@ -782,12 +767,6 @@ export async function handleFeishuMessage(params: {
     const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : directThreadReply;
     const feishuAcpConversationSupported = !isGroup || isTopicSession;
 
-    if (isGroup && groupSession) {
-      log(
-        `feishu[${account.accountId}]: group session scope=${groupSession.groupSessionScope}, peer=${peerId}`,
-      );
-    }
-
     let route = core.channel.routing.resolveAgentRoute({
       cfg: effectiveCfg,
       channel: "feishu",
@@ -880,11 +859,6 @@ export async function handleFeishuMessage(params: {
       route = runtimeRoute.route;
       if (runtimeRoute.bindingRecord) {
         configuredBinding = null;
-        log(
-          runtimeRoute.boundSessionKey
-            ? `feishu[${account.accountId}]: routed via bound conversation ${currentConversationId} -> ${runtimeRoute.boundSessionKey}`
-            : `feishu[${account.accountId}]: plugin-bound conversation ${currentConversationId}`,
-        );
       }
     }
 
@@ -970,9 +944,6 @@ export async function handleFeishuMessage(params: {
           }))
         ) {
           quotedContent = quotedMessageInfo.content;
-          log(
-            `feishu[${account.accountId}]: fetched quoted message (${quotedContent.length} chars)`,
-          );
         } else if (quotedMessageInfo) {
           log(
             `feishu[${account.accountId}]: skipped quoted message from sender ${quotedMessageInfo.senderId ?? "unknown"} (mode=${contextVisibilityMode})`,
@@ -1195,9 +1166,6 @@ export async function handleFeishuMessage(params: {
         );
         rootMsg = null;
       }
-      if (feishuThreadId) {
-        log(`feishu[${account.accountId}]: resolved thread ID: ${feishuThreadId}`);
-      }
       if (!feishuThreadId) {
         log(
           `feishu[${account.accountId}]: no threadId found for root message ${ctx.rootId ?? "none"}, skipping thread history`,
@@ -1250,9 +1218,6 @@ export async function handleFeishuMessage(params: {
         threadContext.threadStarterBody = threadStarterBody;
         threadContext.threadHistoryBody =
           historyParts.length > 0 ? historyParts.join("\n\n") : undefined;
-        log(
-          `feishu[${account.accountId}]: populated thread bootstrap with starter=${threadStarterBody ? "yes" : "no"} history=${historyMessages.length}`,
-        );
       } catch (err) {
         log(`feishu[${account.accountId}]: failed to fetch thread history: ${String(err)}`);
       }
@@ -1371,7 +1336,6 @@ export async function handleFeishuMessage(params: {
       });
     };
 
-    // Determine reply target based on group session mode:
     // - Topic-mode groups (group_topic / group_topic_sender): reply to the topic
     //   root so the bot stays in the same thread.
     // - Groups with explicit replyInThread config: reply to the root so the bot
@@ -1537,10 +1501,6 @@ export async function handleFeishuMessage(params: {
       const agentIds = Object.keys(cfg.agents?.entries ?? {}).map(normalizeAgentId);
       const hasKnownAgents = agentIds.length > 0;
 
-      log(
-        `feishu[${account.accountId}]: broadcasting to ${broadcastAgents.length} agents (strategy=${strategy}, active=${activeAgentId ?? "none"})`,
-      );
-
       const dispatchForAgent = async (agentId: string) => {
         if (hasKnownAgents && !agentIds.includes(agentId)) {
           log(
@@ -1625,10 +1585,6 @@ export async function handleFeishuMessage(params: {
             // mutate observer sessions — only the active agent should execute commands.
             delete (agentCtx as Record<string, unknown>).CommandAuthorized;
           }
-          log(
-            `feishu[${account.accountId}]: broadcast ${dispatcher ? "active" : "observer"} dispatch agent=${agentId} (session=${agentSessionKey})`,
-          );
-
           const turnResult = await runAgentTurn(agentCtx, () => ({
             cfg,
             channel: "feishu",
@@ -1708,10 +1664,6 @@ export async function handleFeishuMessage(params: {
         await abandonBroadcast(err);
         throw err;
       }
-
-      log(
-        `feishu[${account.accountId}]: broadcast dispatch complete for ${broadcastAgents.length} agents`,
-      );
     } else {
       const ctxPayload = await buildCtxPayloadForAgent(
         route.agentId,
@@ -1739,7 +1691,6 @@ export async function handleFeishuMessage(params: {
           sessionKey: route.sessionKey,
         });
 
-      log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
       const turnResult = await runAgentTurn(ctxPayload, () => ({
         cfg: effectiveCfg,
         channel: "feishu",
@@ -1776,20 +1727,15 @@ export async function handleFeishuMessage(params: {
         return;
       }
       const { dispatchResult } = turnResult;
-      const { queuedFinal, counts } = dispatchResult;
       if (shouldSendNoVisibleReplyFallback(dispatchResult)) {
         await ensureNoVisibleReplyFallback("dispatch-complete-no-visible-reply");
       }
-
-      log(
-        `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
-      );
     }
   } catch (err) {
-    error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
     if (turnAdoptionLifecycle) {
       throw err;
     }
+    error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

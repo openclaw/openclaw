@@ -1,6 +1,7 @@
 // Tests high-level reply flow decisions across commands and agent dispatch.
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   composeReplyDispatchBeforeDeliver,
@@ -18,23 +19,24 @@ function deliveredText(deliver: DeliverMock, index = 0) {
 }
 
 describe("createReplyDispatcher", () => {
-  it("drops empty payloads and exact silent tokens without media", async () => {
+  it("drops empty payloads and forwards prepared text literally", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({ deliver });
 
     expect(dispatcher.sendFinalReply({})).toBe(false);
     expect(dispatcher.sendFinalReply({ text: " " })).toBe(false);
-    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
+    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(true);
     expect(dispatcher.sendFinalReply({ text: `${SILENT_REPLY_TOKEN} -- nope` })).toBe(true);
     expect(dispatcher.sendFinalReply({ text: `interject.${SILENT_REPLY_TOKEN}` })).toBe(true);
 
     await dispatcher.waitForIdle();
-    expect(deliver).toHaveBeenCalledTimes(2);
-    expect(deliveredText(deliver)).toBe(`${SILENT_REPLY_TOKEN} -- nope`);
-    expect(deliveredText(deliver, 1)).toBe(`interject.${SILENT_REPLY_TOKEN}`);
+    expect(deliver).toHaveBeenCalledTimes(3);
+    expect(deliveredText(deliver)).toBe(SILENT_REPLY_TOKEN);
+    expect(deliveredText(deliver, 1)).toBe(`${SILENT_REPLY_TOKEN} -- nope`);
+    expect(deliveredText(deliver, 2)).toBe(`interject.${SILENT_REPLY_TOKEN}`);
   });
 
-  it("keeps exact NO_REPLY off direct channel transport without recording delivery", async () => {
+  it("keeps recorded silence off transport without recording delivery", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({
       deliver,
@@ -44,7 +46,11 @@ describe("createReplyDispatcher", () => {
       },
     });
 
-    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
+    expect(
+      dispatcher.sendFinalReply(
+        setReplyPayloadMetadata({ text: SILENT_REPLY_TOKEN }, { silentReply: true }),
+      ),
+    ).toBe(false);
 
     const receipt = await dispatcher.waitForIdle();
     expect(deliver).not.toHaveBeenCalled();

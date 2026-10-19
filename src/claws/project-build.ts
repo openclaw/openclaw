@@ -10,7 +10,6 @@ import {
   ClawProjectError,
   validateClawProject,
 } from "./project.js";
-import { readClawManifestFile } from "./reader.js";
 import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
 
 export const CLAW_BUILD_RESULT_SCHEMA_VERSION = "openclaw.clawBuild.v1" as const;
@@ -170,40 +169,8 @@ export async function buildClawProject(
       tarInputNames,
     );
 
-    const archiveEntries: Array<{ path: string; type: string }> = [];
-    await tar.t({
-      file: temporaryArtifact,
-      onentry: (entry) => archiveEntries.push({ path: entry.path, type: entry.type }),
-    });
-    const expectedEntries = fileNames.map((path) => ({ path: `package/${path}`, type: "File" }));
-    if (JSON.stringify(archiveEntries) !== JSON.stringify(expectedEntries)) {
-      throw new ClawProjectError(
-        "artifact_contents_mismatch",
-        "Built artifact contents differ from the validated project selection.",
-      );
-    }
-
     const packed = await readFile(temporaryArtifact);
     const integrity = digestClawBytes(packed);
-    {
-      await using extracted = await extractBuiltClawArtifact(temporaryArtifact);
-      const reread = await readClawManifestFile(extracted.packageRoot);
-      if (!reread.ok) {
-        throw new ClawProjectError(
-          "artifact_verification_failed",
-          reread.diagnostics.map((item) => `${item.code}: ${item.message}`).join("\n"),
-        );
-      }
-      if (
-        reread.source.name !== project.packageJson.name ||
-        reread.source.version !== project.packageJson.version
-      ) {
-        throw new ClawProjectError(
-          "artifact_identity_mismatch",
-          "Built artifact identity differs from the validated project.",
-        );
-      }
-    }
 
     try {
       await link(temporaryArtifact, artifact);

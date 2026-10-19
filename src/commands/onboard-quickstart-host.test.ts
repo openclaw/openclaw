@@ -7,7 +7,8 @@ import { runQuickstartForegroundGateway } from "./onboard-quickstart-host.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigSnapshot: vi.fn(),
-  runGateway: vi.fn<typeof import("../cli/gateway-cli/run.js").runGatewayCommand>(),
+  startGateway:
+    vi.fn<typeof import("./onboard-gateway-process.js").startOnboardingGatewayProcess>(),
   waitForGateway: vi.fn<typeof import("./onboard-helpers.js").waitForGatewayReachable>(),
   runBrowserHandoff: vi.fn<typeof import("./onboard-browser-handoff.js").runBrowserHatchHandoff>(),
 }));
@@ -17,7 +18,9 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   readConfigFileSnapshot: mocks.readConfigSnapshot,
 }));
 // mock-isolation: Keep foreground Gateway process-lifecycle state outside this handoff fixture.
-vi.mock("../cli/gateway-cli/run.js", () => ({ runGatewayCommand: mocks.runGateway }));
+vi.mock("./onboard-gateway-process.js", () => ({
+  startOnboardingGatewayProcess: mocks.startGateway,
+}));
 vi.mock("./onboard-helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
   waitForGatewayReachable: mocks.waitForGateway,
@@ -43,9 +46,10 @@ function createHostHarness(config: OpenClawConfig = { gateway: { auth: { mode: "
     exit: vi.fn(),
   };
   mocks.readConfigSnapshot.mockResolvedValue({ config });
-  mocks.runGateway.mockImplementation(() => {
+  const close = vi.fn(async () => {});
+  mocks.startGateway.mockImplementation(async () => {
     events.push("gateway started");
-    return gateway.promise;
+    return { wait: gateway.promise, close };
   });
   mocks.waitForGateway.mockImplementation(() => {
     events.push("readiness probe");
@@ -54,9 +58,9 @@ function createHostHarness(config: OpenClawConfig = { gateway: { auth: { mode: "
   });
   mocks.runBrowserHandoff.mockImplementation(async () => {
     events.push("browser handoff");
-    return { handedOff: true };
+    return true;
   });
-  return { config, events, gateway, readiness, probing, summary, runtime };
+  return { config, events, gateway, readiness, probing, summary, runtime, close };
 }
 
 describe("runQuickstartForegroundGateway", () => {
@@ -121,17 +125,20 @@ describe("runQuickstartForegroundGateway", () => {
       h.gateway.resolve();
       await host;
       expect(h.runtime.exit).not.toHaveBeenCalled();
+      expect(h.close).toHaveBeenCalledOnce();
     },
   );
 
-  it("surfaces startup failure without waiting for the readiness timeout", async () => {
+  it("preserves startup failure when process cleanup also fails", async () => {
     const h = createHostHarness();
+    h.close.mockRejectedValueOnce(new Error("cleanup failed"));
     const host = runQuickstartForegroundGateway({ runtime: h.runtime });
     const failed = expect(host).rejects.toThrow("startup failed");
     await h.probing.promise;
     h.gateway.reject(new Error("startup failed"));
 
     await failed;
+    expect(h.runtime.error).toHaveBeenCalledWith("cleanup failed");
     expect(mocks.runBrowserHandoff).not.toHaveBeenCalled();
   });
 
@@ -143,40 +150,58 @@ describe("runQuickstartForegroundGateway", () => {
         if (failure === "error") {
           throw new Error("browser unavailable");
         }
-        return { handedOff: false, reason: "timeout" };
+        return false;
       });
       const host = runQuickstartForegroundGateway({ runtime: h.runtime });
-      const stopped = expect(host).rejects.toThrow("later Gateway failure");
       await h.probing.promise;
       h.readiness.resolve({ ok: true });
-      await h.summary.promise;
+      await Promise.race([
+        h.summary.promise,
+        host.then(() => {
+          throw new Error("foreground Gateway ownership ended after browser fallback");
+        }),
+      ]);
 
       expect(h.runtime.log).toHaveBeenCalledWith(t("wizard.guided.quickstartBrowserUnavailable"));
       expect(h.runtime.exit).not.toHaveBeenCalled();
+      const stopped = expect(host).rejects.toThrow("later Gateway failure");
       h.gateway.reject(new Error("later Gateway failure"));
       await stopped;
     },
   );
 
-  it("surfaces Gateway failure while browser handoff is still pending", async () => {
-    const h = createHostHarness();
-    const handoffStarted = createDeferred();
-    const handoff = createDeferred<{ handedOff: true }>();
-    mocks.runBrowserHandoff.mockImplementation(() => {
-      handoffStarted.resolve();
-      return handoff.promise;
-    });
-    const host = runQuickstartForegroundGateway({ runtime: h.runtime });
-    const stopped = expect(host).rejects.toThrow("Gateway failed during handoff");
-    await h.probing.promise;
-    h.readiness.resolve({ ok: true });
-    await handoffStarted.promise;
-    h.gateway.reject(new Error("Gateway failed during handoff"));
+  it.each(["stopped", "failed"] as const)(
+    "settles the Gateway when it %s while browser handoff is still pending",
+    async (outcome) => {
+      const h = createHostHarness();
+      const handoffStarted = createDeferred();
+      const handoff = createDeferred<boolean>();
+      mocks.runBrowserHandoff.mockImplementation(() => {
+        handoffStarted.resolve();
+        return handoff.promise;
+      });
+      const host = runQuickstartForegroundGateway({ runtime: h.runtime });
+      const settled =
+        outcome === "stopped"
+          ? expect(host).resolves.toBeUndefined()
+          : expect(host).rejects.toThrow("Gateway failed during handoff");
+      await h.probing.promise;
+      h.readiness.resolve({ ok: true });
+      await handoffStarted.promise;
+      if (outcome === "stopped") {
+        h.gateway.resolve();
+      } else {
+        h.gateway.reject(new Error("Gateway failed during handoff"));
+      }
 
-    await stopped;
-    expect(h.runtime.log).not.toHaveBeenCalledWith(t("wizard.guided.quickstartBrowserUnavailable"));
-    handoff.resolve({ handedOff: true });
-  });
+      await settled;
+      expect(h.runtime.log).not.toHaveBeenCalledWith(
+        t("wizard.guided.quickstartBrowserUnavailable"),
+      );
+      expect(h.runtime.log).not.toHaveBeenCalledWith(t("wizard.guided.quickstartReopen"));
+      handoff.resolve(true);
+    },
+  );
 
   it("keeps the foreground Gateway alive when readiness is not confirmed", async () => {
     const h = createHostHarness();

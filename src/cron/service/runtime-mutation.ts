@@ -26,21 +26,15 @@ type CronRuntimeMutationParams<Type extends CronRuntimeMutationType> = {
 export async function runCronRuntimeMutation<Type extends CronRuntimeMutationType>(
   params: CronRuntimeMutationParams<Type>,
 ): Promise<void> {
-  const snapshot = structuredClone(params.snapshot);
   let settled: "committed" | "not-committed" | "unknown" = "not-committed";
-  const assertCurrent = () => {
-    params.context.admission.assertCurrent();
-    params.assertCurrent();
-  };
   try {
     await runOpenClawStateWorkerOperation(
       params.context,
       async (scope) => {
         // Config or caller authority may change after dispatch; cron accepts that race.
-        assertCurrent();
         const command = {
           type: params.type,
-          input: { ...params.input, snapshot },
+          input: { ...params.input, snapshot: params.snapshot },
           // SAFETY: Type selects this private command's input, snapshot, and outcome together.
         } as SqliteWorkerCommand<CronRuntimeWorkerOperations>;
         settled = "unknown";
@@ -62,7 +56,7 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
           throw new Error("Cron mutation returned an unexpected refusal");
         }
       },
-      { assertCurrent },
+      { assertCurrent: params.assertCurrent },
     );
   } finally {
     params.onSettled?.(settled);

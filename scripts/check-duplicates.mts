@@ -23,6 +23,8 @@ const targets = [
   "test",
   "skills",
   "config",
+  "cli-invocation.mjs",
+  "cli-parent-lifetime.mjs",
   "cli-root-options.mjs",
   "docker-entrypoint.mjs",
   "gateway-prewarm.mjs",

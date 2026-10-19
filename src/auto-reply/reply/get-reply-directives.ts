@@ -23,7 +23,7 @@ import {
   hasSkillReferenceCandidate,
 } from "../../skills/discovery/chat-command-invocation.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
-import { isExplicitCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { isExplicitCommandTurn } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
@@ -40,6 +40,7 @@ import {
 } from "../thinking.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
 import { resolveReplyDirectiveCommand } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
@@ -149,7 +150,10 @@ export async function resolveReplyDirectives(params: {
     commandSource: ctx.CommandSource,
   });
   const canInterpretTextDirectives =
-    allowTextCommands && command.isAuthorizedSender && ctx.CommandInterpretationSuppressed !== true;
+    allowTextCommands &&
+    command.isAuthorizedSender &&
+    ctx.CommandInterpretationSuppressed !== true &&
+    matchSlashCommandToken(command.commandBodyNormalized, "/followup") === null;
   const commandTextHasSlash = commandText.includes("/");
   const configuredModelAliases = commandTextHasSlash
     ? listModelAliasCandidates(cfg, agentId)
@@ -225,7 +229,7 @@ export async function resolveReplyDirectives(params: {
   const configuredAliases = rawAliases.filter(
     (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
   );
-  const commandTurn = resolveCommandTurnContext(ctx);
+  const commandTurn = ctx.CommandTurn;
   const commandRegistry =
     command.isAuthorizedSender &&
     isExplicitCommandTurn(commandTurn) &&

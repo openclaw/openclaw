@@ -5,7 +5,6 @@ import {
   runNodePtyCommand,
   validateClaudeSessionId,
 } from "openclaw/plugin-sdk/node-host";
-import { isExactClaudeSessionCursor } from "./session-catalog-cursor.js";
 import { resolveClaudeTerminalExecutable } from "./session-catalog-executable.js";
 import { isResumableClaudeSource } from "./session-catalog-shared.js";
 import type { ClaudeSessionCatalogSession } from "./session-catalog-types.js";
@@ -28,10 +27,10 @@ async function requireLocalResumableClaudeSession(
   threadId: string,
 ): Promise<ClaudeSessionCatalogSession> {
   let cursor: string | undefined;
-  const seenCursors = new Set<string>();
   while (true) {
     const page = await listLocalClaudeSessionPage({
       limit: CLAUDE_NODE_LOOKUP_PAGE_LIMIT,
+      searchTerm: threadId,
       ...(cursor ? { cursor } : {}),
     });
     const record = page.sessions.find((candidate) => candidate.threadId === threadId);
@@ -42,13 +41,9 @@ async function requireLocalResumableClaudeSession(
       break;
     }
     const nextCursor = page.nextCursor;
-    if (nextCursor === undefined || seenCursors.has(nextCursor)) {
+    if (nextCursor === undefined) {
       break;
     }
-    if (!isExactClaudeSessionCursor(nextCursor)) {
-      throw new Error("Claude session catalog returned an invalid cursor");
-    }
-    seenCursors.add(nextCursor);
     cursor = nextCursor;
   }
   throw new Error("Claude session cannot be resumed in a terminal");

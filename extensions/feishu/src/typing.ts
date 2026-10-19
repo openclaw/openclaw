@@ -8,7 +8,6 @@ import {
   isFeishuBackoffError,
 } from "./typing-backoff.js";
 
-// Feishu emoji types for typing indicator
 // See: https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
 // Full list: https://github.com/go-lark/lark/blob/main/emoji.go
 const TYPING_EMOJI = "Typing";

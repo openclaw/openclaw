@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
@@ -136,6 +137,13 @@ it("excludes only the agent media repair completion row from retained metadata",
 
 it("binds semantic preservation to original backups across a partial migration and retry", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    withDaemonRuntimePinStore(state.env, true, (db) => {
+      db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(
+        "daemon-runtime-pin:fixture",
+        "malformed intent",
+        1,
+      );
+    });
     const external = state.path("external.sqlite");
     const externalAlias = state.path("external-alias.sqlite");
     const plugin = state.path("plugin.sqlite");
@@ -290,6 +298,16 @@ it("binds semantic preservation to original backups across a partial migration a
         });
         expect(result.databases).toBeGreaterThanOrEqual(3);
         expect(result.warnings).toContain(`Preexisting missing resource: ${missing}`);
+        withDaemonRuntimePinStore(state.env, true, (db) => {
+          db.prepare("UPDATE daemon_runtime_pins SET value_json = ?").run("changed intent");
+        });
+        const changedIntent = (await capture("witness-changed-intent")).ref;
+        await expect(
+          inspectDoctorMigrationPreservation({ original, candidate: changedIntent }),
+        ).rejects.toThrow(/retained database content/);
+        withDaemonRuntimePinStore(state.env, true, (db) => {
+          db.prepare("UPDATE daemon_runtime_pins SET value_json = ?").run("malformed intent");
+        });
         await fs.writeFile(missing, "unclassified new content");
         const filledResource = (await capture("witness-filled-resource")).ref;
         await expect(

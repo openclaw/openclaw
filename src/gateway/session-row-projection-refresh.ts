@@ -53,7 +53,6 @@ export function createSessionRowRefresh(
   let exactPreparations = 0;
   let exactPreparationsIdle: Deferred | undefined;
   const selectionPreparations = new Map<string, Promise<void>>();
-  const runtimeOwnershipRetries = new Set<string>();
   // Admission and the background drain must share each pending database acquisition.
   let refreshing: Promise<void> | undefined;
   function releaseExactRead(id: string, read: ExactRowPreparation) {
@@ -66,11 +65,11 @@ export function createSessionRowRefresh(
         const selected = new Set(
           [...batch.keys()].filter((id) => {
             const row = owner.rows.get(id);
-            return row && (owner.dirty.has(id) || isCold(row));
+            return row && (owner.dirty.has(id) || !records.ready(row));
           }),
         );
         if (selected.size > 0) {
-          await owner.runAsOwner(() => readRows(selected, { archived: true }));
+          await owner.runAsOwner(() => readRows(selected, { materializeCold: true }));
           // Retained facts can finish through microtasks; let the loop run between row slices.
           await yieldSessionListWork();
         }
@@ -120,7 +119,7 @@ export function createSessionRowRefresh(
         continue;
       }
       const row = owner.lookup(query);
-      if (row && (owner.dirty.has(records.identity(row)) || isCold(row))) {
+      if (row && (owner.dirty.has(records.identity(row)) || !records.ready(row))) {
         selected.add(records.identity(row));
       }
     }
@@ -172,7 +171,7 @@ export function createSessionRowRefresh(
   }
   function readRows(
     selected: ReadonlySet<string>,
-    options: { archived?: boolean; materialize?: boolean } = {},
+    options: { materializeCold?: boolean; materialize?: boolean } = {},
   ) {
     return withSessionRowDatabaseFacts(
       {
@@ -186,16 +185,7 @@ export function createSessionRowRefresh(
       },
       {
         refreshPending: options.materialize === false ? () => false : materializer.refreshPending,
-        accept: (ids, facts) => {
-          materializer.accept(ids, facts, options);
-          for (const id of ids) {
-            if (owner.rows.get(id)?.retainedDatabaseFacts?.runtimeOwnershipRetryPending) {
-              runtimeOwnershipRetries.add(id);
-            } else {
-              runtimeOwnershipRetries.delete(id);
-            }
-          }
-        },
+        accept: (ids, facts) => materializer.accept(ids, facts, options),
       },
     );
   }
@@ -515,22 +505,12 @@ export function createSessionRowRefresh(
       // Preserve page priority across search/placement awaits and metadata preparation.
       const release = retainExactPreparation();
       try {
-        // Retry once per foreground request, outside its readiness loops and background drain.
-        for (const id of runtimeOwnershipRetries) {
-          const row = owner.rows.get(id);
-          if (row?.retainedDatabaseFacts?.runtimeOwnershipRetryPending) {
-            row.pendingDatabaseFacts = undefined;
-            owner.dirty.add(id);
-          }
-        }
-        runtimeOwnershipRetries.clear();
         return await consume();
       } finally {
         release();
       }
     },
     dispose(this: void) {
-      runtimeOwnershipRetries.clear();
       exactPreparationsIdle?.resolve();
       for (const [id, read] of queuedExactReads) {
         read.completion.reject(new Error("Session row projection is no longer active"));

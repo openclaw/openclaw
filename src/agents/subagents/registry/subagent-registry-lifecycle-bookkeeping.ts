@@ -62,14 +62,18 @@ export async function completeCleanupBookkeeping(
     const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
       // Admission can outlive the caller's async scope. Own the tail's lifetime
       // and recheck row ownership after waiting; surviving tails still block snapshots.
-      void runWithGatewayDetachedWorkContinuation(async () => {
+      const cleanup = async () => {
         if (
           !(await context.shouldSuppressSessionEffects(entry)) &&
           postBookkeepingEffectsAllowed()
         ) {
           await run();
         }
-      }, "subagents:lifecycle-cleanup").catch((error: unknown) => {
+      };
+      void runWithGatewayDetachedWorkContinuation(
+        () => context.runBackgroundWork(entry, cleanup),
+        "subagents:lifecycle-cleanup",
+      ).catch((error: unknown) => {
         defaultRuntime.log(
           `[warn] subagent ${label} failed (${cleanupParams.runId}): ${String(error)}`,
         );
@@ -118,7 +122,7 @@ export async function completeCleanupBookkeeping(
     }
   };
   if (cleanupParams.provisionalKill) {
-    // The provider result or bounded kill reconciliation owns terminal settle.
+    // The provider result or the kill's confirmation owns terminal settle.
     // Its kill marker was committed by the caller before reaching this tail.
     scheduleCleanupTails({ allowRetiredRow: false, isDeleteCleanup: false });
     return;
@@ -147,14 +151,17 @@ export async function completeCleanupBookkeeping(
     retire: () => retireImmediately,
     mutate: (draft, current) => {
       const suppressSessionEffects = !context.sessionEffectsHostCurrent(current);
-      // Cron reads settled child rows directly; delete rows retire through the archive sweep.
+      cleanupParams.finalizeDelivery?.(draft);
+      // Cron reads settled rows until archive; expired discards have no remaining reader.
       retireAfterSettle =
         !draft.collect &&
-        ((isDeleteCleanup && !isCronRunSessionKey(draft.requesterSessionKey)) ||
+        ((isDeleteCleanup &&
+          (!isCronRunSessionKey(draft.requesterSessionKey) ||
+            (draft.delivery?.status === "discarded" &&
+              draft.delivery.discardReason === "expired"))) ||
           (draft.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
             draft.suppressAnnounceReason !== "killed"));
       retireImmediately = retireAfterSettle && cleanupParams.skipRequesterSettleWake === true;
-      cleanupParams.finalizeDelivery?.(draft);
       if (!retireImmediately) {
         draft.cleanupCompletedAt = cleanupParams.completedAt;
         if (suppressSessionEffects) {
@@ -184,9 +191,8 @@ export async function completeCleanupBookkeeping(
   // A replacement row or newer child generation still fences these effects.
   scheduleCleanupTails({ allowRetiredRow: retireAfterSettle, isDeleteCleanup });
   assertPublishedOwner();
-  context.resumeAncestorCleanup(entry);
   if (!entry.collect && !cleanupParams.skipRequesterSettleWake) {
-    assertPublishedOwner();
     scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
   }
+  context.resumeAncestorCleanup(entry);
 }

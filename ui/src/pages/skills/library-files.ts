@@ -15,19 +15,6 @@ import { assertUploadsEnabled } from "../../lib/uploads.ts";
 
 registerSkillLibraryEnglish();
 
-export function libraryFileText(file: SkillLibraryFile): string | null {
-  if (file.encoding !== "base64") {
-    return file.content;
-  }
-  try {
-    const bytes = Uint8Array.from(atob(file.content), (character) => character.charCodeAt(0));
-    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-    return text.includes("\0") ? null : text;
-  } catch {
-    return null;
-  }
-}
-
 // Local reads may finish after uploads are disabled; publication and each request recheck policy.
 export async function readLibraryFiles(
   input: File[],

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { ResourceLinkSchema } from "@modelcontextprotocol/sdk/types.js";
+import { ResourceLinkSchema } from "@modelcontextprotocol/core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";

@@ -58,7 +58,6 @@ import {
   listAgentIds,
   resolveDefaultAgentId,
 } from "../agent-scope.js";
-import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
 import { transitionMainSessionRecovery } from "../main-session-recovery/main-session-recovery-state.js";
 
@@ -109,6 +108,7 @@ export function clearRotatedSessionMetadata(entry: InternalSessionEntry): Intern
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
     restartRecoveryOperatorSource: undefined,
+    restartRecoveryRequesterSource: undefined,
     restartRecoveryBeforeAgentReplyState: undefined,
     restartRecoveryDeliveryReceiptState: undefined,
     restartRecoveryDeliveryToolCallId: undefined,
@@ -478,12 +478,10 @@ async function resolveSessionKeyForRequestInternal(
     ? normalizeAgentId(knownAgentId)
     : requestedSessionId
       ? undefined
-      : normalizeAgentId(
-          resolveDefaultAgentId(opts.cfg, {
-            surface: "agent command session routing",
-            hint: "Pass --agent <id> or an agent-prefixed --session-key.",
-          }),
-        );
+      : resolveDefaultAgentId(opts.cfg, {
+          surface: "agent command session routing",
+          hint: "Pass --agent <id> or an agent-prefixed --session-key.",
+        });
   const storeAgentId = explicitSessionKey
     ? unownedBareSessionKey
       ? sessionIdScanAnchor
@@ -709,11 +707,6 @@ export async function resolveSession(
   const isNewSession = !fresh && !requestedSessionId;
   const resolvedSessionEntry =
     isNewSession && sessionEntry ? clearRotatedSessionMetadata(sessionEntry) : sessionEntry;
-
-  clearBootstrapSnapshotOnSessionRollover({
-    sessionKey,
-    previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
-  });
 
   // Behavior overrides belong to the logical session, not one transcript id.
   // Carry them across every rollover; explicit `default` directives clear them.

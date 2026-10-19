@@ -389,8 +389,80 @@ suite.define(() => {
         mobileImage.evaluate((image) =>
           Number(new DOMMatrixReadOnly(getComputedStyle(image).transform).a.toFixed(2)),
         );
-      await mobileImage.dblclick();
-      await expect.poll(readMobileScale).toBeGreaterThan(1);
+      const zoomDiagnostic = await page.evaluateHandle(() => {
+        const host = document.querySelector("openclaw-image-lightbox")!;
+        const originalImage = host.querySelector<HTMLImageElement>(".image")!;
+        const originalSrc = originalImage.getAttribute("src");
+        const originalCurrentSrc = originalImage.currentSrc;
+        const doubleClicks: { originalTarget: boolean; currentTarget: boolean }[] = [];
+        const panzoomScales: number[] = [];
+        const snapshot = () => {
+          const image = host.querySelector<HTMLImageElement>(".image");
+          const box = image?.getBoundingClientRect();
+          const stage = host.querySelector(".stage")?.getBoundingClientRect();
+          return {
+            originalNodeConnected: originalImage.isConnected,
+            sameImageNode: image === originalImage,
+            sameSrc: image?.getAttribute("src") === originalSrc,
+            sameCurrentSrc: image?.currentSrc === originalCurrentSrc,
+            complete: image?.complete,
+            naturalWidth: image?.naturalWidth,
+            naturalHeight: image?.naturalHeight,
+            imageBox: box && { x: box.x, y: box.y, width: box.width, height: box.height },
+            stageSize: stage && { width: stage.width, height: stage.height },
+            viewport: { width: innerWidth, height: innerHeight },
+            displayedScale: image
+              ? Number(new DOMMatrixReadOnly(getComputedStyle(image).transform).a.toFixed(2))
+              : null,
+            zoomInDisabled: host
+              .querySelector('[aria-label="Zoom in"]')
+              ?.getAttribute("aria-disabled"),
+            zoomLabel: host.querySelector('[aria-label="Reset zoom"]')?.textContent?.trim(),
+          };
+        };
+        const before = snapshot();
+        const onDoubleClick = (event: Event) => {
+          doubleClicks.push({
+            originalTarget: event.target === originalImage,
+            currentTarget: event.target === host.querySelector(".image"),
+          });
+        };
+        const onPanzoomChange = (event: Event) => {
+          const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
+          if (
+            typeof detail === "object" &&
+            detail !== null &&
+            "scale" in detail &&
+            typeof detail.scale === "number"
+          ) {
+            panzoomScales.push(detail.scale);
+          }
+        };
+        host.addEventListener("dblclick", onDoubleClick, true);
+        host.addEventListener("panzoomchange", onPanzoomChange, true);
+        return {
+          read: () => ({ before, after: snapshot(), doubleClicks, panzoomScales }),
+          dispose: () => {
+            host.removeEventListener("dblclick", onDoubleClick, true);
+            host.removeEventListener("panzoomchange", onPanzoomChange, true);
+          },
+        };
+      });
+      try {
+        await mobileImage.dblclick();
+        try {
+          await expect.poll(readMobileScale).toBeGreaterThan(1);
+        } catch (error) {
+          console.error(
+            "Lightbox double-click zoom diagnostic:",
+            JSON.stringify(await zoomDiagnostic.evaluate((diagnostic) => diagnostic.read())),
+          );
+          throw error;
+        }
+      } finally {
+        await zoomDiagnostic.evaluate((diagnostic) => diagnostic.dispose());
+        await zoomDiagnostic.dispose();
+      }
       await page.getByRole("button", { name: "Reset zoom" }).click();
       await expect.poll(readMobileScale).toBe(1);
       const zoomIn = page.getByRole("button", { name: "Zoom in" });

@@ -25,7 +25,7 @@ import {
   getPluginServiceCleanupSettlement,
   type PluginServicesHandle,
 } from "../plugins/services.js";
-import type { GatewayPluginReloadStatus } from "./server-plugin-runtime-generation.js";
+import type { GatewayPluginReloadStatus } from "./server-plugin-reload-status.types.js";
 
 const PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS = 60_000;
 
@@ -37,10 +37,11 @@ export class PluginAdmittedWorkTimeoutError extends Error {
     pluginIds: ReadonlySet<string>,
     instances: readonly PluginInstanceHandle[],
     cause: PluginHostCleanupTimeoutError,
+    timeoutMs: number,
   ) {
     const ids = [...pluginIds].join(", ");
     super(
-      `plugin ${ids} admitted work did not settle within 60s; the previous plugin generation stays active. Use \`openclaw plugins reload ${[...pluginIds].join(" ")} --wait\` to wait until it finishes. If an agent turn holds this plugin, end that turn first or use the plugins tool with action reloadAndResume; waiting inside the same turn cannot make progress.`,
+      `plugin ${ids} admitted work did not settle within ${timeoutMs / 1_000}s; the previous plugin generation stays active. Retry \`openclaw plugins reload ${[...pluginIds].join(" ")}\` after the work finishes, or use --wait for a bounded 10-minute drain that blocks new agent runs. If an agent turn holds this plugin, end that turn first or use the plugins tool with action reloadAndResume; waiting inside the same turn cannot make progress.`,
       { cause },
     );
     this.instances = instances;
@@ -74,6 +75,8 @@ export function createPluginReloadCleanup({
   retainRetirement: (retire: () => Promise<PluginHostCleanupResult>) => void;
 }) {
   let pendingServiceCleanup: ReturnType<typeof getPluginServiceCleanupSettlement>;
+  // Match the existing ten-minute plugin lifecycle wait budget for an explicit wait.
+  const admittedWorkTimeoutMs = PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS * (waitForDrain ? 10 : 1);
   let admittedWorkDeadlineAtMs: number | undefined;
   let retainedWorkQueued = false;
   const quiescedInstances: PluginInstanceHandle[] = [];
@@ -105,27 +108,21 @@ export function createPluginReloadCleanup({
     }
   };
   const admittedWorkDeadline = () =>
-    waitForDrain
-      ? undefined
-      : (admittedWorkDeadlineAtMs ??= Date.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS);
+    (admittedWorkDeadlineAtMs ??= Date.now() + admittedWorkTimeoutMs);
   const observeDrain = async (
     label: string,
     signal: AbortSignal,
-    deadlineAtMs: number | undefined,
+    deadlineAtMs: number,
     run: (signal: AbortSignal) => Promise<unknown>,
   ) => {
     const observation = new AbortController();
     const currentSignal = AbortSignal.any([signal, observation.signal]);
     try {
-      if (deadlineAtMs === undefined) {
-        await run(currentSignal);
-      } else {
-        await withPluginHostCleanupTimeout(
-          label,
-          () => run(currentSignal),
-          Math.max(0, deadlineAtMs - Date.now()),
-        );
-      }
+      await withPluginHostCleanupTimeout(
+        label,
+        () => run(currentSignal),
+        Math.max(0, deadlineAtMs - Date.now()),
+      );
     } finally {
       // Remove pending observers before rollback; late settlement cannot quiesce another owner.
       observation.abort();
@@ -330,7 +327,7 @@ export function createPluginReloadCleanup({
     }
     retainedWorkQueued = true;
     const deadlineAtMs = admittedWorkDeadline();
-    const reason = `Plugin replacement queued behind ${count} ${includeCalls ? "admitted" : "retained"} work item(s) for plugin ${[...pluginIds].join(", ")}; ${waitForDrain ? "waiting until they finish or the request is cancelled" : "applies when they finish within the 60s drain budget"}.`;
+    const reason = `Plugin replacement queued behind ${count} ${includeCalls ? "admitted" : "retained"} work item(s) for plugin ${[...pluginIds].join(", ")}; new agent runs wait up to the ${admittedWorkTimeoutMs / 1_000}s drain budget.${waitForDrain ? " Press Ctrl+C to cancel the waiting reload." : ""}`;
     reportStatus({ phase: "reloading", pluginIds: [...changedPluginIds], deadlineAtMs, reason });
     log.info(reason);
     try {
@@ -343,7 +340,12 @@ export function createPluginReloadCleanup({
       );
     } catch (error) {
       if (error instanceof PluginHostCleanupTimeoutError) {
-        throw new PluginAdmittedWorkTimeoutError(pluginIds, instances, error);
+        throw new PluginAdmittedWorkTimeoutError(
+          pluginIds,
+          instances,
+          error,
+          admittedWorkTimeoutMs,
+        );
       }
       throw error;
     }
@@ -487,7 +489,12 @@ export function createPluginReloadCleanup({
         }
       } catch (error) {
         if (error instanceof PluginHostCleanupTimeoutError) {
-          throw new PluginAdmittedWorkTimeoutError(pluginIds, previousInstances(pluginIds), error);
+          throw new PluginAdmittedWorkTimeoutError(
+            pluginIds,
+            previousInstances(pluginIds),
+            error,
+            admittedWorkTimeoutMs,
+          );
         }
         throw error;
       }

@@ -23,7 +23,7 @@ describe("DiscordVoiceSpeakerContextResolver", () => {
     { owner: "pk:123456789012345678", senderIsOwner: true },
     { owner: "<@123456789012345678>", senderIsOwner: true },
     { owner: "<@!123456789012345678>", senderIsOwner: true },
-    { owner: "discord:user:123456789012345678", senderIsOwner: false },
+    { owner: "discord:user:123456789012345678", senderIsOwner: true },
     { owner: "slack:123456789012345678", senderIsOwner: false },
     { owner: "discord:*", senderIsOwner: false },
     { owner: "user:*", senderIsOwner: false },

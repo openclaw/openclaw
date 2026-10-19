@@ -396,7 +396,11 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
           warn: (message) => params.logGateway.warn(message),
           ...(signal ? { signal } : {}),
         });
-      return GatewayRpcDiagnostics.runHandler(invoke, diagnostics);
+      return GatewayRpcDiagnostics.runHandler(
+        workerMethods.has(parsed.method) ? parsed.method : "unknown",
+        invoke,
+        diagnostics,
+      );
     };
     const isLongToolOperation =
       parsed.method === "worker.computer" || parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke;

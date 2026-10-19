@@ -1,7 +1,8 @@
-import { createEffect, createMemo, createSignal, Match, Show, Switch } from "solid-js";
+import { createMemo, createSignal, Match, Show, Switch } from "solid-js";
 import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { createTimeout } from "../lib/reactive/timers.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 
@@ -42,21 +43,15 @@ function Claw(props: { saved?: boolean }) {
 }
 
 function SaveIndicatorContent(input: { props?: SettingsSaveIndicatorProps }) {
-  const [savedVisible, setSavedVisible] = createSignal(false, { ownedWrite: true });
-  // Unrelated shell props refreshes must not clean up the saved-state timer.
-  createEffect(
-    createMemo(() => input.props?.status),
-    (status, previous) => {
-      if (previous === "saving" && status === "saved") {
-        setSavedVisible(true);
-        const timer = globalThis.setTimeout(() => setSavedVisible(false), SAVED_VISIBLE_MS);
-        return () => globalThis.clearTimeout(timer);
-      }
-      if (status !== "saved") {
-        setSavedVisible(false);
-      }
-      return undefined;
-    },
+  const status = createMemo(() => input.props?.status);
+  // Only a saving → saved transition starts a fresh display window.
+  type SaveState = SettingsSaveIndicatorProps["status"] | "saved-visible" | undefined;
+  const [saved, setSaved] = createSignal<SaveState>((previous) =>
+    previous === "saving" && status() === "saved" ? "saved-visible" : status(),
+  );
+  createTimeout(
+    () => setSaved("saved"),
+    () => (saved() === "saved-visible" ? SAVED_VISIBLE_MS : undefined),
   );
   const state = createMemo(() => {
     const props = input.props;
@@ -69,10 +64,7 @@ function SaveIndicatorContent(input: { props?: SettingsSaveIndicatorProps }) {
     if (["saving", "recovery", "rejected", "error", "paused", "conflict"].includes(props.status)) {
       return props.status;
     }
-    if (savedVisible()) {
-      return "saved";
-    }
-    return props.needsApply ? "apply" : undefined;
+    return saved() === "saved-visible" ? "saved" : props.needsApply ? "apply" : undefined;
   });
   const title = () =>
     state() === "error" ? input.props?.lastError?.trim() || undefined : undefined;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
@@ -9,7 +10,6 @@ import {
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { SessionTranscriptMessageCommittedError } from "../../agents/sessions/session-manager-message-error.js";
@@ -23,14 +23,16 @@ import {
   resolveCoreToolExecutionLocation,
 } from "../../agents/tool-catalog.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { resolveSqliteReadScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-inventory.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
+import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -74,87 +76,135 @@ describe("worker turn execution", () => {
   afterEach(resetGlobalHookRunner);
 
   it.each([
-    { recorderOwned: false, throws: false },
-    { recorderOwned: true, throws: true },
-  ])("redacts blocked input before launch (%j)", async ({ recorderOwned, throws }) => {
-    await seedActivePlacement();
-    const input = turn("blocked-input");
-    const resolveTarget = vi.fn(() => ({ ...sessionTarget, sessionEntry: undefined }));
-    const recorder = recorderOwned
-      ? createUserTurnTranscriptRecorder({
-          target: resolveTarget,
-          input: { text: input.prompt },
-        })
-      : undefined;
-    const handler = vi.fn(async () => {
-      expect((await openSessionManager()).getEntries()).toEqual([]);
-      if (throws) {
-        throw new Error("synthetic policy failure");
-      }
-      return { outcome: "block" as const, reason: "synthetic policy", message: "Request blocked." };
-    });
-    await using runtime = await acquireAgentRunPreparedModelRuntime({
-      config: input.config,
-      agentId: input.agentId,
-      agentDir: resolveAgentDir(input.config, input.agentId),
-      workspaceDir: input.workspaceDir,
-    });
-    const registry = runtime.snapshot.pluginRegistry;
-    assert(registry);
-    const registration = {
-      pluginId: "policy",
-      hookName: "before_agent_run" as const,
-      handler,
-      source: "test",
-    };
-    registry.typedHooks.push(registration);
-    initializeGlobalHookRunner(registry);
-    const environments = { ...unusedEnvironments(), get: attachedEnvironment };
-    const provider = createWorkerSessionTurnPlacementProvider({ placements, environments });
-    const runLocal = vi.fn();
-    const onUserMessagePersisted = vi.fn();
-    try {
-      const result = await provider.executeTurn(
-        { ...sessionTarget, runId: input.runId },
-        {
-          ...input,
-          pluginGeneration: runtime.pluginGeneration,
-          userTurnTranscriptRecorder: recorder,
-          onUserMessagePersisted,
-        },
-        runLocal,
-      );
-      expect(result.meta.error?.kind).toBe("hook_block");
-      expect(result.meta.livenessState).toBe("blocked");
-      expect(handler).toHaveBeenCalledOnce();
-      if (recorderOwned) {
-        expect(resolveTarget).toHaveBeenCalledOnce();
-      }
-      expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
-      expect(environments.startTunnel).not.toHaveBeenCalled();
-      expect(runLocal).not.toHaveBeenCalled();
-      const messages = (await openSessionManager()).buildSessionContext().messages;
-      expect(messages).toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: [{ type: "text", text: result.payloads?.[0]?.text }],
-          idempotencyKey: `hook-block:before_agent_run:user:${input.runId}`,
-          __openclaw: {
-            beforeAgentRunBlocked: {
-              blockedBy: throws ? "before_agent_run" : "policy",
-              blockedAt: expect.any(Number),
-            },
+    { recorderOwned: false, throws: false, revokeAtCommit: false },
+    { recorderOwned: true, throws: true, revokeAtCommit: false },
+    { recorderOwned: true, throws: false, revokeAtCommit: true },
+  ])(
+    "redacts blocked input before launch (%j)",
+    async ({ recorderOwned, throws, revokeAtCommit }) => {
+      await seedActivePlacement();
+      const input = turn("blocked-input");
+      const resolveTarget = vi.fn(() => ({ ...sessionTarget, sessionEntry: undefined }));
+      const recorder = recorderOwned
+        ? createUserTurnTranscriptRecorder({
+            target: resolveTarget,
+            input: { text: input.prompt },
+          })
+        : undefined;
+      let sql: ReturnType<typeof observeHostDataSql> | undefined;
+      const handler = vi.fn(async () => {
+        expect((await openSessionManager()).getEntries()).toEqual([]);
+        sql = observeHostDataSql();
+        if (throws) {
+          throw new Error("synthetic policy failure");
+        }
+        return {
+          outcome: "block" as const,
+          reason: "synthetic policy",
+          message: "Request blocked.",
+        };
+      });
+      await using runtime = await acquireAgentRunPreparedModelRuntime({
+        config: input.config,
+        agentId: input.agentId,
+        agentDir: resolveAgentDir(input.config, input.agentId),
+        workspaceDir: input.workspaceDir,
+      });
+      const registry = runtime.snapshot.pluginRegistry;
+      assert(registry);
+      const registration = {
+        pluginId: "policy",
+        hookName: "before_agent_run" as const,
+        handler,
+        source: "test",
+      };
+      registry.typedHooks.push(registration);
+      initializeGlobalHookRunner(registry);
+      const environments = { ...unusedEnvironments(), get: attachedEnvironment };
+      const provider = createWorkerSessionTurnPlacementProvider({ placements, environments });
+      const runLocal = vi.fn();
+      const onUserMessagePersisted = vi.fn();
+      let current = true;
+      let reachedCommit = false;
+      const revoked = new Error("synthetic authority closed");
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.publication) &&
+          request.facts.publication.kind === "session-entry-patch-committed"
+        ) {
+          reachedCommit = true;
+          current = !revokeAtCommit;
+        }
+        admit(request, grant);
+      });
+      try {
+        const execution = provider.executeTurn(
+          { ...sessionTarget, runId: input.runId },
+          {
+            ...input,
+            pluginGeneration: runtime.pluginGeneration,
+            userTurnTranscriptRecorder: recorder,
+            onUserMessagePersisted,
           },
-        }),
-      ]);
-      expect(JSON.stringify(readWorkerTurnTranscriptStorageRows())).not.toContain(input.prompt);
-      expect(onUserMessagePersisted).toHaveBeenCalledExactlyOnceWith(messages[0]);
-      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
-    } finally {
-      registry.typedHooks.splice(registry.typedHooks.indexOf(registration), 1);
-      input.preparedRunAdmission.close();
-    }
-  });
+          runLocal,
+          undefined,
+          () => {
+            if (!current) {
+              throw revoked;
+            }
+          },
+        );
+        if (revokeAtCommit) {
+          await expect(execution).rejects.toThrow(revoked);
+          expect(reachedCommit).toBe(true);
+          expect(sql?.queries).toEqual([]);
+          sql?.restore();
+          expect((await openSessionManager()).getEntries()).toEqual([]);
+          expect(onUserMessagePersisted).not.toHaveBeenCalled();
+          expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
+          expect(environments.startTunnel).not.toHaveBeenCalled();
+          expect(runLocal).not.toHaveBeenCalled();
+          return;
+        }
+        const result = await execution;
+        expect(sql?.queries).toEqual([]);
+        sql?.restore();
+        expect(result.meta.error?.kind).toBe("hook_block");
+        expect(result.meta.livenessState).toBe("blocked");
+        expect(handler).toHaveBeenCalledOnce();
+        if (recorderOwned) {
+          expect(resolveTarget).toHaveBeenCalledOnce();
+        }
+        expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
+        expect(environments.startTunnel).not.toHaveBeenCalled();
+        expect(runLocal).not.toHaveBeenCalled();
+        const messages = (await openSessionManager()).buildSessionContext().messages;
+        expect(messages).toEqual([
+          expect.objectContaining({
+            role: "user",
+            content: [{ type: "text", text: result.payloads?.[0]?.text }],
+            idempotencyKey: `hook-block:before_agent_run:user:${input.runId}`,
+            __openclaw: {
+              beforeAgentRunBlocked: {
+                blockedBy: throws ? "before_agent_run" : "policy",
+                blockedAt: expect.any(Number),
+              },
+            },
+          }),
+        ]);
+        expect(JSON.stringify(readWorkerTurnTranscriptStorageRows())).not.toContain(input.prompt);
+        expect(onUserMessagePersisted).toHaveBeenCalledExactlyOnceWith(messages[0]);
+        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      } finally {
+        sql?.restore();
+        admission.mockRestore();
+        registry.typedHooks.splice(registry.typedHooks.indexOf(registration), 1);
+        input.preparedRunAdmission.close();
+      }
+    },
+  );
 
   it("fences a passing gate when run authority closes during its await", async () => {
     await seedActivePlacement();
@@ -278,10 +328,7 @@ describe("worker turn execution", () => {
         expect(outcome).toBeInstanceOf(SessionTranscriptMessageCommittedError);
         expect(outcome).toMatchObject({
           committedMessageId,
-          committedTarget: {
-            ...sessionTarget,
-            storePath: resolveSqliteReadScope(sessionTarget).path,
-          },
+          committedTarget: sessionTarget,
           cause: expectedFailure,
         });
         expect(isRecordedModelFallbackStop(outcome)).toBe(true);
@@ -320,9 +367,7 @@ describe("worker turn execution", () => {
           ownerEpoch: request.plan.admission.ownerEpoch,
           turnClaim: request.turnClaim,
         });
-        expect(runtime?.getInheritedPublicationToolName()).toBe(
-          declared ? undefined : "github_publish",
-        );
+        expect(runtime?.getInheritedPublicationToolName()).toBeUndefined();
         throw new WorkerRunnerCapacityError();
       });
       const tunnel = createWorkerTurnTunnel({
@@ -405,7 +450,7 @@ describe("worker turn execution", () => {
         expect(authorized).toEqual(
           expect.arrayContaining([...allowed, "sessions_list", "github_identity_status"]),
         );
-        expect(authorized).not.toContain("github_publish");
+        expect(authorized?.includes("github_publish")).toBe(!declared);
         expect(authorize).toHaveBeenCalledExactlyOnceWith(
           request.turnClaim,
           authorized,
@@ -693,7 +738,7 @@ describe("worker turn execution", () => {
       abort.abort(new Error("cancel after terminal acknowledgement"));
       release.resolve();
       expect(await operation).toMatchObject({ payloads: [{ text: "Committed reply 🦞" }] });
-      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
+      await waitForSessionRunEnd(SESSION_ID, null);
       expect((await openSessionManager()).getPersistedEntries()).toEqual(committed);
       expect(readWorkerTurnTranscriptStorageRows()).toEqual(committedRows);
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);

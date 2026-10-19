@@ -178,3 +178,34 @@ describe("apply_patch update byte preservation", () => {
     expect(await runUpdate(testCase)).toBe(testCase.expected);
   });
 });
+
+describe("apply_patch large updates", () => {
+  it("applies a hunk larger than the engine's call argument limit", async () => {
+    const added = Array.from({ length: 200_000 }, (_, index) => `+line ${index}`);
+    const output = await runUpdate({
+      title: "large insertion",
+      initial: "start\nend\n",
+      changes: ["@@", " start", ...added, " end"],
+      expected: "",
+    });
+    const lines = output.split("\n");
+    expect(lines).toHaveLength(200_003);
+    expect(lines.at(1)).toBe("line 0");
+    expect(lines.at(-2)).toBe("end");
+  });
+
+  it("keeps context-heavy large hunks linear", async () => {
+    const count = 100_000;
+    const initial = Array.from({ length: count }, (_, index) => `keep ${index}`);
+    const changes = ["@@", ...initial.flatMap((line) => [` ${line}`, `+added ${line}`])];
+    const output = await runUpdate({
+      title: "context-heavy insertion",
+      initial: `${initial.join("\n")}\n`,
+      changes,
+      expected: "",
+    });
+    const lines = output.split("\n");
+    expect(lines).toHaveLength(count * 2 + 1);
+    expect(lines.slice(0, 2)).toEqual(["keep 0", "added keep 0"]);
+  });
+});

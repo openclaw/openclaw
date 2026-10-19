@@ -1,11 +1,12 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createMemo, onCleanup, Show } from "solid-js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
-import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
+import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { AgentSelectOption } from "./agent-select-types.ts";
 import { revealInScrollRegion } from "./scroll-state.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -23,6 +24,7 @@ type AgentSelectProps = {
   variant: "default" | "compact";
   onSelect: (value: string) => void;
   onCreateAgent: (() => void) | null;
+  focusTargetsRef?: (readTargets: () => readonly HTMLElement[]) => void;
 };
 export type AgentSelectElement = SolidBridgeElement<AgentSelectProps>;
 defineSolidBridge<AgentSelectProps>(
@@ -38,16 +40,14 @@ defineSolidBridge<AgentSelectProps>(
         : undefined);
     const label = () => triggerOption()?.label ?? (props.placeholder || t("agents.noAgents"));
     const accessibleLabel = () => [label(), selected()?.badge].filter(Boolean).join(", ");
-    const [revision, refresh] = createSignal(0, { ownedWrite: true });
-    const loader = new IdentityAvatarController(() => refresh((value) => value + 1));
-    loader.hostConnected();
-    onCleanup(() => loader.hostDisconnected());
+    const loader = createIdentityAvatars();
+    onCleanup(loader.connect());
+    const avatarSource = projectOwner(loader, (owner) => owner);
     const avatars = createMemo(() => {
-      revision();
       const current = triggerOption();
       const candidates = [...props.options, ...(current ? [current] : [])];
       const identities = props.identityById;
-      return loader.withActiveRoutes(
+      return avatarSource.read().withActiveRoutes(
         () =>
           new Map(
             candidates.map((option) => {
@@ -156,19 +156,16 @@ defineSolidBridge<AgentSelectProps>(
           ]
         : []),
     ]);
-    createEffect(
-      () => props.disabled,
-      (disabled) => {
-        if (disabled) {
-          menu?.close();
-        }
-      },
-    );
     return (
       <Menu
         id={id}
         ref={(handle) => {
           menu = handle;
+          props.focusTargetsRef?.(() => {
+            const elements = handle.itemElements();
+            const trigger = handle.overlay.trigger;
+            return trigger ? [trigger, ...elements] : elements;
+          });
         }}
         class={props.variant === "compact" ? "agent-select agent-select--compact" : "agent-select"}
         panelClass="agent-select__menu"
@@ -183,8 +180,10 @@ defineSolidBridge<AgentSelectProps>(
         placement="bottom-start"
         onAfterShow={() => {
           const surface = menu?.overlay.surface;
-          const option = surface?.querySelector<HTMLElement>(":focus");
-          if (surface && option) {
+          const root = surface?.getRootNode();
+          const option =
+            root instanceof ShadowRoot ? root.activeElement : surface?.ownerDocument.activeElement;
+          if (surface && option instanceof HTMLElement && surface.contains(option)) {
             revealInScrollRegion(surface, option);
           }
         }}
@@ -234,6 +233,7 @@ defineSolidBridge<AgentSelectProps>(
       variant: { default: "default", attribute: false },
       onSelect: { default: () => {}, attribute: false },
       onCreateAgent: { default: null, attribute: false },
+      focusTargetsRef: { default: undefined, attribute: false },
     },
   },
 );

@@ -11,6 +11,11 @@ import {
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
 } from "../../extensions/qa-lab/src/evidence-summary.js";
+import { readQaScenarioPack } from "../../extensions/qa-lab/src/scenario-catalog.js";
+import {
+  buildQaScorecardGapReport,
+  renderQaScorecardGapMarkdownReport,
+} from "../../extensions/qa-lab/src/scorecard-gap-report.js";
 import {
   QA_MATURITY_SCORE_LABEL_BANDS,
   activeQaMaturityTaxonomySurfaces,
@@ -31,6 +36,7 @@ import {
   type QaMaturityTaxonomyLevel,
   type QaMaturityTaxonomySurface,
 } from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
+import { booleanFlag, parseFlagArgs, stringFlag } from "../lib/arg-utils.mts";
 import { parseDocsDocument, resolveDocsFragment } from "../lib/docs-markdown.mjs";
 import { collectMirroredDocsRoutes } from "../lib/docs-published-routes.mts";
 import {
@@ -55,6 +61,7 @@ type Args = {
 };
 
 type EvidenceSummary = {
+  evidence: QaEvidenceSummaryJson;
   sourcePath: string;
   path: string;
   generatedAt: string;
@@ -115,45 +122,30 @@ function parseArgs(argv: string[]): Args {
     strictInputs: false,
     allowFailures: false,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") {
-      continue;
-    }
-    if (arg === "--check") {
-      args.check = true;
-      continue;
-    }
-    if (arg === "--strict-inputs") {
-      args.strictInputs = true;
-      continue;
-    }
-    if (arg === "--allow-failures") {
-      args.allowFailures = true;
-      continue;
-    }
-    const next = (): string => {
-      const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
-        throw new Error(`${arg} requires a value`);
-      }
-      index += 1;
-      return value;
-    };
-    if (arg === "--taxonomy") {
-      args.taxonomy = next();
-    } else if (arg === "--scores") {
-      args.scores = next();
-    } else if (arg === "--docs-root") {
-      args.docsRoot = next();
-    } else if (arg === "--output-dir") {
-      args.outputDir = next();
-    } else if (arg === "--static-assets-dir") {
-      args.staticAssetsDir = next();
-    } else if (arg === "--evidence-dir") {
-      args.evidenceDir = next();
-    } else if (arg === "--help" || arg === "-h") {
-      process.stdout.write(`Usage: node --import tsx scripts/qa/render-maturity-docs.ts [options]
+  return parseFlagArgs(
+    argv,
+    args,
+    [
+      booleanFlag<Args>("--check", "check", true, { repeatable: true }),
+      booleanFlag<Args>("--strict-inputs", "strictInputs", true, { repeatable: true }),
+      booleanFlag<Args>("--allow-failures", "allowFailures", true, { repeatable: true }),
+      ...(
+        [
+          ["--taxonomy", "taxonomy"],
+          ["--scores", "scores"],
+          ["--docs-root", "docsRoot"],
+          ["--output-dir", "outputDir"],
+          ["--static-assets-dir", "staticAssetsDir"],
+          ["--evidence-dir", "evidenceDir"],
+        ] as const
+      ).map(([flag, key]) => stringFlag<Args>(flag, key, { allowInline: false, repeatable: true })),
+    ],
+    {
+      onUnhandledArg(arg) {
+        if (arg !== "--help" && arg !== "-h") {
+          throw new Error(`Unknown maturity docs option: ${arg}`);
+        }
+        process.stdout.write(`Usage: node --import tsx scripts/qa/render-maturity-docs.ts [options]
 
 Options:
   --taxonomy <path>     Taxonomy YAML path (default: taxonomy.yaml)
@@ -168,12 +160,10 @@ Options:
   --allow-failures      Render valid incomplete QA evidence; non-passing checks earn no Coverage
   -h, --help            Show this help
 `);
-      process.exit(0);
-    } else {
-      throw new Error(`Unknown maturity docs option: ${arg}`);
-    }
-  }
-  return args;
+        process.exit(0);
+      },
+    },
+  );
 }
 
 function familyTitle(value: string): string {
@@ -850,6 +840,7 @@ function readEvidenceSummaries(
       (item) => item.status === null,
     );
     return {
+      evidence: payload,
       sourcePath: filePath,
       path: path.relative(process.cwd(), filePath),
       generatedAt: payload.generatedAt,
@@ -1232,6 +1223,22 @@ function renderMaturityScorecard({
     );
   }
   lines.push(...renderEvidenceSection(evidenceSummaries, surfaceNames));
+  // Use the coverage owner's exact selection. Report-only gaps must not alter
+  // numeric scores, blocking evidence checks or strict-input warnings.
+  const selected = latestCoverageScorecard(
+    evidenceSummaries.filter((item) => item.taxonomyStatus === "current"),
+  );
+  if (selected) {
+    lines.push(
+      renderQaScorecardGapMarkdownReport(
+        buildQaScorecardGapReport({
+          taxonomy,
+          scenarios: readQaScenarioPack().scenarios,
+          evidence: selected.evidence,
+        }),
+      ),
+    );
+  }
   if (updatedDate) {
     lines.push(`> Last updated: ${updatedDate}`, "");
   }

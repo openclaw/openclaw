@@ -3,9 +3,8 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
 import {
   buildAgentInternalEventContext,
-  buildGeneratedMediaDeliveryContext,
   formatAgentInternalEventsForPrompt,
-  formatGeneratedMediaDeliveryRetryForPrompt,
+  formatGeneratedMediaDeliveredForPrompt,
   type AgentInternalEvent,
   resolveAcpPromptBody,
   resolveInternalEventPromptBody,
@@ -73,7 +72,7 @@ describe("agent internal events", () => {
   it.each([
     "https://example.com/video.mp4?X-Amz-Signature=fake[[reply_to:999]]",
     'https://example.com/video.mp4?signature=part.png"}tail',
-  ])("preserves signed media through completion and retry directives: %s", (mediaUrl) => {
+  ])("preserves signed media through completion directives: %s", (mediaUrl) => {
     const event = {
       ...taskCompletionEvent("Generated video."),
       source: "video_generation",
@@ -86,12 +85,6 @@ describe("agent internal events", () => {
       buildAgentInternalEventContext([event])
         .map((fragment) => fragment.text)
         .join("\n"),
-      formatGeneratedMediaDeliveryRetryForPrompt([mediaUrl]),
-      ...[false, true].map((retry) =>
-        buildGeneratedMediaDeliveryContext([mediaUrl], retry)
-          .map((fragment) => fragment.text)
-          .join("\n"),
-      ),
     ];
 
     for (const prompt of prompts) {
@@ -101,9 +94,14 @@ describe("agent internal events", () => {
         replyToCurrent: undefined,
         replyToTag: false,
         audioAsVoice: undefined,
-        isSilent: false,
       });
     }
+    // The delivered-media notice names files without re-arming them for delivery.
+    const delivered = formatGeneratedMediaDeliveredForPrompt([mediaUrl]);
+    expect(delivered).toContain("Do not send these files again.");
+    expect(
+      parseReplyDirectives(delivered, { extractMarkdownImages: true }).mediaUrls,
+    ).toBeUndefined();
   });
 
   it("normalizes media references while preserving Unicode and delimiter modes", () => {
@@ -112,14 +110,10 @@ describe("agent internal events", () => {
     const normalized = `/tmp/a b c d e f g h/${unicode}/${INTERNAL_RUNTIME_CONTEXT_BEGIN}/${INTERNAL_RUNTIME_CONTEXT_END}.png`;
     const protectedReference = `/tmp/a b c d e f g h/${unicode}/[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]/[[OPENCLAW_INTERNAL_CONTEXT_END]].png`;
     const mediaUrls = [reference, normalized];
-    const raw = buildGeneratedMediaDeliveryContext(mediaUrls, false);
     const protectedPrompt = formatAgentInternalEventsForPrompt([
       { ...taskCompletionEvent("result"), mediaUrls },
     ]);
 
-    expect(raw.find((fragment) => fragment.kind === "conversation-data")?.text).toBe(
-      `Generated media:\nMEDIA:${normalized}`,
-    );
     expect(protectedPrompt).toContain(`\nGenerated media:\nMEDIA:${protectedReference}\n`);
     expect(protectedPrompt.split("\nMEDIA:")).toHaveLength(2);
     expect(mediaUrls).toEqual([reference, normalized]);

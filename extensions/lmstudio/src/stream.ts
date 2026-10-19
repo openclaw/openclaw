@@ -42,43 +42,12 @@ const preloadInFlight = new Map<string, Promise<LmstudioPreparedModel | undefine
 // Back off repeated load failures without blocking inference for models already loaded in the UI.
 type PreloadCooldownEntry = {
   untilMs: number;
-  consecutiveFailures: number;
   error: unknown;
   resolvedModelKey?: string;
 };
 
 const preloadCooldown = new Map<string, PreloadCooldownEntry>();
-
-const PRELOAD_BACKOFF_BASE_MS = 5_000;
-const PRELOAD_BACKOFF_MAX_MS = 300_000;
-
-function recordPreloadFailure(
-  preloadKey: string,
-  now: number,
-  error: unknown,
-): PreloadCooldownEntry {
-  const existing = preloadCooldown.get(preloadKey);
-  const consecutiveFailures = (existing?.consecutiveFailures ?? 0) + 1;
-  const persistedResolvedModelKey =
-    error instanceof LmstudioModelLoadError ? error.resolvedModelKey : existing?.resolvedModelKey;
-  const entry: PreloadCooldownEntry = {
-    consecutiveFailures,
-    error:
-      existing?.error instanceof LmstudioModelLoadError &&
-      existing.error.requiredContextLength !== undefined
-        ? existing.error
-        : error,
-    untilMs:
-      now +
-      Math.min(
-        PRELOAD_BACKOFF_MAX_MS,
-        PRELOAD_BACKOFF_BASE_MS * 2 ** Math.max(0, consecutiveFailures - 1),
-      ),
-    ...(persistedResolvedModelKey ? { resolvedModelKey: persistedResolvedModelKey } : {}),
-  };
-  preloadCooldown.set(preloadKey, entry);
-  return entry;
-}
+const PRELOAD_RETRY_COOLDOWN_MS = 60_000;
 
 function withLmstudioUsageCompat(model: StreamModel): StreamModel {
   const compat = model.compat ?? {};
@@ -190,7 +159,19 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
                   return preparedModel;
                 },
                 (error: unknown) => {
-                  recordPreloadFailure(preloadKey, Date.now(), error);
+                  const previous = preloadCooldown.get(preloadKey);
+                  preloadCooldown.set(preloadKey, {
+                    untilMs: Date.now() + PRELOAD_RETRY_COOLDOWN_MS,
+                    error:
+                      previous?.error instanceof LmstudioModelLoadError &&
+                      previous.error.requiredContextLength !== undefined
+                        ? previous.error
+                        : error,
+                    resolvedModelKey:
+                      error instanceof LmstudioModelLoadError
+                        ? error.resolvedModelKey
+                        : previous?.resolvedModelKey,
+                  });
                   throw error;
                 },
               )

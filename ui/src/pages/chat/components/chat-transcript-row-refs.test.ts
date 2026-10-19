@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { VirtualizerController } from "@tanstack/lit-virtual";
+import { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { measureTranscriptRow } from "./chat-transcript-geometry.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
@@ -20,32 +20,23 @@ function mountRows(scrolling = true) {
     row.dataset.virtualRowKey = String(index);
     return row;
   });
-  const controller = new VirtualizerController<HTMLDivElement, HTMLElement>(
-    {
-      addController: vi.fn(),
-      removeController: vi.fn(),
-      requestUpdate: vi.fn(),
-      updateComplete: Promise.resolve(true),
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: rows.length,
+    getScrollElement: () => viewport,
+    getItemKey: (index) => String(index),
+    estimateSize: () => 100,
+    observeElementRect: (_, callback) => {
+      callback({ width: 800, height: 300 });
     },
-    {
-      count: rows.length,
-      getScrollElement: () => viewport,
-      getItemKey: (index) => String(index),
-      estimateSize: () => 100,
-      observeElementRect: (_, callback) => {
-        callback({ width: 800, height: 300 });
-      },
-      observeElementOffset: (_, callback) => {
-        callback(0, scrolling);
-      },
-      scrollToFn: vi.fn(),
-      measureElement: measureTranscriptRow,
+    observeElementOffset: (_, callback) => {
+      callback(0, scrolling);
     },
-  );
-  controller.hostConnected();
-  controller.hostUpdated();
-  const virtualizer = controller.getVirtualizer();
-  const cleanup = () => controller.hostDisconnected();
+    scrollToFn: vi.fn(),
+    measureElement: measureTranscriptRow,
+  });
+  const { _didMount: mountVirtualizer, _willUpdate: updateVirtualizer } = virtualizer;
+  const cleanup = mountVirtualizer();
+  updateVirtualizer();
   virtualizer.getVirtualItems();
   const readViewport = vi.fn(() => 300);
   Object.defineProperty(viewport, "clientHeight", { configurable: true, get: readViewport });

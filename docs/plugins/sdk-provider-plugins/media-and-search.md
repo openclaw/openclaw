@@ -122,6 +122,16 @@ merging a nested value such as voice settings.
 
   </Tab>
   <Tab title="Image and video generation">
+    OpenAI-compatible image adapters can use `createOpenAiCompatibleImageGenerationProvider`
+    from `openclaw/plugin-sdk/image-generation`. Adapters with custom request handling can
+    use `inlineOpenAiCompatibleImageUrls` before `parseOpenAiCompatibleImageResponse`.
+    The URL helper bounds downloads by `maxDownloads`, `maxBytes`, and the remaining
+    operation budget returned by `timeoutMs`. It trusts only `providerUrl`'s origin
+    automatically, checks every redirect, and never forwards provider HTTP credentials.
+    Pass only explicit operator permission as `allowPrivateNetwork`; an inferred local
+    endpoint allowance must not authorize other private hosts. TLS and hostname
+    overrides in `dispatcherPolicy` stay confined to the provider origin.
+
     Image and video capabilities use a **mode-aware** shape. Image
     providers declare required `generate` and `edit` capability blocks;
     video providers declare `generate`, `imageToVideo`, and
@@ -284,6 +294,12 @@ merging a nested value such as voice settings.
     `hint`, `envVars`, `placeholder`, `signupUrl`, `credentialPath`,
     `getCredentialValue`, `setCredentialValue`, and `createTool` are all
     required.
+
+    Search tools limited to ten results can spread
+    `WEB_SEARCH_QUERY_COUNT_PROPERTIES` from
+    `openclaw/plugin-sdk/provider-web-search-contract` (or its config-only
+    companion) into their schema's `properties`. Providers retain their own
+    required fields, additional-property policy, and optional filters.
 
     Search providers can declare `configPath` as a path relative to their own
     plugin configuration for the Search settings page. It defaults to

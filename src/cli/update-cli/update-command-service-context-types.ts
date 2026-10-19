@@ -66,6 +66,7 @@ export type PreManagedServiceStop = ManagedGatewayServiceObservation & {
 };
 
 export type UpdateRestartParams = {
+  originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   result: UpdateRunResult;
   root: string;
   preManagedServiceStop?: PreManagedServiceStop;
@@ -89,7 +90,7 @@ export type OriginalManagedServiceRuntime = {
     fingerprint: string;
     rebound?: string;
     reboundRuntimePin?: string;
-    runtimePin: DaemonRuntimePinSnapshot;
+    runtimePin: DaemonRuntimePinSnapshot | undefined;
   };
   service: ManagedGatewayServiceObservation;
   packageIdentity: PackageDirectoryIdentity;

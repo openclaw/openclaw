@@ -1,5 +1,5 @@
-import * as ts from "typescript/unstable/ast";
-import { SymbolFlags, type Symbol } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { SymbolFlags, type Symbol } from "typescript/sync";
 import type { NativeTypeScriptProject } from "./native-typescript.mts";
 
 const accounts = "src/state/user-model-accounts.ts";
@@ -311,7 +311,7 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
   [
     key(machineState, "writeConfigMachineState"),
     [
-      key("src/state/openclaw-state-worker-runtime.ts", "executeSharedStateCommand"),
+      key("src/tui/tui-last-session.kernel.ts", "tui.lastSession.write"),
       key("src/commands/doctor/shared/legacy-webhook-pins.ts", "recordUnwrittenWebhookCompletion"),
     ],
   ],
@@ -333,7 +333,11 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
   ],
   [
     key(machineState, "deleteConfigMachineState"),
-    [key("src/state/onboarding-recommendations.kernel.ts", "onboardingRecommendations.clear")],
+    [
+      key("src/state/onboarding-recommendations.kernel.ts", "onboardingRecommendations.clear"),
+      // Exclusive migration selects only daemon-runtime-pin rows before retiring their copied source.
+      key("src/infra/state-migrations.daemon-runtime-pins.ts", "migrateDaemonRuntimePins"),
+    ],
   ],
   [
     key(machineState, "importConfigMachineState"),
@@ -349,7 +353,7 @@ const nativeReadCallers = new Map<string, readonly string[]>([
       "extensions/codex/src/account-usage-runtime.ts:handleCodexAccountUsage/assertCurrent",
       "extensions/codex/src/app-server/auth-profile.ts:<module>",
       "extensions/codex/src/app-server/auth-profile-selection.ts:createCodexAuthProfileSelection/resolveCodexAppServerAuthProfileIdAtEffect",
-      "extensions/codex/src/command-diagnostics.ts:resolvePendingCodexDiagnosticsTargets",
+      "extensions/codex/src/command-diagnostics.ts:resolvePendingCodexDiagnosticsTarget",
       "src/agents/embedded-agent-runner/cli-backend-dispatch-eligibility.ts:resolveEmbeddedCliBackendDispatchEligibility",
       "src/agents/model-auth-label.ts:resolveModelAuthLabel",
       "src/agents/model-auth-provider.ts:resolveScopedAuthProfileStore",
@@ -568,7 +572,12 @@ const callers = new Map<string, readonly string[]>([
   ],
   [
     key(publicationDeletion, "deletePersonalGitHubSessionReceiptsInDatabase"),
-    [key("src/state/openclaw-state-worker-runtime.ts", "executeSharedStateCommand")],
+    [
+      key(
+        "src/state/github-personal-publication-lifecycle.worker.ts",
+        "githubPublication.deleteSessionReceipts",
+      ),
+    ],
   ],
   [key(accounts, "writeRecord"), [key(accounts, "writeProfile"), key(accounts, "writeLinks")]],
   [
@@ -726,9 +735,15 @@ const sinks = new Map<string, number>([
   ],
 ]);
 
+// Generated v25 migration metadata is published only by the existing schema transaction.
+const subagentRecoveryMetadataSinks = new Set([
+  key("scripts/generate-postgres-schema.mts", "generatePostgresSchemas"),
+  key("src/state/postgres-schema.generated/runtime.ts", "<module>"),
+]);
 const rawMachineStateSinks = new Map([
   [key("src/state/openclaw-state-db-schema-v12-foldin.ts", "migrateSingletonStateFoldInV12"), 1],
   [key("src/state/openclaw-state-db-schema-v13-widerow.ts", "migrateJsonCanonicalWideRowsV13"), 2],
+  ...[...subagentRecoveryMetadataSinks].map((id): [string, number] => [id, 1]),
 ]);
 
 function mayIncludeAuthKey(
@@ -1270,7 +1285,11 @@ export function inspectPersonalCredentialWriters(
           rawSinkCounts.set(id, count);
           if (
             write[1]?.toLowerCase() !== "config_machine_state" ||
-            count > (rawMachineStateSinks.get(id) ?? 0)
+            count > (rawMachineStateSinks.get(id) ?? 0) ||
+            (subagentRecoveryMetadataSinks.has(id) &&
+              !/^UPDATE config_machine_state SET value_json = '25' WHERE state_key = 'state\.schema\.contentVersion' AND value_json = '24';\s*$/u.test(
+                node.text.slice(write.index),
+              ))
           ) {
             fail(node, "raw authority-table write bypasses the reviewed writer sinks");
           }

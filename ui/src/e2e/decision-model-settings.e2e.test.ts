@@ -143,10 +143,12 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         await expect.poll(() => pickerValue(global)).toBe("typesafe/jev-latest");
+        await global.locator(".picker-select__trigger").click();
         expect(
           await page.locator('[role="option"][data-value="typesafe/jev-latest"]').count(),
         ).toBe(1);
         expect(await global.locator('[role="option"][data-value="fixture/chat"]').count()).toBe(0);
+        await page.keyboard.press("Escape");
         await page.screenshot({
           path: path.join(suite.artifactDir, "global-with-chat-catalog.png"),
         });

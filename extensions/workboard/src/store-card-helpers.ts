@@ -173,9 +173,7 @@ function latestStatusTransitionAt(card: WorkboardCard): number | undefined {
       (event?.kind === "moved" || event?.kind === "created") &&
       ((event.kind === "created" && card.status !== "todo") ||
         (event.kind === "moved" && event.fromStatus !== event.toStatus)) &&
-      event.toStatus === card.status &&
-      typeof event.at === "number" &&
-      Number.isFinite(event.at)
+      event.toStatus === card.status
     ) {
       return event.at;
     }
@@ -656,18 +654,12 @@ export function closeRunningAttempts(
   );
 }
 
-export function notificationSequence(event: WorkboardNotification): number | undefined {
-  return typeof event.sequence === "number" && Number.isFinite(event.sequence)
-    ? Math.trunc(event.sequence)
-    : undefined;
-}
-
 export function compareNotifications(a: WorkboardNotification, b: WorkboardNotification): number {
   if (a.createdAt !== b.createdAt) {
     return a.createdAt - b.createdAt;
   }
-  const aSequence = notificationSequence(a);
-  const bSequence = notificationSequence(b);
+  const aSequence = a.sequence;
+  const bSequence = b.sequence;
   if (aSequence !== undefined && bSequence !== undefined) {
     return aSequence - bSequence || a.id.localeCompare(b.id);
   }

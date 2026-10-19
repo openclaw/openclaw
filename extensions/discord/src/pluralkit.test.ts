@@ -1,25 +1,38 @@
+import { once } from "node:events";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { fetchPluralKitMessageInfo } from "./pluralkit.js";
 
-const buildResponse = (params: { status: number; body?: unknown }): Response => {
-  const body = params.body;
-  return new Response(typeof body === "string" ? body : JSON.stringify(body ?? {}), {
-    status: params.status,
-    headers: { "content-type": "application/json" },
+function lookup(
+  fetcher: typeof fetch,
+  options: Partial<Parameters<typeof fetchPluralKitMessageInfo>[0]> = {},
+) {
+  return fetchPluralKitMessageInfo({
+    messageId: "123",
+    config: { enabled: true },
+    ...options,
+    fetcher,
   });
-};
+}
+
+const rejection = (pending: Promise<unknown>) =>
+  pending.then(
+    () => undefined,
+    (error: unknown) => {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      return error;
+    },
+  );
+
+afterEach(() => vi.useRealTimers());
 
 describe("fetchPluralKitMessageInfo", () => {
   it("returns null when disabled", async () => {
     const fetcher = vi.fn();
-    const result = await fetchPluralKitMessageInfo({
-      messageId: "123",
-      config: { enabled: false },
-      fetcher: fetcher as unknown as typeof fetch,
-    });
+    const result = await lookup(fetcher, { config: { enabled: false } });
     expect(result).toBeNull();
     expect(fetcher).not.toHaveBeenCalled();
   });
@@ -27,77 +40,46 @@ describe("fetchPluralKitMessageInfo", () => {
   it("returns null on 404", async () => {
     const tracked = cancelTrackedTextResponse("missing", { status: 404 });
     const fetcher = vi.fn(async () => tracked.response);
-    const result = await fetchPluralKitMessageInfo({
-      messageId: "missing",
-      config: { enabled: true },
-      fetcher: fetcher as unknown as typeof fetch,
-    });
+    const result = await lookup(fetcher);
     expect(result).toBeNull();
     expect(tracked.wasCanceled()).toBe(true);
   });
 
   it("returns payload and sends token when configured", async () => {
     let receivedHeaders: Record<string, string> | undefined;
-    const fetcher = vi.fn(async (_url: string, init?: RequestInit) => {
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
       receivedHeaders = init?.headers as Record<string, string> | undefined;
-      return buildResponse({
-        status: 200,
-        body: {
-          id: "123",
-          member: { id: "mem_1", name: "Alex" },
-          system: { id: "sys_1", name: "System" },
-        },
-      });
+      return Response.json({ member: { id: "mem_1" } });
     });
-
-    const result = await fetchPluralKitMessageInfo({
-      messageId: "123",
-      config: { enabled: true, token: "pk_test" },
-      fetcher: fetcher as unknown as typeof fetch,
-    });
-
+    const result = await lookup(fetcher, { config: { enabled: true, token: "pk_test" } });
     expect(result?.member?.id).toBe("mem_1");
     expect(receivedHeaders?.Authorization).toBe("pk_test");
   });
 
   it("aborts PluralKit response body reads that exceed the lookup timeout", async () => {
     vi.useFakeTimers();
-    try {
-      let observedSignal: AbortSignal | undefined;
-      const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
-        observedSignal = init?.signal ?? undefined;
-        const body = new ReadableStream<Uint8Array>({
-          start(controller) {
-            observedSignal?.addEventListener(
-              "abort",
-              () => controller.error(new DOMException("PluralKit lookup timed out", "AbortError")),
-              { once: true },
-            );
-          },
-        });
-        return new Response(body, {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+    let observedSignal: AbortSignal | undefined;
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      observedSignal = init?.signal ?? undefined;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          observedSignal?.addEventListener(
+            "abort",
+            () => controller.error(new DOMException("PluralKit lookup timed out", "AbortError")),
+            { once: true },
+          );
+        },
       });
-
-      const lookupPromise = fetchPluralKitMessageInfo({
-        messageId: "slow-body",
-        config: { enabled: true },
-        fetcher,
-      });
-
-      await vi.advanceTimersByTimeAsync(0);
-      expect(fetcher).toHaveBeenCalledOnce();
-      expect(observedSignal?.aborted).toBe(false);
-      const lookupRejection = expect(lookupPromise).rejects.toThrow(/timed out|abort/i);
-
-      await vi.advanceTimersByTimeAsync(10_000);
-      await lookupRejection;
-      expect(observedSignal?.aborted).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const lookupPromise = lookup(fetcher);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(observedSignal?.aborted).toBe(false);
+    const lookupRejection = expect(lookupPromise).rejects.toThrow(/timed out|abort/i);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await lookupRejection;
+    expect(observedSignal?.aborted).toBe(true);
   });
 
   it("relays parent cancellation to the PluralKit request", async () => {
@@ -116,15 +98,8 @@ describe("fetchPluralKitMessageInfo", () => {
         );
       });
     });
-
-    const lookupPromise = fetchPluralKitMessageInfo({
-      messageId: "cancelled",
-      config: { enabled: true },
-      fetcher,
-      signal: parent.signal,
-    });
+    const lookupPromise = lookup(fetcher, { signal: parent.signal });
     parent.abort(new Error("preflight stopped"));
-
     await expect(lookupPromise).rejects.toThrow("preflight stopped");
     expect(observedSignal?.aborted).toBe(true);
   });
@@ -140,41 +115,27 @@ describe("fetchPluralKitMessageInfo", () => {
       response.writeHead(502, { "content-type": "text/plain" });
       response.end(`proxy failure Authorization: ${authorization}; request rejected`);
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("expected an ephemeral loopback address");
     }
-    const origin = `http://127.0.0.1:${(address as AddressInfo).port}`;
+    const origin = `http://127.0.0.1:${address.port}`;
     const fetcher: typeof fetch = async (input, init) => {
-      const href =
-        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      const rewritten = new URL(href);
-      const target = new URL(`${rewritten.pathname}${rewritten.search}`, origin);
-      return await fetch(target, init);
+      const url = new URL(input instanceof Request ? input.url : input);
+      return fetch(new URL(`${url.pathname}${url.search}`, origin), init);
     };
-
     let caught: Error | undefined;
     try {
-      await fetchPluralKitMessageInfo({
-        messageId: "boom",
-        config: { enabled: true, token },
-        fetcher,
-      });
-    } catch (error) {
-      caught = error as Error;
+      caught = await rejection(
+        lookup(fetcher, { messageId: "boom", config: { enabled: true, token } }),
+      );
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((closeError) => (closeError ? reject(closeError) : resolve()));
       });
     }
-
     expect(requestUrl).toBe("/v2/messages/boom");
     expect(authorization).toBe(token);
     expect(caught?.message).toContain("PluralKit API failed (502)");
@@ -182,9 +143,6 @@ describe("fetchPluralKitMessageInfo", () => {
     expect(caught?.message).toContain("Authorization:");
     expect(caught?.message).not.toContain(token);
     expect(caught?.message).not.toContain(uniqueSecret);
-    console.log(
-      `[pluralkit credential redaction proof] transport=http status=502 path=${requestUrl} authorization_received=${authorization === token} token_present=${caught?.message.includes(token)} unique_fragment_present=${caught?.message.includes(uniqueSecret)} detail=${caught?.message}`,
-    );
   });
 
   it("bounds PluralKit API error bodies without using response.text()", async () => {
@@ -194,18 +152,7 @@ describe("fetchPluralKitMessageInfo", () => {
     });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     const fetcher = vi.fn(async () => tracked.response);
-
-    let caught: Error | undefined;
-    try {
-      await fetchPluralKitMessageInfo({
-        messageId: "boom",
-        config: { enabled: true },
-        fetcher: fetcher as unknown as typeof fetch,
-      });
-    } catch (error) {
-      caught = error as Error;
-    }
-
+    const caught = await rejection(lookup(fetcher));
     expect(caught?.message).toContain("PluralKit API failed (500): plural failure");
     expect(caught?.message).not.toContain("tail");
     expect(caught?.message.length).toBeLessThan(8_400);

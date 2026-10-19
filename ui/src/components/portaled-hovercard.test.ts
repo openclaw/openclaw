@@ -2,7 +2,8 @@
 import { delegateEvents } from "@solidjs/web";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { controlsForHovercard } from "./portaled-hovercard-focus.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -15,7 +16,7 @@ function fixture(shadow = false) {
   const owner = shadow ? pane.attachShadow({ mode: "open" }) : pane;
   const trigger = owner.appendChild(document.createElement("a"));
   const dismiss = vi.fn(() => controller.reset());
-  const controller = new PortaledHovercardController(dismiss);
+  const controller = createPortaledHovercardOwner(dismiss);
   controller.markTrigger(trigger);
   const mount = () => {
     controller.mount(trigger, createPortaledHovercard("preview", "preview"), "vertical");
@@ -25,6 +26,46 @@ function fixture(shadow = false) {
 }
 
 describe("portaled hovercard presentation ownership", () => {
+  it.each(["Tab", "Escape"])("enters registered controls and returns focus on %s", (key) => {
+    const view = fixture();
+    view.trigger.href = "#trigger";
+    const card = createPortaledHovercard("keyboard-preview", "preview");
+    const unrelated = document.createElement("button");
+    const first = document.createElement("button");
+    const last = document.createElement("button");
+    card.append(unrelated, first, last);
+    const controls = controlsForHovercard(card);
+    const releaseFirst = controls.registerSource(() => [first]);
+    const releaseLast = controls.registerSource(() => [last]);
+    view.controller.mount(view.trigger, card, "vertical", true, () => {
+      releaseFirst();
+      releaseLast();
+    });
+    onTestFinished(() => view.controller.reset());
+    view.trigger.addEventListener("keydown", view.controller.handleTriggerKeyDown);
+    view.trigger.focus();
+    const enter = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    view.trigger.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(first);
+
+    const interior = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    first.dispatchEvent(interior);
+    expect(interior.defaultPrevented).toBe(false);
+    last.focus();
+    const exit = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    last.dispatchEvent(exit);
+    expect(exit.defaultPrevented).toBe(true);
+    expect(view.controller.card).toBeNull();
+    expect(document.activeElement).toBe(view.trigger);
+    document.body.append(card);
+    expect(controls.read()).toEqual([]);
+  });
+
   it("keeps a Solid card open while its links hold focus and closes after focus leaves", async () => {
     vi.useFakeTimers();
     const view = fixture();
@@ -35,13 +76,21 @@ describe("portaled hovercard presentation ownership", () => {
     const second = document.createElement("a");
     second.href = "#second";
     content.append(first, second);
+    const controls = controlsForHovercard(card);
+    onTestFinished(controls.registerSource(() => [first]));
+    onTestFinished(controls.registerSource(() => [second]));
     // The application delegates these events before the portal installs native listeners.
     delegateEvents(["focusin", "focusout"]);
     mountSolid(() => content, { container: card });
+    const showPopover = card.showPopover.bind(card);
+    vi.spyOn(card, "showPopover").mockImplementation(() => {
+      showPopover();
+      first.focus();
+    });
     view.controller.mount(view.trigger, card, "vertical");
     onTestFinished(() => view.controller.reset());
 
-    first.focus();
+    expect(document.activeElement).toBe(first);
     view.controller.handleCardPointerLeave();
     await vi.advanceTimersByTimeAsync(200);
     expect(card.isConnected).toBe(true);
@@ -88,6 +137,28 @@ describe("portaled hovercard presentation ownership", () => {
       }
     },
   );
+
+  it("retires card listeners before an animated card is replaced", () => {
+    vi.useFakeTimers();
+    const view = fixture();
+    view.mount();
+    const previous = view.controller.card!;
+    view.controller.reset(100);
+    view.controller.markTrigger(view.trigger);
+    view.mount();
+    onTestFinished(() => view.controller.reset());
+
+    previous.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(view.dismiss).not.toHaveBeenCalled();
+    expect(view.controller.card?.isConnected).toBe(true);
+    expect(previous.isConnected).toBe(false);
+
+    view.controller.card?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(view.dismiss).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it.each([false, true])(
     "ignores unrelated scrolls and coalesces anchor movement (shadow=%s)",

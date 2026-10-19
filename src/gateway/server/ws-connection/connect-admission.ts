@@ -1,5 +1,6 @@
 // Gateway WebSocket connect admission validates protocol, role, and browser origin.
 import type { IncomingMessage } from "node:http";
+import { isDeepStrictEqual } from "node:util";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_CAPS,
@@ -23,7 +24,7 @@ import {
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
-import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
@@ -110,6 +111,7 @@ export async function rejectUnavailableProfileConnect(
 }
 
 export function applyConnectionScopeCap(params: {
+  role: string;
   scopes: string[];
   upgradeReq: IncomingMessage;
 }): string[] {
@@ -118,15 +120,13 @@ export function applyConnectionScopeCap(params: {
   if (rawHeader === undefined) {
     return params.scopes;
   }
-  const declaredScopes = new Set(
-    rawHeader
-      .split(",")
-      .map((scope) => scope.trim())
-      .filter((scope) => scope.length > 0),
-  );
-  return declaredScopes.size === 0
-    ? []
-    : params.scopes.filter((scope) => declaredScopes.has(scope));
+  const declaredScopes = rawHeader
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter((scope) => scope.length > 0);
+  return params.role === "operator"
+    ? intersectOperatorScopes(params.scopes, declaredScopes)
+    : params.scopes.filter((scope) => declaredScopes.includes(scope));
 }
 
 export function resolveEffectiveConnectionScopes(params: {
@@ -135,26 +135,17 @@ export function resolveEffectiveConnectionScopes(params: {
   verifiedIdentity?: string;
   identityScopes?: Record<string, OperatorScope[]>;
   upgradeReq: IncomingMessage;
-}): { scopes: string[]; addedIdentityScopes: OperatorScope[] } {
+}): string[] {
   const verifiedIdentity = params.verifiedIdentity;
   let identityScopes: OperatorScope[] = [];
   if (params.role === "operator" && verifiedIdentity) {
     identityScopes = resolveIdentityOperatorScopes(verifiedIdentity, params.identityScopes);
   }
-  const scopes = applyConnectionScopeCap({
+  return applyConnectionScopeCap({
+    role: params.role,
     scopes: [...new Set([...params.deviceScopes, ...identityScopes])],
     upgradeReq: params.upgradeReq,
   });
-  const addedIdentityScopes = identityScopes.filter(
-    (scope) =>
-      scopes.includes(scope) &&
-      !roleScopesAllow({
-        role: "operator",
-        requestedScopes: [scope],
-        allowedScopes: params.deviceScopes,
-      }),
-  );
-  return { scopes, addedIdentityScopes };
 }
 
 export function rejectGatewayConnectOrigin(
@@ -185,7 +176,11 @@ export function resolveGatewayConnectPolicyFailure(
       return { kind: "origin", reason: originCheck.reason };
     }
   }
-  if (!isGatewayAuthPolicyCurrent(state.authPolicy)) {
+  // Pending handshakes must not issue credentials under a superseded role policy.
+  if (
+    !isDeepStrictEqual(context.configSnapshot.gateway?.roles, getRuntimeConfig().gateway?.roles) ||
+    !isGatewayAuthPolicyCurrent(state.authPolicy)
+  ) {
     return { kind: "auth" };
   }
   if (
@@ -232,7 +227,6 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     return undefined;
   }
 
-  // protocol negotiation
   const { minProtocol, maxProtocol } = connectParams;
   const supportsCurrentProtocol =
     maxProtocol >= PROTOCOL_VERSION && minProtocol <= PROTOCOL_VERSION;

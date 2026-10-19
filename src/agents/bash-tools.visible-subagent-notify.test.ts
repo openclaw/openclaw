@@ -1,10 +1,8 @@
-/** Real exec/process -> ordinary session-event -> channel-boundary regression. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { enqueueSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-handoff.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -15,6 +13,7 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   createOpenClawTestState,
@@ -55,19 +54,11 @@ beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "state-only", prefix: "exec-visible-owner-" });
   vi.mocked(enqueueSessionEvent).mockClear();
   sendTextMock.mockClear();
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "telegram",
-        source: "test",
-        plugin: createOutboundTestPlugin({
-          id: "telegram",
-          outbound: { deliveryMode: "direct", sendText: sendTextMock },
-        }),
-      },
-    ]),
-  );
-  // Model execution is synthetic; event admission, routing, and outbound delivery are real.
+  const plugin = createOutboundTestPlugin({
+    id: "telegram",
+    outbound: { deliveryMode: "direct", sendText: sendTextMock },
+  });
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]));
   dispatchMock.mockReset().mockImplementation(async ({ ctx, replyOptions, dispatcherOptions }) => {
     const operation = createReplyOperation({
       sessionKey: String(ctx.SessionKey),
@@ -76,6 +67,7 @@ beforeEach(async () => {
       resetTriggered: false,
     });
     try {
+      replyOptions!.onReplyOperationAdmitted?.(operation);
       await replyOptions!.turnAdoptionLifecycle!.onAdopted();
       await replyOptions!.internalEventExecution!.beforeStart?.();
       replyOptions!.internalEventExecution!.onStarted(RUN_ID);
@@ -101,22 +93,12 @@ afterEach(async () => {
 });
 
 it.skipIf(process.platform === "win32").each([
-  {
-    kind: "visible child borrowing parent tool policy",
-    sessionKey: "agent:main:dashboard:borrowed",
-    child: true,
-    borrowedPolicy: true,
-  },
-  { kind: "hidden child", sessionKey: "agent:main:subagent:hidden", child: true },
-  {
-    kind: "dashboard with only a navigation parent",
-    sessionKey: "agent:main:dashboard:navigation",
-    child: false,
-    navigation: true,
-  },
-])(
-  "keeps a real failed background exec owned by its $kind",
-  async ({ sessionKey, child, navigation, borrowedPolicy }) => {
+  ["agent:main:dashboard:borrowed", true, true],
+  ["agent:main:subagent:hidden", true, false],
+  ["agent:main:dashboard:navigation", false, false],
+] as const)(
+  "keeps a failed background exec owned by %s (child=%s, borrowed policy=%s)",
+  async (sessionKey, child, borrowedPolicy) => {
     const tmpDir = state.root;
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const cfg: OpenClawConfig = {
@@ -128,26 +110,20 @@ it.skipIf(process.platform === "win32").each([
     const delivery = normalizeSessionDeliveryState({
       context: { channel: "telegram", to: "100123" },
     });
-    await replaceSessionEntry(
-      { storePath, agentId: "main", sessionKey: "agent:main:main" },
-      {
-        sessionId: "main-fixture",
-        updatedAt: Date.now(),
-        delivery,
-      },
-    );
-    if (sessionKey !== "agent:main:main") {
-      await replaceSessionEntry(
-        { storePath, agentId: "main", sessionKey },
+    const seedSession = (key: string, sessionId: string, spawnDepth?: number) =>
+      replaceSessionEntry(
+        { storePath, agentId: "main", sessionKey: key },
         {
-          sessionId: "dashboard-fixture",
+          sessionId,
           updatedAt: Date.now(),
           delivery,
-          ...(child ? { spawnDepth: 1, spawnedBy: "agent:main:main" } : {}),
-          ...(navigation ? { spawnedBy: "agent:main:main" } : {}),
+          ...(key === sessionKey
+            ? { spawnedBy: "agent:main:main", ...(spawnDepth ? { spawnDepth } : {}) }
+            : {}),
         },
       );
-    }
+    await seedSession("agent:main:main", "main-fixture");
+    await seedSession(sessionKey, "dashboard-fixture", child ? 1 : undefined);
     const scriptFile = path.join(tmpDir, "background-child.cjs");
     const releaseFile = path.join(tmpDir, "release-child");
     await fs.writeFile(
@@ -186,8 +162,7 @@ it.skipIf(process.platform === "win32").each([
       throw new Error(`Expected running exec, received ${String(details?.status)}`);
     }
     const sessionId = details.sessionId;
-    // Registration can follow child dispatch. Both registration and retirement
-    // happen while the real background process is waiting, before it exits.
+    // Register and retire the child while its process is waiting, before exit.
     if (child) {
       subagentRuns.set(
         RUN_ID,
@@ -213,8 +188,6 @@ it.skipIf(process.platform === "win32").each([
     } else {
       expect(dispatchMock).not.toHaveBeenCalled();
       expect(sendTextMock).not.toHaveBeenCalled();
-    }
-    if (child) {
       const result = await processTool.execute("poll-child", { action: "poll", sessionId });
       expect(result.details).toMatchObject({ status: "completed", exitCode: 7 });
       expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);

@@ -22,13 +22,50 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import * as settledTurnContext from "./settled-turn-context.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
+async function createDurableParams(name: string) {
+  const params = createParams(path.join(tempDir, `${name}.jsonl`), path.join(tempDir, "workspace"));
+  await attachSqliteSessionTarget(params, path.join(tempDir, `${name}.sqlite`), "session-1");
+  const target = {
+    agentId: "main",
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey!,
+    storePath: params.sessionTarget!.storePath!,
+  };
+  return { params, target };
+}
+
+function createDurableHarness(
+  threadId: string,
+  persisted: boolean,
+  startedThread: (count: number) => string,
+) {
+  let threads = 0;
+  let turns = 0;
+  const harness = createStartedThreadHarness(
+    async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult(startedThread(++threads));
+      }
+      if (method === "thread/resume") {
+        return threadStartResult(threadId);
+      }
+      if (method === "turn/start") {
+        return turnStartResult(`turn-${++turns}`);
+      }
+      return undefined;
+    },
+    { persistedThreads: persisted ? [threadId] : [] },
+  );
+  return { harness, turns: () => turns, threads: () => threads };
+}
+
 it("hands off durable notes once on resume without replaying transient context", async () => {
-  const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
-  await attachSqliteSessionTarget(params, path.join(tempDir, "notes.sqlite"), "session-1");
+  const { params, target } = await createDurableParams("notes");
   const cutoff = Date.now() - 1_000;
   await writeCodexAppServerBinding(params.sessionFile, {
     threadId: "thread-existing",
@@ -42,12 +79,6 @@ it("hands off durable notes once on resume without replaying transient context",
       web_search: "disabled",
     }),
   });
-  const target = {
-    agentId: "main",
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey!,
-    storePath: params.sessionTarget!.storePath!,
-  };
   const manager = SessionManager.open(target);
   const note = {
     role: "custom" as const,
@@ -58,48 +89,21 @@ it("hands off durable notes once on resume without replaying transient context",
     idempotencyKey: "doctor:heartbeat-outcome:synthetic",
   };
   manager.appendMessage(note);
-  const excludedNote = {
-    ...note,
-    idempotencyKey: "excluded",
-    content: "EXCLUDED_NOTE",
-    excludeFromContext: true,
-  };
-  manager.appendMessage(excludedNote);
-  const transientNote = {
-    ...note,
-    idempotencyKey: "transient",
-    customType: "openclaw.runtime-context",
-    content: "TRANSIENT_NOTE",
-    details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
-  };
-  manager.appendMessage(transientNote);
-  const coveredNote = {
-    ...note,
-    idempotencyKey: "covered",
-    content: "ALREADY_COVERED_NOTE",
-    timestamp: cutoff,
-  };
-  manager.appendMessage(coveredNote);
-  const nativeMirrorNote = {
-    ...note,
-    content: "NATIVE_MIRROR_NOTE",
-    idempotencyKey: "codex-app-server:synthetic",
-  };
-  manager.appendMessage(nativeMirrorNote);
-  const threadId = "thread-existing";
-  let turnNumber = 0;
-  const harness = createStartedThreadHarness(
-    async (method) => {
-      if (method === "thread/resume") {
-        return threadStartResult(threadId);
-      }
-      if (method === "turn/start") {
-        return turnStartResult(`turn-${++turnNumber}`);
-      }
-      return undefined;
+  for (const override of [
+    { idempotencyKey: "excluded", content: "EXCLUDED_NOTE", excludeFromContext: true },
+    {
+      idempotencyKey: "transient",
+      content: "TRANSIENT_NOTE",
+      customType: "openclaw.runtime-context",
+      details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
     },
-    { persistedThreads: [threadId] },
-  );
+    { idempotencyKey: "covered", content: "ALREADY_COVERED_NOTE", timestamp: cutoff },
+    { idempotencyKey: "codex-app-server:synthetic", content: "NATIVE_MIRROR_NOTE" },
+  ]) {
+    manager.appendMessage({ ...note, ...override });
+  }
+  const threadId = "thread-existing";
+  const { harness, turns } = createDurableHarness(threadId, true, () => "thread-1");
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const run = runCodexAppServerAttempt(params);
   await run.waitForTurnAccepted();
@@ -124,7 +128,7 @@ it("hands off durable notes once on resume without replaying transient context",
   nextParams.sessionTarget = params.sessionTarget;
   const next = runCodexAppServerAttempt(nextParams);
   await next.waitForTurnAccepted();
-  expect(turnNumber).toBe(2);
+  expect(turns()).toBe(2);
   await harness.completeTurn({ threadId, turnId: "turn-2" });
   await next;
   await nativeHookRelayUnregisterQueue.flush();
@@ -133,15 +137,12 @@ it("hands off durable notes once on resume without replaying transient context",
 });
 
 it("does not replay covered history on the same thread after local message-tool completion", async () => {
-  const sessionFile = path.join(tempDir, "local-source-reply-session.jsonl");
-  const workspaceDir = path.join(tempDir, "local-source-reply-workspace");
+  const { params, target } = await createDurableParams("local-source-reply");
+  const { sessionFile } = params;
   const messageTool = createRuntimeDynamicTool("message");
   messageTool.parameters = {
     type: "object",
-    properties: {
-      action: { type: "string" },
-      message: { type: "string" },
-    },
+    properties: { action: { type: "string" }, message: { type: "string" } },
     additionalProperties: true,
   };
   messageTool.execute = vi.fn(async () => ({
@@ -149,40 +150,23 @@ it("does not replay covered history on the same thread after local message-tool 
     details: { messageId: "telegram-123" },
   }));
 
-  const params = createParams(sessionFile, workspaceDir);
   setCodexTestToolFactory(params, () => [messageTool]);
-  await attachSqliteSessionTarget(
-    params,
-    path.join(tempDir, "local-source-reply-sessions.json"),
-    "session-1",
-  );
   params.runtimePlan = createCodexRuntimePlanFixture();
   params.sourceReplyDeliveryMode = "message_tool_only";
   setCodexTestModelSupportsTools(params, true);
-  const target = {
-    agentId: "main",
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey!,
-    storePath: params.sessionTarget!.storePath!,
-  };
-  let threadNumber = 0;
-  let turnNumber = 0;
   const threadId = "thread-local-source-1";
-  const harness = createStartedThreadHarness(
-    async (method) => {
-      if (method === "thread/start") {
-        return threadStartResult(`thread-local-source-${++threadNumber}`);
-      }
-      if (method === "thread/resume") {
-        return threadStartResult(threadId);
-      }
-      if (method === "turn/start") {
-        return turnStartResult(`turn-${++turnNumber}`);
-      }
-      return undefined;
-    },
-    { persistedThreads: [] },
+  const { harness, turns, threads } = createDurableHarness(
+    threadId,
+    false,
+    (count) => `thread-local-source-${count}`,
   );
+  const append = async (
+    message: Parameters<typeof appendSessionTranscriptMessageByIdentity>[0]["message"],
+  ) => {
+    await expect(
+      appendSessionTranscriptMessageByIdentity({ ...target, message }),
+    ).resolves.toMatchObject({ appended: true });
+  };
   let closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
   try {
     // Keep the history timestamps and attempt deadlines on the same controlled clock.
@@ -199,33 +183,22 @@ it("does not replay covered history on the same thread after local message-tool 
     closeHostCapabilities();
 
     vi.setSystemTime(Date.now() + 1_000);
-    await expect(
-      appendSessionTranscriptMessageByIdentity({
-        ...target,
-        message: {
-          role: "user",
-          content: "The old inventory contains cobalt widgets.",
-          timestamp: Date.now(),
-        },
-      }),
-    ).resolves.toMatchObject({ appended: true });
-    await expect(
-      appendSessionTranscriptMessageByIdentity({
-        ...target,
-        message: assistantMessage("The cobalt inventory is recorded.", Date.now()),
-      }),
-    ).resolves.toMatchObject({ appended: true });
+    await append({ role: "user", content: "old user: cobalt", timestamp: Date.now() });
+    await append(assistantMessage("old assistant: cobalt", Date.now()));
     vi.setSystemTime(Date.now() + 1_000);
     params.runId = "run-2";
     params.prompt = "Send the inventory summary.";
     closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const capture = vi.spyOn(settledTurnContext, "captureCodexSettledTurnFinalizationContext");
+    const onSettledTurn = vi.fn(async () => {});
+    params.onSettledTurn = onSettledTurn;
     const terminal = runCodexAppServerAttempt(params);
     await terminal.waitForTurnAccepted();
-    expect(turnNumber).toBe(2);
+    expect(turns()).toBe(2);
     const terminalRequest = harness.requests.findLast((item) => item.method === "turn/start");
     expect(terminalRequest?.params).toMatchObject({ threadId });
-    expect(JSON.stringify(terminalRequest?.params)).toContain("The old inventory contains cobalt");
-    expect(JSON.stringify(terminalRequest?.params)).toContain("The cobalt inventory is recorded.");
+    expect(JSON.stringify(terminalRequest?.params)).toContain("old user: cobalt");
+    expect(JSON.stringify(terminalRequest?.params)).toContain("old assistant: cobalt");
     const response = await harness.handleServerRequest({
       id: "local-source-reply",
       method: "item/tool/call",
@@ -249,6 +222,8 @@ it("does not replay covered history on the same thread after local message-tool 
       params: { threadId, turn: { id: "turn-2", status: "interrupted", items: [] } },
     });
     expect((await terminal).terminal).toEqual({ kind: "ok" });
+    expect(capture).not.toHaveBeenCalled();
+    expect(onSettledTurn).toHaveBeenCalledOnce();
     await nativeHookRelayUnregisterQueue.flush();
     const binding = await readCodexAppServerBinding(sessionFile);
     const coveredThrough = Date.parse(binding?.historyCoveredThrough ?? "");
@@ -258,34 +233,25 @@ it("does not replay covered history on the same thread after local message-tool 
     closeHostCapabilities();
 
     vi.setSystemTime(Date.now() + 1_000);
-    await expect(
-      appendSessionTranscriptMessageByIdentity({
-        ...target,
-        message: {
-          role: "user",
-          content: "Correction: the new inventory contains amber widgets.",
-          timestamp: Date.now(),
-        },
-      }),
-    ).resolves.toMatchObject({ appended: true });
+    await append({ role: "user", content: "new user: amber", timestamp: Date.now() });
     vi.setSystemTime(Date.now() + 1_000);
     params.runId = "run-3";
     params.prompt = "Use the corrected inventory.";
     closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
     const next = runCodexAppServerAttempt(params);
     await next.waitForTurnAccepted();
-    expect(turnNumber).toBe(3);
+    expect(turns()).toBe(3);
     await harness.completeTurn({ threadId, turnId: "turn-3" });
     expect((await next).terminal).toEqual({ kind: "ok" });
     await nativeHookRelayUnregisterQueue.flush();
     const nextRequest = harness.requests.findLast((item) => item.method === "turn/start");
     expect(nextRequest?.params).toMatchObject({ threadId });
     const nextInput = JSON.stringify(nextRequest?.params);
-    expect(nextInput).toContain("Correction: the new inventory contains amber widgets.");
+    expect(nextInput).toContain("new user: amber");
     expect(nextInput).toContain("Use the corrected inventory.");
-    expect(nextInput).not.toContain("The old inventory contains cobalt widgets.");
-    expect(nextInput).not.toContain("The cobalt inventory is recorded.");
-    expect(threadNumber).toBe(1);
+    expect(nextInput).not.toContain("old user: cobalt");
+    expect(nextInput).not.toContain("old assistant: cobalt");
+    expect(threads()).toBe(1);
   } finally {
     closeHostCapabilities();
     harness.close();

@@ -118,13 +118,12 @@ vi.mock("./scenario-catalog.js", async (importOriginal) => {
 });
 
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
+import { runQaParityReportCommand } from "./cli-report.runtime.js";
 import { registerQaLabCli } from "./cli.js";
 import {
   runQaDockerScaffoldCommand,
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
-  runQaCoverageReportCommand,
-  runQaParityReportCommand,
   runQaProfileCommand,
   runQaManualLaneCommand,
   resolveQaHarnessRepoRoot,
@@ -652,6 +651,9 @@ describe("qa cli", () => {
         category: "telegram.native-controls-and-approvals",
         scenario: ["telegram-commands-command"],
         transport: "qa-channel",
+        "provider-mode": "mock-openai",
+        model: "openai/gpt-5.6-luna",
+        "alt-model": "anthropic/claude-sonnet-4-6",
         fast: true,
         concurrency: 2,
         "allow-failures": true,
@@ -664,6 +666,8 @@ describe("qa cli", () => {
         transportId: "qa-channel",
         channelDriver: "crabline",
         providerMode: "mock-openai",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "anthropic/claude-sonnet-4-6",
         fastMode: true,
         concurrency: 2,
       });
@@ -1331,21 +1335,6 @@ describe("qa cli", () => {
     expect(tokenSummary.aggregate?.flaggedScenarios).toEqual(["runtime-tool-fs-read"]);
   });
 
-  describe("coverage inventory command", () => {
-    it("prints a markdown report from scenario metadata", async () => {
-      await parseQa(["coverage"]);
-
-      expectWriteContains(stdoutWrite, "# QA Coverage Inventory");
-      expectWriteContains(stdoutWrite, "session-memory.embedding-search-recall");
-    });
-  });
-
-  it("prints a markdown tool coverage inventory without a run summary", async () => {
-    await runQaCoverageReportCommand({ tools: true });
-    expectWriteContains(stdoutWrite, "# OpenClaw Runtime Tool Coverage");
-    expectWriteContains(stdoutWrite, "codex-native-workspace");
-  });
-
   it("uses provider defaults for omitted manual models", async () => {
     await runQaManualLaneCommand({ message: "probe" });
     expect(mockFirstObjectArg(runQaManualLane)).toMatchObject({
@@ -1355,32 +1344,6 @@ describe("qa cli", () => {
     });
   });
 
-  it("prints a focused scenario match report from coverage metadata", async () => {
-    await runQaCoverageReportCommand({
-      repoRoot: process.cwd(),
-      match: ["image roundtrip"],
-    });
-
-    expectWriteContains(stdoutWrite, "# QA Scenario Matches");
-    expectWriteContains(stdoutWrite, "image-generation-roundtrip");
-    expectWriteContains(stdoutWrite, "--scenario image-generation-roundtrip");
-    expect(stdoutWrite.mock.calls.flat().join("")).not.toContain("memory-recall");
-  });
-
-  it("rejects null tool coverage summary JSON", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-tool-coverage-null-");
-    await fs.writeFile(path.join(repoRoot, "runtime-summary.json"), "null\n", "utf8");
-    await expect(
-      runQaCoverageReportCommand({
-        repoRoot,
-        tools: true,
-        summary: "runtime-summary.json",
-        json: true,
-      }),
-    ).rejects.toMatchObject({ code: "summary_not_completed" });
-    expect(process.exitCode).toBe(0);
-  });
-
   it("writes a curated mock JSONL replay report and summary", async () => {
     const repoRoot = await tempDirs.makeTempDir("qa-jsonl-replay-cli-");
     await parseQa(["jsonl-replay"], {
@@ -1388,6 +1351,7 @@ describe("qa cli", () => {
       transcripts: path.resolve("qa/scenarios/jsonl-replay"),
       "output-dir": "jsonl-output",
       "runtime-pair": "openclaw,codex",
+      "provider-mode": "mock-openai",
     });
 
     const report = await fs.readFile(
@@ -1404,44 +1368,6 @@ describe("qa cli", () => {
     expect(report).toContain("# OpenClaw JSONL Replay Report - openclaw vs codex");
     expect(report).toContain("| plan-mode-boundaries.jsonl | 3 |  | none, none, none |");
     expect(summary.transcripts).toHaveLength(7);
-  });
-
-  it("exits nonzero when tool coverage summary is missing a required runtime tool call", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-tool-coverage-");
-    const summary = runtimeSummary("runtime-tool-web-search");
-    const scenario = summary.scenarios[0];
-    scenario.status = "fail";
-    summary.counts = { total: 1, passed: 0, failed: 1 };
-    scenario.runtimeParity.drift = "tool-call-shape";
-    scenario.runtimeParity.driftDetails = "Codex emitted no web_search call";
-    Object.assign(scenario.runtimeParity.cells.openclaw, {
-      transcriptBytes: "",
-      toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
-      finalText: "",
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      wallClockMs: 1,
-    });
-    Object.assign(scenario.runtimeParity.cells.codex, {
-      transcriptBytes: "",
-      toolCalls: [],
-      finalText: "",
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      wallClockMs: 1,
-    });
-    await writeJson(path.join(repoRoot, "runtime-summary.json"), summary);
-
-    await runQaCoverageReportCommand({
-      repoRoot,
-      tools: true,
-      summary: "runtime-summary.json",
-    });
-
-    expect(process.exitCode).toBe(1);
-    expectWriteContains(stdoutWrite, "- Verdict: fail");
-    expectWriteContains(
-      stdoutWrite,
-      "web_search missing successful codex tool call/result web_search",
-    );
   });
 
   it("resolves character eval paths and passes model refs through", async () => {
@@ -1553,6 +1479,7 @@ describe("qa cli", () => {
       "output-dir": ".artifacts/qa-multipass",
       runner: "multipass",
       "provider-mode": "mock-openai",
+      "fail-fast": true,
       scenario: ["channel-chat-baseline"],
       "allow-failures": true,
       concurrency: 3,
@@ -1576,6 +1503,7 @@ describe("qa cli", () => {
       fastMode: undefined,
       allowFailures: true,
       scenarioIds: ["channel-chat-baseline"],
+      failFast: true,
       concurrency: 3,
       runtimePair: ["openclaw", "codex"],
       channelDriver: "crabline",
@@ -1702,68 +1630,5 @@ describe("qa cli", () => {
       skipUiBuild: true,
     });
   });
-  it.each([
-    {
-      command: "run",
-      flags: {
-        transport: "discord",
-        scenario: "discord-status-reactions-tool-only",
-        baseline: "origin/main",
-        candidate: "HEAD",
-        "skip-install": true,
-        "skip-build": true,
-      },
-      mock: runMantisBeforeAfterCommand,
-      expected: {
-        baseline: "origin/main",
-        candidate: "HEAD",
-        transport: "discord",
-        scenario: "discord-status-reactions-tool-only",
-        credentialSource: "convex",
-        credentialRole: "ci",
-        fastMode: true,
-        providerMode: "live-frontier",
-        signal: expect.any(AbortSignal),
-        skipBuild: true,
-        skipInstall: true,
-      },
-    },
-    {
-      command: "desktop-browser-smoke",
-      flags: { class: "beast", "keep-lease": true },
-      mock: runMantisDesktopBrowserSmokeCommand,
-      expected: { machineClass: "beast", keepLease: true },
-    },
-    {
-      command: "slack-desktop-smoke",
-      flags: {
-        "machine-class": "beast",
-        model: "openai/gpt-5.6-luna",
-        "alt-model": "openai/gpt-5.6-terra",
-        scenario: "slack-canary",
-        fast: true,
-      },
-      mock: runMantisSlackDesktopSmokeCommand,
-      expected: {
-        machineClass: "beast",
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-terra",
-        scenarioIds: ["slack-canary"],
-        fastMode: true,
-        gatewaySetup: undefined,
-      },
-    },
-  ] satisfies Array<{
-    command: string;
-    flags: Parameters<typeof parseQa>[1];
-    mock: typeof runMantisBeforeAfterCommand;
-    expected: Record<string, unknown>;
-  }>)(
-    "routes Mantis $command options and authority",
-    async ({ command, flags, mock, expected }) => {
-      await parseQa(["mantis", command], flags);
-      expect(mock).toHaveBeenCalledWith(expected);
-    },
-  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

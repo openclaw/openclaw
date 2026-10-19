@@ -3,14 +3,11 @@ import path from "node:path";
 import { normalizeOptionalString as normalizeStringField } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getPluginInstallRecordMapEntry } from "../config/plugin-install-record-map.js";
-import type { OpenClawConfig } from "../config/types.js";
 import {
   isPluginCandidateInstallOwnerAmbiguous,
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
 import type { PluginCompatCode } from "./compat/registry.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
@@ -197,20 +194,21 @@ function readRecordFile(params: {
   return undefined;
 }
 
+/** Disk inventory facts only; activation is projected per config by the index owner. */
+export type InstalledPluginIndexInventoryRecord = Omit<InstalledPluginIndexRecord, "enabled">;
+
 export function buildInstalledPluginIndexRecords(params: {
   candidates: readonly PluginCandidate[];
   registry: PluginManifestRegistry;
-  config?: OpenClawConfig;
   diagnostics: PluginDiagnostic[];
   installRecords: Record<string, InstalledPluginInstallRecordInfo>;
   /** Index builds scoped to an explicit env stamp that env's compat decisions. */
   env?: NodeJS.ProcessEnv;
-}): InstalledPluginIndexRecord[] {
+}): InstalledPluginIndexInventoryRecord[] {
   const candidateBySource = new Map(
     params.candidates.map((candidate) => [candidate.source, candidate]),
   );
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
-  return params.registry.plugins.map((record): InstalledPluginIndexRecord => {
+  return params.registry.plugins.map((record): InstalledPluginIndexInventoryRecord => {
     const candidate = candidateBySource.get(record.source);
     const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
       origin: record.origin,
@@ -257,15 +255,7 @@ export function buildInstalledPluginIndexRecords(params: {
       candidate,
       rejectHardlinks,
     });
-    const enabled = resolveEffectiveEnableState({
-      id: record.id,
-      origin: record.origin,
-      channelIds: record.channels,
-      config: normalizedConfig,
-      rootConfig: params.config,
-      enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
-    }).enabled;
-    const indexRecord: InstalledPluginIndexRecord = {
+    const indexRecord: InstalledPluginIndexInventoryRecord = {
       pluginId: record.id,
       manifestPath: record.manifestPath,
       manifestHash,
@@ -279,7 +269,6 @@ export function buildInstalledPluginIndexRecords(params: {
       source: record.source,
       rootDir: record.rootDir,
       origin: record.origin,
-      enabled,
       startup: buildStartupInfo(record),
       contributions: buildContributionInfo(record),
       compat: collectPluginManifestCompatCodes(record),

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import "./modal-dialog.ts";
 import { mountNativeLinkMenu } from "./native-link-menu.runtime.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { controlsForHovercard } from "./portaled-hovercard-focus.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 afterEach(() => {
@@ -59,7 +60,7 @@ describe.runIf("__vitest_browser__" in globalThis)("native modal transient surfa
     async (shadow) => {
       const { page } = await import("vitest/browser");
       const { modal, dialog, trigger } = await modalFixture(shadow);
-      const controller = new PortaledHovercardController(() => controller.reset());
+      const controller = createPortaledHovercardOwner(() => controller.reset());
       onTestFinished(() => controller.reset());
       const card = createPortaledHovercard("modal-preview", "preview");
       card.style.cssText = "position: fixed; inset: auto; margin: 0; padding: 8px";
@@ -69,8 +70,9 @@ describe.runIf("__vitest_browser__" in globalThis)("native modal transient surfa
       const activate = vi.fn((event: MouseEvent) => event.preventDefault());
       link.addEventListener("click", activate);
       card.append(link);
+      const releaseControl = controlsForHovercard(card).registerSource(() => [link]);
       controller.markTrigger(trigger);
-      controller.mount(trigger, card, "vertical");
+      controller.mount(trigger, card, "vertical", true, releaseControl);
       await page.elementLocator(link).click();
       expect(activate).toHaveBeenCalledOnce();
       expect(dialog.open).toBe(true);

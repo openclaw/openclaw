@@ -1,4 +1,3 @@
-// Hermes-native auth discovery and reauthentication planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import { parseDateStringTimestampMs as readTimestamp } from "openclaw/plugin-sdk/number-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";

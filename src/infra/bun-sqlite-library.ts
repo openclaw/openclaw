@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { posix } from "node:path";
-import { fileURLToPath } from "node:url";
 import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
+import { getEmbeddedStandaloneRuntimeRoot } from "../../cli-invocation.mjs";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { probeSqliteNativeClose } from "./bun-sqlite-close-probe.js";
 import { parseDiagnosticEnvFlags } from "./diagnostic-flags-env.js";
@@ -23,7 +23,6 @@ type LibraryProbe = { version: string; extensionLoadingSupported: boolean };
 const WORKER_SELECTION_KEY = "openclaw.bunSqliteLibrarySelection";
 const WORKER_CAPABILITIES_KEY = "openclaw.sqliteRuntimeCapabilities";
 export const SQLITE_NATIVE_RUNTIME_ADMISSION_KEY = "openclaw.sqliteNativeRuntimeAdmission";
-export const SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY = "openclaw.sqliteExpectedSchemaContracts.v1";
 
 type SqliteCloseProbeResult = Awaited<ReturnType<typeof probeSqliteNativeClose>>;
 export type SqliteRuntimeCapabilities = SqliteCloseProbeResult & Readonly<{ decided: boolean }>;
@@ -178,14 +177,10 @@ function createSelector() {
         : { source: "runtime" };
       return selection;
     }
-    const standaloneRootUrl =
-      // SAFETY: Only the standalone bootstrap publishes this optional runtime-root URL.
-      (globalThis as typeof globalThis & { __openclawStandaloneRootUrl?: string })[
-        "__openclawStandaloneRootUrl"
-      ];
+    const standaloneRoot = getEmbeddedStandaloneRuntimeRoot();
     const bundled =
-      override === undefined && standaloneRootUrl !== undefined
-        ? fileURLToPath(new URL("lib/libsqlite3.dylib", standaloneRootUrl))
+      override === undefined && standaloneRoot !== undefined
+        ? posix.join(standaloneRoot, "lib/libsqlite3.dylib")
         : undefined;
     const prefix = process.env.HOMEBREW_PREFIX?.trim();
     const candidates =
@@ -354,10 +349,6 @@ export function captureSqliteWorkerEnvironmentData(
     [WORKER_CAPABILITIES_KEY, getSqliteRuntimeCapabilities()],
     // Opaque owner facts include absence, which clears a retained carrier's previous snapshot.
     [SQLITE_NATIVE_RUNTIME_ADMISSION_KEY, getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY)],
-    [
-      SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY,
-      getEnvironmentData(SQLITE_EXPECTED_SCHEMA_CONTRACTS_KEY),
-    ],
     [SQLITE_DATABASE_ADMISSIONS_KEY, databaseAdmissions],
   ];
 }

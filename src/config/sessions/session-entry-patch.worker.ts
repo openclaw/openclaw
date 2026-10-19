@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type {
   SqliteWorkerBackend,
@@ -48,7 +48,7 @@ import { readSessionSourceValidation } from "./session-source-predicate.worker.j
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 
 export type SessionWorkerDatabaseBinding = {
-  database: DatabaseSync;
+  database: EngineConnection;
   databasePath: string;
   admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
 };
@@ -196,6 +196,7 @@ export function commitSessionEntryPatch(
         },
       };
       let mutation;
+      let lifecycleEffects: SessionEntryPatchCommitted["lifecycleEffects"];
       if ("operation" in input) {
         if (input.validateCanonicalKeys) {
           assertCanonicalSqliteSessionKeysCurrent(database);
@@ -240,6 +241,9 @@ export function commitSessionEntryPatch(
           existing,
           writeBase,
           operation: input.operation,
+          onLifecycleProjection: (effects) => {
+            lifecycleEffects = effects;
+          },
         });
         mutation = writeSessionEntryPatchInDatabase(database, {
           sessionKey: input.sessionKey,
@@ -276,8 +280,9 @@ export function commitSessionEntryPatch(
       }
       result = {
         kind: "session-entry-patch",
-        entry: mutation.entry,
+        ...(input.returnEntry === false ? {} : { entry: mutation.entry }),
         applied: mutation.applied,
+        lifecycleEffects,
         publication,
         transcriptPredicate:
           mutation.entry.sessionId === predicate.transcriptPredicate?.sessionId
