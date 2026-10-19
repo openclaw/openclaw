@@ -156,7 +156,7 @@ fish:
 
 ```fish
 function openclaw
-    env TERM=linux command openclaw $argv
+    env TERM=linux openclaw $argv
 end
 funcsave openclaw
 ```
