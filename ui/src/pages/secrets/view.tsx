@@ -53,7 +53,11 @@ type SecretsStoreViewProps = {
 const DOCS_URL = "https://docs.openclaw.ai/gateway/secrets#shared-secret-store";
 const SECRET_MASK = "••••••••";
 
-function TextAreaField(props: { view: SecretsStoreViewProps; field: "value" | "hosts" | "bulk" }) {
+function TextAreaField(props: {
+  view: SecretsStoreViewProps;
+  field: "value" | "hosts" | "bulk";
+  onInputRef?: (element: HTMLTextAreaElement) => void;
+}) {
   const name = () =>
     props.field === "hosts" ? "allowed-hosts" : props.field === "bulk" ? "bulk-values" : "value";
   const value = () =>
@@ -75,6 +79,7 @@ function TextAreaField(props: { view: SecretsStoreViewProps; field: "value" | "h
     <label class="secrets-store-field">
       <span>{t(props.field === "hosts" ? "secretsStore.allowedHosts" : "secretsStore.value")}</span>
       <textarea
+        ref={props.onInputRef}
         class={[
           "settings-input",
           `secrets-store-dialog__${props.field}`,
@@ -244,6 +249,7 @@ function SecretsTable(props: SecretsStoreViewProps) {
 function SecretDialog(props: {
   view: SecretsStoreViewProps;
   bulk?: boolean;
+  initialFocus: () => HTMLElement;
   children: SolidJSX.Element;
 }) {
   const title = () =>
@@ -257,6 +263,7 @@ function SecretDialog(props: {
   const close = () => (props.bulk ? props.view.onCloseBulk() : props.view.onCloseDialog());
   return (
     <openclaw-modal-dialog
+      prop:initialFocus={props.initialFocus}
       label={title()}
       description={props.bulk ? undefined : t("secretsStore.hint")}
       onModal-cancel={close}
@@ -306,12 +313,16 @@ function SecretDialog(props: {
 }
 
 function EntryDialog(props: SecretsStoreViewProps) {
+  let nameInput!: HTMLInputElement;
   return (
     <Show when={props.dialogMode}>
-      <SecretDialog view={props}>
+      <SecretDialog view={props} initialFocus={() => nameInput}>
         <label class="secrets-store-field">
           <span>{t("secretsStore.name")}</span>
           <input
+            ref={(element) => {
+              nameInput = element;
+            }}
             class="settings-input mono"
             name="name"
             autocomplete="off"
@@ -374,10 +385,17 @@ function EntryDialog(props: SecretsStoreViewProps) {
 }
 
 function BulkDialog(props: SecretsStoreViewProps) {
+  let bulkInput!: HTMLTextAreaElement;
   return (
     <Show when={props.bulkOpen}>
-      <SecretDialog view={props} bulk>
-        <TextAreaField view={props} field="bulk" />
+      <SecretDialog view={props} bulk initialFocus={() => bulkInput}>
+        <TextAreaField
+          view={props}
+          field="bulk"
+          onInputRef={(element) => {
+            bulkInput = element;
+          }}
+        />
         <div class="secrets-store-bulk__summary" aria-live="polite">
           {t(props.bulkSecretCount === 1 ? "secretsStore.detectedOne" : "secretsStore.detected", {
             count: String(props.bulkSecretCount),

@@ -171,7 +171,6 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         : security === "full" && ask === "off"
           ? "allowAll"
           : "promptUnmatched";
-      params.hostCapabilities.assertActive();
       params.hostCapabilities.prepareContinuationRetryCount?.({ cwd: workspace });
       const lease = await pool.acquire(workspace, apiKey, readOnly);
       const { runtime } = lease;
@@ -189,6 +188,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       let aborted = false;
       let abortPromise: Promise<void> | undefined;
       let failure: unknown;
+      let activeAttachment: ReturnType<typeof setActiveEmbeddedRun> | undefined;
       const messages: AgentMessage[] = [];
       let text = "";
       let lastToolError: AgentHarnessAttemptResult["lastToolError"];
@@ -360,8 +360,13 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           // An approval can fail before sendUserTurn resolves; interrupt now that the turn exists.
           void stop().catch(() => runtime.close());
         }
-        setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
-        params.replyOperation?.attachBackend(handle);
+        activeAttachment = setActiveEmbeddedRun(
+          params.sessionId,
+          handle,
+          params.sessionKey,
+          params.sessionFile,
+          sessionAgentId,
+        );
         active.set(params.sessionId, abort);
         params.onExecutionStarted?.({ backend: "muse" });
         const nativeSessionId = session.sessionId;
@@ -444,7 +449,14 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         clearTimeout(forceCloseTimer);
         signal?.removeEventListener("abort", onAbort);
         active.delete(params.sessionId);
-        clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+        clearActiveEmbeddedRun(
+          params.sessionId,
+          handle,
+          params.sessionKey,
+          params.sessionFile,
+          undefined,
+          activeAttachment,
+        );
         bound?.release();
         lease.release();
       }

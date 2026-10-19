@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AllowedApprovalSnapshot,
@@ -13,6 +14,8 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "./approval-page-registration.ts";
 
 const APPROVAL_PAGE_ELEMENT_NAME = "openclaw-approval-page";
@@ -166,6 +169,33 @@ afterEach(async () => {
 });
 
 describe("ApprovalPage", () => {
+  it("retires old decisions immediately and looks up only the final native ID", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method !== "approval.get" || !isRecord(params) || typeof params.id !== "string") {
+        throw new Error("Expected an approval lookup");
+      }
+      return { approval: pendingApproval({ id: params.id }) } satisfies ApprovalGetResult;
+    });
+    const { page } = createPage({ client: createTestGatewayClient(request) });
+    await waitForSolid(() =>
+      expect(page.querySelector('[data-decision="allow-once"]')).not.toBeNull(),
+    );
+    const oldDecision = page.querySelector<HTMLButtonElement>('[data-decision="allow-once"]')!;
+
+    page.approvalId = "exec:approval-2";
+    page.approvalId = "exec:approval-3";
+    oldDecision.click();
+    await settle(page);
+    await waitForSolid(() =>
+      expect(page.querySelector('[data-decision="allow-once"]')).not.toBeNull(),
+    );
+
+    expect(request.mock.calls).toEqual([
+      ["approval.get", { id: "exec:approval-1" }],
+      ["approval.get", { id: "exec:approval-3" }],
+    ]);
+  });
+
   it.each([
     {
       kind: "exec",

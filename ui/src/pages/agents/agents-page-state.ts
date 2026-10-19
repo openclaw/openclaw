@@ -65,6 +65,7 @@ import {
   setIdentityAvatar,
   setIdentityDraftField,
 } from "./identity-actions.ts";
+import type { AgentMemoryTarget } from "./memory/memory-panel-state.ts";
 import type { AgentIdentityDraft } from "./panels-overview.tsx";
 import {
   navigateToAgent,
@@ -103,7 +104,6 @@ export function createAgentsPageState(
   let active = true;
   let publish = () => {};
   const [skillsFilter, setSkillsFilter] = createSignal("");
-  const applicationConfig = projectOwner(context.config, (config) => config);
   const identities = projectOwner(context.agentIdentity, (identity) => identity.entries());
   const channels = projectOwner(context.channels, (source) => source.state);
   const navigation = projectOwner(context.navigation, (source) => source.snapshot);
@@ -223,7 +223,13 @@ export function createAgentsPageState(
         stopCatalog?.();
         catalogClient = state.client;
         stopCatalog = catalogClient
-          ? subscribeModelCatalogCache(catalogClient, () => publish())
+          ? subscribeModelCatalogCache(
+              catalogClient,
+              () => publish(),
+              () => ({
+                agentId: state.agentsSelectedId ?? undefined,
+              }),
+            )
           : undefined;
       }
       syncGitHubIdentity(state.agentsSelectedId);
@@ -780,14 +786,11 @@ export function createAgentsPageState(
 
   async function refreshAgents(mode: "ensure" | "refresh" | "save" = "refresh") {
     const client = state.client;
-    if (mode === "save" && (!client || !canCall("config.set", "operator.admin"))) {
+    if (!client || (mode === "save" && !canCall("config.set", "operator.admin"))) {
       return;
     }
     const generation = state.requestGeneration;
     const agents = context.agents;
-    if (!client) {
-      return;
-    }
     if (mode === "save" && !(await context.runtimeConfig.save())) {
       return;
     }
@@ -806,16 +809,13 @@ export function createAgentsPageState(
   }
 
   async function selectDefaultAgent(agentId: string) {
-    if (!canCall("config.set", "operator.admin")) {
+    const client = state.client;
+    if (!client || !canCall("config.set", "operator.admin")) {
       return;
     }
-    const client = state.client;
     const generation = state.requestGeneration;
     const agents = context.agents;
     const runtimeConfig = context.runtimeConfig;
-    if (!client) {
-      return;
-    }
     const canDispatch = () =>
       context.runtimeConfig === runtimeConfig &&
       isCurrentRequest(client, generation, undefined, { agents }) &&
@@ -905,6 +905,7 @@ export function createAgentsPageState(
       error: agentsState.agentsError,
       agentsList: state.agentsList,
       selectedAgentId,
+      memoryTarget,
       activePanel: state.agentsPanel,
       config: configState,
       channels: {
@@ -980,7 +981,6 @@ export function createAgentsPageState(
         identities.read().map((entry) => [entry.agentId, entry]),
       ),
       overview: {
-        applicationConfig: applicationConfig.read(),
         identityDraft: state.identityDraft,
         identityScope: state.requestGeneration,
         identitySaving: state.identitySaving,
@@ -1092,6 +1092,10 @@ export function createAgentsPageState(
     },
     equality: "revision",
   });
+  const memoryTarget: AgentMemoryTarget = {
+    read: () => state.agentsSelectedId,
+    subscribe: projection.subscribe,
+  };
   onSettled(() => {
     gateway.connect();
     syncAgentState();

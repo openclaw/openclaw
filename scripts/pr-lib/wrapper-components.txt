@@ -152,6 +152,7 @@ packages/worker-runtime/package.json
 packages/worker-runtime/src/index.ts
 packages/worker-runtime/src/lifecycle.ts
 packages/worker-runtime/src/retained-operation.ts
+packages/worker-runtime/src/worker-task-admission.ts
 packages/worker-runtime/src/worker-task-capacity.ts
 packages/worker-runtime/src/worker-task-context.ts
 packages/worker-runtime/src/worker-task-error.ts
@@ -290,6 +291,7 @@ src/agents/model-selection-shared.ts
 src/agents/openai-model-routes.ts
 src/agents/openai-routing.ts
 src/agents/owner-display.ts
+src/agents/requester-origin.ts
 src/agents/plugin-model-catalog-repair.ts
 src/agents/plugin-model-catalog.kernel.ts
 src/agents/provider-auth-aliases.ts
@@ -979,6 +981,7 @@ src/infra/gateway-owner-lease.worker.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
 src/infra/gateway-state-owner-directory.ts
+src/infra/gateway-state-owner-errors.ts
 src/infra/gateway-state-owner-heartbeat.runtime.ts
 src/infra/gateway-state-owner-heartbeat.ts
 src/infra/gateway-state-owner-heartbeat.worker.ts
@@ -994,7 +997,6 @@ src/infra/git-network-retry.ts
 src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts
 src/infra/git-path-quote.ts
-src/infra/git-ref-lock-repair.ts
 src/infra/git-repository-repair.ts
 src/infra/git-root.ts
 src/infra/git-worker-context.ts
@@ -1109,6 +1111,7 @@ src/infra/sqlite-backup.ts
 src/infra/sqlite-busy-timeout.ts
 src/infra/sqlite-clean-close-seal.ts
 src/infra/sqlite-commit-receipt.ts
+src/infra/sqlite-database-admission-context.ts
 src/infra/sqlite-database-admission-key.ts
 src/infra/sqlite-database-admission-read.ts
 src/infra/sqlite-database-admission-record.ts
@@ -1137,6 +1140,7 @@ src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-maintenance-integrity.ts
 src/infra/sqlite-native-admission.ts
 src/infra/sqlite-native-observer.ts
+src/infra/sqlite-native-runtime.ts
 src/infra/sqlite-number.ts
 src/infra/sqlite-page-cache-residency.ts
 src/infra/sqlite-page-cache.worker.ts
@@ -1144,6 +1148,7 @@ src/infra/sqlite-pinned-read-snapshot.ts
 src/infra/sqlite-planner-statistics.ts
 src/infra/sqlite-post-commit.ts
 src/infra/sqlite-private-directory.ts
+src/infra/sqlite-private-snapshot-fork.ts
 src/infra/sqlite-read-cache.ts
 src/infra/sqlite-reader-lifecycle.ts
 src/infra/sqlite-readonly-auth-schema.ts
@@ -1396,6 +1401,7 @@ src/plugins/compat/assistant-text-phase-terminal-hint-record.ts
 src/plugins/compat/async-sqlite-preparation-records.ts
 src/plugins/compat/auth-async-record.ts
 src/plugins/compat/channel-pairing-record.ts
+src/plugins/compat/channel-prepared-tool-policy-record.ts
 src/plugins/compat/cron-store-path-record.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
@@ -1694,7 +1700,6 @@ src/process/spawn-broker/resource-socket.ts
 src/process/spawn-diagnostics.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
-src/process/supervisor/darwin-bun-process-census.ts
 src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-group-ownership.ts
 src/process/windows-command-line.ts
@@ -1745,6 +1750,8 @@ src/security/safe-regex.ts
 src/security/scan-paths.ts
 src/sessions/model-selection-error.ts
 src/sessions/session-chat-type-shared.ts
+src/sessions/session-controller.cleanup-context.ts
+src/sessions/session-controller.owner-context.ts
 src/sessions/session-diff-parser.ts
 src/sessions/session-diff-revisions.ts
 src/sessions/session-diff.runtime.ts
@@ -1925,6 +1932,7 @@ src/state/openclaw-database-preflight.ts
 src/state/openclaw-database-seal-schema.ts
 src/state/openclaw-quarantine-error.ts
 src/state/openclaw-quarantine-store.ts
+src/state/openclaw-schema-versions.ts
 src/state/openclaw-state-db-additive-columns.ts
 src/state/openclaw-state-db-admission.ts
 src/state/openclaw-state-db-async-lifecycle.ts
@@ -1972,6 +1980,7 @@ src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
 src/state/openclaw-state-db-schema-v27-indexes.ts
+src/state/openclaw-state-db-schema-v28-publication.ts
 src/state/openclaw-state-db-schema-version.ts
 src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts
@@ -2601,3 +2610,6 @@ src/agents/main-session-recovery/main-session-recovery-lifecycle.ts
 src/agents/run-termination.ts
 src/config/sessions/session-run-lifecycle-projection.ts
 src/shared/agent-liveness.ts
+src/agents/agent-bundle-mcp-manager-catalog.ts
+src/agents/agent-bundle-mcp-runtime-owner.ts
+src/agents/agent-bundle-mcp-runtime-shared.ts

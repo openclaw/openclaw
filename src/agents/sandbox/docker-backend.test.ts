@@ -53,10 +53,10 @@ function createConfig(backend?: "docker" | "podman", browserEnabled = true): Ope
           scope: "session",
           workspaceAccess: "none",
           backend,
-          docker: { image: "openclaw-sandbox:bookworm-slim" },
+          docker: { image: "openclaw-sandbox:trixie-slim" },
           browser: {
             enabled: browserEnabled,
-            image: "openclaw-sandbox-browser:bookworm-slim",
+            image: "openclaw-sandbox-browser:trixie-slim",
           },
         },
       },
@@ -190,7 +190,7 @@ function runtimeEntry(backendId = "docker") {
     sessionKey: "agent:coder:main",
     createdAtMs: 1,
     lastUsedAtMs: 1,
-    image: "openclaw-sandbox:bookworm-slim",
+    image: "openclaw-sandbox:trixie-slim",
     ...(backendId === "podman" ? { backendTarget: localTarget } : {}),
   };
 }
@@ -637,8 +637,8 @@ process.stdout.write(JSON.stringify({
 );
 
 it.each([
-  { configLabelKind: "BrowserImage", image: "openclaw-sandbox-browser:bookworm-slim" },
-  { configLabelKind: undefined, image: "openclaw-sandbox:bookworm-slim" },
+  { configLabelKind: "BrowserImage", image: "openclaw-sandbox-browser:trixie-slim" },
+  { configLabelKind: undefined, image: "openclaw-sandbox:trixie-slim" },
 ])("matches configured $configLabelKind image", async ({ configLabelKind, image }) => {
   mocks.execContainer.mockResolvedValueOnce(engineResult(`${image}\n`));
   await expect(
@@ -726,9 +726,7 @@ it("rejects browser sandboxing on the explicit Podman backend", async () => {
 
 it("matches canonical Podman identity for an expanded image name", async () => {
   mocks.execContainer
-    .mockResolvedValueOnce(
-      engineResult("localhost/openclaw-sandbox:bookworm-slim\tsha256:abc123\n"),
-    )
+    .mockResolvedValueOnce(engineResult("localhost/openclaw-sandbox:trixie-slim\tsha256:abc123\n"))
     .mockResolvedValueOnce(engineResult("abc123\n"));
 
   await expect(
@@ -739,13 +737,13 @@ it("matches canonical Podman identity for an expanded image name", async () => {
     }),
   ).resolves.toEqual({
     running: true,
-    actualConfigLabel: "localhost/openclaw-sandbox:bookworm-slim",
+    actualConfigLabel: "localhost/openclaw-sandbox:trixie-slim",
     configLabelMatch: true,
   });
   expect(mocks.execContainer).toHaveBeenNthCalledWith(
     2,
     expect.objectContaining({ id: "podman", command: "podman" }),
-    ["image", "inspect", "-f", "{{.Id}}", "openclaw-sandbox:bookworm-slim"],
+    ["image", "inspect", "-f", "{{.Id}}", "openclaw-sandbox:trixie-slim"],
     { allowFailure: true },
   );
 });

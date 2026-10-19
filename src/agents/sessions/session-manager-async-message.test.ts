@@ -28,7 +28,7 @@ import { kickSessionEntryMaintenanceAfterWrite } from "../../config/sessions/ses
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as reclamationRun from "../../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
-import { createDurableSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
+import { createSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
@@ -930,7 +930,7 @@ async function withSelectedTranscriptReader<T>(
       if (!identity.key.startsWith("file:")) {
         throw new Error("Expected a physical actor database");
       }
-      const acquired = await createDurableSessionActorFactory(reader.database).acquire(
+      const acquired = await createSessionActorFactory(reader.database).acquire(
         {
           sessionKey: target.sessionKey,
           database: {

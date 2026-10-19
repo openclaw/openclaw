@@ -13,6 +13,10 @@ import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./embedded-agent-runner/result-fallback-classifier.js";
+import {
+  buildRunEntryTerminal,
+  resolveRunEntryTerminalOutcome,
+} from "./embedded-agent-runner/run-entry-terminal.js";
 import { resolveEmbeddedRunTerminal } from "./embedded-agent-runner/run/terminal-resolution.js";
 import {
   emptyAssistant,
@@ -296,6 +300,52 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     ]);
   });
 
+  it("keeps an internal missing-result notice private after a later provider candidate fails", async () => {
+    const missing = createContractRunResult({
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        stopReason: "error",
+        suppressErrorNotice: true,
+        terminalReply: { disposition: "empty" },
+        error: {
+          kind: "incomplete_turn",
+          message: "No answer was returned. Ask again if you still need one.",
+          fallbackSafe: true,
+        },
+      },
+    });
+    const provider = createContractRunResult({
+      payloads: [{ isError: true, text: "HTTP 500: internal server error" }],
+      meta: { durationMs: 2, stopReason: "error" },
+    });
+    const run = vi.fn().mockResolvedValueOnce(missing).mockResolvedValueOnce(provider);
+    const result = await runWithModelFallback<ReturnType<typeof createContractRunResult>>({
+      ...contractRunOptions,
+      run,
+      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+    });
+    const terminal = buildRunEntryTerminal({
+      result: result.result,
+      outcome: resolveRunEntryTerminalOutcome({ result: result.result, fallbackExhausted: true }),
+      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+      runId: "internal-result-run",
+      sessionId: "internal-result-session",
+      requested: { provider: "external", model: "primary" },
+    });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.outcome).toBe("exhausted");
+    expect(result.result.meta.durationMs).toBe(2);
+    expect(result.result.meta.error).toBe(missing.meta.error);
+    expect(result.result.meta.suppressErrorNotice).toBe(true);
+    expect(result.attempts.at(-1)).toMatchObject({
+      reason: "server_error",
+      error: expect.stringContaining("HTTP 500: internal server error"),
+    });
+    expect(terminal.outcome.status).toBe("error");
+    expect(terminal.metadata.suppressErrorNotice).toBe(true);
+  });
+
   it("preserves the latest structured summary after all fallback candidates are exhausted", async () => {
     const primary = createContractRunResult({
       payloads: [{ text: "Primary terminal summary", isError: true }],
@@ -334,78 +384,84 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     expect(result.attempts).toHaveLength(2);
   });
 
-  it("keeps a richer terminal presentation over a later generic incomplete result", async () => {
-    const primary = createContractRunResult({
-      payloads: [{ text: "Primary terminal summary", isError: true }],
-      meta: {
-        durationMs: 1,
-        agentMeta: {
-          sessionId: "primary-session",
-          sessionFile: "/tmp/primary.jsonl",
-          provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-          model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+  it.each([undefined, false])(
+    "keeps a richer terminal presentation and its notice policy (%s) over a later generic incomplete result",
+    async (suppressErrorNotice) => {
+      const primary = createContractRunResult({
+        payloads: [{ text: "Primary terminal summary", isError: true }],
+        meta: {
+          durationMs: 1,
+          ...(suppressErrorNotice === undefined ? {} : { suppressErrorNotice }),
+          agentMeta: {
+            sessionId: "primary-session",
+            sessionFile: "/tmp/primary.jsonl",
+            provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+            model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+          },
+          error: {
+            kind: "incomplete_turn",
+            message: "Primary incomplete",
+            fallbackSafe: true,
+            terminalPresentation: true,
+          },
         },
-        error: {
-          kind: "incomplete_turn",
-          message: "Primary incomplete",
-          fallbackSafe: true,
-          terminalPresentation: true,
+      });
+      const fallback = createContractRunResult({
+        payloads: [{ text: "Generic fallback incomplete", isError: true }],
+        meta: {
+          durationMs: 1,
+          suppressErrorNotice: true,
+          agentMeta: {
+            sessionId: "fallback-session",
+            sessionFile: "/tmp/fallback.jsonl",
+            provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
+            model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
+          },
+          executionTrace: {
+            winnerProvider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
+            winnerModel: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
+            fallbackUsed: true,
+            runner: "embedded",
+            attempts: [
+              {
+                provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
+                model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
+                result: "success",
+              },
+            ],
+          },
+          error: {
+            kind: "incomplete_turn",
+            message: "Fallback incomplete",
+            fallbackSafe: true,
+          },
         },
-      },
-    });
-    const fallback = createContractRunResult({
-      payloads: [{ text: "Generic fallback incomplete", isError: true }],
-      meta: {
-        durationMs: 1,
-        agentMeta: {
-          sessionId: "fallback-session",
-          sessionFile: "/tmp/fallback.jsonl",
-          provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
-          model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
-        },
-        executionTrace: {
-          winnerProvider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
-          winnerModel: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
-          fallbackUsed: true,
-          runner: "embedded",
-          attempts: [
-            {
-              provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
-              model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
-              result: "success",
-            },
-          ],
-        },
-        error: {
-          kind: "incomplete_turn",
-          message: "Fallback incomplete",
-          fallbackSafe: true,
-        },
-      },
-    });
-    const run = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(fallback);
+      });
+      const run = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(fallback);
 
-    const result = await runWithModelFallback<ReturnType<typeof createContractRunResult>>({
-      ...contractRunOptions,
-      run,
-      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-    });
+      const result = await runWithModelFallback<ReturnType<typeof createContractRunResult>>({
+        ...contractRunOptions,
+        run,
+        mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+      });
 
-    expect(result.outcome).toBe("exhausted");
-    expect(result.result.payloads).toBe(primary.payloads);
-    expect(result.result.meta.error).toBe(primary.meta.error);
-    expect(result.result.meta.agentMeta).toBe(fallback.meta.agentMeta);
-    expect(result.result.meta.executionTrace).toEqual({
-      winnerProvider: undefined,
-      winnerModel: undefined,
-      fallbackUsed: true,
-      runner: "embedded",
-      attempts: undefined,
-    });
-    expect(result.provider).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider);
-    expect(result.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel);
-    expect(result.attempts).toHaveLength(2);
-  });
+      expect(result.outcome).toBe("exhausted");
+      expect(result.result.payloads).toBe(primary.payloads);
+      expect(result.result.meta.error).toBe(primary.meta.error);
+      expect(result.result.meta.suppressErrorNotice).toBe(suppressErrorNotice);
+      expect(result.result.meta.agentMeta).toBe(fallback.meta.agentMeta);
+      expect(result.result.meta.executionTrace).toEqual({
+        winnerProvider: undefined,
+        winnerModel: undefined,
+        fallbackUsed: true,
+        runner: "embedded",
+        attempts: undefined,
+      });
+      expect(result.provider).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider);
+      expect(result.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel);
+      expect(result.attempts).toHaveLength(2);
+    },
+  );
 
   it("rethrows an unrecognized final failure instead of hiding it behind an earlier summary", async () => {
     const primary = createContractRunResult({

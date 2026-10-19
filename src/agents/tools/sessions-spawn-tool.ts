@@ -158,7 +158,7 @@ function buildSessionsSpawnToolSchema(params: {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
   const schema = {
     task: Type.String(),
-    user: requesterProfileSchema(),
+    user: requesterProfileSchema({ defaultToTurnOwner: true }),
     taskName: Type.Optional(
       Type.String({
         description:
@@ -189,7 +189,7 @@ function buildSessionsSpawnToolSchema(params: {
     cwd: Type.Optional(
       Type.String({
         description:
-          "Child working directory. Visible paths outside configured agent workspaces require operator.admin. Mutually exclusive with projectId/projectGitUrl. With no source selector and worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
+          "Child working directory. Workspace-contained file tools (apply_patch/file writes) resolve and contain paths against cwd; set cwd for edits outside the agent workspace. Visible paths outside configured agent workspaces require operator.admin. Mutually exclusive with projectId/projectGitUrl. With no source selector and worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
       }),
     ),
     ...(params.threadAvailable
@@ -583,6 +583,7 @@ export function createSessionsSpawnTool(
           onSpawnEffectsStart,
           agentSessionKey: opts?.agentSessionKey,
           senderIsOwner: opts?.senderIsOwner,
+          gitContributorProfileId: opts?.gitContributorProfileId,
           expectedParentSessionId: opts?.expectedParentSessionId,
           requesterTurnRunId: opts?.requesterTurnRunId,
           completionOwnerKey: opts?.completionOwnerKey,

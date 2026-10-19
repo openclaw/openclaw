@@ -11,7 +11,10 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workflow = readFileSync(".github/workflows/website-installer-sync.yml", "utf8");
 type Step = { id?: string; name?: string; if?: string; run?: string; with?: { script?: string } };
 const config = parse(workflow) as {
-  jobs: Record<string, { if?: string; needs?: string[]; steps: Step[] }>;
+  jobs: Record<
+    string,
+    { if?: string; needs?: string[]; steps: Step[]; strategy?: { matrix?: { debian?: string[] } } }
+  >;
 };
 const unixJobs = [
   "linux-docker",
@@ -130,8 +133,19 @@ ${stepRun("fedora-installer", "install.sh on Fedora")}`,
 
   it("verifies installers across Linux privilege and package-manager paths", () => {
     expect(Object.keys(config.jobs)).toEqual(expect.arrayContaining(unixJobs));
+    for (const job of [
+      "linux-docker",
+      "debian-installer",
+      "linux-build-tools-failure",
+      "linux-non-root",
+    ]) {
+      expect(config.jobs[job]?.strategy?.matrix?.debian, job).toEqual(["bookworm", "trixie"]);
+      expect(
+        config.jobs[job]?.steps.some((step) => step.run?.includes("${{ matrix.debian }}")),
+      ).toBe(true);
+    }
     contains(
-      "debian:bookworm-slim",
+      "debian:${{ matrix.debian }}-slim",
       "node --version | grep -E '^v24\\.[0-9]+\\.[0-9]+$'",
       'require("node:sqlite")',
       "/tmp/build-tools-stub-triggered",
@@ -143,7 +157,7 @@ ${stepRun("fedora-installer", "install.sh on Fedora")}`,
       "user: [root, non-root]",
       "bash /tmp/install.sh --version latest && openclaw --version",
       "bash /tmp/install-cli.sh --prefix /tmp/openclaw",
-      "runs-on: macos-15",
+      "runs-on: xcode-27",
       "node-version: 24",
       'OPENCLAW_NO_ONBOARD: "1"',
       'OPENCLAW_NO_PROMPT: "1"',

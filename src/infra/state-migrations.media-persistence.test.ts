@@ -885,16 +885,15 @@ describe("legacy media persistence doctor migration", () => {
       "drift.jsonl.deleted.2026-07-24T01-02-03.000Z",
     );
     writeArchive(archivePath, [event], false);
-    const archiveDrift = await migrateLegacyMediaPersistence({
-      env,
-      hooks: {
-        beforeArchiveReplace: (candidate) => {
-          if (candidate === archivePath) {
-            fs.writeFileSync(archivePath, "replacement\n");
-          }
-        },
-      },
+    const open = fs.openSync;
+    using archiveOpen = vi.spyOn(fs, "openSync");
+    archiveOpen.mockImplementation((candidate, flags, mode) => {
+      if (flags === "wx" && String(candidate).startsWith(`${archivePath}.media-retirement.`)) {
+        fs.writeFileSync(archivePath, "replacement\n");
+      }
+      return open(candidate, flags, mode);
     });
+    const archiveDrift = await migrateLegacyMediaPersistence({ env });
     expect(archiveDrift.warnings.join("\n")).toContain("changed before atomic");
     expect(fs.readFileSync(archivePath, "utf8")).toBe("replacement\n");
   });
@@ -924,12 +923,12 @@ describe("legacy media persistence NUL-tail recovery", () => {
   it("atomically removes a terminal NUL suffix from an otherwise valid archive", async () => {
     const valid = Buffer.from(`${JSON.stringify({ type: "event", id: "event-1" })}\n`);
     const { archivePath, env } = createArchiveFixture(Buffer.concat([valid, Buffer.alloc(284)]));
-    let replacements = 0;
+    using rename = vi.spyOn(fs, "renameSync");
 
-    const result = await migrateLegacyMediaPersistence({
-      env,
-      hooks: { beforeArchiveReplace: () => (replacements += 1) },
-    });
+    const result = await migrateLegacyMediaPersistence({ env });
+    const replacements = rename.mock.calls.filter(
+      ([, destination]) => destination === archivePath,
+    ).length;
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toContain(`Migrated archived transcript media in ${archivePath}.`);
@@ -945,12 +944,12 @@ describe("legacy media persistence NUL-tail recovery", () => {
     },
   ])("rejects and preserves $name", async ({ bytes }) => {
     const { archivePath, env } = createArchiveFixture(bytes);
-    let replacements = 0;
+    using rename = vi.spyOn(fs, "renameSync");
 
-    const result = await migrateLegacyMediaPersistence({
-      env,
-      hooks: { beforeArchiveReplace: () => (replacements += 1) },
-    });
+    const result = await migrateLegacyMediaPersistence({ env });
+    const replacements = rename.mock.calls.filter(
+      ([, destination]) => destination === archivePath,
+    ).length;
 
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Skipped archived transcript media migration");
@@ -964,12 +963,12 @@ describe("legacy media persistence NUL-tail recovery", () => {
     async ({ bytes }) => {
       const { archivePath, env } = createArchiveFixture(bytes);
       const before = fs.lstatSync(archivePath);
-      let replacements = 0;
+      using rename = vi.spyOn(fs, "renameSync");
 
-      const result = await migrateLegacyMediaPersistence({
-        env,
-        hooks: { beforeArchiveReplace: () => (replacements += 1) },
-      });
+      const result = await migrateLegacyMediaPersistence({ env });
+      const replacements = rename.mock.calls.filter(
+        ([, destination]) => destination === archivePath,
+      ).length;
 
       const after = fs.lstatSync(archivePath);
       expect(result).toEqual({ changes: [], warnings: [] });

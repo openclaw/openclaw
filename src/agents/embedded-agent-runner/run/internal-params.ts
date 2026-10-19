@@ -3,6 +3,7 @@ import type { SessionAdmissionTransition } from "../../../config/sessions/sessio
 import type { SessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { Model } from "../../../llm/types.js";
+import type { SessionControllerWatchdogAttempt } from "../../../sessions/session-controller.watchdog.js";
 import type { PreparedTtsPreferences } from "../../../tts/tts-preferences.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { ModelFallbackRouteResolution } from "../../model-fallback.types.js";
@@ -82,6 +83,8 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   /** Re-admit from the committed transcript without persisting the original prompt again. */
   pluginRuntimeRefreshContinuation?: true;
   pluginRuntimeRefreshMessages?: EmbeddedRunAttemptParams["pluginRuntimeRefreshMessages"];
+  /** Actual generation cleanup, including source callbacks after native terminal publication. */
+  runCleanupSettlement?: Promise<void>;
   /** Host-only transfer of attempt terminal resources to the logical turn. */
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   /** Aborts the logical turn when its retained embedded handle is cancelled. */
@@ -94,7 +97,11 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
 };
 
 export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
-  Pick<RunEmbeddedAgentInternalParams, "onContextAccountingEvent" | "onCompactionRequestBudget"> & {
+  Pick<
+    RunEmbeddedAgentInternalParams,
+    "onContextAccountingEvent" | "onCompactionRequestBudget" | "runCleanupSettlement"
+  > & {
+    bindWatchdogAttempt?: (attempt: SessionControllerWatchdogAttempt) => void;
     /** The dispatch owner already selected this target, including any compaction successor. */
     preparedSessionTarget?: {
       readonly target: Readonly<BoundAgentRunSessionTarget & SessionTranscriptTargetBinding>;

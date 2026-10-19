@@ -3,13 +3,12 @@ import { createMemo, For, Show, untrack } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import {
   presenceViewerActivity,
   type PresenceActivity,
   projectPresenceViewers,
 } from "../lib/presence-users.ts";
-import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
@@ -34,7 +33,6 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "./app-sidebar-session-types.ts";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
-registerEnglishCatalog(registerSessionOrganizationEnglish);
 type SessionCatalogRenderSnapshot = {
   catalogs: readonly SidebarSessionCatalog[];
   basePath: string;
@@ -99,8 +97,7 @@ function renderSessionCatalog(params: {
 }) {
   const host = createMemo(() => params.host),
     snapshot = createMemo(() => params.snapshot),
-    catalog = createMemo(() => params.catalog),
-    renderer = createMemo(() => params.renderer);
+    catalog = createMemo(() => params.catalog);
   const newSessionAccess = createMemo(() => host().readNewSessionAccess());
   const groupWriteAccess = createMemo(() =>
     host().readSessionMutationAccess({
@@ -109,9 +106,9 @@ function renderSessionCatalog(params: {
     }),
   );
   // One lazy module owns this catalog renderer for the mounted section's lifetime.
-  const Render = untrack(renderer);
+  const InitialRenderer = params.renderer;
   return (
-    <Render
+    <InitialRenderer
       catalogs={[catalog()]}
       basePath={snapshot().basePath}
       routeSessionKey={snapshot().routeSessionKey}
@@ -147,6 +144,7 @@ function renderSessionCatalog(params: {
       onReorderSection={(source, target, position) =>
         host().sessionOrganizer.reorderSidebarSection(source, target, position)
       }
+      sectionHeaders={host().sessionOrganizer.sectionHeaders}
       viewMenuOpenCatalogId={host().sidebarMenus.catalogViewMenuPosition?.catalogId ?? null}
       ownerFilterActive={host().sessionOwnerFilterActive}
       onOpenViewMenu={(catalogId, trigger, position) => {
@@ -179,6 +177,7 @@ function renderSessionCatalog(params: {
       onCatalogMenuTriggerRendered={(key, element) =>
         host().sidebarMenus.catalogMenu.retargetTrigger(key, element)
       }
+      onMountRow={(key) => host().sessionProjection.mountCatalogRow(key)}
       isMenuOpen={(key) => host().sidebarMenus.catalogMenuView.isOpenFor(key)}
     />
   );
@@ -221,8 +220,9 @@ function renderSessionListBody(params: {
   return (
     <For each={params.sections} keyed={(section) => section.id}>
       {(section) => {
-        // The key fixes the section kind; its row facts remain reactive below.
-        if (untrack(section).id.startsWith("catalog:")) {
+        // For keys this branch by id; all changing section facts remain reactive below.
+        const initialSectionId = untrack(() => section().id);
+        if (initialSectionId.startsWith("catalog:")) {
           return (
             <Show when={params.catalogRenderer && catalogsBySectionId().get(section().id)}>
               {(catalog) => (
@@ -269,7 +269,7 @@ export function renderSessionList(params: {
 }) {
   const host = createMemo(() => params.host);
   return renderSessionListFrame(
-    untrack(host),
+    host,
     <div class="sidebar-recent-sessions">
       {renderPendingSessionCreateRow(host)}
       {renderSessionListBody(params)}
@@ -296,14 +296,14 @@ export function renderSessionList(params: {
     </div>,
   );
 }
-export function renderSessionListFrame(host: SidebarSessionListHost, body: JSX.Element) {
+export function renderSessionListFrame(host: () => SidebarSessionListHost, body: JSX.Element) {
   const home = createMemo(() =>
-    host.sidebarAgentsMode === "roster" ? null : host.mainSessionRow(),
+    host().sidebarAgentsMode === "roster" ? null : host().mainSessionRow(),
   );
   const loadKeys = createMemo(() => {
     const homeValue = home();
     return homeValue
-      ? host.projectHomeSession(homeValue, host.expandedAgentId()).childLoadParentKeys
+      ? host().projectHomeSession(homeValue, host().expandedAgentId()).childLoadParentKeys
       : [];
   });
   const homeLoadKeys = createMemo(() => {
@@ -315,13 +315,13 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: JSX.E
     <section
       class={[
         "sidebar-sessions",
-        host.sessionOrganizer.sessionListRemovalDrop && "sidebar-sessions--removal-drop",
+        host().sessionOrganizer.sessionListRemovalDrop && "sidebar-sessions--removal-drop",
       ]}
-      onDragOver={(event: DragEvent) => host.sessionOrganizer.handleSessionListDragOver(event)}
-      onDragLeave={(event: DragEvent) => host.sessionOrganizer.handleSessionListDragLeave(event)}
-      onDrop={(event: DragEvent) => host.sessionOrganizer.handleSessionListDrop(event)}
+      onDragOver={(event: DragEvent) => host().sessionOrganizer.handleSessionListDragOver(event)}
+      onDragLeave={(event: DragEvent) => host().sessionOrganizer.handleSessionListDragLeave(event)}
+      onDrop={(event: DragEvent) => host().sessionOrganizer.handleSessionListDrop(event)}
     >
-      {host.sessionData.sessionsStartingUp && !host.sidebarSnapshot ? (
+      {host().sessionData.sessionsStartingUp && !host().sidebarSnapshot ? (
         <div
           class="sidebar-session-empty-hint sidebar-session-empty-hint--startup"
           role="status"
@@ -331,12 +331,12 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: JSX.E
         </div>
       ) : undefined}
       <For each={homeLoadKeys()}>{(key) => renderChildSessionLoadError(host, key)}</For>
-      {host.sessionOrganizer.isDraggingChildSession ? (
+      {host().sessionOrganizer.isDraggingChildSession ? (
         <div class="sidebar-session-root-drop" data-session-root-drop="" role="status">
           {t("sessionsView.moveToTopLevel")}
         </div>
       ) : undefined}
-      {renderSessionMutationError(host)} {body}
+      {renderSessionMutationError(host())} {body}
     </section>
   );
 }

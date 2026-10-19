@@ -55,15 +55,6 @@ export function expectFields(value: unknown, expected: Record<string, unknown>):
   }
 }
 
-export function firstRecord(value: unknown): Record<string, unknown> {
-  expect(Array.isArray(value)).toBe(true);
-  const [record] = value as unknown[];
-  if (!record || typeof record !== "object") {
-    throw new Error("expected first record");
-  }
-  return record as Record<string, unknown>;
-}
-
 export function parseStdoutJson(stdout: { output: () => string }): Record<string, unknown> {
   return JSON.parse(stdout.output()) as Record<string, unknown>;
 }

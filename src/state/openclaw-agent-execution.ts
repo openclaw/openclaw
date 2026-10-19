@@ -1,5 +1,5 @@
+import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { assertAgentSessionWriteAdmission } from "../sessions/session-agent-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -86,21 +86,10 @@ export async function prepareOpenClawAgentDatabaseExecution(
       options,
       () =>
         execution.prepare(
-          {
+          createSessionWorkerExecutionSource(
             assertCurrent,
-            createAdmission: (binding) => () => ({
-              nativeLocations: binding.nativeLocations,
-              admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                binding.authorize(request);
-                assertCurrent();
-                if (!grant()) {
-                  throw new Error(
-                    `Agent ${options.agentId} database preparation admission expired`,
-                  );
-                }
-              }, binding.attachment),
-            }),
-          },
+            `Agent ${options.agentId} database preparation admission expired`,
+          ),
           signal,
         ),
       undefined,

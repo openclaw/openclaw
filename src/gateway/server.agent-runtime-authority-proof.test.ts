@@ -13,7 +13,10 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
-import { startSessionWorkAdmissionInterruption } from "../sessions/session-lifecycle-admission.js";
+import {
+  captureSessionTarget,
+  startSessionControllerInterruption,
+} from "../sessions/session-controller.lifecycle.js";
 import { createAgentAdmissionController } from "./agent-turn/agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
 import { createAgentRunAdmissionRevalidator } from "./agent-turn/agent-run-admission-revalidation.js";
@@ -111,14 +114,32 @@ describe("agent RPC real delegated-authority effects", () => {
       requests: (Promise<unknown> | undefined)[],
       observers: { mockRestore: () => unknown }[] = [],
       reservation?: ReturnType<typeof createAgentDedupeLifecycle>,
+      allowPublicationDenial = false,
     ) => {
       release.resolve();
-      await execution?.cleanup();
-      await Promise.allSettled(requests.filter((request) => request !== undefined));
-      reservation?.clearUnaccepted();
-      await f.cleanup();
-      observers.forEach((observer) => observer.mockRestore());
-      signal.removeEventListener("abort", unblock);
+      try {
+        if (allowPublicationDenial) {
+          // This test owns input custody, not final publication. Cleanup may finish
+          // normally; if publication races revocation, only that exact denial is expected.
+          await execution?.cleanup().catch((error: unknown) => {
+            expect(error).toMatchObject({
+              name: "SessionMutationAuthorizationChangedError",
+              message: "agent runtime authority is no longer active",
+            });
+          });
+        } else {
+          await execution?.cleanup();
+        }
+      } finally {
+        await Promise.allSettled(requests.filter((request) => request !== undefined));
+        reservation?.clearUnaccepted();
+        try {
+          await f.cleanup();
+        } finally {
+          observers.forEach((observer) => observer.mockRestore());
+          signal.removeEventListener("abort", unblock);
+        }
+      }
     };
     return { entered, release, finish };
   }
@@ -249,9 +270,20 @@ describe("agent RPC real delegated-authority effects", () => {
             expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
           }
           expect(agentCommandMock).not.toHaveBeenCalled();
+          await execution.resume();
+          expect(agentCommandMock).toHaveBeenCalledOnce();
+          const completed = await f.dispatch(
+            params,
+            mode === "ordinary raw input" ? null : await f.freshCaller(),
+          );
+          expect(completed).toMatchObject({
+            ok: true,
+            meta: { cached: true },
+            payload: { runId: f.runId, status: "ok" },
+          });
         }
       } finally {
-        await finish([writer, request], [observer], replacement);
+        await finish([writer, request], [observer], replacement, mode === "accepted custody");
       }
     },
   );
@@ -511,7 +543,7 @@ describe("agent RPC real delegated-authority effects", () => {
       });
       let registration: ReturnType<typeof registerChatAbortController> | undefined;
       let newer: ReturnType<typeof createAgentDedupeLifecycle> | undefined;
-      let interrupted: ReturnType<typeof startSessionWorkAdmissionInterruption> | undefined;
+      let interrupted: ReturnType<typeof startSessionControllerInterruption> | undefined;
       try {
         await admission.acquire(f.scope.storePath);
         if (replaceAlias) {
@@ -520,13 +552,18 @@ describe("agent RPC real delegated-authority effects", () => {
         }
         const retained = f.context.dedupe.get(alias);
         if (phase === "pre-registration") {
-          interrupted = startSessionWorkAdmissionInterruption({
+          interrupted = startSessionControllerInterruption({
             scope: f.scope.storePath,
             identities: [f.sessionKey, f.sessionId],
           });
         } else {
           registration = registerChatAbortController({
-            chatAbortControllers: f.context.chatAbortControllers,
+            target: captureSessionTarget({
+              storeScope: f.scope.storePath,
+              sessionKey: f.sessionKey,
+              incarnation: f.sessionId,
+              agentId: "main",
+            }),
             runId: f.runId,
             sessionKey: f.sessionKey,
             sessionId: f.sessionId,

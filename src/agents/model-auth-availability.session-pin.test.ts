@@ -8,6 +8,7 @@ import {
   dualRoutes,
   evaluate,
   routeResolverFactory,
+  mockRouteResolverFactory,
 } from "./model-auth-availability.test-support.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
 
@@ -40,13 +41,13 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
         authProfileStore: store,
       });
       expect(runtime.attempts.map((attempt) => attempt.kind)).toEqual(["direct"]);
+      mockRouteResolverFactory(routeResolverFactory(provider === "openai" ? dualRoutes : null));
       expect(
         createModelAuthAvailabilityResolver({
           cfg: config,
           authStore: store,
           env,
           preparedRuntimeAuthStore: { version: 1, profiles: {} },
-          routeResolverFactory: routeResolverFactory(provider === "openai" ? dualRoutes : null),
         }).evaluateModelAuth(provider, { modelId: "gpt-5.5" }),
       ).toMatchObject({ availability: true, evidence: "provider-config", selectedAuthMode: mode });
     },
@@ -91,12 +92,12 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
       sessionAuthProfileSource: personal ? "user-link" : "user",
     });
     expect(runtime.attempts.map((attempt) => attempt.profileId)).toEqual(expected);
+    mockRouteResolverFactory(routeResolverFactory(provider === "openai" ? dualRoutes : null));
     const readiness = createModelAuthAvailabilityResolver({
       cfg: config,
       authStore: store,
       env: {},
       preparedRuntimeAuthStore: { version: 1, profiles: {} },
-      routeResolverFactory: routeResolverFactory(provider === "openai" ? dualRoutes : null),
     }).evaluateModelAuth(provider, {
       modelId: "gpt-5.5",
       preferredProfileId: pin,
@@ -166,13 +167,13 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
             })
           : "is not configured",
       );
+      mockRouteResolverFactory(routeResolverFactory(provider === "openai" ? dualRoutes : null));
       expect(
         createModelAuthAvailabilityResolver({
           cfg: config,
           authStore: store,
           env: {},
           preparedRuntimeAuthStore: { version: 1, profiles: {} },
-          routeResolverFactory: routeResolverFactory(provider === "openai" ? dualRoutes : null),
         }).evaluateModelAuth(provider, { modelId: "gpt-5.5", pinnedProfileId: pin }),
       ).toMatchObject({ availability: false, unavailableReason: "auth-failed" });
     },
@@ -374,13 +375,13 @@ describe("session account pin admission", () => {
       } else {
         expect(prepare).toThrow("is not configured");
       }
+      mockRouteResolverFactory(routeResolverFactory(null));
       expect(
         createModelAuthAvailabilityResolver({
           cfg: config,
           authStore: store,
           env: {},
           preparedRuntimeAuthStore: { version: 1, profiles: {} },
-          routeResolverFactory: routeResolverFactory(null),
         }).evaluateModelAuth(provider, { modelId: "synthetic-model", pinnedProfileId: pin }),
       ).toMatchObject(
         state === "absent"
@@ -434,13 +435,13 @@ describe("session account pin admission", () => {
         sessionAuthProfileSource: "user",
       }).attempts.map((attempt) => attempt.profileId),
     ).toEqual([pin]);
+    mockRouteResolverFactory(routeResolverFactory(null));
     expect(
       createModelAuthAvailabilityResolver({
         cfg: config,
         authStore: store,
         preparedRuntimeAuthStore: runtimeStore,
         env: {},
-        routeResolverFactory: routeResolverFactory(null),
       }).evaluateModelAuth(provider, { modelId: "synthetic-model", pinnedProfileId: pin }),
     ).toMatchObject({ availability: true, selectedProfileId: pin });
   });

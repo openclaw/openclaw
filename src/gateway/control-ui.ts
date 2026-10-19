@@ -37,6 +37,7 @@ import {
 } from "./assistant-media-content-disposition.js";
 import {
   resolveAssistantMediaPolicy,
+  resolveAssistantMediaWorkspaceTicketKey,
   assertAssistantMediaPolicyCurrent,
   verifyAssistantMediaTicket,
 } from "./assistant-media-policy.js";
@@ -44,6 +45,7 @@ import {
   normalizeAssistantMediaSource,
   openAssistantMedia,
   resolveAssistantMediaAvailability,
+  resolveAssistantMediaSource,
 } from "./control-ui-assistant-media-read.js";
 import { prepareAssistantMessageMedia } from "./control-ui-assistant-message-media.js";
 import { matchesControlUiBootstrapConfigPath } from "./control-ui-bootstrap-contract.js";
@@ -239,13 +241,12 @@ export async function handleControlUiAssistantMediaRequest(
     return true;
   }
   using mediaPolicy = { ...policy, [Symbol.dispose]: () => policy.release() };
-  if (relativeSource) {
-    if (policy.remote || !policy.executionCwd || !path.isAbsolute(policy.executionCwd)) {
-      respondControlUiNotFound(res);
-      return true;
-    }
-    source = path.resolve(policy.executionCwd, source);
+  const resolvedSource = resolveAssistantMediaSource(source, policy);
+  if (!resolvedSource) {
+    respondControlUiNotFound(res);
+    return true;
   }
+  source = resolvedSource;
   const ticket = ticketCandidate?.source === source ? ticketCandidate : undefined;
   if (explicitAllow && !policy.canAllow) {
     sendJson(res, 403, { error: "Allowing an outside image requires operator.admin" });
@@ -256,7 +257,8 @@ export async function handleControlUiAssistantMediaRequest(
     ticket.session?.sessionKey === policy.session?.sessionKey &&
     ticket.session?.agentId === policy.session?.agentId &&
     ticket.session?.sessionId === policy.session?.sessionId &&
-    ticket.messageId === policy.messageId;
+    ticket.messageId === policy.messageId &&
+    ticket.workspaceKey === resolveAssistantMediaWorkspaceTicketKey(source, policy);
   if (!isMetaRequest && url.searchParams.has("mediaTicket") && (!ticket || !sameSession)) {
     respondControlUiNotFound(res);
     return true;
@@ -292,7 +294,7 @@ export async function handleControlUiAssistantMediaRequest(
       publish();
     });
   if (isMetaRequest) {
-    const availability = await resolveAssistantMediaAvailability(
+    const { assertSourceCurrent, ...availability } = await resolveAssistantMediaAvailability(
       source,
       policy,
       allowance,
@@ -304,15 +306,16 @@ export async function handleControlUiAssistantMediaRequest(
       return true;
     }
     try {
-      await publishResponse(() =>
+      await publishResponse(() => {
+        assertSourceCurrent?.();
         sendJson(
           res,
           200,
           !availability.available && availability.code === "outside-allowed-folders"
             ? { ...availability, retryable: false, ...(policy.canAllow ? { canAllow: true } : {}) }
             : availability,
-        ),
-      );
+        );
+      });
     } catch {
       respondControlUiNotFound(res);
     }
@@ -321,7 +324,7 @@ export async function handleControlUiAssistantMediaRequest(
 
   let byteStream: ReturnType<typeof createGatewayByteStream> | undefined;
   try {
-    const media = await openAssistantMedia(source, policy, allowance);
+    const media = await openAssistantMedia(source, policy, allowance, assertCurrentPolicy);
     let opened = media.opened;
     byteStream = createGatewayByteStream(res, opened.handle, () => respondControlUiNotFound(res));
     const mime = media.mimeType;
@@ -410,6 +413,7 @@ export async function handleControlUiAssistantMediaRequest(
     let delivery: Promise<void> | undefined;
     const stream = byteStream;
     await publishResponse(() => {
+      media.assertSourceCurrent();
       if (media.outsideRoots && mediaKind === "image") {
         applyHttpImageContentSecurityPolicy(res);
       }

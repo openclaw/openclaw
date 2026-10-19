@@ -19,6 +19,7 @@ import {
 import type { GatewayPortalIngressConfig } from "../../config/types.gateway.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
+import { closeHttpServers } from "../../infra/http-server-lifecycle.js";
 import { claimTailscaleServePort, type TailscaleRouteClaim } from "../../infra/tailscale.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
@@ -31,7 +32,7 @@ import {
   type PortalTarget,
 } from "./portal-http-proxy.js";
 import { createPortalIngress, portalIngressHostname } from "./portal-ingress.js";
-import { closePortalServers, removePortalServers } from "./portal-listeners.js";
+import { removePortalServers } from "./portal-listeners.js";
 import { resolvePortalTlsHostname } from "./portal-tls-hostname.js";
 
 type PortalEntry = {
@@ -322,7 +323,7 @@ export function createGatewayPortalService(params: {
     runtime.detachOwner?.();
     // Release every owned resource even if a route owner reports a teardown error.
     const cleanup = await Promise.allSettled([
-      closePortalServers(runtime.servers),
+      closeHttpServers(runtime.servers, { force: true }),
       Promise.resolve().then(() => runtime.claim?.stop()),
       Promise.resolve().then(() => runtime.onClose?.()),
     ]);
@@ -538,7 +539,7 @@ export function createGatewayPortalService(params: {
             for (const socket of upgradedSockets) {
               socket.destroy();
             }
-            await Promise.all([closePortalServers(servers), claim?.stop()]);
+            await Promise.all([closeHttpServers(servers, { force: true }), claim?.stop()]);
             throw error;
           }
           const runtime: PortalRuntimeEntry = {

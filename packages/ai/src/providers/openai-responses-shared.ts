@@ -47,7 +47,7 @@ import { clampMaxTokensToModel } from "./simple-options.js";
 
 type OpenAIResponsesStreamOptions = Pick<
   ResponsesStreamOptions,
-  "serviceTier" | "resolveServiceTier" | "applyServiceTierPricing"
+  "serviceTier" | "applyServiceTierPricing"
 >;
 
 export { convertResponsesToolPayload };
@@ -80,9 +80,6 @@ type ResponsesLifecycleStreamOptions = Pick<
 > &
   Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected"> &
   FirstStreamEventInternalOptions;
-
-type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
-  FirstStreamEventInternalOptions & { signal?: AbortSignal };
 
 type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
@@ -189,7 +186,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     model: Model<TApi>,
     replayMode: OpenAIResponsesReplayMode,
   ) => OpenAIResponsesRequestParams;
-  processStreamOptions?: OpenAIResponsesProcessStreamOptions;
+  processStreamOptions?: OpenAIResponsesStreamOptions;
 }): Promise<void> {
   const { stream, output, options } = params;
 
@@ -255,26 +252,19 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       onFirstEventTimeout !== undefined
         ? {
             ...params.processStreamOptions,
-            firstEventTimeoutMs:
-              params.processStreamOptions?.firstEventTimeoutMs ?? firstEventTimeoutMs,
-            abortFirstEventStream:
-              params.processStreamOptions?.abortFirstEventStream ?? firstEventAbort.abort,
-            onFirstEventTimeout:
-              params.processStreamOptions?.onFirstEventTimeout ?? onFirstEventTimeout,
-            signal: params.processStreamOptions?.signal ?? options?.signal,
+            firstEventTimeoutMs,
+            abortFirstEventStream: firstEventAbort.abort,
+            onFirstEventTimeout,
+            signal: options?.signal,
           }
         : undefined;
     const terminal = await processResponsesStream(hookedOpenAIStream, output, stream, model, {
       ...processStreamOptions,
-      resolveServiceTier: (responseTier, originalTier) => {
-        const tier =
-          requestedTier === "priority" || requestedTier === "default"
-            ? requestedTier
-            : originalTier;
-        return processStreamOptions?.resolveServiceTier
-          ? processStreamOptions.resolveServiceTier(responseTier, tier)
-          : (responseTier ?? tier);
-      },
+      resolveServiceTier: (responseTier, originalTier) =>
+        responseTier ??
+        (requestedTier === "priority" || requestedTier === "default"
+          ? requestedTier
+          : originalTier),
       onServiceTier: (responseTier, response) =>
         responsesServiceTierObserver.observe(options, requestedTier, responseTier, response),
       canRetryIdentityConflict: () => hasOnlyResponsesFunctionTools(admittedRequest),

@@ -5,6 +5,7 @@ import type { ApplicationContext, ApplicationNavigationOptions } from "../app/co
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type {
   SessionConnectionScope,
   SessionListSnapshot,
@@ -69,7 +70,7 @@ export function hidePersonalSidebarCatalog(
   recoveryLink.className = "session-link";
   recoveryLink.href = recoveryHref;
   recoveryLink.textContent = t("chat.sidebar.sectionHiddenRecovery");
-  recoveryLink.addEventListener("click", (event) => {
+  listen(recoveryLink, "click", (event) => {
     if (!shouldHandleNavigationClick(event)) {
       return;
     }

@@ -11,6 +11,7 @@ import {
   releaseChatAttachmentPayloads,
 } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { ChatAttachmentReadLifecycle } from "./chat-attachment-reads.ts";
 import { createChatAttachmentDropHandlers, handleChatAttachmentPaste } from "./chat-attachments.ts";
@@ -91,7 +92,10 @@ describe.runIf(browserMode)("oversized composer images", () => {
         host.addEventListener("drop", handlers.onDrop);
         host.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, cancelable: true }));
       } else if (route === "picker") {
-        view = mountSolid(() => createComponent(ChatAttachmentInputs, props), { container: host });
+        const inputHandle = createChatAttachmentInputHandle();
+        view = mountSolid(() => createComponent(ChatAttachmentInputs, { ...props, inputHandle }), {
+          container: host,
+        });
         flush();
         const input = expectDefined(host.querySelector<HTMLInputElement>("input"), "file picker");
         input.files = transfer.files;

@@ -9,7 +9,6 @@ import { runSqliteIntegrityOperationInWorker } from "../infra/sqlite-integrity-o
 import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { invalidateSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
@@ -26,6 +25,7 @@ import {
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
 import { ensureOpenClawAgentDatabaseSchemaSteps } from "./openclaw-agent-db-schema.js";
+import { OPENCLAW_AGENT_FTS_SCHEMAS } from "./openclaw-agent-fts-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
@@ -112,8 +112,7 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
       return;
     }
     assertExistingAgentSchemaOwner(metadata, agentId, pathname);
-    assertSupportedAgentSchemaVersion(database, pathname);
-    const userVersion = readSqliteUserVersion(database);
+    const userVersion = assertSupportedAgentSchemaVersion(database, pathname);
     const metadataVersion = metadata.schemaVersion;
     const hasCurrentVersion =
       userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
@@ -130,6 +129,7 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
     }
     const repairIndexes = () => {
       const changes = repairDoctorSqliteIndexCorruption(database, pathname, {
+        ftsSchemas: OPENCLAW_AGENT_FTS_SCHEMAS,
         label: `agent ${agentId}`,
         assertCurrent: () => {
           assertOwned();

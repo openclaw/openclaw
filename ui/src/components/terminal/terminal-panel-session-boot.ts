@@ -1,5 +1,6 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { t } from "../../i18n/index.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type {
   TerminalConnection,
   TerminalGatewayClient,
@@ -90,12 +91,12 @@ export function observeTerminalRestoreInput(document: Document, signal: AbortSig
     input.interacted = true;
   };
   function stop() {
-    document.removeEventListener("pointerdown", onInteraction, true);
-    document.removeEventListener("keydown", onInteraction, true);
+    stopPointer();
+    stopKeyboard();
     signal.removeEventListener("abort", stop);
   }
-  document.addEventListener("pointerdown", onInteraction, true);
-  document.addEventListener("keydown", onInteraction, true);
+  const stopPointer = listen(document, "pointerdown", onInteraction, true);
+  const stopKeyboard = listen(document, "keydown", onInteraction, true);
   signal.addEventListener("abort", stop, { once: true });
   return input;
 }

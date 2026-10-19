@@ -29,7 +29,6 @@ import { createWorkerEnvironmentStore } from "./store.js";
 
 const changeContext = (subscribers: string[] = []) => ({
   broadcastToConnIds: vi.fn(),
-  chatAbortControllers: new Map(),
   getRuntimeConfig: () => ({}),
   getSessionEventSubscriberConnIds: () => new Set(subscribers),
 });

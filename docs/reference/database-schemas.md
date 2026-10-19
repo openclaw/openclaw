@@ -199,6 +199,12 @@ idle timeout. Surplus readers retire after 30 seconds idle and restart on demand
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
 
+If a shared-state writer worker is lost, its logical leases retire even while
+idle. Retirement joins dispatched commands but does not wait for external
+callback bodies, allowing agent lease cleanup to reach its existing recovery
+path. An uncertain write remains `outcome-unknown`; recovery never replays it or
+claims that it rolled back.
+
 Durable usage refreshes publish rollups in bounded transactions instead of one
 writer request per transcript. A batch flushes after 50 transcripts, 1 MiB of
 prepared payload, or one second of scanning, checked between whole transcripts;
@@ -307,7 +313,7 @@ process's published facts without repeating validation.
 
 Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent and publishes the committed facts for every handle and worker. A rolled-back installation remains absent until the next normal installation transaction. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
 
-The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths leave existing executors to expire normally. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
+The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent idle timeout (30 minutes in the Gateway, 30 seconds in CLI processes so Doctor maintenance is not left waiting on an idle lease); a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths leave existing executors to expire normally. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
 
 Creating an agent database at an admitted absent path revokes the previous file's
 retained validation before worker preparation. A recreated file cannot borrow that

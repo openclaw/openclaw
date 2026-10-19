@@ -149,6 +149,38 @@ describe("openclaw-file-preview-modal", () => {
     },
   );
 
+  it("reveals active rows on list updates and only refocuses changed document paths", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const modal = await renderPreview();
+    const focusTarget = modal.querySelector<HTMLElement>(".modal")!;
+    focusTarget.tabIndex = 0;
+    focusTarget.focus();
+
+    scroll.mockClear();
+    modal.query = "digest";
+    await modal.updateComplete;
+    expect(scroll.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+    expect(document.activeElement).toBe(focusTarget);
+
+    scroll.mockClear();
+    modal.files = files.map((file) => ({ ...file, size: "3 KB" }));
+    await modal.updateComplete;
+    expect(scroll.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+    expect(document.activeElement).toBe(focusTarget);
+
+    scroll.mockClear();
+    modal.layout = "document";
+    await modal.updateComplete;
+    expect(scroll.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+    expect(document.activeElement).toBe(focusTarget);
+
+    scroll.mockClear();
+    modal.activePath = files[1]!.path;
+    await modal.updateComplete;
+    expect(scroll.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+    expect(document.activeElement).toBe(modal.querySelector(".item.is-active"));
+  });
+
   it("restores modal focus when the same element reconnects", async () => {
     const modal = await renderPreview();
     const outside = document.createElement("button");
@@ -197,6 +229,7 @@ describe("openclaw-file-preview-modal", () => {
     expect(firstChunks.map((chunk) => chunk.textContent ?? "").join("\n")).toBe(firstContents);
 
     body!.scrollTop = 2200;
+    body!.scrollLeft = 40;
     expect(body!.scrollTop).toBe(2200);
 
     modal.activePath = "second.ts";
@@ -205,7 +238,19 @@ describe("openclaw-file-preview-modal", () => {
     const secondChunks = [...(modal.querySelectorAll<HTMLElement>(".code-chunk") ?? [])];
 
     expect(updatedBody?.scrollTop).toBe(0);
+    expect(updatedBody?.scrollLeft).toBe(0);
     expect(secondChunks.map((chunk) => chunk.textContent ?? "").join("\n")).toBe(secondContents);
+
+    updatedBody!.scrollTop = 320;
+    updatedBody!.scrollLeft = 40;
+    modal.files = previewFiles.map((file) =>
+      file.path === "second.ts"
+        ? Object.assign({}, file, { contents: `${file.contents}\nUpdated contents` })
+        : file,
+    );
+    await modal.updateComplete;
+    expect(modal.querySelector<HTMLElement>(".detail-body")?.scrollTop).toBe(0);
+    expect(modal.querySelector<HTMLElement>(".detail-body")?.scrollLeft).toBe(0);
   });
 
   it.each(["files", "document"] as const)(
@@ -230,6 +275,14 @@ describe("openclaw-file-preview-modal", () => {
       expect(body.scrollTop).toBe(240);
       expect(body.scrollLeft).toBe(40);
       expect(body.textContent).toContain("Morning digest template");
+
+      // Changing the requested path still reveals a row, but an unchanged resolved file stays put.
+      const reveal = vi.spyOn(Element.prototype, "scrollIntoView");
+      modal.activePath = "missing-file.md";
+      await modal.updateComplete;
+      expect(reveal.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+      expect(body.scrollTop).toBe(240);
+      expect(body.scrollLeft).toBe(40);
     },
   );
 

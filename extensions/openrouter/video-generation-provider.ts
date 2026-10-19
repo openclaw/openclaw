@@ -9,7 +9,7 @@ import {
   createProviderOperationDeadline,
   pollProviderOperation,
   postJsonRequest,
-  readProviderJsonResponse,
+  readProviderJsonObjectResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
@@ -66,22 +66,6 @@ type OpenRouterImagePart = {
 type OpenRouterFrameImagePart = OpenRouterImagePart & {
   frame_type: "first_frame" | "last_frame";
 };
-
-async function readOpenRouterVideoJson(response: Response): Promise<Record<string, unknown>> {
-  let payload: unknown;
-  try {
-    payload = await readProviderJsonResponse<unknown>(response, "OpenRouter video generation");
-  } catch (error) {
-    if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
-      throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE, { cause: error });
-    }
-    throw error;
-  }
-  if (!isRecord(payload)) {
-    throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
-  }
-  return payload;
-}
 
 function readOpenRouterVideoResponse(payload: Record<string, unknown>): OpenRouterVideoResponse {
   const unsignedUrls = payload.unsigned_urls;
@@ -289,7 +273,11 @@ async function pollOpenRouterVideo(params: {
       });
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter video status request failed");
-        return readOpenRouterVideoResponse(await readOpenRouterVideoJson(response));
+        return readOpenRouterVideoResponse(
+          await readProviderJsonObjectResponse(response, "OpenRouter video generation", {
+            malformedResponseError: OPENROUTER_VIDEO_MALFORMED_RESPONSE,
+          }),
+        );
       } finally {
         await release();
       }
@@ -412,7 +400,11 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
 
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter video generation failed");
-        const submitted = readOpenRouterVideoResponse(await readOpenRouterVideoJson(response));
+        const submitted = readOpenRouterVideoResponse(
+          await readProviderJsonObjectResponse(response, "OpenRouter video generation", {
+            malformedResponseError: OPENROUTER_VIDEO_MALFORMED_RESPONSE,
+          }),
+        );
         const jobId = submitted.id;
         const pollingUrl = submitted.polling_url;
         if (!jobId || !pollingUrl) {

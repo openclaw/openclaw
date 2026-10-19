@@ -313,13 +313,14 @@ export function resolveInboundConversationResolution(
   const plugin = getLoadedChannelPluginForRead(channel);
   const resolutionScope = resolveConversationScope(channel, plugin, params);
   const { threadId } = resolutionScope;
+  const to = normalizeOptionalString(params.to);
   const resolverParams = {
     from: normalizeOptionalString(params.from),
-    to: normalizeOptionalString(params.to),
+    to,
     conversationId:
       normalizeOptionalString(params.conversationId) ??
       normalizeOptionalString(params.groupId) ??
-      normalizeOptionalString(params.to),
+      to,
     threadId,
     threadParentId: stringifyRouteThreadId(params.threadParentId),
     isGroup: params.isGroup ?? true,

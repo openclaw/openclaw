@@ -88,8 +88,6 @@ export function createDiscordMessageReplyRuntime(params: {
   dispatchStartedAt: number;
   feedbackRest: RequestClient;
   deliveryRest: RequestClient;
-  onFinalReplyStart?: () => void;
-  onFinalReplyDelivered?: () => void;
 }) {
   const { ctx, processContext } = params;
   const {
@@ -207,8 +205,6 @@ export function createDiscordMessageReplyRuntime(params: {
     deliveryRest: params.deliveryRest,
     deliverChannelId,
     replyReference: params.replyReference,
-    onFinalReplyStart: params.onFinalReplyStart,
-    onFinalReplyDelivered: params.onFinalReplyDelivered,
     log: logVerbose,
   });
   const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);

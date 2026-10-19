@@ -2,6 +2,7 @@ import { createMemo, For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
+import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
 
@@ -123,4 +124,42 @@ declare module "@solidjs/web" {
       "openclaw-microphone-activity": HTMLAttributes<HTMLElement>;
     }
   }
+}
+
+export function ComposerDictationStatus(props: {
+  readDictation: () => ComposerDictationOwner | undefined;
+}) {
+  const content = createMemo(() => {
+    const dictation = props.readDictation();
+    if (!dictation?.active) {
+      return null;
+    }
+    if (dictation.connecting) {
+      return (
+        <ChatVoiceStatus status="connecting" detail={t("chat.composer.microphoneAccessPending")} />
+      );
+    }
+    return (
+      <div class="agent-chat__composer-status-stack">
+        <div
+          class={[
+            "agent-chat__dictation-status",
+            { "agent-chat__dictation-status--finalizing": dictation.finalizing },
+          ]}
+        >
+          <span
+            class={[
+              "agent-chat__dictation-phase",
+              { "agent-chat__dictation-phase--listening": !dictation.finalizing },
+            ]}
+          >
+            {dictation.finalizing
+              ? t("chat.composer.dictationFinalizing")
+              : t("chat.composer.dictationListening")}
+          </span>
+        </div>
+      </div>
+    );
+  });
+  return <>{content()}</>;
 }

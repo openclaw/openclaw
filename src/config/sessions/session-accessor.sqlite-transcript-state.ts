@@ -638,10 +638,6 @@ export function deleteTranscriptEventsInTransaction(
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
     assertSessionTranscriptHot(database.db, sessionId);
     const db = getSessionKysely(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("transcript_event_identities").where("session_id", "=", sessionId),
-    );
     const result = executeSqliteQuerySync(
       database.db,
       db.deleteFrom("transcript_events").where("session_id", "=", sessionId),

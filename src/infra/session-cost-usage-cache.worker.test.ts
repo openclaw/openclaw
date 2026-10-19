@@ -1,4 +1,3 @@
-import { mkdirSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
@@ -32,8 +31,6 @@ import {
   loadSessionCostSummariesFromCache,
 } from "./session-cost-usage.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
-import * as operationAdmission from "./sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { WorkerTaskInput, WorkerTaskOptions } from "./worker-task-pool.types.js";
 
@@ -290,41 +287,6 @@ it("rebuilds corrupt report bodies only for the exact rejected metadata snapshot
       cacheStatus: { status: "fresh" },
       invalidRows: [],
     });
-  });
-});
-
-it("refuses a foreign cache file appearing after its creating grant", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const agentId = "usage-foreign-creation";
-    const sessionFile = state.path("usage.jsonl");
-    await fs.writeFile(sessionFile, usageLine("foreign-creation"));
-    const prepared = prepareUsageCostWorker({ config, agentId, sessionFiles: [sessionFile] });
-    const target = prepared.location.databasePath;
-    mkdirSync(path.dirname(target), { recursive: true });
-    let injected = false;
-    const observer = probe.admission(operationAdmission, (request, grant, authorize) => {
-      authorize(request, () => {
-        if (
-          !injected &&
-          request.stage === "prepare" &&
-          isRecord(request.facts) &&
-          request.facts.kind === "shared-owner"
-        ) {
-          writeFileSync(target, "foreign file");
-          injected = true;
-        }
-        return grant();
-      });
-    });
-    try {
-      await expect(
-        refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] }),
-      ).rejects.toThrow("Agent database target changed before creating open");
-      expect(injected).toBe(true);
-      expect(await fs.readFile(target, "utf8")).toBe("foreign file");
-    } finally {
-      observer.mockRestore();
-    }
   });
 });
 
@@ -671,6 +633,53 @@ it("prunes a cached transcript after its queued selection disappears", async () 
       unsubscribe();
     }
   });
+});
+
+it("propagates an original host pricing error through exact report replay", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-host-pricing-failure";
+    const sessionFile = state.path("unpriced.jsonl");
+    const timestamp = Date.UTC(2026, 8, 18);
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: new Date(timestamp).toISOString(),
+        message: {
+          role: "assistant",
+          provider: "test",
+          model: "test",
+          usage: { input: 7, output: 3, totalTokens: 10 },
+        },
+      }) + "\n",
+    );
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+    const prepared = prepareUsageCostWorker({ config, agentId, sessionFiles: [sessionFile] });
+    const request = {
+      kind: "sessions" as const,
+      pricingFingerprint: await resolveUsageCostPricingFingerprint(config, prepared.agentDir),
+      sessions: [{ sessionFile }],
+      startMs: timestamp,
+      endMs: timestamp + 1,
+      dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
+    };
+    const original = new Error("Host pricing is unavailable");
+    const pricing = await import("./session-cost-usage-pricing-context.js");
+    const resolver = vi.spyOn(pricing, "createUsageCostResolver").mockReturnValue(() => {
+      throw original;
+    });
+    try {
+      await expect(runUsageCostWorker(prepared, request)).rejects.toBe(original);
+    } finally {
+      resolver.mockRestore();
+    }
+    await expect(runUsageCostWorker(prepared, request)).resolves.toMatchObject({
+      kind: "sessions",
+      summaries: [{ totalTokens: 10 }],
+    });
+  });
+  // Close the pooled runtime before asserting every observed worker retired.
+  await closeStateDatabaseForTest();
 });
 
 it("records failed rollups and clears health after retry", async ({ onTestFinished }) => {

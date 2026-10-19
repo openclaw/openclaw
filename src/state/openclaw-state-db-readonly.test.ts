@@ -6,6 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { mapRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -356,14 +357,28 @@ it.each([
     await withTempDir("openclaw-state-readonly-admission-", async (stateDir) => {
       const options = createClosedState(stateDir);
       const refused = new Error("synthetic readonly verification failure");
-      const prepare = sqliteReadOnly.prepareSqliteReadOnlyLocation;
       let preparedLocation: string | undefined;
       let failurePublished = false;
-      vi.spyOn(sqliteReadOnly, "prepareSqliteReadOnlyLocation").mockImplementationOnce(
-        async (...args) => {
-          const prepared = await prepare(...args);
-          preparedLocation = prepared.location;
-          if (failure === "quarantine") {
+      if (composite) {
+        const start = sqliteReadOnly.startSqliteReadOnlyLocationAsync;
+        vi.spyOn(sqliteReadOnly, "startSqliteReadOnlyLocationAsync").mockImplementationOnce(
+          (...args) => {
+            const preparation = start(...args);
+            return {
+              ...preparation,
+              ...mapRetainedOperation(preparation, (prepared) => {
+                preparedLocation = prepared.location;
+                return prepared;
+              }),
+            };
+          },
+        );
+      } else {
+        const prepare = sqliteReadOnly.prepareSqliteReadOnlyLocation;
+        vi.spyOn(sqliteReadOnly, "prepareSqliteReadOnlyLocation").mockImplementationOnce(
+          async (...args) => {
+            const prepared = await prepare(...args);
+            preparedLocation = prepared.location;
             seedOpenClawDatabaseQuarantine({
               env: options.env,
               kind: "state",
@@ -371,10 +386,10 @@ it.each([
               reason: "synthetic readonly quarantine",
             });
             failurePublished = true;
-          }
-          return prepared;
-        },
-      );
+            return prepared;
+          },
+        );
+      }
       const operation = vi.fn(() => {
         throw refused;
       });

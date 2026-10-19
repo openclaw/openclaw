@@ -57,6 +57,7 @@ it("reconciles a fourth merged PR without expanding or poisoning displayed PRs",
   owner = createTestControlUiSessionPrSubscriptions({
     scheduler: createTestGatewayScheduler(),
     broadcastToConnIds,
+    prepareRead,
     load: (params, cacheSignal, read) =>
       loadControlUiSessionPullRequests(params, {
         cacheSignal,

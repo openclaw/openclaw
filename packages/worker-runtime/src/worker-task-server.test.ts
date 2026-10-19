@@ -50,7 +50,7 @@ it.each([false, true])(
     try {
       serveOwnedWorkerTasks(
         handler,
-        { retireOnError: true },
+        { retireOnError: true, closeResource: vi.fn() },
         {
           selectStartupPort: (message) => (message === "startup" ? taskPort : undefined),
           initialize,

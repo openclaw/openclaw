@@ -27,7 +27,6 @@ import {
 } from "./context-engine-maintenance.fixtures.test-support.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resetDeferredTurnMaintenanceStateForTest } from "./context-engine-maintenance.test-support.js";
-import { resolveSessionLane } from "./lanes.js";
 
 const rewriteMock = vi.fn((_params?: unknown) => ({
   changed: true,
@@ -329,7 +328,7 @@ describe("runContextEngineMaintenance", () => {
       const releaseForeground = createDeferred();
       let foregroundTurn: Promise<void> | undefined;
       try {
-        const sessionLane = resolveSessionLane(sessionKey);
+        const sessionLane = `test:foreground-turn:${sessionKey}`;
         foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
           await releaseForeground.promise;
         });
@@ -636,7 +635,7 @@ describe("runContextEngineMaintenance", () => {
       const allowRewrite = createDeferred();
       let foregroundTurn: Promise<void> | undefined;
       try {
-        const sessionLane = resolveSessionLane(sessionKey);
+        const sessionLane = `test:foreground-turn:${sessionKey}`;
         const events: string[] = [];
         const maintain = vi.fn<Maintain>(async ({ runtimeContext }) => {
           events.push("maintenance-start");
@@ -690,41 +689,38 @@ describe("runContextEngineMaintenance", () => {
     "surfaces unrelated maintenance failures during shutdown",
     inState(async () => {
       vi.useFakeTimers();
-      try {
-        resetSystemEventsForTest();
-        const sessionKey = "agent:main:session-fail";
-        const onDeferredMaintenanceFailure = vi.fn();
-        const maintain = vi.fn<Maintain>(async ({ abortSignal: signal }) => {
-          if (!signal) {
-            throw new Error("expected deferred maintenance abort signal");
+      resetSystemEventsForTest();
+      const sessionKey = "agent:main:session-fail";
+      const onDeferredMaintenanceFailure = vi.fn();
+      const maintain = vi.fn<Maintain>(async ({ abortSignal: signal }) => {
+        if (!signal) {
+          throw new Error("expected deferred maintenance abort signal");
+        }
+        await new Promise<void>((_resolve, reject) => {
+          const onAbort = () => {
+            signal.removeEventListener("abort", onAbort);
+            reject(new Error("maintenance cleanup failed"));
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (signal.aborted) {
+            onAbort();
           }
-          await new Promise<void>((_resolve, reject) => {
-            const onAbort = () => {
-              signal.removeEventListener("abort", onAbort);
-              reject(new Error("maintenance cleanup failed"));
-            };
-            signal.addEventListener("abort", onAbort, { once: true });
-            if (signal.aborted) {
-              onAbort();
-            }
-          });
-          return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
         });
-        const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
-        await runContextEngineMaintenance({
-          contextEngine: backgroundEngine,
-          ...sessionParams("session-fail"),
-          onDeferredMaintenanceFailure,
-        });
-        await backgroundEngine.started;
-        expect(maintain).toHaveBeenCalledTimes(1);
-        process.emit("SIGTERM", "SIGTERM");
-        await waitForSessionMaintenance(sessionKey);
-        expect(onDeferredMaintenanceFailure).toHaveBeenCalledWith(
-          expect.objectContaining({ message: "maintenance cleanup failed" }),
-        );
-      } finally {
-      }
+        return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+      });
+      const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
+      await runContextEngineMaintenance({
+        contextEngine: backgroundEngine,
+        ...sessionParams("session-fail"),
+        onDeferredMaintenanceFailure,
+      });
+      await backgroundEngine.started;
+      expect(maintain).toHaveBeenCalledTimes(1);
+      process.emit("SIGTERM", "SIGTERM");
+      await waitForSessionMaintenance(sessionKey);
+      expect(onDeferredMaintenanceFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "maintenance cleanup failed" }),
+      );
     }),
   );
 });

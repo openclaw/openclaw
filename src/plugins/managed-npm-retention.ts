@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
+import { statIfExists } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   isPluginNpmProjectDir,
@@ -124,16 +125,8 @@ export async function markRetainedManagedNpmInstall(params: {
   if (!info) {
     return false;
   }
-  let stat: fs.Stats;
-  try {
-    stat = await fs.promises.stat(params.packageDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
-  if (!stat.isDirectory()) {
+  const stat = await statIfExists(params.packageDir);
+  if (!stat?.isDirectory()) {
     return false;
   }
   params.assertCurrent?.();

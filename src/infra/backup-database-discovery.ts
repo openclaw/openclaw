@@ -34,7 +34,10 @@ export async function preparePostgresBackupDiscovery(input: Input) {
   });
   try {
     const { stateDir, config, env, agentRegistry, workspaceDirs } = input;
-    return await pool.run({ stateDir, config, env, agentRegistry, workspaceDirs }, {});
+    return await pool.run(
+      { stateDir, config, env: env && { ...env }, agentRegistry, workspaceDirs },
+      {},
+    );
   } finally {
     await pool.close();
   }

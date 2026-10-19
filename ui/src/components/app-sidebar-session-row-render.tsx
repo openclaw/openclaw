@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, Show, untrack } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -90,7 +90,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const subtitle = createMemo(() => subtitleState().subtitle),
     narration = createMemo(() => subtitleState().narration),
     toolName = createMemo(() => subtitleState().toolName);
-  const indicators = renderSidebarSessionIndicators(untrack(host), session, display, icon);
+  const indicators = renderSidebarSessionIndicators(host, session, display, icon);
   const running = createMemo(() => indicators.running),
     stateId = createMemo(() => indicators.stateId),
     metaId = createMemo(() => indicators.metaId),
@@ -164,16 +164,14 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     ),
   );
   // Always reserve the lead so every title shares the section-label text line.
-  let rowElement: HTMLDivElement | undefined;
-  // Ref retargeting deliberately samples the current host without render dependencies.
-  createEffect(
-    () => display()?.rowRef,
-    (callback) => untrack(() => callback?.(rowElement, controls)),
-  );
+  let rowElement: HTMLDivElement;
+  let previousFocus: Element | null;
+  onSettled(() => display()?.rowRef?.(rowElement, controls, previousFocus));
   const row = (
     <div
       ref={(element) => {
         rowElement = element;
+        previousFocus = document.activeElement;
       }}
       class={[
         "sidebar-recent-session session-row-host",
@@ -406,8 +404,8 @@ export function renderPendingSessionCreateRow(
     </Show>
   );
 }
-export function renderChildSessionLoadError(host: SessionListHost, parentKey: string) {
-  const error = createMemo(() => host.sessionData.childSessionErrorsByParent.get(parentKey));
+export function renderChildSessionLoadError(host: () => SessionListHost, parentKey: string) {
+  const error = createMemo(() => host().sessionData.childSessionErrorsByParent.get(parentKey));
   return (
     <Show when={error()}>
       <div
@@ -420,7 +418,7 @@ export function renderChildSessionLoadError(host: SessionListHost, parentKey: st
           class="sidebar-session-tree__show-more"
           type="button"
           data-retry-child-sessions={parentKey}
-          onClick={() => host.sessionData.retryChildSessions(parentKey)}
+          onClick={() => host().sessionData.retryChildSessions(parentKey)}
         >
           {t("common.retry")}
         </button>
@@ -484,7 +482,7 @@ export function renderSessionTree(params: {
             </button>
           ) : undefined}
           <For each={session().childLoadParentKeys ?? [session().key]}>
-            {(key) => renderChildSessionLoadError(host(), key)}
+            {(key) => renderChildSessionLoadError(host, key)}
           </For>
           {session().loadingChildren && session().children.length === 0 ? (
             <span

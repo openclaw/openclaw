@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createStore, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createStore, For, onCleanup, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
@@ -9,6 +9,7 @@ import {
   openAttachmentCardFromClick,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
+import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import {
@@ -53,6 +54,8 @@ type ChatAudioPlayerProps = {
   onMediaLoaded?: () => void;
 };
 
+const inputHandlers = new WeakMap<HTMLElement, (key: keyof ChatAudioPlayerProps) => void>();
+
 function ChatAudioPlayerContent(
   props: ChatAudioPlayerProps,
   host: SolidBridgeElement<ChatAudioPlayerProps>,
@@ -84,21 +87,24 @@ function ChatAudioPlayerContent(
   let waveformAttempted = false;
   let waveformVisible = false;
   let active = true;
-  const sourceSnapshot = createMemo(
-    () => [props.src, props.sourceIdentity, props.playback, props.authToken] as const,
-    { equals: (before, after) => before.every((value, index) => value === after[index]) },
-  );
-  // Synchronize the browser media resource when its authorized source changes.
-  createEffect(sourceSnapshot, (next, previous) => {
+  let sourceSyncQueued = false;
+  function handleInputsChanged(key: keyof ChatAudioPlayerProps): void {
+    if (key === "sizeBytes" || key === "serverDurationMs") {
+      queueSourceSync();
+      return;
+    }
+    if (key !== "src" && key !== "sourceIdentity" && key !== "playback" && key !== "authToken") {
+      return;
+    }
     if (sourceController.readiness === "unavailable") {
       releaseWaveformBlob?.();
       releaseWaveformBlob = undefined;
       sourceController.cancel();
     }
-    if (
-      previous &&
-      (previous[1] !== next[1] || previous[2] !== next[2] || previous[3] !== next[3])
-    ) {
+    if (key !== "src") {
+      if (key !== "playback") {
+        sourceController.cancel();
+      }
       waveformController?.abort();
       waveformController = null;
       releaseWaveformBlob?.();
@@ -112,21 +118,25 @@ function ChatAudioPlayerContent(
         releaseChatAudioPlayback(mediaElement);
       }
     }
-    syncSource();
-  });
-  const waveformMetadata = createMemo(() => [props.sizeBytes, props.serverDurationMs] as const, {
-    equals: (before, after) => before.every((value, index) => value === after[index]),
-  });
-  // Server metadata admits bounded Web Audio decoding for the browser waveform.
-  createEffect(waveformMetadata, () => {
-    if (waveformVisible) {
-      void prepareWaveformAudio().catch(() => undefined);
+    queueSourceSync();
+  }
+  function queueSourceSync(): void {
+    if (sourceSyncQueued) {
+      return;
     }
-  });
+    sourceSyncQueued = true;
+    // Native callers assign related properties together; consume their complete source once.
+    queueMicrotask(() => {
+      sourceSyncQueued = false;
+      syncSource();
+    });
+  }
   onSettled(() => {
+    inputHandlers.set(host, handleInputsChanged);
     syncSource();
     return () => {
       active = false;
+      inputHandlers.delete(host);
       sourceState.dispose();
       sourceController.cancel();
     };
@@ -480,6 +490,9 @@ function ChatAudioPlayerContent(
     );
   };
   const Player = () => {
+    const copyRef = attachmentContextCopyRef(() =>
+      props.voiceNote ? null : { name: props.label, href: downloadHref() },
+    );
     const viewport = createChatAttachmentViewportRef(() => {
       waveformVisible = true;
       void prepareWaveformAudio().catch(() => undefined);
@@ -505,7 +518,7 @@ function ChatAudioPlayerContent(
           "chat-assistant-attachment-card chat-assistant-attachment-card--audio",
           { "chat-assistant-attachment-card--voice-note": props.voiceNote },
         ]}
-        ref={viewport}
+        ref={[viewport, copyRef]}
         data-openable={!props.voiceNote && props.onExpand ? "" : undefined}
         onClick={(event) =>
           openAttachmentCardFromClick(event, props.voiceNote ? undefined : props.onExpand)
@@ -635,6 +648,7 @@ function ChatAudioPlayerContent(
 }
 
 defineSolidBridge("openclaw-chat-audio-player", ChatAudioPlayerContent, {
+  propertyChanged: (host, key) => inputHandlers.get(host)?.(key),
   properties: {
     src: { default: "" },
     sourceIdentity: { default: "" },

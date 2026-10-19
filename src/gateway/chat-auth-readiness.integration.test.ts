@@ -19,7 +19,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { applySessionModelSelectionInternal as applySessionModelSelection } from "../model-picker/apply-session-model-selection.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
@@ -101,7 +101,6 @@ it("refreshes a retained pane from a persisted profile-only selection through th
     const publishLifecycle = createLifecycleEventBroadcastHandler({
       getSessionRowProjection: () => rowProjection,
       sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
-      chatAbortControllers: new Map(),
       broadcastToConnIds: (event, payload) => {
         shell.handleGatewayEvent({ type: "event", event, payload });
         handlePageGatewayEvent(retained, { type: "event", event, payload });

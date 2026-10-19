@@ -157,6 +157,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     activeProjectKeys: [...(attempt.preparedModelRuntime?.activeProjectKeys ?? [])],
     modelProviderId: attempt.model.provider,
     modelId: attempt.model.id,
+    contextTokenBudget: attempt.contextTokenBudget ?? attempt.model.contextWindow,
     inputProvenance: attempt.inputProvenance,
   };
   const promptBuildMessages = input.activeSession.messages;
@@ -415,6 +416,7 @@ type PromptContextAttempt = Pick<
   | "messageChannel"
   | "messageProvider"
   | "requireExplicitMessageTarget"
+  | "messageToolFinalByDefault"
   | "runtimeContextFragments"
   | "sessionId"
   | "sessionKey"
@@ -512,6 +514,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       channel: attempt.messageChannel ?? attempt.messageProvider,
       sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
       requireExplicitMessageTarget: attempt.requireExplicitMessageTarget,
+      messageToolFinalByDefault: attempt.messageToolFinalByDefault,
     }),
     ...buildAgentInternalEventContext(attempt.internalEvents),
     ...(attempt.runtimeContextFragments ?? []),

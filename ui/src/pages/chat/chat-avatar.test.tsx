@@ -482,6 +482,7 @@ describe("ChatAvatar", () => {
     expect(slot?.classList.contains("is-fallback")).toBe(false);
 
     image?.dispatchEvent(new Event("error"));
+    flush();
     expect(slot?.classList.contains("is-fallback")).toBe(true);
     expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("B");
 

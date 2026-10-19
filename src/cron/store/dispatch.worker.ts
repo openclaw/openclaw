@@ -34,18 +34,11 @@ const loadScheduler = createLazyRuntimeModule(() => import("./scheduler-state.wo
 let scheduler: typeof import("./scheduler-state.worker.js") | undefined;
 const loadSchedulerActor = createLazyRuntimeModule(() => import("./scheduler-actor.worker.js"));
 let schedulerActor: typeof import("./scheduler-actor.worker.js") | undefined;
-const loadJobMutations = createLazyRuntimeModule(() => import("./job-mutations.worker.js"));
-let jobMutations: typeof import("./job-mutations.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
   if (String(type).startsWith("cron.scheduler") && !schedulerActor) {
     return loadSchedulerActor().then((loaded) => {
       schedulerActor = loaded;
-    });
-  }
-  if (type === "cron.prepareJobMutation" && !jobMutations) {
-    return loadJobMutations().then((loaded) => {
-      jobMutations = loaded;
     });
   }
   if (
@@ -119,7 +112,6 @@ export function isCronStateWorkerCommand(command: {
     case "cron.schedulerTick":
     case "cron.schedulerRefresh":
     case "cron.schedulerStop":
-    case "cron.prepareJobMutation":
     case "cron.requestRuns":
     case "cron.drainQueue":
     case "cron.cancelRequests":
@@ -164,11 +156,6 @@ export function executeCronStateCommand(
         return schedulerActor.stopCronSchedulerInWorker(command.input);
       }
       return schedulerActor.runCronSchedulerInWorker(database, command);
-    case "cron.prepareJobMutation":
-      if (!jobMutations) {
-        throw new Error("Cron job mutation worker is not prepared");
-      }
-      return jobMutations.prepareCronJobMutationInWorker(database, command.input);
     case "cron.requestRuns":
     case "cron.drainQueue":
     case "cron.cancelRequests":

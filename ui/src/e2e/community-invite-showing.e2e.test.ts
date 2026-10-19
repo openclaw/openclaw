@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import nodePath from "node:path";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
@@ -55,12 +58,13 @@ suite.define(() => {
     );
   });
 
-  it("honors the deployment flag before rendering and after a policy reload", async () => {
+  it("keeps Community in the rail without shortening the session list and honors policy reloads", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, { communityInvite: false });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.locator("openclaw-app-sidebar").waitFor();
       expect(await page.locator(".sidebar-community__entry").count()).toBe(0);
+      const listHeight = (await page.locator(".sidebar-shell__body").boundingBox())!.height;
       await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
         route.fulfill({
           json: { ...createControlUiMockBootstrapConfig(), communityInvite: true },
@@ -69,6 +73,23 @@ suite.define(() => {
       await page.reload();
       const entry = page.getByRole("button", { name: "Community", exact: true });
       await entry.waitFor({ state: "visible" });
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const sidebar = page.locator(".sidebar");
+        const frame = await takeControlUiScreenshotFrame(page, sidebar, [entry], {
+          elements: [sidebar],
+          animations: "disabled",
+        });
+        await writeFile(
+          nodePath.join(suite.artifactDir, "community-sidebar.png"),
+          frame.elements[0]!.png,
+        );
+      }
+      expect(await entry.evaluate((node) => Boolean(node.closest(".sidebar-rail")))).toBe(true);
+      expect((await page.locator(".sidebar-shell__body").boundingBox())!.height).toBe(listHeight);
+      const selectedUrl = page.url();
+      await page.locator('.sidebar-rail [data-navigation-view="sessions"]').click();
+      await expect.poll(() => page.locator(".sidebar-shell").isVisible()).toBe(false);
+      expect(await entry.isVisible()).toBe(true);
       await entry.click();
       const dialog = page.getByRole("dialog", { name: "Community", exact: true });
       await dialog.waitFor({ state: "visible" });
@@ -77,6 +98,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await dialog.waitFor({ state: "detached" });
       expect(await entry.evaluate((node) => node === document.activeElement)).toBe(true);
+      expect(page.url()).toBe(selectedUrl);
     });
   });
 });

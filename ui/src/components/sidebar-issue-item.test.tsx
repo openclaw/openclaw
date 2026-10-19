@@ -92,6 +92,7 @@ describe("renderSidebarMentionItem", () => {
       mention,
       context: { basePath: "/team" },
       dismissing: false,
+      canDismiss: true,
       onDismiss: vi.fn(),
       onNavigate: vi.fn(),
       ...overrides,
@@ -149,17 +150,20 @@ describe("renderSidebarMentionItem", () => {
     expect(onNavigate).toHaveBeenCalledOnce();
   });
 
-  it("disables repeated dismissal while leaving the session link usable", () => {
-    const { onNavigate, onDismiss } = renderMention({ dismissing: true });
-    const dismiss = container.querySelector<HTMLButtonElement>("[data-mention-id] button")!;
-    expect(dismiss).toMatchObject({ disabled: true });
-    dismiss.click();
-    expect(onDismiss).not.toHaveBeenCalled();
+  it.each([{ dismissing: true }, { canDismiss: false }])(
+    "disables unavailable dismissal while leaving the session link usable (%j)",
+    (state) => {
+      const { onNavigate, onDismiss } = renderMention(state);
+      const dismiss = container.querySelector<HTMLButtonElement>("[data-mention-id] button")!;
+      expect(dismiss).toMatchObject({ disabled: true });
+      dismiss.click();
+      expect(onDismiss).not.toHaveBeenCalled();
 
-    find("summary")!.click();
-    find("a[href]")!.click();
-    expect(onNavigate).toHaveBeenCalledExactlyOnceWith("chat", navigation);
-  });
+      find("summary")!.click();
+      find("a[href]")!.click();
+      expect(onNavigate).toHaveBeenCalledExactlyOnceWith("chat", navigation);
+    },
+  );
 });
 
 type UpdateCard = HTMLElement & {

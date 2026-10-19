@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import { GatewayCredentialsRequiredError, GatewayTransportError } from "../gateway/call.js";
-import { StateDatabaseOfflineMaintenanceError } from "../infra/gateway-state-owner-record.js";
+import {
+  StateDatabaseMaintenanceScopeError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner-record.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import {
   ExpectedCliError,
@@ -172,6 +175,17 @@ it("prints the actionable offline maintenance refusal without debug", () => {
   expect(output).not.toMatch(
     /sk-abcdefghijklmnopqrstuv|private nested diagnostic|private sibling diagnostic|Stack:|openclaw doctor/u,
   );
+});
+
+it("prints the actionable missing-maintenance-scope refusal without debug", () => {
+  const error = Object.assign(new StateDatabaseMaintenanceScopeError("/fixture/state.sqlite"), {
+    cause: new Error("private nested diagnostic"),
+  });
+
+  expect(failure(error, ["plugins", "enable", "github"])).toEqual([
+    "[openclaw] The CLI command failed.",
+    "[openclaw] Reason: Internal state ownership error at /fixture/state.sqlite: this process holds maintenance ownership without an active schema lease or maintenance scope. Retry the command; if it persists, report this error.",
+  ]);
 });
 
 it("emits expected guidance only when not already written even with debug output", () => {

@@ -1,12 +1,13 @@
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { downloadXaiVideo } from "./video-generation-transport.js";
 
-function downloadVideo(fetchFn: typeof fetch) {
+afterEach(() => vi.unstubAllGlobals());
+
+function downloadVideo() {
   return downloadXaiVideo({
     url: "https://example.com/generated.mp4",
-    defaultTimeoutMs: 5_000,
-    fetchFn,
+    timeoutMs: 5_000,
     maxBytes: 10 * 1024 * 1024,
     allowPrivateNetwork: false,
   });
@@ -22,8 +23,9 @@ describe("downloadXaiVideo", () => {
     const fetchFn = vi.fn(
       async () => new Response(body, { status: 200, headers: { "content-type": contentType } }),
     );
+    vi.stubGlobal("fetch", fetchFn);
 
-    await expect(downloadVideo(fetchFn)).rejects.toThrow(
+    await expect(downloadVideo()).rejects.toThrow(
       "xAI generated video download: malformed video response",
     );
   });
@@ -44,8 +46,7 @@ describe("downloadXaiVideo", () => {
         await expect(
           downloadXaiVideo({
             url: `${baseUrl}/generated.mp4`,
-            defaultTimeoutMs: 5_000,
-            fetchFn: fetch,
+            timeoutMs: 5_000,
             maxBytes: 10 * 1024 * 1024,
             allowPrivateNetwork: true,
           }),

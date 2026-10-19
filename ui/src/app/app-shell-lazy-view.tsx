@@ -40,6 +40,7 @@ export interface ShellOwnedElements {
   commandPalette?: CommandPaletteElement;
   approvalOverlay?: HTMLElement & { show(): void; dialogOpen?: boolean };
   debugOverlay?: DebugOverlayElement;
+  pendingDebugOverlayFrame?: HTMLElement;
   keyboardShortcuts?: KeyboardShortcutsDialogElement;
   assistantPanel?: HTMLElement;
   browserPanel?: HTMLElement;

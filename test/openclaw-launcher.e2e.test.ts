@@ -15,7 +15,6 @@ import {
 } from "../scripts/lib/managed-child-process.mts";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "./helpers/fixture-lifetime.js";
-import { createLauncherCommandBoundaryPlugin } from "./helpers/launcher-esbuild.js";
 import { NODE_RELEASE_VERSION_CASES } from "./helpers/node-version-cases.js";
 
 // Node version fixtures must enter Node admission even when Vitest runs under Bun.
@@ -1728,6 +1727,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
     await handle.close();
     await fs.utimes(path.join(cache, "openclaw"), new Date(0), new Date(0));
     const cacheModule = path.join(fixtureRoot, "node-compile-cache.mjs");
+    const completedPath = path.join(fixtureRoot, "completed");
     const original = await fs.readFile(cacheModule, "utf8");
     // The maintenance child cannot prune until its launching CLI has exited.
     await fs.writeFile(
@@ -1741,7 +1741,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         const rmdir = fixtureFs.rmdir;
         fixtureFs.rmdir = async target => {
           await rmdir(target);
-          await fixtureFs.writeFile(${JSON.stringify(path.join(fixtureRoot, "completed"))}, "done");
+          await fixtureFs.writeFile(${JSON.stringify(completedPath)}, JSON.stringify("done"));
         };
       }
       ${original}
@@ -1774,14 +1774,6 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       process.stdout.write("command-completed");
     `,
     );
-    const watcher = new AbortController();
-    const completed = (async () => {
-      for await (const event of fs.watch(fixtureRoot, { signal: watcher.signal })) {
-        if (event.filename === "completed") {
-          return;
-        }
-      }
-    })();
     try {
       const result = spawnSync(
         testNodeExecPath,
@@ -1800,13 +1792,13 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toBe("command-completed");
-      await completed;
+      // The detached child can finish during spawnSync; filesystem notifications
+      // may be lost while this process is blocked, so observe its persisted result.
+      expect(await waitForJsonFile<string>(completedPath, 5000)).toBe("done");
       await expect(fs.stat(bytecode)).rejects.toMatchObject({ code: "ENOENT" });
       expect((await fs.stat(path.join(cache, "openclaw"))).mtimeMs).toBeGreaterThan(0);
     } finally {
-      watcher.abort();
-      await completed.catch(() => {});
-      if (!(await fs.stat(path.join(fixtureRoot, "completed")).catch(() => undefined))) {
+      if (!(await fs.stat(completedPath).catch(() => undefined))) {
         const pid = await fs.readFile(path.join(fixtureRoot, "child-pid"), "utf8").catch(() => "");
         if (pid) {
           try {
@@ -1888,7 +1880,6 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           sourcefile: "compile-cache-owner-fixture.ts",
           loader: "ts",
         },
-        plugins: [createLauncherCommandBoundaryPlugin()],
         format: "esm",
         outfile: path.join(fixtureRoot, "dist", name),
         platform: "node",

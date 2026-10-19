@@ -28,7 +28,6 @@ export function createSessionObserverLifecycle(params: {
     agentId: string,
     consume: (session: ReturnType<ReadSession>) => void,
   ) => void;
-  now: () => number;
   isTerminal: (runId: string) => boolean;
   clearPendingTerminalError: (runId: string) => void;
   releaseState: (state: SessionObserverState) => void;
@@ -63,7 +62,7 @@ export function createSessionObserverLifecycle(params: {
   };
 
   const retireRun = (runId: string) => {
-    markSessionObserverRunSuperseded(supersededRuns, runId, params.now());
+    markSessionObserverRunSuperseded(supersededRuns, runId, Date.now());
     params.clearPendingTerminalError(runId);
     dormantRuns.delete(runId);
     disabledRuns.delete(runId);
@@ -134,7 +133,7 @@ export function createSessionObserverLifecycle(params: {
           : {}),
         ...(utilityModelRef ? { utilityModelRef } : {}),
         lastActivityAt: event.ts,
-        lastRunAt: params.now(),
+        lastRunAt: Date.now(),
         lastDigestNoteSequence: 0,
         inFlight: false,
         finalPending: false,
@@ -147,7 +146,7 @@ export function createSessionObserverLifecycle(params: {
       session,
     );
     const startedAt =
-      asFiniteNumber(event.data.startedAt) ?? session?.startedAt ?? event.ts ?? params.now();
+      asFiniteNumber(event.data.startedAt) ?? session?.startedAt ?? event.ts ?? Date.now();
     const state: SessionObserverState = {
       ...createSessionActivityNoteState(),
       sessionKey,

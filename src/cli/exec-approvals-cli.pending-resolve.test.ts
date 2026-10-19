@@ -481,14 +481,15 @@ describe("exec approvals pending and resolve CLI", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("exits non-zero when an approval is not found", async () => {
-    callGatewayFromCli.mockRejectedValue(new Error("approval not found"));
+  it("exits non-zero with a bounded, well-formed error when an approval is not found", async () => {
+    const prefix = `approval not found: ${"x".repeat(279)}`;
+    callGatewayFromCli.mockRejectedValue(new Error(`${prefix}\u{1F680}tail\nignored`));
 
     await expect(runApprovalsCommand(["approvals", "resolve", "missing", "deny"])).rejects.toThrow(
       "__exit__:1",
     );
 
-    expect(runtimeErrors[0]).toBe("approval not found");
+    expect(runtimeErrors).toEqual([`${prefix}...`]);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 

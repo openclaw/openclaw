@@ -489,7 +489,6 @@ export function registerLogsCli(program: Command) {
           break;
         }
         let payload: LogsTailPayload;
-        // Show progress spinner only on first fetch, not during follow polling
         const showProgress = first && !opts.follow;
         let gatewayPollStartedAt = new Date().toISOString();
         try {

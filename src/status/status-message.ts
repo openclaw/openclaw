@@ -22,7 +22,7 @@ import {
 } from "../agents/model-runtime-aliases.js";
 import { buildModelAliasIndex, resolveModelRefFromString } from "../agents/model-selection.js";
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
+import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import type { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { formatCompactionStatus } from "../auto-reply/reply/compaction-notice.js";
 import type {

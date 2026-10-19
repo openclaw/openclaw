@@ -358,7 +358,6 @@ describe("handleClickClackInbound", () => {
       accountId: "default",
       credentialFingerprint: "test-fingerprint",
       destinationIdentity: "http://127.0.0.1:8080\0wsp_1",
-      createGeneration: () => "pending-generation",
     });
     await recordPendingDiscussionOpen({
       runtime,

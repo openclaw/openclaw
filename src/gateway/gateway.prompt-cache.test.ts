@@ -113,7 +113,11 @@ it("preserves the provider prefix across chat.send, completion and Gateway resta
   const stopObservingPrivate = onAgentAuditEvent(observeCompletion);
   try {
     // The real spawn owns child lineage and the completion's one-use tool grant.
-    await sendChatAndWait(fixture.client, sessionKey, "Start the synthetic cache-prefix child.");
+    const parentRunId = await sendChatAndWait(
+      fixture.client,
+      sessionKey,
+      "Start the synthetic cache-prefix child.",
+    );
     const outputs = requests.slice(requestStart).flatMap((body) => {
       const payload = JSON.parse(body) as {
         input: Array<{ type?: string; output?: string }>;
@@ -137,6 +141,15 @@ it("preserves the provider prefix across chat.send, completion and Gateway resta
     );
     expect(child.status, "the child completes before its private parent announcement").toBe("ok");
     await withinTest(completion.promise, signal);
+    const completionRunId = [...terminalRuns].find((runId) => runId !== parentRunId);
+    expect(completionRunId, "the private parent announcement has its own run").toBeTruthy();
+    // Lifecycle end precedes durable input completion and RPC settlement.
+    const settled = await fixture.client.request<{ status: string }>(
+      "agent.wait",
+      { runId: completionRunId!, timeoutMs: 30_000 },
+      { timeoutMs: 35_000 },
+    );
+    expect(settled.status, "the private parent announcement settles before restart").toBe("ok");
   } finally {
     childResponse.resolve();
     stopObserving();

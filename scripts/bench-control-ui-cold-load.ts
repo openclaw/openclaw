@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 import { chromium, type Browser } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.js";
 import { createSandboxHostHttpServer } from "../src/gateway/mcp-app-sandbox-http.js";
+import { captureSessionRowGeneration } from "../src/gateway/session-row-identity.js";
 import { shareSidebarSessionRows } from "../src/gateway/session-row-presentation.js";
 import { createColdLoadProbeInitScript } from "../ui/src/test-helpers/control-ui-cold-load-probes.ts";
 import {
@@ -369,7 +370,9 @@ try {
             ...shareSidebarSessionRows(
               result.sessions,
               typeof params.ifRowsRevision === "string" ? params.ifRowsRevision : undefined,
-              runTransfer === "delta" && previousRows ? [previousRows] : undefined,
+              runTransfer === "delta" && previousRows
+                ? [captureSessionRowGeneration(previousRows)]
+                : undefined,
             ),
           }
         : result;
@@ -467,9 +470,7 @@ try {
   const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
   async function settle() {
     try {
-      await page
-        .locator(".chat-pane__session-title-text", { hasText: "Project dashboard 1" })
-        .waitFor();
+      await page.locator(".chat-pane__header").first().waitFor();
       await page
         .locator('.sidebar-rail [data-sidebar-entry^="session:"]')
         .nth(29)
@@ -843,6 +844,8 @@ try {
       );
     if (values["live-events"]) {
       const before = await readLivePresentation();
+      await cdp.send("Performance.enable");
+      const cpuBefore = (await cdp.send("Performance.getMetrics")).metrics;
       const liveTrace: unknown[] = [];
       collectedTrace = liveTrace;
       if (!values.untraced || cpuProfile) {
@@ -896,6 +899,7 @@ try {
         }
       }
       await page.evaluate(() => Reflect.get(window, "__coldLoad").finishLive());
+      const cpuAfter = (await cdp.send("Performance.getMetrics")).metrics;
       if (!values.untraced || cpuProfile) {
         const liveProfile = await cdp.send("Profiler.stop");
         if (cpuProfile) {
@@ -942,6 +946,16 @@ try {
       const responseTasks = summarizeResponseTasks(liveTrace);
       live = {
         ...liveMetrics,
+        milliseconds: Object.fromEntries(
+          ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"].map(
+            (name) => [
+              name,
+              1000 *
+                (cpuAfter.find((metric) => metric.name === name)!.value -
+                  cpuBefore.find((metric) => metric.name === name)!.value),
+            ],
+          ),
+        ),
         head,
         sidebarRowTransfer: values["sidebar-list-churn"] ? runTransfer : undefined,
         sidebarLists: sidebarReads,

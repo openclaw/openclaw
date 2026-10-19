@@ -64,6 +64,58 @@ const history = [
 ];
 
 suite.define(() => {
+  it("shows a single event directly and bundles it when a second event arrives", async () => {
+    await suite.withPage(
+      { viewport: { width: 1100, height: 900 }, colorScheme: "light" },
+      async ({ page }) => {
+        const initial = [history[0]!, events[2]!];
+        const gateway = await installMockGateway(page, { historyMessages: initial });
+        await page.goto(suite.server.baseUrl + "chat");
+        const thread = page.locator(".chat-thread");
+        const prompt = page.getByText("Please prepare a short launch checklist.", { exact: true });
+        await prompt.waitFor();
+        // Capture before the assertion so the same regression retains the old UI as evidence.
+        const dir = createControlUiE2eArtifactDir("single-system-event");
+        const frame = await takeControlUiScreenshotFrame(page, thread, [prompt], {
+          animations: "disabled",
+          elements: [thread],
+        });
+        writeFileSync(path.join(dir, "single-event.png"), frame.elements[0]!.png);
+        const disclosure = thread.locator(".chat-system-events");
+        expect(await disclosure.count()).toBe(0);
+        const warning = thread.getByText(
+          "Two progress updates could not be delivered. Review the retained updates before continuing.",
+          { exact: true },
+        );
+        await warning.waitFor();
+        expect(await warning.isVisible()).toBe(true);
+        await page.reload();
+        await warning.waitFor();
+        expect(await disclosure.count()).toBe(0);
+
+        const appended = recovery("recovery-next", "The workspace connection is available again.");
+        await gateway.setHistoryMessages([...initial, appended]);
+        await gateway.emitGatewayEvent("session.message", {
+          sessionKey: "agent:main:main",
+          message: appended,
+          messageId: "recovery-next",
+          messageSeq: 3,
+        });
+        await expect
+          .poll(() => disclosure.locator("summary").textContent())
+          .toContain("2 system events");
+        expect(await disclosure.getAttribute("open")).toBeNull();
+        expect(await disclosure.locator(".chat-system-events__warning").isVisible()).toBe(true);
+        await disclosure.locator("summary").click();
+        await warning.waitFor();
+        expect(await warning.isVisible()).toBe(true);
+        expect(await disclosure.getByText(appended.content, { exact: true }).isVisible()).toBe(
+          true,
+        );
+      },
+    );
+  });
+
   it("keeps operational history quiet, readable, keyboard accessible and responsive", async () => {
     await suite.withPage(
       { viewport: { width: 1100, height: 900 }, colorScheme: "light" },

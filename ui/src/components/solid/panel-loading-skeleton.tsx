@@ -1,5 +1,5 @@
-import type { JSX } from "@solidjs/web";
-import { createMemo, createRenderEffect, For } from "solid-js";
+import { spread, type JSX } from "@solidjs/web";
+import { createMemo, For } from "solid-js";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import panelStyles from "../../styles/panel-loading-skeleton.css?inline";
 
@@ -180,15 +180,15 @@ export function PanelLoadingSkeletonContent(props: PanelLoadingSkeletonProps) {
 export const PanelLoadingSkeleton = defineSolidBridge<PanelLoadingSkeletonProps>(
   "openclaw-panel-loading-skeleton",
   (props, host) => {
-    host.setAttribute("role", "status");
-    host.setAttribute("aria-busy", "true");
-    // Native host accessibility attributes must commit with the skeleton content.
-    createRenderEffect(
-      () => ({ variant: props.variant ?? "files", label: props.label }),
-      (value) => {
-        host.setAttribute("data-panel-skeleton", value.variant);
-        host.setAttribute("aria-label", value.label);
-      },
+    spread(
+      host,
+      () => ({
+        role: "status",
+        "aria-busy": "true",
+        "data-panel-skeleton": props.variant ?? "files",
+        "aria-label": props.label,
+      }),
+      true,
     );
     return (
       <>

@@ -9,7 +9,7 @@ import { UPDATE_RUN_HEARTBEAT_MS } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliJsonFailure } from "../failure-output.js";
-import { createUpdateProgress, printResult } from "./progress.js";
+import { createUpdateProgress, prepareResult, printResult } from "./progress.js";
 import {
   reportUpdateCommandPendingRecovery,
   UpdateCommandPendingRecoveryFailure,
@@ -87,6 +87,27 @@ describe("update progress", () => {
     }
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("prepares report artifacts before emitting without later history or filesystem work", async () => {
+    const outputLog = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const emit = await prepareResult(result, { json: true, run: context });
+    expect(writeUpdateRunReportArtifact).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(writeUpdateRunReportArtifact).mock.calls[0]?.[0].assertCurrent,
+    ).toBeUndefined();
+    expect(json).not.toHaveBeenCalled();
+    expect(outputLog).not.toHaveBeenCalled();
+    vi.mocked(getUpdateRun).mockImplementation(() => {
+      throw new Error("released history must not be reopened");
+    });
+    vi.mocked(writeUpdateRunReportArtifact).mockRejectedValue(new Error("released report write"));
+    emit();
+    expect(writeUpdateRunReportArtifact).toHaveBeenCalledOnce();
+    expect(json).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ status: "ok", reportPath }),
+    );
   });
 
   it.each([true, false])(

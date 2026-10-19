@@ -16,34 +16,33 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { Command, CommanderError } from "commander";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { registerOcPathCli } from "../cli-registration.js";
+import plugin from "../index.js";
 import { registerPathCli } from "./cli.js";
 
 const JSONC_INPUT_LIMIT_BYTES = 16 * 1024 * 1024;
-type RegisterCli = Parameters<typeof registerOcPathCli>[0]["registerCli"];
-type CliRegistrar = Parameters<RegisterCli>[0];
-type CliRegistrationOptions = Parameters<RegisterCli>[1];
 
-function resolvePathMachineOutput() {
+const isPathMachineOutput = (() => {
   let resolver:
     | ((params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean)
     | undefined;
-  registerOcPathCli({
-    registerCli(_registrar: CliRegistrar, options?: CliRegistrationOptions) {
-      const descriptor = options?.descriptors?.[0];
-      resolver = descriptor && "machineOutput" in descriptor ? descriptor.machineOutput : undefined;
-    },
-  } as unknown as Parameters<typeof registerOcPathCli>[0]);
+  plugin.register(
+    createTestPluginApi({
+      registerCli(_registrar, options) {
+        const descriptor = options?.descriptors?.[0];
+        resolver =
+          descriptor && "machineOutput" in descriptor ? descriptor.machineOutput : undefined;
+      },
+    }),
+  );
   if (!resolver) {
     throw new Error("oc-path CLI descriptor is missing its machine-output resolver");
   }
   return resolver;
-}
-
-const isPathMachineOutput = resolvePathMachineOutput();
+})();
 
 type PathCommandOptions = {
   readonly json?: boolean;

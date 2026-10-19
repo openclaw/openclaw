@@ -1232,6 +1232,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const {
     refreshAgents,
     refreshSessionInfo,
+    applySessionEventRow,
     applySessionInfoFromPatch,
     applySessionMutationResult,
     loadHistory: loadHistorySnapshot,
@@ -1308,6 +1309,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     setActivityStatus,
     updateFooter,
     refreshSessionInfo,
+    applySessionEventRow,
     loadHistory,
     noteLocalRunId: localRunIds.note,
     isLocalRunId: localRunIds.has,

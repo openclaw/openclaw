@@ -14,7 +14,6 @@ import {
   onCleanup,
   onSettled,
   runWithOwner,
-  untrack,
 } from "solid-js";
 import "../components/link-reader-hovercard-registration.ts";
 import { LazyElementStateView, LazyViewError } from "../components/solid/lazy-view-error.tsx";
@@ -71,13 +70,10 @@ const FocusDashboard = lazy(() => import("./app-root-focus-view.tsx"), {
 
 /** Mount into index.html's plain host; the returned disposer owns this application epoch. */
 export function mountOpenClawApp(host: HTMLElement, runtime = bootstrapApplication()): () => void {
-  return render(() => <OpenClawApp host={host} runtime={runtime} />, host);
+  return render(() => OpenClawApp(host, runtime), host);
 }
 
-function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }): SolidJSX.Element {
-  // The bootstrap epoch and its DOM host stay fixed until this root is disposed.
-  const runtime = untrack(() => props.runtime);
-  const host = untrack(() => props.host);
+function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.Element {
   const context = runtime.context;
   const rootOwner = getOwner();
   let readiness: ControlUiReadiness | undefined;
@@ -507,10 +503,14 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
           prop:client={snapshot().client}
           prop:context={context}
           prop:gateway={context.gateway}
+          prop:lookupSidebarRow={(sessionKey: string) =>
+            shell?.navigationSidebar.findSidebarHovercardRowByKey?.(sessionKey)
+          }
         >
           <ShellLoader
             onShell={(owner) => {
               shell = owner;
+              runtime.setShell(owner);
               readiness?.invalidate();
             }}
             runtime={runtime}
@@ -574,10 +574,8 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
           <Match when={showLoginGate()}>
             <Login />
           </Match>
-          <Match when={runtime.documentMode}>
-            {(mode) => {
-              // A standalone document keeps its bootstrap mode for this root's lifetime.
-              const documentMode = untrack(mode);
+          <Match when={runtime.documentMode} keyed>
+            {(documentMode) => {
               const element =
                 documentMode.kind === "approval" ? APPROVAL_PAGE_ELEMENT : QUESTION_PAGE_ELEMENT;
               return (

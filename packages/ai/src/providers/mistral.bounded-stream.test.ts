@@ -42,11 +42,11 @@ async function settleWithin<T>(promise: Promise<T>, label: string): Promise<T> {
 
 describe("Mistral bounded-stream-read real wire proof (loopback http.createServer)", () => {
   it("caps an oversized body streamed chunked over real wire", async () => {
-    const fetcher = createBoundedMistralFetcher(MAX);
+    const fetcher = createBoundedMistralFetcher(fetch);
     const CHUNK = 1024 * 1024;
     // Pending writes may retain this buffer, so keep its bytes unchanged.
     const chunk = Buffer.alloc(CHUNK);
-    const server = http.createServer((req, res) => {
+    const server = http.createServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/octet-stream" });
       let sent = 0;
       const tick = setInterval(() => {
@@ -111,7 +111,6 @@ describe("Mistral bounded-stream-read direct (synthetic ReadableStream)", () => 
       },
     });
     const fetcher = createBoundedMistralFetcher(
-      MAX,
       async () => new Response(upstreamBody, { status: 200 }),
     );
     const wrapped = await fetcher("http://unused.invalid/");

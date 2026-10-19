@@ -370,6 +370,8 @@ describe("update candidate canary", () => {
       "Duplicate plugin registration",
     ],
     ["malformed plugin inventory", { plugins: [{ status: "error" }] }, false, "invalid inventory"],
+    ["array plugin inventory", [], false, "invalid inventory"],
+    ["primitive plugin inventory", "invalid", false, "invalid inventory"],
   ] as const)(
     "handles %s before proving core readiness",
     async (_label, inventory, proceeds, failureMessage) => {

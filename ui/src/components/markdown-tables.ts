@@ -2,6 +2,7 @@ import type { MarkdownIt } from "markdown-it";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
 import { createIconElement } from "./markdown-icon.ts";
 
@@ -76,7 +77,6 @@ function enhanceTableShell(shell: HTMLElement): void {
   label.textContent = t("common.expandTable");
   expand.replaceChildren(createIconElement("maximize", shell.ownerDocument), label);
   copy.replaceChildren(createIconElement("copy", shell.ownerDocument));
-  viewport.addEventListener("scroll", () => syncTableOverflow(shell), { passive: true });
 }
 
 export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
@@ -153,8 +153,31 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
       }
       syncTables(shells);
     });
+    const stopScroll = listen(
+      owner,
+      "scroll",
+      (event) => {
+        const viewport = event.target;
+        if (!(viewport instanceof HTMLElement) || !viewport.matches(tableViewportSelector)) {
+          return;
+        }
+        // Message roots and their transcript can both own table enhancements.
+        const nearestOwner = event
+          .composedPath()
+          .find((node) => node instanceof HTMLElement && tableOwnerStates.has(node));
+        if (nearestOwner !== owner) {
+          return;
+        }
+        const shell = viewport.closest<HTMLElement>(tableShellSelector);
+        if (shell) {
+          syncTableOverflow(shell);
+        }
+      },
+      { capture: true, passive: true },
+    );
     state = {
       release: () => {
+        stopScroll();
         mutationObserver.disconnect();
         resizeObserver?.disconnect();
       },
@@ -183,9 +206,13 @@ async function showTableDialog(
     return;
   }
   let dialog: HTMLElementTagNameMap["openclaw-modal-dialog"] | undefined;
+  const stopListeners: Array<() => void> = [];
   const close = () => {
     if (state.closeDialog === close) {
       delete state.closeDialog;
+    }
+    for (const stop of stopListeners.splice(0)) {
+      stop();
     }
     dialog?.remove();
   };
@@ -220,19 +247,20 @@ async function showTableDialog(
         }
       }, 0);
     };
-    dialog.addEventListener("modal-cancel", close);
+    stopListeners.push(listen(dialog, "modal-cancel", close));
     const content = document.createElement("div");
     content.className = "markdown-table-dialog chat-text";
     content.dir = getComputedStyle(table).direction;
     for (const event of ["click", "auxclick", "keydown"]) {
-      content.addEventListener(event, dismissLink);
+      stopListeners.push(listen(content, event, dismissLink));
     }
     const dismiss = document.createElement("button");
     dismiss.type = "button";
     dismiss.className = "markdown-table-dialog__close";
     dismiss.setAttribute("aria-label", t("common.closeTable"));
     dismiss.autofocus = true;
-    dismiss.addEventListener("click", close);
+    dialog.initialFocus = () => dismiss;
+    stopListeners.push(listen(dismiss, "click", close));
     dismiss.append(createIconElement("x", document));
     content.append(dismiss, table.cloneNode(true));
     dialog.append(content);

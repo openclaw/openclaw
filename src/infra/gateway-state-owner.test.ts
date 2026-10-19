@@ -11,6 +11,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import { StateDatabaseMaintenanceScopeError } from "./gateway-state-owner-record.js";
 import {
   acquireGatewayStateOwner,
   acquireStateDatabaseSchemaLease,
@@ -197,7 +198,7 @@ describe("Gateway state ownership", () => {
           publish(process.pid);
           expect(() =>
             withStateDatabaseColdAdmission({ databasePath, busyTimeoutMs: 25 }, open),
-          ).toThrow("offline maintenance");
+          ).toThrow(StateDatabaseMaintenanceScopeError);
           expect(wait).not.toHaveBeenCalled();
           expect(open).not.toHaveBeenCalled();
         } finally {
@@ -428,7 +429,9 @@ describe("Gateway state ownership", () => {
         ).toMatchObject({
           role: "agent-embedded",
         });
-        expect(() => openOpenClawStateDatabase(options)).toThrow("offline maintenance");
+        expect(() => openOpenClawStateDatabase(options)).toThrow(
+          StateDatabaseMaintenanceScopeError,
+        );
         schema.run(() => {
           expect(
             openOpenClawStateDatabase(options)
@@ -632,7 +635,7 @@ describe("Gateway state ownership", () => {
           if (kind === "matching PID") {
             fs.writeFileSync(pathname, original);
             expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
-              "offline maintenance",
+              StateDatabaseMaintenanceScopeError,
             );
             expect(() => acquireStateDatabaseSchemaLease(databasePath)).toThrow(
               GatewayStateOwnerContentionError,

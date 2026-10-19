@@ -4,7 +4,7 @@ import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-aut
 import { prepareSessionResetCleanupGuard } from "../../auto-reply/reply/session-reset-cleanup.js";
 import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import { createCompletionGrantLineageAdmission } from "../../gateway/tool-resolution-completion.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import { applySessionEntryOperation } from "./session-accessor.sqlite-entry.js";
@@ -511,7 +511,7 @@ describe("memory actor effect adapters", () => {
         permissionMode: "guarded",
         toolOverrides: { webSearch: false },
       });
-      await runExclusiveSessionLifecycleMutation("reset", {
+      await runSessionMutation({
         scope: source.storePath,
         identities: [source.sessionKey, source.sessionId],
         async run() {

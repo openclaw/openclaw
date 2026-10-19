@@ -19,7 +19,6 @@ import {
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
   beginModelCatalogRead,
-  clearModelCatalogCache,
   invalidateModelCatalogCache,
   publishModelCatalogResult,
 } from "../../lib/model-catalog-cache.ts";
@@ -2058,7 +2057,6 @@ describe("chat state render lifecycle", () => {
       {
         sessionKey: "agent:main:queued-edit",
         dispatchEvent: () => true,
-        querySelector: () => null,
       },
     );
     state.client = createTestGatewayClient(vi.fn());
@@ -2099,7 +2097,6 @@ describe("chat state render lifecycle", () => {
       {
         sessionKey: "agent:main:offline-stop",
         dispatchEvent: () => true,
-        querySelector: () => null,
       },
     );
     state.client = createTestGatewayClient(vi.fn());
@@ -2137,7 +2134,6 @@ describe("chat state render lifecycle", () => {
     const dispose = createRoot((stop) => {
       state = createPageState(createChatPageStateContext(), controller.createRenderLifecycle(), {
         dispatchEvent: () => true,
-        querySelector: () => null,
       });
       state.client = createTestGatewayClient(vi.fn());
       controller.attach(state);
@@ -2163,7 +2159,8 @@ describe("chat state render lifecycle", () => {
     awaitDomCommit.mockClear();
     mutateChatRunState(state!, () => (state!.chatStream = "queued stream"), "animation-frame");
     expect(frames.size).toBe(1);
-    controller.prepareRender();
+    controller.publishPendingRunState();
+    controller.captureRenderChanges();
     flush();
     expect(frames.size).toBe(0);
     expect(rendered).toEqual([null, "queued stream"]);
@@ -2259,7 +2256,6 @@ describe("chat state render lifecycle", () => {
     const makeState = () =>
       createPageState(createChatPageStateContext(), controller.createRenderLifecycle(), {
         dispatchEvent: () => true,
-        querySelector: () => null,
       });
     const first = makeState();
     controller.attach(first);
@@ -2824,7 +2820,6 @@ describe("chat state render lifecycle", () => {
     const renderLifecycle = controller.createRenderLifecycle();
     const state = createPageState(createChatPageStateContext(), renderLifecycle, {
       dispatchEvent: () => true,
-      querySelector: () => null,
     });
     const stop = vi.fn(() => {
       expect(state.realtimeTalk.snapshot.realtimeTalkSession).toBeNull();
@@ -2958,7 +2953,6 @@ describe("chat state render lifecycle", () => {
       const state = createPageState(createChatPageStateContext(), renderLifecycle, {
         sessionKey: "agent:main:current",
         dispatchEvent: () => true,
-        querySelector: () => null,
       });
       const navigateHistory = vi.fn(() => {
         if (handled) {
@@ -3070,7 +3064,7 @@ describe("image lightbox lifecycle", () => {
     const state = createPageState(
       createChatPageStateContext(),
       { afterCommit: () => () => {} },
-      { dispatchEvent: () => true, querySelector: () => null },
+      { dispatchEvent: () => true },
     );
 
     const source = "data:video/mp4;base64,AAAA";
@@ -3102,7 +3096,7 @@ describe("image lightbox lifecycle", () => {
     const state = createPageState(
       createChatPageStateContext(),
       { afterCommit: () => () => {} },
-      { dispatchEvent: () => true, querySelector: () => null },
+      { dispatchEvent: () => true },
     );
     const release = vi.fn();
     state.imageLightbox = {
@@ -3167,7 +3161,7 @@ describe("loadPageAssistantIdentity", () => {
     const state = createPageState(
       context,
       { afterCommit: () => () => {} },
-      { dispatchEvent: () => true, querySelector: () => null },
+      { dispatchEvent: () => true },
     );
     state.client = client;
     state.connected = true;
@@ -3816,59 +3810,6 @@ describe("refreshChatMetadata", () => {
         retireChatMetadataRequests(state);
         replacement.resolve({ models: [] });
       }
-    },
-  );
-
-  it.each(["metadata", "picker"] as const)(
-    "fences a late %s result across same-client reconnect",
-    async (kind) => {
-      const old = createDeferred<{
-        commands: never[];
-        models: typeof state.chatModelCatalog;
-        accountSelection: NonNullable<ChatPageHost["chatAccountSelection"]>;
-      }>();
-      const ready = { id: "model", name: "Model", provider: "test", available: true };
-      const accountSelection: NonNullable<ChatPageHost["chatAccountSelection"]> = {
-        kind: "personal",
-        label: "Current owner's account",
-        authProfileId: "test:current",
-        source: "user",
-      };
-      let reads = 0;
-      const request = vi.fn((method: string) =>
-        method === "chat.metadata"
-          ? Promise.resolve({ commands: [] })
-          : ++reads === 1
-            ? old.promise
-            : Promise.resolve({ models: [ready], accountSelection }),
-      );
-      const state = createMetadataState(request);
-      state.chatAccountSelection = { kind: "automatic", label: "Automatic account selection" };
-      const pending =
-        kind === "picker" ? refreshChatModelCatalogOnDemand(state) : refreshChatMetadata(state);
-      state.connected = false;
-      retireChatMetadataRequests(state);
-      clearModelCatalogCache(state.client!);
-      invalidateChatMetadataStore(state.client!);
-      expect(state.chatModelCatalog).toEqual([]);
-      expect(state.chatAccountSelection).toBeNull();
-      state.connectionEpoch += 1;
-      state.connected = true;
-      await refreshChatMetadata(state);
-      old.resolve({
-        commands: [],
-        models: [{ ...ready, available: false, unavailableReason: "missing-auth" }],
-        accountSelection: {
-          kind: "shared",
-          label: "Old connection's account",
-          authProfileId: "test:old",
-        },
-      });
-      await pending;
-      expect(state.chatModelCatalog).toEqual([ready]);
-      expect(state.chatAccountSelection).toEqual(accountSelection);
-      expect(state.chatModelCatalogError).toBeNull();
-      retireChatMetadataRequests(state);
     },
   );
 

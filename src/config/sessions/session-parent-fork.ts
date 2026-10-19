@@ -6,6 +6,7 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { getChildLogger } from "../../logging/logger.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { forkCliSessionBindings } from "./cli-session-binding.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
@@ -162,16 +163,7 @@ function captureForkWorker(
   const database = { ...toDatabaseOptions(scope), path: scope.path };
   const execution = captureOpenClawAgentDatabaseExecution(
     database,
-    identity.key.startsWith("file:")
-      ? {
-          expectedIdentity: {
-            kind: "file",
-            physicalIdentity: identity.key.slice("file:".length),
-            nativeLocation: identity.canonicalPath,
-            birthtime: identity.birthtime,
-          },
-        }
-      : { expectedCreationIdentity: identity },
+    toAgentExecutionConstraints(identity),
   );
   const assertCurrent = () => {
     execution.assertCurrent();

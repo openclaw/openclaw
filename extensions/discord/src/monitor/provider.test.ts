@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+// Discord tests cover provider plugin behavior.
 import { IncognitoSessionSyncAccessError } from "openclaw/plugin-sdk/acp-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -16,6 +17,8 @@ import {
   getProviderMonitorTestMocks,
   resetDiscordProviderMonitorMocks,
 } from "../test-support/provider.test-support.js";
+import * as voiceCommands from "../voice/command.js";
+import { DiscordGuildJoinIntroductionListener } from "./listeners.guild-join.js";
 import {
   formatDiscordDeployErrorDetails,
   formatDiscordDeployErrorMessage,
@@ -317,6 +320,79 @@ describe("monitorDiscordProvider", () => {
     ).not.toThrow();
   });
 
+  it("joins listener and binding work when message-handler cleanup fails", async () => {
+    const ready = createDeferred<void>();
+    const entered = createDeferred<void>();
+    const bindingReady = createDeferred<void>();
+    const bindingEntered = createDeferred<void>();
+    const failure = new Error("message-handler cleanup failed");
+    const stop = vi.spyOn(DiscordGuildJoinIntroductionListener.prototype, "stop");
+    stop.mockImplementationOnce(async function (this: DiscordGuildJoinIntroductionListener) {
+      entered.resolve();
+      await ready.promise;
+      stop.mockRestore();
+      await this.stop();
+    });
+    const deactivate = vi.fn(async () => {
+      expect(stop).toHaveBeenCalledOnce();
+      throw failure;
+    });
+    createDiscordMessageHandlerMock.mockReturnValueOnce(
+      Object.assign(
+        vi.fn(async () => {}),
+        { deactivate },
+      ),
+    );
+    createThreadBindingManagerMock.mockReturnValueOnce({
+      stop: vi.fn(async () => {
+        bindingEntered.resolve();
+        await bindingReady.promise;
+      }),
+    });
+    const gateway = { emitter: new EventEmitter(), isConnected: true, disconnect: vi.fn() };
+    clientGetPluginMock.mockImplementation((name: string) =>
+      name === "gateway" ? gateway : undefined,
+    );
+    let settled = false;
+    const monitor = runProvider({
+      setStatus: (patch) => {
+        if (patch.connected) {
+          throw new Error("status publication failed before lifecycle");
+        }
+      },
+    }).then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    try {
+      await entered.promise;
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      ready.resolve();
+      expect(
+        await Promise.race([
+          bindingEntered.promise.then(() => "binding-stop"),
+          monitor.then(() => "completed"),
+        ]),
+      ).toBe("binding-stop");
+      expect(settled).toBe(false);
+    } finally {
+      ready.resolve();
+      bindingReady.resolve();
+      await monitor;
+      stop.mockRestore();
+    }
+    expect(await monitor).toBe(failure);
+    expect(deactivate).toHaveBeenCalledOnce();
+    expect(monitorLifecycleMock).not.toHaveBeenCalled();
+  });
+
   it("fails closed before lifecycle when Discord bot identity fetch rejects", async () => {
     const runtime = baseRuntime();
     clientFetchUserMock.mockRejectedValueOnce(new Error("identity offline"));
@@ -347,6 +423,38 @@ describe("monitorDiscordProvider", () => {
     await runProvider();
 
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps voice-owned commands out of the generic native dispatcher", async () => {
+    configureAccount({ voice: {} });
+    const standard = { name: "normal", description: "Normal", acceptsArgs: false };
+    listNativeCommandSpecsForConfigMock.mockReturnValue([
+      standard,
+      { name: "vc", description: "Shadow voice command", acceptsArgs: false },
+    ]);
+    const createVoiceCommand = vi.spyOn(voiceCommands, "createDiscordVoiceCommand");
+    try {
+      await runProvider();
+      expect(createDiscordNativeCommandMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ command: standard }),
+      );
+      expect(createVoiceCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ accountId: "default", getManager: expect.any(Function) }),
+      );
+    } finally {
+      createVoiceCommand.mockRestore();
+    }
+  });
+
+  it("binds native slash commands to the owning Gateway dispatcher", async () => {
+    const channelRuntime = createPluginRuntimeMock().channel;
+    await runProvider({ channelRuntime });
+    expect(createDiscordNativeCommandMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        dispatchReplyFromConfig: channelRuntime.reply.dispatchReplyFromConfig,
+        buildContext: channelRuntime.inbound.buildContext,
+      }),
+    );
   });
 
   it("registers the native approval runtime context when exec approvals are enabled", async () => {

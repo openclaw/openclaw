@@ -1,4 +1,4 @@
-import { createRenderEffect, createSignal } from "solid-js";
+import { createRenderEffect, createSignal, onCleanup } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
@@ -10,7 +10,8 @@ import {
 } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { McpAppOpenDetail } from "./mcp-app-launch.ts";
-import type { McpAppViewProps } from "./mcp-app-view-owner.ts";
+import { registerMcpAppUnmountTarget } from "./mcp-app-unmount.ts";
+import type { McpAppViewProps } from "./mcp-app-view-types.ts";
 import { McpAppPanel } from "./solid/mcp-app-panel.tsx";
 
 const viewLoad = vi.hoisted(() => ({
@@ -27,6 +28,7 @@ vi.mock("./mcp-app-view-registration.ts", async () => {
       props: Pick<McpAppViewProps, "sessionKey" | "agentId" | "viewId" | "title" | "deepLink">,
     ) => {
       const view = document.createElement("mcp-app-view");
+      onCleanup(registerMcpAppUnmountTarget(view));
       createRenderEffect(
         () => ({
           sessionKey: props.sessionKey,

@@ -71,7 +71,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       return;
     }
     // Install before ws parses the first frame; the upgrade emits synchronously.
-    const compression = installGatewayDeflateCodec(socket);
+    const compression = installGatewayDeflateCodec(socket, upgradeReq.socket);
     if (!compression && !warnedDeflateCodec) {
       warnedDeflateCodec = true;
       params.logWsControl.warn(
@@ -82,6 +82,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       socket,
       upgradeReq.socket,
       compression?.acceptsDeflatedSegments ?? false,
+      compression?.observeFrameBytes,
     );
     const ingressSocket = socket as GatewayIngressWebSocket;
     const connectionKind = ingressSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";

@@ -182,6 +182,55 @@ it.each([false, true])(
   },
 );
 
+it("preserves host-admitted build-root inputs while excluding guest cache churn", async () => {
+  const inputs = [
+    ".artifacts/build-all-cache/compile/outputs/dist/authored.txt",
+    ".artifacts/build-cache-inputs/authored.json",
+  ];
+  await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
+  for (const entryPath of inputs) {
+    await fs.mkdir(path.dirname(path.join(canonical, entryPath)), { recursive: true });
+    await writeText(canonical, entryPath, "original input\n");
+  }
+  await git(canonical, "add", "--force", "--", ...inputs);
+  const projection = await prepare();
+  for (const entryPath of inputs) {
+    await expectText(projection, entryPath, "original input\n");
+    await writeText(projection, entryPath, "guest input edit\n");
+  }
+  const cache = ".artifacts/build-all-cache/other/outputs/generated.js";
+  await fs.mkdir(path.dirname(path.join(projection, cache)), { recursive: true });
+  await writeText(projection, cache, "disposable cache\n");
+  // The guest's independent index cannot turn generated outputs into host-admitted inputs.
+  await git(projection, "add", "--force", "--", cache);
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    await fs.chmod(path.join(projection, cache), 0);
+  }
+  await synchronize();
+  await closeOpenClawStateDatabaseAsync();
+  await prepare();
+  for (const entryPath of inputs) {
+    await expectText(canonical, entryPath, "guest input edit\n");
+    await expectText(projection, entryPath, "guest input edit\n");
+  }
+  await expectMissing(canonical, cache);
+  await writeText(canonical, inputs[0]!, "human input edit\n");
+  await writeText(projection, inputs[0]!, "conflicting guest edit\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+  await expectText(canonical, inputs[0]!, "human input edit\n");
+  await writeText(canonical, inputs[0]!, "guest input edit\n");
+  await settleProjection();
+  await expectText(canonical, inputs[0]!, "conflicting guest edit\n");
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    await fs.chmod(path.join(projection, inputs[1]!), 0);
+    try {
+      await expect(synchronize()).rejects.toThrow("EACCES");
+    } finally {
+      await fs.chmod(path.join(projection, inputs[1]!), 0o644);
+    }
+  }
+});
+
 it("expires an old runtime-file baseline while preserving unaccepted source", async () => {
   const { proveGeneratedWorkspaceExpiry } =
     await import("./local-workspace-generated-paths.test-support.js");
@@ -454,6 +503,25 @@ it("keeps eligible nested project content and accepted empty directories across 
   await expectMissing(canonical, ".openclaw/sandbox-skills");
 });
 
+it("retains an accepted directory after deleting its last file across turns", async () => {
+  const projection = await prepare();
+  await fs.mkdir(path.join(projection, "retained/nested"), { recursive: true });
+  await writeText(projection, "retained/nested/old.txt", "old content\n");
+  await synchronize();
+
+  await fs.unlink(path.join(projection, "retained/nested/old.txt"));
+  await synchronize();
+  expect((await fs.stat(path.join(canonical, "retained/nested"))).isDirectory()).toBe(true);
+  await expectMissing(canonical, "retained/nested/old.txt");
+
+  await writeText(projection, "retained/nested/new.txt", "new content\n");
+  await synchronize();
+  await prepare();
+  await expectText(canonical, "retained/nested/new.txt", "new content\n");
+  await expectText(projection, "retained/nested/new.txt", "new content\n");
+  expect((await readProjection())?.pending_ref).toBeNull();
+});
+
 it("retains both sides and a durable pending result when edits conflict", async () => {
   const projection = await prepare();
   await writeText(projection, "source.txt", "guest conflict\n");
@@ -528,148 +596,253 @@ it.each(["acceptance", "accepted-result cleanup"] as const)(
   },
 );
 
-it("waits for checkpoint resume before preparing the next guest command", async ({ signal }) => {
-  const [
-    projectionOwner,
-    { prepareLocalSandboxWorkspace, bindLocalSandboxWorkspace },
-    { createSandboxTestContext },
-    { createSandboxFsBridge },
-    { resolveSandboxConfigForAgent },
-    registry,
-    engine,
-  ] = await Promise.all([
-    import("./local-workspace-projection.js"),
-    import("../../agents/sandbox/local-workspace.js"),
-    import("../../agents/sandbox/test-fixtures.js"),
-    import("../../agents/sandbox/fs-bridge.js"),
-    import("../../agents/sandbox/config.js"),
-    import("../../agents/sandbox/registry.js"),
-    import("../../agents/sandbox/container-engine.js"),
-  ]);
-  vi.spyOn(projectionOwner, "resolveLocalWorkspaceOwner").mockResolvedValue({
-    ...owner,
-    [Symbol.dispose]() {},
-  });
-  using projection = await prepareLocalSandboxWorkspace({
-    cfg: { worktreeAcceleration: false },
-    agentId: owner.agentId,
-    sessionKey: owner.sessionKey,
-    workspaceDir: canonical,
-    sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
-  });
-  if (!projection) {
-    throw new Error("Expected managed projection");
-  }
-  const paused = createDeferred();
-  const settle = createDeferred();
-  let runtimePaused = false;
-  const events: string[] = [];
-  const entry = {
-    containerName: "checkpoint-command-owned",
-    backendId: "docker",
-    sessionKey: owner.sessionKey,
-    workspaceDir: projection.workspaceDir,
-    createdAtMs: 1,
-    lastUsedAtMs: 1,
-    image: "fixture",
-  };
-  await registry.updateRegistry(entry);
-  vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
-    if (args[0] === "inspect") {
-      return {
-        code: 0,
-        stderr: "",
-        stdout: args.includes("{{.State.Paused}}")
-          ? String(runtimePaused)
-          : `${"a".repeat(64)} true ${runtimePaused}`,
-      };
-    }
-    if (args[0] === "pause") {
-      runtimePaused = true;
-      events.push("paused");
-      paused.resolve();
-      await settle.promise;
-    } else if (args[0] === "unpause") {
-      runtimePaused = false;
-      events.push("resumed");
-    }
-    return { code: 0, stdout: "", stderr: "" };
-  });
-  const dispatch = (kind: string) => {
-    if (runtimePaused) {
-      throw new Error("Container is paused");
-    }
-    events.push(kind);
-  };
-  const backend: SandboxBackendHandle = {
-    id: "docker",
-    runtimeId: entry.containerName,
-    runtimeLabel: entry.containerName,
-    workdir: "/workspace",
-    buildExecSpec: async () => {
-      dispatch("exec");
-      return { argv: ["true"], env: {}, stdinMode: "pipe-closed" };
-    },
-    runShellCommand: async () => {
-      dispatch("shell");
-      return { code: 0, stdout: Buffer.from("ready"), stderr: Buffer.alloc(0) };
-    },
-  };
-  const sandbox = createSandboxTestContext({
-    overrides: { workspaceDir: projection.workspaceDir, backend },
-  });
-  sandbox.fsBridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
-  bindLocalSandboxWorkspace(sandbox, projection);
-  const checkpoint = projection.checkpoint();
-  let commands: Promise<unknown>[] = [];
-  let pendingExec: ReturnType<typeof backend.buildExecSpec> | undefined;
-  try {
-    await awaitGateBeforeSettlement(paused.promise, checkpoint, "Checkpoint did not pause runtime");
-    const controller = new AbortController();
-    const reason = new Error("cancelled during checkpoint");
-    const cancelled = backend.runShellCommand({ script: "true", signal: controller.signal });
-    commands = [cancelled];
-    controller.abort(reason);
-    await expect(withinTest(cancelled, signal)).rejects.toMatchObject({
-      code: "OPENCLAW_STATE_LEASE_ABORTED",
-      cause: reason,
+it.for([false, true])(
+  "waits for checkpoint resume before guest command preparation and cleanup (stopped: %s)",
+  async (stopped, { signal }) => {
+    const [
+      projectionOwner,
+      { prepareLocalSandboxWorkspace, bindLocalSandboxWorkspace },
+      { createSandboxTestContext },
+      { createSandboxFsBridge },
+      { resolveSandboxConfigForAgent },
+      registry,
+      engine,
+      docker,
+      { createDockerSandboxBackend },
+    ] = await Promise.all([
+      import("./local-workspace-projection.js"),
+      import("../../agents/sandbox/local-workspace.js"),
+      import("../../agents/sandbox/test-fixtures.js"),
+      import("../../agents/sandbox/fs-bridge.js"),
+      import("../../agents/sandbox/config.js"),
+      import("../../agents/sandbox/registry.js"),
+      import("../../agents/sandbox/container-engine.js"),
+      import("../../agents/sandbox/docker.js"),
+      import("../../agents/sandbox/docker-backend.js"),
+    ]);
+    let ownerActive = true;
+    const execution = new AbortController();
+    vi.spyOn(projectionOwner, "resolveLocalWorkspaceOwner").mockResolvedValue({
+      ...owner,
+      assertCurrent: () => {
+        owner.assertCurrent();
+        if (!ownerActive) {
+          throw new Error("Workspace owner released before cleanup");
+        }
+      },
+      [Symbol.dispose]() {
+        ownerActive = false;
+      },
     });
-    expect(runtimePaused).toBe(true);
-    expect(events).toEqual(["paused"]);
-    pendingExec = backend.buildExecSpec({ command: "true", env: {}, usePty: false });
-    commands = [backend.runShellCommand({ script: "true" }), pendingExec];
-    const outcomes = Promise.allSettled(commands);
-    settle.resolve();
-    await checkpoint;
-    expect((await outcomes).map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
-    expect(events.slice(0, 2)).toEqual(["paused", "resumed"]);
-    expect(events.slice(2).toSorted()).toEqual(["exec", "shell"]);
-    // Preparing an exec must release admission before that background command exits.
-    await projection.provision(async () => events.push("next admission"));
-    expect(events.at(-1)).toBe("next admission");
-  } finally {
-    settle.resolve();
-    await Promise.allSettled([checkpoint, ...commands]);
-    if (pendingExec) {
-      const [result] = await Promise.allSettled([pendingExec]);
-      if (result.status === "fulfilled") {
+    using projection = await prepareLocalSandboxWorkspace({
+      cfg: { worktreeAcceleration: false },
+      agentId: owner.agentId,
+      sessionKey: owner.sessionKey,
+      workspaceDir: canonical,
+      sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
+      assertCurrent: () => execution.signal.throwIfAborted(),
+    });
+    if (!projection) {
+      throw new Error("Expected managed projection");
+    }
+    const paused = createDeferred();
+    const settle = createDeferred();
+    let runtimePaused = false;
+    const events: string[] = [];
+    const entry = {
+      containerName: "checkpoint-command-owned",
+      backendId: "docker",
+      sessionKey: owner.sessionKey,
+      workspaceDir: projection.workspaceDir,
+      createdAtMs: 1,
+      lastUsedAtMs: 1,
+      image: "fixture",
+    };
+    await registry.updateRegistry(entry);
+    vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
+      if (args[0] === "inspect") {
+        if (args.some((arg) => arg.includes("{{json .Mounts}}"))) {
+          return { code: 0, stdout: JSON.stringify({ Mounts: [], Tmpfs: {} }), stderr: "" };
+        }
+        if (args.includes("{{json .State}}")) {
+          return {
+            code: 0,
+            stdout: JSON.stringify({ Running: true, Paused: runtimePaused, Pid: 1 }),
+            stderr: "",
+          };
+        }
+        return {
+          code: 0,
+          stderr: "",
+          stdout: args.includes("{{.State.Paused}}")
+            ? String(runtimePaused)
+            : `${"a".repeat(64)} true ${runtimePaused}`,
+        };
+      }
+      if (args[0] === "exec") {
+        return { code: 0, stdout: "1 0 0:1 / / rw - overlay overlay rw\n", stderr: "" };
+      }
+      if (args[0] === "pause") {
+        runtimePaused = true;
+        events.push("paused");
+        paused.resolve();
+        await settle.promise;
+      } else if (args[0] === "unpause") {
+        runtimePaused = false;
+        events.push("resumed");
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const dispatch = (kind: string) => {
+      if (runtimePaused) {
+        throw new Error("Container is paused");
+      }
+      events.push(kind);
+    };
+    // Keep the cleanup producer and projection gate real; model only container I/O.
+    vi.spyOn(docker, "ensureSandboxContainer").mockResolvedValue({
+      containerName: entry.containerName,
+      containerId: "a".repeat(64),
+    });
+    vi.spyOn(docker, "execContainerRaw").mockImplementation(async (_engine, args) => {
+      if (runtimePaused) {
+        return { code: 125, stdout: Buffer.alloc(0), stderr: Buffer.from("Container is paused") };
+      }
+      events.push("cleanup");
+      if (args.some((arg) => arg.includes("kill -TERM"))) {
+        await writeText(projection.workspaceDir, "term-output.txt", "final descendant output\n");
+      }
+      return { code: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+    });
+    const container = await createDockerSandboxBackend({
+      cfg: resolveSandboxConfigForAgent({}, owner.agentId),
+      scopeKey: owner.sessionKey,
+      sessionKey: owner.sessionKey,
+      workspaceDir: projection.workspaceDir,
+      agentWorkspaceDir: canonical,
+    });
+    const backend: SandboxBackendHandle = {
+      id: "docker",
+      runtimeId: entry.containerName,
+      runtimeLabel: entry.containerName,
+      workdir: "/workspace",
+      prepareProcessCleanup: container.prepareProcessCleanup!.bind(container),
+      buildExecSpec: async () => {
+        dispatch("exec");
+        return { argv: ["true"], env: {}, stdinMode: "pipe-closed" };
+      },
+      runShellCommand: async () => {
+        dispatch("shell");
+        return { code: 0, stdout: Buffer.from("ready"), stderr: Buffer.alloc(0) };
+      },
+    };
+    const sandbox = createSandboxTestContext({
+      overrides: { workspaceDir: projection.workspaceDir, backend },
+    });
+    sandbox.fsBridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
+    bindLocalSandboxWorkspace(sandbox, projection);
+    const cleanup = backend.prepareProcessCleanup!({});
+    const accepted = await backend.buildExecSpec({
+      command: "true",
+      env: cleanup.env,
+      usePty: false,
+    });
+    events.length = 0;
+    const checkpoint = stopped
+      ? backend.finalizeExec!({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          token: accepted.finalizeToken,
+        })
+      : projection.checkpoint();
+    let commands: Promise<unknown>[] = [];
+    let pendingExec: ReturnType<typeof backend.buildExecSpec> | undefined;
+    const acceptedFinalization = stopped ? checkpoint : undefined;
+    try {
+      await awaitGateBeforeSettlement(
+        paused.promise,
+        checkpoint,
+        "Checkpoint did not pause runtime",
+      );
+      const controller = new AbortController();
+      const reason = new Error("cancelled during checkpoint");
+      const cancelled = backend.runShellCommand({ script: "true", signal: controller.signal });
+      commands = [cancelled];
+      controller.abort(reason);
+      await expect(withinTest(cancelled, signal)).rejects.toMatchObject({
+        code: "OPENCLAW_STATE_LEASE_ABORTED",
+        cause: reason,
+      });
+      expect(runtimePaused).toBe(true);
+      expect(events).toEqual(["paused"]);
+      pendingExec = backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+      commands = [backend.runShellCommand({ script: "true" }), pendingExec];
+      const stop = new Error("stopped during checkpoint");
+      if (stopped) {
+        execution.abort(stop);
+        projection[Symbol.dispose]();
+      }
+      commands.push(cleanup.terminate(), cleanup.interrupt(1000));
+      const outcomes = Promise.allSettled(commands);
+      settle.resolve();
+      await checkpoint;
+      for (const [index, outcome] of (await outcomes).entries()) {
+        if (stopped && index !== 2) {
+          expect(outcome).toEqual({ status: "rejected", reason: stop });
+        } else if (outcome.status === "rejected") {
+          throw outcome.reason;
+        }
+      }
+      await acceptedFinalization;
+      await expectText(canonical, "term-output.txt", "final descendant output\n");
+      expect(events.slice(0, 2)).toEqual(["paused", "resumed"]);
+      expect(
+        events.filter((event) => event !== "paused" && event !== "resumed").toSorted(),
+      ).toEqual(stopped ? ["cleanup"] : ["cleanup", "cleanup", "exec", "shell"]);
+      if (!stopped) {
+        // Preparing an exec must release admission before that background command exits.
+        await projection.provision(async () => events.push("next admission"));
+        expect(events.at(-1)).toBe("next admission");
+      }
+    } finally {
+      settle.resolve();
+      await Promise.allSettled([checkpoint, ...commands]);
+      if (acceptedFinalization) {
+        await acceptedFinalization;
+      } else {
         await backend.finalizeExec!({
           status: "completed",
           exitCode: 0,
           timedOut: false,
-          token: result.value.finalizeToken,
+          token: accepted.finalizeToken,
         });
       }
+      if (pendingExec) {
+        const [result] = await Promise.allSettled([pendingExec]);
+        if (result.status === "fulfilled") {
+          await backend.finalizeExec!({
+            status: "completed",
+            exitCode: 0,
+            timedOut: false,
+            token: result.value.finalizeToken,
+          });
+        }
+      }
+      await registry.removeRegistryEntry(entry.containerName);
     }
-    await registry.removeRegistryEntry(entry.containerName);
-  }
-});
+  },
+);
 
 it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
   "preserves accepted ignored files, symlinks and empty directories through archive: %s",
   async (mode) => {
     const { restoreProvisionedFiles } = await import("../../agents/worktrees/provisioned-files.js");
     const { service, registry, retentionMs } = await archiveFixture([".env.allowed"]);
+    const originalInput = ".artifacts/build-cache-inputs/archived.json";
+    await fs.mkdir(path.dirname(path.join(canonical, originalInput)), { recursive: true });
+    await writeText(canonical, originalInput, "original archived input\n");
+    await git(canonical, "add", "--force", "--", originalInput);
     await writeText(canonical, ".env.allowed", "original provisioned bytes");
     await fs.chmod(path.join(canonical, ".env.allowed"), 0o600);
     await writeText(canonical, ".gitignore", ".env.local\n.env.allowed\nguest-ignored/\n");
@@ -780,6 +953,7 @@ it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
     }
     await prepare();
     for (const workspace of [canonical, projection]) {
+      await expectText(workspace, originalInput, "original archived input\n");
       expect(await fs.readFile(path.join(workspace, "guest-ignored/data"))).toEqual(bytes);
       expect((await fs.stat(path.join(workspace, "guest-ignored/empty"))).isDirectory()).toBe(true);
       if (process.platform !== "win32") {
@@ -798,6 +972,40 @@ it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
     expect(await treePaths(published.workspaceTree)).not.toContain("guest-ignored");
   },
 );
+
+it("preserves later inputs from an older archive without admitting new caches", async () => {
+  const { service } = await archiveFixture();
+  const projection = await prepare();
+  const originalAdmission = (await readProjection())!.source_paths_json;
+  const input = ".artifacts/build-cache-inputs/late-original.json";
+  expect(JSON.parse(originalAdmission)).not.toContain(input);
+  await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
+  await fs.mkdir(path.dirname(path.join(canonical, input)), { recursive: true });
+  await writeText(canonical, input, "host-admitted input\n");
+  await git(canonical, "add", "--force", "--", input);
+  await prepare();
+  await expectText(projection, input, "host-admitted input\n");
+  const removed = await service.remove({ id: owner.worktree.id, reason: "legacy-admission-probe" });
+  expect(removed.removed).toBe(true);
+  expect(await treePaths(removed.snapshotRef!)).toContain(input);
+  // Before this policy, host-index admission did not update source_paths_json.
+  await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
+    await store.update(store.get()!, { source_paths_json: originalAdmission });
+  });
+  await closeOpenClawStateDatabaseAsync();
+  await service.restore({ id: owner.worktree.id });
+  await prepare();
+  await expectText(projection, input, "host-admitted input\n");
+  const generated = ".artifacts/build-cache-inputs/generated-after-restore.json";
+  await writeText(projection, generated, "new disposable cache\n");
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    await fs.chmod(path.join(projection, generated), 0);
+  }
+  await writeText(projection, input, "restored authored edit\n");
+  await synchronize();
+  await expectText(canonical, input, "restored authored edit\n");
+  await expectMissing(canonical, generated);
+});
 
 it.each(["lifecycle reset", "replacement session"] as const)(
   "preserves pending bytes across a %s without transferring session authority",

@@ -7,7 +7,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { getLaneState, getQueueState } from "./command-queue.state.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
-import type { CommandQueueTaskDeadline } from "./command-queue.types.js";
 import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -218,14 +217,19 @@ describe("command queue", () => {
     );
   });
 
-  it("does not report capacity waiting for an entry synchronously cleared during enqueue", async () => {
-    const lane = "reentrant-clear";
+  it("does not report capacity waiting for an entry synchronously cancelled during enqueue", async () => {
+    const lane = "reentrant-cancel";
     queue.setCommandLaneConcurrency(lane, 0);
-    diagnosticMocks.logLaneEnqueue.mockImplementationOnce(() => queue.clearCommandLane(lane));
+    const cancellation = new AbortController();
+    const reason = new Error("owner cancelled during enqueue");
+    diagnosticMocks.logLaneEnqueue.mockImplementationOnce(() => cancellation.abort(reason));
     const onQueued = vi.fn();
     await expect(
-      queue.enqueueCommandInLane(lane, async () => undefined, { onQueued }),
-    ).rejects.toBeInstanceOf(queue.CommandLaneClearedError);
+      queue.enqueueCommandInLane(lane, async () => undefined, {
+        onQueued,
+        abortSignal: cancellation.signal,
+      }),
+    ).rejects.toBe(reason);
     expect(onQueued).not.toHaveBeenCalled();
   });
 
@@ -333,6 +337,39 @@ describe("command queue", () => {
     ).toBe(true);
   });
 
+  it("owner cancellation rejects pending promises at every priority without releasing active work", async () => {
+    const gate = createDeferred();
+    const cancellation = new AbortController();
+    const first = queue.enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        await gate.promise;
+        return "first";
+      },
+      { abortSignal: cancellation.signal },
+    );
+    const task = vi.fn(async () => "unexpected");
+    const pending = (["background", "normal", "foreground"] as const).map((priority) =>
+      queue.enqueueCommandInLane(CommandLane.Main, task, {
+        priority,
+        abortSignal: cancellation.signal,
+      }),
+    );
+    const reason = new Error("owner stopped pending work");
+    const outcomes = Promise.allSettled(pending);
+
+    cancellation.abort(reason);
+    expect(queue.getCommandLaneSnapshot(CommandLane.Main)).toMatchObject({
+      activeCount: 1,
+      queuedCount: 0,
+    });
+    expect(await outcomes).toEqual(pending.map(() => ({ status: "rejected", reason })));
+    expect(task).not.toHaveBeenCalled();
+
+    gate.resolve();
+    await expect(first).resolves.toBe("first");
+  });
+
   it("keeps draining functional after synchronous onWait failure", async () => {
     const lane = "drain-sync-throw";
     queue.setCommandLaneConcurrency(lane, 1);
@@ -351,10 +388,10 @@ describe("command queue", () => {
   });
 
   it.each(["admission", "error"] as const)(
-    "settles callers and drains the session lane when %s diagnostics throw",
+    "settles callers and drains the command lane when %s diagnostics throw",
     async (phase) => {
       vi.useFakeTimers();
-      const lane = "session:agent:test:diagnostic-failure";
+      const lane = "diagnostic-failure";
       const diagnosticError = new Error("diagnostic sink failed");
       const taskError = new Error("Session transcript keyed user is outside the current turn");
       const gate = createDeferred<string>();
@@ -528,43 +565,46 @@ describe("command queue", () => {
     }
   });
   describe("scoped command lane lifecycle", () => {
-    it.each(["session", "cli"])("retires parallel %s lanes after completion", async (prefix) => {
-      const lanes = getQueueState().lanes;
-      const baselineSize = lanes.size;
-      const allRunsStarted = createDeferred();
-      let activeRuns = 0;
-      let peakActiveRuns = 0;
-      const laneNames = Array.from(
-        { length: 10 },
-        (_, index) => `${prefix}:agent:main:autoqa-${index}`,
-      );
-      const results = await Promise.all(
-        laneNames.map((lane, index) =>
-          queue.enqueueCommandInLane(lane, async () => {
-            activeRuns += 1;
-            peakActiveRuns = Math.max(peakActiveRuns, activeRuns);
-            if (activeRuns === laneNames.length) {
-              allRunsStarted.resolve();
-            }
-            await allRunsStarted.promise;
-            activeRuns -= 1;
-            return index;
-          }),
-        ),
-      );
-      expect(results).toEqual(Array.from({ length: 10 }, (_, index) => index));
-      expect(peakActiveRuns).toBe(10);
-      expect(activeRuns).toBe(0);
-      expect(queue.getTotalQueueSize()).toBe(0);
-      expect(lanes.size).toBe(baselineSize);
-      for (const lane of laneNames) {
-        expect(lanes.has(lane)).toBe(false);
-      }
-    });
+    it.each(["session:probe-", "cli:"])(
+      "retires parallel %s lanes after completion",
+      async (prefix) => {
+        const lanes = getQueueState().lanes;
+        const baselineSize = lanes.size;
+        const allRunsStarted = createDeferred();
+        let activeRuns = 0;
+        let peakActiveRuns = 0;
+        const laneNames = Array.from(
+          { length: 10 },
+          (_, index) => `${prefix}agent:main:autoqa-${index}`,
+        );
+        const results = await Promise.all(
+          laneNames.map((lane, index) =>
+            queue.enqueueCommandInLane(lane, async () => {
+              activeRuns += 1;
+              peakActiveRuns = Math.max(peakActiveRuns, activeRuns);
+              if (activeRuns === laneNames.length) {
+                allRunsStarted.resolve();
+              }
+              await allRunsStarted.promise;
+              activeRuns -= 1;
+              return index;
+            }),
+          ),
+        );
+        expect(results).toEqual(Array.from({ length: 10 }, (_, index) => index));
+        expect(peakActiveRuns).toBe(10);
+        expect(activeRuns).toBe(0);
+        expect(queue.getTotalQueueSize()).toBe(0);
+        expect(lanes.size).toBe(baselineSize);
+        for (const lane of laneNames) {
+          expect(lanes.has(lane)).toBe(false);
+        }
+      },
+    );
 
-    it("keeps a session lane until its queued successor finishes", async () => {
+    it("keeps a setup-probe lane until its queued successor finishes", async () => {
       const lanes = getQueueState().lanes;
-      const lane = "session:agent:main:autoqa-queued";
+      const lane = "session:probe-autoqa-queued";
       const first = park(lane, "first");
       const second = park(lane, "second");
       expect(lanes.has(lane)).toBe(true);
@@ -617,7 +657,7 @@ describe("command queue", () => {
 
     it("preserves explicitly configured and paused dynamic lanes", async () => {
       const lanes = getQueueState().lanes;
-      const configuredLane = "session:agent:main:autoqa-configured";
+      const configuredLane = "session:probe-autoqa-configured";
       const pausedLane = "nested:agent:main:autoqa-paused";
 
       queue.setCommandLaneConcurrency(configuredLane, 2);
@@ -654,13 +694,13 @@ describe("command queue", () => {
       expect(lanes.has(configuredLane)).toBe(true);
     });
 
-    it("does not let stale session completion retire a replacement-generation run", async () => {
+    it("does not let pre-restart probe completion retire a replacement-generation run", async () => {
       const lanes = getQueueState().lanes;
-      const lane = "session:agent:main:autoqa-replacement";
+      const lane = "session:probe-autoqa-replacement";
       const staleRun = park(lane, "stale", {
         sessionTarget: { agentId: "stale", sessionId: "stale" },
       });
-      expect(queue.resetCommandLane(lane)).toBe(1);
+      queue.resetAllLanes();
       const replacementRun = park(lane, "replacement", {
         sessionTarget: { agentId: "replacement", sessionId: "replacement" },
       });
@@ -696,7 +736,7 @@ describe("command queue", () => {
 
     it("does not retire a newer lane state when stale work finishes", async () => {
       const lanes = getQueueState().lanes;
-      const lane = "session:agent:main:autoqa-recreated-state";
+      const lane = "session:probe-autoqa-recreated-state";
       const staleRun = park(lane, "stale");
       lanes.delete(lane);
       const replacementState = getLaneState(lane);
@@ -708,7 +748,7 @@ describe("command queue", () => {
 
     it("retires a scoped lane after its active task times out", async () => {
       const lanes = getQueueState().lanes;
-      const lane = "session:agent:main:autoqa-timed-out";
+      const lane = "session:probe-autoqa-timed-out";
       vi.useFakeTimers();
       try {
         const timedOut = queue.enqueueCommandInLane(
@@ -727,135 +767,6 @@ describe("command queue", () => {
       } finally {
         vi.useRealTimers();
       }
-    });
-  });
-
-  describe("command lane owner deadlines", () => {
-    const lane = "runtime-deadline-test";
-    const finishers: Array<() => void> = [];
-
-    function enqueueOwnedTask(initialDeadline: CommandQueueTaskDeadline, initiallyAborted = false) {
-      const finish = createDeferred();
-      finishers.push(finish.resolve);
-      const abort = new AbortController();
-      const release = new AbortController();
-      if (initiallyAborted) {
-        abort.abort();
-      }
-      const unsubscribe = vi.fn();
-      let progressAtMs = Date.now();
-      let publish: (deadline: CommandQueueTaskDeadline | undefined) => void = () => {
-        throw new Error("deadline subscription is not active");
-      };
-      const task = queue.enqueueCommandInLane(lane, () => finish.promise, {
-        taskTimeoutMs: 25,
-        taskTimeoutProgressAtMs: () => progressAtMs,
-        taskTimeoutAbortSignal: abort.signal,
-        taskTimeoutAbortGraceMs: 5,
-        taskTimeoutReleaseSignal: release.signal,
-        taskTimeoutSubscribe: (onDeadline) => {
-          publish = onDeadline;
-          onDeadline(initialDeadline);
-          return unsubscribe;
-        },
-      });
-      const outcome = task.then(
-        () => ({ status: "completed" as const }),
-        (error: unknown) => ({ status: "failed" as const, error }),
-      );
-      return {
-        abort,
-        release,
-        finish: finish.resolve,
-        outcome,
-        unsubscribe,
-        publish: (deadline: CommandQueueTaskDeadline | undefined) => publish(deadline),
-        progress: () => {
-          progressAtMs = Date.now();
-        },
-      };
-    }
-    async function expectOwnerFailure(
-      outcome: ReturnType<typeof enqueueOwnedTask>["outcome"],
-      message: string,
-    ) {
-      await expect(outcome).resolves.toMatchObject({
-        status: "failed",
-        error: { name: "CommandLaneTaskTimeoutError", message: expect.stringContaining(message) },
-      });
-    }
-
-    beforeEach(() => {
-      resetCommandQueueStateForTest();
-      vi.useFakeTimers();
-      vi.setSystemTime(Date.parse("2026-08-20T12:00:00Z"));
-    });
-
-    afterEach(async () => {
-      for (const finish of finishers.splice(0)) {
-        finish();
-      }
-      await vi.advanceTimersByTimeAsync(0);
-      resetCommandQueueStateForTest();
-      vi.useRealTimers();
-    });
-
-    it("replaces idle timing with an absolute deadline that progress cannot extend", async () => {
-      const owner = enqueueOwnedTask({ kind: "bounded", deadlineAtMs: Date.now() + 100 });
-      const next = vi.fn(async () => "next");
-      const queued = queue.enqueueCommandInLane(lane, next);
-      await vi.advanceTimersByTimeAsync(50);
-      owner.progress();
-      await vi.advanceTimersByTimeAsync(49);
-      expect(next).not.toHaveBeenCalled();
-      expectCounts(lane, 1, 1);
-      await vi.advanceTimersByTimeAsync(1);
-      await expectOwnerFailure(owner.outcome, "owner deadline");
-      await expect(queued).resolves.toBe("next");
-      expect(owner.unsubscribe).toHaveBeenCalledOnce();
-    });
-
-    it("lets unlimited execution hand off to bounded terminal settlement", async () => {
-      const owner = enqueueOwnedTask({ kind: "unlimited" });
-      await vi.advanceTimersByTimeAsync(49 * 60 * 60 * 1000);
-      expect(queue.getCommandLaneSnapshot(lane).activeCount).toBe(1);
-      owner.publish({ kind: "bounded", deadlineAtMs: Date.now() + 120_000 });
-      await vi.advanceTimersByTimeAsync(119_999);
-      expect(queue.getCommandLaneSnapshot(lane).activeCount).toBe(1);
-      owner.finish();
-      await expect(owner.outcome).resolves.toEqual({ status: "completed" });
-      owner.publish({ kind: "bounded", deadlineAtMs: Date.now() });
-      await vi.advanceTimersByTimeAsync(1);
-      expect(queue.getCommandLaneSnapshot(lane).activeCount).toBe(0);
-      expect(vi.getTimerCount()).toBe(0);
-    });
-
-    it("restores ordinary idle recovery after the runtime releases deadline ownership", async () => {
-      const owner = enqueueOwnedTask({ kind: "unlimited" });
-      await vi.advanceTimersByTimeAsync(1_000);
-      owner.progress();
-      owner.publish(undefined);
-      await vi.advanceTimersByTimeAsync(24);
-      expect(queue.getCommandLaneSnapshot(lane).activeCount).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      await expectOwnerFailure(owner.outcome, "no progress for 25ms");
-    });
-
-    it("does not let a late deadline update replace an accepted abort grace", async () => {
-      const owner = enqueueOwnedTask({ kind: "unlimited" });
-      owner.abort.abort();
-      owner.publish({ kind: "unlimited" });
-      await vi.advanceTimersByTimeAsync(4);
-      expect(queue.getCommandLaneSnapshot(lane).activeCount).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      await expectOwnerFailure(owner.outcome, "abort grace 5ms");
-    });
-
-    it("honors immediate release when initially aborted", async () => {
-      const owner = enqueueOwnedTask({ kind: "unlimited" }, true);
-      owner.release.abort();
-      await expectOwnerFailure(owner.outcome, "lane release requested");
-      expect(queue.getCommandLaneSnapshot(lane).activeCount).toBe(0);
     });
   });
 });

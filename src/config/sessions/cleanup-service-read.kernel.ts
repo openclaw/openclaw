@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { shouldPreserveSessionCleanupEntry } from "./cleanup-service-read.policy.js";
 import type {
@@ -96,7 +96,7 @@ export function readSessionCleanupSnapshotInDatabase(
   };
   return readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
     request.fixMissing && !database.db.isTransaction
-      ? runSqliteDeferredTransactionSync(database.db, read)
+      ? runSqliteReadSnapshotSync(database.db, read)
       : read(),
   );
 }

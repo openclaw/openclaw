@@ -420,6 +420,7 @@ async function runPreparedSettledTurnFinalization(input: {
         {
           ...input.attempt,
           abortSignal: controls.abortSignal,
+          bindWatchdogAttempt: controls.bindWatchdogAttempt,
           onAttemptDeadlineChanged: controls.onAttemptDeadlineChanged,
           onAttemptTimeout: controls.onAttemptTimeout,
           onAttemptAbort: controls.onAttemptAbort,

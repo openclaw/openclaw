@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For } from "solid-js";
+import { createMemo, For, onSettled } from "solid-js";
 import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
 import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
@@ -32,7 +32,7 @@ type CronRunsSectionProps = Pick<
   | "onRefresh"
   | "onRunsFiltersChange"
   | "onViewRunTranscript"
-  | "onHighlightedRun"
+  | "onRunMount"
 > & {
   conditionActivity?: {
     checkCount: number;
@@ -357,7 +357,7 @@ export function RunsSection(props: CronRunsSectionProps) {
                 entry={entry()}
                 formatTimestamp={formatTimestamp()}
                 highlightedRunId={props.highlightedRunId}
-                onHighlightedRun={(element, link) => props.onHighlightedRun?.(element, link)}
+                onRunMount={(element, getEntry) => props.onRunMount?.(element, getEntry)}
                 onViewRunTranscript={(targetEntry, trigger) =>
                   props.onViewRunTranscript?.(targetEntry, trigger)
                 }
@@ -405,7 +405,7 @@ function Run(props: {
   formatTimestamp: ReturnType<typeof createMsFormatter>;
   highlightedRunId?: string | null;
   onViewRunTranscript?: CronProps["onViewRunTranscript"];
-  onHighlightedRun?: (element: HTMLElement, link: string) => (() => void) | undefined;
+  onRunMount?: CronProps["onRunMount"];
 }) {
   const status = () =>
     runStatusLabel(props.entry.status ?? "unknown", props.entry.completionStatus);
@@ -443,10 +443,7 @@ function Run(props: {
       : null,
   );
   let row!: HTMLDivElement;
-  // Register the highlighted DOM row with the cron owner until this selection changes.
-  createEffect(highlighted, (selected) =>
-    selected ? props.onHighlightedRun?.(row, selected) : undefined,
-  );
+  onSettled(() => props.onRunMount?.(row, () => props.entry));
   return (
     <div
       ref={(element) => {

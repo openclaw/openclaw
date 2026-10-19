@@ -246,6 +246,13 @@ discarding your edits. Switching identities or losing access still clears the
 affected settings. These drafts are not persisted by this behavior: reloading
 or closing the tab can discard them, including entered credentials.
 
+Plugin Settings panels, including the Memory overview and memory search, stay open
+through the same kind of reconnect. Search results, the typed query, and opened
+memory files remain visible; searching waits for the connection, and replies to
+requests sent before the drop are discarded. Reopening a file whose read was
+interrupted retries it. Changing the Settings agent, account, or access starts a
+fresh panel.
+
 Rejected model-default saves return the pickers to the saved configuration.
 **Retry** keeps the rejected change with the configuration write owner. Model
 edits that have not been sent still survive a temporary disconnect. After

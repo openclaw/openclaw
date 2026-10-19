@@ -461,21 +461,22 @@ export async function fetchGitUpdateTarget(params: {
   // Implicit Dev updates use the same live source as discovery. Only an explicit
   // detached target may search for its requested object on other remotes.
   const authority =
-    channel !== "dev"
-      ? tagRemote
-      : devTarget?.mode === "detached"
-        ? (targetRemote ?? (targetRef?.startsWith("refs/heads/") ? "origin" : undefined))
-        : devSource?.remote;
+    devTarget?.mode === "detached"
+      ? (targetRemote ?? (targetRef?.startsWith("refs/heads/") ? "origin" : undefined))
+      : devSource?.remote;
   if (channel === "dev" && devTarget?.mode !== "detached" && !devSource) {
     return devTarget ? { ...result(false), reason: "tracked-upstream-invalid" } : result(true);
   }
-  const fetchRemotes = authority
-    ? [authority]
-    : channel !== "dev" || remoteRef || targetRef?.startsWith("refs/tags/")
+  const fetchRemotes =
+    channel !== "dev"
       ? []
-      : targetRef && !isFullGitObjectId(targetRef)
-        ? remotes.filter((candidate) => candidate === "origin")
-        : remotes;
+      : authority
+        ? [authority]
+        : remoteRef || targetRef?.startsWith("refs/tags/")
+          ? []
+          : targetRef && !isFullGitObjectId(targetRef)
+            ? remotes.filter((candidate) => candidate === "origin")
+            : remotes;
   const fetchConfigKey = `remote.${devSource?.remote}.fetch`;
   const exclusions = devSource
     ? await runStep(step("git-config-update-upstream", "config", "--get-all", fetchConfigKey))

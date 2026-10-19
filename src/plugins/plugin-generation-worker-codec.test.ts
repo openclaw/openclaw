@@ -2,31 +2,44 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { markPluginSourceCaptureOperation } from "./plugin-generation-source-lookup.js";
-import { GenerationCodec } from "./plugin-generation-worker-codec.js";
+import {
+  GenerationCodec,
+  type GenerationNativeRootTransport,
+} from "./plugin-generation-worker-codec.js";
 import { restorePluginNativeRecovery } from "./plugin-native-admission.js";
+import { retainPluginNativeRoot } from "./plugin-native-root-lease.js";
+
+function nativeRootTransport(): GenerationNativeRootTransport {
+  const roots: Parameters<GenerationNativeRootTransport["exportRoot"]>[0][] = [];
+  return {
+    exportRoot(root) {
+      const existing = roots.indexOf(root);
+      return existing === -1 ? roots.push(root) - 1 : existing;
+    },
+    importRoot: (id) => retainPluginNativeRoot(roots[id]!),
+  };
+}
 
 function resourceTransport() {
-  const sender = new GenerationCodec(
-    () => undefined,
-    (root) => own(root),
-  );
-  const accept = (value: unknown) => {
-    const encoded = sender.encode(value);
+  const nativeRoots = nativeRootTransport();
+  const sender = new GenerationCodec(() => undefined, nativeRoots);
+  const accept = (value: unknown, handle?: number) => {
+    const encoded =
+      handle === undefined ? sender.encode(value) : sender.encodeResult(value, handle);
     receiver.releaseReceivedHandles(sender.takeReleasedHandles());
     return receiver.decode(encoded);
   };
-  const receiver = new GenerationCodec(
-    (handle, args, asynchronous) => {
-      try {
-        const result = sender.call(handle, receiver.encodeArguments(args));
-        return asynchronous ? Promise.resolve(result).then(accept) : accept(result);
-      } catch (error) {
-        receiver.releaseReceivedHandles(sender.takeReleasedHandles());
-        throw error;
-      }
-    },
-    () => undefined,
-  );
+  const receiver = new GenerationCodec((handle, args, asynchronous) => {
+    try {
+      const result = sender.call(handle, receiver.encodeArguments(args));
+      return asynchronous
+        ? Promise.resolve(result).then((value) => accept(value, handle))
+        : accept(result, handle);
+    } catch (error) {
+      receiver.releaseReceivedHandles(sender.takeReleasedHandles());
+      throw error;
+    }
+  }, nativeRoots);
   function own<T extends { dispose(): void; disposeAsync(): Promise<void> }>(resource: T): T {
     sender.retainResource(resource);
     const dispose = resource.dispose.bind(resource);
@@ -92,6 +105,31 @@ it.each(["sync", "async"])(
   },
 );
 
+it.each(["sync", "async"])("releases %s method replies after their last owner", async (mode) => {
+  const transport = resourceTransport();
+  async function cycle() {
+    const payload = { value: 42 };
+    const read = () => payload;
+    const facts = () => ({ read });
+    const factsAsync = async () => facts();
+    const create = () =>
+      transport.own({ facts, factsAsync, dispose() {}, async disposeAsync() {} });
+    const [first, second] = transport.exchange([create(), create()]);
+    const reply = mode === "async" ? await first!.factsAsync() : first!.facts();
+    first!.dispose();
+    expect(reply.read()).toEqual({ value: 42 });
+    const references = [new WeakRef(payload), new WeakRef(read), new WeakRef(reply.read)];
+    await second!.disposeAsync();
+    return references;
+  }
+  const references = await cycle();
+  const control = new WeakRef({});
+  await nextTurn();
+  queryObjects(WeakRef);
+  expect(control.deref()).toBeUndefined();
+  expect(references.every((reference) => reference.deref() === undefined)).toBe(true);
+});
+
 it("keeps shared callbacks with their remaining owner and retries failed disposal", async () => {
   const transport = resourceTransport();
   const shared = { value: () => 42 };
@@ -154,15 +192,12 @@ it("keeps a transferred native root alive for a fork after outer recovery dispos
 });
 
 it("releases ordinary message graphs while retaining callable identity", async () => {
-  const sender = new GenerationCodec(
-    () => {
-      throw new Error("unexpected callback");
-    },
-    () => {},
-  );
+  const sender = new GenerationCodec(() => {
+    throw new Error("unexpected callback");
+  }, nativeRootTransport());
   const receiver = new GenerationCodec(
     (handle, args) => sender.call(handle, receiver.encodeArguments(args)),
-    () => {},
+    nativeRootTransport(),
   );
   const callable = receiver.decode(sender.encode((value: number) => value + 1)) as (
     value: number,
@@ -217,16 +252,10 @@ it("releases ordinary message graphs while retaining callable identity", async (
 
 it("keeps only owner-marked source copies outside the ordinary method deadline", () => {
   const calls: boolean[] = [];
-  const sender = new GenerationCodec(
-    () => undefined,
-    () => {},
-  );
-  const receiver = new GenerationCodec(
-    (_handle, _args, _async, sourceCapture) => {
-      calls.push(sourceCapture);
-    },
-    () => {},
-  );
+  const sender = new GenerationCodec(() => undefined, nativeRootTransport());
+  const receiver = new GenerationCodec((_handle, _args, _async, sourceCapture) => {
+    calls.push(sourceCapture);
+  }, nativeRootTransport());
   const ownerCopy = markPluginSourceCaptureOperation(() => undefined);
   const original = {
     captureRecoverySource: ownerCopy,

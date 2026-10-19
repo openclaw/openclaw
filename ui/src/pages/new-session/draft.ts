@@ -300,6 +300,8 @@ export class NewSessionDraft {
       this.gateway.connected &&
       this.gateway.client &&
       agents?.connected &&
+      !agents.agentsLoading &&
+      !agents.agentsError &&
       agents.client === this.gateway.client &&
       this.place.agents().length > 0,
     );

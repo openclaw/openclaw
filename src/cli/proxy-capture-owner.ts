@@ -79,7 +79,6 @@ export function withProxyCaptureOwner<T>(
             }
           },
         runLocal: async ({ env, assertCurrent }) => {
-          assertCurrent();
           const lease = await acquireDebugProxyCaptureStoreAsync({ env });
           const outcome = await Promise.resolve()
             .then(() => {

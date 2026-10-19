@@ -39,7 +39,7 @@ function fixture(autoVacuum = 0) {
   return { directory, sourcePath, targetPath, sqlite, source, options };
 }
 
-function observeIntegrity(sqlite: ReturnType<typeof requireNodeSqlite>) {
+function observeVerification(sqlite: ReturnType<typeof requireNodeSqlite>) {
   const statements: string[] = [];
   // oxlint-disable-next-line typescript/unbound-method -- call preserves the native database receiver.
   const prepare = sqlite.DatabaseSync.prototype.prepare;
@@ -47,7 +47,7 @@ function observeIntegrity(sqlite: ReturnType<typeof requireNodeSqlite>) {
     this: DatabaseSync,
     sql,
   ) {
-    if (/^PRAGMA (integrity_check|foreign_key_check);$/u.test(sql)) {
+    if (/^PRAGMA (integrity_check;|foreign_key_check;|user_version)$/u.test(sql)) {
       statements.push(sql);
     }
     return prepare.call(this, sql);
@@ -77,7 +77,7 @@ it.each([
     using _ = source;
     expect(fs.statSync(`${sourcePath}-wal`).size).toBeGreaterThan(0);
     const before = familyBytes(sourcePath);
-    const observed = observeIntegrity(sqlite);
+    const observed = observeVerification(sqlite);
 
     const result = await createVerifiedSqliteSnapshot({
       ...options,
@@ -87,12 +87,13 @@ it.each([
           : { ...options.sourceAcquisition, preserveSourceArtifacts: acquisition === "artifacts" },
     });
 
-    expect(observed.finish()).toEqual(
-      Array.from({ length: checks }, () => [
-        "PRAGMA integrity_check;",
-        "PRAGMA foreign_key_check;",
-      ]).flat(),
-    );
+    expect(observed.finish()).toEqual([
+      ...(checks === 2 ? ["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"] : []),
+      "PRAGMA user_version",
+      "PRAGMA integrity_check;",
+      "PRAGMA foreign_key_check;",
+      ...(acquisition === "worker" ? ["PRAGMA user_version"] : []),
+    ]);
     expect(result).toMatchObject({ path: targetPath, userVersion: 7 });
     using snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
     expect(snapshot.prepare("SELECT rowid, value FROM records ORDER BY rowid").all()).toEqual([
@@ -118,12 +119,12 @@ it.each(["vacuum", "transform", "validator"] as const)(
     const { sqlite, source, sourcePath, targetPath, options } = fixture();
     using _ = source;
     const labels: string[] = [];
-    const observed = observeIntegrity(sqlite);
-    await createVerifiedSqliteSnapshot({
+    const observed = observeVerification(sqlite);
+    const result = await createVerifiedSqliteSnapshot({
       ...options,
       ...(operation === "vacuum" ? { preserveRowIds: false, sourceAcquisition: undefined } : {}),
       ...(operation === "transform"
-        ? { transform: (db: DatabaseSync) => db.exec("UPDATE records SET value = 'new';") }
+        ? { transform: (db: DatabaseSync) => db.exec("PRAGMA user_version = 8;") }
         : {}),
       ...(operation === "validator"
         ? {
@@ -136,9 +137,11 @@ it.each(["vacuum", "transform", "validator"] as const)(
     expect(observed.finish()).toEqual([
       "PRAGMA integrity_check;",
       "PRAGMA foreign_key_check;",
+      "PRAGMA user_version",
       "PRAGMA integrity_check;",
       "PRAGMA foreign_key_check;",
     ]);
+    expect(result.userVersion).toBe(operation === "transform" ? 8 : 7);
     if (operation === "validator") {
       expect(labels).toEqual([sourcePath, targetPath]);
     }

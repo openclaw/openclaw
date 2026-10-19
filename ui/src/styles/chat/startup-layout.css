@@ -928,6 +928,10 @@ openclaw-chat-sidebar-region,
   background: var(--bg);
 }
 
+.sidebar-region__failed-panel {
+  flex-direction: column;
+}
+
 .side-panel__empty-body {
   display: flex;
   grid-area: side;

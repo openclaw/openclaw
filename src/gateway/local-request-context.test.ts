@@ -287,13 +287,13 @@ describe("local gateway request context", () => {
 });
 
 it("keeps standalone embedded RPC available inside its session admission", async () => {
-  const { beginSessionWorkAdmission } = await import("../sessions/session-lifecycle-admission.js");
+  const { beginSessionEffect } = await import("../sessions/session-controller.lifecycle.js");
   const cfg = { agents: { defaults: {} } };
   await withConfig(cfg, async () => {
     const readIdentity = () =>
       dispatchGatewayMethodInProcessRaw("agent.identity.get", { agentId: "main" });
     await expect(readIdentity()).resolves.toMatchObject({ ok: true, payload: { agentId: "main" } });
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: "local-rpc-admission-regression",
       identities: ["agent:main:local-rpc"],
       assertAllowed: () => {},
