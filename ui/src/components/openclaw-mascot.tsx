@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { createDocumentVisibility, createMediaQuery } from "../lib/reactive/platform.ts";
@@ -91,18 +91,23 @@ defineSolidBridge<Props>(
         animationFrame = window.requestAnimationFrame(renderFrame);
       }
     };
-    createEffect(
+    const configuration = createMemo(
       () => [props.mood, props.tease, props.size, branding.read(), themeRevision()] as const,
-      () => {
-        const time = performance.now() / 1_000;
-        animator.setMood(mood(), time);
-        animator.setTease(props.tease, time);
-        host.style.setProperty("--openclaw-mascot-size", `${size()}px`);
-        draw(time);
+    );
+    createEffect(
+      () => [configuration(), reducedMotion(), documentVisible()] as const,
+      ([current], previous) => {
+        // Visibility changes resume playback without resetting the tease timestamp.
+        if (current !== previous?.[0]) {
+          const time = performance.now() / 1_000;
+          animator.setMood(mood(), time);
+          animator.setTease(props.tease, time);
+          host.style.setProperty("--openclaw-mascot-size", `${size()}px`);
+          draw(time);
+        }
         syncPlayback();
       },
     );
-    createEffect(() => [reducedMotion(), documentVisible()], syncPlayback);
     createIntersectionObserver(
       () => [host],
       (entries) => {

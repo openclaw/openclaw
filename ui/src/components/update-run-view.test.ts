@@ -218,38 +218,55 @@ describe("update run view", () => {
     }
   });
 
-  it("follows installation progress on opening and updates but preserves scrollback", async () => {
+  it("follows run output on opening and updates, preserving scrollback until a new run", async () => {
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     const record = run({ steps: [{ step: "build", status: "in_progress" }] });
     const { element, setRecord } = mount(record);
     const disclosure = element.querySelector<HTMLDetailsElement>(".update-run-view__step-list")!;
     const list = element.querySelector<HTMLElement>(".update-run-view__step-scroll")!;
-    Object.defineProperties(list, {
-      scrollHeight: { configurable: true, value: 1000 },
-      clientHeight: { value: 160 },
-    });
+    const streams = [list, element.querySelector<HTMLElement>(".update-run-view__details")!];
+    for (const stream of streams) {
+      Object.defineProperties(stream, {
+        scrollHeight: { configurable: true, value: 1000 },
+        clientHeight: { value: 160 },
+      });
+    }
     const opened = new Promise<void>((resolve) => {
       disclosure.addEventListener("toggle", () => resolve(), { once: true });
     });
     disclosure.open = true;
     await opened;
     await vi.runOnlyPendingTimersAsync();
-    expect(list.scrollTop).toBe(1000);
-
-    list.scrollTop = 0;
-    list.dispatchEvent(new Event("scroll"));
+    for (const stream of streams) {
+      expect(stream.scrollTop).toBe(1000);
+      stream.scrollTop = 0;
+      stream.dispatchEvent(new Event("scroll"));
+    }
     setRecord({ ...record, updatedAtMs: record.updatedAtMs + 1 });
     flush();
     await vi.runOnlyPendingTimersAsync();
-    expect(list.scrollTop).toBe(0);
-
-    list.scrollTop = 840;
-    list.dispatchEvent(new Event("scroll"));
-    Object.defineProperty(list, "scrollHeight", { value: 1200 });
+    for (const stream of streams) {
+      expect(stream.scrollTop).toBe(0);
+      stream.scrollTop = 840;
+      stream.dispatchEvent(new Event("scroll"));
+      Object.defineProperty(stream, "scrollHeight", { value: 1200 });
+    }
     setRecord({ ...record, updatedAtMs: record.updatedAtMs + 2 });
     flush();
     await vi.runOnlyPendingTimersAsync();
-    expect(list.scrollTop).toBe(1200);
+    for (const stream of streams) {
+      expect(stream.scrollTop).toBe(1200);
+      stream.scrollTop = 0;
+      stream.dispatchEvent(new Event("scroll"));
+    }
+    setRecord({ ...record, runId: "next-update-run" });
+    flush();
+    await vi.runOnlyPendingTimersAsync();
+    for (const stream of streams) {
+      expect(stream.scrollTop).toBe(1200);
+    }
+    expect(element.querySelector(".update-run-view__step-scroll")).toBe(list);
+    expect(element.querySelector(".update-run-view__details")).toBe(streams[1]);
   });
 
   it.each([
