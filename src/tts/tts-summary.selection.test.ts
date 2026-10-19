@@ -3,7 +3,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   closeHttpServer,
   listenLoopback,
-  readRequestText,
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { requireApiKey } from "../agents/model-auth.js";
 import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
@@ -49,20 +48,27 @@ async function withSummaryFixture(
   const pluginId = modelProvider;
   await withOpenClawTestState({ label: "tts-summary-selection" }, async (state) => {
     const requests: string[] = [];
-    const server = createServer(async (request, response) => {
-      const { model } = JSON.parse(await readRequestText(request)) as { model: string };
-      requests.push(model);
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(
-        `data: ${JSON.stringify({
-          id: "tts-selection-response",
-          object: "chat.completion.chunk",
-          model,
-          choices: [
-            { index: 0, delta: { content: `materialized:${model}` }, finish_reason: "stop" },
-          ],
-        })}\n\ndata: [DONE]\n\n`,
-      );
+    const server = createServer((request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        const { model } = JSON.parse(body) as { model: string };
+        requests.push(model);
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(
+          `data: ${JSON.stringify({
+            id: "tts-selection-response",
+            object: "chat.completion.chunk",
+            model,
+            choices: [
+              { index: 0, delta: { content: `materialized:${model}` }, finish_reason: "stop" },
+            ],
+          })}\n\ndata: [DONE]\n\n`,
+        );
+      });
     });
     const baseUrl = `${await listenLoopback(server)}/v1`;
     try {

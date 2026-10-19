@@ -21,6 +21,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+// mock-isolation: Quote fixtures provide synthetic listeners and sends, never a live Zalo session.
 vi.mock("./zca-client.js", () => ({ createZalo: createZaloMock, TextStyle: { Indent: 9 } }));
 
 import { zalouserMessageAdapter } from "./channel.adapters.js";

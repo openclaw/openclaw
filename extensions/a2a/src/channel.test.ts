@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
@@ -164,8 +165,8 @@ describe("A2A channel message adapter", () => {
       redirect: "manual",
       signal: expect.any(AbortSignal),
     });
-    expect(typeof request?.body).toBe("string");
-    expect(JSON.parse(String(request?.body))).toEqual({
+    assert(typeof request?.body === "string", "expected a serialized A2A request body");
+    expect(JSON.parse(request.body)).toEqual({
       jsonrpc: "2.0",
       id: expect.any(String),
       method: "SendMessage",

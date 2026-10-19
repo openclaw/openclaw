@@ -43,10 +43,12 @@ const storageMetadataRuntime = vi.hoisted(() => ({
   },
 }));
 
+// mock-isolation: Recovery scenarios use synthetic clients, not live Matrix accounts.
 vi.mock("../substrate/client.js", () => ({
   createMatrixQaClient: mocks.createMatrixQaClient,
 }));
 
+// mock-isolation: Keep crypto admission and storage metadata inside the synthetic fixture.
 vi.mock("../substrate/e2ee-client.js", () => ({
   createMatrixQaE2eeScenarioClient: mocks.createMatrixQaE2eeScenarioClient,
   loadMatrixQaE2eeRuntime: async () => ({
@@ -71,11 +73,13 @@ vi.mock("./scenario-runtime-shared.js", async (importOriginal) => ({
   createMatrixQaDriverScenarioClient: mocks.createMatrixQaDriverScenarioClient,
 }));
 
+// mock-isolation: Account replacement must target fixture state, not an operator Gateway.
 vi.mock("./scenario-runtime-config.js", () => ({
   readMatrixQaGatewayMatrixAccount: mocks.readMatrixQaGatewayMatrixAccount,
   replaceMatrixQaGatewayMatrixAccount: mocks.replaceMatrixQaGatewayMatrixAccount,
 }));
 
+// mock-isolation: Exercise cursor recovery without waiting for a live Matrix sync store.
 vi.mock("./scenario-runtime-state-files.js", () => ({
   waitForMatrixSyncStoreWithCursor: mocks.waitForMatrixSyncStoreWithCursor,
   deleteMatrixSyncStoreCursor: mocks.deleteMatrixSyncStoreCursor,

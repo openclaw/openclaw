@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({ createRuntime: vi.fn() }));
 vi.mock("./scenario-runtime-e2ee-cli-runtime.js", () => ({
   createMatrixQaCliE2eeSetupRuntime: mocks.createRuntime,
 }));
+// mock-isolation: Synthetic account login must not contact a live Matrix homeserver.
 vi.mock("../substrate/client.js", () => ({
   createMatrixQaClient: () => ({
     registerWithToken: async () => ({

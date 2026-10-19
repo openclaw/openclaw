@@ -69,6 +69,7 @@ async function expectPending(entered: Promise<void>, result: Promise<unknown>) {
   ).resolves.toBe("pending");
 }
 
+// mock-isolation: Credential lifecycle tests must not authenticate a live Zalo client.
 vi.mock("./zca-client.js", () => ({ createZalo: createZaloMock }));
 vi.mock("./qr-temp-file.js", () => ({ writeQrDataUrlToTempFile: async () => undefined }));
 
