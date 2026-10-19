@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import type { OnboardOptions } from "../onboard-types.js";
 
 const commitNonInteractiveOnboardConfigMock = vi.hoisted(() =>
   vi.fn(async (_params: { nextConfig: OpenClawConfig }) => undefined),
@@ -23,6 +24,23 @@ describe("runNonInteractiveRemoteSetup", () => {
     },
   };
   const remoteUrl = "wss://gateway.example.test";
+  const tokenRef = { source: "env", provider: "default", id: "OLD_REMOTE_TOKEN" } as const;
+  const tlsFingerprint = "sha256:test-fingerprint";
+  const edgeAuth = { "X-Edge-Auth": "existing-edge-secret" };
+  const remoteConfig = (
+    remote: NonNullable<OpenClawConfig["gateway"]>["remote"],
+  ): OpenClawConfig => ({
+    gateway: { mode: "remote", remote },
+  });
+
+  async function setup(opts: Partial<OnboardOptions>, baseConfig: OpenClawConfig) {
+    await runNonInteractiveRemoteSetup({
+      opts: { nonInteractive: true, mode: "remote", remoteUrl, skipHooks: true, ...opts },
+      runtime,
+      baseConfig,
+    });
+    return commitNonInteractiveOnboardConfigMock.mock.calls[0]?.[0].nextConfig.gateway?.remote;
+  }
 
   beforeEach(() => {
     commitNonInteractiveOnboardConfigMock.mockClear();
@@ -37,190 +55,103 @@ describe("runNonInteractiveRemoteSetup", () => {
     },
     {
       name: "a token SecretRef on the same endpoint",
-      baseConfig: {
-        gateway: {
-          mode: "remote" as const,
-          remote: {
-            url: remoteUrl,
-            token: { source: "env" as const, provider: "default", id: "OLD_REMOTE_TOKEN" },
-            tlsFingerprint: "sha256:test-fingerprint",
-            edgeAuth: { "X-Edge-Auth": "existing-edge-secret" },
-          },
-        },
-      },
+      baseConfig: remoteConfig({
+        url: remoteUrl,
+        token: tokenRef,
+        tlsFingerprint,
+        edgeAuth,
+      }),
       expectedRemote: {
         url: remoteUrl,
         password: "replacement-password",
-        tlsFingerprint: "sha256:test-fingerprint",
-        edgeAuth: { "X-Edge-Auth": "existing-edge-secret" },
+        tlsFingerprint,
+        edgeAuth,
       },
     },
     {
       name: "credentials and routing from a different endpoint",
-      baseConfig: {
-        gateway: {
-          mode: "remote" as const,
-          remote: {
-            url: "wss://old-gateway.example.test",
-            token: { source: "env" as const, provider: "default", id: "OLD_REMOTE_TOKEN" },
-            password: { source: "env" as const, provider: "default", id: "OLD_REMOTE_PASSWORD" },
-            tlsFingerprint: "sha256:old-fingerprint",
-            sshTarget: "operator@old-gateway.example.test",
-            edgeAuth: { "X-Edge-Auth": "old-edge-secret" },
-          },
-        },
-      },
+      baseConfig: remoteConfig({
+        url: "wss://old-gateway.example.test",
+        token: tokenRef,
+        password: { source: "env" as const, provider: "default", id: "OLD_REMOTE_PASSWORD" },
+        tlsFingerprint: "sha256:old-fingerprint",
+        sshTarget: "operator@old-gateway.example.test",
+        edgeAuth: { "X-Edge-Auth": "old-edge-secret" },
+      }),
       expectedRemote: { url: remoteUrl, password: "replacement-password" },
     },
   ])("stores a remote password while replacing $name", async ({ baseConfig, expectedRemote }) => {
-    await runNonInteractiveRemoteSetup({
-      opts: {
-        nonInteractive: true,
-        mode: "remote",
-        remoteUrl,
-        remotePassword: "replacement-password",
-        skipHooks: true,
-      },
-      runtime,
-      baseConfig,
-    });
-
-    const commit = commitNonInteractiveOnboardConfigMock.mock.calls[0]?.[0];
-    expect(commit?.nextConfig.gateway?.remote).toEqual(expectedRemote);
+    expect(await setup({ remotePassword: "replacement-password" }, baseConfig)).toEqual(
+      expectedRemote,
+    );
   });
 
   it.each([
-    {
-      name: "token",
-      option: "remoteToken" as const,
-      field: "token" as const,
-      envName: "OPENCLAW_GATEWAY_TOKEN",
-      previousField: "password" as const,
-    },
-    {
-      name: "password",
-      option: "remotePassword" as const,
-      field: "password" as const,
-      envName: "OPENCLAW_GATEWAY_PASSWORD",
-      previousField: "token" as const,
-    },
-  ])(
-    "stores a remote $name as a configured-provider env reference and clears the old credential",
-    async ({ option, field, envName, previousField }) => {
+    ["remoteToken", "token", "OPENCLAW_GATEWAY_TOKEN", "password"],
+    ["remotePassword", "password", "OPENCLAW_GATEWAY_PASSWORD", "token"],
+  ] as const)(
+    "stores %s as a configured-provider env reference and clears the old credential",
+    async (option, field, envName, previousField) => {
       await withEnvAsync({ [envName]: "replacement-credential" }, async () => {
-        await runNonInteractiveRemoteSetup({
-          opts: {
-            nonInteractive: true,
-            mode: "remote",
-            remoteUrl,
-            [option]: "replacement-credential",
-            secretInputMode: "ref",
-            skipHooks: true,
-          },
-          runtime,
-          baseConfig: {
+        const remote = await setup(
+          { [option]: "replacement-credential", secretInputMode: "ref" },
+          {
             secrets: {
               defaults: { env: "gatewayenv" },
               providers: { gatewayenv: { source: "env" } },
             },
-            gateway: {
-              mode: "remote",
-              remote: {
-                url: remoteUrl,
-                [previousField]: {
-                  source: "env",
-                  provider: "default",
-                  id: "OLD_GATEWAY_CREDENTIAL",
-                },
-                tlsFingerprint: "sha256:test-fingerprint",
+            ...remoteConfig({
+              url: remoteUrl,
+              [previousField]: {
+                source: "env",
+                provider: "default",
+                id: "OLD_GATEWAY_CREDENTIAL",
               },
-            },
+              tlsFingerprint,
+            }),
           },
-        });
+        );
 
-        const commit = commitNonInteractiveOnboardConfigMock.mock.calls[0]?.[0];
-        expect(commit?.nextConfig.gateway?.remote).toEqual({
+        expect(remote).toEqual({
           url: remoteUrl,
           [field]: { source: "env", provider: "gatewayenv", id: envName },
-          tlsFingerprint: "sha256:test-fingerprint",
+          tlsFingerprint,
         });
       });
     },
   );
 
   it("clears a stale password when a token replaces auth for the same endpoint", async () => {
-    await runNonInteractiveRemoteSetup({
-      opts: {
-        nonInteractive: true,
-        mode: "remote",
-        remoteUrl,
-        remoteToken: "replacement-token",
-        skipHooks: true,
-      },
-      runtime,
-      baseConfig: {
-        gateway: {
-          mode: "remote",
-          remote: {
-            url: remoteUrl,
-            password: "old-password",
-            tlsFingerprint: "sha256:test-fingerprint",
-          },
-        },
-      },
-    });
+    const remote = await setup(
+      { remoteToken: "replacement-token" },
+      remoteConfig({
+        url: remoteUrl,
+        password: "old-password",
+        tlsFingerprint,
+      }),
+    );
 
-    const commit = commitNonInteractiveOnboardConfigMock.mock.calls[0]?.[0];
-    expect(commit?.nextConfig.gateway?.remote).toEqual({
+    expect(remote).toEqual({
       url: remoteUrl,
       token: "replacement-token",
-      tlsFingerprint: "sha256:test-fingerprint",
+      tlsFingerprint,
     });
   });
 
-  it("preserves existing auth when no replacement token is provided", async () => {
-    const remote = {
-      url: remoteUrl,
-      token: "existing-token",
-      password: "existing-password",
-    };
+  it.each([
+    "existing-password",
+    { source: "env" as const, provider: "default", id: "EXISTING_REMOTE_PASSWORD" },
+  ])(
+    "preserves existing token and password %j when no replacement is provided",
+    async (password) => {
+      const remote = {
+        url: remoteUrl,
+        token: "existing-token",
+        password,
+        tlsFingerprint,
+      };
 
-    await runNonInteractiveRemoteSetup({
-      opts: {
-        nonInteractive: true,
-        mode: "remote",
-        remoteUrl,
-        secretInputMode: "ref",
-        skipHooks: true,
-      },
-      runtime,
-      baseConfig: { gateway: { mode: "remote", remote } },
-    });
-
-    const commit = commitNonInteractiveOnboardConfigMock.mock.calls[0]?.[0];
-    expect(commit?.nextConfig.gateway?.remote).toEqual(remote);
-  });
-
-  it("preserves an existing remote password SecretRef when no replacement is provided", async () => {
-    const remote = {
-      url: remoteUrl,
-      password: { source: "env" as const, provider: "default", id: "EXISTING_REMOTE_PASSWORD" },
-      tlsFingerprint: "sha256:test-fingerprint",
-    };
-
-    await runNonInteractiveRemoteSetup({
-      opts: {
-        nonInteractive: true,
-        mode: "remote",
-        remoteUrl,
-        secretInputMode: "ref",
-        skipHooks: true,
-      },
-      runtime,
-      baseConfig: { gateway: { mode: "remote", remote } },
-    });
-
-    const commit = commitNonInteractiveOnboardConfigMock.mock.calls[0]?.[0];
-    expect(commit?.nextConfig.gateway?.remote).toEqual(remote);
-  });
+      expect(await setup({ secretInputMode: "ref" }, remoteConfig(remote))).toEqual(remote);
+    },
+  );
 });

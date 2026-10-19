@@ -67,7 +67,6 @@ export function createModelProviders(
   let pendingCredentialInvalidation = false;
   let profilesVisible = false;
   let readAccess = false;
-  let catalogClient: GatewayBrowserClient | null = null;
   let stopCatalog: (() => void) | undefined;
 
   function setState<Key extends keyof ModelProvidersState>(
@@ -132,11 +131,12 @@ export function createModelProviders(
     invalidateRequests,
     ensureInitialData,
     onSnapshot: (change) => {
-      if (change.snapshot.client !== catalogClient) {
+      if (change.clientChanged) {
         stopCatalog?.();
-        catalogClient = change.snapshot.client;
-        stopCatalog = catalogClient
-          ? modelCatalog.subscribeModelCatalogCache(catalogClient, notify)
+        stopCatalog = change.snapshot.client
+          ? modelCatalog.subscribeModelCatalogCache(change.snapshot.client, notify, () => ({
+              agentId: state.selectedAgentId || undefined,
+            }))
           : undefined;
       }
       if (change.initial) {

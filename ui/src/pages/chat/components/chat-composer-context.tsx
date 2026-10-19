@@ -315,8 +315,13 @@ export function ContextNotice(props: ContextNoticeProps) {
         const pickerRef = createChatPickerOverlay((details) => setOpen(details.open));
         return (
           <div class="context-usage" style={colors()}>
-            <details ref={pickerRef}>
+            <details
+              ref={pickerRef.details}
+              onClick={pickerRef.onClick}
+              onToggle={pickerRef.onToggle}
+            >
               <summary
+                ref={pickerRef.trigger}
                 class={["context-ring", { "context-ring--warning": model()?.warning }]}
                 aria-label={summary()}
                 title={t("chat.composer.contextUsage.open")}
@@ -339,7 +344,12 @@ export function ContextNotice(props: ContextNoticeProps) {
                   />
                 </svg>
               </summary>
-              <div class="oc-overlay chat-picker-overlay" data-anchored-overlay popover="manual">
+              <div
+                ref={pickerRef.surface}
+                class="oc-overlay chat-picker-overlay"
+                data-anchored-overlay
+                popover="manual"
+              >
                 <Show when={open()}>
                   <section
                     class="context-usage__popover"

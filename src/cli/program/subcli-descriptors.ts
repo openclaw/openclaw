@@ -185,8 +185,6 @@ const registrations = {
   },
 } satisfies Record<SubCliCommandName, Pick<SubCliCommand, "register" | "machineOutput">>;
 
-export const SUB_CLI_DESCRIPTORS = getSubCliEntriesCore();
-
 export function getSubCliEntriesCore(): readonly SubCliCommand[] {
   return getSubCliCommandMetadata().map((metadata) =>
     Object.assign({}, metadata, registrations[metadata.name]),

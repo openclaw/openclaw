@@ -4,10 +4,14 @@
 import fs from "node:fs/promises";
 import process from "node:process";
 import { PassThrough } from "node:stream";
-import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import {
+  STDIO_DEFAULT_MAX_BUFFER_SIZE,
+  serializeMessage,
+  type Transport,
+  type JSONRPCMessage,
+} from "@modelcontextprotocol/client";
+import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -19,11 +23,12 @@ import {
 } from "../process/owned-stdio.js";
 import type { ProcessCleanupResult } from "../process/supervisor/types.js";
 import { parseMcpDockerCommand } from "./mcp-docker-command.js";
+import { McpStdioFrameDecoder } from "./mcp-stdio-frame-decoder.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
 const log = createSubsystemLogger("mcp/stdio");
 
-type McpStdioDecoder = Pick<ReadBuffer, "append" | "readMessage" | "clear">;
+type McpStdioDecoder = Pick<McpStdioFrameDecoder, "append" | "readMessage" | "clear">;
 
 type McpStdioExit = { code: number | null; signal: NodeJS.Signals | null };
 
@@ -33,14 +38,14 @@ type OpenClawStdioServerParameters = {
   env?: NodeJS.ProcessEnv;
   /** Use only the supplied environment, including explicit omissions. */
   exactEnv?: true;
-  /** The decoder owns byte bounds and frame validation; the default is the MCP SDK decoder. */
+  /** The decoder owns byte bounds and frame validation. */
   decoder?: McpStdioDecoder;
   cwd?: string;
   prepareDataDir?: string;
   stderr?: "pipe" | "overlapped" | "inherit" | "ignore";
 };
 
-export class OpenClawStdioClientTransport implements Transport {
+export class OpenClawStdioClientTransport extends EventTarget implements Transport {
   onclose?: () => void;
   onerror?: (error: Error) => void;
   onmessage?: (message: JSONRPCMessage) => void;
@@ -61,7 +66,10 @@ export class OpenClawStdioClientTransport implements Transport {
   >;
 
   constructor(private readonly serverParams: OpenClawStdioServerParameters) {
-    this.readBuffer = serverParams.decoder ?? new ReadBuffer();
+    super();
+    // Keep malformed-frame errors visible; the v2 SDK buffer silently drops invalid JSON.
+    this.readBuffer =
+      serverParams.decoder ?? new McpStdioFrameDecoder(STDIO_DEFAULT_MAX_BUFFER_SIZE, "transport");
     if (serverParams.stderr === "pipe" || serverParams.stderr === "overlapped") {
       this.stderrStream = new PassThrough();
     }
@@ -127,7 +135,7 @@ export class OpenClawStdioClientTransport implements Transport {
           this.stderrStream ?? (this.serverParams.stderr === "ignore" ? undefined : process.stderr),
       });
       this.process = child;
-      child.onError((error) => this.onerror?.(error));
+      child.onError((error) => this.notifyError(error));
       const receive = (chunk: Buffer) => {
         if (this.closing) {
           return;
@@ -136,7 +144,7 @@ export class OpenClawStdioClientTransport implements Transport {
           this.readBuffer.append(chunk);
           this.processReadBuffer();
         } catch (error) {
-          this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+          this.notifyError(error instanceof Error ? error : new Error(String(error)));
           void this.close().catch(() => {});
         }
       };
@@ -153,16 +161,17 @@ export class OpenClawStdioClientTransport implements Transport {
       void child.wait().then(
         (exit) => {
           try {
+            this.dispatchEvent(new Event("exit"));
             this.onexit?.(exit);
           } catch (error) {
-            this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+            this.notifyError(error instanceof Error ? error : new Error(String(error)));
           } finally {
             void this.close().catch(() => {});
             this.notifyClosed();
           }
         },
         (error: unknown) => {
-          this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+          this.notifyError(error instanceof Error ? error : new Error(String(error)));
           void this.close().catch(() => {});
           this.notifyClosed();
         },
@@ -179,7 +188,7 @@ export class OpenClawStdioClientTransport implements Transport {
           .close(this.startupCleanupError ? undefined : Promise.resolve())
           .catch((cleanupError: unknown) => {
             recordAgentCleanupFailure();
-            this.onerror?.(
+            this.notifyError(
               cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)),
             );
           });
@@ -187,7 +196,7 @@ export class OpenClawStdioClientTransport implements Transport {
           await cleanup;
         }
       }
-      this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+      this.notifyError(error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
@@ -202,6 +211,12 @@ export class OpenClawStdioClientTransport implements Transport {
 
   get cleanupResult() {
     return this.cleanup;
+  }
+
+  private notifyError(error: Error): void {
+    // Observe failures before SDK callbacks can request cleanup or replace handlers.
+    this.dispatchEvent(new Event("error"));
+    this.onerror?.(error);
   }
 
   private notifyClosed(): void {
@@ -221,7 +236,7 @@ export class OpenClawStdioClientTransport implements Transport {
         }
         this.onmessage?.(message);
       } catch (error) {
-        this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+        this.notifyError(error instanceof Error ? error : new Error(String(error)));
       }
     }
   }
@@ -256,12 +271,7 @@ export class OpenClawStdioClientTransport implements Transport {
             failures.push(error);
           }
         }
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "MCP container and host-process cleanup failed");
-        }
+        throwCollectedErrors(failures, "MCP container and host-process cleanup failed");
       } catch (error) {
         recordAgentCleanupFailure();
         throw error;

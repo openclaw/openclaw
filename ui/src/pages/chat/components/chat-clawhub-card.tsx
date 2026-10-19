@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { pathForPluginCatalogEntry } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -25,6 +25,7 @@ type CardPresentation = Pick<
 };
 type CardStatus = CardPresentation & { installed: boolean; canInstall: boolean };
 type Props = { recommendation?: ClawHubRecommendation; agentId?: string };
+const inputHandlers = new WeakMap<HTMLElement, () => void>();
 
 /** Catalog owners authorize status; icon controllers own their object URLs through disposal. */
 function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
@@ -205,17 +206,21 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
       }
     }
   }
-  // Recommendation changes refresh catalog status through the current Gateway client.
-  createEffect(
-    () => [
-      props.recommendation?.id,
-      props.recommendation?.kind,
-      props.recommendation?.kind === "skill" ? props.recommendation.registry : undefined,
-      props.agentId,
-    ],
-    () => void load(),
-  );
   onSettled(() => {
+    let queued = false;
+    // Related recommendation and agent assignments arrive as separate native setters.
+    inputHandlers.set(host, () => {
+      if (!queued) {
+        queued = true;
+        queueMicrotask(() => {
+          queued = false;
+          if (active) {
+            void load();
+          }
+        });
+      }
+    });
+    void load();
     // Connection edges retire request generations and icon URLs before later replies arrive.
     const stop = context.gateway.subscribe(() => void load());
     const activate = () => {
@@ -229,6 +234,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
     const stopVisibility = listen(document, "visibilitychange", activate);
     const stopFocus = listen(globalThis, "focus", activate);
     return () => {
+      inputHandlers.delete(host);
       active = false;
       ++generation;
       controller?.abort();
@@ -420,6 +426,7 @@ export const ChatClawHubCard = defineSolidBridge<Props>(
   "openclaw-chat-clawhub-card",
   ChatClawHubCardContent,
   {
+    propertyChanged: (host) => inputHandlers.get(host)?.(),
     properties: {
       recommendation: { default: undefined, attribute: false },
       agentId: { default: undefined, attribute: false },

@@ -10,6 +10,7 @@ import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sql
 import { publishSqliteDatabaseAdmission } from "./sqlite-database-admission.js";
 import { captureSqliteReaderOwner, type SqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "./sqlite-worker-binding.js";
 import {
   SQLITE_WORKER_PREPARE_COMMAND,
   type SqliteWorkerPreparedBackend,
@@ -44,6 +45,7 @@ if (parentPort) {
 }
 
 export type FixtureOpenInput =
+  | { type: "disk-full" }
   | { type: "link"; existingPath: string }
   | { type: "observe"; markerPath: string }
   | { type: "prepare"; markerPath: string; gatePath: string; reject?: boolean; guarded?: boolean }
@@ -166,12 +168,24 @@ function createFixtureBackend(
         : {}),
     };
   }
-  function closeNative(): void {
+  function closeNative(): undefined {
     clearNodeSqliteKyselyCacheForDatabase(db);
     db.close();
     if (failClose) {
       throw new Error("Fixture native database closed with a cleanup failure");
     }
+  }
+  if (input?.type === "disk-full") {
+    db.exec("PRAGMA journal_mode=WAL; PRAGMA max_page_count=2");
+    return bindSqliteWorkerDatabase<FixtureOperations>(db, {
+      execute() {
+        return runSqliteImmediateTransactionSync(db, () => {
+          append("x".repeat(65_536));
+          throw new Error("Expected SQLITE_FULL from the bounded database");
+        });
+      },
+      close: closeNative,
+    });
   }
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {

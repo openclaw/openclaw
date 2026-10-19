@@ -1,5 +1,5 @@
 import { dynamic, type JSX } from "@solidjs/web";
-import { For, Show, createEffect, createMemo, onCleanup, refresh } from "solid-js";
+import { For, Show, createMemo, onCleanup, onSettled, refresh, untrack } from "solid-js";
 import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
@@ -8,9 +8,11 @@ import {
 import { PanelTabStrip } from "../../../components/panel-tab-strip-solid.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { i18n } from "../../../i18n/index.ts";
+import { projectI18n, t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
+import { createTabFocus } from "../../../lib/tabs.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -31,21 +33,16 @@ type ChatFilesPanel = SolidBridgeElement<Props, Methods> & {
   readonly hostedActions: HTMLButtonElement;
 };
 let filesPanelSequence = 0;
+const hostedTabNotifiers = new WeakMap<HTMLElement, () => void>();
 
 /** The workspace owns tab order and selection; this view retains retiring app DOM. */
 defineSolidBridge<Props, Methods>(
   "openclaw-chat-files-panel",
   (props, host) => {
     const contentId = `chat-files-content-${++filesPanelSequence}`;
+    const tabFocus = createTabFocus();
     const pages = new Map<string, HTMLElement>();
-    let completeCommit = () => {};
-    const appUnmount = createMcpAppUnmountGate<Props>(
-      () => void refresh(rendered),
-      () =>
-        new Promise<void>((resolve) => {
-          completeCommit = resolve;
-        }),
-    );
+    const appUnmount = createMcpAppUnmountGate<Props>(() => void refresh(rendered));
     const rendered = createMemo(() => {
       const snapshot = {
         previews: props.previews,
@@ -71,9 +68,6 @@ defineSolidBridge<Props, Methods>(
       );
     });
     const Detail = dynamic(() => rendered().renderDetail ?? (() => null));
-    createEffect(rendered, () => completeCommit());
-    // Disposal also settles the gate; it restarts only views that remain connected.
-    onCleanup(() => completeCommit());
     const hostedTabs = (): PanelHostedTab[] => {
       const tabs = props.previews.map(({ id, label, content }) => ({
         id,
@@ -90,7 +84,13 @@ defineSolidBridge<Props, Methods>(
       }));
       return props.activeId === null && tabs.length
         ? [
-            { id: "browse", label: t("chat.sidePanel.files"), icon: <Icon name="folder" /> },
+            {
+              id: "browse",
+              label: t("chat.sidePanel.files"),
+              get icon() {
+                return <Icon name="folder" />;
+              },
+            },
             ...tabs,
           ]
         : tabs;
@@ -134,14 +134,33 @@ defineSolidBridge<Props, Methods>(
         props.onClose(id);
       }
     };
-    createEffect(
-      () => [
-        activeHostedTabId(),
-        t("chat.sidePanel.files"),
-        hostedTabs().map(({ id, label, title, className }) => [id, label, title, className]),
-      ],
-      (facts) => notifyPanelHostedTabsChanged(host, facts),
-    );
+    const translation = projectI18n(i18n);
+    onSettled(() => {
+      let queued = false;
+      const notify = () => {
+        if (queued) {
+          return;
+        }
+        queued = true;
+        queueMicrotask(() => {
+          queued = false;
+          if (hostedTabNotifiers.get(host) === notify && host.isConnected) {
+            notifyPanelHostedTabsChanged(host, [
+              activeHostedTabId(),
+              t("chat.sidePanel.files"),
+              hostedTabs().map(({ id, label, title, className }) => [id, label, title, className]),
+            ]);
+          }
+        });
+      };
+      hostedTabNotifiers.set(host, notify);
+      const stop = translation.subscribe(notify);
+      notify();
+      return () => {
+        hostedTabNotifiers.delete(host);
+        stop();
+      };
+    });
     return (
       <>
         <Show when={!rendered().tabsInHeader}>
@@ -149,6 +168,7 @@ defineSolidBridge<Props, Methods>(
             <div class="side-panel__header-tabs">
               <openclaw-panel-tab-strip style={{ display: "contents" }}>
                 <PanelTabStrip
+                  focusOwner={tabFocus}
                   tabs={tabStripTabs()}
                   activeId={activeHostedTabId()}
                   ariaControls={contentId}
@@ -168,7 +188,9 @@ defineSolidBridge<Props, Methods>(
           </div>
           <For each={rendered().previews} keyed={(preview) => preview.id}>
             {(preview) => {
-              onCleanup(() => pages.delete(preview().id));
+              // Registration and cleanup follow the keyed row's lifetime, not its current data.
+              const initialPreviewId = untrack(() => preview().id);
+              onCleanup(() => pages.delete(initialPreviewId));
               const entry = () => {
                 rendered();
                 return preview();
@@ -181,7 +203,7 @@ defineSolidBridge<Props, Methods>(
               };
               return (
                 <div
-                  ref={(element) => pages.set(preview().id, element)}
+                  ref={(element) => pages.set(initialPreviewId, element)}
                   class="chat-files-panel__page"
                   data-app-tab-id={entry().content.kind === "mcp-app" ? entry().id : undefined}
                   hidden={rendered().activeId !== entry().id}
@@ -217,6 +239,11 @@ defineSolidBridge<Props, Methods>(
       onClose: { default: () => {}, attribute: false },
     },
     methods: { selectHostedTab: () => {}, closeHostedTab: async () => {} },
+    propertyChanged: (host, key) => {
+      if (key === "previews" || key === "activeId") {
+        hostedTabNotifiers.get(host)?.();
+      }
+    },
   },
 );
 

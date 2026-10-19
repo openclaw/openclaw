@@ -13,6 +13,7 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -197,41 +198,39 @@ it.each([
   const before = (await loadCronStore(storePath)).jobs;
   await withAgentManagement(async (identity, _management, capability) => {
     const mint = () => mintCronCreatorAuthorityGrant(capability, undefined, runtimeAuthority);
-    const tool = createCronTool(
-      {
-        runId: identity.operationalRunInstance.runId,
-        agentSessionKey: sessionKey,
-        agentAccountId: accountId,
-        creatorToolAllowlist: caller === "known tool" ? ["calendar_search"] : ["read"],
-        resolveCreatorToolAuthority:
-          caller === "no capture"
-            ? undefined
-            : async () => ({
-                tools: caller === "owner" || caller === "known tool" ? ["calendar_search"] : [],
-                provenance: { version: 1, source: "final-executable-surface" },
-                grant: mint(),
-                holdsRuntimeAuthority: true,
-              }),
-      },
-      {
-        callGatewayTool: async <T>(method: string, _options: unknown, params: unknown) => {
-          const request = requireRecord(params, "Cron tool request");
-          const client = createSyntheticPluginRuntimeClient();
-          const agentRuntimeIdentity = { ...identity, ...getGatewayToolCallerIdentity() };
-          if (caller === "borrowed capture" && method === "cron.update") {
-            agentRuntimeIdentity.cronToolsAllowCapture = "final-executable-surface";
-            agentRuntimeIdentity.cronCreatorAuthorityGrant = mint();
-          }
-          client.internal = { ...client.internal, agentRuntimeIdentity };
-          const respond = await callCron(context, method, request, { client });
-          const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
-          if (!ok) {
-            throw new Error(error?.message);
-          }
-          return result as T;
-        },
+    vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(
+      async <T>(method: string, _options: unknown, params: unknown) => {
+        const request = requireRecord(params, "Cron tool request");
+        const client = createSyntheticPluginRuntimeClient();
+        const agentRuntimeIdentity = { ...identity, ...getGatewayToolCallerIdentity() };
+        if (caller === "borrowed capture" && method === "cron.update") {
+          agentRuntimeIdentity.cronToolsAllowCapture = "final-executable-surface";
+          agentRuntimeIdentity.cronCreatorAuthorityGrant = mint();
+        }
+        client.internal = { ...client.internal, agentRuntimeIdentity };
+        const respond = await callCron(context, method, request, { client });
+        const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
+        if (!ok) {
+          throw new Error(error?.message);
+        }
+        return result as T;
       },
     );
+    const tool = createCronTool({
+      runId: identity.operationalRunInstance.runId,
+      agentSessionKey: sessionKey,
+      agentAccountId: accountId,
+      creatorToolAllowlist: caller === "known tool" ? ["calendar_search"] : ["read"],
+      resolveCreatorToolAuthority:
+        caller === "no capture"
+          ? undefined
+          : async () => ({
+              tools: caller === "owner" || caller === "known tool" ? ["calendar_search"] : [],
+              provenance: { version: 1, source: "final-executable-surface" },
+              grant: mint(),
+              holdsRuntimeAuthority: true,
+            }),
+    });
     const update = tool.execute("app-update", {
       action: "update",
       jobId: created.id,

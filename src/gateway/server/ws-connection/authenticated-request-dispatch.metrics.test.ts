@@ -116,6 +116,40 @@ describe("authenticated Gateway RPC diagnostics", () => {
   });
 
   it.each([
+    ["openclaw-control-ui", "control-ui"],
+    ["webchat-ui", "control-ui"],
+    ["webchat", "control-ui"],
+    ["openclaw-browser-copilot", "control-ui"],
+    ["openclaw-macos", "macos"],
+    ["openclaw-ios", "ios"],
+    ["openclaw-watchos", "ios"],
+    ["openclaw-android", "android"],
+    ["cli", "cli"],
+    ["openclaw-tui", "cli"],
+    ["node-host", "node"],
+    ["openclaw-worker", "node"],
+    ["gateway-client", "other"],
+    ["openclaw-linux", "other"],
+    ["test", "other"],
+  ] as const)("attributes ordinary RPCs from %s as %s", async (id, clientKind) => {
+    const fixture = createRequest(({ respond }) => respond(true, {}));
+    const client = createOperatorWsClient({ clientInfo: { id, mode: "backend" } });
+    client.connect.client.displayName = "private-display-name";
+    client.connect.client.instanceId = "private-instance";
+    client.connect.client.platform = "private-platform";
+    await fixture.dispatcher.dispatch(
+      { type: "req", id: "private-request", method: "health", params: {} },
+      client,
+    );
+    await fixture.finished;
+    expect(fixture.events.find((event) => event.phase === "received")).toMatchObject({
+      method: "health",
+      clientKind,
+    });
+    expect(JSON.stringify(fixture.events)).not.toContain("private-");
+  });
+
+  it.each([
     {
       clientKind: "openclaw-control-ui",
       params: { sessionKey: "private-session", agentId: "private-agent", compact: true },

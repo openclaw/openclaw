@@ -92,7 +92,10 @@ export function createSidebarMenus(deps: {
   commit: () => Promise<boolean>;
 }) {
   const { host, element, commit } = deps;
-  const catalogMenu = createSidebarCatalogMenu(host, () => menus.dismissTransientMenus());
+  const catalogMenu = createSidebarCatalogMenu(host, () => {
+    menus.dismissTransientMenus();
+    loadMenuRenderer();
+  });
   const [state, setState] = createStore<SidebarMenusState>({
     railPinMenuPosition: null,
     pluginNavigationMenuPosition: null,
@@ -648,7 +651,9 @@ export function createSidebarMenus(deps: {
         <Show when={state.menuRenderer && state.sessionMenu} keyed>
           {(menu) => state.menuRenderer!.renderSidebarSessionMenuForMenus(menus, view, menu)}
         </Show>,
-        menus.catalogMenuView.render(),
+        <Show when={state.menuRenderer} keyed>
+          {(renderer) => <>{menus.catalogMenuView.render(renderer.CatalogSessionMenu)}</>}
+        </Show>,
         <Show when={state.menuRenderer && state.sessionGroupMenu} keyed>
           {(menu) => state.menuRenderer!.renderSidebarSessionGroupMenuForMenus(menus, view, menu)}
         </Show>,

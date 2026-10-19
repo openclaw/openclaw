@@ -1,7 +1,7 @@
 import "../../../styles/chat/session-rail.css";
 import "../../../styles/chat/working-indicator.css";
 import "./chat-comment-controller.ts";
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
@@ -11,6 +11,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { formatTimeMs } from "../../../lib/format.ts";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -70,7 +71,9 @@ type ChatSessionRailProps = {
 };
 export type ChatSessionRailElement = SolidBridgeElement<ChatSessionRailProps>;
 
-function ChatSessionRailContent(props: ChatSessionRailProps) {
+const inputHandlers = new WeakMap<HTMLElement, () => void>();
+
+function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRailElement) {
   let textarea: HTMLTextAreaElement | undefined;
   let thread!: HTMLDivElement;
   const focusComposer = () => {
@@ -122,27 +125,43 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
       props.onSubmit?.(question);
     }
   };
-  // Focus the composer DOM only when the pane publishes a new focus intent.
-  const focusRequest = createMemo(() => props.focusRequest);
-  createEffect(focusRequest, (request) => {
-    if (!request) {
-      return undefined;
-    }
-    // The full-width mobile panel must commit before its input can take focus.
-    // Consume the pane's live intent after that commit, not while still hidden.
-    const frame = requestAnimationFrame(() => {
-      if (props.presented && request()) {
-        focusComposer();
+  onSettled(() => {
+    let focusRequest: ChatSessionRailProps["focusRequest"];
+    let scrollKey: string | undefined;
+    const syncInputs = () => {
+      const request = host.focusRequest;
+      if (request !== focusRequest) {
+        focusRequest = request;
+        cancelLayout(host);
+        if (request) {
+          // The mobile panel must commit before consuming the pane's focus intent.
+          scheduleLayout(host, () => () => {
+            if (host.presented && request()) {
+              focusComposer();
+            }
+          });
+        }
       }
-    });
-    return () => cancelAnimationFrame(frame);
-  });
-  const scrollKey = createMemo(() =>
-    JSON.stringify(props.companion.turns.map((turn) => [turn.question, turn.status])),
-  );
-  // The companion thread DOM follows newly submitted and settled turns.
-  createEffect(scrollKey, () => {
-    thread.scrollTop = thread.scrollHeight;
+      const nextScrollKey = JSON.stringify(
+        host.companion.turns.map((turn) => [turn.question, turn.status]),
+      );
+      if (nextScrollKey !== scrollKey) {
+        scrollKey = nextScrollKey;
+        scheduleLayout(thread, () => {
+          const bottom = thread.scrollHeight;
+          return () => {
+            thread.scrollTop = bottom;
+          };
+        });
+      }
+    };
+    inputHandlers.set(host, syncInputs);
+    syncInputs();
+    return () => {
+      inputHandlers.delete(host);
+      cancelLayout(host);
+      cancelLayout(thread);
+    };
   });
   const showPullRequests = () =>
     props.digest &&
@@ -345,6 +364,11 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
 }
 
 defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessionRailContent, {
+  propertyChanged: (host, key) => {
+    if (key === "companion" || key === "focusRequest") {
+      inputHandlers.get(host)?.();
+    }
+  },
   properties: {
     sessionKey: { default: "", attribute: false },
     digest: { default: null, attribute: false },

@@ -25,7 +25,6 @@ import {
   runOpenClawStateWriteTransaction as writeState,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath as stateSqlitePath } from "./openclaw-state-db.paths.js";
-import { startAwaitedReadMock } from "./openclaw-state-read-mock.test-support.js";
 import * as readWorker from "./openclaw-state-read-worker.js";
 
 function pending(state: OpenClawTestState, agentId = "worker") {
@@ -172,22 +171,18 @@ it("rejects stale journal absence when deletion arrives during native read clean
             selected = true;
             return {
               ...owned,
-              startRead(...args) {
-                return startAwaitedReadMock(async () => {
-                  const outcome = await owned.startRead(...args).result;
-                  expect(outcome).toMatchObject({
-                    value: { ok: true, type: "agentDeletionJournal.status", status: "absent" },
-                  });
-                  return outcome;
+              async startRead(...args) {
+                const outcome = await owned.startRead(...args);
+                expect(outcome).toMatchObject({
+                  value: { ok: true, type: "agentDeletionJournal.status", status: "absent" },
                 });
+                return outcome;
               },
-              startClose() {
-                return startAwaitedReadMock(async () => {
-                  cleanupEntered.resolve();
-                  await releaseCleanup.promise;
-                  await owned.startClose().result;
-                  closed = true;
-                });
+              async startClose() {
+                cleanupEntered.resolve();
+                await releaseCleanup.promise;
+                await owned.startClose();
+                closed = true;
               },
             };
           },

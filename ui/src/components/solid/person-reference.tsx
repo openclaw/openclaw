@@ -1,5 +1,6 @@
-import { createEffect, onSettled, Show } from "solid-js";
+import { onSettled, Show } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
 import {
@@ -10,7 +11,7 @@ import {
 import { profileAvatarUrl, profileDirectory } from "../../lib/profile-directory.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { projectI18n, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import {
   prepareSessionNavigationHandoff,
@@ -27,7 +28,7 @@ import { updatePersonActivityCard } from "../person-activity-card.tsx";
 import { observePersonActivityData } from "../person-activity-data.ts";
 import { personActivityRouting } from "../person-activity-link.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "../portaled-hovercard.ts";
-import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
+import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import "../../styles/chat/person-reference.css";
 
@@ -37,12 +38,19 @@ type PersonReferenceProps = {
   label?: string;
 };
 
-const active = new WeakMap<Document, () => void>();
+type ActivePersonCard = {
+  host: HTMLElement;
+  close: () => void;
+  refresh: () => void;
+};
+
+const active = new WeakMap<Document, ActivePersonCard>();
 let nextCardId = 0;
 
 /** Explicit transcript selections only. The directory remains Gateway-owned, not a UI name index. */
 function PersonReferenceContent(props: PersonReferenceProps) {
   const context = useOptionalApplication();
+  const translations = projectI18n(i18n);
   const profileId = () => props.profileId ?? "";
   const label = () => props.label ?? "";
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
@@ -61,7 +69,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
   );
 
   function close() {
-    if (active.get(props.host.ownerDocument) === close) {
+    if (active.get(props.host.ownerDocument)?.close === close) {
       active.delete(props.host.ownerDocument);
     }
     activity?.dispose();
@@ -104,16 +112,6 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       renderCard();
     }
   };
-  createEffect(
-    () => ({ profileId: profileId(), label: label(), loading: t("common.loading") }),
-    (value, previous) => {
-      if (previous && value.profileId !== previous.profileId) {
-        close();
-      }
-      renderCard();
-    },
-  );
-
   onSettled(() => {
     const stopGateway = gateway?.subscribe(syncConnection);
     syncConnection();
@@ -130,8 +128,8 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     if (!trigger || !profileId() || portal.card) {
       return;
     }
-    active.get(trigger.ownerDocument)?.();
-    active.set(trigger.ownerDocument, close);
+    active.get(trigger.ownerDocument)?.close();
+    active.set(trigger.ownerDocument, { host: props.host, close, refresh: renderCard });
     const card = createPortaledHovercard(
       "openclaw-person-reference-" + ++nextCardId,
       "session-progress-hovercard person-activity-hovercard",
@@ -143,6 +141,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       listen(document, "pointerdown", outside, true),
       listen(document, "focusin", outside, true),
       listen(document, "keydown", escape, true),
+      translations.subscribe(renderCard),
     ];
     stopRoute = context?.router.subscribe(close);
     if (context) {
@@ -265,6 +264,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     identity: { type: "profile", id: profileId() },
     name: label().replace(/^@/u, ""),
   }));
+  const presentation = createIdentityAvatarPresentation(avatar);
   return (
     <button
       ref={(element) => {
@@ -317,15 +317,15 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       }}
     >
       <span
-        ref={identityAvatarState(avatar)}
-        class="markdown-person-reference__avatar"
+        data-avatar-state={presentation.state()}
+        class={["markdown-person-reference__avatar", presentation.classes()]}
         aria-hidden="true"
         data-initials={avatar().fallback.initials}
       >
         <Show when={Boolean(avatar().imageUrl)}>
           <IdentityAvatarImage
             view={avatar()}
-            fallbackSelector=".markdown-person-reference__avatar"
+            onStateChange={presentation.onStateChange}
             ariaHidden={true}
           />
         </Show>
@@ -356,6 +356,17 @@ defineSolidBridge<PersonReferenceProperties>(
     properties: {
       profileId: { default: "", attribute: "profile-id" },
       label: { default: "" },
+    },
+    propertyChanged(host, key) {
+      const current = active.get(host.ownerDocument);
+      if (current?.host !== host) {
+        return;
+      }
+      if (key === "profileId") {
+        current.close();
+      } else if (key === "label") {
+        current.refresh();
+      }
     },
   },
 );

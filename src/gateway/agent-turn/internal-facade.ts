@@ -141,20 +141,21 @@ export function createInternalAgentTurnFacade(
           } catch {
             return undefined;
           }
+          const executionStarted = isRpcSourceExecuting(owner);
           if (
             !isRpcSourceRegistered(owner) ||
             getAgentEventLifecycleGeneration() !== lifecycleGeneration ||
             getRpcSourceLifecycleGeneration(owner) !== lifecycleGeneration ||
             (expectedAgentId !== undefined &&
               getRpcSourceIdentity(owner).agentId !== expectedAgentId) ||
-            getRpcSourceIdentity(owner).sessionId !== expectedSessionId ||
+            // Execution owns later session adoption; preparation binds the requested identity.
+            (!executionStarted && getRpcSourceIdentity(owner).sessionId !== expectedSessionId) ||
             getRpcSourceIdentity(owner).sessionKey !== expectedSessionKey ||
             owner.input.abortSignal.aborted ||
             owner.input.retirementRequested === true
           ) {
             return undefined;
           }
-          const executionStarted = isRpcSourceExecuting(owner);
           // The start watch is complete; attempt policy may itself read this owner.
           const watchdog = executionStarted ? undefined : owner.input.claim?.operation?.watchdog;
           const snapshot = watchdog?.snapshot();
@@ -314,6 +315,7 @@ export function createInternalAgentTurnFacade(
                 io,
                 onRunObserved,
                 assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
+                executionSource: dispatchOptions.executionSource,
                 privateCompletion: dispatchOptions.privateCompletion,
                 replyExpectation: dispatchOptions.replyExpectation,
                 settleWakeReplay: dispatchOptions.settleWakeReplay,

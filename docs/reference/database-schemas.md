@@ -199,6 +199,12 @@ idle timeout. Surplus readers retire after 30 seconds idle and restart on demand
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
 
+If a shared-state writer worker is lost, its logical leases retire even while
+idle. Retirement joins dispatched commands but does not wait for external
+callback bodies, allowing agent lease cleanup to reach its existing recovery
+path. An uncertain write remains `outcome-unknown`; recovery never replays it or
+claims that it rolled back.
+
 Durable usage refreshes publish rollups in bounded transactions instead of one
 writer request per transcript. A batch flushes after 50 transcripts, 1 MiB of
 prepared payload, or one second of scanning, checked between whole transcripts;

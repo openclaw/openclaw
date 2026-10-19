@@ -1,8 +1,12 @@
 import { isGatewayProtocolResponseError } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { onCleanup } from "solid-js";
+import { Check } from "typebox/value";
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
-import type { PluginsSetEnabledParams } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
+import {
+  PluginsInstallProgressEventSchema,
+  type PluginsSetEnabledParams,
+} from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -21,7 +25,6 @@ import {
   type PluginMutationResult,
   type PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
-import { installPlugin } from "../../lib/plugins/install.ts";
 import type { PluginConsentIntent, PluginConsentState } from "./consent-dialog.tsx";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
@@ -327,10 +330,17 @@ export function createPluginsConsent(host: PluginsConsentOptions) {
           scope &&
           host.gateway.isCurrent(scope) &&
           state.installProgress.get(installIdentity) === progress;
-        const result = await installPlugin(client, request, (activity) => {
-          if (!current()) {
+        let requestId: string | undefined;
+        const unsubscribe = client.addEventListener((event) => {
+          if (
+            event.event !== "plugins.install.progress" ||
+            !Check(PluginsInstallProgressEventSchema, event.payload) ||
+            event.payload.requestId !== requestId ||
+            !current()
+          ) {
             return;
           }
+          const activity = event.payload;
           const index = progress.activities.findIndex(
             (row) => row.activityId === activity.activityId,
           );
@@ -344,6 +354,16 @@ export function createPluginsConsent(host: PluginsConsentOptions) {
           state.installProgress.set(installIdentity, progress);
           host.onChange();
         });
+        let result: PluginMutationResult;
+        try {
+          result = await client.request<PluginMutationResult>("plugins.install", request, {
+            onSent: (id) => {
+              requestId = id;
+            },
+          });
+        } finally {
+          unsubscribe();
+        }
         if (current()) {
           // The final RPC result settles installation before optional config/catalog refreshes.
           state.installProgress.delete(installIdentity);

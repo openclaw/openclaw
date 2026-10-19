@@ -6,6 +6,7 @@ import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import {
@@ -16,10 +17,13 @@ import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
 
+registerSessionOrganizationEnglish();
+
 export type AppearancePickerFocus = (target: "first" | "grid" | "custom", roving?: boolean) => void;
 
 export type AppearancePickerProps = {
   ref?: (handle: AppearancePickerFocus) => void;
+  controlRef?: () => (element: HTMLElement) => void;
   allowSvg?: boolean;
   clearable?: boolean;
   mode: "grid" | "custom";
@@ -85,6 +89,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
       disabled={props.disabled}
       title={props.disabledReason ?? (icon === null ? t("sessionsView.noIcon") : undefined)}
       ref={[
+        props.controlRef?.(),
         (element) => choices.set(icon, element),
         nativeListener("click", (event) => props.onSelect(event, icon)),
       ]}
@@ -118,6 +123,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
                 disabled={props.colorDisabled}
                 title={props.colorDisabledReason ?? label()}
                 ref={[
+                  props.controlRef?.(),
                   (element) => colors.set(color, element),
                   nativeListener("click", (event) => props.onSelectColor(event, color)),
                 ]}
@@ -174,6 +180,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
               disabled={props.disabled}
               title={props.disabledReason}
               ref={[
+                props.controlRef?.(),
                 (element) => choices.set("", (custom = element)),
                 nativeListener("click", (event) => props.onShowCustom(event)),
               ]}
@@ -198,7 +205,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
               class="session-menu__icon-back"
               data-form-control
               aria-label={t("common.back")}
-              ref={nativeListener("click", (event) => props.onBack(event))}
+              ref={[props.controlRef?.(), nativeListener("click", (event) => props.onBack(event))]}
             >
               <Icon name="arrowLeft" />
             </button>
@@ -218,6 +225,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
               value={props.customIconValue}
               onInput={(event) => props.onInput(event)}
               ref={[
+                props.controlRef?.(),
                 (element) => (input = element),
                 nativeListener("keydown", (event) => {
                   if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) {
@@ -236,7 +244,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
               class="session-menu__icon-set"
               data-form-control
               disabled={!accepted() || props.disabled}
-              ref={nativeListener("click", (event) => props.onApply(event))}
+              ref={[props.controlRef?.(), nativeListener("click", (event) => props.onApply(event))]}
             >
               {t("sessionsView.customEmojiSet")}
             </button>
@@ -269,7 +277,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
             data-form-control
             disabled={props.disabled || props.colorDisabled}
             title={props.disabledReason ?? props.colorDisabledReason}
-            ref={nativeListener("click", (event) => props.onReset(event))}
+            ref={[props.controlRef?.(), nativeListener("click", (event) => props.onReset(event))]}
           >
             {t("sessionsView.resetAppearance")}
           </button>
@@ -339,6 +347,7 @@ export function useSessionMenuAppearance(
   },
   actionDisabled: (kind: "set-icon" | "set-color") => boolean,
   runAction: (action: AppearanceAction) => void,
+  controlRef?: () => (element: HTMLElement) => void,
 ) {
   const [mode, setMode] = createSignal<"grid" | "custom">("grid");
   const [customValue, setCustomValue] = createSignal("");
@@ -358,6 +367,7 @@ export function useSessionMenuAppearance(
     showIconGrid,
     render: () => (
       <AppearancePicker
+        controlRef={controlRef}
         ref={(handle) => (focus = handle)}
         allowSvg
         mode={mode()}

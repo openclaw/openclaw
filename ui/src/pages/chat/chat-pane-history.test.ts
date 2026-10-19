@@ -66,7 +66,7 @@ function historyPane(request = vi.fn(async () => historyPage())) {
 }
 
 function olderRequest(sessionKey: string, offset = 2) {
-  return { sessionKey, limit: 1000, maxBytes: 2 * 1024 * 1024, toolResultMaxChars: 2_000, offset };
+  return { sessionKey, limit: 1000, maxBytes: 3 * 1024 * 1024, toolResultMaxChars: 2_000, offset };
 }
 
 function pagination(totalMessages = 4, nextOffset?: number): ChatHistoryPagination {
@@ -111,10 +111,11 @@ function installHistoryObserver(intersect = true) {
   return { observe, disconnect, construct, rootMargin: () => rootMargin };
 }
 
-function appendSentinel(thread: HTMLElement) {
+function appendSentinel(thread: HTMLElement, pane: { historySentinel: HTMLElement | null }) {
   const sentinel = document.createElement("div");
   sentinel.className = "chat-history-sentinel";
   thread.append(sentinel);
+  pane.historySentinel = sentinel;
   return sentinel;
 }
 
@@ -477,7 +478,7 @@ it("fills a visible history tail once the viewport can fit it", async () => {
   Object.defineProperty(thread, "scrollHeight", { value: 400 });
   let clientHeight = 0;
   Object.defineProperty(thread, "clientHeight", { get: () => clientHeight });
-  const sentinel = appendSentinel(thread);
+  const sentinel = appendSentinel(thread, pane);
   pane.append(thread);
   vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
   const { observe } = installHistoryObserver();
@@ -515,7 +516,7 @@ it("prefetches older history from upward intent well before the top edge", async
   const { pane, state, request } = historyPane();
   state.handleChatScroll = vi.fn();
   const thread = appendChatThread(pane, { scrollHeight: 4_000, clientHeight: 600 });
-  appendSentinel(thread);
+  appendSentinel(thread, pane);
   const observer = installHistoryObserver();
   pane.transcriptScrollTop = 900;
   thread.scrollTop = 800;
@@ -601,7 +602,7 @@ it("reuses an armed history observer and ignores its queued callback after reset
   state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
   pane.historyObserverArmed = true;
   const thread = appendChatThread(pane, { scrollHeight: 400, clientHeight: 200 });
-  const sentinel = appendSentinel(thread);
+  const sentinel = appendSentinel(thread, pane);
   const { observe, disconnect, construct } = installHistoryObserver(false);
   pane.syncHistoryObserver();
   pane.syncHistoryObserver();

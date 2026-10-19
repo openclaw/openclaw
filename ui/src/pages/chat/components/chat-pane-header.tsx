@@ -1,10 +1,12 @@
-import { Show, createMemo, createUniqueId } from "solid-js";
+import { Show, createMemo, createUniqueId, onSettled } from "solid-js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../../app/control-ui-auth.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
+import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
+import { createRouteElementRef } from "../../../app/route-element-ref.ts";
 import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
@@ -33,6 +35,7 @@ import {
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending, resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
@@ -69,6 +72,7 @@ type ChatPaneParentSession = {
 };
 
 export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
+  onHeaderRef?: (element: HTMLElement) => void | (() => void);
   presented: PresentationValue;
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
@@ -303,32 +307,47 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
         </Show>
       }
     >
-      <input
-        class="chat-pane__session-title-input"
-        value={props.renameValue}
-        aria-label={t("chat.sessionHeader.renameInputAria")}
-        placeholder={t("chat.sessionHeader.renameInputPlaceholder")}
-        onInput={(event) => props.onRenameInput(event.currentTarget.value)}
-        onCompositionEnd={recordCompositionEnd}
-        ref={nativeListener("keyup", clearCompositionEnd)}
-        onKeyDown={(event) => {
-          if (isComposingKeyboardEvent(event)) {
-            return;
-          }
-          if (event.key === "Enter") {
-            event.preventDefault();
-            props.onCommitRename();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            props.onCancelRename();
-          }
-        }}
-        onBlur={(event) => {
-          clearCompositionEnd(event);
-          props.onCommitRename();
-        }}
-      />
+      <SessionRenameInput {...props} />
     </Show>
+  );
+}
+
+function SessionRenameInput(props: ChatPaneHeaderProps) {
+  let input!: HTMLInputElement;
+  onSettled(() => {
+    input.focus();
+    input.select();
+  });
+  return (
+    <input
+      class="chat-pane__session-title-input"
+      value={props.renameValue}
+      aria-label={t("chat.sessionHeader.renameInputAria")}
+      placeholder={t("chat.sessionHeader.renameInputPlaceholder")}
+      onInput={(event) => props.onRenameInput(event.currentTarget.value)}
+      onCompositionEnd={recordCompositionEnd}
+      ref={[(element) => (input = element), nativeListener("keyup", clearCompositionEnd)]}
+      onKeyDown={(event) => {
+        if (isComposingKeyboardEvent(event)) {
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          if (!props.actionsDisabled) {
+            props.onCommitRename();
+          }
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          props.onCancelRename();
+        }
+      }}
+      onBlur={(event) => {
+        clearCompositionEnd(event);
+        if (!props.actionsDisabled) {
+          props.onCommitRename();
+        }
+      }}
+    />
   );
 }
 
@@ -431,6 +450,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
   return (
     <>
       <div
+        ref={[elementRef(props.onHeaderRef)]}
         class={[
           "chat-pane__header",
           {
@@ -447,31 +467,37 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
         onMouseDown={beginNativeWindowDrag}
       >
         <div class="chat-pane__header-leading">
-          {props.mergedChrome ? (
-            <openclaw-tooltip prop:content={drawerLabel()}>
-              <button
-                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
-                type="button"
-                aria-label={drawerLabel()}
-                aria-expanded={props.navDrawerOpen ? "true" : "false"}
-                data-connection-status={props.gatewayStatus?.kind ?? undefined}
-                onClick={(event) => {
-                  window.dispatchEvent(
-                    new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
-                      detail: {
-                        trigger: event.currentTarget,
-                      },
-                    }),
-                  );
-                }}
-              >
-                <Icon name="menu" />
-                <Show when={props.gatewayStatus?.kind}>
-                  <span class="gateway-status-dot" aria-hidden="true" />
-                </Show>
-              </button>
-            </openclaw-tooltip>
-          ) : undefined}
+          <Show when={props.mergedChrome}>
+            {(_mergedChrome) => {
+              const drawerRef = createRouteElementRef(NAV_DRAWER_TOGGLE_REGISTRATION);
+              return (
+                <openclaw-tooltip prop:content={drawerLabel()}>
+                  <button
+                    ref={drawerRef}
+                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
+                    type="button"
+                    aria-label={drawerLabel()}
+                    aria-expanded={props.navDrawerOpen ? "true" : "false"}
+                    data-connection-status={props.gatewayStatus?.kind ?? undefined}
+                    onClick={(event) => {
+                      window.dispatchEvent(
+                        new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
+                          detail: {
+                            trigger: event.currentTarget,
+                          },
+                        }),
+                      );
+                    }}
+                  >
+                    <Icon name="menu" />
+                    <Show when={props.gatewayStatus?.kind}>
+                      <span class="gateway-status-dot" aria-hidden="true" />
+                    </Show>
+                  </button>
+                </openclaw-tooltip>
+              );
+            }}
+          </Show>
           <Show when={incognito()}>
             <openclaw-tooltip
               prop:content={t("sessionsView.incognitoDescription")}

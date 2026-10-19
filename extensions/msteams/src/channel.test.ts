@@ -245,10 +245,7 @@ describe("msteamsPlugin", () => {
   });
 
   it("registers the approval runtime before monitor startup only when native delivery is enabled", async () => {
-    const monitor = monitorMSTeamsProviderMock.mockReset().mockResolvedValue({
-      app: null,
-      shutdown: async () => {},
-    });
+    const monitor = monitorMSTeamsProviderMock.mockReset().mockResolvedValue(undefined);
     const register = vi.fn(() => ({ dispose: vi.fn() }));
     const controller = new AbortController();
     const cfg: OpenClawConfig = {
@@ -790,7 +787,6 @@ describe("Teams named-account integration", () => {
     monitorMSTeamsProviderMock.mockImplementationOnce(
       async (params: Parameters<typeof import("./monitor.js").monitorMSTeamsProvider>[0]) => {
         params.statusSink?.({ running: true });
-        return { app: null, shutdown: async () => {} };
       },
     );
 

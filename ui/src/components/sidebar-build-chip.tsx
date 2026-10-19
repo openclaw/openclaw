@@ -20,6 +20,7 @@ export type SidebarBuildChipProps = {
   onNavigate?: (routeId: "about") => void;
   variant: "identity" | "settings";
   menuAttributes?: MenuItemBindings;
+  copyButtonRef?: (element: HTMLButtonElement) => void;
 };
 
 function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement) {
@@ -56,7 +57,11 @@ function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement
           {text ? <span class="sidebar-footer-build__text">{text}</span> : null}
         </a>
         <div slot="content" class="sidebar-hover-card sidebar-build-hover-card">
-          {renderSidebarServerDetails(CONTROL_UI_BUILD_INFO, props.gatewayVersion)}
+          {renderSidebarServerDetails(
+            CONTROL_UI_BUILD_INFO,
+            props.gatewayVersion,
+            props.copyButtonRef,
+          )}
         </div>
       </openclaw-tooltip>
     );
@@ -74,6 +79,7 @@ export const SidebarBuildChip = defineSolidBridge<SidebarBuildChipProps>(
       onNavigate: { default: undefined, attribute: false },
       variant: { default: "identity", attribute: false },
       menuAttributes: { default: undefined, attribute: false },
+      copyButtonRef: { default: undefined, attribute: false },
     },
   },
 );
@@ -114,6 +120,7 @@ async function copyBuildCommit(button: HTMLButtonElement, commit: string, idleLa
 function renderSidebarServerDetails(
   info: ControlUiBuildInfo,
   gatewayVersion: string | null,
+  copyButtonRef?: (element: HTMLButtonElement) => void,
 ): SolidJSX.Element {
   const commit = info.commit?.slice(0, 12) ?? null;
   const builtAtMs = info.builtAt ? Date.parse(info.builtAt) : Number.NaN;
@@ -142,6 +149,7 @@ function renderSidebarServerDetails(
             <span>{commit ?? unavailable}</span>
             {commit ? (
               <button
+                ref={copyButtonRef}
                 type="button"
                 class="sidebar-build-hover-card__copy"
                 aria-label={copyLabel}

@@ -90,7 +90,7 @@ type MentionMenuState = {
 };
 
 /** One bounded suggestion lifecycle shared by existing- and new-session composers. */
-export function createHumanMentionMenu() {
+export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => void) {
   let directory: HumanMentionDirectory | undefined;
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -131,8 +131,12 @@ export function createHumanMentionMenu() {
   }
 
   function close(draft: MentionMenuState) {
+    const wasOpen = draft.target !== null;
     cancelSearch();
     Object.assign(draft, { target: null, search: null, index: 0, selectedProfileId: undefined });
+    if (wasOpen) {
+      onOpenChange?.(false);
+    }
   }
 
   function dispose() {
@@ -174,6 +178,9 @@ export function createHumanMentionMenu() {
     draft.target = target;
     if (previous?.start !== target.start || previous.query !== target.query) {
       searchPeople(draft);
+    }
+    if (!previous) {
+      onOpenChange?.(true);
     }
   }
 

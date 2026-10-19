@@ -9,6 +9,7 @@ import { GatewayPageBinding } from "../lib/gateway-page-binding.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import {
@@ -99,7 +100,10 @@ export class CommandPaletteState {
   private initialInput: CommandPaletteOpenInput | undefined;
   private takeInitialInput: CommandPaletteInputHandoff | undefined;
   private inputElement: HTMLTextAreaElement | undefined;
-  private readonly mentionMenu = createHumanMentionMenu();
+  private stopInputFocus: (() => void) | undefined;
+  private readonly mentionMenu = createHumanMentionMenu((nextOpen) =>
+    this.notifyMentionChange(nextOpen),
+  );
   private hasOpened = false;
   private mentionInput: HumanMentionInput | undefined;
   private composing = false;
@@ -110,12 +114,13 @@ export class CommandPaletteState {
     getTextarea: () => this.inputElement ?? null,
     commitDraft: (value, mentions) => this.draft.setMessage(value, mentions),
   };
-  private readonly notifyMentionChange = () => {
-    if (this.mentionMenu.open || this.draft.mentions.length > 0) {
+  // Menu transitions arrive before Solid publishes the new store value.
+  private readonly notifyMentionChange = (nextOpen = this.mentionMenu.open) => {
+    if (nextOpen || this.draft.mentions.length > 0) {
       this.clearSessionSearch();
       this.clearCatalogSearch();
     } else {
-      this.scheduleSessionSearch(this.draft.message);
+      this.scheduleSessionSearch(this.draft.message, false, nextOpen);
     }
     this.changed();
   };
@@ -142,7 +147,17 @@ export class CommandPaletteState {
     promise: Promise<void>;
     loadedAt?: number;
   };
-  private readonly modelReader = new ModelCatalogReader(this.changed);
+  private modelItems: readonly CommandPaletteItem[] = [];
+  private readonly modelReader = new ModelCatalogReader(() => {
+    const snapshot = this.modelReader.snapshot;
+    if (snapshot.hasSnapshot) {
+      this.settledModels = snapshot;
+      // Project accepted catalog publications, not every rendering/selection read.
+      this.modelItems = getCommandPaletteModelItems(snapshot);
+    }
+    this.changed();
+  });
+  private settledModels = this.modelReader.snapshot;
   private readonly gateway: GatewayPageBinding;
 
   constructor(
@@ -176,7 +191,18 @@ export class CommandPaletteState {
     );
     this.gateway = new GatewayPageBinding(this.changed, {
       getGateway: () => this.context?.gateway,
-      invalidateRequests: this.handleAgentSelection,
+      invalidateRequests: (change) => {
+        this.invalidateSessionSearch();
+        this.sessionSearchPending = false;
+        this.catalogLoad = undefined;
+        this.modelReader.clear();
+        if (change.identityChanged) {
+          this.clearSessionSearch();
+          this.clearCatalogSearch();
+        } else if (change.snapshot.phase !== "connected") {
+          this.scheduleSessionSearch(this.draft.message);
+        }
+      },
       onSnapshot: () => this.synchronizePresentationScope(),
       ensureInitialData: () => this.scheduleSessionSearch(this.draft.message),
     });
@@ -191,6 +217,8 @@ export class CommandPaletteState {
       if (invalidation === "clear") {
         this.catalogLoad = undefined;
         this.catalogItems = [];
+        this.settledModels = this.modelReader.snapshot;
+        this.modelItems = getCommandPaletteModelItems(this.settledModels);
       }
       if (this.open) {
         void this.ensureCatalogItems(true);
@@ -217,7 +245,8 @@ export class CommandPaletteState {
     this.connected = false;
     this.initialInput = undefined;
     this.takeInitialInput = undefined;
-    this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
+    this.stopInputFocus?.();
+    this.stopInputFocus = undefined;
     this.inputElement = undefined;
     this.open = false;
     this.gateway.dispose();
@@ -259,7 +288,7 @@ export class CommandPaletteState {
     }
     this.activeId = null;
     this.filter = "all";
-    this.scheduleSessionSearch(this.draft.message);
+    this.scheduleSessionSearch(this.draft.message, false, false);
     this.changed();
   }
 
@@ -273,6 +302,14 @@ export class CommandPaletteState {
       // transport reconnects keep the canonical presentation scope and query.
       this.closePalette();
       this.activeId = null;
+      this.clearCatalogSearch();
+    }
+    if (
+      gateway?.snapshot.phase === "connected" &&
+      gateway.snapshot.hello &&
+      !hasOperatorReadAccess(gateway.snapshot.hello.auth ?? null)
+    ) {
+      this.clearSessionSearch();
       this.clearCatalogSearch();
     }
     this.presentationScope = scope;
@@ -307,9 +344,11 @@ export class CommandPaletteState {
     if (previous && previous !== this.inputElement) {
       return;
     }
-    this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
+    this.stopInputFocus?.();
     this.inputElement = element instanceof HTMLTextAreaElement ? element : undefined;
-    this.inputElement?.addEventListener("focus", this.adoptInitialInput);
+    this.stopInputFocus = this.inputElement
+      ? listen(this.inputElement, "focus", this.adoptInitialInput)
+      : undefined;
     // The dialog may have focused the field before its committed ref arrived.
     this.adoptInitialInput();
   };
@@ -381,6 +420,8 @@ export class CommandPaletteState {
 
   private clearCatalogSearch() {
     this.modelReader.clear();
+    this.modelItems = [];
+    this.settledModels = this.modelReader.snapshot;
     this.catalogLoad = undefined;
     this.catalogItems = [];
     this.pluginIcons.reset();
@@ -449,11 +490,15 @@ export class CommandPaletteState {
     return promise;
   }
 
-  private scheduleSessionSearch(query: string, immediate = false) {
+  private scheduleSessionSearch(
+    query: string,
+    immediate = false,
+    mentionOpen = this.mentionMenu.open,
+  ) {
     // Retire in-flight results immediately, but keep the settled search visible
     // until the typing burst ends. The view disables selection during this pause.
     this.invalidateSessionSearch();
-    if (this.promptMode || this.mentionMenu.open || this.draft.mentions.length > 0) {
+    if (this.promptMode || mentionOpen || this.draft.mentions.length > 0) {
       // Retire catalog generations too: late results and refresh events must not
       // revive search while the same field is being used as a session draft.
       this.clearSessionSearch();
@@ -471,8 +516,8 @@ export class CommandPaletteState {
       return;
     }
     const applySearch = () => {
-      this.clearSessionSearch();
       if (this.searchQuery !== query) {
+        this.clearSessionSearch();
         this.activeId = null;
       }
       this.searchQuery = query;
@@ -504,6 +549,7 @@ export class CommandPaletteState {
       return;
     }
     const requestId = ++this.sessionSearchId;
+    this.sessionSearchFailed = false;
     const scope = gatewayPresentationScope(gateway);
     const isCurrent = () =>
       requestId === this.sessionSearchId &&
@@ -592,7 +638,6 @@ export class CommandPaletteState {
       event?.inputType === "insertFromDrop"
     ) {
       this.mentionMenu.close();
-      this.notifyMentionChange();
       return;
     }
     this.mentionMenu.update(
@@ -606,7 +651,7 @@ export class CommandPaletteState {
   }
 
   readProps(): CommandPaletteProps {
-    const models = this.modelReader.snapshot;
+    const models = this.settledModels;
     return {
       basePath: this.context?.basePath ?? "",
       open: this.open,
@@ -639,8 +684,12 @@ export class CommandPaletteState {
       },
       onCompositionEnd: () => {
         this.composing = false;
+        const wasOpen = this.mentionMenu.open;
         this.updateMentionMenu();
-        this.scheduleSessionSearch(this.draft.message);
+        // The menu callback handles closes; closed menus still need the IME refresh.
+        if (!wasOpen) {
+          this.scheduleSessionSearch(this.draft.message);
+        }
       },
       activeId: this.activeId,
       filter: this.filter,
@@ -655,7 +704,10 @@ export class CommandPaletteState {
         this.context?.agentSelection.state.selectedId ??
         resolveUiSelectedGlobalAgentId(this.context?.gateway.snapshot ?? {}),
       sessionItems: this.sessionItems,
-      modelSearchError: this.modelReader.failed ? t("palette.modelSearchFailed") : null,
+      remoteSearchOffline:
+        !this.gateway.connected && Boolean(normalizeOptionalString(this.searchQuery)),
+      modelSearchError:
+        this.gateway.connected && this.modelReader.failed ? t("palette.modelSearchFailed") : null,
       primaryModelSearch: models.hasSnapshot && !models.modelSelectionPolicy?.restricted,
       catalogItems: [
         ...getStaticCommandPaletteCatalogItems(
@@ -663,7 +715,7 @@ export class CommandPaletteState {
           this.context?.nativeDeviceSettings,
         ),
         ...this.catalogItems,
-        ...getCommandPaletteModelItems(models),
+        ...this.modelItems,
       ],
       sessionSearchPending: this.sessionSearchPending,
       catalogSearchPending: Boolean(

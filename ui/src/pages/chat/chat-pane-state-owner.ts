@@ -20,6 +20,7 @@ import type {
 } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   readSessionProgressCard,
   sessionProgressCardsForGateway,
@@ -38,7 +39,6 @@ import { projectChatFields } from "./chat-field-projection.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
-  CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "./chat-history-events.ts";
 import {
   getAcceptedChatHistorySession,
@@ -88,6 +88,42 @@ export abstract class ChatPaneStateOwner {
   updateComplete: Promise<boolean> = Promise.resolve(true);
   awaitDomCommit = (): Promise<boolean> => this.updateComplete;
   isConnected = false;
+  headerElement: HTMLElement | null = null;
+  historySentinel: HTMLElement | null = null;
+  transcriptAnnouncement: HTMLElement | null = null;
+  composerShell: HTMLElement | null = null;
+  protected readonly registerHeaderElement = (element: HTMLElement) => {
+    this.headerElement = element;
+    return () => {
+      if (this.headerElement === element) {
+        this.headerElement = null;
+      }
+    };
+  };
+  protected readonly registerHistorySentinel = (element: HTMLElement) => {
+    this.historySentinel = element;
+    return () => {
+      if (this.historySentinel === element) {
+        this.historySentinel = null;
+      }
+    };
+  };
+  protected readonly registerTranscriptAnnouncement = (element: HTMLElement) => {
+    this.transcriptAnnouncement = element;
+    return () => {
+      if (this.transcriptAnnouncement === element) {
+        this.transcriptAnnouncement = null;
+      }
+    };
+  };
+  protected readonly registerComposerShell = (element: HTMLElement) => {
+    this.composerShell = element;
+    return () => {
+      if (this.composerShell === element) {
+        this.composerShell = null;
+      }
+    };
+  };
 
   abstract synchronizeInputs(changes: ChatPaneInputChanges): void;
   abstract afterRender(focusComposerChanged: boolean): void;
@@ -121,7 +157,7 @@ export abstract class ChatPaneStateOwner {
     }
     this.paneLifecycleRoot =
       this.element.closest("openclaw-app-shell") ?? this.element.parentElement;
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    this.chatState.addCleanup(listen(document, "visibilitychange", this.handleVisibilityChange));
     this.isConnected = true;
     this.transcript.start();
     this.refreshBoardSubscriptions();
@@ -144,20 +180,11 @@ export abstract class ChatPaneStateOwner {
         this.refreshSwarmRoster();
       }) ?? (() => {}),
     );
-    this.element.addEventListener(
-      CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
-      this.synchronizeForegroundTranscript,
-    );
     this.paneLifecycleRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
 
   dispose() {
-    this.element.removeEventListener(
-      CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
-      this.synchronizeForegroundTranscript,
-    );
     this.context?.connectionBootstrap.setForegroundPane(this, null);
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.chatState.dispose();
     this.isConnected = false;
     this.transcript.dispose();
@@ -309,6 +336,10 @@ export abstract class ChatPaneStateOwner {
   protected retireHeaderSessionMutations(): void {
     this.headerSessionMutationAbortController.abort();
     this.headerSessionMutationAbortController = new AbortController();
+  }
+  protected retireHeaderSessionDrafts(): void {
+    this.headerSessionDraftAbortController.abort();
+    this.headerSessionDraftAbortController = new AbortController();
   }
   draft?: string = undefined;
   focusComposer = false;
@@ -465,6 +496,7 @@ export abstract class ChatPaneStateOwner {
   // across a reconnect or pane teardown dismiss itself, matching
   // SessionDataController's own epoch-scoped controller for the sidebar.
   protected headerSessionMutationAbortController = new AbortController();
+  protected headerSessionDraftAbortController = new AbortController();
 
   readonly headerPresentation: {
     renameValue: string;

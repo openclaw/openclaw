@@ -201,7 +201,6 @@ export function buildNodeInvokeParams(params: {
   return invokeParams;
 }
 
-/** Parse an optional integer node CLI flag. */
 export function parseOptionalNodeInteger(
   value: unknown,
   flag: string,
@@ -228,7 +227,6 @@ export function parseNodeDurationMs(value: string): number {
   }
 }
 
-/** Parse an optional finite number node CLI flag with optional bounds. */
 export function parseOptionalNodeFiniteNumber(
   value: unknown,
   flag: string,
@@ -275,7 +273,6 @@ export async function resolveNodeDiagnosticsId(opts: NodesRpcOpts, query: string
   }
 }
 
-/** Resolve a node query to the best available node record. */
 export async function resolveCliNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
   let nodes: NodeListNode[];
   try {

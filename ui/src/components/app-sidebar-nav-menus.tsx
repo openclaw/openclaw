@@ -13,7 +13,13 @@ import { listen } from "../lib/reactive/listener.ts";
 import { iconData, type IconName } from "./icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
-import { Menu, type MenuEntry, type MenuHandle, type MenuItem } from "./solid/menu.tsx";
+import {
+  Menu,
+  type MenuControls,
+  type MenuEntry,
+  type MenuHandle,
+  type MenuItem,
+} from "./solid/menu.tsx";
 
 type SidebarMenuPosition = { x: number; y?: number; top?: number; bottom?: number };
 
@@ -40,6 +46,7 @@ export function renderSidebarMenuAction(
 }
 
 export type SidebarDropdownProps = {
+  controls?: MenuControls;
   position: SidebarMenuPosition;
   class: JSX.ClassValue;
   label: string;
@@ -63,6 +70,7 @@ export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
   onCleanup(() => removeListeners.forEach((stop) => stop()));
   return (
     <Menu
+      controls={params.controls}
       id={`sidebar-menu-${id}`}
       panelClass={params.class}
       label={params.label}

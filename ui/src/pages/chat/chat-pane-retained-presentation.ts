@@ -499,13 +499,12 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       void resumeStoredChatOutboxes(this.state);
     }
     // Parked transcript snapshots do not rerender; update their component-owned live region now.
-    this.element
-      .querySelector(".chat-transcript-announcement")
-      ?.setAttribute("aria-live", active ? "polite" : "off");
+    this.transcriptAnnouncement?.setAttribute("aria-live", active ? "polite" : "off");
   }
 
   protected override presentedChanged(presented: boolean): void {
     if (!presented) {
+      this.retireHeaderSessionMutations();
       this.dashboardPresentationActivation = undefined;
       this.retainedProgressCard = undefined;
       this.syncSessionCompanionPresentation(false);
@@ -567,6 +566,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     this.clearComposerPrefillAttention();
     this.settleResetConfirmation(false);
     this.cancelHeaderRename();
+    this.retireHeaderSessionDrafts();
     dismissConfirmedActionPopovers(this.element);
     resetTranscriptSession(this.presentationId, this.element);
     const state = this.state;
@@ -577,7 +577,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       clearSessionWorkspacePreviews(state);
     }
     // Hidden snapshots stay parked, so the retained live region must be silenced synchronously.
-    this.element.querySelector(".chat-transcript-announcement")?.setAttribute("aria-live", "off");
+    this.transcriptAnnouncement?.setAttribute("aria-live", "off");
   }
 
   public prepareForEviction(): void {

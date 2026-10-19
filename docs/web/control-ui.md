@@ -22,6 +22,26 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+## Temporary disconnections
+
+When the connection drops, the Control UI keeps loaded catalogs, automation
+editors, Memory Import selections, Activity history, Dreaming results, approval
+queues, and open board and portal documents in memory. A transport interruption
+does not reset those page-local drafts. The connection indicator at the bottom
+left shows the connection state; retained data may be out of date until reconnect.
+
+If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
+
+Gateway actions, including saving edits and approving requests, require a live
+connection. Reconnecting refreshes retained data without automatically replaying
+those actions. Memory Import keeps explicit deselections when refreshing its
+plan. Session rename and new-group dialogs keep typed text across a temporary
+disconnect; failed submissions stay open for review and retry.
+
+Switching Gateway or account, signing out, or losing access clears the affected
+data and drafts. This retention does not add offline persistence or guarantee
+that page-local drafts survive a reload or closing the tab.
+
 ## Browser requirements
 
 Use Safari 26.2 or later on macOS 26.2, iOS 26.2, or iPadOS 26.2 or later,
@@ -231,8 +251,10 @@ menu to inspect the conversation's background exec commands. It is separate from
 time. **Finished** starts collapsed; click its heading to expand or collapse the
 list. Selecting a process opens its recent output. **Stop** targets that exact
 process, not the parent conversation or another command with the same name.
-Details and Processes panels viewing the same session share one refresh every
-five seconds. Hidden panels and browser tabs stop refreshing. Output follows the process owner's temporary
+Details and Processes panels viewing the same session share one observation and
+refresh when its background processes change. Changes are batched over five seconds;
+a safety refresh runs after a minute without an update. Hidden panels and browser
+tabs stop refreshing. Output follows the process owner's temporary
 retention limits; viewing it does not drain output waiting for the agent.
 
 Select a session's title in the chat header to rename it. Enter saves the name;
@@ -281,6 +303,10 @@ If team creation stops partway through, the custodian reports the retained
 agents so you can inspect them before creating the missing members.
 
 ## Download files
+
+If the **Files** panel shows a listing error, select **Retry** to load the current
+folder or search again. This keeps the session and query in place; access checks
+still apply, and a failed retry displays its error.
 
 In the **Files** panel, hover over a file or focus its row to reveal **Download file**
 next to Preview and Copy path. The same action is available in the file preview

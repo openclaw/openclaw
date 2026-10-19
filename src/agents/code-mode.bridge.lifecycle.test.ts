@@ -153,13 +153,6 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         sessionId: scope.sessionId,
         agentId: scope.agentId,
         runId: harness.runId,
-        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-        resolveCommandSecretRefsViaGateway: async () => ({
-          resolvedConfig: config,
-          diagnostics: [],
-          targetStatesByPath: {},
-          hadUnresolvedTargets: false,
-        }),
       });
       applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
       try {

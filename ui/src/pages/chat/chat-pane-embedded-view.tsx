@@ -234,9 +234,14 @@ function LinkReaderPanel(props: Props) {
   );
 }
 
-export function ExternalPanelLink(props: { href: string; label: string }) {
+export function ExternalPanelLink(props: {
+  href: string;
+  label: string;
+  actionRef?: (element: HTMLAnchorElement) => void;
+}) {
   return (
     <a
+      ref={props.actionRef}
       class="rail-header__action"
       href={props.href}
       target="_blank"
@@ -249,10 +254,13 @@ export function ExternalPanelLink(props: { href: string; label: string }) {
   );
 }
 
-export function ClearCompanion(props: Props) {
+export function ClearCompanion(
+  props: Props & { actionRef?: (element: HTMLButtonElement) => void },
+) {
   return (
     <openclaw-tooltip prop:content={t("chat.rail.clear")}>
       <button
+        ref={props.actionRef}
         class="rail-header__action chat-session-rail__clear"
         type="button"
         aria-label={t("chat.rail.clear")}

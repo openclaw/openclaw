@@ -58,6 +58,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
+import { prepareAgentWaitForTurn } from "./agent-turn/agent-wait.js";
 import { isPublicSessionShareActive } from "./control-ui-public-session-read.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -314,6 +315,12 @@ describe("X publication production-owner composition", () => {
       ],
     });
     gateway.resolveGatewayContext = () => gateway;
+    // Registry completion must observe the real child, not the direct fixture's empty wait result.
+    vi.mocked(
+      expectDefined(gateway.recoveryRuntime, "Gateway recovery fixture").waitForAgent,
+    ).mockImplementation(
+      async (params) => (await prepareAgentWaitForTurn(gateway, params).wait()).result,
+    );
     gateway.readPreparedGatewayModelCatalog = async () => {
       const catalog = await gateway.loadGatewayModelCatalogSnapshot();
       return { entries: catalog.entries, routeVariants: catalog.routeVariants };
@@ -461,6 +468,7 @@ describe("X publication production-owner composition", () => {
     const spawnErrors = new Map<Case, unknown>();
     const publications = new Map<Case, boolean>();
     const childWritten = observedDeferred<string>();
+    const childCanFinish = Promise.withResolvers<void>();
     const childRuns = new Set<Promise<unknown>>();
     const runModel = async (params: Parameters<typeof embeddedAgent.runEmbeddedAgent>[0]) => {
       const admitted =
@@ -636,6 +644,7 @@ describe("X publication production-owner composition", () => {
         expect(appended.appended).toBe(true);
         if (child) {
           childWritten.resolve(key);
+          await withinTest(childCanFinish.promise, signal);
         }
         return {
           payloads: [{ text }],
@@ -874,46 +883,50 @@ describe("X publication production-owner composition", () => {
               "committed child publication",
             );
             expect(publication.sessionId).toBe(entry.sessionId);
-            // The append checkpoint precedes the run's final session metadata writes.
+            // Keep completion publications from invalidating the committed page during its read.
             const childReleased = captureSessionControllerSettlement({
               scope: childStore,
               identities: [key, entry.sessionId],
               agentId: "coder",
             });
-            if (childReleased) {
-              await waitFor("child admission release", childReleased);
+            try {
+              await waitFor("projection membership", projection.prepareMembership());
+              expect(
+                isPublicSessionShareActive(
+                  cfg(),
+                  {
+                    agentId: "coder",
+                    sessionKey: key,
+                    sessionId: publication.sessionId,
+                    shareId: publication.id,
+                  },
+                  projection,
+                ),
+              ).toBe(true);
+              const response = await waitFor(
+                "anonymous public read",
+                sendRequest(http, {
+                  path: new URL(
+                    expectDefined(
+                      resolveControlUiSessionUrl(cfg(), { sessionKey: key }),
+                      "canonical child URL",
+                    ),
+                  ).pathname,
+                  host: "localhost",
+                  remoteAddress: "127.0.0.1",
+                }),
+              );
+              expect(response.res.statusCode, response.getBody()).toBe(200);
+              expect(response.getBody()).toContain(
+                "X publication composition: durable child answer.",
+              );
+              expect(response.getBody()).not.toContain("openclaw-app");
+            } finally {
+              childCanFinish.resolve();
+              if (childReleased) {
+                await waitFor("child admission release", childReleased);
+              }
             }
-            await waitFor("projection membership", projection.prepareMembership());
-            expect(
-              isPublicSessionShareActive(
-                cfg(),
-                {
-                  agentId: "coder",
-                  sessionKey: key,
-                  sessionId: publication.sessionId,
-                  shareId: publication.id,
-                },
-                projection,
-              ),
-            ).toBe(true);
-            const response = await waitFor(
-              "anonymous public read",
-              sendRequest(http, {
-                path: new URL(
-                  expectDefined(
-                    resolveControlUiSessionUrl(cfg(), { sessionKey: key }),
-                    "canonical child URL",
-                  ),
-                ).pathname,
-                host: "localhost",
-                remoteAddress: "127.0.0.1",
-              }),
-            );
-            expect(response.res.statusCode, response.getBody()).toBe(200);
-            expect(response.getBody()).toContain(
-              "X publication composition: durable child answer.",
-            );
-            expect(response.getBody()).not.toContain("openclaw-app");
           } else if (kind === "revoked") {
             expect(revokedInCatalogWait).toBe(true);
             expect(outcomes.get(kind)).toMatchObject({
@@ -936,6 +949,7 @@ describe("X publication production-owner composition", () => {
         }
       }
     } finally {
+      childCanFinish.resolve();
       channel.inbound.dispatch = originalDispatch;
       try {
         await waitFor("child model settlement", Promise.allSettled(childRuns));

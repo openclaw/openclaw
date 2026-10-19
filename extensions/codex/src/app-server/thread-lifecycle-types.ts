@@ -73,6 +73,8 @@ export type CodexStartOrResumeThreadParams = Omit<
   authority?: CodexBindingAuthority;
   /** Caller liveness; durable lineage is owned by authority. */
   assertCurrent?: () => void;
+  /** Refresh requester lookups immediately before native thread writes. */
+  assertCurrentAsync?: () => Promise<void>;
   /** Private execution identity resolved by this harness's catalog generation. */
   runtimeModelId?: string;
   agentId?: string;

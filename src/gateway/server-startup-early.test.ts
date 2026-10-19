@@ -100,6 +100,7 @@ function earlyRuntimeInput(
     maintenance: maintenanceState,
     broadcast: maintenanceState.broadcast,
     scheduler,
+    getCronStorePath: () => "/synthetic/cron/jobs.json",
     getRuntimeConfig: () => ({}) as never,
     ...overrides,
   };
@@ -199,7 +200,10 @@ describe("startGatewayEarlyRuntime", () => {
     await Promise.resolve();
     expect(mocks.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
     expect(mocks.primeRemoteSkillsCache).toHaveBeenCalledTimes(1);
-    expect(mocks.startCronMaintenance).toHaveBeenCalledExactlyOnceWith(input.scheduler);
+    expect(mocks.startCronMaintenance).toHaveBeenCalledExactlyOnceWith(
+      input.scheduler,
+      input.getCronStorePath,
+    );
     expect(mocks.startGatewayDiscovery).toHaveBeenCalledOnce();
     expect(mocks.startGatewayDiscovery.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
       mocks.setSkillsRemoteRegistry.mock.invocationCallOrder[0] ?? -Infinity,

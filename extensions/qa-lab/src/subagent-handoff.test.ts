@@ -1,9 +1,10 @@
 import { wrapPromptDataBlock } from "openclaw/plugin-sdk/qa-runtime";
 import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { nestedToolActivityFixture } from "../test/nested-tool-activity-fixture.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { findSubagentHandoffReply } from "./subagent-handoff-reply.js";
+import { runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import { projectQaToolActivity } from "./tool-activity.js";
 
 const child = {
@@ -12,7 +13,17 @@ const child = {
   runId: "child-run",
 };
 
-async function runHandoff(fault?: string, childReply = "qa-sidecar", deliveredReply = childReply) {
+async function runHandoff({
+  fault,
+  childReply = "qa-sidecar",
+  deliveredReply = childReply,
+  api,
+}: {
+  fault?: string;
+  childReply?: string;
+  deliveredReply?: string;
+  api?: Record<string, unknown>;
+} = {}) {
   const result =
     fault === "partial result"
       ? childReply + " was mentioned"
@@ -130,6 +141,7 @@ async function runHandoff(fault?: string, childReply = "qa-sidecar", deliveredRe
         expect(selected).toBe(reply.content);
         return selected;
       },
+      ...api,
     },
   });
 }
@@ -143,7 +155,7 @@ it.each([
 ])(
   "credits the accepted child's settled result in the requester's subsequent visible reply: %s",
   async (childReply, deliveredReply) => {
-    await expect(runHandoff(undefined, childReply, deliveredReply)).resolves.toMatchObject({
+    await expect(runHandoff({ childReply, deliveredReply })).resolves.toMatchObject({
       status: "pass",
     });
   },
@@ -165,5 +177,34 @@ it.each([
     "unrelated public reply",
   ].map((fault) => [fault, "no matching delivered reply"]),
 ])("refuses %s", async (fault, error) => {
-  await expect(runHandoff(fault)).rejects.toThrow(error);
+  await expect(runHandoff({ fault })).rejects.toThrow(error);
+});
+
+it.each([
+  ["waitForCondition", "observes an accepted child run"],
+  ["waitForAgentRun", "observes the accepted child's terminal reply"],
+  ["waitForAgentHistory", "observes the child's result in the requester's reply"],
+])("reports which observation expired at %s", async (wait, name) => {
+  const details = "timed out after 360000ms";
+  vi.useFakeTimers();
+  try {
+    // Let the preceding observations succeed, then expire only the selected wait.
+    const pending = runHandoff({
+      api: {
+        runScenario: runQaSuiteScenarioSteps,
+        [wait]: async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 360_000);
+          });
+          throw new Error(details);
+        },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(360_000);
+    const result = await pending;
+    expect(result.status).toBe("fail");
+    expect(result.steps.at(-1)).toMatchObject({ name, status: "fail", details });
+  } finally {
+    vi.useRealTimers();
+  }
 });

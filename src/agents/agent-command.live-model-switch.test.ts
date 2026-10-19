@@ -262,43 +262,6 @@ vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
     state.runMemoryFlushIfNeededMock(params),
 }));
 
-vi.mock("./command/run-context.js", () => ({
-  resolveAgentRunContext: (opts: {
-    accountId?: string;
-    channel?: string;
-    groupChannel?: string | null;
-    groupId?: string | null;
-    groupSpace?: string | null;
-    messageChannel?: string;
-    replyChannel?: string;
-    runContext?: {
-      accountId?: string;
-      currentChannelId?: string;
-      currentThreadTs?: string;
-      groupChannel?: string | null;
-      groupId?: string | null;
-      groupSpace?: string | null;
-      messageChannel?: string;
-      replyToMode?: "off" | "first" | "all" | "batched";
-    };
-    threadId?: string | number;
-    to?: string;
-  }) => ({
-    messageChannel:
-      opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.replyChannel ?? opts.channel,
-    accountId: opts.runContext?.accountId ?? opts.accountId ?? "acct",
-    groupId: opts.runContext?.groupId ?? opts.groupId,
-    groupChannel: opts.runContext?.groupChannel ?? opts.groupChannel,
-    groupSpace: opts.runContext?.groupSpace ?? opts.groupSpace,
-    currentChannelId: undefined,
-    currentThreadTs:
-      opts.runContext?.currentThreadTs ??
-      (opts.threadId == null ? undefined : String(opts.threadId)),
-    replyToMode: opts.runContext?.replyToMode,
-    hasRepliedRef: { current: false },
-  }),
-}));
-
 // mock-isolation: Model-switch fixtures own session reads and run-end writes without opening storage.
 vi.mock("./command/session-store.runtime.js", () => ({
   readSessionEntryInWorker: async (...args: unknown[]) => state.loadSessionEntryMock(...args),

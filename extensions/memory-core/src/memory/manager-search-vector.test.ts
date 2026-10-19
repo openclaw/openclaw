@@ -16,7 +16,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runVectorKnnQuery, vectorToBlob } from "./manager-search-knn.test-support.js";
 import { createEmbeddingScorer } from "./manager-search-scorer.js";
 import { searchChunksByEmbedding, searchVector } from "./manager-search-vector.js";
-import { runMemorySearchWithDeadline } from "./search-deadline.js";
 
 function referenceCosine(a: number[], b: number[]): number {
   let dot = 0;
@@ -93,11 +92,7 @@ describe("searchVector sqlite-vec KNN", () => {
       `);
       const caller = new AbortController();
       const abortReason = new Error("caller stopped memory search");
-      const pending = runMemorySearchWithDeadline({
-        timeoutMs: 5_000,
-        parentSignal: caller.signal,
-        run: async (signal) => await searchVectorFixture(db, { signal }),
-      });
+      const pending = searchVectorFixture(db, { signal: caller.signal });
       setImmediate(() => caller.abort(abortReason));
 
       await expect(pending).rejects.toBe(abortReason);

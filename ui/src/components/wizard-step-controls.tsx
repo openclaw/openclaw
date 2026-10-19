@@ -1,14 +1,17 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
 import type { WizardStep } from "../api/types.ts";
+import { registerModelSetupEnglish } from "../i18n/locales/en-model-setup.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
 import { handleCopyButton } from "./copy-button-state.ts";
 import { Picker, type PickerParams } from "./select-picker.ts";
 import { SensitiveInput } from "./sensitive-input.tsx";
 import { ChannelPicker, type ChannelPickerOption } from "./solid/channel-picker.tsx";
 import "../styles/wizard-step-controls.css";
+
+registerEnglishCatalog(registerModelSetupEnglish);
 
 type WizardStepOption = NonNullable<WizardStep["options"]>[number];
 type WizardStepControlsProps = {
@@ -35,8 +38,8 @@ function stepClass(props: WizardStepControlsProps, name: string) {
   return `${props.presentation === "channels" ? "channels-wizard" : "wizard-step"}__${name}`;
 }
 
-export function WizardBusyButton(props: { statusLabel: string; buttonLabel?: string }) {
-  const label = () => props.buttonLabel ?? t("modelSetup.wizard.continue");
+export function WizardBusyButton(props: { statusLabel: string }) {
+  const label = () => t("modelSetup.wizard.continue");
   return (
     <button type="button" class="btn primary" disabled aria-busy="true" aria-label={label()}>
       <span class="btn__label">{label()}</span>
@@ -121,15 +124,20 @@ function SignIn(props: Pick<WizardStepControlsProps, "step" | "presentation" | "
             </a>
           </Show>
           <Show when={copyValue()} keyed>
-            {(value) => (
-              <button
-                type="button"
-                class="btn"
-                onClick={(event) => void handleCopyButton(event, value, copyLabel())}
-              >
-                <span data-copy-label>{copyLabel()}</span>
-              </button>
-            )}
+            {(value) => {
+              let label!: HTMLSpanElement;
+              return (
+                <button
+                  type="button"
+                  class="btn"
+                  onClick={(event) => void handleCopyButton(event, value, copyLabel(), { label })}
+                >
+                  <span ref={(element) => (label = element)} data-copy-label>
+                    {copyLabel()}
+                  </span>
+                </button>
+              );
+            }}
           </Show>
         </div>
         <div

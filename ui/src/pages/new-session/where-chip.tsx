@@ -1,6 +1,7 @@
 import { createMemo, For, Show } from "solid-js";
 import { resolveCloudProfileIconData } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
 import { resolveMacFormFactorFromName } from "../../lib/mac-form-factor.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
@@ -134,7 +135,10 @@ function EnvironmentHeading(props: {
   );
 }
 
-export function WhereChip(props: { params: WhereChipOptions }) {
+export function WhereChip(props: {
+  params: WhereChipOptions;
+  ref?: (handle: PopoverHandle) => void;
+}) {
   const kind = createMemo(() => props.params.state.kind);
   const triggerIcon = createMemo(() =>
     kind() === "hosted" ? (
@@ -271,6 +275,7 @@ export function WhereChip(props: { params: WhereChipOptions }) {
   });
   return (
     <SessionPicker
+      ref={(handle) => props.ref?.(handle)}
       kind="where"
       label={`${t("newSession.where")}: ${view().label}`}
       value={view().label}

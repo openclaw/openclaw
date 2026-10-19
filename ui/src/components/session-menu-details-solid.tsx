@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
@@ -9,13 +10,16 @@ import type {
   SessionMenuActionsState as MenuState,
 } from "./session-menu-actions.ts";
 import { Icon } from "./solid/icon.tsx";
-import type { MenuEntry } from "./solid/menu.tsx";
+import type { MenuControls, MenuEntry } from "./solid/menu.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
+
+registerSessionOrganizationEnglish();
 
 export function useSessionMenuDetails(
   actions: SessionMenuActions,
   readState: () => MenuState,
   disabled: (kind: SessionManagementActionKind) => boolean,
+  controls?: MenuControls,
 ) {
   const ownerSnapshot = actions.ownerMenu.snapshot;
   const ownerStatus = (): MenuEntry[] => {
@@ -90,6 +94,7 @@ export function useSessionMenuDetails(
         ref={nativeListener("click", (event) => event.stopPropagation())}
       >
         <input
+          ref={controls?.ref()}
           type="search"
           data-search
           data-form-control
@@ -213,10 +218,7 @@ export function useSessionMenuDetails(
                             ? t("sessionsView.communication.default")
                             : undefined)
                         }
-                        ref={(element) => {
-                          click(element);
-                          keydown(element);
-                        }}
+                        ref={[controls?.ref(), click, keydown]}
                       >
                         {t(
                           mode === "always"

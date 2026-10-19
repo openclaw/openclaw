@@ -27,7 +27,6 @@ export function renderSidebarSessionIndicators(
   readSession: () => SidebarRecentSession,
   readDisplay?: () => CatalogBackingSessionDisplay | undefined,
   readIcon?: () => JSX.Element,
-  headerSummary?: () => TeamSessionSlotsProps,
 ) {
   const team = createMemo(() => host().sidebarAgentsMode === "roster");
   const ownAttention = createMemo(() => readSession().ownAttention ?? readSession().attention);
@@ -44,13 +43,11 @@ export function renderSidebarSessionIndicators(
   const pullRequest = createMemo(() => {
     const readSessionValue = readSession();
     const initialPullRequestValue = initialPullRequest();
-    return readSessionValue.worktreeId
-      ? host().sessionPullRequests.summary(
-          readSessionValue.key,
-          readSessionValue.worktreeId,
-          initialPullRequestValue,
-        )
-      : initialPullRequestValue;
+    return host().sessionPullRequests.summary(
+      readSessionValue.key,
+      readSessionValue.worktreeId ?? "",
+      initialPullRequestValue,
+    );
   });
   const ownerAttribution = createMemo(() => {
     const readSessionValue = readSession();
@@ -120,15 +117,12 @@ export function renderSidebarSessionIndicators(
       password: gateway()?.connection.password,
     }),
   );
-  const teamSummary = createMemo<TeamSessionSlotsProps>(
-    () =>
-      headerSummary?.() ?? {
-        rows: [readSession()],
-        includeChildren: !childrenExpanded(),
-        childCount: readSession().childSessionKeys.length,
-        runVisibility: sessionRunVisibility,
-      },
-  );
+  const teamSummary = createMemo<TeamSessionSlotsProps>(() => ({
+    rows: [readSession()],
+    includeChildren: !childrenExpanded(),
+    childCount: readSession().childSessionKeys.length,
+    runVisibility: sessionRunVisibility,
+  }));
   const leadingState = renderSessionLeadingState({
     get session() {
       return readSession();
@@ -263,9 +257,6 @@ export function renderSidebarSessionIndicators(
       <>
         {" "}
         <span class="sidebar-recent-session__details-endcap">
-          {headerSummary && (leadingState.visible || readSession().visibility === "draft")
-            ? persistentIndicator
-            : undefined}
           <openclaw-viewer-facepile
             prop:presencePayload={host().sessionData.presencePayload}
             prop:selfUser={host().sessionDataContext?.gateway.snapshot.selfUser}
@@ -312,6 +303,7 @@ export function renderSidebarSessionIndicators(
               outboxAttentionCount={readSession().outboxAttentionCount}
               hasComposerDraft={readSession().hasComposerDraft === true}
               pullRequest={pullRequest()}
+              pullRequestCount={host().sessionPullRequests.count(readSession().key)}
               hasApproval={hasApproval()}
             />
           }

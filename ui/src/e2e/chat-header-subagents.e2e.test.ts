@@ -9,6 +9,7 @@ import {
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails } from "./chat-details.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
@@ -66,11 +67,36 @@ suite.define(() => {
             "session.members.listEvidence",
           ],
         });
+        const activityModule = controlUiE2eBuiltModuleRequest(
+          "ui/src/pages/chat/components/chat-subagent-activity-live.tsx",
+        );
+        const detailsChunk = Promise.withResolvers<void>();
+        await page.route(
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-details-session.tsx"),
+          async (route) => {
+            await detailsChunk.promise;
+            await route.continue();
+          },
+        );
+        const activityChunk = Promise.withResolvers<void>();
+        const activityRequested = Promise.withResolvers<void>();
+        await page.route(activityModule, async (route) => {
+          activityRequested.resolve();
+          await activityChunk.promise;
+          await route.continue();
+        });
+        const activityRequests: string[] = [];
+        page.on("request", (request) => {
+          if (activityModule.test(request.url())) {
+            activityRequests.push(request.url());
+          }
+        });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
         const activePane = page.locator(".chat-pane-cache__pane--active");
         const panel = activePane.locator("openclaw-chat-subagents-panel");
         const waitLine = activePane.locator(".agent-chat__composer-run-status--waiting");
         await activePane.getByText("Ready for delegated work.", { exact: true }).waitFor();
+        expect(activityRequests).toEqual([]);
         expect(await panel.isVisible()).toBe(false);
         expect(await activePane.locator(".chat-pane__actions").getByRole("button").count()).toBe(3);
 
@@ -78,6 +104,12 @@ suite.define(() => {
         const detailsDialog = activePane.getByRole("dialog", { name: "Details", exact: true });
         await details.getByRole("button", { name: "Details", exact: true }).click();
         await detailsDialog.waitFor();
+        await detailsDialog.getByRole("status").filter({ hasText: "Loading…" }).waitFor();
+        detailsChunk.resolve();
+        await detailsDialog.locator(".chat-details-session").waitFor();
+        expect(
+          await detailsDialog.getByRole("status").filter({ hasText: "Loading…" }).count(),
+        ).toBe(0);
         expect(
           await activePane
             .locator(".chat-main__conversation-frame > openclaw-chat-details")
@@ -193,10 +225,19 @@ suite.define(() => {
           state: "final",
           yielded: true,
         });
+        await activityRequested.promise;
+        const pendingStatus = activePane.locator(".chat-working-indicator");
+        await pendingStatus.locator(".chat-reading-indicator").waitFor();
+        expect(await pendingStatus.isVisible()).toBe(true);
+        expect(await pendingStatus.textContent()).toContain("Working");
+        expect(await activePane.locator(".chat-subagent-activity").count()).toBe(0);
+        activityChunk.resolve();
         await activePane
           .locator(".chat-subagent-activity")
           .getByText("Backend review", { exact: true })
           .waitFor();
+        expect(activityRequests).toHaveLength(1);
+        await pendingStatus.waitFor({ state: "hidden" });
         expect(await waitLine.count()).toBe(0);
         expect(await activePane.locator(".chat-working-indicator--subagents").count()).toBe(0);
         expect(await transcriptHeight()).toBe(beforeWaitHeight);

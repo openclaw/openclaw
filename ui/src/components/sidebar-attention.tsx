@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, flush, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, flush, onCleanup, Show } from "solid-js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
@@ -10,7 +10,8 @@ import { projectGateway, projectSidebarAttention } from "../lib/reactive/applica
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { defineSolidBridge } from "../lib/solid-bridge.ts";
+import { createScrollStateRef } from "../lib/reactive/scroll-state.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "../styles/sidebar-attention-floating.css";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { sidebarInboxTabCounts, type SidebarAttentionItem } from "./sidebar-attention-entries.ts";
@@ -28,6 +29,12 @@ export type SidebarAttentionProps = {
   onNavigate?: ApplicationContext["navigate"];
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
 };
+
+export type SidebarAttentionMethods = { dismissPanel(): boolean };
+export type SidebarAttentionElement = SolidBridgeElement<
+  SidebarAttentionProps,
+  SidebarAttentionMethods
+>;
 
 const panelDismissals = new WeakMap<HTMLElement, () => boolean>();
 
@@ -87,10 +94,14 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     return wasOpen;
   });
 
-  const syncOverflowCue = () => {
-    setOverflowAbove(Boolean(list && list.scrollTop > 2));
-    setOverflowBelow(Boolean(list && list.scrollHeight - list.scrollTop - list.clientHeight > 2));
+  const syncOverflowCue = (element: HTMLElement) => {
+    setOverflowAbove(element.scrollTop > 2);
+    setOverflowBelow(element.scrollHeight - element.scrollTop - element.clientHeight > 2);
   };
+  const observeListScroll = createScrollStateRef(syncOverflowCue, {
+    presented: panelOpen,
+    content: attention.revision,
+  });
   const preloadPanel = () => {
     void panelLoad.load().catch(() => undefined);
   };
@@ -129,8 +140,8 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
       }
       if (list) {
         list.scrollTop = 0;
+        syncOverflowCue(list);
       }
-      syncOverflowCue();
     });
   }
   async function open(item: SidebarAttentionItem) {
@@ -213,14 +224,6 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     remaining[Math.min(Math.max(rowIndex, 0), remaining.length - 1)]?.focus();
   }
 
-  createEffect(
-    () => [panelOpen(), selectedTab(), attention.read()],
-    ([isOpen]) => {
-      if (isOpen) {
-        syncOverflowCue();
-      }
-    },
-  );
   onCleanup(listen(document, "pointerdown", handleOutsideInteraction, true));
   onCleanup(listen(document, "keydown", handleOutsideInteraction, true));
   onCleanup(listen(window, "blur", handleWindowBlur));
@@ -276,8 +279,12 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
               (props.onNavigate ?? context.navigate)(route, options);
             }}
             onOpen={(item) => void open(item)}
-            onScroll={syncOverflowCue}
-            listRef={(element) => (list = element)}
+            listRef={(element) => {
+              list = element;
+              if (element) {
+                observeListScroll(element);
+              }
+            }}
             focusRef={(registry) => (panelFocus = registry)}
             onSelectTab={selectTab}
             overflowAbove={overflowAbove()}
@@ -292,10 +299,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   );
 }
 
-export const SidebarAttention = defineSolidBridge<
-  SidebarAttentionProps,
-  { dismissPanel(): boolean }
->(
+export const SidebarAttention = defineSolidBridge<SidebarAttentionProps, SidebarAttentionMethods>(
   "openclaw-sidebar-attention",
   (props, host) =>
     useOptionalApplication() ? renderSidebarAttentionContent(props, host) : props.children,

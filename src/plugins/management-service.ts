@@ -82,7 +82,6 @@ import {
   createPluginCache,
   getPluginCache,
   getProcessPluginCache,
-  retainPluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
 import { resolvePluginConfigEnablement } from "./plugin-config-enablement.js";
@@ -130,17 +129,12 @@ export function loadFreshManagedPluginMetadata(
     const params = configWide
       ? { config, env: capturedEnv }
       : resolveManagedPluginMetadataParams(config, capturedEnv);
-    const release = retainPluginCache(cache);
-    try {
-      const assertCurrent = await preparePluginMetadataMachineStateAsync({ env: capturedEnv });
-      assertCurrent();
-      // Management requires fresh inventory even when a generic reader could reuse boot facts.
-      return configWide
-        ? resolveConfigWidePluginMetadataSnapshot({ ...params, allowCurrent: false })
-        : loadPluginMetadataSnapshot({ ...params, allowCurrent: false });
-    } finally {
-      release();
-    }
+    const assertCurrent = await preparePluginMetadataMachineStateAsync({ env: capturedEnv });
+    assertCurrent();
+    // Management requires fresh inventory even when a generic reader could reuse boot facts.
+    return configWide
+      ? resolveConfigWidePluginMetadataSnapshot({ ...params, allowCurrent: false })
+      : loadPluginMetadataSnapshot({ ...params, allowCurrent: false });
   });
 }
 

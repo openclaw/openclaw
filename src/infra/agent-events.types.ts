@@ -60,6 +60,8 @@ export type AgentAssistantSourceReceipt = {
   itemId?: string;
   /** Undefined until commit; null is durable without an available transcript position. */
   committedMessageSeq?: number | null;
+  /** Exact transcript occurrence assigned by the persistence owner after commit. */
+  committedMessageId?: string;
 };
 
 export type AgentAssistantProjection = {

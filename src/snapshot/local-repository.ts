@@ -26,6 +26,7 @@ import {
   ensureAbsoluteDirectory,
   isPathInside,
 } from "../infra/fs-safe.js";
+import { findGitRoot } from "../infra/git-root.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
@@ -493,7 +494,7 @@ class LocalSqliteSnapshotProvider {
     }
     assertDirectory(repositoryStat, this.#repositoryPath, "SQLite snapshot repository");
 
-    if ((await lstatIfExists(path.join(this.#repositoryPath, ".git")))?.isDirectory()) {
+    if (findGitRoot(this.#repositoryPath, { maxDepth: 1 })) {
       throw new Error(
         `Git backup repository is not a SQLite snapshot repository: ${this.#repositoryPath}. Use \`openclaw backup git log --repository <path>\` instead.`,
       );
@@ -502,20 +503,18 @@ class LocalSqliteSnapshotProvider {
     const entries = await fs.readdir(this.#repositoryPath, { withFileTypes: true });
     const snapshots: SnapshotSummary[] = [];
     for (const entry of entries) {
+      const snapshotPath = path.join(this.#repositoryPath, entry.name);
       if (entry.name.startsWith(".tmp-")) {
         if (entry.isSymbolicLink() || !entry.isDirectory()) {
           throw new Error(
-            `SQLite snapshot repository contains unsafe staging entry: ${path.join(this.#repositoryPath, entry.name)}`,
+            `SQLite snapshot repository contains unsafe staging entry: ${snapshotPath}`,
           );
         }
         continue;
       }
       if (entry.isSymbolicLink() || !entry.isDirectory()) {
-        throw new Error(
-          `SQLite snapshot repository contains unexpected entry: ${path.join(this.#repositoryPath, entry.name)}`,
-        );
+        throw new Error(`SQLite snapshot repository contains unexpected entry: ${snapshotPath}`);
       }
-      const snapshotPath = path.join(this.#repositoryPath, entry.name);
       const snapshotState = await classifySnapshotDirectory(snapshotPath);
       if (snapshotState === "incomplete") {
         continue;

@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
+import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
 import { createMissingReplyNotice } from "../../agents/reply-completion.js";
+import {
+  createSessionMaintenanceFollowup,
+  scheduleSessionMaintenance,
+} from "../../agents/session-maintenance/run.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
@@ -13,7 +18,6 @@ import {
   resolveSourceReplyPolicy,
   normalizeAssistantFinalDeliveryText,
 } from "./agent-runner-core.js";
-import { scheduleReplySessionMaintenance } from "./agent-runner-maintenance.js";
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import type { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
@@ -300,6 +304,60 @@ export async function completeReplyAgentRun(input: {
   const result = returnWithQueuedFollowupDrain(
     finalPayloads.length <= 1 ? finalPayloads[0] : finalPayloads,
   );
-  scheduleReplySessionMaintenance({ context, accounting, sessionEntry: activeSessionEntry });
+  const { replyOperation } = context;
+  const meta = runResult.meta;
+  const auth = context.execution.maintenanceAuthProfile;
+  if (
+    !activeSessionEntry ||
+    !sessionKey ||
+    !storePath ||
+    !accounting.providerUsed ||
+    !replyOperation.lifecycleGeneration ||
+    isHeartbeat ||
+    accounting.preserveUserFacingSessionState ||
+    context.execution.status !== "ok" ||
+    accounting.fallbackExhausted ||
+    autoCompactionCount > 0 ||
+    meta?.aborted ||
+    meta?.yielded ||
+    meta?.error ||
+    meta?.agentMeta?.agentHarnessId !== OPENCLAW_AGENT_RUNTIME_ID ||
+    auth === undefined ||
+    cfg.agents?.defaults?.compaction?.enabled === false
+  ) {
+    return result;
+  }
+  const maintenancePrepared = {
+    cfg,
+    sessionKey,
+    storePath,
+    timeoutMs: followupRun.run.timeoutMs,
+    runtimePolicySessionKey,
+  };
+  // The descriptor has no foreground authority; delivery settlement gates its new owner.
+  scheduleSessionMaintenance(
+    {
+      prepared: maintenancePrepared,
+      followupRun: createSessionMaintenanceFollowup({
+        run: followupRun.run,
+        sessionEntry: activeSessionEntry,
+        cfg,
+        sessionKey,
+        runtimePolicySessionKey: runtimePolicySessionKey ?? followupRun.run.runtimePolicySessionKey,
+        provider: accounting.providerUsed,
+        model: accounting.modelUsed,
+        auth,
+      }),
+      sessionId: activeSessionEntry.sessionId,
+      lifecycleRevision: activeSessionEntry.lifecycleRevision,
+      lifecycleGeneration: replyOperation.lifecycleGeneration,
+      startedAt: replyOperation.startedAtMs,
+      agentHarnessId: meta.agentMeta.agentHarnessId,
+      compactionRequestBudget: context.execution.compactionRequestBudget,
+    },
+    replyOperation.ownerSettlement.then(
+      () => replyOperation.result?.kind === "completed" && !replyOperation.abortSignal.aborted,
+    ),
+  );
   return result;
 }

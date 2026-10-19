@@ -3,6 +3,7 @@ import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
+import { resolveRequestGitCoauthorPrompt } from "../../agents/git-coauthor-prompt.js";
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import {
   isSyntheticSourceReplyTurn,
@@ -23,9 +24,11 @@ import {
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { updateSessionControllerSourcePolicy } from "../../sessions/session-controller.mailbox.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import { hasControlCommand } from "../command-detection.js";
 import {
+  isExplicitFollowupCommandTurn,
   isNativeCommandTurn,
   isTextSlashCommandTurn,
   resolveCommandTurnContext,
@@ -33,6 +36,7 @@ import {
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
+import { getRequesterProfile } from "../requester-profile.js";
 import type { TemplateContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { applySessionHints } from "./body.js";
@@ -310,7 +314,8 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
   const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/i.test(normalizedCommandBody);
   const commandTurn = resolveCommandTurnContext(ctx);
-  const canInterpretCommands = ctx.CommandInterpretationSuppressed !== true;
+  const canInterpretCommands =
+    ctx.CommandInterpretationSuppressed !== true && !isExplicitFollowupCommandTurn(ctx);
   const isRegisteredWholeMessageCommand =
     isWholeMessageCommand && (hasControlCommand(rawBodyTrimmed, cfg) || isResetOrNewCommand);
   const isActiveCommandTurn =
@@ -388,6 +393,15 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     }));
   }
 
+  const requestGitCredit =
+    !isHeartbeat && !isInternalEvent
+      ? await resolveRequestGitCoauthorPrompt({
+          config: cfg,
+          agentId,
+          sessionKey,
+          requesterProfileId: getRequesterProfile(ctx)?.id ?? readSessionInputProfileId(ctx),
+        })
+      : undefined;
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const inboundUserContextSessionCtx = isNewSession
     ? {
@@ -551,7 +565,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
         ? [{ kind: "runtime-instruction" as const, text: deliveryDirective }]
         : []),
     ];
-    const currentInboundContext: CurrentInboundPromptContext | undefined =
+    let currentInboundContext: CurrentInboundPromptContext | undefined =
       !isBareSessionReset && currentInboundContextText
         ? {
             text: currentInboundContextText,
@@ -561,6 +575,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
             ...(activeGoalContext ? { injectedGoalContexts: [activeGoalContext] } : {}),
           }
         : undefined;
+    if (requestGitCredit) {
+      currentInboundContext = appendCurrentInboundContext(currentInboundContext, [
+        { kind: "runtime-instruction", text: requestGitCredit },
+      ]);
+    }
 
     return {
       effectiveBaseBody,

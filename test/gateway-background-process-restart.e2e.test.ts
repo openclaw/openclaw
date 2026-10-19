@@ -13,6 +13,7 @@ import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { killProcessTree } from "../src/process/kill-tree.js";
 import { getFileLockProcessStartTime } from "../src/shared/pid-alive.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
+import { readRestartSession } from "./gateway-restart.test-support.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import {
@@ -328,7 +329,7 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
           signal,
         },
       );
-    const waitForIdleFinal = async (sessionKey: string, final: string) => {
+    const waitForIdleFinal = async (sessionKey: string, final: string, recoverySettled = false) => {
       await withinTest(
         Promise.race([
           vi.waitFor(
@@ -341,6 +342,16 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
               expect(sessions.sessions.find((row) => row.key === sessionKey)).toMatchObject({
                 hasActiveRun: false,
               });
+              if (recoverySettled) {
+                const settled = readRestartSession(instance.state.agentDir(), sessionKey);
+                expect(settled?.status).toBe("done");
+                expect(settled?.abortedLastRun).not.toBe(true);
+                expect(settled?.pendingExecNotifications).toBeUndefined();
+                expect(settled?.restartRecoveryRuns).toBeUndefined();
+                expect(settled?.mainRestartRecovery).toBeUndefined();
+                expect(settled?.restartRecoveryDeliveryRunId).toBeUndefined();
+                expect(settled?.pendingFinalDelivery).toBeUndefined();
+              }
             },
             { timeout: 30_000 },
           ),
@@ -412,7 +423,8 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
         provider.beginRecovery();
         await restart(mode);
         await withinTest(Promise.race([provider.firstRecovery, provider.failed]), signal);
-        await waitForIdleFinal(REVOKED_KEY, REVOKED_FINAL);
+        // The next forced crash must not interrupt this completed recovery's durable settlement.
+        await waitForIdleFinal(REVOKED_KEY, REVOKED_FINAL, true);
         if (mode === "SIGKILL") {
           // The first successor has adopted the notice and is waiting on its model response.
           await restart("SIGKILL");

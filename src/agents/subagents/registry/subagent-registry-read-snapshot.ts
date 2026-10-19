@@ -4,6 +4,7 @@ import {
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import {
   getSubagentSessionReadLookup,
   immutableSubagentRunSessionList,
@@ -138,7 +139,8 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
   const compact = context
     ? await prepareSubagentRunsCache(compactCache, readCompactSubagentRuns)
     : new Map<string, SubagentRunReadRecord>();
-  const selected = select(withLiveFacts(compact));
+  const initialSnapshot = withLiveFacts(compact);
+  const selected = select(initialSnapshot);
   const scope = selectionScope(selected);
   const resident = context ? acceptedFullSnapshot(fullCache, context) : undefined;
   const preparedPayloads = mergeSelectedFullRuns(
@@ -148,7 +150,7 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
     scope.matches,
     {
       context,
-      runIds: scope.sessionKeys.size ? undefined : scope.runIds,
+      runIds: scope.sessionKeys.size ? new Set(initialSnapshot.keys()) : scope.runIds,
     },
   );
   const residentPayloads = new Map(preparedPayloads);
@@ -255,9 +257,10 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
   inMemoryRuns: Map<string, SubagentRunRecord>;
   fullCache: SubagentRunsCache<SubagentRunRecord>;
   sessionKeys: readonly string[];
+  context?: OpenClawStateWorkerContext;
 }): Promise<PreparedSubagentSessionsRead> {
   const { inMemoryRuns, fullCache } = params;
-  const context = captureOpenClawStateWorkerContext();
+  const context = params.context ?? captureOpenClawStateWorkerContext();
   const signal = getAsyncWorkSignal();
   const roots = Object.freeze(
     [...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean))].toSorted(),

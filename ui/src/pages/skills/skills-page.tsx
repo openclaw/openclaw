@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createStore, onCleanup } from "solid-js";
+import { createEffect, createMemo, createStore, onCleanup, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -89,6 +89,11 @@ export type SkillsPageProps = { routeData?: SkillsRouteData; surface?: "discover
 export function SkillsPage(props: SkillsPageProps) {
   const context = useApplication();
   const surface = () => props.surface ?? "settings";
+  // The synchronous request owner admits live surface props at the effect boundary.
+  let admittedSurface: ReturnType<typeof surface> | undefined;
+  let lastSearchScope:
+    | readonly [GatewayBrowserClient | null, boolean, number, ReturnType<typeof surface>]
+    | undefined;
   const [local, setLocal] = createStore<SkillsPresentation>({
     skillsFilter: "",
     skillsStatusFilter: "all",
@@ -96,6 +101,7 @@ export function SkillsPage(props: SkillsPageProps) {
     skillsDetailTab: "overview",
     clawhubSearchQuery: "",
   });
+  let active = true;
   let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
   let routeDataInitialized = false;
   let routeDataEnabled = true;
@@ -103,10 +109,10 @@ export function SkillsPage(props: SkillsPageProps) {
   const skills = observeSkillState<SkillsState>({
     ...createSkillsData(),
     get client() {
-      return gateway.client;
+      return context.gateway.snapshot.client;
     },
     get connected() {
-      return gateway.connected;
+      return context.gateway.snapshot.phase === "connected";
     },
     get runtimeConfig() {
       return context.runtimeConfig;
@@ -118,8 +124,8 @@ export function SkillsPage(props: SkillsPageProps) {
       data.clawhubSearchLoading = searchRequest.pending;
     },
     {
-      task: (client: GatewayBrowserClient, { signal }) =>
-        searchClawHub(client, local.clawhubSearchQuery, signal),
+      task: ({ client, query }: { client: GatewayBrowserClient; query: string }, { signal }) =>
+        searchClawHub(client, query, signal),
       onComplete: (results) => {
         data.clawhubSearchResults = results;
       },
@@ -163,7 +169,7 @@ export function SkillsPage(props: SkillsPageProps) {
     ensureInitialData: (change) => {
       if (change.becameConnected && !change.initial) {
         void loadSkills(data);
-        void library.load();
+        void library.load(change.snapshot);
       }
       ensureInitialData();
     },
@@ -177,98 +183,132 @@ export function SkillsPage(props: SkillsPageProps) {
   const clawhubIcons = new PluginIconOwner({
     kind: "catalog",
     getFetchContext: () => pluginIconFetchContext(context),
-    isConnected: () => gateway.connected,
+    isConnected: () => context.gateway.snapshot.phase === "connected",
     onUrlsChange: (urls) => {
       data.clawhubIconUrls = urls;
     },
   });
   const agents = projectAgents(context.agents);
-  // Agent and route receipts retarget the skills owner and its Gateway reads.
-  createEffect(
-    () => agents.revision(),
-    () => {
-      reconcileAgentState();
+  const syncSelection = () => {
+    if (!admittedSurface) {
+      return;
+    }
+    const previous = data.skillsAgentId;
+    reconcileAgentState();
+    if (routeDataInitialized && previous !== data.skillsAgentId) {
+      routeDataEnabled = false;
       ensureInitialData();
-    },
-  );
-
+    }
+  };
+  // Route receipts admit loader data; changing surface only retargets its selection owner.
   createEffect(
-    () => agentSelection(),
-    (selection) => {
-      const sync = () => {
-        const previous = data.skillsAgentId;
-        reconcileAgentState();
-        if (routeDataInitialized && previous !== data.skillsAgentId) {
-          routeDataEnabled = false;
-          ensureInitialData();
+    () => ({
+      route: props.routeData,
+      surface: surface(),
+      client: gateway.client,
+      connected: gateway.connected,
+      epoch: gateway.epoch,
+      query: local.clawhubSearchQuery,
+    }),
+    (current, previous) => {
+      if (!previous || current.route !== previous.route || current.surface !== previous.surface) {
+        admittedSurface = current.surface;
+        syncSelection();
+        if (!previous || current.route !== previous.route) {
+          applyRouteData(current.route);
         }
-      };
-      // Each agent transition retires prior skill requests, preserving A-to-B-to-A changes before rendering.
-      const cleanup = selection.subscribe(sync);
-      sync();
-      return cleanup;
-    },
-  );
-  createEffect(
-    () => props.routeData,
-    () => {
-      applyRouteData();
-      ensureInitialData();
-    },
-  );
-  // Keep the catalog image cache aligned with the currently loaded ClawHub entries.
-  createEffect(
-    () => [skills.read().clawhubSearchResults, skills.read().clawhubDetail] as const,
-    () => {
-      clawhubIcons.syncCatalog(
-        [],
-        [
-          ...(data.clawhubSearchResults ?? []).flatMap((result) =>
-            result.icon ? [result.icon] : [],
-          ),
-          ...(data.clawhubDetail?.skill?.icon ? [data.clawhubDetail.skill.icon] : []),
-          ...(data.clawhubDetail?.owner?.image ? [data.clawhubDetail.owner.image] : []),
-        ],
+        ensureInitialData();
+      }
+      syncSearch(
+        [current.client, current.connected, current.epoch, current.surface],
+        current.query,
       );
     },
   );
-  const searchContext = createMemo(
-    () => [gateway.client, gateway.connected, gateway.epoch, surface()] as const,
-    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
-  );
-  createEffect(searchContext, ([, connected]) => {
-    // Gateway binding can connect first; restart the cancellable ClawHub request on connection.
-    if (connected) {
-      void runSearch();
-    }
+  onSettled(() => {
+    const stopAgents = agents.subscribe(() => {
+      reconcileAgentState();
+      ensureInitialData();
+    });
+    const selections = new Set([context.settingsAgentSelection, context.agentSelection]);
+    const stopSelections = Array.from(selections, (selection) =>
+      selection.subscribe(() => {
+        if (selection === agentSelection()) {
+          syncSelection();
+        }
+      }),
+    );
+    let previousResults: SkillsState["clawhubSearchResults"] | undefined;
+    let previousDetail: SkillsState["clawhubDetail"] | undefined;
+    const syncIcons = () => {
+      if (!active) {
+        return;
+      }
+      const results = data.clawhubSearchResults;
+      const detail = data.clawhubDetail;
+      if (results === previousResults && detail === previousDetail) {
+        return;
+      }
+      previousResults = results;
+      previousDetail = detail;
+      clawhubIcons.syncCatalog(
+        [],
+        [
+          ...(results ?? []).flatMap((result) => (result.icon ? [result.icon] : [])),
+          ...(detail?.skill?.icon ? [detail.skill.icon] : []),
+          ...(detail?.owner?.image ? [detail.owner.image] : []),
+        ],
+      );
+    };
+    const stopSkills = skills.subscribe(() => onSettled(syncIcons));
+    syncSelection();
+    syncIcons();
+    return () => {
+      stopAgents();
+      stopSelections.forEach((stop) => stop());
+      stopSkills();
+    };
   });
   onCleanup(() => {
+    active = false;
     clearClawHubSearchTimer();
     searchRequest.cancel();
     skills.dispose();
     clawhubIcons.reset();
   });
 
-  async function runSearch() {
+  function syncSearch(scope: NonNullable<typeof lastSearchScope>, query: string) {
+    if (lastSearchScope?.every((value, index) => value === scope[index])) {
+      return;
+    }
+    lastSearchScope = scope;
+    if (scope[1]) {
+      void runSearch(query);
+    }
+  }
+
+  async function runSearch(query: string) {
     searchRequest.cancel();
     data.clawhubSearchError = null;
-    data.clawhubSearchLoading = gateway.connected && canReadSkills() && surface() === "discovery";
-    const client = gateway.client;
+    const snapshot = context.gateway.snapshot;
+    data.clawhubSearchLoading =
+      snapshot.phase === "connected" && canReadSkills() && admittedSurface === "discovery";
+    const client = snapshot.client;
     if (!data.clawhubSearchLoading || !client || clawhubSearchTimer) {
       return;
     }
-    await searchRequest.run(client);
+    await searchRequest.run({ client, query });
   }
 
   function agentSelection() {
-    return surface() === "settings" ? context.settingsAgentSelection : context.agentSelection;
+    return admittedSurface === "settings" ? context.settingsAgentSelection : context.agentSelection;
   }
 
   function reconcileAgentState() {
     const agentState = context.agents.state;
     const previousAgentId = data.skillsAgentId;
     setSkillsAgentId(data, agentSelection().state.selectedId);
-    if (surface() === "discovery" && agentState.agentsList) {
+    if (admittedSurface === "discovery" && agentState.agentsList) {
       reconcileSkillsAgentId(data, agentState.agentsList);
     }
     if (previousAgentId !== data.skillsAgentId) {
@@ -305,8 +345,7 @@ export function SkillsPage(props: SkillsPageProps) {
     clawhubIcons.reset();
   }
 
-  function applyRouteData() {
-    const route = props.routeData;
+  function applyRouteData(route: SkillsRouteData | undefined) {
     if (!route) {
       return;
     }
@@ -345,13 +384,17 @@ export function SkillsPage(props: SkillsPageProps) {
   }
 
   function ensureInitialData() {
-    if (!canReadSkills()) {
+    if (!admittedSurface || !canReadSkills()) {
       return;
     }
-    if (!library.state.list && !library.state.loading && !library.state.error) {
-      void library.load();
-    }
-    if (routeDataEnabled || !routeDataInitialized || !gateway.connected || !gateway.client) {
+    const snapshot = context.gateway.snapshot;
+    library.ensureLoaded(snapshot);
+    if (
+      routeDataEnabled ||
+      !routeDataInitialized ||
+      snapshot.phase !== "connected" ||
+      !snapshot.client
+    ) {
       return;
     }
     const agentState = context.agents.state;
@@ -368,7 +411,7 @@ export function SkillsPage(props: SkillsPageProps) {
   }
 
   function canReadSkills() {
-    return hasOperatorReadAccess(gateway.snapshot?.hello?.auth ?? null);
+    return hasOperatorReadAccess(context.gateway.snapshot.hello?.auth ?? null);
   }
 
   async function loadAgents() {
@@ -395,7 +438,7 @@ export function SkillsPage(props: SkillsPageProps) {
     searchRequest.cancel();
     clawhubSearchTimer = setTimeout(() => {
       clawhubSearchTimer = null;
-      void runSearch();
+      void runSearch(query);
     }, 300);
   }
 

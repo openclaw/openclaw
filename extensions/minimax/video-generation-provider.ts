@@ -1,4 +1,4 @@
-import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveImageSourceUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
@@ -19,7 +19,6 @@ import {
   normalizeVideoGenerationDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
-  type VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   assertMinimaxBaseResp,
@@ -66,21 +65,6 @@ type MinimaxFileRetrieveResponse = {
   base_resp?: MinimaxBaseResp;
 };
 
-function resolveFirstFrameImage(req: VideoGenerationRequest): string | undefined {
-  const input = req.inputImages?.[0];
-  if (!input) {
-    return undefined;
-  }
-  const inputUrl = normalizeOptionalString(input.url);
-  if (inputUrl) {
-    return inputUrl;
-  }
-  if (!input.buffer) {
-    throw new Error("MiniMax image-to-video input is missing image data.");
-  }
-  return toImageDataUrl({ ...input, buffer: input.buffer, defaultMimeType: "image/png" });
-}
-
 function resolveDurationSeconds(params: {
   model: string;
   durationSeconds: number | undefined;
@@ -89,7 +73,9 @@ function resolveDurationSeconds(params: {
   if (rounded === undefined) {
     return undefined;
   }
-  const allowed = MINIMAX_MODEL_ALLOWED_DURATIONS[params.model];
+  const allowed = Object.hasOwn(MINIMAX_MODEL_ALLOWED_DURATIONS, params.model)
+    ? MINIMAX_MODEL_ALLOWED_DURATIONS[params.model]
+    : undefined;
   if (!allowed || allowed.length === 0) {
     return rounded;
   }
@@ -106,7 +92,9 @@ function resolveResolution(params: {
   if (!requested) {
     return undefined;
   }
-  const allowed = MINIMAX_MODEL_ALLOWED_RESOLUTIONS[params.model];
+  const allowed = Object.hasOwn(MINIMAX_MODEL_ALLOWED_RESOLUTIONS, params.model)
+    ? MINIMAX_MODEL_ALLOWED_RESOLUTIONS[params.model]
+    : undefined;
   if (!allowed || allowed.length === 0 || allowed.includes(requested)) {
     return requested;
   }
@@ -138,7 +126,6 @@ function resolveResolution(params: {
 async function downloadVideoFromUrl(params: {
   url: string;
   timeoutMs?: ProviderOperationTimeoutMs;
-  fetchFn: typeof fetch;
   maxBytes: number;
   policy: MinimaxRequestPolicy;
 }): Promise<GeneratedVideoAsset> {
@@ -146,7 +133,7 @@ async function downloadVideoFromUrl(params: {
     url: params.url,
     timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-    fetchFn: params.fetchFn,
+    fetchFn: fetch,
     provider: "minimax",
     label: "MiniMax generated video download",
     requestFailedMessage: "MiniMax generated video download failed",
@@ -159,7 +146,6 @@ async function downloadVideoFromUrl(params: {
         url: params.url,
         init: { method: "GET" },
         timeoutMs,
-        fetchFn: params.fetchFn,
         requestFailedMessage: "MiniMax generated video download failed",
         policy: params.policy,
       }),
@@ -171,7 +157,6 @@ async function downloadVideoFromFileId(params: {
   headers: Headers;
   timeoutMs?: ProviderOperationTimeoutMs;
   baseUrl: string;
-  fetchFn: typeof fetch;
   maxBytes: number;
   policy: MinimaxRequestPolicy;
 }): Promise<GeneratedVideoAsset> {
@@ -193,7 +178,6 @@ async function downloadVideoFromFileId(params: {
       headers: params.headers,
     },
     timeoutMs: metadataTimeoutMs,
-    fetchFn: params.fetchFn,
     requestFailedMessage: "MiniMax generated video metadata request failed",
     policy: params.policy,
   });
@@ -221,7 +205,6 @@ async function downloadVideoFromFileId(params: {
   const video = await downloadVideoFromUrl({
     url: downloadUrl,
     timeoutMs: params.timeoutMs,
-    fetchFn: params.fetchFn,
     maxBytes: params.maxBytes,
     policy: params.policy,
   });
@@ -274,7 +257,6 @@ export function buildMinimaxVideoGenerationProvider(
       if ((req.inputVideos?.length ?? 0) > 0) {
         throw new Error("MiniMax video generation does not support video reference inputs.");
       }
-      const fetchFn = fetch;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveMinimaxMediaRequestConfig({
           cfg: req.cfg,
@@ -293,7 +275,10 @@ export function buildMinimaxVideoGenerationProvider(
         model,
         prompt: req.prompt,
       };
-      const firstFrameImage = resolveFirstFrameImage(req);
+      const firstFrameImage = resolveImageSourceUrl(
+        req.inputImages?.[0],
+        "MiniMax image-to-video input is missing image data.",
+      );
       if (firstFrameImage) {
         body.first_frame_image = firstFrameImage;
       }
@@ -319,7 +304,7 @@ export function buildMinimaxVideoGenerationProvider(
           deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         }),
-        fetchFn,
+        fetchFn: fetch,
         allowPrivateNetwork,
         dispatcherPolicy,
         errorLabel: "MiniMax video generation failed",
@@ -359,7 +344,6 @@ export function buildMinimaxVideoGenerationProvider(
               headers,
             },
             timeoutMs: resolveTimeoutMs,
-            fetchFn,
             requestFailedMessage: "MiniMax video status request failed",
             policy: requestPolicy,
           });
@@ -394,7 +378,6 @@ export function buildMinimaxVideoGenerationProvider(
           deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         }),
-        fetchFn,
         maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         policy: requestPolicy,
       };

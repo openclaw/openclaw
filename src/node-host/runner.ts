@@ -18,12 +18,12 @@ import {
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { logInfo } from "../logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
-import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
 import { canReuseNodeHostDeviceToken } from "./gateway-auth.js";
@@ -522,7 +522,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
           failures.push(error);
         }
       }
-      throwNodeHostCleanupErrors(failures, "node host shutdown cleanup failed");
+      throwCollectedErrors(failures, "node host shutdown cleanup failed");
     } finally {
       clearInterval(lifetimeInterval);
     }

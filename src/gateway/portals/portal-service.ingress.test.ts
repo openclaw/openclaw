@@ -1,21 +1,18 @@
-import { Agent, request, type Server } from "node:http";
+import { Agent } from "node:http";
 import { createConnection } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as advertisedLanHost from "../../infra/advertised-lan-host.js";
 import { claimTailscaleServePort, type TailscaleRouteClaim } from "../../infra/tailscale.js";
-import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
-import * as httpListen from "../server/http-listen.js";
 import { prepareTailscalePublishedOrigin } from "../tailscale-published-origin.js";
-import { createGatewayPortalService, type GatewayPortalService } from "./portal-service.js";
+import { holdPortalBind, authority, requestText, usePortalHarness } from "./portal.test-support.js";
 
 // Every managed route operation is fake: these tests must never change the host's tailnet.
 vi.mock("../../infra/tailscale.js", () => ({ claimTailscaleServePort: vi.fn() }));
 
-const services: GatewayPortalService[] = [];
+const { target, makeService } = usePortalHarness();
 const withdraw: Array<() => void> = [];
-afterEach(async () => {
-  await Promise.all(services.splice(0).map((service) => service.closeAll()));
+afterEach(() => {
   for (const release of withdraw.splice(0)) {
     release();
   }
@@ -23,22 +20,12 @@ afterEach(async () => {
   vi.mocked(claimTailscaleServePort).mockReset();
 });
 
-function makeService(options: Partial<Parameters<typeof createGatewayPortalService>[0]> = {}) {
-  const httpServers: Server[] = [];
-  const service = createGatewayPortalService({
-    httpBindHosts: ["127.0.0.1"],
-    httpServers,
-    ...options,
-  });
-  services.push(service);
-  return { service, httpServers };
+function wildcardService(httpBindHosts = ["127.0.0.1"]) {
+  return makeService({ httpBindHosts, ingress: { domain: "preview.test", port: 0 } });
 }
 
 function publishManaged(mode: "serve" | "funnel" = "serve") {
-  const release = prepareTailscalePublishedOrigin({
-    origin: "https://gateway.example.ts.net",
-    mode,
-  });
+  const release = prepareTailscalePublishedOrigin({ origin: "https://gw.ts.net", mode });
   withdraw.push(release);
   return release;
 }
@@ -60,132 +47,82 @@ function fakeClaim() {
 
 async function ingressRequest(port: number, url: string, host?: string) {
   const parsed = new URL(url);
-  const authority = new URL(`http://${host ?? parsed.host}`);
+  const destination = new URL(`http://${host ?? parsed.host}`);
   const agent = new Agent({ keepAlive: false });
   agent.createConnection = () => createConnection({ host: "127.0.0.1", port });
-  return await new Promise<{ status: number; body: string; cookie: string[]; location?: string }>(
-    (resolve, reject) => {
-      const req = request(
-        {
-          // Preserve the tested HTTP authority while routing only the test socket
-          // to the private ingress listener (no DNS or external network needed).
-          hostname: authority.hostname,
-          port: authority.port || 80,
-          path: `${parsed.pathname}${parsed.search}`,
-          headers: { host: host ?? parsed.host },
-          agent,
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-          res.on("end", () =>
-            resolve({
-              status: res.statusCode ?? 0,
-              body: Buffer.concat(chunks).toString(),
-              cookie: res.headers["set-cookie"] ?? [],
-              location: res.headers.location,
-            }),
-          );
-        },
-      );
-      req.on("error", reject);
-      req.end();
-    },
-  );
+  const response = await requestText(new URL(`${parsed.pathname}${parsed.search}`, destination), {
+    headers: { host: host ?? parsed.host },
+    agent,
+  });
+  return {
+    ...response,
+    cookie: response.headers["set-cookie"] ?? [],
+    location: response.headers.location,
+  };
 }
 
-describe("operator-managed private wildcard portal ingress", () => {
+describe("private portal ingress", () => {
   it("publishes authoritative HTTPS paths on random per-lifetime hosts and gates every target", async () => {
-    await withServer(
-      (req, res) => {
-        res.setHeader("Set-Cookie", ["session=ok; Path=/", "restricted=ok; SameSite=Strict"]);
-        res.end(JSON.stringify({ path: req.url, proto: req.headers["x-forwarded-proto"] }));
-      },
-      async (targetUrl) => {
-        const { service, httpServers } = makeService({
-          httpBindHosts: ["0.0.0.0"],
-          ingress: { domain: "previews.example.net", port: 0 },
-        });
-        const resolveHost = vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore");
-        const targetPort = Number(new URL(targetUrl).port);
-        const first = await service.open({ targetPort, path: "/nested/start?theme=dark" });
-        expect(first.publicUrl).toMatch(
-          /^https:\/\/[a-f0-9]{32}\.previews\.example\.net\/nested\/start\?theme=dark$/u,
-        );
-        expect(first.publicUrl).not.toContain("openclaw_portal");
-        expect(httpServers).toHaveLength(1);
-        expect(httpServers[0]?.address()).toMatchObject({
-          address: "127.0.0.1",
-          port: first.listenPort,
-        });
-        const response = await ingressRequest(first.listenPort, first.url);
-        expect(response.status).toBe(200);
-        expect(JSON.parse(response.body)).toEqual({
-          path: "/nested/start?theme=dark",
-          proto: "https",
-        });
-        expect(response.cookie.join(";")).toContain("HttpOnly");
-        expect(response.cookie.join(";")).toContain("Secure");
-        const authCookie = response.cookie.find((cookie) => cookie.startsWith("openclaw_portal_"));
-        expect(authCookie).toContain("SameSite=None; Partitioned");
-        const appCookie = response.cookie.find((cookie) => cookie.includes("_session="));
-        expect(appCookie).toContain("SameSite=None; Secure; Partitioned");
-        const restrictedCookie = response.cookie.find((cookie) => cookie.includes("_restricted="));
-        expect(restrictedCookie).toContain("SameSite=Strict");
-        expect(restrictedCookie).not.toContain("SameSite=None");
-        expect((await ingressRequest(first.listenPort, first.publicUrl)).status).toBe(401);
-        expect(
-          (await ingressRequest(first.listenPort, first.url, "unknown.previews.example.net"))
-            .status,
-        ).toBe(404);
-        expect(
-          (await ingressRequest(first.listenPort, first.url, "gateway.example.net")).status,
-        ).toBe(404);
-        expect(
-          (await ingressRequest(first.listenPort, first.url, `${new URL(first.url).hostname}:8443`))
-            .status,
-        ).toBe(404);
-        const reused = await service.open({ targetPort, path: "/updated" });
-        expect(new URL(reused.url).origin).toBe(new URL(first.url).origin);
-        expect(reused.publicUrl).toBe(`${new URL(first.url).origin}/updated`);
-        await service.close(first.id);
-        expect((await ingressRequest(first.listenPort, first.url)).status).toBe(404);
-        const reopened = await service.open({ targetPort });
-        expect(new URL(reopened.url).hostname).not.toBe(new URL(first.url).hostname);
-        expect((await ingressRequest(first.listenPort, first.url)).status).toBe(404);
-        expect(claimTailscaleServePort).not.toHaveBeenCalled();
-        expect(resolveHost).not.toHaveBeenCalled();
-      },
-    );
+    target.handler = (req, res) => {
+      res.setHeader("Set-Cookie", ["session=ok; Path=/", "restricted=ok; SameSite=Strict"]);
+      res.end(JSON.stringify({ path: req.url, proto: req.headers["x-forwarded-proto"] }));
+    };
+    const { service, httpServers } = wildcardService(["0.0.0.0"]);
+    const resolveHost = vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore");
+    const targetPort = target.port;
+    const first = await service.open({ targetPort, path: "/a/b?x=1" });
+    expect(first.publicUrl).toMatch(/^https:\/\/[a-f0-9]{32}\.preview\.test\/a\/b\?x=1$/u);
+    expect(httpServers).toHaveLength(1);
+    expect(httpServers[0]?.address()).toMatchObject({
+      address: "127.0.0.1",
+      port: first.listenPort,
+    });
+    expect(first.exposure).toEqual({ kind: "non-loopback", browserReachability: "unverified" });
+    const response = await ingressRequest(first.listenPort, first.url);
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ path: "/a/b?x=1", proto: "https" });
+    expect(response.cookie.join(";")).toContain("HttpOnly");
+    expect(response.cookie.join(";")).toContain("Secure");
+    const authCookie = response.cookie.find((cookie) => cookie.startsWith("openclaw_portal_"));
+    expect(authCookie).toContain("SameSite=None; Partitioned");
+    const appCookie = response.cookie.find((cookie) => cookie.includes("_session="));
+    expect(appCookie).toContain("SameSite=None; Secure; Partitioned");
+    const restrictedCookie = response.cookie.find((cookie) => cookie.includes("_restricted="));
+    expect(restrictedCookie).toContain("SameSite=Strict");
+    expect(restrictedCookie).not.toContain("SameSite=None");
+    expect((await ingressRequest(first.listenPort, first.publicUrl)).status).toBe(401);
+    for (const host of [
+      "unknown.preview.test",
+      "gateway.example.net",
+      `${new URL(first.url).hostname}:8443`,
+    ]) {
+      expect((await ingressRequest(first.listenPort, first.url, host)).status).toBe(404);
+    }
+    const reused = await service.open({ targetPort, path: "/updated" });
+    expect(reused.publicUrl).toBe(`${new URL(first.url).origin}/updated`);
+    await service.close(first.id);
+    expect((await ingressRequest(first.listenPort, first.url)).status).toBe(404);
+    const reopened = await service.open({ targetPort });
+    expect(new URL(reopened.url).hostname).not.toBe(new URL(first.url).hostname);
+    expect((await ingressRequest(first.listenPort, first.url)).status).toBe(404);
+    expect(claimTailscaleServePort).not.toHaveBeenCalled();
+    expect(resolveHost).not.toHaveBeenCalled();
   });
 
-  it.each(["http://localhost", "//127.0.0.1"])(
-    "clears the backend port from wildcard redirects using %s",
-    async (prefix) => {
-      let targetPort = 0;
-      await withServer(
-        (_req, res) => {
-          res.writeHead(302, { Location: `${prefix}:${targetPort}/next?q=1#section` });
-          res.end();
-        },
-        async (targetUrl) => {
-          targetPort = Number(new URL(targetUrl).port);
-          const { service } = makeService({
-            ingress: { domain: "previews.example.net", port: 0 },
-          });
-          const portal = await service.open({ targetPort });
-          const response = await ingressRequest(portal.listenPort, portal.url);
-          expect(response.status).toBe(302);
-          expect(response.location).toBe(`${new URL(portal.publicUrl).origin}/next?q=1#section`);
-        },
-      );
-    },
-  );
+  it.each(["http://localhost", "//127.0.0.1"])("rewrites %s redirects", async (prefix) => {
+    const targetPort = target.port;
+    target.handler = (_req, res) => {
+      res.writeHead(302, { Location: `${prefix}:${targetPort}/next?q=1#section` }).end();
+    };
+    const { service } = wildcardService();
+    const portal = await service.open({ targetPort });
+    const response = await ingressRequest(portal.listenPort, portal.url);
+    expect(response.status).toBe(302);
+    expect(response.location).toBe(`${new URL(portal.publicUrl).origin}/next?q=1#section`);
+  });
 
   it("shares listener startup across concurrent opens and closes only the selected portal", async () => {
-    const { service, httpServers } = makeService({
-      ingress: { domain: "previews.example.net", port: 0 },
-    });
+    const { service, httpServers } = wildcardService();
     const [first, second] = await Promise.all([
       service.open({ targetPort: 3000 }),
       service.open({ targetPort: 4000 }),
@@ -202,22 +139,13 @@ describe("operator-managed private wildcard portal ingress", () => {
   });
 
   it("settles an in-flight ingress bind before whole-service teardown", async () => {
-    const started = createDeferred();
-    const release = createDeferred();
-    const actual = httpListen.listenGatewayHttpServer;
-    vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
-      started.resolve();
-      await release.promise;
-      await actual(params);
-    });
-    const { service, httpServers } = makeService({
-      ingress: { domain: "previews.example.net", port: 0 },
-    });
+    const bind = holdPortalBind();
+    const { service, httpServers } = wildcardService();
     const opening = service.open({ targetPort: 3000 });
     const rejected = expect(opening).rejects.toThrow("portals unavailable");
-    await started.promise;
+    await bind.started;
     const closing = service.closeAll();
-    release.resolve();
+    bind.release();
     await rejected;
     await closing;
     expect(service.list()).toEqual([]);
@@ -232,50 +160,42 @@ describe("operator-managed private wildcard portal ingress", () => {
       }),
     ).toThrow("separate DNS domain");
   });
-});
-
-describe("managed private Serve portal ingress", () => {
   it("uses a private Serve claim with partitioned cookies even for a Funnel Gateway", async () => {
-    await withServer(
-      (_, res) => {
-        res.setHeader("Set-Cookie", "session=ok; Path=/");
-        res.end("app");
-      },
-      async (targetUrl) => {
-        const resolveHost = vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore");
-        publishManaged("funnel");
-        const { claim } = fakeClaim();
-        vi.mocked(claimTailscaleServePort).mockResolvedValue(claim);
-        const { service, httpServers } = makeService({
-          managedTailscale: true,
-          httpBindHosts: ["0.0.0.0"],
-        });
-        const targetPort = Number(new URL(targetUrl).port);
-        const portal = await service.open({ targetPort, path: "/app" });
-        expect(portal.publicUrl).toBe(`https://gateway.example.ts.net:${portal.listenPort}/app`);
-        expect(claimTailscaleServePort).toHaveBeenCalledExactlyOnceWith(
-          portal.listenPort,
-          portal.listenPort,
-          expect.any(Function),
-        );
-        expect(httpServers[0]?.address()).toMatchObject({ address: "127.0.0.1" });
-        expect(portal.listenPort).not.toBe(443);
-        const response = await ingressRequest(portal.listenPort, portal.url);
-        expect(response.status).toBe(200);
-        expect(response.cookie).toHaveLength(2);
-        for (const cookie of response.cookie) {
-          expect(cookie).toContain("SameSite=None");
-          expect(cookie).toContain("Secure");
-          expect(cookie).toContain("Partitioned");
-        }
-        await service.open({ targetPort });
-        expect(claimTailscaleServePort).toHaveBeenCalledTimes(1);
-        await service.close(portal.id);
-        expect(claim.stop).toHaveBeenCalledOnce();
-        expect(service.list()).toEqual([]);
-        expect(resolveHost).not.toHaveBeenCalled();
-      },
+    target.handler = (_, res) => {
+      res.setHeader("Set-Cookie", "session=ok; Path=/");
+      res.end("app");
+    };
+    const resolveHost = vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore");
+    publishManaged("funnel");
+    const { claim } = fakeClaim();
+    vi.mocked(claimTailscaleServePort).mockResolvedValue(claim);
+    const { service, httpServers } = makeService({
+      managedTailscale: true,
+      httpBindHosts: ["0.0.0.0"],
+    });
+    const targetPort = target.port;
+    const portal = await service.open({ targetPort, path: "/app" });
+    expect(portal.publicUrl).toBe(`https://gw.ts.net:${portal.listenPort}/app`);
+    expect(claimTailscaleServePort).toHaveBeenCalledExactlyOnceWith(
+      portal.listenPort,
+      portal.listenPort,
+      expect.any(Function),
     );
+    expect(httpServers[0]?.address()).toMatchObject({ address: "127.0.0.1" });
+    const response = await ingressRequest(portal.listenPort, portal.url);
+    expect(response.status).toBe(200);
+    expect(response.cookie).toHaveLength(2);
+    for (const cookie of response.cookie) {
+      expect(cookie).toContain("SameSite=None");
+      expect(cookie).toContain("Secure");
+      expect(cookie).toContain("Partitioned");
+    }
+    await service.open({ targetPort });
+    expect(claimTailscaleServePort).toHaveBeenCalledTimes(1);
+    await service.close(portal.id);
+    expect(claim.stop).toHaveBeenCalledOnce();
+    expect(service.list()).toEqual([]);
+    expect(resolveHost).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -284,14 +204,14 @@ describe("managed private Serve portal ingress", () => {
     ["revoked", "authority revoked"],
   ])("rolls back unpublished resources when the managed route is %s", async (state, message) => {
     const { claim } = fakeClaim();
-    let current = true;
+    const guard = authority(message);
     if (state !== "absent") {
       publishManaged();
       vi.mocked(claimTailscaleServePort).mockImplementation(async () => {
         if (state === "failed") {
           throw new Error(message);
         }
-        current = false;
+        guard.current = false;
         return claim;
       });
     }
@@ -301,11 +221,7 @@ describe("managed private Serve portal ingress", () => {
       service.open({
         targetPort: 3000,
         onClose: releaseTarget,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error(message);
-          }
-        },
+        assertCurrent: guard.assertCurrent,
       }),
     ).rejects.toThrow(message);
     expect(releaseTarget).toHaveBeenCalledOnce();
@@ -318,27 +234,24 @@ describe("managed private Serve portal ingress", () => {
     }
   });
 
-  it.each(["claim", "gateway"])(
-    "withdraws publication and closes resources after %s owner loss",
-    async (loss) => {
-      const withdrawGateway = publishManaged();
-      const { claim, lose } = fakeClaim();
-      vi.mocked(claimTailscaleServePort).mockResolvedValue(claim);
-      const { service, httpServers } = makeService({ managedTailscale: true });
-      const releaseTarget = vi.fn();
-      await service.open({ targetPort: 3000, onClose: releaseTarget });
-      const listener = httpServers[0];
-      if (loss === "claim") {
-        lose();
-      } else {
-        withdrawGateway();
-      }
-      expect(service.list()).toEqual([]);
-      // Explicit close joins the owner teardown instead of polling the event loop.
-      await service.close("p3000");
-      expect(claim.stop).toHaveBeenCalledOnce();
-      expect(releaseTarget).toHaveBeenCalledOnce();
-      expect(listener?.listening).toBe(false);
-    },
-  );
+  it.each(["claim", "gateway"])("retires portals on %s loss", async (loss) => {
+    const withdrawGateway = publishManaged();
+    const { claim, lose } = fakeClaim();
+    vi.mocked(claimTailscaleServePort).mockResolvedValue(claim);
+    const { service, httpServers } = makeService({ managedTailscale: true });
+    const releaseTarget = vi.fn();
+    await service.open({ targetPort: 3000, onClose: releaseTarget });
+    const listener = httpServers[0];
+    if (loss === "claim") {
+      lose();
+    } else {
+      withdrawGateway();
+    }
+    expect(service.list()).toEqual([]);
+    // Explicit close joins the owner teardown instead of polling the event loop.
+    await service.close("p3000");
+    expect(claim.stop).toHaveBeenCalledOnce();
+    expect(releaseTarget).toHaveBeenCalledOnce();
+    expect(listener?.listening).toBe(false);
+  });
 });

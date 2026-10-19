@@ -26,6 +26,7 @@ function createWorkspace(overrides: WorkspaceFixture = {}): SessionWorkspaceProp
     browserPath: "",
     browserSearch: "",
     onBrowsePath: vi.fn(),
+    onRetry: vi.fn(),
     onOpenFile: vi.fn(),
     onSearch: vi.fn(),
     onSetFilter: vi.fn(),

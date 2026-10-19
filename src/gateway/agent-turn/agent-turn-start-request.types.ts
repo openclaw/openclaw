@@ -1,4 +1,5 @@
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.contracts.js";
 import type { AgentRequestPreflight } from "./agent-request-preflight.js";
 import type { RequesterSettleWakeReplay } from "./internal-facade.types.js";
@@ -11,6 +12,7 @@ export type AgentTurnStartRequest = {
   replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
   assertAdmissionCurrent?: () => void;
+  executionSource?: SessionSourceAssertion;
   assertInputCommitAllowed?: () => void;
   hasCurrentClientAuthority?: () => boolean;
   preflight: AgentRequestPreflight;

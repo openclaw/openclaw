@@ -61,7 +61,8 @@ function setup() {
     scrollport.scrollTop = height - scrollport.clientHeight;
     return true;
   };
-  controller.prepareRender();
+  controller.publishPendingRunState();
+  controller.captureRenderChanges();
   controller.commitRender();
   vi.advanceTimersToNextFrame();
   const published = vi.fn();
@@ -74,7 +75,8 @@ function setup() {
     scrollport,
     commitGrowth: () => {
       height += 889;
-      controller.prepareRender();
+      controller.publishPendingRunState();
+      controller.captureRenderChanges();
       controller.commitRender();
       vi.advanceTimersToNextFrame();
     },
@@ -127,7 +129,8 @@ describe("transcript arrival scroll ownership", () => {
       },
       "animation-frame",
     );
-    controller.prepareRender();
+    controller.publishPendingRunState();
+    controller.captureRenderChanges();
     vi.advanceTimersToNextFrame();
     expect(published).toHaveBeenCalledOnce();
 
@@ -153,7 +156,8 @@ describe("transcript arrival scroll ownership", () => {
     const follow = vi.spyOn(state, "chatScrollToEnd");
     state.chatStream = "A response arrived before the property commit.";
     publishChatRunState(state, "animation-frame");
-    controller.prepareRender();
+    controller.publishPendingRunState();
+    controller.captureRenderChanges();
     controller.commitRender();
     vi.advanceTimersToNextFrame();
     expect(follow).toHaveBeenCalledOnce();

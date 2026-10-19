@@ -105,9 +105,6 @@ export async function executeNodeMediaAction(input: {
       if (facing) {
         const delayMs = readNonNegativeIntegerParam(params, "delayMs");
         const deviceId = normalizeOptionalString(params.deviceId);
-        if (deviceId && facing === "both" && resolvedNode.platform?.toLowerCase() !== "linux") {
-          throw new Error("facing=both is not allowed when deviceId is set");
-        }
         const targets = resolveCameraSnapTargets({
           facing,
           platform: resolvedNode.platform,

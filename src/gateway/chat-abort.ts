@@ -63,7 +63,6 @@ import {
 } from "./chat-abort-diagnostics.js";
 import {
   markChatAbortTerminalOutcome,
-  markChatAbortTerminalPersistenceError,
   notifyChatAbortControllerRemoved,
   waitForChatAbortTerminalPersistence,
 } from "./chat-abort-lifecycle-internal.js";
@@ -276,23 +275,7 @@ export function registerChatAbortController(params: {
     }
     const persistence = adapter.projectSessionTerminalPersistence;
     if (persistence) {
-      const settlePersistence = (error?: unknown) => {
-        if (adapter.projectSessionTerminalPersistence === persistence) {
-          markChatAbortTerminalPersistenceError(entry, error);
-          adapter.projectSessionTerminalPending = false;
-          adapter.projectSessionTerminalPersistence = undefined;
-        }
-      };
-      trackSessionControllerSourceWork(
-        input,
-        persistence.then(
-          () => settlePersistence(),
-          (error: unknown) => {
-            settlePersistence(error);
-            throw error;
-          },
-        ),
-      );
+      trackSessionControllerSourceWork(input, persistence);
     }
     retireRpcSource(params.runId, entry);
   };

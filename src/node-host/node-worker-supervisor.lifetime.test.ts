@@ -251,6 +251,7 @@ describe("node worker environment lifetime", () => {
             }),
             false,
             true,
+            true,
           ),
         );
       poll.descriptor.assignment.systemPrompt += "x".repeat(

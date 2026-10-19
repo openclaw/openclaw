@@ -1887,6 +1887,30 @@ process.stdout.write(sessionDir + "\\n");
     expect(verify).not.toThrow();
   });
 
+  it.each([false, true])("preserves frozen inline ACP metadata (shared database: %s)", (shared) => {
+    runSessionStateAssertion(
+      (stateDir) => {
+        const env = seedSessionSourceFixture(stateDir, "acpx-openclaw-tools-bridge");
+        const storePath = join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const legacy = JSON.parse(readFileSync(storePath, "utf8"));
+        const store = createMigratedSessionFileStore();
+        store["agent:main:slack:channel:cupgrade"] = {
+          ...store["agent:main:slack:channel:cupgrade"],
+          acp: legacy["agent:main:slack:channel:cupgrade"].acp,
+        };
+        writeMigratedSessionFiles(stateDir);
+        writeJson(storePath, store);
+        if (shared) {
+          mkdirSync(join(stateDir, "state"), { recursive: true });
+          const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+          db.close();
+        }
+        return env;
+      },
+      { scenario: "acpx-openclaw-tools-bridge" },
+    );
+  });
+
   it.each<{
     name: string;
     setup: (stateDir: string) => void;

@@ -458,6 +458,14 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
           });
     const assistantTranscriptMediaUrls = Array.from(new Set(payload.mediaUrls ?? []));
     copyReplyPayloadMetadata(payload, blockPayload);
+    if (
+      assistantTranscriptMediaUrls.length > 0 ||
+      getReplyPayloadMetadata(payload)?.assistantMediaFailures?.length
+    ) {
+      setReplyPayloadMetadata(blockPayload, {
+        assistantTranscriptSource: readAgentAssistantSource(state.lastAssistant),
+      });
+    }
     const taggedPayload =
       options?.assistantMessageIndex !== undefined
         ? setReplyPayloadMetadata(blockPayload, {

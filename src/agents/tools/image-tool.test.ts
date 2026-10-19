@@ -1064,7 +1064,7 @@ describe("image tool implicit imageModel config", () => {
           }),
         ).toEqual({ primary: `${provider}/${model}` });
         if (checkTool) {
-          // Direct factories retain their shipped directory-backed auth contract.
+          // Direct image factories retain their shipped directory-backed auth contract.
           expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
           expect(typeof createPdfTool({ config: cfg, agentDir })?.execute).toBe("function");
         }

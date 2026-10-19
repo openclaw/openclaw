@@ -394,6 +394,10 @@ export async function runAgentHarnessAttempt(
                 nativePermissionsConsented,
                 pluginAttempt.setInputAttachmentReadAllowed,
                 attemptParams.runtimePluginToolGrant !== undefined,
+                // Pending native supervision has no model identity to prepare against yet.
+                nativeSessionRuntime?.auth === "native"
+                  ? (nativeSessionRuntime.modelRef ?? null)
+                  : undefined,
               );
           const effectiveAttemptParams =
             hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted

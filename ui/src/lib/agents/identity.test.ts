@@ -4,11 +4,87 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
 import type { ApplicationGatewayPhase, ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createAgentIdentityCapability, fetchAgentIdentity } from "./identity.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+it.each(["account", "recovery scope"])(
+  "retires identities when the same client's %s changes",
+  async (change) => {
+    const pending = createDeferred<AgentIdentityResult>();
+    const original = { agentId: "main", name: "Main", avatar: "" };
+    const request = vi.fn().mockResolvedValueOnce(original).mockReturnValue(pending.promise);
+    const source = createApplicationGateway();
+    const hello = gatewayHelloForMethods(["agent.identity.get"], ["operator.read"]);
+    hello.auth!.recoveryScope = "test-recovery-scope";
+    source.publish({
+      ...source.gateway.snapshot,
+      client: createTestGatewayClient(request),
+      phase: "connected",
+      hello,
+      selfUser: { id: "alice", name: "Alice" },
+    });
+    const capability = createAgentIdentityCapability(source.gateway);
+    await capability.ensure(["main"]);
+    source.publish({
+      ...source.gateway.snapshot,
+      phase: "reconnecting",
+      hello: null,
+      selfUser: undefined,
+    });
+    expect(capability.get("main")).toEqual(original);
+    source.publish({ ...source.gateway.snapshot, phase: "connected", hello });
+    const old = capability.ensure(["main"]);
+    source.publish({
+      ...source.gateway.snapshot,
+      ...(change === "account"
+        ? { selfUser: { id: "bob", name: "Bob" } }
+        : {
+            selfUser: undefined,
+            hello: { ...hello, auth: { ...hello.auth!, recoveryScope: "bob-scope" } },
+          }),
+    });
+    expect(capability.get("main")).toBeNull();
+    pending.resolve(original);
+    await old;
+    expect(capability.get("main")).toBeNull();
+  },
+);
+
+it("retains settled identity during a blip and retires it for a different client", async () => {
+  const refreshed = createDeferred<AgentIdentityResult>();
+  const original = { agentId: "main", name: "Main", avatar: "" };
+  const request = vi.fn().mockResolvedValueOnce(original).mockReturnValue(refreshed.promise);
+  const snapshot: { client: GatewayBrowserClient; phase: ApplicationGatewayPhase } = {
+    client: createTestGatewayClient(request),
+    phase: "connected",
+  };
+  let publish = (_snapshot: typeof snapshot) => {};
+  const capability = createAgentIdentityCapability({
+    snapshot,
+    subscribe(listener) {
+      publish = listener;
+      return () => {};
+    },
+  });
+  await capability.ensure(["main"]);
+  snapshot.phase = "reconnecting";
+  publish(snapshot);
+  expect(capability.get("main")).toEqual(original);
+  snapshot.phase = "connected";
+  publish(snapshot);
+  expect(capability.get("main")).toEqual(original);
+  snapshot.client = createTestGatewayClient(request);
+  publish(snapshot);
+  expect(capability.get("main")).toBeNull();
+  refreshed.resolve({ ...original, name: "Old connection" });
+  await capability.ensure([]);
+  expect(capability.get("main")).toBeNull();
 });
 
 it.each([undefined, 7_000])(

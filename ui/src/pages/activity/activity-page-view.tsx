@@ -605,6 +605,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
                 </a>
                 <RunInspector
                   basePath={state().context.basePath}
+                  connected={state().context.gateway.snapshot.phase === "connected"}
                   state={state().runInspector}
                   selector={runRoute()?.selector ?? null}
                   selectorId={runRoute()?.selectorId ?? null}

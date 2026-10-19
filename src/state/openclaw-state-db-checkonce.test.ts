@@ -15,7 +15,10 @@ import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { requireNativeSqliteDatabase as nativeDatabase } from "../test-utils/native-sqlite.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION as SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import {
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS as BUSY_TIMEOUT_MS,
+  OPENCLAW_STATE_SCHEMA_VERSION as SCHEMA_VERSION,
+} from "./openclaw-state-db-contract.js";
 import { assertExistingOpenClawStateRuntimeSchema as assertRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { openExistingOpenClawStateWriter as openExistingWriter } from "./openclaw-state-db-existing-write.js";
 import { expectRow, readRow, readRows } from "./openclaw-state-db-fixtures.test-support.js";
@@ -60,8 +63,10 @@ it("preserves full verification across a disposable startup checkpoint write", a
   expect(verified).toBeDefined();
   await closeStateAsync();
   const observed = observeSqliteReadSql(StatementSync.prototype);
+  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
   withCheckpoint(
     (db) => {
+      expect(readRow(db, "PRAGMA busy_timeout")).toEqual({ timeout: BUSY_TIMEOUT_MS });
       db.prepare(
         `INSERT INTO state_leases(scope, lease_key, owner, created_at, updated_at)
          VALUES('checkpoint-proof', 'global', 'startup', 1, 1)`,
@@ -69,6 +74,7 @@ it("preserves full verification across a disposable startup checkpoint write", a
     },
     { env, atomic: true },
   );
+  expect(exec.mock.calls.filter(([sql]) => /PRAGMA busy_timeout/iu.test(sql))).toEqual([]);
   expect(readSqliteDatabaseCleanClose(state.path)).toBe(true);
   const reopened = openState({ env });
   expect(readSqliteDatabaseIntegrityVerification(nativeDatabase(reopened.db))).toEqual(verified);
@@ -203,6 +209,17 @@ it("readmits startup checkpoint storage after a tracked header change", () => {
   );
   const read = () => withCheckpoint(callback, options);
   expect(read()).toBe(0);
+  revokeSqliteDatabaseAdmissionsForPath(options.path);
+  const observation = observeSqliteReadSql(StatementSync.prototype);
+  try {
+    expect(read()).toBe(0);
+    // Keep the pre-transaction probe, admission read, and final catalog capture.
+    expect(observation.queries.filter((sql) => /^PRAGMA user_version\b/iu.test(sql))).toHaveLength(
+      3,
+    );
+  } finally {
+    observation.restore();
+  }
   using peer = openNodeSqliteDatabase(options.path);
   expectTrackedReadmission(peer, read, callback, 0);
 });

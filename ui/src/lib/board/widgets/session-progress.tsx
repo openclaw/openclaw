@@ -1,5 +1,5 @@
 import type { BoardGetParams, ProgressCardGetParams } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onSettled, Show, untrack } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
 import { useOptionalApplication } from "../../reactive/context.ts";
 import { projectProgressCard } from "../../reactive/domain-keyed.ts";
@@ -87,10 +87,7 @@ function SessionProgressWidgetContent(
         a.target.agentId === b.target.agentId,
     },
   );
-  const initialProgressScope = untrack(progressScope);
-  const progress = projectProgressCard(initialProgressScope);
-  // Bind the imperative store watch only while the widget is active.
-  createEffect(progressScope, (next) => progress.replaceSource(next));
+  const progress = projectProgressCard(progressScope);
   const rosterScope = createMemo(
     () => {
       return [

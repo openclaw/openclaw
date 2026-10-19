@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced";
-import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { inspectDarwinAcl } from "@openclaw/fs-safe/permissions";
 import { expressionBuilder } from "kysely";
 import { resolveStateDir } from "../config/paths.js";
@@ -19,7 +17,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
-import { applyPrivateModeSync } from "./private-mode.js";
+import { preparePrivateStoreFileSync } from "./private-store-file.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -38,16 +36,6 @@ const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {
 
 export function resolveClientCredentialStorePath(env: NodeJS.ProcessEnv): string {
   return path.join(resolveStateDir(env), "client", "credentials.sqlite");
-}
-
-function createPrivateIfMissing(create: () => void): void {
-  try {
-    create();
-  } catch (error) {
-    if (!(error instanceof FsSafeError && error.code === "already-exists")) {
-      throw error;
-    }
-  }
 }
 
 function assertPrivateAcl(pathname: string): void {
@@ -85,14 +73,7 @@ export function withClientCredentialStore<T>(
     assertPrivateAcl(directory);
   }
   if (createIfMissing) {
-    if (!parent) {
-      fs.mkdirSync(path.dirname(directory), { recursive: true, mode: 0o700 });
-      createPrivateIfMissing(() => createDirectorySync(directory, { private: true }));
-    }
-    applyPrivateModeSync(directory, 0o700);
-    if (!fs.existsSync(pathname)) {
-      createPrivateIfMissing(() => createFileSync(pathname, { private: true }).close());
-    }
+    preparePrivateStoreFileSync(pathname, Boolean(parent));
   }
   const opened = openRootFileSync({
     absolutePath: pathname,

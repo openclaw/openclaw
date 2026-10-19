@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -14,8 +14,7 @@ import { createLogbook, localDayKey, shiftDay, type LogbookModel } from "./logbo
 import type { LogbookCardPayload, LogbookStatusPayload, LogbookUiState } from "./logbook-types.ts";
 
 export type LogbookProps = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
+  initialClient: GatewayBrowserClient | null;
 };
 
 /** Stable category hue so colors stay consistent across renders and days. */
@@ -317,11 +316,12 @@ export function Logbook(props: LogbookProps) {
   };
   const model = createLogbook();
   const state = () => model.state;
-  // A client change retires logbook requests and starts loading the newly connected Gateway.
-  createEffect(
-    () => (props.connected ? props.client : null),
-    (client) => void (model.connect(client) && model.load()),
-  );
+  // PluginPageOwner remounts this view when the connection changes.
+  onSettled(() => {
+    if (model.connect(props.initialClient)) {
+      void model.load();
+    }
+  });
   const isToday = () => state().day === (state().status?.today ?? localDayKey());
   return (
     <section class="logbook">

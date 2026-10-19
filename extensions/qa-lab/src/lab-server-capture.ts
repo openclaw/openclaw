@@ -6,10 +6,7 @@ import {
   type CaptureQueryPreset,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import {
-  normalizeOptionalString,
-  readStringField,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function createQaCaptureLifecycle() {
   const captureEnv = {
@@ -91,10 +88,10 @@ export function mapCaptureEventForQa(row: Record<string, unknown>) {
   return {
     ...row,
     payloadPreview: typeof row.dataText === "string" ? row.dataText : undefined,
-    provider: normalizeOptionalString(readStringField(meta, "provider")),
-    api: normalizeOptionalString(readStringField(meta, "api")),
-    model: normalizeOptionalString(readStringField(meta, "model")),
-    captureOrigin: normalizeOptionalString(readStringField(meta, "captureOrigin")),
+    provider: normalizeOptionalString(meta?.provider),
+    api: normalizeOptionalString(meta?.api),
+    model: normalizeOptionalString(meta?.model),
+    captureOrigin: normalizeOptionalString(meta?.captureOrigin),
   };
 }
 

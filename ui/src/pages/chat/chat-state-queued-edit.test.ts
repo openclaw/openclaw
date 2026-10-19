@@ -43,7 +43,6 @@ function createControllerFixture(withClient = false) {
   const dispose = controller.dispose;
   const state = createPageState(createInitializationContext(), controller.createRenderLifecycle(), {
     dispatchEvent: () => true,
-    querySelector: () => null,
   });
   if (withClient) {
     state.client = createTestGatewayClient(async () => ({}));

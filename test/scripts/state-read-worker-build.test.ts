@@ -10,6 +10,7 @@ import { createScriptTestHarness } from "./test-helpers.js";
 const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
 const { createTempDir } = createScriptTestHarness();
 const handlersModule = "/src/state/openclaw-state-read-handlers.ts";
+const registryModule = "/src/state/openclaw-agent-db-registry.read.ts";
 
 describe("state read worker artifacts", () => {
   it("preserves installed native and asset locations when filesystem helpers are bundled", () => {
@@ -69,33 +70,43 @@ describe("state read worker artifacts", () => {
             .map((chunk) => [chunk.fileName, chunk] as const),
         ),
       );
-      const queue = [`${entryName}${extension}`];
-      const visited = new Set<string>();
-      const startupModules = new Set<string>();
-      for (const name of queue) {
-        if (visited.has(name)) {
-          continue;
-        }
-        visited.add(name);
-        const chunk = chunks.get(name);
-        if (!chunk) {
-          throw new Error(`Missing state read worker chunk: ${name}`);
-        }
-        for (const [id, module] of Object.entries(chunk.modules)) {
-          if (module.renderedLength > 0) {
-            startupModules.add(id.replaceAll("\\", "/"));
+      const resolveImport = (name: string, specifier: string) =>
+        specifier.startsWith(".")
+          ? path.posix.normalize(path.posix.join(path.posix.dirname(name), specifier))
+          : specifier;
+      const staticClosure = (entryFile: string) => {
+        const queue = [entryFile];
+        const visited = new Set<string>();
+        const modules = new Set<string>();
+        const dynamicImports = new Set<string>();
+        for (const name of queue) {
+          if (visited.has(name)) {
+            continue;
+          }
+          visited.add(name);
+          const chunk = chunks.get(name);
+          if (!chunk) {
+            throw new Error(`Missing state read worker chunk: ${name}`);
+          }
+          for (const [id, module] of Object.entries(chunk.modules)) {
+            if (module.renderedLength > 0) {
+              modules.add(id.replaceAll("\\", "/"));
+            }
+          }
+          for (const specifier of chunk.dynamicImports) {
+            dynamicImports.add(resolveImport(name, specifier));
+          }
+          for (const specifier of chunk.imports) {
+            const target = resolveImport(name, specifier);
+            if (chunks.has(target)) {
+              queue.push(target);
+            }
           }
         }
-        for (const specifier of chunk.imports) {
-          const target = specifier.startsWith(".")
-            ? path.posix.normalize(path.posix.join(path.posix.dirname(name), specifier))
-            : specifier;
-          if (chunks.has(target)) {
-            queue.push(target);
-          }
-        }
-      }
-      expect([...startupModules].some((id) => id.endsWith(deferredModule))).toBe(false);
+        return { modules, dynamicImports };
+      };
+      const startup = staticClosure(`${entryName}${extension}`);
+      expect([...startup.modules].some((id) => id.endsWith(deferredModule))).toBe(false);
       expect(
         [...chunks.values()].some((chunk) =>
           Object.entries(chunk.modules).some(
@@ -104,6 +115,29 @@ describe("state read worker artifacts", () => {
           ),
         ),
       ).toBe(true);
+      if (entryName === "state/openclaw-state-read.worker") {
+        const registryTargets = [...startup.dynamicImports].filter((name) => {
+          const chunk = chunks.get(name);
+          return Object.entries(chunk?.modules ?? {}).some(
+            ([id, module]) =>
+              module.renderedLength > 0 && id.replaceAll("\\", "/").endsWith(registryModule),
+          );
+        });
+        const [registryTarget] = registryTargets;
+        if (registryTargets.length !== 1 || registryTarget === undefined) {
+          throw new Error(
+            `Expected exactly one entry-selected registry reader chunk, found ${registryTargets.length}: ${entryName}`,
+          );
+        }
+        const registry = staticClosure(registryTarget);
+        expect([...registry.modules].some((id) => id.endsWith(registryModule))).toBe(true);
+        expect(
+          [...registry.modules].some(
+            (id) =>
+              id.endsWith(handlersModule) || id.endsWith("/src/state/backup-run-records.kernel.ts"),
+          ),
+        ).toBe(false);
+      }
     } finally {
       for (const bundle of bundles) {
         await bundle[Symbol.asyncDispose]();

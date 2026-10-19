@@ -12,7 +12,7 @@ import type { UiSettings } from "../../../app/settings.ts";
 import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
 import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
 import { boardWidgetMenuEntries } from "../../../components/board/board-widget-menu.tsx";
-import { activateMenuShortcut } from "../../../components/menu-shortcuts.ts";
+import { activateMenuShortcut } from "../../../components/menu-shortcut-activation.ts";
 import {
   EMPTY_SESSION_MENU_DATA,
   SessionMenuActions,
@@ -27,12 +27,14 @@ import { useSessionMenuEntries } from "../../../components/session-menu-view.tsx
 import { createSessionOwnerMenu } from "../../../components/session-owner-menu.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import {
+  createMenuControls,
   Menu,
   type MenuEntry,
   type MenuItem,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -116,7 +118,9 @@ function ChatHeaderSessionMenuContent(
   const preparation = () => liveProps.prewarm;
   const presentation = createParkedProjection(() => ({ ...liveProps }), open, preparation);
   const props = createProjection(presentation, {}, { key: "id" });
+  const controls = createMenuControls();
   let menu: MenuHandle | undefined;
+  let stopShortcut: (() => void) | undefined;
   const quickActions = useChatQuickActionEntries(() => props.sessionActions, false, "quick:");
   const state = merge(props, { selectionCount: 1, navigationAllowed: true, disabled: false });
   const readState = () => state;
@@ -142,6 +146,7 @@ function ChatHeaderSessionMenuContent(
     createSessionOwnerMenu(open, preparation),
   );
   const view = useSessionMenuEntries(actions, readState, {
+    controls,
     openInExtra: () => [
       {
         id: "continue-in-terminal",
@@ -169,16 +174,17 @@ function ChatHeaderSessionMenuContent(
       },
       () => props.sharing ?? {},
     ),
+    controls,
   );
   openMenus.set(host, () => menu?.open() ?? false);
   const shortcut = (event: KeyboardEvent) => {
     if (!actions.handleKeydown(event, view.appearance)) {
-      activateMenuShortcut(host, event);
+      activateMenuShortcut(menu?.overlay.surface, event);
     }
   };
   onCleanup(() => {
     openMenus.delete(host);
-    menu?.overlay.surface.removeEventListener("keydown", shortcut, true);
+    stopShortcut?.();
   });
   const content = (id: string, value: JSX.Element): MenuEntry => ({
     kind: "content",
@@ -461,6 +467,7 @@ function ChatHeaderSessionMenuContent(
   const label = () => t("chat.sidebar.sessionMenu", { session: liveProps.session.label });
   return (
     <Menu
+      controls={controls}
       id={menuId}
       lazy
       prewarm={liveProps.prewarm && !liveProps.compact}
@@ -480,7 +487,7 @@ function ChatHeaderSessionMenuContent(
       onSelect={select}
       ref={(handle) => {
         menu = handle;
-        handle.overlay.surface.addEventListener("keydown", shortcut, true);
+        stopShortcut = listen(handle.overlay.surface, "keydown", shortcut, true);
       }}
       onEscape={(event) => actions.handleKeydown(event, view.appearance)}
       onBeforeShow={() => {

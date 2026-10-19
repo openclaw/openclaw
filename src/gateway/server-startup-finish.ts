@@ -235,6 +235,7 @@ export async function finishGatewayStartup(params: {
         cfgAtStart,
         deps,
         sessionDeliveryRecoveryMaxEnqueuedAt,
+        sessionRecoveryReady: postAttachHandles.subagentRecoverySettled,
         cronEnabled: runtimeState.cronState.cronEnabled,
         log,
         resolveGatewayContext: resolvePluginGatewayContext,
@@ -351,6 +352,7 @@ export async function finishGatewayStartup(params: {
                   }
                   databasePreparationReady.resolve(); // Plugins are attached; worker recovery awaits admission.
                   return await workerPlacementRuntime.startRuntime({
+                    startupTrace,
                     isClosePreludeStarted: () => lifecycle.closePreludeStarted,
                     // Close must see the drain handle before reconciliation can yield.
                     registerSidecar: registerConnectionDependentSidecars,

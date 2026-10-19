@@ -10,6 +10,9 @@ import {
 import { collectTooltipNameText, isTooltipTriggerElement } from "./tooltip-content.ts";
 import { resolveTransientContainer } from "./transient-container.ts";
 
+const DESCRIBABLE_SELECTOR =
+  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
 function titleNamesElement(element: Element) {
   if (
     element.hasAttribute("aria-label") ||
@@ -195,11 +198,23 @@ export function installTitleTooltips(ownerDocument: Document) {
         event.detail === "focus")
         ? "focus"
         : "pointer";
+    const control =
+      elements.find((element) => element.matches(DESCRIBABLE_SELECTOR)) ??
+      elements.find((element) => element instanceof HTMLLabelElement)?.control;
+    const descriptionTarget = () => (control?.isConnected ? control : (anchor ?? null));
     const previewOwned = ownsPreview(link);
     if (anchor === active?.anchor && previewOwned === active?.previewOwned) {
       if (active) {
         active.link = link;
         active[input] = true;
+        // Pointer movement within an inherited hint must not displace its focused control.
+        if (
+          tooltip &&
+          (input === "focus" || (!active.focus && control)) &&
+          tooltip.descriptionTarget?.() !== descriptionTarget()
+        ) {
+          tooltip.descriptionTarget = descriptionTarget;
+        }
         if (link && !active.anchor.contains(link)) {
           observer.observe(link, { attributes: true, attributeFilter: ["href"] });
         }
@@ -263,6 +278,7 @@ export function installTitleTooltips(ownerDocument: Document) {
     if (!explicit && tooltipContent) {
       tooltip ??= ownerDocument.createElement("openclaw-tooltip");
       tooltip.disabled = dialogExpanded();
+      tooltip.descriptionTarget = descriptionTarget;
       if (active.filePath) {
         const current = active;
         const path = active.filePath;
