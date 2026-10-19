@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { containsComposed, registryFor } from "../../../components/overlay-registry.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
@@ -62,58 +62,85 @@ export function createComposerMobileInteraction(
     // Prepare current facts without republishing editing on unrelated prop updates.
     { equals: (previous, next) => previous.editing === next.editing },
   );
-  createEffect(editingTransition, (next, previous) => {
-    next.onChange?.(next.editing);
-    const textarea = state.composerTextarea;
-    if (textarea && (next.mobile || previous?.editing === true)) {
-      adjustTextareaHeight(textarea);
-    }
-    const from = previousInputHeight;
-    previousInputHeight = undefined;
-    if (from !== undefined && next.mobile && !next.keyboardVisible && !next.keyboardNavigation) {
-      queueMicrotask(() => {
-        const input = state.composerInput;
-        if (
-          !input?.isConnected ||
-          input.ownerDocument.defaultView?.matchMedia("(prefers-reduced-motion: reduce)").matches
-        ) {
-          return;
-        }
-        const to = input.getBoundingClientRect().height;
-        inputReveals = [
-          input.animate(
-            [
-              { height: `${from}px`, minHeight: "0px", overflow: "clip" },
-              { height: `${to}px`, minHeight: "0px", overflow: "clip" },
-            ],
-            { duration: 180, easing: "cubic-bezier(0.32, 0.72, 0, 1)" },
-          ),
-        ];
-        // The compact hint and editor have different text origins. Reveal the
-        // hint after the surface settles instead of carrying it through that jump.
-        const hint = placeholder();
-        if (hint) {
-          inputReveals.push(
-            hint.animate([{ opacity: 0 }, { opacity: 1 }], {
-              delay: 180,
-              duration: 80,
-              fill: "backwards",
-              easing: "ease-out",
-            }),
-          );
-        }
-      });
-    }
-  });
   const keyboardTransition = createMemo(
     () => ({ visible: props.mobileKeyboardVisible, editing: editing() }),
     { equals: (previous, next) => previous.visible === next.visible },
   );
-  createEffect(keyboardTransition, (next, previous) => {
-    if (previous?.visible === true && next.visible === false && !ownedOverlay(null)) {
-      changeEditing(false, next.editing);
-    }
-  });
+  let previousEditing: ReturnType<typeof editingTransition> | undefined;
+  let previousKeyboard: ReturnType<typeof keyboardTransition> | undefined;
+  // Only these nonvisual lifetimes change; the composer DOM and animation owner stay mounted.
+  const lifecycle = (
+    <>
+      <Show when={editingTransition()} keyed>
+        {(next) => {
+          onSettled(() => {
+            const previous = previousEditing;
+            previousEditing = next;
+            next.onChange?.(next.editing);
+            const textarea = state.composerTextarea;
+            if (textarea && (next.mobile || previous?.editing === true)) {
+              adjustTextareaHeight(textarea);
+            }
+            const from = previousInputHeight;
+            previousInputHeight = undefined;
+            if (
+              from !== undefined &&
+              next.mobile &&
+              !next.keyboardVisible &&
+              !next.keyboardNavigation
+            ) {
+              queueMicrotask(() => {
+                const input = state.composerInput;
+                if (
+                  !input?.isConnected ||
+                  input.ownerDocument.defaultView?.matchMedia("(prefers-reduced-motion: reduce)")
+                    .matches
+                ) {
+                  return;
+                }
+                const to = input.getBoundingClientRect().height;
+                inputReveals = [
+                  input.animate(
+                    [
+                      { height: `${from}px`, minHeight: "0px", overflow: "clip" },
+                      { height: `${to}px`, minHeight: "0px", overflow: "clip" },
+                    ],
+                    { duration: 180, easing: "cubic-bezier(0.32, 0.72, 0, 1)" },
+                  ),
+                ];
+                // The compact hint and editor have different text origins. Reveal the
+                // hint after the surface settles instead of carrying it through that jump.
+                const hint = placeholder();
+                if (hint) {
+                  inputReveals.push(
+                    hint.animate([{ opacity: 0 }, { opacity: 1 }], {
+                      delay: 180,
+                      duration: 80,
+                      fill: "backwards",
+                      easing: "ease-out",
+                    }),
+                  );
+                }
+              });
+            }
+          });
+          return undefined;
+        }}
+      </Show>
+      <Show when={keyboardTransition()} keyed>
+        {(next) => {
+          onSettled(() => {
+            const previous = previousKeyboard;
+            previousKeyboard = next;
+            if (previous?.visible === true && next.visible === false && !ownedOverlay(null)) {
+              changeEditing(false, next.editing);
+            }
+          });
+          return undefined;
+        }}
+      </Show>
+    </>
+  );
   onSettled(() => {
     const doc = shell()?.ownerDocument;
     if (!doc) {
@@ -246,5 +273,5 @@ export function createComposerMobileInteraction(
       props.onComposerEditingChange?.(false);
     };
   });
-  return { mobileEditing, keyboardNavigation };
+  return { mobileEditing, keyboardNavigation, lifecycle };
 }
