@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
@@ -247,10 +248,13 @@ it("reads newly registered stores without copying admitted state after startup w
       `PRAGMA journal_mode=DELETE; PRAGMA user_version=${supportedVersions.agent + 1};`,
     );
     const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
+    const exec = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "exec");
     expect(await fleet.inspect()).toMatchObject({
       incompatible: [versionRow("agent", changedPath, supportedVersions.agent + 1)],
       indeterminate: [],
     });
+    expect(exec.mock.calls.filter(([sql]) => /PRAGMA busy_timeout/iu.test(sql))).toEqual([]);
+    exec.mockRestore();
     const statePath = fs.realpathSync.native(
       path.join(fleet.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
     );

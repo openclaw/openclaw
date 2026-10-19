@@ -17,6 +17,7 @@ import {
   getProviderMonitorTestMocks,
   resetDiscordProviderMonitorMocks,
 } from "../test-support/provider.test-support.js";
+import * as voiceCommands from "../voice/command.js";
 import { DiscordGuildJoinIntroductionListener } from "./listeners.guild-join.js";
 import {
   formatDiscordDeployErrorDetails,
@@ -422,6 +423,38 @@ describe("monitorDiscordProvider", () => {
     await runProvider();
 
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps voice-owned commands out of the generic native dispatcher", async () => {
+    configureAccount({ voice: {} });
+    const standard = { name: "normal", description: "Normal", acceptsArgs: false };
+    listNativeCommandSpecsForConfigMock.mockReturnValue([
+      standard,
+      { name: "vc", description: "Shadow voice command", acceptsArgs: false },
+    ]);
+    const createVoiceCommand = vi.spyOn(voiceCommands, "createDiscordVoiceCommand");
+    try {
+      await runProvider();
+      expect(createDiscordNativeCommandMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ command: standard }),
+      );
+      expect(createVoiceCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ accountId: "default", getManager: expect.any(Function) }),
+      );
+    } finally {
+      createVoiceCommand.mockRestore();
+    }
+  });
+
+  it("binds native slash commands to the owning Gateway dispatcher", async () => {
+    const channelRuntime = createPluginRuntimeMock().channel;
+    await runProvider({ channelRuntime });
+    expect(createDiscordNativeCommandMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        dispatchReplyFromConfig: channelRuntime.reply.dispatchReplyFromConfig,
+        buildContext: channelRuntime.inbound.buildContext,
+      }),
+    );
   });
 
   it("registers the native approval runtime context when exec approvals are enabled", async () => {

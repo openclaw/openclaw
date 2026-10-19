@@ -32,9 +32,6 @@ async function prepareIdentityFacts(input: UserProfileCatalogIdentityInput) {
     { context, current: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userProfiles.catalogIdentity")) {
-    throw new Error("Session catalog identity reader returned an unexpected result");
-  }
   const result: UserProfileCatalogIdentityRead = reply?.result ?? {
     profiles: new Map(),
     accounts: new Map(),
