@@ -986,10 +986,10 @@ export async function createQaLabApp(root: HTMLDivElement) {
     root
       .querySelector<HTMLButtonElement>("#capture-delete-selected-sessions")
       ?.addEventListener("click", () => {
-        void deleteCaptureData(state.selectedCaptureSessionIds);
+        void runBusyAction(() => deleteCaptureData(state.selectedCaptureSessionIds));
       });
     root.querySelector<HTMLButtonElement>("#capture-purge-all")?.addEventListener("click", () => {
-      void deleteCaptureData();
+      void runBusyAction(() => deleteCaptureData());
     });
     bindValue("#capture-preset", "change", (value) => {
       state.captureQueryPreset = value as UiState["captureQueryPreset"];
@@ -1203,7 +1203,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       if (!text) {
         return;
       }
-      void navigator.clipboard.writeText(text).catch(() => undefined);
+      void runBusyAction(() => navigator.clipboard.writeText(text));
     });
     root.querySelectorAll<HTMLElement>("[data-capture-sparkline-window]").forEach((node) => {
       const readWindow = () => {
