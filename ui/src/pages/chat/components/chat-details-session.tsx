@@ -11,11 +11,8 @@ import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
 import { ChatDetailsContext, ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import {
-  ChatPullRequests,
-  hasChatPullRequests,
-  type ChatPullRequestsProps,
-} from "./chat-pull-requests.tsx";
+import { hasChatPullRequests } from "./chat-pull-requests.ts";
+import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
 
