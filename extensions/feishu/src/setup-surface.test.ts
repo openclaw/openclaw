@@ -22,10 +22,7 @@ const {
   initAppRegistrationMock: vi.fn(),
   pollAppRegistrationMock: vi.fn(),
   printQrCodeMock: vi.fn(),
-  probeFeishuMock: vi.fn<() => Promise<FeishuProbeResult>>(async () => ({
-    ok: false,
-    error: "mocked",
-  })),
+  probeFeishuMock: vi.fn<() => Promise<FeishuProbeResult>>(),
 }));
 
 vi.mock("./probe.js", () => ({
@@ -43,11 +40,18 @@ vi.mock("./app-registration.js", () => ({
 import { feishuPlugin } from "./channel.js";
 import { setFeishuNamedAccountEnabled } from "./setup-core.js";
 
-async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: string }) {
-  return status({
-    appId: { source: "env", id: params.appIdKey, provider: "default" },
-    appSecret: { source: "env", id: params.appSecretKey, provider: "default" },
-  });
+function credentialRefs(appId = "FEISHU_APP_ID", appSecret = "FEISHU_APP_SECRET") {
+  return {
+    appId: { source: "env", id: appId, provider: "default" },
+    appSecret: { source: "env", id: appSecret, provider: "default" },
+  };
+}
+function answers(...values: string[]) {
+  const mock = vi.fn();
+  for (const value of values) {
+    mock.mockResolvedValueOnce(value);
+  }
+  return mock;
 }
 
 const feishuConfigure = createPluginSetupWizardConfigure(feishuPlugin);
@@ -81,26 +85,16 @@ afterAll(() => {
 describe("feishu setup wizard", () => {
   it("preserves the exact named-account key without enabling the channel", () => {
     const accountId = " Alert Account ";
-    const result = setFeishuNamedAccountEnabled(
+    const accountConfig = (enabled: boolean) =>
       withFeishu({
         enabled: false,
         accounts: {
-          [accountId]: { appId: "kept", enabled: false },
+          [accountId]: { appId: "kept", enabled },
           sibling: { enabled: false },
         },
-      }),
-      accountId,
-      true,
-    );
-
-    expect(result).toEqual(
-      withFeishu({
-        enabled: false,
-        accounts: {
-          [accountId]: { appId: "kept", enabled: true },
-          sibling: { enabled: false },
-        },
-      }),
+      });
+    expect(setFeishuNamedAccountEnabled(accountConfig(false), accountId, true)).toEqual(
+      accountConfig(true),
     );
   });
 
@@ -115,17 +109,25 @@ describe("feishu setup wizard", () => {
     getAppOwnerOpenIdMock.mockReset().mockResolvedValue(undefined);
   });
 
-  it("uses manual credentials by default instead of starting scan-to-create", async () => {
-    const text = vi.fn().mockResolvedValueOnce("cli_manual").mockResolvedValueOnce("secret_manual");
-    const prompter = createTestWizardPrompter({ text });
-
+  it.each([
+    ["manual default", "cli_manual", "secret_manual"],
+    ["scan fallback", "cli_from_fallback", "secret_from_fallback"],
+  ])("uses manual credentials via %s", async (mode, appId, appSecret) => {
+    const scan = mode === "scan fallback";
+    const prompter = createTestWizardPrompter({
+      text: answers(appId, appSecret),
+      ...(scan ? { select: answers("scan", "feishu", "allowlist") as never } : {}),
+    });
     const result = await configure(prompter);
-
-    expect(initAppRegistrationMock).not.toHaveBeenCalled();
+    if (scan) {
+      expect(initAppRegistrationMock).toHaveBeenCalledWith("feishu");
+    } else {
+      expect(initAppRegistrationMock).not.toHaveBeenCalled();
+    }
     expect(beginAppRegistrationMock).not.toHaveBeenCalled();
     expect(result.cfg.channels?.feishu).toMatchObject({
-      appId: "cli_manual",
-      appSecret: "secret_manual",
+      appId,
+      appSecret,
       connectionMode: "websocket",
       domain: "feishu",
     });
@@ -150,11 +152,7 @@ describe("feishu setup wizard", () => {
       },
     });
     const prompter = createTestWizardPrompter({
-      select: vi
-        .fn()
-        .mockResolvedValueOnce("scan")
-        .mockResolvedValueOnce("lark")
-        .mockResolvedValueOnce("open") as never,
+      select: answers("scan", "lark", "open") as never,
     });
     const beforePersistentEffect = vi.fn(async () => {});
 
@@ -188,12 +186,11 @@ describe("feishu setup wizard", () => {
       throw guardError;
     });
     const prompter = createTestWizardPrompter({
-      select: vi.fn().mockResolvedValueOnce("scan").mockResolvedValueOnce("feishu") as never,
+      select: answers("scan", "feishu") as never,
     });
 
-    await expect(configure(prompter, undefined, { beforePersistentEffect })).rejects.toBe(
-      guardError,
-    );
+    const guarded = configure(prompter, undefined, { beforePersistentEffect });
+    await expect(guarded).rejects.toBe(guardError);
 
     expect(initAppRegistrationMock).toHaveBeenCalledWith("feishu");
     expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
@@ -201,48 +198,16 @@ describe("feishu setup wizard", () => {
     expect(pollAppRegistrationMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to manual credentials when selected scan-to-create is unavailable", async () => {
-    const text = vi
-      .fn()
-      .mockResolvedValueOnce("cli_from_fallback")
-      .mockResolvedValueOnce("secret_from_fallback");
-    const prompter = createTestWizardPrompter({
-      text,
-      select: vi
-        .fn()
-        .mockResolvedValueOnce("scan")
-        .mockResolvedValueOnce("feishu")
-        .mockResolvedValueOnce("allowlist") as never,
-    });
-
-    const result = await configure(prompter);
-
-    expect(initAppRegistrationMock).toHaveBeenCalledWith("feishu");
-    expect(beginAppRegistrationMock).not.toHaveBeenCalled();
-    expect(result.cfg.channels?.feishu).toMatchObject({
-      appId: "cli_from_fallback",
-      appSecret: "secret_from_fallback",
-      domain: "feishu",
-    });
-  });
-
   it("prompts over SecretRef appId/appSecret config objects", async () => {
-    const text = vi
-      .fn()
-      .mockResolvedValueOnce("cli_from_prompt")
-      .mockResolvedValueOnce("secret_from_prompt");
     const prompter = createTestWizardPrompter({
-      text,
+      text: answers("cli_from_prompt", "secret_from_prompt"),
       confirm: vi.fn(async () => true),
       select: vi.fn(
         async ({ initialValue }: { initialValue?: string }) => initialValue ?? "bot",
       ) as never,
     });
 
-    const result = await configure(prompter, {
-      appId: { source: "env", id: "FEISHU_APP_ID", provider: "default" },
-      appSecret: { source: "env", id: "FEISHU_APP_SECRET", provider: "default" },
-    });
+    const result = await configure(prompter, credentialRefs());
 
     expect(result.cfg.channels?.feishu).toEqual({
       appId: "cli_from_prompt",
@@ -253,13 +218,6 @@ describe("feishu setup wizard", () => {
       groupPolicy: "allowlist",
     });
   });
-});
-
-describe("feishu setup wizard status", () => {
-  beforeEach(() => {
-    probeFeishuMock.mockReset().mockResolvedValue({ ok: false, error: "mocked" });
-  });
-
   it("probes the resolved default account in multi-account config", async () => {
     probeFeishuMock.mockResolvedValueOnce({ ok: true, botName: "Feishu Main" });
 
@@ -275,8 +233,10 @@ describe("feishu setup wizard status", () => {
       },
     });
 
-    expect(result.configured).toBe(true);
-    expect(result.statusLines).toEqual(["Feishu: connected as Feishu Main"]);
+    expect(result).toMatchObject({
+      configured: true,
+      statusLines: ["Feishu: connected as Feishu Main"],
+    });
     expect(probeFeishuMock).toHaveBeenCalledWith({
       accountId: "main-bot",
       selectionSource: "explicit-default",
@@ -301,10 +261,7 @@ describe("feishu setup wizard status", () => {
     await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
       const confirm = vi.fn(async () => true);
       const note = vi.fn(async () => {});
-      const prompter = createTestWizardPrompter({
-        confirm,
-        note,
-      });
+      const prompter = createTestWizardPrompter({ confirm, note });
 
       await configure(prompter, {
         appId: "cli_a123456",
@@ -337,7 +294,7 @@ describe("feishu setup wizard status", () => {
         [appSecretKey]: "env-credential-456", // pragma: allowlist secret
       },
       async () => {
-        const result = await getStatusWithEnvRefs({ appIdKey, appSecretKey });
+        const result = await status(credentialRefs(appIdKey, appSecretKey));
         expect(result.configured).toBe(true);
       },
     );

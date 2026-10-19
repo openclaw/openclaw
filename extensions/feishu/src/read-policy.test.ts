@@ -91,11 +91,7 @@ describe("Feishu read policy", () => {
           appSecret: "secret_test",
           dmPolicy: "allowlist",
           allowFrom: ["ou_admin"],
-          accounts: {
-            sales: {
-              dmPolicy: "open",
-            },
-          },
+          accounts: { sales: { dmPolicy: "open" } },
         },
       },
     } as OpenClawConfig;
@@ -138,20 +134,16 @@ describe("Feishu read policy", () => {
 
   it("requires metadata only when an unknown target has mixed scope policy", () => {
     const account = createAccount({ allowFrom: ["*"] });
-
+    const target = { cfg, account, chatId: "oc_unknown" };
     expect(
       resolveFeishuChatReadPreliminaryAuthorization({
-        cfg,
-        account,
-        chatId: "oc_unknown",
+        ...target,
         ctx: {},
       }),
     ).toEqual({ chatId: "oc_unknown", decision: "needs-metadata" });
     expect(
       resolveFeishuChatReadPreliminaryAuthorization({
-        cfg,
-        account,
-        chatId: "oc_unknown",
+        ...target,
         ctx: { conversationReadOrigin: "direct-operator" },
       }),
     ).toEqual({ chatId: "oc_unknown", decision: "allow" });

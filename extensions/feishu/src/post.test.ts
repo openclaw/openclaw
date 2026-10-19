@@ -11,20 +11,23 @@ function file(file_key: string, file_name: string, is_folder = false) {
 function topLevelFile(key: string, fileName: string) {
   return { kind: "file", key, fileName, origin: "top-level" };
 }
+function text(value: string, style?: string[]) {
+  return { tag: "text", text: value, ...(style ? { style } : {}) };
+}
 
 describe("parsePostContent", () => {
   it("renders title and styled text as markdown", () => {
     const content = post(
       [
         [
-          { tag: "text", text: "Bold", style: ["bold"] },
-          { tag: "text", text: " " },
-          { tag: "text", text: "Italic", style: ["italic"] },
-          { tag: "text", text: " " },
-          { tag: "text", text: "Underline", style: ["underline"] },
-          { tag: "text", text: " " },
-          { tag: "text", text: "Strike", style: ["lineThrough"] },
-          { tag: "text", text: " " },
+          text("Bold", ["bold"]),
+          text(" "),
+          text("Italic", ["italic"]),
+          text(" "),
+          text("Underline", ["underline"]),
+          text(" "),
+          text("Strike", ["lineThrough"]),
+          text(" "),
           { tag: "code", text: "Code" },
         ],
       ],
@@ -33,22 +36,16 @@ describe("parsePostContent", () => {
 
     const result = parsePostContent(content);
 
-    expect(result.textContent).toBe(
-      "Daily \\*Plan\\*\n\n**Bold** *Italic* <u>Underline</u> ~~Strike~~ `Code`",
-    );
-    expect(result.attachments).toStrictEqual([]);
-    expect(result.mentionedOpenIds).toStrictEqual([]);
+    expect(result).toStrictEqual({
+      textContent: "Daily \\*Plan\\*\n\n**Bold** *Italic* <u>Underline</u> ~~Strike~~ `Code`",
+      attachments: [],
+      mentionedOpenIds: [],
+    });
   });
 
   it("keeps boundary whitespace outside emphasis delimiters", () => {
     const result = parsePostContent(
-      post([
-        [
-          { tag: "text", text: "Before" },
-          { tag: "text", text: " styled ", style: ["bold"] },
-          { tag: "text", text: "after" },
-        ],
-      ]),
+      post([[text("Before"), text(" styled ", ["bold"]), text("after")]]),
     );
 
     expect(parseFeishuMarkdown(result.textContent)).toMatchObject({
@@ -74,11 +71,11 @@ describe("parsePostContent", () => {
           href: "https://example.com/guide(a)",
           style: ["lineThrough", "bold", "italic"],
         },
-        { tag: "text", text: " " },
+        text(" "),
         { tag: "at", user_name: "alice_bob", style: ["underline"] },
-        { tag: "text", text: " " },
+        text(" "),
         { tag: "at", open_id: "ou_123" },
-        { tag: "text", text: " " },
+        text(" "),
         { tag: "a", href: "https://example.com/no-text" },
       ],
     ]);
@@ -93,22 +90,20 @@ describe("parsePostContent", () => {
 
   it("inserts image placeholders and collects image attachments", () => {
     const content = post([
-      [
-        { tag: "text", text: "Before " },
-        { tag: "img", image_key: "img_1" },
-        { tag: "text", text: " after" },
-      ],
+      [text("Before "), { tag: "img", image_key: "img_1" }, text(" after")],
       [{ tag: "img", image_key: "img_2" }],
     ]);
 
     const result = parsePostContent(content);
 
-    expect(result.textContent).toBe("Before ![image] after\n![image]");
-    expect(result.attachments).toEqual([
-      { kind: "image", key: "img_1" },
-      { kind: "image", key: "img_2" },
-    ]);
-    expect(result.mentionedOpenIds).toStrictEqual([]);
+    expect(result).toEqual({
+      textContent: "Before ![image] after\n![image]",
+      attachments: [
+        { kind: "image", key: "img_1" },
+        { kind: "image", key: "img_2" },
+      ],
+      mentionedOpenIds: [],
+    });
     expect(
       parsePostContent(content, { renderMediaPlaceholders: false, emptyTextFallback: "" })
         .textContent,
@@ -138,40 +133,30 @@ describe("parsePostContent", () => {
   });
 
   it("collects top-level files[] from captioned and multi-file posts", () => {
-    const captioned = post([[{ tag: "text", text: "这是账本" }]], "", {
-      content_v2: [[{ tag: "text", text: "这是账本" }]],
-      files: [
-        file(
-          "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
-          "amount-2026-08-01_2026-08-31.csv",
-        ),
-      ],
+    const captioned = post([[text("这是账本")]], "", {
+      content_v2: [[text("这是账本")]],
+      files: [file("file_v3_caption", "amount.csv")],
     });
 
     expect(parsePostContent(captioned)).toEqual({
       textContent: "这是账本",
-      attachments: [
-        topLevelFile(
-          "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
-          "amount-2026-08-01_2026-08-31.csv",
-        ),
-      ],
+      attachments: [topLevelFile("file_v3_caption", "amount.csv")],
       mentionedOpenIds: [],
     });
 
     const multiFile = post([[]], "", {
       content_v2: [[]],
       files: [
-        file("file_v3_zip_aug", "usage_data_2026-08-01_2026-08-31.zip"),
-        file("file_v3_zip_sep", "usage_data_2026-09-01_2026-09-18.zip"),
+        file("file_v3_zip_aug", "aug.zip"),
+        file("file_v3_zip_sep", "sep.zip"),
         file("file_v3_folder", "ignored-folder", true),
         file("invalid/key", "bad.csv"),
       ],
     });
 
     expect(parsePostContent(multiFile).attachments).toEqual([
-      topLevelFile("file_v3_zip_aug", "usage_data_2026-08-01_2026-08-31.zip"),
-      topLevelFile("file_v3_zip_sep", "usage_data_2026-09-01_2026-09-18.zip"),
+      topLevelFile("file_v3_zip_aug", "aug.zip"),
+      topLevelFile("file_v3_zip_sep", "sep.zip"),
     ]);
 
     expect(
@@ -180,7 +165,7 @@ describe("parsePostContent", () => {
           post: {
             zh_cn: {
               title: "",
-              content: [[{ tag: "text", text: "附件" }]],
+              content: [[text("附件")]],
               files: [file("file_v3_locale", "locale.csv")],
             },
           },
@@ -193,29 +178,11 @@ describe("parsePostContent", () => {
     ).toEqual([{ kind: "file", key: "file_pdf", origin: "top-level" }]);
   });
 
-  it("supports locale wrappers", () => {
-    const wrappedByPost = JSON.stringify({
-      post: {
-        zh_cn: {
-          title: "标题",
-          content: [[{ tag: "text", text: "内容A" }]],
-        },
-      },
-    });
-    const wrappedByLocale = JSON.stringify({
-      zh_cn: {
-        title: "标题",
-        content: [[{ tag: "text", text: "内容B" }]],
-      },
-    });
-
-    expect(parsePostContent(wrappedByPost)).toEqual({
-      textContent: "标题\n\n内容A",
-      attachments: [],
-      mentionedOpenIds: [],
-    });
-    expect(parsePostContent(wrappedByLocale)).toEqual({
-      textContent: "标题\n\n内容B",
+  it.each([true, false])("supports locale wrapper (nested post: %s)", (nested) => {
+    const payload = { zh_cn: { title: "标题", content: [[text("内容")]] } };
+    const content = JSON.stringify(nested ? { post: payload } : payload);
+    expect(parsePostContent(content)).toEqual({
+      textContent: "标题\n\n内容",
       attachments: [],
       mentionedOpenIds: [],
     });
