@@ -390,7 +390,6 @@ describe("sweepCronRunSessions", () => {
   });
 
   it("retains a continuation when a child is admitted after retention selection", async () => {
-    const now = Date.now();
     const sessionKey = "agent:main:cron:job1:run:late-child-parent";
     const writerKey = "agent:main:main";
     const parent: SessionEntry = {
@@ -416,7 +415,7 @@ describe("sweepCronRunSessions", () => {
     });
     await writerStarted.promise;
 
-    const sweep = sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log });
+    const sweeping = sweep(now);
     const child = createSubagentRunRecord({
       runId: "child-admitted-during-retention",
       requesterSessionKey: sessionKey,
@@ -426,13 +425,13 @@ describe("sweepCronRunSessions", () => {
     subagentRuns.set(child.runId, child);
     try {
       releaseWriter.resolve();
-      const result = await sweep;
+      const result = await sweeping;
       expect(result).toEqual({ swept: true, pruned: 0 });
       expect(log.warn).not.toHaveBeenCalled();
       expect(readSessionEntries(storePath)[sessionKey]).toEqual(parent);
     } finally {
       releaseWriter.resolve();
-      await Promise.allSettled([writer, sweep]);
+      await Promise.allSettled([writer, sweeping]);
     }
   });
 

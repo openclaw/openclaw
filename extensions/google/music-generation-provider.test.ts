@@ -71,7 +71,7 @@ function generateMusic(overrides: Partial<GenerateMusicRequest> = {}) {
   });
 }
 
-function googleConfig(google: { apiKey?: string; baseUrl: string }): GenerateMusicRequest["cfg"] {
+function googleConfig(google: { apiKey?: string; baseUrl?: string }): GenerateMusicRequest["cfg"] {
   return { models: { providers: { google: { models: [], ...google } } } };
 }
 
@@ -192,7 +192,6 @@ describe("google music generation provider", () => {
   });
 
   it("does not retry request errors", async () => {
-    mockGoogleAuth();
     generateContentMock.mockRejectedValue(new Error("HTTP 400 invalid request"));
 
     await expect(generateMusic()).rejects.toThrow("HTTP 400 invalid request");
