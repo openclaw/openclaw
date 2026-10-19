@@ -23,10 +23,46 @@ import {
 } from "../../../../src/state/openclaw-agent-db.js";
 import { tableExists } from "../../../../src/state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../../../../src/state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../../src/test-utils/openclaw-test-state.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { listSessionTranscriptCorpusEntriesForAgent } from "./session-files.js";
+
+async function configureStore(state: OpenClawTestState, storePath: string) {
+  const config = { session: { store: storePath } };
+  await state.writeConfig(config);
+  clearConfigCache();
+  setRuntimeConfigSnapshot(config);
+}
+
+async function seedSession(
+  storePath: string,
+  sessionId: string,
+  entry: Parameters<typeof upsertSessionEntryCore>[1] = {},
+) {
+  const sessionKey = `agent:main:${sessionId}`;
+  const persisted = await upsertSessionEntryCore(
+    { sessionKey, storePath },
+    { sessionId, updatedAt: 10, ...entry },
+  );
+  return {
+    sessionKey,
+    expected: {
+      agentId: "main",
+      artifactKind: "active-session",
+      sessionFile: sessionKey,
+      sessionId,
+      sessionKey,
+      sessionKind: "heartbeat",
+      storePath,
+      transcriptSource: "sqlite",
+      updatedAtMs: persisted?.updatedAt,
+    },
+  };
+}
 
 function pauseDirectoryDiscovery(sessionsDir: string) {
   const entered = createDeferred();
@@ -177,25 +213,19 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     async ({ readOnly, includeRetainedSqlite }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         setRuntimeConfigSnapshot({});
-        const sessionKey = "agent:main:corpus-metadata";
         const storePath = path.join(state.sessionsDir(), "sessions.json");
-        const persisted = await upsertSessionEntryCore(
-          { sessionKey, storePath },
-          {
-            sessionId: "corpus-metadata",
-            updatedAt: 10,
-            heartbeatIsolatedBaseSessionKey: "agent:main:main",
-            skillsSnapshot: { prompt: "unused corpus prompt ".repeat(256), skills: [] },
-            systemPromptReport: {
-              source: "run",
-              generatedAt: 1,
-              systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-              injectedWorkspaceFiles: [],
-              skills: { promptChars: 0, entries: [] },
-              tools: { listChars: 0, schemaChars: 0, entries: [] },
-            },
+        const { expected } = await seedSession(storePath, "corpus-metadata", {
+          heartbeatIsolatedBaseSessionKey: "agent:main:main",
+          skillsSnapshot: { prompt: "unused corpus prompt ".repeat(256), skills: [] },
+          systemPromptReport: {
+            source: "run",
+            generatedAt: 1,
+            systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+            injectedWorkspaceFiles: [],
+            skills: { promptChars: 0, entries: [] },
+            tools: { listChars: 0, schemaChars: 0, entries: [] },
           },
-        );
+        });
 
         const parse = vi.spyOn(JSON, "parse");
         const observed = observeSqliteReadSql(StatementSync.prototype);
@@ -217,19 +247,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
             includeRetainedSqlite,
             readOnly,
           });
-          expect(entries).toEqual([
-            {
-              agentId: "main",
-              artifactKind: "active-session",
-              sessionFile: sessionKey,
-              sessionId: "corpus-metadata",
-              sessionKey,
-              sessionKind: "heartbeat",
-              storePath,
-              transcriptSource: "sqlite",
-              updatedAtMs: persisted?.updatedAt,
-            },
-          ]);
+          expect(entries).toEqual([expected]);
           expect(observed.queries).toEqual([]);
           const decodedEntries = parse.mock.calls.filter(([json]) =>
             json.includes('"sessionId":"corpus-metadata"'),
@@ -251,27 +269,11 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
   it("preserves admitted metadata parsing when readonly corpus discovery crosses the worker", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});
-      const sessionKey = "agent:main:admitted-corpus";
-      const sessionId = "admitted-corpus";
       const storePath = path.join(state.sessionsDir(), "sessions.json");
-      const persisted = await upsertSessionEntryCore(
-        { sessionKey, storePath },
-        { sessionId, updatedAt: 10 },
-      );
+      const { sessionKey, expected } = await seedSession(storePath, "admitted-corpus");
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const { db } = database;
       const options = { readOnly: true, includeContentRevision: false };
-      const expected = {
-        agentId: "main",
-        artifactKind: "active-session",
-        sessionFile: sessionKey,
-        sessionId,
-        sessionKey,
-        sessionKind: "heartbeat",
-        storePath,
-        transcriptSource: "sqlite",
-        updatedAtMs: persisted?.updatedAt,
-      };
       await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).resolves.toEqual([
         { ...expected, sessionKind: "interactive" },
       ]);
@@ -307,12 +309,8 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
   it("reads worker content revisions without claiming an agent database lease", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});
-      const sessionKey = "agent:main:revision-corpus";
       const storePath = path.join(state.sessionsDir(), "sessions.json");
-      await upsertSessionEntryCore(
-        { sessionKey, storePath },
-        { sessionId: "revision-corpus", updatedAt: 10 },
-      );
+      const { sessionKey } = await seedSession(storePath, "revision-corpus");
       const { path: agentPath } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const leases = openOpenClawStateDatabase({ env: state.env }).db.prepare(
         "SELECT lease_id FROM agent_database_leases WHERE path = ?",
@@ -340,9 +338,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         const sessionsDir = state.statePath("custom-sessions");
         const storePath = path.join(sessionsDir, "sessions.json");
         await fs.mkdir(sessionsDir, { recursive: true });
-        await state.writeConfig({ session: { store: storePath } });
-        clearConfigCache();
-        setRuntimeConfigSnapshot({ session: { store: storePath } });
+        await configureStore(state, storePath);
         await upsertSessionEntryCore(
           { sessionKey: "agent:main:chat:original", storePath },
           { sessionId: "original", updatedAt: 1 },
@@ -359,13 +355,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           await new Promise<void>((resolve) => {
             setImmediate(resolve);
           });
-          await state.writeConfig({
-            session: { store: state.statePath("replacement", "sessions.json") },
-          });
-          clearConfigCache();
-          setRuntimeConfigSnapshot({
-            session: { store: state.statePath("replacement", "sessions.json") },
-          });
+          await configureStore(state, state.statePath("replacement", "sessions.json"));
           await upsertSessionEntryCore(
             { sessionKey: "agent:main:chat:fresh", storePath },
             { sessionId: "fresh", updatedAt: 2 },
@@ -392,9 +382,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         const storePath = path.join(sessionsDir, "sessions.json");
         const unsuffixedDatabase = path.join(sessionsDir, "openclaw-agent.sqlite");
         await fs.mkdir(sessionsDir, { recursive: true });
-        await state.writeConfig({ session: { store: storePath } });
-        clearConfigCache();
-        setRuntimeConfigSnapshot({ session: { store: storePath } });
+        await configureStore(state, storePath);
         registerOpenClawAgentDatabase({ agentId: "ops", path: unsuffixedDatabase });
         const { entered, release, realpathSpy } = pauseDirectoryDiscovery(sessionsDir);
         const listing = listSessionTranscriptCorpusEntriesForAgent("main", {
