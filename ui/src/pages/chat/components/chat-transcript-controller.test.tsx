@@ -340,7 +340,7 @@ describe("chat transcript controller", () => {
 
     await draw(true, next);
     expect(container.querySelector(".chat-history-boundary__action")).toBe(button);
-    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
     expect(button.textContent).toContain("Loading");
 
     await draw(false, next);
