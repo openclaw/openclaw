@@ -1,3 +1,4 @@
+import type { SessionsRecoverResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SessionsBranchesListResult,
@@ -8,7 +9,6 @@ import type {
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
 } from "../../api/types.ts";
-import { requestSessionRecovery } from "./recover.ts";
 import type {
   SessionCompactResult,
   SessionCapability,
@@ -55,7 +55,10 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       return null;
     }
     try {
-      const result = await requestSessionRecovery(scope.client, params);
+      const result = await scope.client.request<SessionsRecoverResult>("sessions.recover", params);
+      if (!result?.key?.trim() || !result?.sessionId?.trim()) {
+        throw new Error("sessions.recover returned no session identity");
+      }
       if (!host.connection.isCurrent(scope)) {
         return null;
       }
