@@ -316,7 +316,6 @@ extensions/file-transfer/src/tools/dir-list-tool.ts	2
 extensions/file-transfer/src/tools/file-fetch-tool.ts	1
 extensions/file-transfer/src/tools/file-write-tool.ts	1
 extensions/firecrawl/index.ts	2
-extensions/firecrawl/src/config.ts	3
 extensions/firecrawl/src/firecrawl-fetch-provider-shared.ts	4
 extensions/github-copilot/embeddings.ts	3
 extensions/github-copilot/index.ts	3
@@ -569,7 +568,6 @@ extensions/oc-path/src/oc-path/universal.ts	2
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
 extensions/oc-path/src/oc-path/yaml/resolve.ts	2
 extensions/ollama/index.ts	5
-extensions/ollama/provider-discovery.ts	1
 extensions/ollama/src/discovery-shared.ts	1
 extensions/ollama/src/provider-base-url.ts	1
 extensions/ollama/src/provider-models.ts	1
@@ -912,7 +910,6 @@ extensions/xai/provider-discovery.ts	1
 extensions/xai/provider-models.ts	1
 extensions/xai/realtime-voice-bridge.ts	1
 extensions/xai/realtime-voice-config.ts	2
-extensions/xai/src/code-execution-config.ts	1
 extensions/xai/src/tool-auth-shared.ts	2
 extensions/xai/src/web-search-provider.runtime.ts	2
 extensions/xai/src/x-search-config.ts	3

@@ -58,10 +58,7 @@ const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 export class WorkerConnection {
-  readonly rpc: Pick<
-    WorkerConnectionFrameDispatcher,
-    "request" | "onInferenceEvent" | "onInferenceTerminal"
-  >;
+  readonly rpc: Pick<WorkerConnectionFrameDispatcher, "request" | "onInferenceFrame">;
   private stateValue: WorkerConnectionState = { kind: "idle" };
   private readiness: Deferred<WorkerHelloOk> | undefined;
   private readonly readyListeners = new Set<(hello: WorkerHelloOk) => void>();

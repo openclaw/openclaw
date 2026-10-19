@@ -253,6 +253,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       this.stopRoster?.();
       this.roster?.setInvolvingMe(false);
       this.roster = roster;
+      // Adopt roster facts synchronously before frame-coalesced view publication.
       this.stopRoster = roster?.subscribe(this.requestSessionDataUpdate);
       this.updateSessions(this.context.sessions);
       this.requestSessionDataUpdate();

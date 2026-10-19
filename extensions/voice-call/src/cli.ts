@@ -489,12 +489,11 @@ export function registerVoiceCallCli(params: {
     .action(
       async (options: { mode?: string; port?: string; path?: string; servePath?: string }) => {
         const mode = resolveMode(options.mode ?? "funnel");
-        const servePort = parseCliInteger(
-          options.port ?? String(config.serve.port ?? 3334),
-          "--port",
-          { min: 1, max: MAX_TCP_PORT },
-        );
-        const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
+        const servePort = parseCliInteger(options.port ?? String(config.serve.port), "--port", {
+          min: 1,
+          max: MAX_TCP_PORT,
+        });
+        const servePath = options.servePath ?? config.serve.path;
         const tsPath = options.path ?? config.tailscale?.path ?? servePath;
         const streamExposurePaths = resolveVoiceCallStreamExposurePaths(config, {
           publicWebhookPath: tsPath,

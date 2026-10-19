@@ -1,5 +1,6 @@
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { findCapabilityProviderEntry } from "../plugins/provider-registry-shared.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -79,12 +80,7 @@ export function scheduleTranscriptsSidecar(params: {
         }
       }
       const results = await Promise.allSettled([sidecar?.stop(), shutdownCapturePolicy.drain()]);
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (failures.length) {
-        throw new AggregateError(failures, "Transcript capture shutdown failed");
-      }
+      throwSettledAggregate(results, "Transcript capture shutdown failed");
     },
     preparePluginReload({ previousRegistry, nextRegistry, changedPluginIds, nextConfig }) {
       const affected = new Set<string>();

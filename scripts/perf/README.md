@@ -646,6 +646,45 @@ Post-GC Gateway heap samples follow every completed cohort, and the optional
 final `settled.heapsnapshot` permits retainer inspection. Session resets exclude
 intentionally retained live histories from the trend.
 
+For a steady memory soak with real tool execution and attached viewers, use:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --scenario memory-soak \
+  --clients 8 --runs 4 --chunks 100 --chunk-interval-ms 10 \
+  --warmup-ms 300000 --duration-ms 3600000 --round-interval-ms 15000 \
+  --memory-interval-ms 60000 --retained-profile-ms 600000 \
+  --reset-every-rounds 20 --list-interval-ms 2000 --heap-snapshot
+```
+
+This runs paced cohorts after five minutes of warmup, with one real `read` tool
+and a streamed completion per turn. Diagnostics and the Prometheus plugin are
+enabled. Session generations reset every twenty cohorts (including warmup) to
+bound intentional live transcript growth; `--reset-every-rounds 0` keeps history
+instead. The report records resets and completed cohorts. It does not exercise
+the image/output-limit recovery of `attempt-retention`. `--rounds` is ignored;
+an admitted cohort drains before the duration ends, so a slow cohort may overrun.
+
+`memory-samples.jsonl` records Gateway heap, external, ArrayBuffer and RSS memory
+after completed cohorts at the requested interval, including exact timestamps.
+Periodic samples use natural GC; initial and final settled samples explicitly
+collect garbage. Sampling cadence is bounded by cohort duration. The final
+window writes `retained.heapprofile` with both include-collected flags false and
+a forced collection before stopping. Its `sampledRetainedBytes` and
+`topRetainedSites` describe allocations surviving that window, not allocation
+churn or all objects retained since startup. `--retained-profile-ms 0` disables
+this capture; it cannot run with allocation-churn capture. The optional
+`settled.heapsnapshot` supports retainer inspection. A smoke run can use
+`--warmup-ms 0 --duration-ms 30000 --retained-profile-ms 15000`.
+
+Use identical fixtures, driver revisions and options for concurrent A/B pairs,
+separate state/ports, the existing `--start-at` barrier after warmup, the shared
+measurement lock and swapped sixteen-core halves. Check paired settled-memory
+changes alongside raw sample trends; compare the same session-reset phase.
+The soak preserves explicitly configured fixture plugin entries; prepare any
+synthetic diagnostic listener fixture separately and record its version. It
+does not install production-only listeners or copy their operator state.
+
 To start an existing fixture without regenerating it, set `HOME` and
 `OPENCLAW_HOME` to `<state-dir>/home`, `OPENCLAW_STATE_DIR` to `<state-dir>`,
 `OPENCLAW_CONFIG_PATH` to `<state-dir>/openclaw.json`, and `TMPDIR` to

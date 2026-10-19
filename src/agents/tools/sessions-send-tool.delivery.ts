@@ -257,7 +257,7 @@ export async function trySessionsSendActiveRunDelivery(
                 assertCurrent: () => {
                   assertInputCurrent();
                   if (!selection.operatorAuthority) {
-                    assertCaller?.("agent");
+                    assertCaller?.("sessions.send");
                   }
                 },
               }

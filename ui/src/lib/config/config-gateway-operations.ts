@@ -31,7 +31,6 @@ import {
   currentConfigConnectionEpoch,
   isCurrentConfigConnection,
   isCurrentRequest,
-  nextRequestVersion,
   resolveEditableSnapshotConfig,
   type ConfigRead,
   type ConfigGatewayClient,
@@ -322,7 +321,7 @@ async function readConfig(
   isCurrentLoad: () => boolean,
 ): Promise<Result<void, string>> {
   const isCurrent = () =>
-    isCurrentLoad() && isCurrentRequest(state, "config", version, client, connectionEpoch);
+    isCurrentLoad() && isCurrentRequest(state, version, client, connectionEpoch);
   if (!options.background) {
     state.configLoading = true;
   }
@@ -393,7 +392,7 @@ async function readConfig(
     }
     return failure(outcome.message);
   } finally {
-    if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
+    if (isCurrentRequest(state, version, client, connectionEpoch)) {
       state.configLoading = false;
     }
   }
@@ -410,25 +409,24 @@ export async function loadConfigSchema(state: RuntimeConfigState) {
     return;
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
-  const version = nextRequestVersion(state, "schema");
   state.configSchemaLoading = true;
   try {
     const res = await client.request<ConfigSchemaResponse>("config.schema", {});
-    if (!isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
+    if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return;
     }
     state.configSchema = res.schema ?? null;
     state.configUiHints = res.uiHints ?? {};
     state.configSchemaVersion = res.version ?? null;
   } catch (err) {
-    if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
+    if (isCurrentConfigConnection(state, client, connectionEpoch)) {
       state.lastError = formatUiError(err);
       if (state.configAutoSaveStatus === "rejected") {
         state.configAutoSaveStatus = "error";
       }
     }
   } finally {
-    if (isCurrentRequest(state, "schema", version, client, connectionEpoch)) {
+    if (isCurrentConfigConnection(state, client, connectionEpoch)) {
       state.configSchemaLoading = false;
     }
   }

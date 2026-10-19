@@ -1,6 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
-import { i18n } from "../../i18n/lib/translate.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createDockLayout } from "../dock-layout.ts";
 import { browserPanelLayout } from "../dock-panel-layout.ts";
@@ -349,9 +348,7 @@ export function createBrowserPanelPresentation(
     toggle,
     handleToggleRequest,
     closePanel,
-    selectHostedTab: (id: string) => {
-      void browser.selectTab(id);
-    },
+    selectHostedTab: (id: string) => void browser.selectTab(id),
     closeHostedTab: (id: string) => browser.closeTab(id),
     get hostedTabs() {
       return browserPanelHostedTabs(browser.tabs, element.ownerDocument);
@@ -383,7 +380,6 @@ export function createBrowserPanelPresentation(
             handleToggleRequest(event);
           }
         }),
-        i18n.subscribe(publish),
       ];
       // A takeover already owning the viewport suppresses the restored dock first.
       dockLayout.setSuppressed(element.suppressed);

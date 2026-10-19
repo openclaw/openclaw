@@ -135,6 +135,7 @@ export function createMcpAppView(
   function start() {
     started = true;
     let { client, phase, hello } = context.gateway.snapshot;
+    // Connection receipts retire frame requests before a replacement binding is admitted.
     stopConnection = context.gateway.subscribe((snapshot) => {
       if (snapshot.client !== client || snapshot.phase !== phase || snapshot.hello !== hello) {
         connectionChanged();
@@ -143,6 +144,7 @@ export function createMcpAppView(
       // Scope, generation, and access can change without replacing the snapshot's objects.
       inputChanged();
     });
+    // The protocol owner updates the iframe's native title outside Solid rendering.
     stopLocale = i18n.subscribe(updateTitle);
     inputChanged();
   }
@@ -692,6 +694,7 @@ export function createMcpAppView(
           await refreshModelContext();
         }
       };
+      // Theme receipts update the remote app's host context through its live bridge.
       addResourceCleanup(createdResources, context.theme.subscribe(updateHostContext));
       if (typeof ResizeObserver !== "undefined") {
         const hostResizeObserver = new ResizeObserver(updateHostContext);

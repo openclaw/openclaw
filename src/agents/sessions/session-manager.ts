@@ -165,7 +165,7 @@ export class SessionManager extends SessionManagerBranching {
     const context = await readSessionManagerModelContextAsync(
       target,
       { limits: this.boundedContextLimits },
-      (snapshot) => SessionManager.fromSelectedEntries(snapshot.events, cwd),
+      (snapshot) => SessionManager.fromSelectedEntries(snapshot.events, cwd, snapshot.version),
       this,
     );
     const current = this.captureTranscriptView();
@@ -630,7 +630,7 @@ export class SessionManager extends SessionManagerBranching {
     const context = withSessionContextAdmission(target, options.admission, () =>
       readSessionTranscriptModelContext(target, options.through, options.limits),
     );
-    return SessionManager.fromSelectedEntries(context.events, options.cwd);
+    return SessionManager.fromSelectedEntries(context.events, options.cwd, context.version);
   }
 
   /** The same detached model view, with durable transcript scanning off the event loop. */
@@ -645,18 +645,33 @@ export class SessionManager extends SessionManagerBranching {
     } = {},
   ): Promise<SessionManager> {
     return readSessionManagerModelContextAsync(target, options, (context) =>
-      SessionManager.fromSelectedEntries(context.events, options.cwd),
+      SessionManager.fromSelectedEntries(context.events, options.cwd, context.version),
     );
   }
 
-  private static fromSelectedEntries(contextEntries: unknown[], cwd?: string): SessionManager {
+  /** The source snapshot's version, including writes beyond a selected admission prefix. */
+  getTranscriptSnapshotVersion(): Readonly<SessionTranscriptContextVersion> | undefined {
+    return this.transcriptVersion;
+  }
+
+  private static fromSelectedEntries(
+    contextEntries: unknown[],
+    cwd?: string,
+    version?: SessionTranscriptContextVersion,
+  ): SessionManager {
     // SAFETY: The transcript owner preserves the entry union; the constructor applies the normal codec.
     const entries = contextEntries as FileEntry[];
     const header = entries.find((entry) => entry.type === "session");
     if (entries.length > 0) {
       assertCurrentSessionTranscriptHeader(header);
     }
-    const manager = new SessionManager(cwd ?? header?.cwd ?? process.cwd(), undefined, entries);
+    const manager = new SessionManager(
+      cwd ?? header?.cwd ?? process.cwd(),
+      undefined,
+      entries,
+      undefined,
+      version,
+    );
     manager.adoptSelectedTranscriptPath(
       manager.appendParentId,
       [...manager.byId].map(([id, entry]) => [id, entry.parentId]),

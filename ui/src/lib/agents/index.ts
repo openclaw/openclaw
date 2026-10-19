@@ -316,6 +316,7 @@ export function createAgentCapability(gateway: AgentGateway) {
     return request;
   };
 
+  // Retire cached agent and file reads when connection or access authority changes.
   const stopGateway = gateway.subscribe((snapshot) => {
     const hadList = state.agentsList !== null;
     const clientChanged = state.client !== snapshot.client;

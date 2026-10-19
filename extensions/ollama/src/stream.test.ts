@@ -2,6 +2,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -50,9 +51,14 @@ const STREAM_MODEL = {
   api: "ollama",
   provider: "ollama",
   id: "qwen3.5",
+  name: "qwen3.5",
+  baseUrl: "http://127.0.0.1:11434",
+  reasoning: true,
   input: ["text"],
   contextWindow: 65536,
-} as const;
+  maxTokens: 8192,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+} satisfies ProviderRuntimeModel;
 
 describe("isOllamaCompatProvider", () => {
   it.each([
@@ -184,7 +190,7 @@ describe("createOllamaStreamFn thinking events", () => {
     });
 
     const streamFn = createOllamaStreamFn("http://localhost:11434");
-    const stream = streamFn(STREAM_MODEL as never, context, options);
+    const stream = streamFn(STREAM_MODEL, context, options);
 
     const events: Array<{ type: string; [key: string]: unknown }> = [];
     for await (const event of stream as AsyncIterable<{
@@ -585,7 +591,7 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const streamFn = createOllamaStreamFn("http://localhost:11434");
     const stream = streamFn(
-      STREAM_MODEL as never,
+      STREAM_MODEL,
       { messages: [{ role: "user", content: "test" }] } as never,
       {},
     );
@@ -636,7 +642,7 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const streamFn = createOllamaStreamFn("http://localhost:11434");
     const stream = streamFn(
-      STREAM_MODEL as never,
+      STREAM_MODEL,
       { messages: [{ role: "user", content: "test" }] } as never,
       { signal: controller.signal },
     );
@@ -697,7 +703,7 @@ describe("createOllamaStreamFn thinking events", () => {
         "X-Proxy-Auth": configuredSecret,
       });
       const stream = streamFn(
-        STREAM_MODEL as never,
+        STREAM_MODEL,
         { messages: [{ role: "user", content: "test" }] } as never,
         { apiKey: bearerCredential },
       );
@@ -721,7 +727,7 @@ describe("createOllamaStreamFn thinking events", () => {
       returnSuccess = true;
       const successEvents: Array<{ type: string }> = [];
       for await (const event of streamFn(
-        STREAM_MODEL as never,
+        STREAM_MODEL,
         { messages: [{ role: "user", content: "test" }] } as never,
         { apiKey: bearerCredential },
       ) as AsyncIterable<{ type: string }>) {
@@ -759,7 +765,7 @@ describe("createOllamaStreamFn thinking events", () => {
       const readEventTypes = async () => {
         const events: string[] = [];
         for await (const event of streamFn(
-          STREAM_MODEL as never,
+          STREAM_MODEL,
           { messages: [{ role: "user", content: "test" }] } as never,
           {},
         ) as AsyncIterable<{ type: string }>) {
@@ -826,7 +832,7 @@ describe("createOllamaStreamFn thinking events", () => {
       const address = server.address() as AddressInfo;
       const streamFn = createOllamaStreamFn(`http://127.0.0.1:${address.port}`);
       const stream = streamFn(
-        STREAM_MODEL as never,
+        STREAM_MODEL,
         { messages: [{ role: "user", content: "test" }] } as never,
         { requestTimeoutMs } as never,
       );
@@ -872,7 +878,7 @@ describe("createOllamaStreamFn thinking events", () => {
       const address = server.address() as AddressInfo;
       const streamFn = createOllamaStreamFn(`http://127.0.0.1:${address.port}`);
       const stream = streamFn(
-        STREAM_MODEL as never,
+        STREAM_MODEL,
         { messages: [{ role: "user", content: "test" }] } as never,
         { requestTimeoutMs: 120 } as never,
       );
@@ -910,7 +916,7 @@ describe("createOllamaStreamFn thinking events", () => {
     const controller = new AbortController();
     const streamFn = createOllamaStreamFn("http://localhost:11434");
     const stream = streamFn(
-      STREAM_MODEL as never,
+      STREAM_MODEL,
       { messages: [{ role: "user", content: "test" }] } as never,
       { signal: controller.signal },
     );
