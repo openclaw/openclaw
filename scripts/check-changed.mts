@@ -496,13 +496,6 @@ export function createChangedCheckPlan(
   const controllerGuardArgs = [
     "check:control-ui-controllers",
     ...(options.staged ? ["--staged"] : []),
-    "--base",
-    options.base ?? (options.staged ? "HEAD" : baseEnv.CHECKOUT_BASE_SHA || "origin/main"),
-    // CI materializes this exact comparison commit without its ancestry.
-    // Explicit and staged bases retain their normal Git scope.
-    ...(options.base === undefined && !options.staged && baseEnv.CHECKOUT_BASE_SHA
-      ? ["--no-merge-base"]
-      : []),
   ];
   delete baseEnv.OPENCLAW_OXLINT_CHANGED_PATHS;
   const cwd = process.cwd();

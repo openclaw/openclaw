@@ -239,7 +239,6 @@ const legacyStorePattern = new RegExp(
 const allowedRuntimeMigrationPaths = [
   "src/commands/doctor/",
   "src/commands/doctor-usage-cost-cache.ts",
-  "src/infra/session-state-migration.ts",
   "src/infra/state-migrations.tui-last-session.ts",
   "src/infra/state-migrations.managed-outgoing-images.ts",
   "src/infra/state-migrations.apns.ts",
@@ -251,8 +250,6 @@ const allowedRuntimeMigrationPaths = [
   "src/infra/state-migrations.node-host.ts",
   "src/infra/state-migrations.device-identity.ts",
   "src/infra/state-migrations.rescue-pending.ts",
-  "src/commands/session-state-migration.ts",
-  "src/commands/doctor-state-migrations.test.ts",
 ];
 
 const allowedFixturePaths = new Set(["extensions/qa-lab/src/providers/shared/auth-store.ts"]);
