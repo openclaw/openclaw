@@ -11,11 +11,7 @@ import {
 } from "./persistence.test-support.js";
 
 async function send(
-  message:
-    | PersistenceReply
-    | { kind: "ready" | "booted" }
-    | { kind: "error"; error: string }
-    | { kind: "phase"; phase: string },
+  message: PersistenceReply | { kind: "ready" | "booted" } | { kind: "error"; error: string },
 ) {
   await new Promise<void>((resolve, reject) => {
     assert.ok(typeof process.send === "function");
@@ -23,34 +19,24 @@ async function send(
   });
 }
 
-async function phase(label: string) {
-  await send({ kind: "phase", phase: label });
-}
-
 async function beginOperation() {
-  // Readiness means imports are complete. The parent observes this phase before
-  // releasing the operation gate, independently of the publication reply.
-  const start = new Promise<void>((resolve) => {
-    process.once("message", () => resolve());
-  });
+  // Install the gate before readiness; publication replies cannot satisfy this handshake.
+  const start = hold();
   await send({ kind: "ready" });
   await start;
-  await phase("operation-start");
 }
 
-async function hold() {
+function hold() {
   // The IPC listener keeps the publisher alive without a sleep or production testing flag.
-  await new Promise<void>((resolve) => {
+  return new Promise<void>((resolve) => {
     process.once("message", () => resolve());
   });
 }
 
 async function runCandidate(command: PersistenceCommand, root: string): Promise<PersistenceReply> {
-  await phase("bundle-import");
   const bundle = await import("./bundle.js");
   if (command.action === "stage-hold") {
     await beginOperation();
-    await phase("stage-operation");
     const staged = await bundle.stageSkillLibraryBundle(
       command.pin.skillId,
       bundle.prepareSkillLibraryBundle(persistenceFiles(command.version)),
@@ -64,21 +50,16 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
     }
     return { kind: "complete" };
   }
-  await phase("state-import");
   const state = await import("../../state/openclaw-state-db.js");
-  await phase("profiles-import");
   const { ensureProfileForEmail } = await import("../../state/user-profiles.js");
-  await phase("service-import");
   const service = await import("./service.js");
   const usesSessions = ["seed", "read", "update-remove"].includes(command.action);
-  await phase("session-imports");
   const sessions = usesSessions
     ? await import("../../config/sessions/session-accessor.sqlite-entry.js")
     : undefined;
   const agent = usesSessions ? await import("../../state/openclaw-agent-db.js") : undefined;
   const selection = usesSessions ? await import("./selection.js") : undefined;
   const uploads = command.action === "seed" ? await import("./import.js") : undefined;
-  await phase("imports-complete");
   await beginOperation();
   const options = { env: process.env, path: path.join(root, "state", "openclaw.sqlite") };
   const scope = { env: process.env, agentId: "main", sessionKey: PERSISTENCE_SESSION_KEY };
@@ -87,9 +68,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
     return { slug, content: instructions!.content, files };
   };
   try {
-    await phase("profile-open");
     const profile = ensureProfileForEmail("persistence@example.test", options);
-    await phase("profile-ready");
     const authority = {
       profileId: profile.id,
       scopes: ["operator.admin"],
@@ -153,7 +132,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
         },
         options,
       );
-      return { kind: "seeded", profileId: profile.id, pins };
+      return { kind: "seeded" };
     }
     const pins = sessions?.loadSessionEntry(scope)?.skillLibrarySelections;
     if (command.action === "read") {
@@ -211,7 +190,6 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
       };
     }
     try {
-      await phase("save-operation");
       await save(command.version, "revised-procedure", command.pin);
     } finally {
       fs.open = originalOpen;
@@ -227,7 +205,6 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
 process.once("message", (command: PersistenceCommand) => {
   void (async () => {
     try {
-      await phase("command-received");
       const root = process.env.OPENCLAW_STATE_DIR;
       assert.ok(root);
       const reply = await runCandidate(command, root);

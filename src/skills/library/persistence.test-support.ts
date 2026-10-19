@@ -19,6 +19,10 @@ import { persistenceRuntimeEntrypoint } from "./persistence-runtime.test-support
 
 export const PERSISTENCE_SESSION_KEY = "agent:main:library-persistence";
 export const PERSISTENCE_SESSION_ID = "library-persistence-session";
+const bytesOf = (file: SkillLibraryFile) => Buffer.from(file.content, file.encoding ?? "utf8");
+const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+const byPath = (a: SkillLibraryFile, b: SkillLibraryFile) =>
+  a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
 
 export function persistenceFiles(version: "old" | "new" | "orphan"): SkillLibraryFile[] {
   return [
@@ -61,9 +65,7 @@ function persistenceEnvironment(root: string): NodeJS.ProcessEnv {
 }
 
 export type PersistenceCommand =
-  | { action: "seed" }
-  | { action: "read" }
-  | { action: "update-remove" }
+  | { action: "seed" | "read" | "update-remove" }
   | {
       action: "publish-hold" | "stage-hold" | "save";
       pin: SkillLibrarySelection;
@@ -71,7 +73,7 @@ export type PersistenceCommand =
     };
 
 export type PersistenceReply =
-  | { kind: "seeded"; profileId: string; pins: SkillLibrarySelection[] }
+  | { kind: "seeded" }
   | { kind: "complete" }
   | { kind: "staged" | "published"; directory: string }
   | {
@@ -83,22 +85,17 @@ export type PersistenceReply =
     };
 
 /** IPC owns readiness; close is installed before any signal, and every child is reaped in finally. */
-export async function withPersistenceChild<T>(
+export async function withPersistenceChild(
   root: string,
   command: PersistenceCommand,
   signal: AbortSignal,
-  use: (
+  use?: (
     reply: PersistenceReply,
     child: { pid: number; kill: () => Promise<void>; finish: () => Promise<void> },
-  ) => Promise<T>,
-): Promise<T> {
+  ) => Promise<void>,
+): Promise<PersistenceReply> {
   const output = createBoundedChildOutput();
-  const started = performance.now();
-  const phases: string[] = [];
-  const recordPhase = (phase: string) => {
-    phases.push(`${phase}@${Math.round(performance.now() - started)}ms`);
-  };
-  const diagnostic = () => `${command.action}: ${phases.join(" -> ")}; output=${output.text()}`;
+  const diagnostic = () => `${command.action}: ${output.text()}`;
   const workerUrl = resolveRuntimeWorkerUrl(persistenceRuntimeEntrypoint);
   const child = fork(workerUrl, [], {
     execArgv: workerUrl.pathname.endsWith(".ts")
@@ -124,20 +121,15 @@ export async function withPersistenceChild<T>(
         });
       };
       child.once("error", reject);
-      child.on("message", (message: { kind?: string; error?: string; phase?: string }) => {
-        if (message.kind === "phase") {
-          recordPhase(message.phase ?? "unknown");
-        } else if (message.kind === "booted") {
-          recordPhase("booted");
+      child.on("message", (message: { kind?: string; error?: string }) => {
+        if (message.kind === "booted") {
           send(command);
         } else if (message.kind === "ready") {
-          recordPhase("module-ready");
           moduleReady.resolve();
           send({ kind: "run" });
         } else if (message.kind === "error") {
           reject(new Error(message.error));
         } else {
-          recordPhase(`reply:${message.kind}`);
           resolve(message as PersistenceReply);
         }
       });
@@ -159,7 +151,7 @@ export async function withPersistenceChild<T>(
     );
     const reply = await withinTest(replyPromise, signal);
     assert.ok(child.pid);
-    return await use(reply, {
+    const control = {
       pid: child.pid,
       async kill() {
         assert.equal(child.kill("SIGKILL"), true);
@@ -169,7 +161,13 @@ export async function withPersistenceChild<T>(
         const result = await withinTest(closed, signal);
         assert.deepEqual(result, { code: 0, signal: null }, output.text());
       },
-    });
+    };
+    if (use) {
+      await use(reply, control);
+    } else {
+      await control.finish();
+    }
+    return reply;
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGKILL");
@@ -179,51 +177,32 @@ export async function withPersistenceChild<T>(
   }
 }
 
-export async function runPersistenceChild(
-  root: string,
-  command: PersistenceCommand,
-  signal: AbortSignal,
-) {
-  return await withPersistenceChild(root, command, signal, async (reply, child) => {
-    await child.finish();
-    return reply;
-  });
-}
-
 export function readPersistenceDisk(root: string) {
-  const state = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), { readOnly: true });
-  try {
-    const agent = new DatabaseSync(
-      path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
-      { readOnly: true },
-    );
-    try {
-      const row = agent
-        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-        .get(PERSISTENCE_SESSION_KEY);
-      assert.equal(typeof row?.entry_json, "string");
-      const session = JSON.parse(row!.entry_json as string) as {
-        skillLibrarySelections: SkillLibrarySelection[];
-        label?: string;
-      };
-      return {
-        stateVersion: state.prepare("PRAGMA user_version").get()!.user_version,
-        agentVersion: agent.prepare("PRAGMA user_version").get()!.user_version,
-        entries: state.prepare("SELECT * FROM skill_library_entries ORDER BY skill_id").all(),
-        revisions: state
-          .prepare("SELECT * FROM skill_library_revisions ORDER BY skill_id, revision")
-          .all(),
-        events: state.prepare("SELECT * FROM skill_library_events ORDER BY event_id").all(),
-        uploads: state.prepare("SELECT * FROM skill_library_uploads ORDER BY upload_id").all(),
-        pins: session.skillLibrarySelections,
-        label: session.label,
-      };
-    } finally {
-      agent.close();
-    }
-  } finally {
-    state.close();
-  }
+  using state = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), { readOnly: true });
+  using agent = new DatabaseSync(
+    path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
+    { readOnly: true },
+  );
+  const row = agent
+    .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+    .get(PERSISTENCE_SESSION_KEY);
+  assert.equal(typeof row?.entry_json, "string");
+  const session = JSON.parse(row!.entry_json as string) as {
+    skillLibrarySelections: SkillLibrarySelection[];
+    label?: string;
+  };
+  return {
+    stateVersion: state.prepare("PRAGMA user_version").get()!.user_version,
+    agentVersion: agent.prepare("PRAGMA user_version").get()!.user_version,
+    entries: state.prepare("SELECT * FROM skill_library_entries ORDER BY skill_id").all(),
+    revisions: state
+      .prepare("SELECT * FROM skill_library_revisions ORDER BY skill_id, revision")
+      .all(),
+    events: state.prepare("SELECT * FROM skill_library_events ORDER BY event_id").all(),
+    uploads: state.prepare("SELECT * FROM skill_library_uploads ORDER BY upload_id").all(),
+    pins: session.skillLibrarySelections,
+    label: session.label,
+  };
 }
 
 export function persistenceRevisionDir(
@@ -240,24 +219,18 @@ export async function assertPersistenceBundle(
   version: "old" | "new" | "orphan",
   recorded = true,
 ) {
-  const files = persistenceFiles(version);
-  const manifest = files
+  const manifest = persistenceFiles(version)
+    .toSorted(byPath)
     .map((file) => {
-      const bytes = Buffer.from(file.content, file.encoding ?? "utf8");
+      const bytes = bytesOf(file);
       return {
         path: file.path,
-        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sha256: hash(bytes),
         sizeBytes: bytes.length,
         executable: file.executable === true,
       };
-    })
-    .toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  assert.equal(
-    createHash("sha256")
-      .update(JSON.stringify(["openclaw.skill-library.tree.v1", manifest]))
-      .digest("hex"),
-    pin.revision,
-  );
+    });
+  assert.equal(hash(JSON.stringify(["openclaw.skill-library.tree.v1", manifest])), pin.revision);
   if (recorded) {
     const row = readPersistenceDisk(root).revisions.find(
       (item) => item.skill_id === pin.skillId && item.revision === pin.revision,
@@ -280,10 +253,7 @@ export async function assertPersistenceFiles(directory: string, version: "old" |
     const filename = path.join(directory, file.path);
     const stat = await fs.lstat(filename);
     assert.equal(stat.isFile(), true);
-    assert.deepEqual(
-      await fs.readFile(filename),
-      Buffer.from(file.content, file.encoding ?? "utf8"),
-    );
+    assert.deepEqual(await fs.readFile(filename), bytesOf(file));
     if (process.platform !== "win32") {
       assert.equal((stat.mode & 0o111) !== 0, file.executable === true);
     }
@@ -305,13 +275,13 @@ export function assertPersistenceSelection(
     reply.files,
     pins.map(() =>
       persistenceFiles("old")
+        .toSorted(byPath)
         .map((file) => ({
           path: file.path,
-          content: Buffer.from(file.content, file.encoding ?? "utf8").toString("base64"),
+          content: bytesOf(file).toString("base64"),
           encoding: "base64",
           executable: file.executable === true,
-        }))
-        .toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
+        })),
     ),
   );
 }

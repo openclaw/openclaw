@@ -27,6 +27,13 @@ import { saveSkillLibrary } from "./service.js";
 const dirs = useStateDatabaseTempDirs();
 const content =
   "---\nname: guide\ndescription: Saved procedure\n---\n# Guide\nRead references/data.bin.\n";
+type Pin = NonNullable<SkillSnapshot["librarySelections"]>[number];
+const pinOf = ({ skillId, revision, name, ownerProfileId }: Pin): Pin => ({
+  skillId,
+  revision,
+  name,
+  ownerProfileId,
+});
 
 function snapshotFor(...pins: NonNullable<SkillSnapshot["librarySelections"]>): SkillSnapshot {
   return { prompt: "", skills: pins.map(({ name }) => ({ name })), librarySelections: pins };
@@ -72,12 +79,7 @@ async function fixture() {
     },
     options,
   );
-  const pin = {
-    skillId: saved.entry.skillId,
-    revision: saved.entry.revision,
-    name: saved.entry.name,
-    ownerProfileId: saved.entry.ownerProfileId,
-  };
+  const pin = pinOf(saved.entry);
   const snapshot = snapshotFor(pin);
   const databasePath = openDatabase(options).path;
   await closeDatabase();
@@ -151,12 +153,7 @@ it("reads both phases from the active snapshot without fetching hidden manifests
     },
     options,
   );
-  snapshot.librarySelections!.push({
-    skillId: hidden.entry.skillId,
-    revision: hidden.entry.revision,
-    name: hidden.entry.name,
-    ownerProfileId: hidden.entry.ownerProfileId,
-  });
+  snapshot.librarySelections!.push(pinOf(hidden.entry));
   await closeDatabase();
   const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   await withEnvAsync({ OPENCLAW_STATE_DIR: root }, () =>
@@ -168,9 +165,9 @@ it("reads both phases from the active snapshot without fetching hidden manifests
         )
         .run("Later live description", "invalid live manifest", pin.skillId);
       const delivery = await deliver(snapshot, () => {});
-      expect(delivery?.skills).toHaveLength(1);
-      expect(delivery?.skills[0]?.description).toBe("Saved procedure");
-      expect(delivery?.skills[0]?.revision).toBe(pin.revision);
+      expect(delivery?.skills).toEqual([
+        expect.objectContaining({ description: "Saved procedure", revision: pin.revision }),
+      ]);
       const manifests = execute.mock.calls
         .map(([, command]) => command)
         .find((command) => command.type === "skills.library.manifests");
@@ -179,87 +176,72 @@ it("reads both phases from the active snapshot without fetching hidden manifests
   );
 });
 
-it.each(["root", "authority", "admission"] as const)(
-  "retains the captured owner when %s changes while descriptions are pending",
+it.each(["root", "authority", "admission", "selection", "descriptions", "manifests"] as const)(
+  "retains captured resource facts across a pending %s change",
   async (change) => {
-    const { root, snapshot } = await fixture();
+    const { root, pin, snapshot } = await fixture();
+    const originalPin = { ...pin };
     const other = dirs.make("skill-library-other-root-");
     const { entered, release, hold } = pausedRead();
-    const original = selectionReads.readSkillLibrarySelectionDescriptions;
-    vi.spyOn(selectionReads, "readSkillLibrarySelectionDescriptions").mockImplementation(
-      async (...args) => hold(await original(...args)),
-    );
+    if (change === "manifests") {
+      const read = selectionReads.readSkillLibrarySelectionManifests;
+      vi.spyOn(selectionReads, "readSkillLibrarySelectionManifests").mockImplementation(
+        async (...args) => hold(await read(...args)),
+      );
+    } else {
+      const read = selectionReads.readSkillLibrarySelectionDescriptions;
+      vi.spyOn(selectionReads, "readSkillLibrarySelectionDescriptions").mockImplementation(
+        async (...args) => hold(await read(...args)),
+      );
+    }
     const closed = new Error("Synthetic resource owner closed");
     let current = true;
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      const pending = deliver(snapshot, () => {
-        if (!current) {
-          throw closed;
-        }
-      });
-      const outcome = outcomeOf(pending);
-      await entered;
-      if (change === "root") {
-        process.env.OPENCLAW_STATE_DIR = other;
-      } else if (change === "admission") {
-        await closeDatabase();
-      } else {
-        current = false;
-      }
-      release();
-      const result = await outcome;
-      if (change === "authority") {
-        expect(result).toEqual({ error: closed });
-      } else if (change === "admission") {
-        expect(result).toHaveProperty("error");
-      } else {
-        expect(result).toMatchObject({ value: { skills: [{ description: "Saved procedure" }] } });
-        expect(fs.existsSync(path.join(other, "state", "openclaw.sqlite"))).toBe(false);
-      }
-    });
-  },
-);
-
-it.each(["selection", "descriptions", "manifests"] as const)(
-  "retains pin values and eligibility when the caller mutates them during %s",
-  async (phase) => {
-    const { root, pin, snapshot } = await fixture();
-    const originalPin = { ...pin };
-    const { entered, release, hold } = pausedRead();
-    const descriptions = selectionReads.readSkillLibrarySelectionDescriptions;
-    const manifests = selectionReads.readSkillLibrarySelectionManifests;
-    if (phase === "manifests") {
-      vi.spyOn(selectionReads, "readSkillLibrarySelectionManifests").mockImplementation(
-        async (...args) => hold(await manifests(...args)),
-      );
-    } else {
-      vi.spyOn(selectionReads, "readSkillLibrarySelectionDescriptions").mockImplementation(
-        async (...args) => hold(await descriptions(...args)),
-      );
-    }
-    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       const pending =
-        phase === "selection"
+        change === "selection"
           ? selection
               .prepareSkillLibrarySelection(snapshot.librarySelections!, {}, () => {})
               .then((entries) => entries.map((entry) => entry.skill))
-          : deliver(snapshot, () => {}).then((delivery) => delivery?.skills);
+          : deliver(snapshot, () => {
+              if (!current) {
+                throw closed;
+              }
+            }).then((delivery) => delivery?.skills);
       const outcome = outcomeOf(pending);
       try {
         await entered;
-        Object.assign(pin, {
-          skillId: "changed",
-          revision: "0".repeat(64),
-          name: "changed",
-          ownerProfileId: null,
-        });
-        snapshot.librarySelections!.push({ ...pin });
-        snapshot.skills[0]!.name = "changed";
+        if (change === "root") {
+          process.env.OPENCLAW_STATE_DIR = other;
+        } else if (change === "authority") {
+          current = false;
+        } else if (change === "admission") {
+          await closeDatabase();
+        } else {
+          Object.assign(pin, {
+            skillId: "changed",
+            revision: "0".repeat(64),
+            name: "changed",
+            ownerProfileId: null,
+          });
+          snapshot.librarySelections!.push({ ...pin });
+          snapshot.skills[0]!.name = "changed";
+        }
         release();
-        expect(await outcome).toMatchObject({
-          value: [{ name: originalPin.name, description: "Saved procedure" }],
-        });
-        expect(loadSelection([originalPin])[0]?.skill.name).toBe(originalPin.name);
+        const result = await outcome;
+        if (change === "authority") {
+          expect(result).toEqual({ error: closed });
+        } else if (change === "admission") {
+          expect(result).toHaveProperty("error");
+        } else {
+          expect(result).toMatchObject({
+            value: [{ name: originalPin.name, description: "Saved procedure" }],
+          });
+          if (change === "root") {
+            expect(fs.existsSync(path.join(other, "state", "openclaw.sqlite"))).toBe(false);
+          } else {
+            expect(loadSelection([originalPin])[0]?.skill.name).toBe(originalPin.name);
+          }
+        }
       } finally {
         release();
         await outcome;
