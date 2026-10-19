@@ -13,8 +13,7 @@ import {
 } from "./plugins-page.test-support.ts";
 
 export function queryWithin(root: ParentNode) {
-  return <T extends Element = Element>(selector: string): T | null =>
-    root.querySelector<T>(selector);
+  return root.querySelector.bind(root);
 }
 
 function createFixture<Context extends ApplicationContext>(
