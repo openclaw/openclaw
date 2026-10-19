@@ -251,6 +251,20 @@ function normalizeHookPayloadAgentId(raw: unknown): Result<string | undefined, s
     : { ok: false, error: "agentId must be a non-empty string" };
 }
 
+function normalizeHookWakeMode(
+  raw: unknown,
+  field: string,
+): Result<"now" | "next-heartbeat", string> {
+  if (raw === undefined || raw === null || (typeof raw === "string" && !raw.trim())) {
+    return { ok: true, value: "now" };
+  }
+  const mode = normalizeOptionalLowercaseString(raw)?.replaceAll("_", "-");
+  if (mode === "now" || mode === "next-heartbeat") {
+    return { ok: true, value: mode };
+  }
+  return { ok: false, error: `${field} must be now or next-heartbeat` };
+}
+
 export function normalizeWakePayload(
   payload: Record<string, unknown>,
 ): Result<
@@ -261,10 +275,11 @@ export function normalizeWakePayload(
   if (!normalizedText) {
     return { ok: false, error: "text required" };
   }
-  const mode = payload.mode === "next-heartbeat" ? "next-heartbeat" : "now";
-  if (payload.mode !== undefined && payload.mode !== mode) {
-    return { ok: false, error: "mode must be now or next-heartbeat" };
+  const modeResult = normalizeHookWakeMode(payload.mode, "mode");
+  if (!modeResult.ok) {
+    return modeResult;
   }
+  const mode = modeResult.value;
   const agentId = normalizeHookPayloadAgentId(payload.agentId);
   if (!agentId.ok) {
     return agentId;
@@ -635,10 +650,11 @@ export function normalizeAgentPayload(
     payload.idempotencyKey,
     MAX_HOOK_IDEMPOTENCY_KEY_LENGTH,
   );
-  const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
-  if (payload.wakeMode !== undefined && payload.wakeMode !== wakeMode) {
-    return { ok: false, error: "wakeMode must be now or next-heartbeat" };
+  const wakeModeResult = normalizeHookWakeMode(payload.wakeMode, "wakeMode");
+  if (!wakeModeResult.ok) {
+    return wakeModeResult;
   }
+  const wakeMode = wakeModeResult.value;
   const sessionKey = normalizeOptionalString(payload.sessionKey);
   if (payload.sessionKey !== undefined && !sessionKey) {
     return { ok: false, error: "sessionKey must be a non-empty string" };

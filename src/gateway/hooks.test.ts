@@ -169,13 +169,13 @@ describe("gateway hooks helpers", () => {
   });
 
   test("rejects unknown wake modes instead of waking immediately", () => {
-    expect(normalizeWakePayload({ text: "wake", mode: "next_heartbeat" })).toEqual({
+    expect(normalizeWakePayload({ text: "wake", mode: "later" })).toEqual({
       ok: false,
       error: "mode must be now or next-heartbeat",
     });
-    expect(normalizeWakePayload({ text: "wake", mode: "now" })).toEqual({
-      ok: true,
-      value: { text: "wake", mode: "now" },
+    expect(normalizeWakePayload({ text: "wake", mode: 1 })).toEqual({
+      ok: false,
+      error: "mode must be now or next-heartbeat",
     });
     expect(normalizeAgentPayload({ message: "hello", wakeMode: "later" })).toEqual({
       ok: false,
@@ -185,6 +185,29 @@ describe("gateway hooks helpers", () => {
       ok: true,
       value: { wakeMode: "next-heartbeat" },
     });
+  });
+
+  test("accepts spelling variants of the documented wake modes", () => {
+    for (const mode of ["next_heartbeat", "Next-Heartbeat", " NEXT_HEARTBEAT "]) {
+      expect(normalizeWakePayload({ text: "wake", mode })).toEqual({
+        ok: true,
+        value: { text: "wake", mode: "next-heartbeat" },
+      });
+      expect(normalizeAgentPayload({ message: "hello", wakeMode: mode })).toMatchObject({
+        ok: true,
+        value: { wakeMode: "next-heartbeat" },
+      });
+    }
+    for (const mode of [undefined, null, "", "  ", "NOW"]) {
+      expect(normalizeWakePayload({ text: "wake", mode })).toEqual({
+        ok: true,
+        value: { text: "wake", mode: "now" },
+      });
+      expect(normalizeAgentPayload({ message: "hello", wakeMode: mode })).toMatchObject({
+        ok: true,
+        value: { wakeMode: "now" },
+      });
+    }
   });
 
   test("normalizeAgentPayload defaults + validates channel", () => {
