@@ -35,7 +35,7 @@
   color: inherit;
   font: inherit;
   text-align: start;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-details-subagents__row:is(:hover, :focus-visible) {
