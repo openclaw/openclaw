@@ -241,7 +241,7 @@ async function measure(
   await warmup.stop();
   await ingress("warmup", true);
   await writeConfigMachineStateAsync(INTERACTIVE_KEY, "warmup", options);
-  assert.deepEqual(errors, []);
+  assert.equal(errors.length, 0, errors.join("\n"));
   const writer = createAuditEventWriter(writerOptions);
   await writer.ready;
 
@@ -354,7 +354,7 @@ async function measure(
     await scheduler.stop();
     await closeOpenClawStateDatabaseAsync();
   }
-  assert.deepEqual(errors, [], "Workload did not settle successfully");
+  assert.equal(errors.length, 0, `Workload did not settle successfully: ${errors.join("\n")}`);
   assert.equal(diagnosticDrops, 0, "Worker diagnostic samples were dropped");
   using db = new DatabaseSync(databasePath, { readOnly: true });
   const persisted = db
