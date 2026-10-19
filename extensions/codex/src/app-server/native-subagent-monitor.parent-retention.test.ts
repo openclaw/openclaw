@@ -36,7 +36,11 @@ it("permits parent cold resume once every child is terminal, while preserving un
     recoveryPollDelaysMs: [],
     completionDeliveryRetryDelaysMs: [100],
   });
-  onTestFinished(() => monitor.dispose());
+  onTestFinished(async () => {
+    await monitor.retireParent("parent-thread");
+    await monitor.dispose();
+    client.close();
+  });
   const parent = await registerParent(monitor);
   await notifyChildStarted(client, "parent-thread", "child-a");
   await notifyChildStarted(client, "parent-thread", "child-b");
