@@ -48,23 +48,35 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+// mock-isolation: Registration-order tests use synthetic subcommands without initializing live plugins or services.
 vi.mock("../acp-cli.js", () => ({ registerAcpCli: mocks.acp }));
+// mock-isolation: Registration-order tests use synthetic subcommands without initializing live plugins or services.
 vi.mock("../gateway-cli.js", () => ({ registerGatewayCli: mocks.gateway }));
+// mock-isolation: Registration-order tests use synthetic subcommands without initializing live plugins or services.
 vi.mock("../gateway-cli/run-command.js", () => ({
   addGatewayRunCommand: mocks.gatewayRun,
 }));
+// mock-isolation: Registration-order tests use synthetic subcommands without initializing live plugins or services.
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli: mocks.nodes }));
+// mock-isolation: Registration-order tests use synthetic subcommands without initializing live plugins or services.
 vi.mock("../capability-cli.js", () => ({ registerCapabilityCli: mocks.infer }));
+// mock-isolation: Registration-order tests use synthetic subcommands without initializing live plugins or services.
 vi.mock("../exec-approvals-cli.js", () => ({
   registerExecApprovalsCli: mocks.approvals,
 }));
+// mock-isolation: Registration-order tests use synthetic subcommands without initializing live plugins or services.
 vi.mock("../tui-cli.js", () => ({ registerTuiCli: mocks.tui }));
+// mock-isolation: Registration-order tests use synthetic subcommands without initializing live plugins or services.
 vi.mock("../cron-cli.js", () => ({ registerCronCli: mocks.cron }));
 // mock-isolation: registration-order checks must not initialize channel plugins or pairing stores.
 vi.mock("../pairing-cli.js", () => ({ registerPairingCli: mocks.pairing }));
+// mock-isolation: Registration-order tests use synthetic subcommands without initializing live plugins or services.
 vi.mock("../plugins-cli.js", () => ({ registerPluginsCli: mocks.plugins }));
+// mock-isolation: Registration-order tests use synthetic subcommands without initializing live plugins or services.
 vi.mock("../channels-cli.js", () => ({ registerChannelsCli: mocks.channels }));
+// mock-isolation: Registration-order tests use synthetic subcommands without initializing live plugins or services.
 vi.mock("../resume-cli.js", () => ({ registerResumeCli: mocks.resume }));
+// mock-isolation: Registration-order tests use synthetic subcommands without initializing live plugins or services.
 vi.mock("../../plugins/cli.js", () => ({
   registerPluginCliCommandsFromValidatedConfig: mocks.pluginCommands,
 }));

@@ -175,7 +175,7 @@ it.each([
   const report = await runSetup({
     runtimeStatus: {
       ...readyRuntime,
-      helperConnected: false,
+      helperConnected: target.stale === true,
       helperTargets: readyRuntime.helperTargets.map((entry) =>
         entry.target === "FaceTime" ? { ...entry, connected: false, ...target } : entry,
       ),

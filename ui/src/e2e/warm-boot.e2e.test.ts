@@ -139,7 +139,15 @@ async function snapshotStorage(operation: "check" | "legacy" | SidebarRecord[]) 
 
 async function waitForPersistedWarmState(page: Page): Promise<void> {
   await expect
-    .poll(async () => (await page.evaluate(snapshotStorage, "check")).state)
+    .poll(
+      async () =>
+        (
+          await page.evaluate<
+            Awaited<ReturnType<typeof snapshotStorage>>,
+            Parameters<typeof snapshotStorage>[0]
+          >(snapshotStorage, "check")
+        ).state,
+    )
     .toEqual({ bootRecord: true, roster: true, transcript: true });
 }
 
@@ -308,7 +316,10 @@ suite.define(() => {
         );
 
         if (profile === "legacy-rail") {
-          const { records } = await page.evaluate(snapshotStorage, "legacy");
+          const { records } = await page.evaluate<
+            Awaited<ReturnType<typeof snapshotStorage>>,
+            Parameters<typeof snapshotStorage>[0]
+          >(snapshotStorage, "legacy");
           expect(records.length).toBeGreaterThan(0);
           const url = page.url();
           await page.goto("about:blank");

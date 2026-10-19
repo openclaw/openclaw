@@ -26,6 +26,7 @@ const profileIds = () => (mocks.credential === "marker" ? [] : ["openai:profile"
 const envKey = { apiKey: "envkey", source: "OPENAI_API_KEY" };
 
 // The factory must remain unloaded until a probe actually dispatches inference.
+// mock-isolation: Probe tests use fixture-owned credentials, catalog rows, and inference dispatch without provider calls.
 vi.doMock("../../agents/isolated-completion.js", () => {
   assert(mocks.allowInferenceImport, "isolated-completion should stay lazy for probe imports");
   return { runIsolatedCompletion: mocks.runner };
@@ -53,6 +54,7 @@ vi.doMock("../../agents/auth-profiles.js", async (importOriginal) => ({
   resolveAuthProfileEligibility: () => ({ eligible: true }),
   upsertAuthProfileWithLock: mocks.upsert,
 }));
+// mock-isolation: Probe tests use fixture-owned credentials, catalog rows, and inference dispatch without provider calls.
 vi.doMock("../../agents/model-auth.js", () => ({
   hasUsableCustomProviderApiKey: () => mocks.credential !== "profile",
   resolveEnvApiKey: () => (mocks.credential === "marker" ? envKey : null),
@@ -66,6 +68,7 @@ vi.doMock("../../agents/model-auth.js", () => ({
     return envKey;
   },
 }));
+// mock-isolation: Probe tests use fixture-owned credentials, catalog rows, and inference dispatch without provider calls.
 vi.doMock("../../agents/prepared-model-catalog.js", () => ({
   readPreparedModelCatalog: mocks.readCatalog,
 }));

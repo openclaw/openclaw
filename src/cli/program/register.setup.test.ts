@@ -14,12 +14,16 @@ const { setup, wizard, systemAgent, config, onboardingState, runtime } = vi.hois
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
 
+// mock-isolation: Setup routing uses fixture-owned config and command receipts without onboarding or inference.
 vi.mock("../../commands/setup.js", () => ({ setupCommand: setup }));
+// mock-isolation: Setup routing uses fixture-owned config and command receipts without onboarding or inference.
 vi.mock("../../commands/onboard.js", () => ({ setupWizardCommand: wizard }));
+// mock-isolation: Setup routing uses fixture-owned config and command receipts without onboarding or inference.
 vi.mock("../../commands/system-agent-with-inference.js", () => ({
   runSystemAgentWithInference: systemAgent,
 }));
 
+// mock-isolation: Setup routing uses fixture-owned config and command receipts without onboarding or inference.
 vi.mock("../../config/config.js", () => ({ readConfigFileSnapshot: config }));
 
 // mock-isolation: Setup routing reads synthetic receipts without opening shared state.

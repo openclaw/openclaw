@@ -25,14 +25,17 @@ vi.mock("../../plugins/provider-auth-choices.js", () => ({
     ].map(([cliOption, optionKey]) => ({ cliOption, optionKey, description: "Fixture flag" })),
 }));
 
+// mock-isolation: CLI parsing captures command dispatch without running onboarding, inference, or recommendation state.
 vi.mock("../../commands/onboard.js", () => ({ setupWizardCommand: wizard }));
 
+// mock-isolation: CLI parsing captures command dispatch without running onboarding, inference, or recommendation state.
 vi.mock("../../commands/onboard-recommendations.js", () => ({
   acknowledgeOnboardRecommendationsCommand: acknowledge,
   onboardRecommendationsCommand: recommendations,
   refreshOnboardRecommendationsCommand: refresh,
 }));
 
+// mock-isolation: CLI parsing captures command dispatch without running onboarding, inference, or recommendation state.
 vi.mock("../../commands/system-agent-with-inference.js", () => ({
   runSystemAgentWithInference: systemAgent,
 }));
@@ -106,22 +109,25 @@ it.each([
   [
     "recommendations --json refresh",
     "This recommendations command does not support parent option(s): --json.",
+    false,
   ],
   [
     "--json --reset recommendations",
     "This recommendations command does not support parent option(s): --reset.",
+    true,
   ],
   [
     "--custom-image-input --custom-text-input --json",
     "Use either --custom-image-input or --custom-text-input, not both.",
+    true,
   ],
   [
     "--json --modern --non-interactive",
     "Non-interactive setup requires explicit risk acknowledgement.",
+    true,
   ],
-  ["--modern --no-install-daemon", "--modern cannot be combined with: --no-install-daemon."],
-] as const)("rejects invalid options: %s", async (args, message) => {
-  const json = args.includes("--json");
+  ["--modern --no-install-daemon", "--modern cannot be combined with: --no-install-daemon.", false],
+] as const)("rejects invalid options: %s", async (args, message, json) => {
   const partial = args.includes("--modern");
   await runCli(args);
   const expected = partial ? expect.stringContaining(message) : message;

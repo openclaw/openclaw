@@ -145,7 +145,12 @@ const scenarios = [
   ["override selection", "buffer", "cold", "override"],
   ["fallback selection", "buffer", "cold", "fallback"],
 ] as const;
-type Scenario = (typeof scenarios)[number];
+type Scenario = readonly [
+  name: string,
+  mode: Mode,
+  owner: "cold" | "managed" | "raw",
+  selection: "none" | "override" | "fallback",
+];
 async function exercise([, mode, owner, selection]: Scenario, deliveryUrl?: string) {
   const first = selection === "none" ? undefined : fixtureFor("first", "reject");
   const fixture = fixtureFor(first ? "second" : "native", mode, owner === "managed", deliveryUrl);
@@ -211,8 +216,8 @@ async function exercise([, mode, owner, selection]: Scenario, deliveryUrl?: stri
           if (mode === "url") {
             expect(result.value?.videos[0]).toMatchObject({
               url: deliveryUrl,
-              buffer: undefined,
             });
+            expect(result.value?.videos[0]?.buffer).toBeUndefined();
           } else {
             expect(result.value?.videos[0]?.buffer).toEqual(videoBytes);
           }

@@ -12,12 +12,15 @@ const m = vi.hoisted(() => ({
   timeout: vi.fn(),
 }));
 
+// mock-isolation: Timeout and revocation tests use fixture-owned browser state without starting a real browser service.
 vi.mock("../browser-control-state.js", () => ({ createBrowserControlContext: m.context }));
+// mock-isolation: Timeout and revocation tests use fixture-owned browser state without starting a real browser service.
 vi.mock("../browser/routes/dispatcher.js", () => ({ createBrowserRouteDispatcher: m.dispatcher }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
   readRuntimeConfig: m.config,
 }));
+// mock-isolation: Timeout and revocation tests use fixture-owned browser state without starting a real browser service.
 vi.mock("../control-service.js", () => ({ startBrowserControlServiceFromConfig: m.start }));
 vi.mock("../sdk-node-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../sdk-node-runtime.js")>()),

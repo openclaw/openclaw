@@ -35,6 +35,7 @@ vi.mock("../../kill-tree.js", async (importOriginal) => ({
   signalProcessTree: signalMock,
 }));
 vi.mock("../../../infra/windows-encoding.js", () => ({ createWindowsOutputDecoder: decoderMock }));
+// mock-isolation: Child-adapter tests own process fixtures and must not initialize the service relay.
 vi.mock("../service-child-relay-host.js", () => ({ createServiceChildRelayAdapter: vi.fn() }));
 
 let start: ReturnType<typeof readyChildAdapter>;
@@ -412,7 +413,9 @@ it("records tree signaling rejection in cleanup without an unhandled rejection",
   });
   let cleanup: Promise<ProcessExtinctionResult> | undefined;
   const { adapter } = await setup({
-    onSpawnCleanup: (promise) => (cleanup = promise),
+    onSpawnCleanup: (promise) => {
+      cleanup = promise;
+    },
   });
   const unhandled = vi.fn();
   process.on("unhandledRejection", unhandled);

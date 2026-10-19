@@ -33,7 +33,7 @@ const hybridPolicy = (modelId: string, modelApi = "anthropic-messages") =>
 
 describe("provider replay helpers", () => {
   it("builds strict openai-completions replay policy", () => {
-    expectFields(buildOpenAICompatibleReplayPolicy("openai-completions"), {
+    expectFields(openAI("openai-completions"), {
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
       applyAssistantFirstOrderingFix: true,
@@ -43,7 +43,7 @@ describe("provider replay helpers", () => {
   });
 
   it("omits tool-call id sanitization when opted out for openai-completions", () => {
-    const policy = buildOpenAICompatibleReplayPolicy("openai-completions", {
+    const policy = openAI("openai-completions", {
       sanitizeToolCallIds: false,
     });
     expectFields(policy, {
@@ -152,7 +152,7 @@ describe("provider replay helpers", () => {
       "claude-mythos-5",
       "us.anthropic.claude-opus-5-20260101-v1:0",
     ]) {
-      const policy = buildAnthropicReplayPolicyForModel(modelId);
+      const policy = anthropic(modelId);
       expect(policy).not.toHaveProperty("dropThinkingBlocks");
     }
 
@@ -167,19 +167,19 @@ describe("provider replay helpers", () => {
       "claude-sonnet-50",
       "claude-sonnet-4-60",
     ]) {
-      const policy = buildAnthropicReplayPolicyForModel(modelId);
+      const policy = anthropic(modelId);
       expect(policy.dropThinkingBlocks).toBe(true);
     }
   });
 
   it("uses canonical deployment metadata for Claude replay policy", () => {
     expect(
-      buildAnthropicReplayPolicyForModel("prod-opus", {
+      anthropic("prod-opus", {
         params: { canonicalModelId: "claude-opus-5" },
       }),
     ).not.toHaveProperty("dropThinkingBlocks");
     expect(
-      buildAnthropicReplayPolicyForModel("prod-sonnet", {
+      anthropic("prod-sonnet", {
         params: { canonicalModelId: "claude-sonnet-4-5-20250929" },
       }),
     ).toHaveProperty("dropThinkingBlocks", true);

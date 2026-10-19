@@ -470,7 +470,12 @@ describe("browser.request profile selection", () => {
   const errorBody = {
     error: "headed mode needs a display",
     reason: "no_display_for_headed_profile",
-    details: { profile: "openclaw" },
+    details: {
+      profile: "openclaw",
+      requestedHeadless: false,
+      headlessSource: "config",
+      displayPresent: false,
+    },
   };
   it.each([
     {

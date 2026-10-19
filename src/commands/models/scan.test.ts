@@ -10,12 +10,14 @@ const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
 }));
 
+// mock-isolation: Scan tests use synthetic catalog, credentials, and results without provider discovery or config reads.
 vi.mock("./load-config.js", () => ({ loadModelsConfig: mocks.loadModelsConfig }));
 
 vi.mock("../../agents/model-auth.js", () => ({
   resolveApiKeyForProviderCore: mocks.resolveApiKeyForProviderCore,
 }));
 
+// mock-isolation: Scan tests use synthetic catalog, credentials, and results without provider discovery or config reads.
 vi.mock("../../agents/model-scan.js", () => ({ scanOpenRouterModels: mocks.scanOpenRouterModels }));
 
 vi.mock("./shared.js", async (importOriginal) => ({

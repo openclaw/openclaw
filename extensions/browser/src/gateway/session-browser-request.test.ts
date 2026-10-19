@@ -4,10 +4,13 @@ import { deferredOperation } from "./browser-request.test-support.js";
 import { handleSessionBrowserGatewayRequest } from "./session-browser-request.js";
 
 const m = vi.hoisted(() => ({ access: vi.fn(), dispatch: vi.fn(), tabs: vi.fn(), current: true }));
+// mock-isolation: Session authorization tests use fixture-owned dashboards and dispatch without starting a browser.
 vi.mock("../session-browser-dashboard.js", () => ({ accessSessionBrowserDashboard: m.access }));
+// mock-isolation: Session authorization tests use fixture-owned dashboards and dispatch without starting a browser.
 vi.mock("../browser-control-state.js", () => ({
   createBrowserControlContext: () => ({ forProfile: () => ({ listTabs: m.tabs }) }),
 }));
+// mock-isolation: Session authorization tests use fixture-owned dashboards and dispatch without starting a browser.
 vi.mock("../browser/routes/dispatcher.js", () => ({
   createBrowserRouteDispatcher: () => ({ dispatch: m.dispatch }),
 }));
