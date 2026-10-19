@@ -11,12 +11,12 @@ import {
 import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import type { AppleFmFacts } from "./native.js";
+import type { AppleFmFacts, AppleFmNative } from "./native.js";
 
 const native = vi.hoisted(() => ({
-  prepare: vi.fn<import("./native.js").AppleFmNative["prepare"]>(),
-  probe: vi.fn<import("./native.js").AppleFmNative["probe"]>(),
-  run: vi.fn<import("./native.js").AppleFmNative["run"]>(),
+  prepare: vi.fn<AppleFmNative["prepare"]>(),
+  probe: vi.fn<AppleFmNative["probe"]>(),
+  run: vi.fn<AppleFmNative["run"]>(),
   createAppleFmNative: vi.fn<typeof import("./native.js").createAppleFmNative>(),
 }));
 vi.mock("./native.js", () => ({ createAppleFmNative: native.createAppleFmNative }));
@@ -40,10 +40,13 @@ function registeredProvider(
   });
   const provider = registration.providers[0];
   const method = provider?.auth[0];
-  if (!provider || !method) {
+  const guided = method?.appGuidedSetup;
+  const setup = method?.runNonInteractive;
+  const validate = method?.validateNonInteractive;
+  if (!provider || !method || !guided || !setup || !validate) {
     throw new Error("Apple Foundation Models registration missing");
   }
-  return { provider, method };
+  return { provider, method, guided, setup, validate };
 }
 
 function authContext(config: OpenClawConfig = {}): ProviderAuthContext {
@@ -85,9 +88,8 @@ describe("Apple Foundation Models setup", () => {
     expect(native.createAppleFmNative).not.toHaveBeenCalled();
     await method.appGuidedSetup?.detect({ config: {}, env: {} });
     await method.run(authContext());
-    expect(native.createAppleFmNative).toHaveBeenCalledExactlyOnceWith(
-      "/checkout/extensions/apple-fm",
-    );
+    const expectedRoot = "/checkout/extensions/apple-fm";
+    expect(native.createAppleFmNative).toHaveBeenCalledExactlyOnceWith(expectedRoot);
     expect(native.probe).toHaveBeenCalledOnce();
     expect(native.prepare).toHaveBeenCalledOnce();
   });
@@ -98,19 +100,17 @@ describe("Apple Foundation Models setup", () => {
       modelName: "Future model",
       contextWindow: 16_384,
     });
+    const root = "/bundle/dist/extensions/apple-fm";
     const { provider, method } = registeredProvider({
-      rootDir: "/bundle/dist/extensions/apple-fm",
+      rootDir: root,
       source: "/bundle/dist/apple-fm-entry-HASH.mjs",
     });
     const result = await method.run(authContext());
-    expect(native.createAppleFmNative).toHaveBeenCalledExactlyOnceWith(
-      "/bundle/dist/extensions/apple-fm",
-    );
+    expect(native.createAppleFmNative).toHaveBeenCalledExactlyOnceWith(root);
     const config = applyProviderAuthConfigPatch({}, result.configPatch, result);
     const configured = config.models?.providers?.["apple-fm"];
 
-    expect(result.profiles).toEqual([]);
-    expect(result.defaultModel).toBe("apple-fm/system");
+    expect(result).toMatchObject({ profiles: [], defaultModel: "apple-fm/system" });
     expect(configured?.models[0]).toMatchObject({
       id: "system",
       name: "Future model",
@@ -120,68 +120,53 @@ describe("Apple Foundation Models setup", () => {
     });
     expect(configured?.apiKey).toBeUndefined();
     expect(configured?.localService).toBeUndefined();
-    expect(
-      provider.resolveSyntheticAuth?.({ provider: "apple-fm", providerConfig: configured }),
-    ).toMatchObject({
-      apiKey: "apple-fm-local",
-    });
+    const auth = () =>
+      provider.resolveSyntheticAuth?.({ provider: "apple-fm", providerConfig: configured });
+    expect(auth()).toMatchObject({ apiKey: "apple-fm-local" });
     expect(provider.resolveSyntheticAuth?.({ provider: "apple-fm" })).toBeUndefined();
+    const noAuth = { apiKey: undefined, mode: "none", source: "none" } as const;
     const context = {
       config,
       env: {},
       resolveProviderApiKey: () => ({ apiKey: undefined }),
-      resolveProviderAuth: () => ({
-        apiKey: undefined,
-        mode: "none" as const,
-        source: "none" as const,
-      }),
+      resolveProviderAuth: () => noAuth,
     };
     expect(await provider.catalog?.run(context)).toEqual({ provider: configured });
     expect(native.probe).not.toHaveBeenCalled();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     expect(await provider.catalog?.run(context)).toBeNull();
-    expect(
-      provider.resolveSyntheticAuth?.({ provider: "apple-fm", providerConfig: configured }),
-    ).toBeUndefined();
+    expect(auth()).toBeUndefined();
   });
 
   it("prepares only the selected model and rechecks its eligibility before activation", async () => {
-    const guided = registeredProvider().method.appGuidedSetup;
-    if (!guided) {
-      throw new Error("Apple guided setup missing");
-    }
+    const { guided } = registeredProvider();
     const context = { config: {}, env: {}, signal: new AbortController().signal };
+    const selected = { ...context, modelRef: "apple-fm/system" };
     expect(await guided.detect(context)).toMatchObject({ modelRef: "apple-fm/system" });
     expect(await guided.detectAvailability?.(context)).toBe(true);
     expect(native.prepare).not.toHaveBeenCalled();
     expect(await guided.prepare({ ...context, modelRef: "another/model" })).toBeNull();
-    expect(await guided.prepare({ ...context, modelRef: "apple-fm/system" })).toMatchObject({
-      defaultModel: "apple-fm/system",
-    });
+    expect(await guided.prepare(selected)).toMatchObject({ defaultModel: "apple-fm/system" });
     native.probe.mockResolvedValue(null);
     expect(await guided.detect(context)).toBeNull();
     native.prepare.mockResolvedValue({ ...facts, contextWindow: 4_096 });
-    await expect(guided.prepare({ ...context, modelRef: "apple-fm/system" })).rejects.toThrow(
-      "requires at least 8192",
-    );
+    await expect(guided.prepare(selected)).rejects.toThrow("requires at least 8192");
     native.prepare.mockResolvedValue({ ...facts, available: false, reason: "Model unavailable" });
-    await expect(guided.prepare({ ...context, modelRef: "apple-fm/system" })).rejects.toThrow(
-      "Model unavailable",
-    );
+    await expect(guided.prepare(selected)).rejects.toThrow("Model unavailable");
     expect(native.probe).toHaveBeenCalledWith({ signal: context.signal, env: {} });
   });
 
-  it.each([
-    { result: { ...facts, available: false }, visible: false },
-    { result: { ...facts, contextWindow: 8_191 }, visible: false },
-  ])("offers only an available 8K or larger model: $result", async ({ result, visible }) => {
-    native.probe.mockResolvedValue(result);
-    const guided = registeredProvider().method.appGuidedSetup!;
-    const context = { config: {}, env: {} };
-    expect(Boolean(await guided.detect(context))).toBe(visible);
-    expect(await guided.detectAvailability?.(context)).toBe(visible);
-    expect(native.prepare).not.toHaveBeenCalled();
-  });
+  it.each([{ available: false }, { contextWindow: 8_191 }])(
+    "rejects an ineligible model: %j",
+    async (overrides) => {
+      native.probe.mockResolvedValue({ ...facts, ...overrides });
+      const { guided } = registeredProvider();
+      const context = { config: {}, env: {} };
+      expect(Boolean(await guided.detect(context))).toBe(false);
+      expect(await guided.detectAvailability?.(context)).toBe(false);
+      expect(native.prepare).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves other providers, auth, model restrictions, and fallbacks during noninteractive setup", async () => {
     const config: OpenClawConfig = {
@@ -198,10 +183,7 @@ describe("Apple Foundation Models setup", () => {
       },
     };
     const before = structuredClone(config);
-    const setup = registeredProvider().method.runNonInteractive;
-    if (!setup) {
-      throw new Error("Apple noninteractive setup missing");
-    }
+    const { setup } = registeredProvider();
     const updated = await setup(nonInteractiveContext(config));
     expect(config).toEqual(before);
     expect(updated?.auth).toEqual(before.auth);
@@ -217,12 +199,9 @@ describe("Apple Foundation Models setup", () => {
 
   it("rejects unsupported hosts before a noninteractive reset can proceed", async () => {
     native.probe.mockResolvedValue(null);
-    const validator = registeredProvider().method.validateNonInteractive;
-    if (!validator) {
-      throw new Error("Apple reset preflight missing");
-    }
+    const { validate } = registeredProvider();
     const context = nonInteractiveContext({});
-    expect(await validator(context)).toBe(false);
+    expect(await validate(context)).toBe(false);
     expect(context.runtime.error).toHaveBeenCalledWith(expect.stringContaining("macOS 27"));
     expect(native.prepare).not.toHaveBeenCalled();
   });
