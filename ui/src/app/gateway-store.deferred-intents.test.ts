@@ -9,7 +9,10 @@ import {
   stubGatewayStoreTestGlobals,
 } from "./gateway-store.test-support.ts";
 
-vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
+vi.mock("../lib/toast.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/toast.ts")>()),
+  showToast: vi.fn(),
+}));
 
 describe("Gateway deferred intents", () => {
   let store: ReturnType<typeof createGatewayStoreTestStore>;

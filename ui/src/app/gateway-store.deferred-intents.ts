@@ -52,6 +52,9 @@ export function createGatewayDeferredIntents(host: {
     }
   };
   const discard = () => {
+    if (!identity) {
+      return;
+    }
     const discarded = [...intents.values()];
     intents.clear();
     identity = undefined;

@@ -421,8 +421,12 @@ export function createSessionCapability(
     const connected = next.phase === "connected";
     const presentationScope = gatewayPresentationScope(gateway);
     const selfUserId = presentationScope.displayUser?.id.trim() || null;
+    const samePresentationScope = presentationKey === presentationScope.key;
+    const retainDeferredMetadata =
+      samePresentationScope && Boolean(next.deferredIntentCount || next.deferredIntentDraining);
     // First-client adoption keeps the boot roster admitted by the cache lifecycle.
-    const identityChanged = presentationKey !== presentationScope.key;
+    const identityChanged =
+      (previousClient !== null && previousClient !== next.client) || !samePresentationScope;
     presentationKey = presentationScope.key;
     const transportChanged = connection.transition(next);
     if (identityChanged && !transportChanged) {
@@ -454,16 +458,17 @@ export function createSessionCapability(
       const hadSubscriptionError = sessionEventSubscriptionError !== null;
       thinkingClaims.reset();
       permissions.clear();
-      roster.reset(identityChanged);
+      roster.reset(identityChanged && !retainDeferredMetadata);
       sessionEventSubscription.reset();
       sessionEventSubscriptionError = null;
       retireOperationConnection(previousClient);
       groups.invalidate();
       swarmActivity.clear();
-      mutations.retireConnection(!identityChanged);
+      mutations.retireConnection(retainDeferredMetadata);
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
-      if (identityChanged) {
+      // Only queued desired-state changes retain presentation across a replacement client.
+      if (identityChanged && !retainDeferredMetadata) {
         hydratedClient = null;
         hydratedSelfUserId = null;
         presentationProfileId = selfUserId;

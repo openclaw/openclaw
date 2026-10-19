@@ -535,6 +535,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!session) {
       return;
     }
+    const snapshot = this.context.gateway.snapshot;
+    if (snapshot.phase !== "connected" && !snapshot.hello) {
+      return;
+    }
     const patch = resolveSessionRenamePatch(
       this.headerPresentation.renameValue,
       this.headerRenameInitialValue,

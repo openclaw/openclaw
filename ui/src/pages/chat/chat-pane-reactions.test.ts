@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-reactions.test/"} */
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   MessageReactionSummary,
   SessionReactionEvent,
@@ -207,7 +207,9 @@ describe("pane reaction ownership", () => {
     await pane.setMessageReaction("message-1", "🎉", true);
     await pane.setMessageReaction("message-1", "🎉", false);
     expect(writes).toEqual([]);
-    await [...deferred.values()][0].run(replayClient);
+    const pending = deferred.values().next().value;
+    assert(pending);
+    await pending.run(replayClient);
     expect(writes).toEqual([
       {
         sessionKey: "agent:main:current",
@@ -233,7 +235,9 @@ describe("pane reaction ownership", () => {
     await pane.setMessageReaction("message-1", "🎉", false);
     expect(writes).toEqual([]);
     expect(deferred.size).toBe(1);
-    await [...deferred.values()][0].run(client);
+    const pending = deferred.values().next().value;
+    assert(pending);
+    await pending.run(client);
     expect(writes).toHaveLength(1);
   });
 
@@ -254,8 +258,10 @@ describe("pane reaction ownership", () => {
       await pane.setMessageReaction("message-1", "👍", false);
       const pending = [...deferred.values()][0];
       if (outcome === "discard") {
+        assert(pending);
         pending.discard?.();
       } else if (outcome === "reject") {
+        assert(pending);
         connect(true);
         const write = pending.run(client);
         rejected.reject(new Error("reaction denied"));
@@ -283,7 +289,9 @@ describe("pane reaction ownership", () => {
       pane.state.sessionKey = "agent:main:next";
       session("session-2");
       pane.syncSessionReactions();
-      const replay = [...deferred.values()][0].run(client);
+      const pending = deferred.values().next().value;
+      assert(pending);
+      const replay = pending.run(client);
       if (owner === "replacement client") {
         pane.context.gateway.snapshot.client = createTestGatewayClient(() => ({}));
       } else if (owner === "replacement scope") {

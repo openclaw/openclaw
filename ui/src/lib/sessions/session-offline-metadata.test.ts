@@ -9,7 +9,10 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { showToast } from "../toast.ts";
 import { createTestSessionCapability, sessionsResult } from "./session-capability.test-support.ts";
 
-vi.mock("../toast.ts", () => ({ showToast: vi.fn() }));
+vi.mock("../toast.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../toast.ts")>()),
+  showToast: vi.fn(),
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
