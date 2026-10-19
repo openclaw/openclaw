@@ -209,7 +209,7 @@ describe("chat annotation editor", () => {
         input.dispatchEvent(
           release === "blur"
             ? new FocusEvent("blur")
-            : new KeyboardEvent("keyup", { key: "Enter" }),
+            : new KeyboardEvent("keyup", { key: "Enter", bubbles: true }),
         );
       }
       const enter = key(
