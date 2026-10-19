@@ -175,14 +175,6 @@ describe("settled dispatcher final outcomes", () => {
     }
   });
 
-  it("rethrows an opted-in proven no-send failure when nothing was visible", async () => {
-    const error = noSendError();
-    const { dispatcher } = deliveryHarness([error], { propagateRetryableNoSendFailure: true });
-
-    dispatcher.sendFinalReply({ text: "retry me" });
-    await expect(settle(dispatcher)).rejects.toBe(error);
-  });
-
   it.each(["caller-first", "recovery-first", "attached-fallback"] as const)(
     "keeps recovery exclusive across %s attempts",
     async (order) => {

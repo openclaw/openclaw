@@ -9,12 +9,10 @@ import {
   diagnosticMocks,
   hookMocks,
   mocks,
-  parseGenericThreadSessionInfo,
   resetPluginTtsAndThreadMocks,
   sessionBindingMocks,
   sessionStoreMocks,
   setDiscordTestRegistry,
-  threadInfoMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
@@ -24,6 +22,15 @@ import {
   type ReplyPreRunRejectionCode,
 } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+type Resolver = NonNullable<DispatchFromConfigParams["replyResolver"]>;
+const telegramContext = {
+  From: "user1",
+  To: "telegram:2000",
+  Provider: "telegram",
+  Surface: "telegram",
+  ChatType: "direct",
+} as const;
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
@@ -39,17 +46,19 @@ const cfg: OpenClawConfig = {
   messages: { visibleReplies: "automatic" },
 };
 
-function dispatch(
-  replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]>,
+async function dispatch(
+  replyResolver: Resolver,
   overrides: Partial<DispatchFromConfigParams> = {},
 ) {
-  return dispatchReplyFromConfig({
+  const dispatcher = overrides.dispatcher ?? createDispatcher();
+  await dispatchReplyFromConfig({
     ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
     cfg,
-    dispatcher: createDispatcher(),
+    dispatcher,
     replyResolver,
     ...overrides,
   });
+  return dispatcher;
 }
 
 async function dispatchReplyFixture(params: {
@@ -58,27 +67,17 @@ async function dispatchReplyFixture(params: {
   reply: ReplyPayload;
   rejection?: ReplyPreRunRejectionCode;
 }) {
-  const runState: ReplyOperationRunState = { preRunRejection: params.rejection };
-  const dispatcher = createDispatcher();
-  await dispatchReplyFromConfig({
+  return dispatch(async () => params.reply, {
     ctx: buildTestCtx({
       Body: params.body,
       CommandBody: params.body,
       CommandAuthorized: true,
-      From: "user1",
-      To: "telegram:2000",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "direct",
+      ...telegramContext,
       SessionKey: SESSION_KEY,
       MessageSid: params.messageId,
     }),
-    cfg,
-    dispatcher,
-    replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
-    replyResolver: async () => params.reply,
+    replyOptions: { [REPLY_OPERATION_RUN_STATE]: { preRunRejection: params.rejection } },
   });
-  return dispatcher;
 }
 
 describe("dispatchReplyFromConfig pre-run directive rejection", () => {
@@ -101,9 +100,6 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     mocks.routeReply
       .mockReset()
       .mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
-    threadInfoMocks.parseSessionThreadInfo
-      .mockReset()
-      .mockImplementation(parseGenericThreadSessionInfo);
     sessionBindingMocks.listBySession.mockReset().mockReturnValue([]);
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
     sessionStoreMocks.currentEntry = undefined;
@@ -140,11 +136,7 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
       const pending = dispatch(async () => undefined, {
         ctx: buildTestCtx({
           Body: "hello",
-          From: "user1",
-          To: "telegram:2000",
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "direct",
+          ...telegramContext,
           SessionKey: SESSION_KEY,
           MessageSid: "handled-1",
         }),
@@ -212,55 +204,45 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
       });
 
       expect(nextDispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(nextReply);
-      expect(
-        processedEvents.map(({ messageId, outcome, reason: eventReason }) => ({
-          messageId,
-          outcome,
-          reason: eventReason,
-        })),
-      ).toEqual([
+      expect(processedEvents).toMatchObject([
         { messageId: "1", outcome: "skipped", reason: "session-directive-rejected" },
-        { messageId: "2", outcome: "completed", reason: undefined },
+        { messageId: "2", outcome: "completed" },
       ]);
+      expect(processedEvents[1]?.reason).toBeUndefined();
     },
   );
 
-  it.each<{ label: string; reply: ReplyPayload[] | undefined }>([
-    {
-      label: "delivered reply",
-      reply: [{ text: "internal reasoning trace", isReasoning: true }, { text: "Agent reply." }],
-    },
-    { label: "empty-turn fallback", reply: undefined },
-    {
-      label: "host error",
-      reply: [{ text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true }],
-    },
-  ])("excludes $label from captured model output", async ({ reply }) => {
-    await dispatch(async () => reply);
-    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.not.objectContaining({ finalResponse: expect.anything() }),
-    );
-  });
-
-  it("captures the raw LLM response for a sentinel turn instead of delivered facts", async () => {
-    await dispatch(async (_ctx, opts) => {
-      opts?.onRawLlmResponse?.("NO_REPLY");
-      return undefined;
+  it.each<[string, ReplyPayload[] | undefined, string?, boolean?]>([
+    [
+      "delivered reply",
+      [{ text: "internal reasoning trace", isReasoning: true }, { text: "Agent reply." }],
+    ],
+    ["empty-turn fallback", undefined],
+    [
+      "host error",
+      [{ text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true }],
+    ],
+    ["sentinel", undefined, "NO_REPLY"],
+    ["delivery failure", undefined, "model answer", true],
+  ])("captures only model output for %s", async (_label, replies, raw, failed) => {
+    const pending = dispatch(async (_ctx, options) => {
+      if (raw !== undefined) {
+        options?.onRawLlmResponse?.(raw);
+      }
+      if (failed) {
+        throw new Error("final delivery failed");
+      }
+      return replies;
     });
-
+    if (failed) {
+      await pending.catch(() => undefined);
+    } else {
+      await pending;
+    }
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({ finalResponse: "NO_REPLY" }),
-    );
-  });
-
-  it("keeps the captured model response when dispatch fails after the model answered", async () => {
-    await dispatch(async (_ctx, opts) => {
-      opts?.onRawLlmResponse?.("model answer");
-      throw new Error("final delivery failed");
-    }).catch(() => undefined);
-
-    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "error", finalResponse: "model answer" }),
+      raw === undefined
+        ? expect.not.objectContaining({ finalResponse: expect.anything() })
+        : expect.objectContaining({ finalResponse: raw, ...(failed ? { outcome: "error" } : {}) }),
     );
   });
 
@@ -306,8 +288,7 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
         { replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState } },
       );
 
-      expect(processedEvents).toHaveLength(1);
-      expect(processedEvents[0]).toMatchObject({ outcome });
+      expect(processedEvents).toMatchObject([{ outcome }]);
       expect(processedEvents[0]?.reason).toBe(reason);
       expect(processedEvents[0]?.error).toBeUndefined();
     },

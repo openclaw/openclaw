@@ -42,26 +42,21 @@ describe("pending final delivery restart proof", () => {
 
   const scope = () => ({ storePath, sessionKey });
   const readEntry = () => loadSessionEntry(scope()) as SessionEntry;
-  const deliveries = (...states: ("prepared" | "delivered")[]) =>
-    states.map((state, index) => ({ id: `delivery-${index + 1}`, state }));
-
   async function writePendingFinal(
     beforeAgentReplyState: "handled-reply" | undefined,
-    state: "prepared" | "delivered" = "delivered",
-    updatedAt = Date.now(),
-    deliveryStates = [state],
+    ...states: ("prepared" | "delivered")[]
   ): Promise<void> {
     const entry: SessionEntry = {
       sessionId: "session",
       startedAt: 10,
       lifecycleRunId: "active-run",
-      updatedAt,
+      updatedAt: 1,
       pendingFinalDelivery: {
         kind: "replayable",
         text: "hook reply",
         createdAt: 1,
         intentId: "intent-1",
-        deliveries: deliveries(...deliveryStates),
+        deliveries: states.map((state, index) => ({ id: `delivery-${index + 1}`, state })),
       },
       restartRecoveryBeforeAgentReplyState: beforeAgentReplyState,
       restartRecoveryForceSafeTools: beforeAgentReplyState === "handled-reply" ? true : undefined,
@@ -86,7 +81,7 @@ describe("pending final delivery restart proof", () => {
   }
 
   it("settles hook delivery and clears its provenance without changing user activity", async () => {
-    await writePendingFinal("handled-reply", "prepared", 1);
+    await writePendingFinal("handled-reply", "prepared");
     const payload = setReplyPayloadMetadata(pendingFinalPayload(), {
       pendingFinalDeliveryCleanup: { preserveActivity: true },
     });
@@ -128,15 +123,17 @@ describe("pending final delivery restart proof", () => {
     expect(entry?.restartRecoveryForceSafeTools).toBeUndefined();
     expect(entry?.restartRecoverySourceIngress).toBeUndefined();
     expect(entry?.lifecycleRunId).toBeUndefined();
-    expect(entry?.status).toBe("done");
-    expect(entry?.abortedLastRun).toBe(false);
-    expect(entry?.endedAt).toBeTypeOf("number");
+    expect(entry).toMatchObject({
+      status: "done",
+      abortedLastRun: false,
+      endedAt: expect.any(Number),
+      updatedAt: 1,
+    });
     expect(entry?.runtimeMs).toBeGreaterThanOrEqual(0);
-    expect(entry?.updatedAt).toBe(1);
   });
 
   it("clears a skipped turn only after every sendable final is suppressed", async () => {
-    await writePendingFinal(undefined, "prepared", 1, ["prepared", "prepared"]);
+    await writePendingFinal(undefined, "prepared", "prepared");
 
     await suppressPendingFinalDelivery(pendingFinalPayload("delivery-1"), {
       preserveActivity: true,
@@ -155,12 +152,11 @@ describe("pending final delivery restart proof", () => {
     expect(entry.pendingFinalDelivery).toBeUndefined();
     expect(entry.restartRecoverySourceIngress).toBeUndefined();
     expect(entry.status).toBeUndefined();
-    expect(entry.lifecycleRunId).toBe("active-run");
-    expect(entry.updatedAt).toBe(1);
+    expect(entry).toMatchObject({ lifecycleRunId: "active-run", updatedAt: 1 });
   });
 
   it("cleans only the current completed intent in one worker request after a foreign commit", async () => {
-    await writePendingFinal("handled-reply", "delivered", 1);
+    await writePendingFinal("handled-reply", "delivered");
     const targetScope = scope();
     const original = readEntry();
     const identity = getReplyPayloadMetadata(pendingFinalPayload())?.pendingFinalDeliveryCompletion;
