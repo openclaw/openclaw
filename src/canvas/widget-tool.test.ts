@@ -30,9 +30,11 @@ const WIDGET_HTML_MAX_UTF8_BYTES = 10 * 1024 * 1024;
 const PINNED_WIDGET_MAX_UTF8_BYTES = WIDGET_HTML_MAX_UTF8_BYTES;
 const WIDGET_MAX_PER_SCOPE = 32;
 const tempDirs: string[] = [];
+let stateDir: string;
 
-beforeEach(() => {
+beforeEach(async () => {
   resetPluginRuntimeStateForTest();
+  stateDir = await createStateDir();
 });
 
 afterEach(async () => {
@@ -46,22 +48,9 @@ afterEach(async () => {
 });
 
 async function createStateDir(): Promise<string> {
-  const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-widget-tool-"));
-  tempDirs.push(stateDir);
-  return stateDir;
-}
-
-function createLiveBoardTestContext(
-  broadcast: ReturnType<typeof vi.fn> = vi.fn(),
-  cfg: OpenClawConfig = { agents: { entries: { main: {} } } },
-): GatewayRequestContext {
-  const context = {
-    broadcast,
-    getSessionEventSubscriberConnIds: () => new Set<string>(),
-    getRuntimeConfig: () => cfg,
-  } as unknown as GatewayRequestContext;
-  context.resolveGatewayContext = () => context;
-  return context;
+  const directory = await mkdtemp(path.join(tmpdir(), "openclaw-widget-tool-"));
+  tempDirs.push(directory);
+  return directory;
 }
 
 function createLiveBoardCaller(
@@ -70,12 +59,18 @@ function createLiveBoardCaller(
   cfg: OpenClawConfig = { agents: { entries: { main: {} } } },
 ): InProcessGatewayCaller {
   const handlers = createBoardHandlers(store);
+  const context = {
+    broadcast,
+    getSessionEventSubscriberConnIds: () => new Set<string>(),
+    getRuntimeConfig: () => cfg,
+  } as unknown as GatewayRequestContext;
+  context.resolveGatewayContext = () => context;
   return async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
     let result: unknown;
     let failure: Error | undefined;
-    const respond: RespondFn = (ok, payload, error) => {
+    const respond: RespondFn = (ok, responsePayload, error) => {
       if (ok) {
-        result = payload;
+        result = responsePayload;
       } else {
         failure = new Error(error?.message ?? "board request failed");
       }
@@ -86,7 +81,7 @@ function createLiveBoardCaller(
       client: null,
       isWebchatConnect: () => false,
       respond,
-      context: createLiveBoardTestContext(broadcast, cfg),
+      context,
     });
     if (failure) {
       throw failure;
@@ -95,12 +90,44 @@ function createLiveBoardCaller(
   };
 }
 
-function resolveCanvasDocumentDir(stateDir: string, documentId: string): string {
+function documentDir(documentId: string): string {
   return path.join(resolveCanvasDocumentsDir(stateDir), documentId);
+}
+function documentFile(documentId: string, file = "index.html"): string {
+  return path.join(documentDir(documentId), file);
+}
+function expectNoDocument() {
+  return expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+}
+
+function createTool(options: Parameters<typeof createShowWidgetTool>[0] = {}) {
+  return createShowWidgetTool({ stateDir, ...options });
+}
+
+const widget = { title: "Status", widget_code: "<p>ready</p>" };
+const diagram = { title: "Diagram", widget_code: "diagram:ready", kind: "diagram" };
+function run(tool: ReturnType<typeof createShowWidgetTool>, args: Record<string, unknown> = {}) {
+  return tool.execute("widget-call", { ...widget, ...args });
+}
+function payload(result: Awaited<ReturnType<ReturnType<typeof createShowWidgetTool>["execute"]>>) {
+  return JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "null");
+}
+function failingPresenter(): WidgetPresenter {
+  return {
+    target: "current_channel",
+    description: "Failing current channel",
+    capabilities: { sourceKinds: ["html"] },
+    match: () => true,
+    availability: async () => ({ ok: true, value: { available: true } }),
+    present: async () => ({
+      ok: false,
+      error: { code: "presentation_error", message: "delivery rejected" },
+    }),
+  };
 }
 
 async function executeWidget(params: {
-  stateDir: string;
+  stateDir?: string;
   sessionId?: string;
   title?: string;
   widgetCode: string;
@@ -120,26 +147,26 @@ async function executeWidget(params: {
   capabilities?: { netOrigins?: string[]; tools?: string[] };
   kind?: string;
 }) {
+  const {
+    stateDir: directory = stateDir,
+    sessionId = "widget-session",
+    agentId = "main",
+    agentSessionKey,
+    callGateway,
+    presenters,
+    title = "Widget title",
+    widgetCode,
+    ...input
+  } = params;
   const tool = createShowWidgetTool({
-    stateDir: params.stateDir,
-    sessionId: params.sessionId ?? "widget-session",
-    agentId: params.agentId ?? "main",
-    agentSessionKey: params.agentSessionKey,
-    callGateway: params.callGateway,
-    presenters: params.presenters,
+    stateDir: directory,
+    sessionId,
+    agentId,
+    agentSessionKey,
+    callGateway,
+    presenters,
   });
-  const result = await tool.execute("widget-call", {
-    title: params.title ?? "Widget title",
-    widget_code: params.widgetCode,
-    ...(params.pin !== undefined ? { pin: params.pin } : {}),
-    ...(params.name ? { name: params.name } : {}),
-    ...(params.tab ? { tab: params.tab } : {}),
-    ...(params.size ? { size: params.size } : {}),
-    ...(params.presentation ? { presentation: params.presentation } : {}),
-    ...(params.after ? { after: params.after } : {}),
-    ...(params.capabilities ? { capabilities: params.capabilities } : {}),
-    ...(params.kind ? { kind: params.kind } : {}),
-  });
+  const result = await tool.execute("widget-call", { title, widget_code: widgetCode, ...input });
   const text = result.content.find((item) => item.type === "text")?.text;
   if (!text) {
     throw new Error("expected widget tool text result");
@@ -169,10 +196,8 @@ async function executeWidget(params: {
 describe("show_widget", () => {
   it("builds a sorted kind enum and routes registered source through board put", async () => {
     registerDiagramContentKind();
-    const stateDir = await createStateDir();
     const { mock: callGatewayMock, callGateway } = createBoardPutCaller();
-    const tool = createShowWidgetTool({
-      stateDir,
+    const tool = createTool({
       sessionId: "registered",
       agentSessionKey: "agent:main:registered",
       callGateway,
@@ -182,9 +207,7 @@ describe("show_widget", () => {
 
     expect(kindSchema?.enum).toEqual(["html", "diagram"]);
     await tool.execute("registered", {
-      title: "Diagram",
-      widget_code: "diagram:ready",
-      kind: "diagram",
+      ...diagram,
       pin: true,
     });
     expect(callGatewayMock).toHaveBeenCalledWith(
@@ -195,23 +218,15 @@ describe("show_widget", () => {
     );
 
     setActivePluginRegistry(createEmptyPluginRegistry());
-    await expect(
-      tool.execute("stale", {
-        title: "Diagram",
-        widget_code: "diagram:ready",
-        kind: "diagram",
-      }),
-    ).rejects.toThrow(
+    await expect(tool.execute("stale", diagram)).rejects.toThrow(
       'widget kind "diagram" is unavailable; enable the plugin that provides it and retry',
     );
   });
 
   it("uses board-only delivery when inline hosting is disabled", async () => {
     registerDiagramContentKind();
-    const stateDir = await createStateDir();
     const { mock: callGatewayMock, callGateway } = createBoardPutCaller();
-    const tool = createShowWidgetTool({
-      stateDir,
+    const tool = createTool({
       sessionId: "board-only",
       agentSessionKey: "agent:main:board-only",
       inlineHostEnabled: false,
@@ -222,25 +237,16 @@ describe("show_widget", () => {
       "Inline previews are unavailable this turn; set pin=true to save to the session dashboard",
     );
     expect(tool.description).not.toContain("Keep one-off visualizations inline");
-    await expect(
-      tool.execute("unpinned", {
-        title: "Diagram",
-        widget_code: "diagram:ready",
-        kind: "diagram",
-      }),
-    ).rejects.toThrow(
+    await expect(tool.execute("unpinned", diagram)).rejects.toThrow(
       "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
     );
-    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+    await expectNoDocument();
 
     const result = await tool.execute("pinned", {
-      title: "Diagram",
-      widget_code: "diagram:ready",
-      kind: "diagram",
+      ...diagram,
       pin: true,
     });
-    const text = result.content.find((item) => item.type === "text")?.text;
-    expect(JSON.parse(text ?? "null")).toEqual({
+    expect(payload(result)).toEqual({
       status: "pinned",
       boardWidgetName: "diagram",
       capabilityState: "none",
@@ -252,11 +258,10 @@ describe("show_widget", () => {
         content: { kind: "registered", contentKind: "diagram", source: "diagram:ready" },
       }),
     );
-    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+    await expectNoDocument();
   });
 
   it("routes node-panel presentation and reports the selected device", async () => {
-    const stateDir = await createStateDir();
     const availability = vi.fn(async () => ({
       ok: true as const,
       value: { available: true as const },
@@ -266,7 +271,6 @@ describe("show_widget", () => {
       value: { kind: "node" as const, nodeId: "mac-panel", nodeName: "Studio" },
     }));
     const result = await executeWidget({
-      stateDir,
       title: "Status",
       widgetCode: "<p>ready</p>",
       agentSessionKey: "agent:main:status",
@@ -321,9 +325,7 @@ describe("show_widget", () => {
   ])(
     "falls back inline with an actionable message when node presentation $name",
     async ({ presenters, expected }) => {
-      const stateDir = await createStateDir();
       const result = await executeWidget({
-        stateDir,
         widgetCode: "<p>inline fallback</p>",
         presentation: { target: "node_panel" },
         presenters,
@@ -335,7 +337,7 @@ describe("show_widget", () => {
       expect(result.resultText).toMatch(
         /Pair a canvas-capable device|Retry the requested presentation destination/u,
       );
-      await access(resolveCanvasDocumentDir(stateDir, result.viewId));
+      await access(documentDir(result.viewId));
     },
   );
 
@@ -351,7 +353,7 @@ describe("show_widget", () => {
         throw new Error("present must not run");
       },
     };
-    const tool = createShowWidgetTool({
+    const tool = createTool({
       inlineClientAvailable: false,
       presenters: [presenter],
       presenterContext: {},
@@ -364,52 +366,29 @@ describe("show_widget", () => {
     await expect(
       tool.execute("oversized-current", { title: "Large", widget_code: "123456789" }),
     ).rejects.toThrow("widget_code exceeds maximum size (8 bytes)");
-    await expect(
-      tool.execute("unsupported-current", {
-        title: "Diagram",
-        widget_code: "diagram:ready",
-        kind: "diagram",
-      }),
-    ).rejects.toThrow("inline widget hosting is disabled");
+    await expect(tool.execute("unsupported-current", diagram)).rejects.toThrow(
+      "inline widget hosting is disabled",
+    );
   });
 
   it("fails visibly without inline fallback and uses a real inline route when available", async () => {
-    const presenter: WidgetPresenter = {
-      target: "current_channel",
-      description: "Failing current channel",
-      capabilities: { sourceKinds: ["html"] },
-      match: () => true,
-      availability: async () => ({ ok: true, value: { available: true } }),
-      present: async () => ({
-        ok: false,
-        error: { code: "presentation_error", message: "delivery rejected" },
-      }),
-    };
-    const noInline = createShowWidgetTool({
+    const presenter = failingPresenter();
+    const noInline = createTool({
       inlineClientAvailable: false,
       presenters: [presenter],
       presenterContext: {},
     });
-    await expect(
-      noInline.execute("no-inline", { title: "Status", widget_code: "<p>ready</p>" }),
-    ).rejects.toThrow("Widget presentation failed: delivery rejected");
+    await expect(noInline.execute("no-inline", widget)).rejects.toThrow(
+      "Widget presentation failed: delivery rejected",
+    );
 
-    const stateDir = await createStateDir();
-    const withInline = createShowWidgetTool({
-      stateDir,
+    const withInline = createTool({
       sessionId: "inline-fallback",
       inlineClientAvailable: true,
       presenters: [presenter],
       presenterContext: {},
     });
-    const fallback = await withInline.execute("with-inline", {
-      title: "Status",
-      widget_code: "<p>ready</p>",
-    });
-    const parsed = JSON.parse(
-      fallback.content[0]?.type === "text" ? fallback.content[0].text : "null",
-    );
-    expect(parsed).toMatchObject({
+    expect(payload(await run(withInline))).toMatchObject({
       kind: "canvas",
       presentation: { target: "assistant_message" },
       text: expect.stringContaining("delivery rejected. The widget is available inline here."),
@@ -418,32 +397,15 @@ describe("show_widget", () => {
 
   it("reports pin success and presentation failure as an explicit partial outcome", async () => {
     const { callGateway } = createBoardPutCaller();
-    const presenter: WidgetPresenter = {
-      target: "current_channel",
-      description: "Failing current channel",
-      capabilities: { sourceKinds: ["html"] },
-      match: () => true,
-      availability: async () => ({ ok: true, value: { available: true } }),
-      present: async () => ({
-        ok: false,
-        error: { code: "presentation_error", message: "delivery rejected" },
-      }),
-    };
-    const tool = createShowWidgetTool({
+    const presenter = failingPresenter();
+    const tool = createTool({
       agentSessionKey: "agent:main:partial",
       callGateway,
       inlineClientAvailable: false,
       presenters: [presenter],
       presenterContext: {},
     });
-    const result = await tool.execute("partial", {
-      title: "Status",
-      widget_code: "<p>ready</p>",
-      pin: true,
-    });
-    const parsed = JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "null");
-
-    expect(parsed).toMatchObject({
+    expect(payload(await run(tool, { pin: true }))).toMatchObject({
       status: "partial",
       boardWidgetName: "status",
       presentation: {
@@ -458,38 +420,28 @@ describe("show_widget", () => {
   });
 
   it("rejects empty and oversized widget code", async () => {
-    const stateDir = await createStateDir();
-    const tool = createShowWidgetTool({ stateDir, sessionId: "validation" });
+    const tool = createTool();
 
-    await expect(tool.execute("empty", { title: "Empty", widget_code: "   " })).rejects.toThrow(
+    await expect(run(tool, { title: "Empty", widget_code: "   " })).rejects.toThrow(
       "widget_code required",
     );
     await expect(
-      tool.execute("oversized", {
-        title: "Too large",
+      run(tool, {
         widget_code: "x".repeat(WIDGET_HTML_MAX_UTF8_BYTES + 1),
       }),
     ).rejects.toThrow(`widget_code exceeds maximum size (${WIDGET_HTML_MAX_UTF8_BYTES} bytes)`);
   });
 
   it("rejects pinning without a session before creating a Canvas document", async () => {
-    const stateDir = await createStateDir();
-    const tool = createShowWidgetTool({ stateDir, sessionId: "missing-agent-session" });
+    const tool = createTool();
 
-    await expect(
-      tool.execute("pin", {
-        title: "Pinned",
-        widget_code: "<p>never materialized</p>",
-        pin: true,
-      }),
-    ).rejects.toThrow("pin requires an agent session");
-    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+    await expect(run(tool, { pin: true })).rejects.toThrow("pin requires an agent session");
+    await expectNoDocument();
   });
 
   it.each([true, false])(
     "rejects multibyte input over the wrapped UTF-8 budget (pin=%s)",
     async (pin) => {
-      const stateDir = await createStateDir();
       const callGateway = vi.fn();
       const title = "Multibyte";
       const wrapperBytes = Buffer.byteLength(buildWidgetDocument(title, ""), "utf8");
@@ -500,8 +452,7 @@ describe("show_widget", () => {
       expect(Buffer.byteLength(buildWidgetDocument(title, widgetCode), "utf8")).toBeGreaterThan(
         PINNED_WIDGET_MAX_UTF8_BYTES,
       );
-      const tool = createShowWidgetTool({
-        stateDir,
+      const tool = createTool({
         sessionId: "wrapped-budget",
         agentSessionKey: "agent:main:wrapped-budget",
         callGateway,
@@ -513,19 +464,17 @@ describe("show_widget", () => {
           : `widget document after wrapping exceeds maximum size (${WIDGET_HTML_MAX_UTF8_BYTES} bytes)`,
       );
       expect(callGateway).not.toHaveBeenCalled();
-      await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+      await expectNoDocument();
     },
   );
 
   it("does not create an inline Canvas document when dashboard pinning fails", async () => {
-    const stateDir = await createStateDir();
     const callGateway = vi.fn(async () => {
       throw new Error("board tab not found: missing");
     });
 
     await expect(
       executeWidget({
-        stateDir,
         agentSessionKey: "agent:main:failed-pin",
         widgetCode: "<p>never materialized</p>",
         pin: true,
@@ -534,26 +483,21 @@ describe("show_widget", () => {
       }),
     ).rejects.toThrow("board tab not found: missing");
     expect(callGateway).toHaveBeenCalledOnce();
-    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+    await expectNoDocument();
   });
 
   it("requires dashboard pinning for declared capabilities", async () => {
-    const stateDir = await createStateDir();
-    const tool = createShowWidgetTool({ stateDir, sessionId: "capabilities" });
+    const tool = createTool();
 
     await expect(
-      tool.execute("capabilities", {
-        title: "Weather",
-        widget_code: "<p>weather</p>",
+      run(tool, {
         capabilities: { netOrigins: ["https://api.open-meteo.com"] },
       }),
     ).rejects.toThrow("capabilities require pin=true");
   });
 
   it("wraps SVG widgets with the stable result and sandbox contracts", async () => {
-    const stateDir = await createStateDir();
     const { viewId, url, sandbox, text } = await executeWidget({
-      stateDir,
       title: "<Status>",
       widgetCode: '  <SvG viewBox="0 0 10 10"><circle r="4" /></SvG>  ',
     });
@@ -566,10 +510,7 @@ describe("show_widget", () => {
       text: `Widget hosted at ${url}`,
     });
     expect(sandbox).toBe("scripts");
-    const html = await readFile(
-      path.join(resolveCanvasDocumentDir(stateDir, viewId), "index.html"),
-      "utf8",
-    );
+    const html = await readFile(documentFile(viewId), "utf8");
     expect(html).toContain(
       `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://cdnjs.cloudflare.com`,
     );
@@ -581,12 +522,9 @@ describe("show_widget", () => {
     expect(html).toContain("--accent-fill:#d13c3c");
     expect(html).toContain('<body class="svg-widget"><script>');
     expect(html).toContain("openclaw:widget-size");
-    const manifest = JSON.parse(
-      await readFile(
-        path.join(resolveCanvasDocumentDir(stateDir, viewId), "manifest.json"),
-        "utf8",
-      ),
-    ) as { cspSandbox?: string };
+    const manifest = JSON.parse(await readFile(documentFile(viewId, "manifest.json"), "utf8")) as {
+      cspSandbox?: string;
+    };
     expect(manifest.cspSandbox).toBe("scripts");
   });
 
@@ -596,7 +534,6 @@ describe("show_widget", () => {
   ] as const)(
     "creates and refreshes pinned HTML in %s",
     async (_label, sessionKey, agentId, retainedMain) => {
-      const stateDir = await createStateDir();
       const store = createTestBoardStore({ stateDir });
       const broadcast = vi.fn();
       const target = { sessionKey, agentId };
@@ -616,7 +553,6 @@ describe("show_widget", () => {
 
       const pinWidget = (widgetCode: string, withPlacement = false) =>
         executeWidget({
-          stateDir,
           agentId,
           agentSessionKey: sessionKey,
           title,
@@ -637,8 +573,10 @@ describe("show_widget", () => {
         html: buildWidgetDocument(pinnedTitle, initialHtml),
         revision: 1,
       });
-      expect((await store.getSnapshot(target)).widgets[0]?.title).toBe(pinnedTitle);
-      expect((await store.getSnapshot(target)).widgets[0]?.presentation).toBe("frameless");
+      expect((await store.getSnapshot(target)).widgets[0]).toMatchObject({
+        title: pinnedTitle,
+        presentation: "frameless",
+      });
       expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
       expect(result.boardWidgetName).toBe("release-status");
       expect((await readCanvasDocumentHtmlSource(result.viewId, { stateDir })).html).toContain(
@@ -676,12 +614,10 @@ describe("show_widget", () => {
   );
 
   it("pins a granted-CSP document and declaration without networking in the inline preview", async () => {
-    const stateDir = await createStateDir();
     const store = createTestBoardStore({ stateDir });
     const callGateway = createLiveBoardCaller(store);
 
     const result = await executeWidget({
-      stateDir,
       agentSessionKey: "agent:main:weather",
       title: "Weather",
       widgetCode: "<p>weather</p>",
@@ -692,10 +628,7 @@ describe("show_widget", () => {
       },
       callGateway,
     });
-    const inlineHtml = await readFile(
-      path.join(resolveCanvasDocumentDir(stateDir, result.viewId), "index.html"),
-      "utf8",
-    );
+    const inlineHtml = await readFile(documentFile(result.viewId), "utf8");
     const pinned = await readBoardHtml(store, { sessionKey: "agent:main:weather" }, "weather");
 
     expect(inlineHtml).toContain("connect-src 'none'");
@@ -712,11 +645,9 @@ describe("show_widget", () => {
   });
 
   it("keeps generated pin names distinct when titles cannot fit a plain slug", async () => {
-    const stateDir = await createStateDir();
     const { callGateway } = createBoardPutCaller();
     const pinWidget = (title: string, widgetCode: string) =>
       executeWidget({
-        stateDir,
         agentSessionKey: "agent:main:pinned",
         title,
         widgetCode,
@@ -737,13 +668,11 @@ describe("show_widget", () => {
   });
 
   it("keeps colliding generated pins distinct and canonical spellings stable", async () => {
-    const stateDir = await createStateDir();
     const store = createTestBoardStore({ stateDir });
     const callGateway = createLiveBoardCaller(store);
     const sessionKey = "agent:main:generated-collision";
     const pinWidget = (title: string, widgetCode: string) =>
       executeWidget({
-        stateDir,
         agentSessionKey: sessionKey,
         title,
         widgetCode,
@@ -770,14 +699,13 @@ describe("show_widget", () => {
   it("uses opaque ids and evicts the oldest widget within a session scope", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-07T00:00:00.000Z"));
-    const stateDir = await createStateDir();
     const first = await executeWidget({ stateDir, widgetCode: "<p>0</p>" });
     for (let index = 1; index <= WIDGET_MAX_PER_SCOPE; index += 1) {
       vi.setSystemTime(new Date(`2026-07-07T00:00:${String(index).padStart(2, "0")}.000Z`));
       await executeWidget({ stateDir, widgetCode: `<p>${index}</p>` });
     }
 
-    await expect(access(resolveCanvasDocumentDir(stateDir, first.viewId))).rejects.toThrow();
+    await expect(access(documentDir(first.viewId))).rejects.toThrow();
     const entries = await readdir(path.join(stateDir, "canvas", "documents"));
     expect(entries).toHaveLength(WIDGET_MAX_PER_SCOPE);
   });

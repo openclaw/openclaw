@@ -29,6 +29,13 @@ afterEach(async () => {
   resetPluginRuntimeStateForTest();
 });
 
+function createTool(options: Parameters<typeof createShowWidgetTool>[0] = {}) {
+  return createShowWidgetTool({
+    stateDir: options.stateDir ?? tempDirs.make("openclaw-report-"),
+    agentSessionKey: "agent:main:report",
+    ...options,
+  });
+}
 const report: BoardReport = {
   blocks: [
     { type: "text", title: "Community pulse", text: "Activity is steady." },
@@ -43,11 +50,7 @@ describe("native report authoring", () => {
   it("preserves plugin source kinds named report alongside native report data", async () => {
     registerTestWidgetContentKind("report");
     const { mock, callGateway } = createBoardPutCaller();
-    const tool = createShowWidgetTool({
-      stateDir: tempDirs.make("openclaw-report-plugin-"),
-      agentSessionKey: "agent:main:report-plugin",
-      callGateway,
-    });
+    const tool = createTool({ callGateway });
     const result = await tool.execute("registered-report", {
       title: "Plugin report",
       kind: "report",
@@ -67,10 +70,7 @@ describe("native report authoring", () => {
     const target = { sessionKey: "global", agentId: "research" };
     const stateDir = tempDirs.make("openclaw-native-report-");
     const store = createTestBoardStore({ stateDir });
-    const sibling = {
-      sessionKey: "global",
-      agentId: "main",
-    };
+    const sibling = { sessionKey: "global", agentId: "main" };
     const siblingBefore = await store.getSnapshot(sibling);
     const { invoke } = createBoardHarness(undefined, {}, store, {
       getRuntimeConfig: () => ({
@@ -88,7 +88,7 @@ describe("native report authoring", () => {
       }
       return payload as T;
     };
-    const tool = createShowWidgetTool({
+    const tool = createTool({
       stateDir,
       agentSessionKey: target.sessionKey,
       agentId: target.agentId,
@@ -142,47 +142,34 @@ describe("native report authoring", () => {
   });
 
   it.each([
-    {
-      label: "executable fields",
-      props: { blocks: [{ type: "text", text: "Hello", script: "ignored" }] },
-    },
-    {
-      label: "unsupported blocks",
-      props: { blocks: [{ type: "image", url: "https://example.com/image.png" }] },
-    },
-    {
-      label: "script links",
-      props: {
-        blocks: [{ type: "links", items: [{ label: "Invalid", url: "javascript:void(0)" }] }],
-      },
-    },
-    {
-      label: "mismatched table rows",
-      props: { blocks: [{ type: "table", columns: ["A", "B"], rows: [["one"]] }] },
-    },
-    {
-      label: "too many points",
-      props: {
-        blocks: [
-          { type: "chart", points: Array.from({ length: 41 }, () => ({ label: "A", value: 1 })) },
-        ],
-      },
-    },
-    {
-      label: "oversized UTF-8 data",
-      props: {
-        blocks: Array.from({ length: 3 }, () => ({ type: "text", text: "é".repeat(2_000) })),
-      },
-    },
-  ])("rejects $label at the storage owner without changing the saved report", async ({ props }) => {
+    ["executable fields", [{ type: "text", text: "Hello", script: "ignored" }]],
+    ["unsupported blocks", [{ type: "image", url: "https://example.com/image.png" }]],
+    ["script links", [{ type: "links", items: [{ label: "Invalid", url: "javascript:void(0)" }] }]],
+    ["mismatched table rows", [{ type: "table", columns: ["A", "B"], rows: [["one"]] }]],
+    [
+      "too many points",
+      [
+        {
+          type: "chart",
+          points: Array.from({ length: 41 }, () => ({ label: "A", value: 1 })),
+        },
+      ],
+    ],
+    [
+      "oversized UTF-8 data",
+      Array.from({ length: 3 }, () => ({
+        type: "text",
+        text: "é".repeat(2_000),
+      })),
+    ],
+  ])("rejects %s without changing the saved report", async (_label, blocks) => {
     const store = createTestBoardStore();
     const target = { sessionKey: "agent:main:report" };
     const content = { kind: "plugin" as const, pluginKind: "session:report", props: report };
     await store.putWidget({ ...target, name: "report", content });
     const before = await store.getSnapshot(target);
     await expect(
-      (async () =>
-        await store.putWidget({ ...target, name: "report", content: { ...content, props } }))(),
+      store.putWidget({ ...target, name: "report", content: { ...content, props: { blocks } } }),
     ).rejects.toThrow();
     expect(await store.getSnapshot(target)).toEqual(before);
   });
@@ -203,11 +190,7 @@ describe("native report authoring", () => {
 
   it("accepts HTML widget payload when report is an empty object", async () => {
     const { mock, callGateway } = createBoardPutCaller();
-    const tool = createShowWidgetTool({
-      stateDir: tempDirs.make("openclaw-empty-report-html-"),
-      agentSessionKey: "agent:main:dashboard:empty-report",
-      callGateway,
-    });
+    const tool = createTool({ callGateway });
     const result = await tool.execute("empty-report-with-html", {
       title: "SaaS Operations",
       pin: true,
@@ -215,10 +198,7 @@ describe("native report authoring", () => {
       widget_code: "<main>dashboard</main>",
       kind: "html",
       capabilities: {},
-      presentation: {
-        target: "assistant_message",
-        frame: "card",
-      },
+      presentation: { target: "assistant_message", frame: "card" },
     });
     expect(result.details).toMatchObject({
       kind: "canvas",
@@ -227,10 +207,7 @@ describe("native report authoring", () => {
     expect(mock).toHaveBeenCalledWith(
       "board.widget.put",
       expect.objectContaining({
-        content: expect.objectContaining({
-          kind: "html",
-          html: "<main>dashboard</main>",
-        }),
+        content: expect.objectContaining({ kind: "html", html: "<main>dashboard</main>" }),
       }),
     );
   });
