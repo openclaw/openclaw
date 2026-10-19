@@ -365,6 +365,7 @@ describe("runReplyAgent runtime config", () => {
       };
       resolveQueuedReplyExecutionConfigMock.mockResolvedValue({
         ...freshCfg,
+        session: { store: storePath },
         messages: { visibleReplies: "message_tool" },
       });
       runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
