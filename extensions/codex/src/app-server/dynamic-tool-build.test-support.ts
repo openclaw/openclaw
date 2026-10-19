@@ -22,8 +22,8 @@ export { createCodexRuntimePlanFixture } from "./test-support.js";
 const hoisted = vi.hoisted(() => ({
   normalizeAgentRuntimeTools:
     vi.fn<typeof import("openclaw/plugin-sdk/agent-harness-runtime").normalizeAgentRuntimeTools>(),
-  resolveWebSearchToolPolicy:
-    vi.fn<typeof import("openclaw/plugin-sdk/agent-harness").resolveWebSearchToolPolicy>(),
+  resolveWebSearchToolPolicyAsync:
+    vi.fn<typeof import("openclaw/plugin-sdk/agent-harness").resolveWebSearchToolPolicyAsync>(),
   loadNodeExecAvailability: vi.fn(),
 }));
 
@@ -31,8 +31,8 @@ export { hoisted };
 
 vi.mock("openclaw/plugin-sdk/agent-harness", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness")>();
-  hoisted.resolveWebSearchToolPolicy = vi.fn(actual.resolveWebSearchToolPolicy);
-  return { ...actual, resolveWebSearchToolPolicy: hoisted.resolveWebSearchToolPolicy };
+  hoisted.resolveWebSearchToolPolicyAsync = vi.fn(actual.resolveWebSearchToolPolicyAsync);
+  return { ...actual, resolveWebSearchToolPolicyAsync: hoisted.resolveWebSearchToolPolicyAsync };
 });
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
@@ -123,7 +123,7 @@ export function setupDynamicToolBuildFixture(): Promise<string> {
     isAvailable: () => true,
   });
   hoisted.normalizeAgentRuntimeTools.mockClear();
-  hoisted.resolveWebSearchToolPolicy.mockClear();
+  hoisted.resolveWebSearchToolPolicyAsync.mockClear();
   setRuntimeConfigSnapshot({});
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-tools-"));
 }

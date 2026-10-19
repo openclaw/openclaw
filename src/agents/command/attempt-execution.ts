@@ -77,6 +77,7 @@ import {
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
+import { buildCommandAttemptToolContext } from "./attempt-tool-context.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -227,25 +228,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         ? ["structured_output"]
         : undefined,
   });
-  const toolContext = {
-    messageChannel: params.messageChannel,
-    messageProvider: params.opts.messageProvider ?? params.messageChannel,
-    agentAccountId: params.runContext.accountId,
-    groupId: params.runContext.groupId,
-    groupChannel: params.runContext.groupChannel,
-    groupSpace: params.runContext.groupSpace,
-    spawnedBy: params.spawnedBy,
-    currentChannelId: params.runContext.currentChannelId,
-    chatId: params.runContext.chatId,
-    channelContext: params.runContext.channelContext,
-    currentThreadTs: params.runContext.currentThreadTs,
-    currentInboundAudio: params.runContext.currentInboundAudio,
-    replyToMode: params.runContext.replyToMode,
-    senderId: params.runContext.senderId,
-    senderIsOwner: params.opts.senderIsOwner,
-    scheduledToolPolicy: params.opts.scheduledToolPolicy,
-    pinnedWidgetAuthoring: params.opts.pinnedWidgetAuthoring,
-  };
+  const toolContext = buildCommandAttemptToolContext(params);
   if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
     params.fallbackRuntimeState.originRuntime =
       !isRawModelRun && isCliExecutionProvider ? "cli" : "embedded";

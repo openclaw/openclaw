@@ -154,7 +154,7 @@ it.each([
   expect(persistent).toHaveBeenCalledExactlyOnceWith(testCase.persistent);
   expect(allowed).toHaveBeenCalledExactlyOnceWith(testCase.allowed);
   if (testCase.skipsPolicyLookup) {
-    expect(hoisted.resolveWebSearchToolPolicy).not.toHaveBeenCalled();
+    expect(hoisted.resolveWebSearchToolPolicyAsync).not.toHaveBeenCalled();
   }
 });
 

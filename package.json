@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.4",
+  "version": "2026.10.5",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "databaseEngines": [
@@ -1950,7 +1950,6 @@
     "lint:tmp:no-raw-http2-imports": "node --import ./scripts/tsx.mjs scripts/check-no-raw-http2-imports.mts",
     "lint:tmp:session-accessor-boundary": "node --import ./scripts/tsx.mjs scripts/check-session-accessor-boundary.mts",
     "lint:tmp:session-accessor-boundary:gen": "node --import ./scripts/tsx.mjs scripts/check-session-accessor-boundary.mts --update-debt-baseline",
-    "lint:tmp:session-transcript-reader-boundary": "node --import ./scripts/tsx.mjs scripts/check-session-transcript-reader-boundary.mts",
     "lint:tmp:sqlite-transaction-boundary": "node --import ./scripts/tsx.mjs scripts/check-sqlite-transaction-boundary.mts",
     "lint:tmp:tsgo-core-boundary": "node --import ./scripts/tsx.mjs scripts/check-tsgo-core-boundary.mts",
     "lint:ui:i18n": "pnpm ui:i18n:verify",

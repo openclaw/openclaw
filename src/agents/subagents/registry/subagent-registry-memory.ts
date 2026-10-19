@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
 import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import {
@@ -287,6 +288,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
 
   retireCompletionAuthority(observed: SubagentRunRecord): void {
     const entry = this.currentValue(observed);
+    revokeGoalContinuationReturn(entry);
     this.retiredCompletionEntries.add(getSubagentRunRuntimeKey(entry));
     this.releaseCompletionAuthority(entry);
   }
@@ -649,6 +651,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   override clear(): void {
+    this.forEach(revokeGoalContinuationReturn);
     for (const { entry } of this.completionAuthorities.values()) {
       this.releaseCompletionAuthority(entry);
     }
