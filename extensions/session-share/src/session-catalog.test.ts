@@ -30,10 +30,13 @@ vi.mock("openclaw/plugin-sdk/diagnostic-runtime", async (importOriginal) => {
   };
 });
 
-const cleanups: Array<() => Promise<void>> = [];
-beforeEach(() => vi.useFakeTimers());
+let f: Awaited<ReturnType<typeof catalogFixture>>;
+beforeEach(async () => {
+  vi.useFakeTimers();
+  f = await catalogFixture();
+});
 afterEach(async () => {
-  await Promise.all(cleanups.splice(0).map((stop) => stop()));
+  await f.stop();
   diagnostics.enabled = false;
   diagnostics.warn.mockReset();
   vi.restoreAllMocks();
@@ -52,16 +55,13 @@ const nativeSession: SessionCatalogSession = {
 };
 type CatalogQuery = Parameters<SessionCatalogProvider["list"]>[0];
 const makeNode = (nodeId: string) => ({ nodeId, connected: true, commands });
-const rows = (length: number) =>
+const rows = (length: number, fields: Partial<SessionCatalogSession> = {}) =>
   Array.from({ length }, (_, index) => ({
     ...nativeSession,
     threadId: `agent:main:${index}`,
     name: `Shared ${index}`,
+    ...fields,
   }));
-const makePage = (sessions: SessionCatalogSession[], offset: number, total: number) => ({
-  sessions,
-  ...(offset + 100 < total ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + 100) } : {}),
-});
 
 async function catalogFixture() {
   let config: OpenClawConfig = {};
@@ -80,14 +80,10 @@ async function catalogFixture() {
     config: { current: () => config },
     nodes: { list, invoke },
   });
-  let service: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
-  const api = createTestPluginApi({
-    runtime,
-    registerService: (registered) => {
-      service = registered;
-    },
-  });
+  const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
+  const api = createTestPluginApi({ runtime, registerService });
   const catalog = createSessionShareCatalog(api);
+  const service = registerService.mock.calls[0]![0];
   let scheduler = createTestPluginServiceScheduler();
   let serviceContext = {
     config,
@@ -96,13 +92,26 @@ async function catalogFixture() {
     invokeNode: invoke,
     scheduler,
   };
-  await service?.start(serviceContext);
-  const fixture = {
+  await service.start(serviceContext);
+  const result = {
     catalog,
     list,
     invoke,
+    nodes: (...ids: string[]) => list.mockResolvedValue({ nodes: ids.map(makeNode) }),
     host: async (query: CatalogQuery = {}) => (await catalog.list(query))[0],
     read: (hostId = "node:alpha") => catalog.read({ hostId, threadId: nativeSession.threadId }),
+    expectSessions: async (sessions = [nativeSession], query: CatalogQuery = {}) => {
+      expect((await catalog.list(query))[0]?.sessions).toEqual(sessions);
+    },
+    hold: (once = false) => {
+      const gate = createDeferred<unknown>();
+      if (once) {
+        invoke.mockImplementationOnce(() => gate.promise);
+      } else {
+        invoke.mockImplementation(() => gate.promise);
+      }
+      return gate;
+    },
     watch: async (query: CatalogQuery = {}) => {
       const publications: Promise<void>[] = [];
       const onHost = vi.fn();
@@ -112,7 +121,7 @@ async function catalogFixture() {
         onHost,
         waitUntil: (work) => publications.push(work),
       });
-      return { publications, onHost };
+      return { done: () => Promise.all(publications), onHost };
     },
     paginate: (sessions: SessionCatalogSession[], delayMs = 0) => {
       invoke.mockImplementation(async ({ params }) => {
@@ -123,7 +132,12 @@ async function catalogFixture() {
             setTimeout(resolve, delayMs);
           });
         }
-        return makePage(sessions.slice(offset, offset + 100), offset, sessions.length);
+        return {
+          sessions: sessions.slice(offset, offset + 100),
+          ...(offset + 100 < sessions.length
+            ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + 100) }
+            : {}),
+        };
       });
     },
     hydrate: async () => {
@@ -133,7 +147,7 @@ async function catalogFixture() {
     stop: async () => {
       scheduler.beginClose();
       try {
-        await service?.stop?.(serviceContext);
+        await service.stop?.(serviceContext);
       } finally {
         await scheduler.stop();
       }
@@ -142,40 +156,35 @@ async function catalogFixture() {
       config = next;
     },
     restart: async (): Promise<void> => {
-      await fixture.stop();
+      await result.stop();
       scheduler = createTestPluginServiceScheduler();
       serviceContext = { ...serviceContext, config, scheduler };
-      await service?.start(serviceContext);
+      await service.start(serviceContext);
     },
   };
-  cleanups.push(fixture.stop);
-  return fixture;
+  return result;
 }
 
 describe("session-share receiver catalog", () => {
-  let fixture: Awaited<ReturnType<typeof catalogFixture>>;
-  beforeEach(async () => {
-    fixture = await catalogFixture();
-  });
   it.each(["runtime", "request snapshot"])(
-    "reports %s node discovery failures and recovers without hiding them as an empty catalog",
+    "propagates %s discovery failures and recovers",
     async (route) => {
       const failure = new Error("paired node inventory is unavailable");
-      fixture.list.mockRejectedValueOnce(failure);
+      f.list.mockRejectedValueOnce(failure);
       await expect(
-        fixture.catalog.list(route === "request snapshot" ? { listNodes: fixture.list } : {}),
+        f.catalog.list(route === "request snapshot" ? { listNodes: f.list } : {}),
       ).rejects.toBe(failure);
-      expect(fixture.invoke).not.toHaveBeenCalled();
+      expect(f.invoke).not.toHaveBeenCalled();
 
-      await fixture.hydrate();
-      expect((await fixture.host())?.sessions).toEqual([nativeSession]);
-      fixture.list.mockResolvedValueOnce({ nodes: [] });
-      expect(await fixture.catalog.list({})).toEqual([]);
+      await f.hydrate();
+      await f.expectSessions();
+      f.list.mockResolvedValueOnce({ nodes: [] });
+      expect(await f.catalog.list({})).toEqual([]);
     },
   );
 
-  it("bounds requested-node admission and refresh concurrency without interrupting admitted work", async () => {
-    fixture.list.mockResolvedValue({
+  it("bounds admission and refresh concurrency without interrupting work", async () => {
+    f.list.mockResolvedValue({
       nodes: Array.from({ length: 40 }, (_, index) =>
         makeNode(`node-${String(index).padStart(2, "0")}`),
       ),
@@ -183,7 +192,7 @@ describe("session-share receiver catalog", () => {
     const gate = createDeferred<unknown>();
     let active = 0;
     let peak = 0;
-    fixture.invoke.mockImplementation(async () => {
+    f.invoke.mockImplementation(async () => {
       active++;
       peak = Math.max(peak, active);
       try {
@@ -194,28 +203,26 @@ describe("session-share receiver catalog", () => {
     });
     try {
       await vi.advanceTimersByTimeAsync(30_005);
-      expect(fixture.invoke).not.toHaveBeenCalled();
-      await fixture.catalog.list({ hostIds: ["node:node-39"] });
+      expect(f.invoke).not.toHaveBeenCalled();
+      await f.catalog.list({ hostIds: ["node:node-39"] });
       await vi.advanceTimersByTimeAsync(2);
-      expect(fixture.invoke.mock.calls.map(([request]) => request.nodeId)).toEqual(["node-39"]);
-      await fixture.catalog.list({});
+      expect(f.invoke.mock.calls.map(([request]) => request.nodeId)).toEqual(["node-39"]);
+      await f.catalog.list({});
       await vi.advanceTimersByTimeAsync(2);
-      expect(fixture.invoke).toHaveBeenCalledTimes(4);
+      expect(f.invoke).toHaveBeenCalledTimes(4);
       expect(peak).toBe(4);
-      const waiting = await fixture.catalog.list({ hostIds: ["node:node-38"] });
+      const waiting = await f.catalog.list({ hostIds: ["node:node-38"] });
       expect(waiting[0]?.error?.code).toBe("CATALOG_LOADING");
       gate.resolve({ sessions: [nativeSession] });
       await vi.advanceTimersByTimeAsync(2);
-      expect(fixture.invoke).toHaveBeenCalledTimes(32);
+      expect(f.invoke).toHaveBeenCalledTimes(32);
       expect(peak).toBe(4);
-      await fixture.catalog.list({ hostIds: ["node:node-38"] });
+      await f.catalog.list({ hostIds: ["node:node-38"] });
       await vi.advanceTimersByTimeAsync(2);
-      expect((await fixture.host({ hostIds: ["node:node-38"] }))?.sessions).toEqual([
-        nativeSession,
-      ]);
-      expect(fixture.invoke).toHaveBeenCalledTimes(33);
+      await f.expectSessions([nativeSession], { hostIds: ["node:node-38"] });
+      expect(f.invoke).toHaveBeenCalledTimes(33);
       await vi.advanceTimersByTimeAsync(30_010);
-      const refreshed = fixture.invoke.mock.calls.slice(33).map(([request]) => request.nodeId);
+      const refreshed = f.invoke.mock.calls.slice(33).map(([request]) => request.nodeId);
       expect(refreshed).toHaveLength(32);
       expect(refreshed).not.toContain("node-39");
       expect(refreshed).toContain("node-38");
@@ -225,182 +232,155 @@ describe("session-share receiver catalog", () => {
   });
 
   it("restarts after retiring queued refreshes before dispatch", async () => {
-    const { publications } = await fixture.watch();
-    await fixture.restart();
-    await Promise.all(publications);
-    await fixture.hydrate();
-    expect((await fixture.host())?.sessions).toEqual([nativeSession]);
-    expect(fixture.invoke).toHaveBeenCalledTimes(1);
+    const { done } = await f.watch();
+    await f.restart();
+    await done();
+    await f.hydrate();
+    await f.expectSessions();
+    expect(f.invoke).toHaveBeenCalledTimes(1);
   });
 
-  it("serves searches and pages from one complete node snapshot until refresh", async () => {
-    const sessions = rows(101);
-    fixture.paginate(sessions);
-    expect((await fixture.host())?.error?.code).toBe("CATALOG_LOADING");
-    await vi.advanceTimersByTimeAsync(2);
-    const first = (await fixture.host({ limitPerHost: 100 }))!;
+  it.each([0, 5_000])("serves complete paged snapshots with %i ms pages", async (delay) => {
+    const count = delay ? 601 : 101;
+    const sessions = rows(count);
+    f.paginate(sessions, delay);
+    expect((await f.host())?.error?.code).toBe("CATALOG_LOADING");
+    await vi.advanceTimersByTimeAsync(delay ? 35_005 : 2);
+    const first = (await f.host({ limitPerHost: 100 }))!;
     expect(first.sessions).toEqual(sessions.slice(0, 100));
-    expect(
-      (await fixture.host({ cursors: { "node:alpha": first.nextCursor! } }))?.sessions,
-    ).toEqual(sessions.slice(100));
-    expect((await fixture.host({ search: "SHARED 100" }))?.sessions).toEqual(sessions.slice(100));
-    expect((await fixture.host({ search: "MAIN:100" }))?.sessions).toEqual(sessions.slice(100));
-    expect(fixture.invoke).toHaveBeenCalledTimes(2);
-    fixture.invoke.mockResolvedValue({ sessions: [] });
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect((await fixture.host())?.sessions).toEqual([]);
-    expect(fixture.invoke).toHaveBeenCalledTimes(3);
-  });
-
-  it("finishes a multi-page snapshot when slow successful pages exceed one invocation budget", async () => {
-    const sessions = rows(601);
-    fixture.paginate(sessions, 5_000);
-    await fixture.catalog.list({});
-    await vi.advanceTimersByTimeAsync(35_005);
-    const hosts = await fixture.catalog.list({
-      cursors: { "node:alpha": sessionCatalogPaging.encodeCursor(600) },
+    expect(first.error).toBeUndefined();
+    await f.expectSessions(sessions.slice(100, 200), {
+      limitPerHost: 100,
+      cursors: { "node:alpha": first.nextCursor! },
     });
-    expect(hosts[0]?.sessions).toEqual(sessions.slice(600));
-    expect(hosts[0]?.error).toBeUndefined();
-    expect(fixture.invoke).toHaveBeenCalledTimes(7);
+    await f.expectSessions(sessions.slice(count - 1), {
+      cursors: { "node:alpha": sessionCatalogPaging.encodeCursor(count - 1) },
+    });
+    await f.expectSessions([sessions[100]!], { search: "SHARED 100" });
+    await f.expectSessions([sessions[100]!], { search: "MAIN:100" });
+    const calls = Math.ceil(count / 100);
+    expect(f.invoke).toHaveBeenCalledTimes(calls);
+    if (!delay) {
+      f.invoke.mockResolvedValue({ sessions: [] });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await f.expectSessions([]);
+      expect(f.invoke).toHaveBeenCalledTimes(calls + 1);
+    }
   });
 
-  it.each(["rows", "bytes"])(
-    "bounds aggregate snapshot %s without publishing a truncated catalog",
-    async (budget) => {
-      const total = budget === "rows" ? 10_100 : 1_500;
-      const text = "x".repeat(6_000);
-      fixture.invoke.mockImplementation(async ({ params }) => {
-        const { cursor } = params as { cursor?: string };
-        const offset = sessionCatalogPaging.decodeCursor(cursor);
-        return makePage(
-          Array.from({ length: 100 }, (_, index) => ({
-            ...nativeSession,
-            threadId: `agent:main:${offset + index}`,
-            ...(budget === "bytes" ? { name: text, cwd: text, gitBranch: text } : {}),
-          })),
-          offset,
-          total,
-        );
-      });
-      await fixture.hydrate();
-      const host = await fixture.host();
-      expect(host?.error?.code).toBe("CATALOG_TOO_LARGE");
-      expect(host?.sessions).toEqual([]);
-      expect(host?.error?.message).toContain("Reduce the shared groups");
-    },
-  );
+  it.each(["rows", "bytes"])("rejects oversized snapshot %s", async (budget) => {
+    const total = budget === "rows" ? 10_100 : 1_500;
+    const text = "x".repeat(6_000);
+    f.paginate(rows(total, budget === "bytes" ? { name: text, cwd: text, gitBranch: text } : {}));
+    await f.hydrate();
+    const host = await f.host();
+    expect(host).toMatchObject({
+      sessions: [],
+      error: {
+        code: "CATALOG_TOO_LARGE",
+        message: expect.stringContaining("Reduce the shared groups"),
+      },
+    });
+  });
 
-  it("backs off failed refreshes and expires snapshots despite a backward wall-clock adjustment", async () => {
-    await fixture.hydrate();
-    fixture.invoke.mockRejectedValue(new Error("offline"));
+  it("backs off failures and expires snapshots after the wall clock moves backward", async () => {
+    await f.hydrate();
+    f.invoke.mockRejectedValue(new Error("offline"));
     await vi.advanceTimersByTimeAsync(30_005);
-    expect((await fixture.host())?.sessions).toEqual([nativeSession]);
-    expect(fixture.invoke).toHaveBeenCalledTimes(2);
+    await f.expectSessions();
+    expect(f.invoke).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(30_005);
     const wallNow = Date.now();
     vi.setSystemTime(wallNow - 86_400_000);
     for (let index = 0; index < 10; index++) {
-      expect(await fixture.host()).toMatchObject({
+      expect(await f.host()).toMatchObject({
         sessions: [],
         error: { code: "NODE_INVOKE_FAILED" },
       });
     }
     vi.setSystemTime(wallNow);
-    expect(fixture.invoke).toHaveBeenCalledTimes(3);
+    expect(f.invoke).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(fixture.invoke).toHaveBeenCalledTimes(3);
-    fixture.invoke.mockResolvedValue({ sessions: [] });
+    expect(f.invoke).toHaveBeenCalledTimes(3);
+    f.invoke.mockResolvedValue({ sessions: [] });
     await vi.advanceTimersByTimeAsync(30_005);
-    expect((await fixture.host())?.error).toBeUndefined();
-    expect(fixture.invoke).toHaveBeenCalledTimes(4);
+    expect((await f.host())?.error).toBeUndefined();
+    expect(f.invoke).toHaveBeenCalledTimes(4);
   });
 
-  it.each(["config", "connection", "disconnect"])(
-    "invalidates a snapshot on %s and rejects its late refresh",
-    async (revision) => {
-      await fixture.hydrate();
-      const gate = createDeferred<unknown>();
-      fixture.invoke.mockImplementationOnce(() => gate.promise);
-      await vi.advanceTimersByTimeAsync(30_000);
-      const { publications, onHost } = await fixture.watch();
-      if (revision === "config") {
-        fixture.configure({ gateway: { port: 12345 } });
-      } else {
-        fixture.list.mockResolvedValue({
-          nodes: [
-            { nodeId: "alpha", connected: revision !== "disconnect", connectedAtMs: 2, commands },
-          ],
-        });
-      }
-      const host = await fixture.host();
-      expect(host?.sessions).toEqual([]);
-      gate.resolve({ sessions: [{ ...nativeSession, name: "Retired publication" }] });
-      await Promise.all(publications);
-      expect(onHost).not.toHaveBeenCalled();
-      if (revision !== "disconnect") {
-        await vi.advanceTimersByTimeAsync(2);
-        expect((await fixture.host())?.sessions).toEqual([nativeSession]);
-      } else {
-        expect(host?.error?.code).toBe("NODE_OFFLINE");
-      }
-    },
-  );
+  it.each(["config", "connection", "disconnect"])("retires %s snapshots", async (revision) => {
+    await f.hydrate();
+    const gate = f.hold(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    const { done, onHost } = await f.watch();
+    if (revision === "config") {
+      f.configure({ gateway: { port: 12345 } });
+    } else {
+      f.list.mockResolvedValue({
+        nodes: [
+          { nodeId: "alpha", connected: revision !== "disconnect", connectedAtMs: 2, commands },
+        ],
+      });
+    }
+    const host = await f.host();
+    expect(host?.sessions).toEqual([]);
+    gate.resolve({ sessions: [{ ...nativeSession, name: "Retired publication" }] });
+    await done();
+    expect(onHost).not.toHaveBeenCalled();
+    if (revision !== "disconnect") {
+      await vi.advanceTimersByTimeAsync(2);
+      await f.expectSessions();
+    } else {
+      expect(host?.error?.code).toBe("NODE_OFFLINE");
+    }
+  });
 
   it("keeps background refresh owned by the service after a viewer cancels", async () => {
-    const gate = createDeferred<unknown>();
-    fixture.invoke.mockImplementation(() => gate.promise);
+    const gate = f.hold();
     const controller = new AbortController();
-    const { publications, onHost } = await fixture.watch({ signal: controller.signal });
+    const { done, onHost } = await f.watch({ signal: controller.signal });
     onHost.mockClear();
     await vi.advanceTimersByTimeAsync(2);
     controller.abort();
-    expect(fixture.invoke.mock.calls[0]?.[0].signal?.aborted).toBe(false);
+    expect(f.invoke.mock.calls[0]?.[0].signal?.aborted).toBe(false);
     gate.resolve({ sessions: [nativeSession] });
-    await Promise.all(publications);
+    await done();
     expect(onHost).not.toHaveBeenCalled();
-    expect((await fixture.host())?.sessions).toEqual([nativeSession]);
-    expect(fixture.invoke).toHaveBeenCalledTimes(1);
+    await f.expectSessions();
+    expect(f.invoke).toHaveBeenCalledTimes(1);
   });
 
   it("cancels and joins active node work when the service retires", async () => {
-    const release = createDeferred<unknown>();
-    let signal: AbortSignal | undefined;
-    fixture.invoke.mockImplementation((request) => {
-      signal = request.signal;
-      return release.promise;
-    });
-    const { publications, onHost } = await fixture.watch();
+    const release = f.hold();
+    const { done, onHost } = await f.watch();
     onHost.mockClear();
     await vi.advanceTimersByTimeAsync(2);
     let stopped = false;
-    const stopping = fixture.stop().then(() => {
+    const stopping = f.stop().then(() => {
       stopped = true;
     });
-    await Promise.all(publications);
-    expect(signal?.aborted).toBe(true);
+    await done();
+    expect(f.invoke.mock.calls[0]?.[0].signal?.aborted).toBe(true);
     expect(stopped).toBe(false);
     release.resolve({ sessions: [nativeSession] });
     await stopping;
     expect(onHost).not.toHaveBeenCalled();
-    expect((await fixture.host())?.sessions).toEqual([]);
+    await f.expectSessions([]);
   });
 
   it("stops a multi-host publication when its catalog owner retires", async () => {
-    fixture.list.mockResolvedValue({
-      nodes: ["alpha", "beta"].map(makeNode),
-    });
+    f.nodes("alpha", "beta");
     const controller = new AbortController();
     const reason = new Error("catalog owner retired");
     const onHost = vi.fn(() => controller.abort(reason));
-    await expect(fixture.catalog.list({ signal: controller.signal, onHost })).rejects.toBe(reason);
+    await expect(f.catalog.list({ signal: controller.signal, onHost })).rejects.toBe(reason);
     expect(onHost).toHaveBeenCalledTimes(1);
   });
 
   it("does not start catalog work after cancellation during node discovery", async () => {
     const gate = createDeferred<Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>>();
     const controller = new AbortController();
-    const listing = fixture.catalog.list({
+    const listing = f.catalog.list({
       signal: controller.signal,
       listNodes: () => gate.promise,
     });
@@ -408,22 +388,19 @@ describe("session-share receiver catalog", () => {
     controller.abort(reason);
     gate.resolve({ nodes: [] });
     await expect(listing).rejects.toBe(reason);
-    expect(fixture.invoke).not.toHaveBeenCalled();
+    expect(f.invoke).not.toHaveBeenCalled();
   });
 
   it.each([false, undefined])(
-    "preserves slow refresh dispatch attribution (%s) with rate-limited private-safe logs",
+    "rate-limits redacted diagnostics (%s)",
     async (nodeCommandDispatched) => {
       diagnostics.enabled = true;
       diagnostics.warnEnabled = true;
-      fixture.list.mockResolvedValue({
-        nodes: ["alpha", "beta"].map(makeNode),
-      });
-      const gate = createDeferred<unknown>();
-      fixture.invoke.mockImplementation(() => gate.promise);
+      f.nodes("alpha", "beta");
+      const gate = f.hold();
       let clock = 0;
       vi.spyOn(performance, "now").mockImplementation(() => clock);
-      await fixture.hydrate();
+      await f.hydrate();
       clock = 30_000;
       gate.reject(
         Object.assign(new Error("PRIVATE_MESSAGE"), {
@@ -441,21 +418,19 @@ describe("session-share receiver catalog", () => {
         }),
       );
       await vi.advanceTimersByTimeAsync(1);
-      expect(await fixture.host()).toMatchObject({
+      expect(await f.host()).toMatchObject({
         sessions: [],
         error: { code: "NODE_INVOKE_FAILED" },
       });
-      expect(diagnostics.warn.mock.calls).toEqual([
-        [
-          "slow Session Share catalog refresh",
-          {
-            elapsedMs: 30_000,
-            outcome: "rejected",
-            nodeErrorCode: nodeCommandDispatched === undefined ? "unknown" : "TIMEOUT",
-            ...(nodeCommandDispatched !== undefined ? { nodeCommandDispatched } : {}),
-          },
-        ],
-      ]);
+      expect(diagnostics.warn).toHaveBeenCalledExactlyOnceWith(
+        "slow Session Share catalog refresh",
+        {
+          elapsedMs: 30_000,
+          outcome: "rejected",
+          nodeErrorCode: nodeCommandDispatched === undefined ? "unknown" : "TIMEOUT",
+          ...(nodeCommandDispatched !== undefined ? { nodeCommandDispatched } : {}),
+        },
+      );
     },
   );
 
@@ -471,8 +446,8 @@ describe("session-share receiver catalog", () => {
       }
       let clock = 0;
       vi.spyOn(performance, "now").mockImplementation(() => clock);
-      const invoke = fixture.invoke.getMockImplementation()!;
-      fixture.invoke.mockImplementation(async (params) => {
+      const invoke = f.invoke.getMockImplementation()!;
+      f.invoke.mockImplementation(async (params) => {
         clock += mode === "fast" ? 999 : 1_200;
         if (mode === "disabled before settlement") {
           diagnostics.enabled = false;
@@ -480,16 +455,14 @@ describe("session-share receiver catalog", () => {
         return invoke(params);
       });
 
-      await fixture.hydrate();
-      expect((await fixture.host())?.sessions).toEqual([nativeSession]);
+      await f.hydrate();
+      await f.expectSessions();
       expect(diagnostics.warn).toHaveBeenCalledTimes(mode === "sink throws" ? 1 : 0);
     },
   );
 
-  it("namespaces colliding profile claims by the invoked node, not the claimed node domain", async () => {
-    fixture.list.mockResolvedValue({
-      nodes: ["alpha", "beta"].map(makeNode),
-    });
+  it("namespaces colliding claims by the invoked node, not the wire domain", async () => {
+    f.nodes("alpha", "beta");
     const identity = {
       type: "remote" as const,
       pluginId: "session-share",
@@ -497,7 +470,7 @@ describe("session-share receiver catalog", () => {
       idKind: "profile",
       id: "same-profile",
     };
-    fixture.invoke.mockImplementation(async ({ command }) => ({
+    f.invoke.mockImplementation(async ({ command }) => ({
       payloadJSON: JSON.stringify(
         command === commands[0]
           ? {
@@ -509,9 +482,9 @@ describe("session-share receiver catalog", () => {
             },
       ),
     }));
-    await fixture.hydrate();
-    const hosts = await fixture.catalog.list({});
-    const pages = await Promise.all(hosts.map(({ hostId }) => fixture.read(hostId)));
+    await f.hydrate();
+    const hosts = await f.catalog.list({});
+    const pages = await Promise.all(hosts.map(({ hostId }) => f.read(hostId)));
     const expected = [
       { ...identity, domain: "node:alpha" },
       { ...identity, domain: "node:beta" },
@@ -521,7 +494,7 @@ describe("session-share receiver catalog", () => {
   });
 
   it("preserves eligible host order and separates offline and failed sources", async () => {
-    fixture.list.mockResolvedValue({
+    f.list.mockResolvedValue({
       nodes: [
         { nodeId: "partial", commands: [commands[0]!], connected: true },
         { nodeId: "offline", displayName: "Bravo", commands, connected: false },
@@ -529,61 +502,55 @@ describe("session-share receiver catalog", () => {
         { nodeId: "alpha", displayName: "Alpha", commands, connected: true },
       ],
     });
-    fixture.invoke.mockImplementation(async ({ nodeId }) => {
+    f.invoke.mockImplementation(async ({ nodeId }) => {
       if (nodeId === "broken") {
         throw new Error("disconnected");
       }
       return { sessions: [nativeSession] };
     });
-    await fixture.hydrate();
-    const hosts = await fixture.catalog.list({});
-    expect(hosts.map((host) => host.hostId)).toEqual(["node:alpha", "node:offline", "node:broken"]);
+    await f.hydrate();
+    const hosts = await f.catalog.list({});
+    expect(hosts).toMatchObject([
+      { hostId: "node:alpha" },
+      { hostId: "node:offline", error: { code: "NODE_OFFLINE" } },
+      { hostId: "node:broken", error: { code: "NODE_INVOKE_FAILED" } },
+    ]);
     expect(hosts[0]?.sessions).toEqual([nativeSession]);
-    expect(hosts[1]?.error?.code).toBe("NODE_OFFLINE");
-    expect(hosts[2]?.error?.code).toBe("NODE_INVOKE_FAILED");
-    expect(fixture.invoke).toHaveBeenCalledTimes(2);
-    expect(fixture.catalog.continueSession).toBeUndefined();
-    expect(fixture.catalog.archive).toBeUndefined();
-    expect(fixture.catalog.openTerminal).toBeUndefined();
+    expect(f.invoke).toHaveBeenCalledTimes(2);
+    expect(f.catalog.continueSession).toBeUndefined();
+    expect(f.catalog.archive).toBeUndefined();
+    expect(f.catalog.openTerminal).toBeUndefined();
   });
 
   it.each([
     { nodeId: "alpha", commands, connected: false },
     { nodeId: "alpha", commands: [commands[0]!], connected: true },
   ])("denies reads when the paired host is unavailable: %j", async (node) => {
-    fixture.list.mockResolvedValue({ nodes: [node] });
-    await expect(fixture.read()).rejects.toThrow("unavailable");
-    expect(fixture.invoke).not.toHaveBeenCalled();
+    f.list.mockResolvedValue({ nodes: [node] });
+    await expect(f.read()).rejects.toThrow("unavailable");
+    expect(f.invoke).not.toHaveBeenCalled();
   });
 
   it.each([
-    {
-      label: "local profile",
-      patch: { createdActor: { type: "human", identity: { type: "profile", id: "forged" } } },
-    },
-    { label: "local adoption", patch: { sessionKey: "agent:main:local" } },
-    { label: "write capability", patch: { canContinue: true } },
-  ])("rejects node rows carrying $label", async ({ patch }) => {
-    fixture.invoke.mockResolvedValue({
-      payloadJSON: JSON.stringify({ sessions: [{ ...nativeSession, ...patch }] }),
-    });
-    await fixture.hydrate();
-    expect(await fixture.host()).toMatchObject({
-      sessions: [],
-      error: { code: "NODE_INVOKE_FAILED" },
-    });
+    ["session", { createdActor: { type: "human", identity: { type: "profile", id: "forged" } } }],
+    ["session", { sessionKey: "agent:main:local" }],
+    ["session", { canContinue: true }],
+    ["transcript", { sender: { identity: { type: "profile", id: "forged" } } }],
+    ["transcript", { unexpected: true }],
+  ] as const)("rejects forbidden %s fields: %j", async (kind, patch) => {
+    const payload =
+      kind === "session"
+        ? { sessions: [{ ...nativeSession, ...patch }] }
+        : {
+            threadId: nativeSession.threadId,
+            items: [{ type: "userMessage", text: "Question", ...patch }],
+          };
+    f.invoke.mockResolvedValue({ payloadJSON: JSON.stringify(payload) });
+    if (kind === "session") {
+      await f.hydrate();
+      expect(await f.host()).toMatchObject({ sessions: [], error: { code: "NODE_INVOKE_FAILED" } });
+    } else {
+      await expect(f.read()).rejects.toThrow("Invalid OpenClaw transcript");
+    }
   });
-
-  it.each([{ sender: { identity: { type: "profile", id: "forged" } } }, { unexpected: true }])(
-    "rejects transcript payload outside the closed wire identity contract: %j",
-    async (patch) => {
-      fixture.invoke.mockResolvedValue({
-        payloadJSON: JSON.stringify({
-          threadId: nativeSession.threadId,
-          items: [{ type: "userMessage", text: "Question", ...patch }],
-        }),
-      });
-      await expect(fixture.read()).rejects.toThrow("Invalid OpenClaw transcript");
-    },
-  );
 });
