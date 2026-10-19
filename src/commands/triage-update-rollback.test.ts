@@ -22,6 +22,22 @@ vi.mock("node:crypto", async () => {
 afterEach(() => vi.mocked(crypto.randomUUID).mockReset());
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const lintFailure = () => ({
+  error: "Original Doctor failure",
+  result: {
+    status: "error" as const,
+    mode: "npm" as const,
+    steps: [
+      {
+        name: "candidate doctor lint",
+        exitCode: 1,
+        doctorLintFindings: [
+          { checkId: "fixture/check", message: "Startup failed", severity: "error" },
+        ],
+      },
+    ],
+  },
+});
 
 describe("rollback-readable update diagnostics", () => {
   it.each([
@@ -223,25 +239,8 @@ describe("rollback-readable update diagnostics", () => {
       ...Array.from({ length: 3 }, () => "detached-diagnostics-".repeat(10)),
       "failure.json",
     );
-    await writeTriageUpdateFailure(
-      {
-        error: "Original Doctor failure",
-        result: {
-          status: "error",
-          mode: "npm",
-          steps: [
-            {
-              name: "candidate doctor lint",
-              exitCode: 1,
-              doctorLintFindings: [
-                { checkId: "fixture/check", message: "Startup failed", severity: "error" },
-              ],
-            },
-          ],
-        },
-      },
-      { env, outputPath },
-    );
+    const failure = lintFailure();
+    await writeTriageUpdateFailure(failure, { env, outputPath });
     const raw = await fs.readFile(outputPath, "utf8");
     const released = await readReleasedTriageUpdateFailure(outputPath, { env, stateDir });
     expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(8 * 1024);
@@ -289,25 +288,7 @@ describe("rollback-readable update diagnostics", () => {
       return rename(from, to);
     });
     try {
-      const outputPath = await writeTriageUpdateFailure(
-        {
-          error: "Original Doctor failure",
-          result: {
-            status: "error",
-            mode: "npm",
-            steps: [
-              {
-                name: "candidate doctor lint",
-                exitCode: 1,
-                doctorLintFindings: [
-                  { checkId: "fixture/check", message: "Startup failed", severity: "error" },
-                ],
-              },
-            ],
-          },
-        },
-        { env },
-      );
+      const outputPath = await writeTriageUpdateFailure(lintFailure(), { env });
       const failure = await readTriageUpdateFailure(outputPath, { env, stateDir });
       expect(failure.error).toContain("Original Doctor failure");
       expect(failure.error).toContain("Complete Doctor lint inventory unavailable: ENOSPC");
