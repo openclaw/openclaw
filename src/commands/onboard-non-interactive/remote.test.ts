@@ -138,14 +138,20 @@ describe("runNonInteractiveRemoteSetup", () => {
     });
   });
 
-  it("preserves existing token and password SecretRef when no replacement is provided", async () => {
-    const remote = {
-      url: remoteUrl,
-      token: "existing-token",
-      password: { source: "env" as const, provider: "default", id: "EXISTING_REMOTE_PASSWORD" },
-      tlsFingerprint,
-    };
+  it.each([
+    "existing-password",
+    { source: "env" as const, provider: "default", id: "EXISTING_REMOTE_PASSWORD" },
+  ])(
+    "preserves existing token and password %j when no replacement is provided",
+    async (password) => {
+      const remote = {
+        url: remoteUrl,
+        token: "existing-token",
+        password,
+        tlsFingerprint,
+      };
 
-    expect(await setup({ secretInputMode: "ref" }, remoteConfig(remote))).toEqual(remote);
-  });
+      expect(await setup({ secretInputMode: "ref" }, remoteConfig(remote))).toEqual(remote);
+    },
+  );
 });

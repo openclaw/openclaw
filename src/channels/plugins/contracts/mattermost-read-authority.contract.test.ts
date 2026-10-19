@@ -238,7 +238,7 @@ async function withReadFixture(
 }
 
 type AuthorityOwner = "plugin" | "run" | "turn";
-type Revocation = readonly [AuthorityOwner, string, number?];
+type Revocation = [AuthorityOwner, string, number?];
 async function checkRead(
   options: FixtureOptions,
   target: string,
@@ -318,7 +318,7 @@ describe("Mattermost registered message reads", () => {
     ["turn", metadataPath],
     ["plugin", postsPath(OTHER), 200],
     ["run", postsPath(OTHER), 403],
-  ])("fences %s revocation at %s (status=%s)", (owner, at, status = undefined) =>
+  ])("fences %s revocation at %s (status=%s)", (owner, at, status?: number) =>
     checkRead(
       {},
       OTHER,

@@ -82,7 +82,7 @@ describe("failover classification", () => {
     ],
   ] satisfies [string, Signal, Options?][])(
     "HTTP policy: %s for %j",
-    (expected, signal, opts = undefined) => {
+    (expected, signal, opts?: Options) => {
       expectReason(expected, signal, opts);
     },
   );

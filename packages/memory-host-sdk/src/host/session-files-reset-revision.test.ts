@@ -54,7 +54,7 @@ const messageEvent = (id: string, role: string, content: unknown, parentId?: str
   message: { role, content },
   ...(parentId !== undefined ? { parentId } : {}),
 });
-const msg = <T extends object>(role: string, content: unknown, metadata?: T) => ({
+const msg = (role: string, content: unknown, metadata?: Record<string, unknown>) => ({
   role,
   content,
   ...metadata,

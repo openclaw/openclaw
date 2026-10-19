@@ -24,7 +24,7 @@ function expectAuthority(
   authority: { assertCurrent(): void; assertLegacyCurrent(): void },
   error?: string,
 ) {
-  for (const check of [authority.assertCurrent, authority.assertLegacyCurrent]) {
+  for (const check of [() => authority.assertCurrent(), () => authority.assertLegacyCurrent()]) {
     if (error) {
       expect(check).toThrow(error);
     } else {
@@ -111,7 +111,7 @@ describe("native session binding generation authority", () => {
         },
       });
       if (state === "rotated-during-read") {
-        gate.observe(pending);
+        void gate.observe(pending);
         await gate.reached;
         await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
         gate.resume();

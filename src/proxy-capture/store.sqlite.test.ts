@@ -402,7 +402,9 @@ describe("DebugProxyCaptureStore", () => {
   });
 
   it("uses rollback journaling for captures on NFS-backed volumes", () => {
-    vi.spyOn(fs, "statfsSync").mockReturnValue({ ...fs.statfsSync("."), type: 0x6969 });
+    const stats = fs.statfsSync(".");
+    stats.type = 0x6969;
+    vi.spyOn(fs, "statfsSync").mockReturnValue(stats);
 
     const store = makeStore();
     expect(store.db.prepare("PRAGMA journal_mode").get()).toMatchObject({

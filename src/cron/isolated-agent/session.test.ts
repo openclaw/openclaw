@@ -229,6 +229,8 @@ it.each([true, false])("resets routing and runtime handles (forced=$0)", (forceN
   expect(result.lifecycleRevision).not.toBe("old-revision");
   expect(result.sessionEntry.agentHarnessId).toBeUndefined();
   expect(result.sessionEntry.delivery).toBeUndefined();
+  expect(result.sessionEntry.channel).toBeUndefined();
+  expect(result.sessionEntry.origin).toBeUndefined();
   if (forceNew) {
     expect(result.sessionEntry.sessionId).not.toBe("old-session");
     expect(result.sessionEntry).toMatchObject(preferences);

@@ -7,7 +7,7 @@ import {
   interruptSessionControllerEffects,
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
-import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   ensureAgentWorkspaceMock,
@@ -69,11 +69,11 @@ function run(sessionTarget = `session:${sessionKey}`, key = sessionKey) {
     makeIsolatedAgentParamsFixture({
       sessionKey: key,
       cfg: { tools: { fs: { workspaceOnly: true } }, plugins: { enabled: false } },
-      job: {
+      job: makeIsolatedAgentJobFixture({
         sessionTarget,
         delivery: { mode: "none" },
         payload: { kind: "agentTurn", message: "read the saved report", toolsAllow: ["read"] },
-      },
+      }),
     }),
   );
 }

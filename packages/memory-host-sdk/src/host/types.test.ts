@@ -5,7 +5,10 @@ import {
   type MemoryProviderStatus,
 } from "./types.js";
 
-const withIdentity = <T extends object>(indexIdentity: Record<string, unknown>, extra?: T) => ({
+const withIdentity = (
+  indexIdentity: Record<string, unknown>,
+  extra?: Partial<MemoryProviderStatus>,
+) => ({
   ...extra,
   custom: { indexIdentity },
 });

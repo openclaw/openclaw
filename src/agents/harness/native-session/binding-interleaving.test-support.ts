@@ -1,4 +1,5 @@
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import type { NativeSessionBindingStateStore } from "./binding-leases.js";
 import type { TestBindingRecord } from "./binding.test-support.js";
 
 export function bindingMutation(value: string, current?: TestBindingRecord) {
@@ -31,8 +32,12 @@ export function bindingGate() {
   };
 }
 
-export function interceptBindingStore<TAuthority, TStore extends object>(
-  state: { withCurrent(authority: TAuthority): TStore },
+export function interceptBindingStore<TStore extends object>(
+  state: {
+    withCurrent(
+      authority: Parameters<NativeSessionBindingStateStore<TestBindingRecord>["withCurrent"]>[0],
+    ): TStore;
+  },
   wrap: (store: TStore) => Partial<TStore>,
 ) {
   const original = state.withCurrent.bind(state);

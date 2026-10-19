@@ -68,7 +68,7 @@ export function sheet(page: Element) {
   return expectDefined(page.querySelector(".cloud-environments__sheet"), "Environment sheet");
 }
 
-export function field<T extends Element>(page: Element, selector: string) {
+export function field<T extends Element>(page: Element, selector: string): T {
   return expectDefined(page.querySelector<T>(selector), selector);
 }
 

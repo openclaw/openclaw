@@ -119,7 +119,7 @@ it.each([
   ],
 ] satisfies [string, string | null, number?][])(
   "guards wrapped statuses: %s",
-  (message, reason, status = undefined) => {
+  (message, reason, status?: number) => {
     expect(classifyFailoverSignal({ message, status })).toEqual(
       reason ? { kind: "reason", reason } : null,
     );
