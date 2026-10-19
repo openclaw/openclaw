@@ -1,10 +1,5 @@
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  type ElicitRequestParams,
-} from "@modelcontextprotocol/sdk/types.js";
+import { InMemoryTransport } from "@modelcontextprotocol/client";
+import { Server, type ElicitRequestParams, type ServerContext } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -12,7 +7,6 @@ import { createSessionMcpRuntime } from "../../agents/agent-bundle-mcp-runtime.j
 import type { McpAppViewLease } from "../../agents/mcp-ui-resource.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { mcpAppHandlers } from "./mcp-app.js";
-import { expectRpcError } from "./rpc-response.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({ transport: vi.fn(), view: vi.fn(), question: vi.fn() }));
@@ -62,10 +56,10 @@ let questionAnswer: ReturnType<typeof createDeferred<typeof answer>>;
 let toolStarted: ReturnType<typeof createDeferred<void>>;
 let toolCalls: number;
 
-function elicit(params: ElicitRequestParams, signal?: AbortSignal) {
-  return server.request({ method: "elicitation/create", params }, resultSchema, {
+function elicit(ctx: ServerContext, params: ElicitRequestParams) {
+  return ctx.mcpReq.send({ method: "elicitation/create", params }, resultSchema, {
     timeout: 600_000,
-    signal,
+    signal: ctx.mcpReq.signal,
   });
 }
 
@@ -87,13 +81,13 @@ beforeEach(async () => {
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   server = new Server({ name: "demo", version: "1" }, { capabilities: { tools: {} } });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  server.setRequestHandler("tools/list", async () => ({
     tools: [{ name: "pick", inputSchema: { type: "object" } }],
   }));
-  server.setRequestHandler(CallToolRequestSchema, async () => {
+  server.setRequestHandler("tools/call", async (_request, ctx) => {
     toolCalls += 1;
     toolStarted.resolve();
-    const result = await elicit({
+    const result = await elicit(ctx, {
       message: "Choose a color",
       requestedSchema: {
         type: "object",
@@ -161,7 +155,10 @@ function invoke() {
 }
 
 function expectTimeout(respond: unknown) {
-  expectRpcError(respond, { message: expect.stringContaining("-32001: Request timed out") });
+  expect(respond).toHaveBeenCalledWith(false, undefined, {
+    code: "UNAVAILABLE",
+    message: "Request timed out",
+  });
 }
 
 describe("MCP tool human-input timeouts", () => {
@@ -194,9 +191,9 @@ describe("MCP tool human-input timeouts", () => {
   });
 
   it("keeps ordinary tools on their configured deadline", async () => {
-    server.setRequestHandler(CallToolRequestSchema, async (_request, extra) => {
+    server.setRequestHandler("tools/call", async (_request, ctx) => {
       toolStarted.resolve();
-      return await racePromiseWithAbortSignal(new Promise<never>(() => {}), extra.signal);
+      return await racePromiseWithAbortSignal(new Promise<never>(() => {}), ctx.mcpReq.signal);
     });
     const call = invoke();
     await toolStarted.promise;
@@ -206,12 +203,12 @@ describe("MCP tool human-input timeouts", () => {
   });
 
   it("bounds repeated human questions by one allowance for the whole tool call", async () => {
-    server.setRequestHandler(CallToolRequestSchema, async (_request, extra) => {
+    server.setRequestHandler("tools/call", async (_request, ctx) => {
       for (let index = 0; index < 2; index += 1) {
-        await elicit(
-          { message: "Confirm", requestedSchema: { type: "object", properties: {} } },
-          extra.signal,
-        );
+        await elicit(ctx, {
+          message: "Confirm",
+          requestedSchema: { type: "object", properties: {} },
+        });
       }
       return { content: [] };
     });

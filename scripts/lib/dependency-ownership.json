@@ -61,6 +61,11 @@
       "class": "plugin-runtime",
       "risk": ["mdns", "network"]
     },
+    "@modelcontextprotocol/client": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["protocol-client", "network"]
+    },
     "@modelcontextprotocol/core": {
       "owner": "core:mcp",
       "class": "core-runtime",
@@ -173,6 +178,11 @@
       "owner": "capability:http-route-host",
       "class": "default-runtime-initially",
       "risk": ["http-server", "large-transitive-cone"]
+    },
+    "fast-uri": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["schema-validation"]
     },
     "file-type": {
       "owner": "core:media-admission",

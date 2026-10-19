@@ -117,6 +117,20 @@ describe("mcp.tools.call.v1", () => {
     expect(unexpected.error?.message).toHaveLength(1_024);
   });
 
+  it("exposes the compatibility error when a result cannot cross the published boundary", async () => {
+    const result = await invokeMcp(
+      managerWith(async () => ({ content: [], structuredContent: ["not a v1 object"] })),
+      { server: "docs", tool: "search" },
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "MCP_SDK_RESULT_UNREPRESENTABLE",
+        message: expect.stringContaining("tools/call"),
+      },
+    });
+  });
+
   it("does not publish an MCP result after its invocation is canceled", async () => {
     const controller = new AbortController();
     let resolveTool:

@@ -51,7 +51,6 @@ interface PlanAnnotationsParams {
   viewport?: { width: number; height: number };
   /** Required when space === "element". */
   elementRect?: AnnotationBox;
-  maxLabels?: number;
 }
 
 function refToNumber(ref: string): number {
@@ -64,8 +63,6 @@ function refToNumber(ref: string): number {
 }
 
 export function planAnnotations(params: PlanAnnotationsParams) {
-  const maxLabels = params.maxLabels ?? ANNOTATION_MAX_LABELS_DEFAULT;
-
   if (params.space === "viewport" && !params.scroll) {
     throw new Error("planAnnotations: scroll is required when space is 'viewport'");
   }
@@ -109,7 +106,7 @@ export function planAnnotations(params: PlanAnnotationsParams) {
       annotations.push(toAnnotation(input, params));
       continue;
     }
-    if (overlayItems.length >= maxLabels) {
+    if (overlayItems.length >= ANNOTATION_MAX_LABELS_DEFAULT) {
       skipped += 1;
       continue;
     }

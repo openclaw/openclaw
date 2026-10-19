@@ -29,6 +29,7 @@ import type {
 } from "../../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 // Pane-local search, context menus, selection actions, and presentation resets.
 import type { TurnRecapWatch } from "../chat-progress.ts";
@@ -453,6 +454,7 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   event.stopPropagation();
   removeReplyContextMenu();
   const menu = document.createElement("div");
+  const owner = { element: menu, paneId: props.paneId, listeners: new AbortController() };
   menu.className = "chat-reply-context-menu";
   menu.setAttribute("role", "menu");
   menu.setAttribute("aria-label", t("chat.messages.actions"));
@@ -464,16 +466,18 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     disabled?: boolean;
     tooltip: string;
     className?: string;
-    onClick: (event: Event) => void;
+    onClick: (event: Event, label: HTMLSpanElement) => void;
   }) => {
     const button = document.createElement("button");
     button.type = "button";
     button.disabled = params.disabled ?? false;
     button.setAttribute("role", "menuitem");
-    button.addEventListener("click", params.onClick);
     const label = document.createElement("span");
     label.dataset.copyLabel = "";
     label.textContent = params.label;
+    listen(button, "click", (clickEvent) => params.onClick(clickEvent, label), {
+      signal: owner.listeners.signal,
+    });
     button.append(label);
     const tooltip = document.createElement("openclaw-tooltip");
     tooltip.content = params.tooltip;
@@ -492,8 +496,8 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     appendAction({
       label,
       tooltip: label,
-      onClick: (copyEvent) => {
-        void handleCopyButton(copyEvent, text, label).then((copied) => {
+      onClick: (copyEvent, labelElement) => {
+        void handleCopyButton(copyEvent, text, label, { label: labelElement }).then((copied) => {
           if (copied && activeReplyContextMenu?.element === menu) {
             removeReplyContextMenu(props.paneId);
           }
@@ -577,7 +581,6 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   // Expanded tables live in a native modal. Its context menu must stay inside
   // that top layer, otherwise the browser makes the body portal inert.
   (target.closest("openclaw-modal-dialog, dialog") ?? document.body).appendChild(menu);
-  const owner = { element: menu, paneId: props.paneId, listeners: new AbortController() };
   activeReplyContextMenu = owner;
 
   const menuRect = menu.getBoundingClientRect();

@@ -1,4 +1,5 @@
 import { cancelLayout, scheduleLayout } from "../lib/layout-frame.ts";
+import { listen } from "../lib/reactive/listener.ts";
 
 export type ScrollState = { scrollable: boolean; atStart: boolean; atEnd: boolean };
 type Observation = {
@@ -6,12 +7,12 @@ type Observation = {
   trackScroll: boolean;
   publish: (state: ScrollState) => void;
 };
-const observations = new Map<HTMLElement, Set<Observation>>();
+const observations = new Map<HTMLElement, { entries: Set<Observation>; stopScroll: () => void }>();
 let resizeObserver: ResizeObserver | undefined;
 
 function schedule(element: HTMLElement): void {
   scheduleLayout(element, () => {
-    const entries = observations.get(element);
+    const entries = observations.get(element)?.entries;
     if (!entries || !element.isConnected) {
       return undefined;
     }
@@ -34,7 +35,7 @@ function schedule(element: HTMLElement): void {
     });
     return () => {
       for (const { entry, state } of updates) {
-        if (observations.get(element)?.has(entry)) {
+        if (observations.get(element)?.entries.has(entry)) {
           entry.publish(state);
         }
       }
@@ -46,7 +47,7 @@ function onScroll(event: Event): void {
   const element = event.currentTarget;
   if (
     element instanceof HTMLElement &&
-    [...(observations.get(element) ?? [])].some((entry) => entry.trackScroll)
+    [...(observations.get(element)?.entries ?? [])].some((entry) => entry.trackScroll)
   ) {
     schedule(element);
   }
@@ -59,9 +60,13 @@ export function observeScrollState(
   horizontal = false,
   trackScroll = true,
 ): { schedule: () => void; disconnect: () => void } {
-  let entries = observations.get(element);
-  if (!entries) {
-    observations.set(element, (entries = new Set()));
+  let group = observations.get(element);
+  if (!group) {
+    group = {
+      entries: new Set(),
+      stopScroll: listen(element, "scroll", onScroll, { passive: true }),
+    };
+    observations.set(element, group);
     if (!resizeObserver && typeof ResizeObserver !== "undefined") {
       resizeObserver = new ResizeObserver((resized) => {
         for (const { target } of resized) {
@@ -72,8 +77,8 @@ export function observeScrollState(
       });
     }
     resizeObserver?.observe(element);
-    element.addEventListener("scroll", onScroll, { passive: true });
   }
+  const { entries, stopScroll } = group;
   const entry = { horizontal, trackScroll, publish };
   entries.add(entry);
   schedule(element);
@@ -84,7 +89,7 @@ export function observeScrollState(
       if (entries.size === 0) {
         observations.delete(element);
         resizeObserver?.unobserve(element);
-        element.removeEventListener("scroll", onScroll);
+        stopScroll();
         cancelLayout(element);
         if (observations.size === 0) {
           resizeObserver?.disconnect();
