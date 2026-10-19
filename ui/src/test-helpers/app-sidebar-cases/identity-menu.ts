@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationOverlays } from "../../app/overlays-types.ts";
+import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
   dismissSidebarAttention,
   resolveSidebarAttentionKey,
@@ -99,6 +100,11 @@ describe("AppSidebar footer identity menu", () => {
   });
 
   it("owns account utilities, restores focus, and routes Profile", async () => {
+    const originalBuildInfo = { ...CONTROL_UI_BUILD_INFO };
+    Object.assign(CONTROL_UI_BUILD_INFO, { release: false, commit: "0123456789abcdef" });
+    onTestFinished(() => {
+      Object.assign(CONTROL_UI_BUILD_INFO, originalBuildInfo);
+    });
     const fullName = "Ada Lovelace With A Deliberately Long Display Name";
     const email = "ada.with.a.deliberately.long.address@example.test";
     const avatarUrl = "/api/users/self/avatar?v=1";
