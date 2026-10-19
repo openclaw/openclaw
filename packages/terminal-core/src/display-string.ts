@@ -22,19 +22,28 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
 /** Find a case-insensitive Windows path without changing offsets in the original string. */
 function indexOfWindowsPath(input: string, home: string, cursor: number): number {
   const foldedHome = lowercasePreservingWhitespace(home);
-  // Resolved Windows homes begin with a drive or UNC prefix. Their first backslash
-  // anchors candidates without folding the input and shifting Unicode offsets.
+  // Match either Windows separator without folding the input and shifting Unicode offsets.
   const separatorOffset = home.indexOf("\\");
-  for (
-    let separator = input.indexOf("\\", cursor + separatorOffset);
-    separator !== -1;
-    separator = input.indexOf("\\", separator + 1)
-  ) {
-    const index = separator - separatorOffset;
+  const separators = /[\\/]/g;
+  separators.lastIndex = cursor + separatorOffset;
+  for (let match = separators.exec(input); match; match = separators.exec(input)) {
+    const index = match.index - separatorOffset;
     if (index > input.length - home.length) {
       break;
     }
-    if (lowercasePreservingWhitespace(input.slice(index, index + home.length)) === foldedHome) {
+    // Keep URI schemes intact when a new slash alias resembles a drive or UNC home.
+    if (
+      input[index - 1] === ":" &&
+      input.slice(index, index + home.length).includes("/") &&
+      /[A-Za-z][A-Za-z0-9+.-]*:$/u.test(input.slice(0, index))
+    ) {
+      continue;
+    }
+    if (
+      lowercasePreservingWhitespace(
+        input.slice(index, index + home.length).replaceAll("/", "\\"),
+      ) === foldedHome
+    ) {
       return index;
     }
   }
