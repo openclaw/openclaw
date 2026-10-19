@@ -140,9 +140,9 @@ it.each([
       await onTimer(next.state);
     };
     const expectedDeliveries = interrupted === "after-acceptance" ? [result] : [];
-    const expectNoReplay = () => {
-      expect(received).toEqual(expectedDeliveries);
-      expect(executionCount).toBe(1);
+    const expectRecoveredOnce = () => {
+      expect(received).toEqual([result]);
+      expect(executionCount).toBe(interrupted === "before-delivery" ? 2 : 1);
     };
     let tick: Promise<void> | undefined;
     try {
@@ -166,14 +166,15 @@ it.each([
       expect((await first.cron.readJob(job.id))?.state.runningReceiptId).toBe(receipt?.receiptId);
 
       await restart(first, replacement);
-      expectNoReplay();
+      expectRecoveredOnce();
       const recovered = await replacement.cron.readJob(job.id);
       expect(recovered).toMatchObject({
         enabled: false,
         state: {
-          lastRunStatus: "error",
-          lastError: interruptedError,
-          lastDeliveryStatus: "unknown",
+          lastRunStatus: interrupted === "before-delivery" ? "ok" : "error",
+          ...(interrupted === "after-acceptance"
+            ? { lastError: interruptedError, lastDeliveryStatus: "unknown" }
+            : { lastDeliveryStatus: "delivered" }),
         },
       });
       expect(recovered?.state.nextRunAtMs).toBeUndefined();
@@ -186,14 +187,15 @@ it.each([
         readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
           .entries;
       const history = readHistory();
-      expect(history).toEqual([
+      expect(history).toHaveLength(interrupted === "before-delivery" ? 2 : 1);
+      expect(history).toContainEqual(
         expect.objectContaining({
           status: "error",
           error: interruptedError,
           runAtMs: receipt?.startedAtMs,
           deliveryStatus: "unknown",
         }),
-      ]);
+      );
       expect(
         openOpenClawStateDatabase()
           .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
@@ -201,7 +203,7 @@ it.each([
       ).toMatchObject({ status: "interrupted" });
 
       await restart(replacement, secondReplacement);
-      expectNoReplay();
+      expectRecoveredOnce();
       expect(await secondReplacement.cron.readJob(job.id)).toEqual(recovered);
       expect(readHistory()).toEqual(history);
     } finally {

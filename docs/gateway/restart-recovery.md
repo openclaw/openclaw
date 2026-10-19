@@ -22,10 +22,15 @@ tomorrow, without a new user message. Shutdown uses the same interruption and
 recovery marking as a managed restart, with the existing drain deadlines.
 Explicit session Stop/cancel remains terminal. The crash-loop breaker, recovery
 retry budgets, current-authority checks, and archived/reset exclusions still apply.
-In-flight cron occurrences keep their existing restart treatment. Main-session
-recovery does not replay a started cron occurrence, including when the conversation
-retains an earlier operator source. Cron records the interruption; a fresh
-authenticated turn or a future scheduled occurrence can continue the work.
+Cron owns recovery of interrupted scheduled turns. An enabled, unchanged,
+time-scheduled agent job interrupted before delivery gets one fresh retry after
+startup, including one-shot jobs. Its original run remains recorded as interrupted.
+The retry uses the job's current authorization and tool limits and asks the agent
+to reconcile prior work before continuing. Main-session recovery leaves a local
+notice and releases the interrupted cron turn to the scheduler; it does not borrow
+an earlier operator turn's authority. Possible prior delivery, changed or disabled
+jobs, and command, script, event, or process-exit jobs remain interrupted without
+automatic replay. Inspect their run history before continuing them manually.
 
 Inter-session steering updates remain context for the executing turn. When that
 turn retains a Control UI, channel, or authenticated operator source claim,
@@ -1375,7 +1380,7 @@ Use the session transcript and recorded delivery outcome to verify completion.
 
 - Sessions excluded from main-session recovery because another owner already
   handles them: subagent sessions (settled back to their parent), cron sessions (the
-  scheduler re-runs on schedule), and ACP-managed sessions (the connected IDE
+  scheduler owns eligible retries and future occurrences), and ACP-managed sessions (the connected IDE
   or client owns the resume).
 - Work that was never admitted: messages arriving during the drain window are
   rejected with an explicit restart error rather than silently queued into a
