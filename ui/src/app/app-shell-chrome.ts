@@ -420,7 +420,7 @@ export class ShellChromeOwner {
       host.context &&
       isTerminalAvailable(
         host.context.gateway.snapshot,
-        host.context.config.current.terminalEnabled,
+        host.context.config.current.terminalEnabled ?? false,
       )
     ) {
       event.preventDefault();

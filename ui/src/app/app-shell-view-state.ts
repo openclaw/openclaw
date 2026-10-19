@@ -114,7 +114,7 @@ export function readShellView(host: ShellViewHost) {
     (connectionStatus === "connecting" ||
       connectionStatus === "starting" ||
       connectionStatus === "restoring");
-  const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled);
+  const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
   const custodianPanelAvailable = isCustodianPanelAvailable(context.gateway);

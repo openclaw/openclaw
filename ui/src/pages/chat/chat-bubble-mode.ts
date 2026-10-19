@@ -49,7 +49,9 @@ export function setChatBubbleMode(
     return {};
   }
   const withoutSession = (keys: string[] | undefined) =>
-    (keys ?? []).filter((candidate) => !areUiSessionKeysEquivalent(candidate, key));
+    (normalizeChatBubbleSessionKeys(keys) ?? []).filter(
+      (candidate) => !areUiSessionKeysEquivalent(candidate, key),
+    );
   const on = withoutSession(settings.chatBubbleSessionKeys);
   const off = withoutSession(settings.chatBubbleDisabledSessionKeys);
   (enabled ? on : off).push(key);

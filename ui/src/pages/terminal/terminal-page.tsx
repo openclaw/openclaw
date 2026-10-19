@@ -24,7 +24,7 @@ export function TerminalPage(props: { location: RouteLocation | null }) {
   const selection = projectAgentSelection(context.agentSelection);
   const theme = projectTheme(context.theme);
   const snapshot = () => gateway.read().snapshot;
-  const available = () => isTerminalAvailable(snapshot(), config.read().terminalEnabled);
+  const available = () => isTerminalAvailable(snapshot(), config.read().terminalEnabled ?? false);
   const owner = () => selection.read().state.selectedId ?? snapshot().assistantAgentId;
   const target = createMemo(() =>
     props.location ? resolveTerminalRouteLocation(props.location, context.basePath) : null,

@@ -7,6 +7,7 @@ import {
   createTweakcnThemePayload as createTweakcnPayload,
 } from "../test-helpers/custom-theme.ts";
 import { parseImportedCustomTheme, syncCustomThemeStyleTag } from "./custom-theme.ts";
+import type { ImportedCustomTheme } from "./custom-theme.ts";
 
 beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
 
@@ -221,6 +222,18 @@ describe("custom theme import helpers", () => {
       getElementById: vi.fn(() => style),
     } as unknown as Document);
     syncCustomThemeStyleTag(null);
+    expect(remove).toHaveBeenCalledOnce();
+  });
+
+  it("removes the managed style tag when a stored theme is missing tokens", () => {
+    const remove = vi.fn();
+    vi.stubGlobal("document", {
+      getElementById: vi.fn(() => ({ remove })),
+    } as unknown as Document);
+    const theme = { ...createImportedTheme(), light: undefined } as unknown as ImportedCustomTheme;
+
+    syncCustomThemeStyleTag(theme);
+
     expect(remove).toHaveBeenCalledOnce();
   });
 });

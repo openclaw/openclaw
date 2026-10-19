@@ -176,14 +176,19 @@ export function parseImportedCustomTheme(value: unknown): ImportedCustomTheme | 
 }
 
 function buildCustomThemeStyles(theme: Pick<ImportedCustomTheme, "light" | "dark">) {
+  const light = normalizeStoredTokenMap(theme.light);
+  const dark = normalizeStoredTokenMap(theme.dark);
+  if (!light || !dark) {
+    throw new Error("Stored custom theme is missing required tokens.");
+  }
   const renderDeclarations = (modeTokens: ThemeTokenMap) =>
     MODE_TOKEN_ORDER.map((key) => `  --${key}: ${modeTokens[key]};`).join("\n");
   return [
     `:root[data-theme="custom"] {`,
-    renderDeclarations(theme.dark),
+    renderDeclarations(dark),
     `}`,
     `:root[data-theme="custom-light"] {`,
-    renderDeclarations(theme.light),
+    renderDeclarations(light),
     `}`,
   ].join("\n");
 }
@@ -199,7 +204,13 @@ export function syncCustomThemeStyleTag(
     style?.remove();
     return;
   }
-  const cssText = buildCustomThemeStyles(theme);
+  let cssText;
+  try {
+    cssText = buildCustomThemeStyles(theme);
+  } catch {
+    style?.remove();
+    return;
+  }
   if (!style) {
     style = document.createElement("style");
     style.id = CUSTOM_THEME_STYLE_ID;

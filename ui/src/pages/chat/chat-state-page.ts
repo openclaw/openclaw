@@ -252,11 +252,7 @@ export function createPageState(
     chatUserNearBottom: true,
     chatFollowLocked: false,
     chatReadingHistory: false,
-    sidebarLayout: settings.sidebarSessionLayouts?.[sidebarSessionKey] ?? {
-      columns: [],
-      open: false,
-      expanded: false,
-    },
+    sidebarLayout: normalizeSidebarLayout(settings.sidebarSessionLayouts?.[sidebarSessionKey]),
     sidebarContent: null,
     sidebarFocusPanelId: settings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "",
     sidebarFocusVersion: 0,

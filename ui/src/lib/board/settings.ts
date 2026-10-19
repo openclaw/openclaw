@@ -51,9 +51,9 @@ export function updateBoardSessionView(
 ): BoardSessionViews {
   const key = sessionKey.trim();
   if (!key) {
-    return current ?? {};
+    return normalizeBoardSessionViews(current);
   }
-  const views = { ...current };
+  const views = normalizeBoardSessionViews(current);
   const previous = views[key] ?? {};
   delete views[key];
   views[key] = {

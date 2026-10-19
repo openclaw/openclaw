@@ -342,7 +342,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     const terminal = () => panelProps.target.kind === "terminal";
     const available = () =>
       terminal()
-        ? isTerminalAvailable(snapshot(), config.read().terminalEnabled)
+        ? isTerminalAvailable(snapshot(), config.read().terminalEnabled ?? false)
         : isDesktopPanelAvailable(snapshot());
     const agentId = () => {
       const id = selection.read().state.selectedId ?? snapshot().assistantAgentId;
