@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { rotateAgentRunRegistryLifecycleGeneration } from "../../../infra/agent-run-registry.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { copySubagentRunRuntimeOwner } from "../registry/subagent-run-generation.js";
+import { copySubagentRunRuntimeOwner as copyOwner } from "../registry/subagent-run-generation.js";
 import { transferFollowupCohort } from "./session-followup-cohort.js";
 import {
   SessionFollowupCompletion,
@@ -42,7 +42,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function yieldCohort(runId = "first", generation = 1, finish = true) {
+const yielded = { status: "ok", yielded: true, terminalReply: { disposition: "empty" } } as const;
+
+async function yieldCohort(requesterTurnRunId = "first", rearmGeneration = 1, finish = true) {
   const entry: SubagentRunRecord = {
     runId: "C",
     childSessionKey: "C-session",
@@ -51,29 +53,13 @@ async function yieldCohort(runId = "first", generation = 1, finish = true) {
     task: "nested",
     cleanup: "keep",
     createdAt: 2,
-    execution: { status: "terminal", endedAt: 3, outcome: { status: "ok" } },
-    requesterSettleWake: {
-      status: "pending",
-      attemptCount: 0,
-      requesterYieldBatch: true,
-      rearmGeneration: generation,
-      batchRunIds: ["C"],
-    },
+    execution: { status: "terminal" },
+    requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration },
   };
-  promoteFollowupYield({
-    requesterTurnRunId: runId,
-    entries: [entry],
-    rearmGeneration: generation,
-  });
-  expect(
-    await owner.settle(runId, {
-      status: "ok",
-      yielded: true,
-      terminalReply: { disposition: "empty" },
-    }),
-  ).toEqual({ kind: "yielded" });
+  promoteFollowupYield({ requesterTurnRunId, entries: [entry], rearmGeneration });
+  expect(await owner.settle(requesterTurnRunId, yielded)).toEqual({ kind: "yielded" });
   if (finish) {
-    owner.finishExecution(runId);
+    owner.finishExecution(requesterTurnRunId);
   }
   return entry;
 }
@@ -106,11 +92,7 @@ it.each(["replacement", "cleared wake", "cleared adopted wake"] as const)(
     const published =
       publication === "replacement"
         ? { ...c, runId: "C-next", taskRunId: c.runId }
-        : copySubagentRunRuntimeOwner(c, {
-            ...c,
-            requesterSettleWake: undefined,
-            suppressCompletionDelivery: true,
-          });
+        : copyOwner(c, { ...c, requesterSettleWake: undefined, suppressCompletionDelivery: true });
     transferFollowupCohort(c, published);
     expect(getFollowupForCohort([published])).toBe(owner);
     if (publication === "replacement") {
@@ -139,12 +121,7 @@ it("publishes to exactly one consumer after the caller joins physical execution 
     return decision;
   })();
   try {
-    await Promise.race([
-      cleanupEntered.promise,
-      settled.then(() => {
-        throw new Error("Completion skipped the caller's cleanup boundary");
-      }),
-    ]);
+    await awaitGateBeforeSettlement(cleanupEntered.promise, settled, "Completion skipped cleanup");
     expect(published).toBe(false);
     cleanupReleased.resolve();
     expect(await settled).toEqual({ kind: "terminal", reply: final });

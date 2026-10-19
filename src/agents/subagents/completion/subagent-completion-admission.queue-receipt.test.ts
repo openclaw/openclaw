@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import {
   deleteDeliveryQueueEntryInDatabase,
@@ -34,18 +35,12 @@ const db = useCompletionDatabase("openclaw-requester-outcome-");
 it.each(["pending", "completed", "replaced", "absent"] as const)(
   "joins the existing %s intent after a published callback fails",
   async (intentState) => {
-    const now = Date.now();
     const entry = createSubagentRunRecord({
       runId: "blocked-requester-outcome",
-      childSessionKey: "agent:main:subagent:blocked-outcome",
-      requesterSessionKey: "agent:main:requester-outcome",
       requesterAgentId: "main",
-      createdAt: now - 20,
-      endedAt: now - 10,
-      outcome: { status: "ok" },
+      createdAt: 1,
+      execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
       expectsCompletionMessage: true,
-      cleanupHandled: true,
-      completion: { required: true, resultText: "Synthetic child result", capturedAt: now - 10 },
       delivery: { status: "pending", generation: 1 },
       requesterSettleWake: {
         status: "pending",
@@ -55,25 +50,19 @@ it.each(["pending", "completed", "replaced", "absent"] as const)(
       },
     });
     seedSubagentCompletionOwner({ subagent: entry, databaseOptions: { database: db.value } });
-    const ctx = captureOpenClawStateWorkerContext();
+    const queueContext = captureOpenClawStateWorkerContext();
     const clock = createGatewaySchedulerClock(Date.now());
     const scheduler = createTestGatewayScheduler(clock.clock);
     const deliver = vi.fn(async (_entry: QueuedSessionDelivery) => {});
     const onSettled = vi.fn();
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const stop = startSessionDeliveryRuntime({
-      queueContext: ctx,
-      scheduler,
-      deliver,
-      onSettled,
-      log,
-    });
+    const stop = startSessionDeliveryRuntime({ queueContext, scheduler, deliver, onSettled, log });
     let committed: RequesterWakeCommittedWrite | undefined;
     const settle = (onPublished: () => void) =>
       settleRequesterCompletionBatch({
         entries: [entry],
         outcome: { delivered: false, path: "none", error: "Requester unavailable" },
-        context: ctx,
+        context: queueContext,
         assertCurrent: () => {
           if (!isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry)) {
             throw new SubagentCompletionSourceChangedError(
@@ -95,10 +84,8 @@ it.each(["pending", "completed", "replaced", "absent"] as const)(
       ).rejects.toMatchObject({ outcome: "committed", publication: "published" });
       expect(committed?.result.queueIds).toHaveLength(1);
       const id = committed!.result.queueIds[0]!;
-      const queued = await loadPendingSessionDelivery(id, ctx);
-      if (!queued || queued.kind !== "systemEvent") {
-        throw new Error("Blocked outcome did not retain a system-event intent");
-      }
+      const queued = await loadPendingSessionDelivery(id, queueContext);
+      assert(queued?.kind === "systemEvent", "Blocked outcome must retain its system-event intent");
       expect(queued.text).toContain("Requester unavailable");
       expect(queued.text).toContain(entry.runId);
       expect(subagentRuns.get(entry.runId)?.requesterSettleWake).toBeUndefined();
@@ -106,7 +93,7 @@ it.each(["pending", "completed", "replaced", "absent"] as const)(
       const advanceToIntent = () =>
         clock.advanceBy(Math.max(0, (queued.availableAt ?? queued.enqueuedAt) - scheduler.now()));
       if (intentState === "completed") {
-        await scheduleSessionDelivery(id, ctx);
+        await scheduleSessionDelivery(id, queueContext);
         await advanceToIntent();
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(getDeliveryQueueEntryStatus(queueName, id)).toBe("completed");
@@ -134,10 +121,7 @@ it.each(["pending", "completed", "replaced", "absent"] as const)(
         if (intentState === "replaced" || intentState === "absent") {
           await expect(reconciliation).rejects.toThrow(/Requester outcome queue intent/);
         } else {
-          await expect(reconciliation).resolves.toEqual({
-            applied: true,
-            publication: "published",
-          });
+          expect(await reconciliation).toEqual({ applied: true, publication: "published" });
         }
       } finally {
         for (const [name] of triggers) {
@@ -149,12 +133,12 @@ it.each(["pending", "completed", "replaced", "absent"] as const)(
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(onSettled).toHaveBeenCalledOnce();
         expect(getDeliveryQueueEntryStatus(queueName, id)).toBe("completed");
-        expect(await loadPendingSessionDelivery(id, ctx)).toBeNull();
+        expect(await loadPendingSessionDelivery(id, queueContext)).toBeNull();
         expect(log.error).not.toHaveBeenCalled();
       } else {
         expect(deliver).not.toHaveBeenCalled();
         expect(onSettled).not.toHaveBeenCalled();
-        expect((await loadPendingSessionDelivery(id, ctx))?.kind).toBe(
+        expect((await loadPendingSessionDelivery(id, queueContext))?.kind).toBe(
           intentState === "absent" ? undefined : "systemEvent",
         );
       }

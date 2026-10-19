@@ -21,29 +21,23 @@ vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun: vi.fn() 
 const db = useCompletionDatabase("openclaw-expired-receipt-");
 
 async function suspend(
-  options: {
-    completionTarget?: "parent";
-    reason?: "expiry" | "permanent_failure";
-    resultText?: string | null;
-  } = {},
+  reason: "expiry" | "permanent_failure" = "expiry",
+  completionTarget?: "parent",
+  resultText: string | null = "canonical result",
 ) {
   const input = armRequesterWake(records());
   input.subagent.cleanupHandled = false;
   input.subagent.cleanupCompletedAt = undefined;
   input.subagent.delivery = { status: "pending", generation: 1 };
-  input.subagent.completionTarget = options.completionTarget;
-  input.subagent.completionRequesterSessionId = options.completionTarget
-    ? "requester-session"
-    : undefined;
-  if (options.resultText !== undefined) {
-    input.subagent.completion!.resultText = options.resultText;
-  }
+  input.subagent.completionTarget = completionTarget;
+  input.subagent.completionRequesterSessionId = completionTarget ? "requester-session" : undefined;
+  input.subagent.completion!.resultText = resultText;
   seedSubagentCompletionOwner({ ...input, databaseOptions: { database: db.value } });
   expect(
     await blockSubagentCompletionDelivery({
       subagent: input.subagent,
       reason: "completion delivery expired",
-      suspendedReason: options.reason ?? "expiry",
+      suspendedReason: reason,
       databaseOptions: { database: db.value },
     }),
   ).toBe(true);
@@ -89,7 +83,7 @@ it.each([
 ] as const)(
   "settles expiry (target=%s, result=%s, delivered=%s)",
   async (completionTarget, resultText, delivered) => {
-    const input = await suspend({ completionTarget, resultText });
+    const input = await suspend("expiry", completionTarget, resultText);
     const before = structuredClone(input.subagent);
     const notices = readCompletionSystemEvents(db.value);
     if (!delivered) {
@@ -117,14 +111,10 @@ it.each([
       const stored = subagentRuns.get(input.subagent.runId);
       expect(stored?.requesterSettleWake).toBeUndefined();
       if (delivered) {
-        const { status, suspendedAt, suspendedReason, lastError, payload } = stored!.delivery!;
-        expect({ status, suspendedAt, suspendedReason, lastError, payload }).toEqual({
-          status: "delivered",
-          suspendedAt: undefined,
-          suspendedReason: undefined,
-          lastError: undefined,
-          payload: undefined,
-        });
+        expect(stored?.delivery?.status).toBe("delivered");
+        for (const key of ["suspendedAt", "suspendedReason", "lastError", "payload"] as const) {
+          expect(stored?.delivery?.[key]).toBeUndefined();
+        }
         expect(stored?.completion?.resultText).toBe(resultText);
       } else {
         expect(stored).toMatchObject({
@@ -146,7 +136,7 @@ it.each([
 );
 
 it("does not recover permanent_failure from a successful receipt", async () => {
-  const input = await suspend({ reason: "permanent_failure" });
+  const input = await suspend("permanent_failure");
   await settle(input, true);
   db.value = await reopenCompletionFixtureOwners();
   expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
@@ -200,13 +190,11 @@ it.each([
       }
     }
     db.value = await reopenCompletionFixtureOwners();
-    expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
-    expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeDefined();
+    const stored = currentCompletionRun(input);
+    expect(isDeliverySuspended(stored)).toBe(true);
+    expect(stored.requesterSettleWake).toBeDefined();
     if (cut === "delivery generation") {
-      expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
-        status: "suspended",
-        generation: 2,
-      });
+      expect(stored.delivery).toMatchObject({ status: "suspended", generation: 2 });
     }
   },
 );

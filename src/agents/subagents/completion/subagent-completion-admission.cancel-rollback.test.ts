@@ -98,10 +98,7 @@ it.each([
 
     const writerEntered = createDeferredCore();
     const releaseWriter = createDeferredCore();
-    const failure = new SubagentRegistryWriteError(
-      "not-committed",
-      new Error("Stop write rejected"),
-    );
+    const failure = new SubagentRegistryWriteError("not-committed", new Error("Stop rejected"));
     let stopHeld = false;
     probe.command(stateWorker, async (command, executeOptions, scope) => {
       if (command.type === "subagents.persistChanges" && !stopHeld) {
@@ -126,8 +123,6 @@ it.each([
       ]);
       await writerEntered.promise;
 
-      // Retry callbacks cannot publish a completion while Stop owns admission.
-      // The sibling reconciles the shared pending commit through its real owner.
       resumeSibling();
       expect(driver.wake).toHaveBeenCalledOnce();
       expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.delivery?.status).toBe(
@@ -159,7 +154,6 @@ it.each([
       releaseWriter.resolve();
       expect(await stopResult).toEqual([{ status: "rejected", reason: failure }]);
       await successorWrite;
-      // Reconcile the old cohort's receipt without admitting the independent successor.
       await advanceRequesterWakeTime(60_000, () =>
         resumeSibling(subagentRuns.get(sibling.subagent.runId)!),
       );

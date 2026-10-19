@@ -1,20 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../../config/runtime-snapshot.js";
+import * as config from "../../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import * as stateDb from "../../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
@@ -43,7 +36,7 @@ beforeEach(() => {
     "OPENCLAW_STATE_DIR",
     tempDirs.make("openclaw-completion-replay-", resolvePreferredOpenClawTmpDir()),
   );
-  setRuntimeConfigSnapshot({});
+  config.setRuntimeConfigSnapshot({});
 });
 
 afterEach(async () => {
@@ -62,10 +55,10 @@ afterEach(async () => {
       for (const dir of tempDirs.dirs) {
         await closeOpenClawAgentDatabasesAsync(dir);
       }
-      await closeOpenClawStateDatabaseAsync();
+      await stateDb.closeOpenClawStateDatabaseAsync();
       subagentRuns.clear();
-      closeOpenClawStateDatabaseForTest();
-      clearRuntimeConfigSnapshot();
+      stateDb.closeOpenClawStateDatabaseForTest();
+      config.clearRuntimeConfigSnapshot();
       // Keep failed removals tracked without retaining the retired fixture's environment.
       await collect(tempDirs.cleanup);
       env.restore();
@@ -88,11 +81,7 @@ async function runningOwner(signal: AbortSignal, holdTail = false) {
   const input = records();
   const { requesterAgentId: agentId, requesterSessionKey: sessionKey } = input.subagent;
   await replaceSessionEntry(
-    {
-      agentId,
-      sessionKey,
-      storePath: resolveSessionStorePathCore(undefined, { agentId }),
-    },
+    { agentId, sessionKey, storePath: resolveSessionStorePathCore(undefined, { agentId }) },
     { sessionId: "requester-session", updatedAt: Date.now() },
   );
   input.subagent.execution = { status: "running", startedAt: input.subagent.createdAt };
@@ -144,9 +133,7 @@ async function runningOwner(signal: AbortSignal, holdTail = false) {
   return { input, driver, reported, complete, close };
 }
 
-it("atomically retains the lifecycle-produced block before the announce tail, then fences reopen", async ({
-  signal,
-}) => {
+it("persists a blocked completion across the announce tail and reopen", async ({ signal }) => {
   const { input, driver, reported, complete, close } = await runningOwner(signal, true);
   try {
     await complete(true);
@@ -178,7 +165,8 @@ it("atomically retains the lifecycle-produced block before the announce tail, th
     expect(input.subagent).toEqual(retained);
 
     // Older persisted ordinary wake markers are not permission to replay.
-    openOpenClawStateDatabase()
+    stateDb
+      .openOpenClawStateDatabase()
       .db.prepare(
         "UPDATE subagent_runs SET payload_json = json_set(payload_json, '$.requesterSettleWake', json('{}')) WHERE run_id = ?",
       )
@@ -207,9 +195,7 @@ it("atomically retains the lifecycle-produced block before the announce tail, th
   }
 });
 
-it("rechecks a wake that waited for admission while completion became blocked", async ({
-  signal,
-}) => {
+it("rechecks blocked completion after wake admission", async ({ signal }) => {
   const { input, driver, reported, complete, close } = await runningOwner(signal);
   const admitted = createDeferred();
   const release = createDeferred();
@@ -227,20 +213,12 @@ it("rechecks a wake that waited for admission while completion became blocked", 
   try {
     await complete(false);
     // Admission must start from the committed terminal row and a pending obligation.
-    await mutateSubagentRuns(
-      [input.subagent.runId],
-      (rows) => {
-        const current = rows.get(input.subagent.runId)!;
-        const next = structuredClone(current);
-        next.requesterSettleWake = { status: "pending", attemptCount: 0 };
-        return { value: undefined, postimages: new Map([[next.runId, next]]) };
-      },
-      {
-        onPublished(postimages) {
-          input.subagent = postimages.get(input.subagent.runId)!;
-        },
-      },
-    );
+    await mutateSubagentRuns([input.subagent.runId], (rows) => {
+      const next = structuredClone(rows.get(input.subagent.runId)!);
+      next.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      return { value: undefined, postimages: new Map([[next.runId, next]]) };
+    });
+    input.subagent = subagentRuns.get(input.subagent.runId)!;
     driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent);
     await withinTest(admitted.promise, signal);
     expect(driver.controller.startSubagentAnnounceCleanupFlow(input.subagent)).toBe(true);
