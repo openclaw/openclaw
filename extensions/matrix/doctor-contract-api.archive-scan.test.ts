@@ -1,22 +1,12 @@
-// Matrix tests cover bounded doctor state-root discovery.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  OpenKeyedStoreOptions,
-  PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  getPluginStateCapacityForTests,
-  importPluginStateEntriesForDoctorForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   migrationById,
+  accountStorageRoot,
+  createMigrationParams as migrationParams,
   writeLegacySyncCache,
   writeSqliteDedupeSource,
 } from "./doctor-contract-api.test-support.js";
@@ -25,37 +15,19 @@ import { createMatrixInboundEventDeduper } from "./src/matrix/monitor/inbound-de
 import { installMatrixTestRuntime } from "./src/test-runtime.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
-function createMigrationParams(stateDir: string) {
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  const context: PluginDoctorStateMigrationContext = {
-    getPluginStateCapacity: () => getPluginStateCapacityForTests("matrix", env),
-    importPluginStateEntries: (options, entries) =>
-      importPluginStateEntriesForDoctorForTests("matrix", options, entries),
-    openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> =>
-      createPluginStateKeyedStoreForTests<T>("matrix", options),
-  };
-  return {
-    config: {} as OpenClawConfig,
-    env,
-    stateDir,
-    oauthDir: path.join(stateDir, "oauth"),
-    context,
-  };
-}
+const createMigrationParams = (stateDir: string) => migrationParams(stateDir, false);
 
 function createStateRoots(stateDir: string) {
   const matrixRoot = path.join(stateDir, "matrix");
   const tokenParent = path.join(matrixRoot, "accounts", "ops", "matrix.example.org__bot");
+  const archivedAccount = path.relative(
+    matrixRoot,
+    accountStorageRoot(stateDir, "ops", "fedcba9876543210"),
+  );
   return {
     activeRoots: [
       path.join(matrixRoot, "accounts", "legacy"),
-      path.join(
-        matrixRoot,
-        "accounts",
-        "sync-cache-backup",
-        "matrix.example.org__bot",
-        "0123456789abcdef",
-      ),
+      accountStorageRoot(stateDir, "sync-cache-backup"),
     ],
     excludedRoots: [
       "0123456789abcdef.apr24-cutover-20260424",
@@ -68,14 +40,7 @@ function createStateRoots(stateDir: string) {
       .map((name) => path.join(tokenParent, name))
       .concat(
         ["crypto-backup-20260720", ".apr24-cutover-20260424", "operator-copy"].map((name) =>
-          path.join(
-            matrixRoot,
-            name,
-            "accounts",
-            "ops",
-            "matrix.example.org__bot",
-            "fedcba9876543210",
-          ),
+          path.join(matrixRoot, name, archivedAccount),
         ),
       ),
   };

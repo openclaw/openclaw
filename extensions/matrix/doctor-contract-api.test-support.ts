@@ -2,7 +2,100 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  getPluginStateCapacityForTests,
+  importPluginStateEntriesForDoctorForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { stateMigrations } from "./doctor-contract-api.js";
+import type { MatrixStoredCredentialRecord } from "./src/matrix/credentials-state.js";
+
+export function createContext(env?: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
+  return {
+    getPluginStateCapacity: () => getPluginStateCapacityForTests("matrix", env),
+    importPluginStateEntries: (options, entries) =>
+      importPluginStateEntriesForDoctorForTests("matrix", options, entries),
+    openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("matrix", { ...options, env: options.env ?? env }),
+  };
+}
+
+export function createMigrationParams(stateDir: string, inheritStoreEnv = true) {
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  return {
+    config: {} as OpenClawConfig,
+    env,
+    stateDir,
+    oauthDir: path.join(stateDir, "oauth"),
+    context: {
+      ...createContext(env),
+      ...(!inheritStoreEnv && {
+        openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+          createPluginStateKeyedStoreForTests<T>("matrix", options),
+      }),
+    },
+  };
+}
+
+export function accountStorageRoot(
+  stateDir: string,
+  accountId = "default",
+  token = "0123456789abcdef",
+) {
+  return path.join(stateDir, "matrix", "accounts", accountId, "matrix.example.org__bot", token);
+}
+
+export function writeSource(file: string, contents: string): string {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, contents);
+  return file;
+}
+
+export function legacyCredentials(
+  overrides: Partial<Omit<MatrixStoredCredentialRecord, "accountId">> = {},
+) {
+  return {
+    homeserver: "https://matrix.example.org",
+    userId: "@bot:example.org",
+    accessToken: "legacy-token",
+    createdAt: "2026-07-01T12:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function withDatabase<T>(
+  databasePath: string,
+  readOnly: boolean,
+  run: (db: DatabaseSync) => T,
+): T {
+  const db = new DatabaseSync(databasePath, { readOnly });
+  try {
+    return run(db);
+  } finally {
+    db.close();
+  }
+}
+
+export function createLegacyDatabase(databasePath: string) {
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  const db = new DatabaseSync(databasePath);
+  db.exec(`
+    CREATE TABLE plugin_state_entries (
+      plugin_id TEXT NOT NULL,
+      namespace TEXT NOT NULL,
+      entry_key TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER,
+      PRIMARY KEY (plugin_id, namespace, entry_key)
+    ) STRICT;
+    PRAGMA user_version = 1;
+  `);
+  return db;
+}
 
 export function migrationById(id: string) {
   const migration = stateMigrations.find((entry) => entry.id === id);
@@ -19,26 +112,12 @@ export function writeSqliteDedupeSource(
   ts: number,
 ): string {
   const databasePath = path.join(storageRootDir, "state", "openclaw.sqlite");
-  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const roomId = "!room:example.org";
   const key = `${accountId}:${createHash("sha256")
     .update(`${accountId}\0${roomId}\0${eventId}`)
     .digest("hex")}`;
-  const db = new DatabaseSync(databasePath);
+  const db = createLegacyDatabase(databasePath);
   try {
-    // July's per-account store used this row shape and schema version.
-    db.exec(`
-      CREATE TABLE plugin_state_entries (
-        plugin_id TEXT NOT NULL,
-        namespace TEXT NOT NULL,
-        entry_key TEXT NOT NULL,
-        value_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        expires_at INTEGER,
-        PRIMARY KEY (plugin_id, namespace, entry_key)
-      ) STRICT;
-      PRAGMA user_version = 1;
-    `);
     db.prepare(`
       INSERT INTO plugin_state_entries VALUES ('matrix', 'inbound-dedupe', ?, ?, ?, NULL)
     `).run(key, JSON.stringify({ roomId, eventId, ts }), ts);

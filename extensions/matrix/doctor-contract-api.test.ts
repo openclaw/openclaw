@@ -3,27 +3,28 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPersistentDedupeImportEntry,
   type PersistentDedupeEntry,
 } from "openclaw/plugin-sdk/persistent-dedupe";
-import type {
-  OpenKeyedStoreOptions,
-  PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   getPluginStateCapacityForTests,
   importPluginStateEntriesForDoctorForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   migrationById,
+  accountStorageRoot,
+  createContext,
+  createMigrationParams,
+  createLegacyDatabase,
+  legacyCredentials,
+  withDatabase,
+  writeSource,
   writeLegacySyncCache,
   writeSqliteDedupeSource,
 } from "./doctor-contract-api.test-support.js";
@@ -55,34 +56,16 @@ import { installMatrixTestRuntime } from "./src/test-runtime.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const DOCTOR_IDB_DATABASE_PREFIX = "openclaw-matrix-doctor-test";
+const unchanged = { changes: [], warnings: [] };
+const pendingDedupe = {
+  preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
+};
 
-function createContext(env?: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
-  return {
-    getPluginStateCapacity() {
-      return getPluginStateCapacityForTests("matrix", env);
-    },
-    importPluginStateEntries(options, entries) {
-      importPluginStateEntriesForDoctorForTests("matrix", options, entries);
-    },
-    openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> =>
-      createPluginStateKeyedStoreForTests<T>("matrix", { ...options, env: options.env ?? env }),
-  };
-}
-
-function createMigrationParams(stateDir: string) {
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  return {
-    config: {} as OpenClawConfig,
-    env,
-    stateDir,
-    oauthDir: path.join(stateDir, "oauth"),
-    context: createContext(env),
-  };
-}
-
-function accountStorageRoot(stateDir: string, accountId = "default", token = "0123456789abcdef") {
-  return path.join(stateDir, "matrix", "accounts", accountId, "matrix.example.org__bot", token);
-}
+const credentialStoreOptions = {
+  namespace: MATRIX_CREDENTIALS_NAMESPACE,
+  maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
+  overflowPolicy: "reject-new",
+} as const;
 
 describe("matrix doctor contract state migrations", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -163,10 +146,9 @@ describe("matrix doctor contract state migrations", () => {
         `Kept existing Matrix sync cache in SQLite and archived the legacy source for ${storageRootDir}`,
       ],
     });
-    await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
+    await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual(
+      unchanged,
+    );
 
     fs.writeFileSync(sourcePath, `${fs.readFileSync(`${sourcePath}.migrated.2`, "utf8")} `, "utf8");
     fs.mkdirSync(`${sourcePath}.migrated.3`);
@@ -225,74 +207,50 @@ describe("matrix doctor contract state migrations", () => {
     fs.mkdirSync(sqliteRoot, { recursive: true });
     const roomId = "!room:example.org";
     const now = Date.now();
-    const legacyKey = (accountId: string, eventId: string) =>
-      `${accountId}:${createHash("sha256")
-        .update(accountId)
-        .update("\0")
-        .update(roomId)
-        .update("\0")
-        .update(eventId)
-        .digest("hex")}`;
+    const legacyKey = (eventId: string) =>
+      `ops:${createHash("sha256").update(`ops\0${roomId}\0${eventId}`).digest("hex")}`;
 
     // July shape in a historical schema-v1 database. It intentionally has
     // none of the current schema's migration/audit tables.
     const legacyDatabasePath = path.join(sqliteRoot, "state", "openclaw.sqlite");
-    fs.mkdirSync(path.dirname(legacyDatabasePath), { recursive: true });
-    const legacyDb = new DatabaseSync(legacyDatabasePath);
+    const legacyDb = createLegacyDatabase(legacyDatabasePath);
     try {
-      legacyDb.exec(`
-        CREATE TABLE plugin_state_entries (
-          plugin_id TEXT NOT NULL,
-          namespace TEXT NOT NULL,
-          entry_key TEXT NOT NULL,
-          value_json TEXT NOT NULL,
-          created_at INTEGER NOT NULL,
-          expires_at INTEGER,
-          PRIMARY KEY (plugin_id, namespace, entry_key)
-        ) STRICT;
-        PRAGMA user_version = 1;
-      `);
       const insert = legacyDb.prepare(`
         INSERT INTO plugin_state_entries (
           plugin_id, namespace, entry_key, value_json, created_at, expires_at
         ) VALUES (?, ?, ?, ?, ?, ?)
       `);
-      insert.run(
-        "matrix",
-        "inbound-dedupe",
-        legacyKey("ops", "$committed"),
-        JSON.stringify({ roomId, eventId: "$committed", ts: now - 60_000 }),
-        1,
-        now + 60_000,
-      );
-      insert.run(
-        "matrix",
-        "inbound-dedupe",
-        legacyKey("ops", "$stale"),
-        JSON.stringify({
-          roomId,
-          eventId: "$stale",
-          ts: now - 31 * 24 * 60 * 60 * 1000,
-        }),
-        2,
-        null,
-      );
-      insert.run(
-        "matrix",
-        "inbound-dedupe",
-        legacyKey("ops", "$expired-corrupt"),
-        "not-json",
-        3,
-        now - 1,
-      );
-      insert.run(
-        "matrix",
-        "inbound-dedupe-migrations",
-        "ops:legacy-json-marker",
-        JSON.stringify({ importedAt: now }),
-        4,
-        now + 60_000,
-      );
+      const marker = (eventId: string, ts: number) => JSON.stringify({ roomId, eventId, ts });
+      const rows = [
+        [
+          "matrix",
+          "inbound-dedupe",
+          legacyKey("$committed"),
+          marker("$committed", now - 60_000),
+          1,
+          now + 60_000,
+        ],
+        [
+          "matrix",
+          "inbound-dedupe",
+          legacyKey("$stale"),
+          marker("$stale", now - 31 * 24 * 60 * 60 * 1000),
+          2,
+          null,
+        ],
+        ["matrix", "inbound-dedupe", legacyKey("$expired-corrupt"), "not-json", 3, now - 1],
+        [
+          "matrix",
+          "inbound-dedupe-migrations",
+          "ops:legacy-json-marker",
+          JSON.stringify({ importedAt: now }),
+          4,
+          now + 60_000,
+        ],
+      ];
+      for (const row of rows) {
+        insert.run(...row);
+      }
       insert.run("matrix", "credentials", "keep-matrix", '{"keep":true}', 5, null);
       insert.run("other-plugin", "inbound-dedupe", "keep-other", '{"keep":true}', 6, null);
     } finally {
@@ -303,20 +261,15 @@ describe("matrix doctor contract state migrations", () => {
 
     const migration = migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
     const detectParams = createMigrationParams(stateDir);
-    await expect(migration.detectLegacyState(detectParams)).resolves.toEqual({
-      preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
-    });
-    const detectedDb = new DatabaseSync(legacyDatabasePath, { readOnly: true });
-    try {
+    await expect(migration.detectLegacyState(detectParams)).resolves.toEqual(pendingDedupe);
+    withDatabase(legacyDatabasePath, true, (detectedDb) => {
       expect(detectedDb.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
       expect(
         detectedDb
           .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
           .all(),
       ).toEqual([{ name: "plugin_state_entries" }]);
-    } finally {
-      detectedDb.close();
-    }
+    });
 
     await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
       changes: [
@@ -352,8 +305,7 @@ describe("matrix doctor contract state migrations", () => {
 
     // Only the two retired Matrix namespaces are deleted. The source remains
     // schema v1, with unrelated Matrix and other-plugin state untouched.
-    const retiredDb = new DatabaseSync(legacyDatabasePath, { readOnly: true });
-    try {
+    withDatabase(legacyDatabasePath, true, (retiredDb) => {
       expect(retiredDb.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
       expect(
         retiredDb
@@ -382,9 +334,7 @@ describe("matrix doctor contract state migrations", () => {
           value_json: '{"keep":true}',
         },
       ]);
-    } finally {
-      retiredDb.close();
-    }
+    });
     await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toBeNull();
   });
 
@@ -404,9 +354,7 @@ describe("matrix doctor contract state migrations", () => {
     await expect(migration.detectLegacyState(params)).resolves.toBeNull();
 
     writeSqliteDedupeSource(accountStorageRoot(stateDir, "legacy"), "legacy", "$old", Date.now());
-    await expect(migration.detectLegacyState(params)).resolves.toEqual({
-      preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
-    });
+    await expect(migration.detectLegacyState(params)).resolves.toEqual(pendingDedupe);
   });
 
   it("allows an empty configured Matrix scan and then skips completed historical databases", async () => {
@@ -418,27 +366,16 @@ describe("matrix doctor contract state migrations", () => {
     await expect(migration.detectLegacyState(params)).resolves.toBeNull();
     // Fresh installs scan nothing: the durable receipt is recorded (proven by
     // the historical-database skip below) without a user-visible change line.
-    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual(unchanged);
     const lateDatabasePath = path.join(
-      stateDir,
-      "matrix",
-      "accounts",
-      "late",
-      "matrix.example.org__bot",
-      "0123456789abcdef",
+      accountStorageRoot(stateDir, "late"),
       "state",
       "openclaw.sqlite",
     );
     fs.mkdirSync(path.dirname(lateDatabasePath), { recursive: true });
     fs.writeFileSync(lateDatabasePath, "the completed migration must not open this database");
     await expect(migration.detectLegacyState(params)).resolves.toBeNull();
-    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual(unchanged);
   });
 
   it("withholds completion after a directory read failure and imports the source on retry", async () => {
@@ -465,9 +402,7 @@ describe("matrix doctor contract state migrations", () => {
         `Failed scanning Matrix inbound dedupe sources under ${blockedDir}: Error: injected directory read failure`,
       ],
     });
-    await expect(migration.detectLegacyState(params)).resolves.toEqual({
-      preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
-    });
+    await expect(migration.detectLegacyState(params)).resolves.toEqual(pendingDedupe);
 
     readdirSpy.mockRestore();
     await expect(migration.migrateLegacyState(params)).resolves.toEqual({
@@ -526,9 +461,7 @@ describe("matrix doctor contract state migrations", () => {
       ],
     });
     expect(fs.readFileSync(databasePath)).toEqual(sourceBytes);
-    await expect(migration.detectLegacyState(params)).resolves.toEqual({
-      preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
-    });
+    await expect(migration.detectLegacyState(params)).resolves.toEqual(pendingDedupe);
   });
 
   it("preserves a legacy inbound dedupe marker's remaining TTL", async () => {
@@ -548,14 +481,7 @@ describe("matrix doctor contract state migrations", () => {
       importNewestInboundDedupeMarkers({
         io,
         now,
-        markers: [
-          {
-            accountId: "ops",
-            roomId,
-            eventId,
-            ts: markerTs,
-          },
-        ],
+        markers: [{ accountId: "ops", roomId, eventId, ts: markerTs }],
       }),
     ).resolves.toEqual({ imported: 1, total: 1 });
 
@@ -593,14 +519,7 @@ describe("matrix doctor contract state migrations", () => {
   it("keeps sources when the completion namespace is full and imports them after capacity frees", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-capacity-");
     const now = Date.now();
-    const storageRootDir = path.join(
-      stateDir,
-      "matrix",
-      "accounts",
-      "home",
-      "matrix.example.org__bot",
-      "0123456789abcdef",
-    );
+    const storageRootDir = accountStorageRoot(stateDir, "home");
     const databasePath = writeSqliteDedupeSource(storageRootDir, "home", "$legacy", now - 60_000);
     const sourceBytes = fs.readFileSync(databasePath);
     const params = createMigrationParams(stateDir);
@@ -677,16 +596,12 @@ describe("matrix doctor contract state migrations", () => {
       const stateDir = tempDirs.make("openclaw-matrix-doctor-");
       const credentialsDir = path.join(stateDir, "credentials", "matrix");
       const filePath = path.join(credentialsDir, filename);
-      const credentials = {
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
+      const credentials = legacyCredentials({
         accessToken: "secret-token",
         deviceId: "DEVICE123",
-        createdAt: "2026-07-01T12:00:00.000Z",
         lastUsedAt: "2026-07-02T12:00:00.000Z",
-      };
-      fs.mkdirSync(credentialsDir, { recursive: true });
-      fs.writeFileSync(filePath, JSON.stringify(credentials));
+      });
+      writeSource(filePath, JSON.stringify(credentials));
       const migration = migrationById("matrix-credentials-json-to-plugin-state");
       const params = createMigrationParams(stateDir);
       if (accountIds.length > 0) {
@@ -702,11 +617,10 @@ describe("matrix doctor contract state migrations", () => {
       });
       const result = await migration.migrateLegacyState(params);
 
-      const store = params.context.openPluginStateKeyedStore<MatrixStoredCredentialRecord>({
-        namespace: MATRIX_CREDENTIALS_NAMESPACE,
-        maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      });
+      const store =
+        params.context.openPluginStateKeyedStore<MatrixStoredCredentialRecord>(
+          credentialStoreOptions,
+        );
       if (accountId === null) {
         expect(result.changes).toEqual([]);
         expect(result.warnings).toEqual([
@@ -733,14 +647,8 @@ describe("matrix doctor contract state migrations", () => {
   it("retains credential sources when an absent-only import is refused", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const filePath = path.join(stateDir, "credentials", "matrix", "credentials-ops.json");
-    const source = JSON.stringify({
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "synthetic-token",
-      createdAt: "2026-07-01T12:00:00.000Z",
-    });
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, source);
+    const source = JSON.stringify(legacyCredentials({ accessToken: "synthetic-token" }));
+    writeSource(filePath, source);
     const params = createMigrationParams(stateDir);
     const context = params.context;
     params.context = {
@@ -765,24 +673,13 @@ describe("matrix doctor contract state migrations", () => {
 
   it("archives legacy credentials without restoring an explicitly cleared account", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const credentialsDir = path.join(stateDir, "credentials", "matrix");
-    const filePath = path.join(credentialsDir, "credentials-ops.json");
-    fs.mkdirSync(credentialsDir, { recursive: true });
-    fs.writeFileSync(
-      filePath,
-      JSON.stringify({
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accessToken: "legacy-token",
-        createdAt: "2026-07-01T12:00:00.000Z",
-      }),
+    const filePath = writeSource(
+      path.join(stateDir, "credentials", "matrix", "credentials-ops.json"),
+      JSON.stringify(legacyCredentials()),
     );
     const params = createMigrationParams(stateDir);
-    const credentialStore = params.context.openPluginStateKeyedStore<MatrixCredentialStateRecord>({
-      namespace: MATRIX_CREDENTIALS_NAMESPACE,
-      maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    });
+    const credentialStore =
+      params.context.openPluginStateKeyedStore<MatrixCredentialStateRecord>(credentialStoreOptions);
     await credentialStore.register(matrixCredentialsStoreKey("ops"), {
       accountId: "ops",
       kind: "revoked",
@@ -803,32 +700,25 @@ describe("matrix doctor contract state migrations", () => {
 
   it("keeps canonical SQLite credentials and archives a differing legacy source", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
-    const credentialsDir = path.join(stateDir, "credentials", "matrix");
-    const filePath = path.join(credentialsDir, "credentials-agent1.json");
-    fs.mkdirSync(credentialsDir, { recursive: true });
-    fs.writeFileSync(
-      filePath,
-      JSON.stringify({
-        homeserver: "https://matrix.example.org",
-        userId: "@agent1:example.org",
-        accessToken: "legacy-token",
-        deviceId: "LEGACYDEVICE",
-        createdAt: "2026-07-02T12:00:00.000Z",
-      }),
+    const filePath = writeSource(
+      path.join(stateDir, "credentials", "matrix", "credentials-agent1.json"),
+      JSON.stringify(
+        legacyCredentials({
+          userId: "@agent1:example.org",
+          deviceId: "LEGACYDEVICE",
+          createdAt: "2026-07-02T12:00:00.000Z",
+        }),
+      ),
     );
     const params = createMigrationParams(stateDir);
-    const credentialStore = params.context.openPluginStateKeyedStore<MatrixCredentialStateRecord>({
-      namespace: MATRIX_CREDENTIALS_NAMESPACE,
-      maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    });
+    const credentialStore =
+      params.context.openPluginStateKeyedStore<MatrixCredentialStateRecord>(credentialStoreOptions);
     const canonical: MatrixStoredCredentialRecord = {
       accountId: "agent1",
-      homeserver: "https://matrix.example.org",
+      ...legacyCredentials(),
       userId: "@agent1:example.org",
       accessToken: "canonical-token",
       deviceId: "CANONICALDEVICE",
-      createdAt: "2026-07-01T12:00:00.000Z",
     };
     await credentialStore.register(matrixCredentialsStoreKey("agent1"), canonical);
 

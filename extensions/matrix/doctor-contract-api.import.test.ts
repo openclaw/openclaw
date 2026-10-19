@@ -41,6 +41,33 @@ vi.mock("./src/account-selection.js", () => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function accountRoot(stateDir: string, token = "0123456789abcdef") {
+  return path.join(stateDir, "matrix", "accounts", "ops", "matrix.example.org__bot", token);
+}
+
+function migrationParams(stateDir: string, openPluginStateKeyedStore: OpenStore) {
+  return {
+    config: {},
+    env: { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir },
+    stateDir,
+    oauthDir: path.join(stateDir, "oauth"),
+    context: { openPluginStateKeyedStore },
+  };
+}
+
+type OpenStore = <T>(
+  options: OpenKeyedStoreOptions,
+) => ReturnType<typeof createPluginStateKeyedStoreForTests<T>>;
+
+async function migrationById(id: string) {
+  const { stateMigrations } = await import("./doctor-contract-api.js");
+  const migration = stateMigrations.find((entry) => entry.id === id);
+  if (!migration) {
+    throw new Error(`Missing migration: ${id}`);
+  }
+  return migration;
+}
+
 it("refuses retired JSON state without changing it or inspecting token-root archives", async () => {
   const stateDir = tempDirs.make("matrix-retired-state-");
   const filenames = [
@@ -56,34 +83,20 @@ it("refuses retired JSON state without changing it or inspecting token-root arch
   const sources = [
     matrixRoot,
     path.join(matrixRoot, "accounts", "default"),
-    path.join(matrixRoot, "accounts", "ops", "matrix.example.org__bot", "0123456789abcdef"),
+    accountRoot(stateDir),
   ].flatMap((root) => filenames.map((filename) => path.join(root, filename)));
   const archives = filenames.map((filename) =>
-    path.join(
-      matrixRoot,
-      "accounts",
-      "ops",
-      "matrix.example.org__bot",
-      "sync-cache-backup",
-      filename,
-    ),
+    path.join(accountRoot(stateDir, "sync-cache-backup"), filename),
   );
   for (const file of [...sources, ...archives]) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, '{"retained":true}\n');
   }
-  const { stateMigrations } = await import("./doctor-contract-api.js");
-  const migration = stateMigrations.find((entry) => entry.id === "matrix-account-sqlite-schema")!;
+  const migration = await migrationById("matrix-account-sqlite-schema");
   const openPluginStateKeyedStore = vi.fn(() => {
     throw new Error("retired state must not open a store");
   });
-  const params = {
-    config: {},
-    env: { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir },
-    stateDir,
-    oauthDir: path.join(stateDir, "oauth"),
-    context: { openPluginStateKeyedStore },
-  };
+  const params = migrationParams(stateDir, openPluginStateKeyedStore);
   for (const run of [migration.detectLegacyState, migration.migrateLegacyState]) {
     const result = run(params);
     await expect(result).rejects.toThrow("Install OpenClaw 2026.9.5");
@@ -102,42 +115,25 @@ it("refuses retired JSON state without changing it or inspecting token-root arch
 
 it("completes absent legacy-state checks without loading client runtimes", async () => {
   const stateDir = tempDirs.make("openclaw-matrix-doctor-import-");
-  const { stateMigrations } = await import("./doctor-contract-api.js");
   const openPluginStateKeyedStore = vi.fn(() => {
     throw new Error("absent legacy sources must not open a state store");
   });
-  const params = {
-    config: {},
-    env: { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir },
-    stateDir,
-    oauthDir: path.join(stateDir, "oauth"),
-    context: { openPluginStateKeyedStore },
-  };
+  const params = migrationParams(stateDir, openPluginStateKeyedStore);
   for (const id of [
     "matrix-account-sqlite-schema",
     "matrix-crypto-unsafe-state",
     "matrix-sync-cache-json-to-plugin-state",
   ]) {
-    const migration = stateMigrations.find((entry) => entry.id === id);
-    if (!migration) {
-      throw new Error(`Missing migration: ${id}`);
-    }
+    const migration = await migrationById(id);
     await expect(migration.detectLegacyState(params)).resolves.toBeNull();
     await expect(migration.migrateLegacyState(params)).resolves.toEqual({
       changes: [],
       warnings: [],
     });
   }
-  const inboundDedupe = stateMigrations.find(
-    (entry) => entry.id === "matrix-inbound-dedupe-to-claimable-dedupe",
-  )!;
+  const inboundDedupe = await migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
   await expect(inboundDedupe.detectLegacyState(params)).resolves.toBeNull();
-  const credentials = stateMigrations.find(
-    (entry) => entry.id === "matrix-credentials-json-to-plugin-state",
-  );
-  if (!credentials) {
-    throw new Error("Missing credential migration");
-  }
+  const credentials = await migrationById("matrix-credentials-json-to-plugin-state");
   await expect(credentials.detectLegacyState(params)).resolves.toBeNull();
   const credentialsDir = path.join(stateDir, "credentials", "matrix");
   fs.mkdirSync(credentialsDir, { recursive: true });
@@ -152,14 +148,7 @@ it.each([true, false])(
   "inspects populated canonical state through the Doctor context without initializing Matrix (guard present: %s)",
   async (guardPresent) => {
     const stateDir = tempDirs.make("matrix-doctor-canonical-");
-    const root = path.join(
-      stateDir,
-      "matrix",
-      "accounts",
-      "ops",
-      "matrix.example.org__bot",
-      "0123456789abcdef",
-    );
+    const root = accountRoot(stateDir);
     const generation = "0123456789abcdef0123456789abcdef";
     const marker = path.join(root, "crypto-idb-snapshot.json.owner.poisoned");
     const stateRuntime = {
@@ -179,7 +168,7 @@ it.each([true, false])(
     const syncStore = openPluginStateKeyedStore(openMatrixSyncCacheStoreOptions(root));
     await writeMatrixSyncCacheStateToStore({
       storageRootDir: root,
-      store: openPluginStateKeyedStore(openMatrixSyncCacheStoreOptions(root)),
+      store: syncStore,
       payload: {
         version: 1,
         cleanShutdown: false,
@@ -196,15 +185,8 @@ it.each([true, false])(
     const snapshotBefore = await snapshotStore.entries();
     const syncBefore = await syncStore.entries();
     expect(() => getMatrixRuntime()).toThrow("Matrix runtime not initialized");
-    const { stateMigrations } = await import("./doctor-contract-api.js");
-    const migration = stateMigrations.find((entry) => entry.id === "matrix-crypto-unsafe-state")!;
-    const params = {
-      config: {},
-      env: { OPENCLAW_STATE_DIR: stateDir },
-      stateDir,
-      oauthDir: path.join(stateDir, "oauth"),
-      context: { openPluginStateKeyedStore },
-    };
+    const migration = await migrationById("matrix-crypto-unsafe-state");
+    const params = migrationParams(stateDir, openPluginStateKeyedStore);
     try {
       const detected = await migration.detectLegacyState(params);
       const migrated = await migration.migrateLegacyState(params);
