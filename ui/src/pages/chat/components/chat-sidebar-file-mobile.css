@@ -104,7 +104,7 @@
   padding: 2px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-full);
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   color: var(--muted);
   box-shadow: var(--shadow-sm);
   pointer-events: auto;
@@ -126,7 +126,6 @@
 
 .sidebar-file-mobile__mode--source {
   border-color: var(--border-hover);
-  background: color-mix(in srgb, var(--text) 18%, var(--bg-elevated));
 }
 
 .sidebar-file-mobile__mode--source .sidebar-file-mobile__button {
