@@ -13,9 +13,15 @@ const CHANNELS = [
   "openclaw.session.write",
   "openclaw.session.list",
   "openclaw.worker.task",
+  "openclaw.gateway.request.stages",
+  "openclaw.git.operation",
+  "openclaw.gateway.rpc",
 ] as const;
 const METRICS = [
   "elapsedMs",
+  "durationMs",
+  "admissionMs",
+  "responseBytes",
   "threadCpuMs",
   "inputChars",
   "patternCount",
@@ -57,6 +63,13 @@ const PHASES = [
   "visibilityRepair",
   "response",
   "handlerExit",
+  "resolve",
+  "repository",
+  "managedBase",
+  "git",
+  "scopedRead",
+  "load",
+  "send",
 ] as const;
 
 const MAX_HISTOGRAMS = 256;
@@ -154,11 +167,15 @@ export function startGatewayBenchDiagnostics() {
           return;
         }
         const outcome =
-          message.outcome === "ok" || message.outcome === "error" || message.outcome === "failed"
-            ? message.outcome
-            : message.responseOutcome === "ok"
-              ? "ok"
-              : "error";
+          name === "openclaw.gateway.request.stages" || name === "openclaw.gateway.rpc"
+            ? "observed"
+            : message.outcome === "ok" ||
+                message.outcome === "error" ||
+                message.outcome === "failed"
+              ? message.outcome
+              : message.responseOutcome === "ok"
+                ? "ok"
+                : "error";
         const cacheRole = [
           "unreached",
           "completed-hit",

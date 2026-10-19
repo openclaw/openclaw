@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { gitCommitPrefixesMatch } from "./git-commit.js";
 
@@ -84,6 +84,8 @@ function limitPositionalReads(maxBytes: number) {
 }
 
 describe("git commit resolution", () => {
+  let gitRoot: typeof import("./git-root.js");
+  const packageJson = vi.fn<() => { gitHead?: string }>(() => ({}));
   let resolveCommitHash: (typeof import("./git-commit.js"))["resolveCommitHash"];
   let resolveLoadedCommitHash: (typeof import("./git-commit.js"))["resolveLoadedCommitHash"];
   const resolveAt = (cwd: string, options: Parameters<typeof resolveCommitHash>[0] = {}) =>
@@ -95,13 +97,25 @@ describe("git commit resolution", () => {
   beforeAll(async () => {
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
-    vi.doUnmock("node:module");
+    vi.doMock("node:module", async (importOriginal) => {
+      const { createRequire, ...actual } = await importOriginal<typeof import("node:module")>();
+      return {
+        ...actual,
+        createRequire: (filename: string | URL) =>
+          filename === new URL("./git-commit.ts", import.meta.url).href
+            ? packageJson
+            : createRequire(filename),
+      };
+    });
     vi.resetModules();
+    gitRoot = await import("./git-root.js");
     ({ resolveCommitHash, resolveLoadedCommitHash } = await import("./git-commit.js"));
   });
+  afterAll(() => vi.doUnmock("node:module"));
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    packageJson.mockReset();
     await tempDirs.cleanup();
   });
 
@@ -159,28 +173,21 @@ describe("git commit resolution", () => {
     async (source) => {
       const root = source === "caught null" ? await makeFakeGitRepo() : await tempDir();
       const expected = source === "caught null" ? null : "badc0ff";
-      const probe = vi.fn(() => {
-        if (source === "caught null") {
-          throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-        }
-        return "badc0ff";
-      });
-      const readers =
+      vi.spyOn(gitRoot, "readGitMetadataPrefix").mockReturnValue("{}");
+      const probe =
         source === "caught null"
-          ? {
-              readGitCommit: probe,
-              readBuildInfoCommit: () => null,
-              readPackageJsonCommit: () => null,
-            }
-          : { readBuildInfoCommit: () => null, readPackageJsonCommit: probe };
-      expect(resolveAt(root, { readers })).toBe(expected);
+          ? vi.spyOn(gitRoot, "readGitHead").mockImplementation(() => {
+              throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+            })
+          : packageJson.mockReturnValue({ gitHead: "badc0ff" });
+      expect(resolveAt(root)).toBe(expected);
       const reads = probe.mock.calls.length;
       if (source === "caught null") {
         expect(reads).toBe(1);
       } else {
         expect(reads).toBeGreaterThan(0);
       }
-      expect(resolveAt(root, { readers })).toBe(expected);
+      expect(resolveAt(root)).toBe(expected);
       expect(probe).toHaveBeenCalledTimes(reads);
     },
   );
@@ -220,8 +227,10 @@ describe("git commit resolution", () => {
     const coldDir = path.join(temp, "cold");
     const hotDir = path.join(temp, "hot");
     const newestDir = path.join(temp, "newest");
-    const readGitCommit = vi.fn((_searchDir: string, _packageRoot: string | null) => result);
-    const resolve = (cwd: string) => resolveAt(cwd, { readers: { readGitCommit } });
+    const readGitCommit = vi
+      .spyOn(gitRoot, "readGitHead")
+      .mockReturnValue({ headPath: "unused", ref: null, value: result });
+    const resolve = resolveAt;
     const callsFor = (cwd: string) =>
       readGitCommit.mock.calls.filter(([searchDir]) => searchDir === cwd).length;
 
@@ -276,8 +285,7 @@ describe("git commit resolution", () => {
       throw Object.assign(new Error("EIO: forced read failure"), { code: "EIO" });
     }) as typeof fsSync.readSync);
 
-    expect(resolveAt(repoRoot, { readers: { readBuildInfoCommit: () => "deadbee" } })).toBe(
-      "deadbee",
-    );
+    vi.spyOn(gitRoot, "readGitMetadataPrefix").mockReturnValue('{"commit":"deadbee"}');
+    expect(resolveAt(repoRoot)).toBe("deadbee");
   });
 });

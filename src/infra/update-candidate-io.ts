@@ -47,7 +47,7 @@ export async function withUpdateCandidateIoBudget<T>(
   const expire = () =>
     deadline.abort(
       new Error(
-        `Update state ${params.operation ?? "inspection"} exceeded its ${budget / 1000} second allowance (${formatDiskSpaceBytes(params.bytes)} of SQLite state). Check storage performance before retrying.`,
+        `Update state ${params.operation ?? "inspection"} exceeded its ${budget / 1000} second allowance (${formatDiskSpaceBytes(params.bytes)} ${params.operation === "snapshot" ? "total estimated snapshot input, including SQLite and plugins" : "of SQLite state"}). Check storage performance before retrying.`,
       ),
     );
   const cancelDeadline = scheduleAbsoluteDeadline(deadlineAtMs, expire);

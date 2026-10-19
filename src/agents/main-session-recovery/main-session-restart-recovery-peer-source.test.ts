@@ -196,6 +196,7 @@ it.each(["reset", "archive", "deny"] as const)(
             : { communication: { send: "never" } },
       );
       const runtime: GatewayRecoveryRuntime = {
+        resumeChatInput: vi.fn(),
         prepareRestartRecovery: () => undefined,
         dispatchSessionMethod: vi.fn(),
         waitForAgent: vi.fn(),
@@ -311,6 +312,7 @@ it("recovers a consumed peer input through two process losses without replaying 
     const skipped: string[] = [];
     let current = true;
     const runtime: GatewayRecoveryRuntime = {
+      resumeChatInput: vi.fn(),
       prepareRestartRecovery: () => undefined,
       dispatchSessionMethod: vi.fn(),
       waitForAgent: vi.fn(),

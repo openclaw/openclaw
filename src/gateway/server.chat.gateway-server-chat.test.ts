@@ -755,12 +755,15 @@ describe("gateway server chat", () => {
       const messagePromises: Promise<unknown>[] = [];
       const sessionChanged = await (async () => {
         try {
-          dispatchInboundMessageMock.mockImplementationOnce(async () => {
+          mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+            // Keep real reply admission alive through the simulated provider failure.
+            expectDefined(opts?.replyOperation, "expected admitted reply operation");
             dispatchStarted.resolve();
             await rejectDispatch.promise;
             throw new Error("provider rejected request");
           });
           const errorPromise = waitForChatEvent("idem-dispatch-error-1", "error");
+          void errorPromise.catch(() => undefined);
           messagePromises.push(errorPromise);
           const sessionChangedPromise = onceMessage(
             ws,
@@ -773,6 +776,7 @@ describe("gateway server chat", () => {
               o.payload?.hasActiveRun === false,
             8_000,
           );
+          void sessionChangedPromise.catch(() => undefined);
           messagePromises.push(sessionChangedPromise);
           const res = await rpcReq(ws, "chat.send", {
             sessionKey: "main",

@@ -10,9 +10,9 @@ import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../../api.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+import { nativeCommandContext } from "./native-command.dispatch.test-support.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import { createMockCommandInteraction } from "./native-command.test-helpers.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof conversationRuntime>()),
@@ -85,12 +85,8 @@ describe("Discord native verbose menu", () => {
         });
       const command = createDiscordNativeCommand({
         command: { name: "verbose", description: "Verbose mode", acceptsArgs: true },
-        cfg,
-        discordConfig: cfg.channels?.discord ?? {},
-        accountId: "default",
-        sessionPrefix: "discord:slash",
+        ...nativeCommandContext(cfg),
         ephemeralDefault: true,
-        threadBindings: createNoopThreadBindingManager("default"),
       });
       await command.run(interaction);
       if (mode === "unavailable") {

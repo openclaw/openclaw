@@ -380,7 +380,7 @@ suite.define(() => {
     ["late follower without metadata, metadata first", 1, false, "chat.metadata"],
     ["late follower, catalog first", 1, true, "models.list"],
   ] as const)(
-    "coalesces fresh catalog reads after pending work (%s)",
+    "shares pending catalog reads and refreshes after settlement (%s)",
     async (_label, paneCount, metadata, first) => {
       await withPage(async ({ page }) => {
         if (paneCount === 2) {
@@ -391,12 +391,11 @@ suite.define(() => {
         await expectCatalogs(panes, model.name);
         const before = await deferRefresh(gateway);
         const pendingCatalogCount = await gateway.deferNext("models.list");
+        const earlierModel = { ...model, name: "Earlier model" };
         const resolvePending = (method: (typeof methods)[number]) =>
           gateway.resolveDeferred(
             method,
-            method === "models.list"
-              ? { models: [{ ...model, name: "Retired model" }] }
-              : undefined,
+            method === "models.list" ? { models: [earlierModel] } : undefined,
           );
         await gateway.setMethodResponse("models.list", { models: [freshModel] });
         await gateway.emitGatewayEvent("chat.metadata.changed", {});
@@ -415,21 +414,27 @@ suite.define(() => {
                 requestAnimationFrame(() => resolve());
               }),
           );
-          expect(await requestCounts(gateway)).toEqual(countsAfter(before, 1, 1));
+          // Command refreshes settle independently of the shared catalog transport.
+          expect(await requestCounts(gateway)).toEqual(
+            countsAfter(before, first === "chat.metadata" ? 2 : 1, 1),
+          );
         }
         for (const method of methods) {
           if (method !== first) {
             await resolvePending(method);
           }
         }
+        // #177294 permits the pending ordinary reply across invalidations.
+        await expectCatalogs(panes, earlierModel.name);
+        await expect.poll(() => requestCounts(gateway)).toEqual(countsAfter(before, 2, 1));
+
+        await gateway.emitGatewayEvent("chat.metadata.changed", {});
         await gateway.waitForRequest("models.list", { after: pendingCatalogCount });
-        expect(await gateway.getRequests("models.list")).toHaveLength(before["models.list"] + 2);
-        await expectCatalogs(panes, model.name);
+        expect(await requestCounts(gateway)).toEqual(countsAfter(before, 3, 2));
+        await expectCatalogs(panes, earlierModel.name);
         await gateway.resolveDeferred("models.list");
         await expectCatalogs(panes, freshModel.name);
-        expect(await requestCounts(gateway)).toEqual(
-          countsAfter(before, metadata === true ? 1 : 2, 2),
-        );
+        expect(await requestCounts(gateway)).toEqual(countsAfter(before, 3, 2));
       });
     },
   );

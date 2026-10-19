@@ -13,7 +13,6 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
 import type { createGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
-import type { createHookRunner } from "../plugins/hooks.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
@@ -431,10 +430,10 @@ export async function startGatewaySidecars(
   return postReadySidecars.length;
 }
 
-type GatewayPostAttachRuntimeDeps = {
-  createHookRunner: (
-    ...args: Parameters<typeof createHookRunner>
-  ) => Awaitable<ReturnType<typeof createHookRunner>>;
+type GatewayPostAttachRuntimeDeps = Pick<
+  Parameters<typeof runGatewayStartupObservers>[0],
+  "createHookRunner" | "loadSubagentRegistryActivation"
+> & {
   logGatewayStartup: (params: Parameters<typeof logGatewayStartup>[0]) => Awaitable<void>;
   refreshLatestUpdateRestartSentinel: (
     env?: NodeJS.ProcessEnv,
@@ -444,9 +443,6 @@ type GatewayPostAttachRuntimeDeps = {
   ) => Awaitable<ReturnType<typeof createGatewayUpdateCheck>>;
   startGatewaySidecars: typeof startGatewaySidecars;
   warmSystemCa: typeof warmMacOSSystemCaOffMainThread;
-  loadSubagentRegistryActivation: Parameters<
-    typeof runGatewayStartupObservers
-  >[0]["loadSubagentRegistryActivation"];
 };
 
 const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
@@ -503,7 +499,7 @@ export async function startGatewayPostAttachRuntime(
       error: (msg: string) => void;
     };
     logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-    unlockStartupMethods: () => void;
+    unlockStartupMethods: (options?: { keepChatSendUnavailable?: boolean }) => void;
     loadStartupPlugins?: () => Awaitable<{
       pluginRegistry: PluginRegistry;
       gatewayMethods: string[];
@@ -823,9 +819,8 @@ export async function startGatewayPostAttachRuntime(
             }
             return pluginRegistry;
           }
-          // Capture the orphan-recovery cutoff before new startup-gated agent
-          // work can create sessions that the recovery scan must leave alone.
-          params.unlockStartupMethods();
+          // Mark the old cohort before admitting new work; chat waits for recovery.
+          params.unlockStartupMethods({ keepChatSendUnavailable: true });
           const newGatewayLifetimeSidecars = [
             ...scheduleGatewayPrewarm(params),
             ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),
@@ -882,6 +877,7 @@ export async function startGatewayPostAttachRuntime(
         isClosing: params.isClosing,
         waitForPostReadyWork: params.waitForPostReadyWork,
         onSubagentRecoverySettled: subagentRecoverySettled.resolve,
+        unlockStartupMethods: params.unlockStartupMethods,
         startupTrace: params.startupTrace,
         log: params.log,
         logHooks: params.logHooks,

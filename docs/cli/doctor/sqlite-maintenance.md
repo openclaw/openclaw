@@ -283,6 +283,10 @@ are named in the warning; retained historical conflicts do not block update's
 post-session plugin repair. Preserve the originals and migration manifests while
 resolving those conflicts, then rerun `openclaw doctor --fix`.
 
+Duplicate settlement indexes retained artifact paths and manifest moves once per
+inventory instead of rescanning the full history for each duplicate. File-identity
+and source-byte checks still run before originals are retired.
+
 Normal Doctor output and `openclaw update status` show at most five
 `historical_transcript_deferred` examples per session store. Larger groups include
 the total and omitted counts; other warning types remain visible. For every

@@ -69,14 +69,33 @@ function expectCancelled(sink: ReturnType<typeof createSink>) {
 }
 
 describe("worker inference manager", () => {
-  it.each(["authority-refused", "outcome-unknown"] as const)(
-    "reconciles cancellation during a pending terminal write only after %s",
-    async (failureKind) => {
+  it.each([
+    { failureKind: "authority-refused", invalidUsage: false },
+    { failureKind: "authority-refused", invalidUsage: true },
+    { failureKind: "outcome-unknown", invalidUsage: false },
+  ] as const)(
+    "reconciles cancellation during a pending terminal write ($failureKind, invalidUsage=$invalidUsage)",
+    async ({ failureKind, invalidUsage }) => {
       const entered = createDeferred();
       const release = createDeferred();
       const failure = new Error("terminal commit outcome unavailable", {
         cause: new SqliteWorkerError("terminal result lost", "outcome-unknown"),
       });
+      const outcome: WorkerInferenceTerminalOutcome = invalidUsage
+        ? {
+            type: "error",
+            reason: "provider-error",
+            message: "Provider request failed",
+            usage: {
+              input: -1,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+          }
+        : DONE;
       const store = createMemoryStore();
       let first = true;
       const complete = vi
@@ -84,7 +103,7 @@ describe("worker inference manager", () => {
         .mockImplementation(async (input, assertCurrent) => {
           if (first) {
             first = false;
-            expect(input.outcome).toEqual(DONE);
+            expect(input.outcome).toEqual(invalidUsage ? ERROR : DONE);
             entered.resolve();
             await release.promise;
             if (failureKind === "outcome-unknown") {
@@ -96,7 +115,7 @@ describe("worker inference manager", () => {
           return input.outcome;
         });
       const sink = createSink();
-      const instance = makeManager(async () => DONE, store);
+      const instance = makeManager(async () => outcome, store);
       await accept(instance, { sink: sink.sink });
       await entered.promise;
       const drain = instance.reserveSessionDrain(REQUEST.sessionId);
@@ -120,6 +139,9 @@ describe("worker inference manager", () => {
         await expect(instance.stop()).rejects.toBe(failure);
       } else {
         expectCancelled(sink);
+        if (invalidUsage) {
+          expect(terminalFrames(sink.frames)[0]?.payload.outcome).not.toHaveProperty("usage");
+        }
         await instance.stop();
       }
     },

@@ -28,6 +28,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.lifecycl
 import {
   submitSessionControllerTask,
   releaseSessionControllerClaim,
+  updateSessionControllerSourcePolicy,
 } from "../../sessions/session-controller.mailbox.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
@@ -38,9 +39,12 @@ import {
   createDispatchMemorySession,
   dispatchMemorySessionScope,
 } from "./dispatch-memory-session.test-support.js";
+import type { InternalGetReplyFromConfig } from "./get-reply.types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { requestCurrentSessionStop } from "./reply-run-stop.test-support.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
+import * as turnAdmission from "./reply-turn-admission.js";
+import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
@@ -184,10 +188,49 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     resetSessionControllerForTest();
     resetInboundDedupe();
     vi.useRealTimers();
     clearAgentHarnesses();
+  });
+
+  it("retries a deferred restart event without resolving its retired source", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    // Recovery can defer a queued event after it has selected its mailbox claim.
+    vi.spyOn(turnAdmission, "admitReplyTurn").mockResolvedValueOnce({
+      status: "skipped",
+      reason: "active-run",
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn<InternalGetReplyFromConfig>(async (_ctx, options) => {
+      const input = readReplySourceInput(options);
+      if (!input) {
+        throw new Error("Expected the admitted event source");
+      }
+      updateSessionControllerSourcePolicy(input, { mode: "followup" });
+      return { text: "resumed once" };
+    });
+    const request = {
+      ctx: buildTestCtx({
+        Provider: "webchat",
+        Surface: "webchat",
+        SessionKey: "agent:main:restart-event",
+        MessageSid: "restart-event",
+        InternalTurnSource: "event",
+        InputProvenance: { kind: "internal_system" as const, sourceTool: "restart" },
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { internalEventExecution: { onStarted() {}, onTerminal() {} } },
+    };
+    await expect(dispatchReplyFromConfig(request)).resolves.toMatchObject({ queuedFinal: false });
+    expect(replyResolver).not.toHaveBeenCalled();
+    await dispatchReplyFromConfig(request);
+    await dispatchReplyFromConfig(request);
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "resumed once" });
   });
 
   it.each(["agent:beta:main"])(

@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -845,6 +846,32 @@ describe("authenticated Gateway RPC diagnostics", () => {
       ]),
     );
     expect(JSON.stringify(fixture.events)).not.toContain("synthetic handler failure");
+  });
+
+  it("captures payload-free RPC timings for channel subscribers with diagnostics disabled", async () => {
+    const events: unknown[] = [];
+    const source = channel("openclaw.gateway.rpc");
+    const listener = (event: unknown) => events.push(event);
+    source.subscribe(listener);
+    onTestFinished(() => source.unsubscribe(listener));
+    const fixture = createRequest(({ respond }) => respond(true, { private: "response content" }));
+    setDiagnosticsEnabledForProcess(false);
+    expect(captureGatewayRpcReceivedAt()).toEqual(expect.any(Number));
+    await fixture.dispatch();
+    expect(fixture.send).toHaveBeenCalledOnce();
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ operation: "health.received" }),
+        expect.objectContaining({
+          operation: "health.response",
+          durationMs: expect.any(Number),
+        }),
+        expect.objectContaining({ operation: "health.handler", admissionMs: expect.any(Number) }),
+        expect.objectContaining({ operation: "health.dispatch", durationMs: expect.any(Number) }),
+      ]),
+    );
+    expect(JSON.stringify(events)).not.toContain("private");
+    expect(JSON.stringify(events)).not.toContain("response content");
   });
 
   it.each(["disabled", "trusted-filtered"] as const)(

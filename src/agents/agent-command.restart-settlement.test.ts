@@ -559,6 +559,7 @@ it.each(["unknown", "delivered"] as const)(
       prepareRestartRecovery: () => undefined,
       dispatchAgent: unexpectedDispatch,
       dispatchSessionMethod: unexpectedDispatch,
+      resumeChatInput: unexpectedDispatch,
       sendRecoveryNotice: unexpectedDispatch,
       waitForAgent: unexpectedDispatch,
     };

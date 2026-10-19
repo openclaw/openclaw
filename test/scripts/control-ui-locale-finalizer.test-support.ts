@@ -37,6 +37,8 @@ export type FinalizerScenario = {
   change?: "glossary" | "canonical";
   artifactFault?: "foreign-run" | "path" | "fallback";
   publish?: boolean;
+  advanceDuringCheckout?: boolean;
+  advanceAfterCatchup?: boolean;
 };
 
 function put(root: string, file: string, text: string) {
@@ -174,6 +176,25 @@ export function createLocaleFinalizerHarness() {
       const trace: Array<{ step: string; status: number | "skipped" }> = [];
       let failure = "";
       let fresh = "";
+      let later = "";
+      let sourceAtSetup = "";
+      let checkouts = 0;
+      let updater: string | undefined;
+      const advanceMain = (previous: string, next: string) => {
+        if (!updater) {
+          updater = path.join(directory, "main-updater");
+          runGit(directory, ["clone", "--quiet", fixture.env.FAKE_ORIGIN, updater]);
+          runGit(updater, ["config", "user.name", "Canonical Main Fixture"]);
+          runGit(updater, ["config", "user.email", "main@example.invalid"]);
+        }
+        const file = path.join(updater, sourceFile);
+        const source = fs.readFileSync(file, "utf8");
+        expect(source).toContain(previous);
+        fs.writeFileSync(file, source.replace(previous, next));
+        const revision = commit(updater, "canonical source advances");
+        runGit(updater, ["push", "--quiet", "origin", "main"]);
+        return revision;
+      };
       const context: Context = {
         eventName: "workflow_dispatch",
         repository: scenario.repository ?? "openclaw/openclaw",
@@ -272,6 +293,9 @@ export function createLocaleFinalizerHarness() {
       const result = () => ({
         root,
         fresh,
+        later,
+        sourceAtSetup,
+        admittedSource: context.steps?.locale_memory?.outputs.sha,
         states,
         trace,
         failure,
@@ -420,17 +444,34 @@ export function createLocaleFinalizerHarness() {
           execute(step);
         } else if (step.uses?.startsWith("actions/checkout@")) {
           const ref = interpolate(step.with?.ref);
-          runGit(root, ["fetch", "--quiet", "origin", ref]);
+          const depth = Number(step.with?.["fetch-depth"] ?? 1);
+          const depthArgs =
+            depth > 0
+              ? ["--depth", String(depth)]
+              : fs.existsSync(path.join(root, ".git", "shallow"))
+                ? ["--unshallow"]
+                : [];
+          runGit(root, ["fetch", "--quiet", ...depthArgs, "origin", ref]);
+          if (checkouts++ === 0 && scenario.advanceDuringCheckout) {
+            // Git advertises the ref before transferring its pack. Advancing the
+            // remote after fetch, before checkout, models that stale-ref window
+            // deterministically without delaying the service fixture.
+            fresh = advanceMain("Added locale proof", "Latest locale proof");
+          }
           runGit(root, ["checkout", "--quiet", "--detach", "FETCH_HEAD"]);
         } else if (step.uses?.startsWith("actions/download-artifact@")) {
           expect(step.with).not.toHaveProperty("run-id");
           fs.cpSync(artifacts, interpolate(step.with?.path), { recursive: true });
         } else if (step.uses === "./.github/actions/setup-node-env") {
+          sourceAtSetup = runGit(root, ["rev-parse", "HEAD"]);
           // The source capsule already binds the installed dependency tree.
           expect(fs.existsSync(path.join(root, "node_modules"))).toBe(true);
         } else if (step.uses === "./.github/actions/publish-generated-pr") {
           if (!scenario.publish) {
             break;
+          }
+          if (scenario.advanceAfterCatchup) {
+            later = advanceMain("Latest locale proof", "Later locale proof");
           }
           const inputs = Object.fromEntries(
             Object.entries(step.with ?? {}).map(([key, value]) => [key, interpolate(value)]),

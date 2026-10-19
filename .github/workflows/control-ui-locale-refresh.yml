@@ -243,6 +243,16 @@ jobs:
           path: ${{ runner.temp }}/control-ui-locale-artifacts
           merge-multiple: true
 
+      # Full-history transfer can take minutes after Git advertises the branch tip.
+      # Reuse that history to refresh main before dependencies or worker admission.
+      - name: Refresh canonical main after history download
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:

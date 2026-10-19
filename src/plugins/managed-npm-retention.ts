@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { statIfExists } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -30,9 +30,7 @@ export async function hasRetainedManagedNpmInstallCandidates(
         return true;
       }
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+      ignoreMissingPath(error);
     }
   }
   return false;

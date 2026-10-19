@@ -64,6 +64,9 @@ export function createGatewayContext() {
     sendRecoveryNotice: async () => {
       throw new Error("Unexpected recovery notice");
     },
+    resumeChatInput: async () => {
+      throw new Error("Unexpected chat input recovery");
+    },
   };
   const methodRegistry = createRequestGatewayMethodRegistry();
   const context = Object.assign(

@@ -3,6 +3,7 @@ import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import { discoverRestartRecoveryStoreTargets } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { decodeRequesterOrigin } from "../agents/requester-origin.js";
 import { SessionCommunicationDeniedError } from "../agents/tools/sessions-send-communication.js";
+import { isMainRestartRecoveryCandidate } from "../config/sessions/restart-recovery-state.js";
 import { appendSessionTranscriptReport } from "../config/sessions/session-accessor.js";
 import { readPendingInputRecoveryEntriesInWorker } from "../config/sessions/session-entry-read-maintenance.js";
 import { readSessionSendRecoveryPage } from "../config/sessions/session-pending-input-history.js";
@@ -26,6 +27,7 @@ import {
 } from "../state/agent-database-admission.js";
 import { waitForAgentDatabasePreparation } from "../state/agent-database-preparation-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import { CHAT_INPUT_RECOVERY_MAX_AGE_MS } from "./chat-input-recovery-source.js";
 import type { RestoredGatewayOperatorAuthority } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
@@ -37,7 +39,7 @@ import {
 import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 class SessionSendRequesterUnavailableError extends Error {}
 
-/** Re-admit accepted peer inputs, not predecessor executions or sender tool calls. */
+/** Discover saved inputs; existing turn owners retain execution and sender custody. */
 export async function recoverSessionSendDeliveries(
   context: GatewayRequestContext,
   signal: AbortSignal,
@@ -155,6 +157,28 @@ async function recoverSessionSendDeliveriesForAgents(
         pending.unshift(...page.items);
         before = page.nextBefore;
       } while (before !== undefined);
+      // Peer replay enters agent admission directly, which would claim the
+      // interrupted turn. Start that predecessor through its owner first.
+      if (
+        entry.abortedLastRun &&
+        isMainRestartRecoveryCandidate(entry, sessionKey) &&
+        pending.some(
+          (input) => input.state === "interrupted" && readSessionSendDelivery(input.message),
+        )
+      ) {
+        const { retryRestartAbortedMainSessionRecovery } =
+          await import("../agents/main-session-recovery/main-session-restart-recovery.js");
+        const recovery = await retryRestartAbortedMainSessionRecovery({
+          ...scope,
+          cfg: config,
+          expectedSessionId: entry.sessionId,
+          gatewayRuntime: runtime,
+        });
+        assertCurrent();
+        if (recovery.started === 0 && recovery.settled === 0) {
+          continue;
+        }
+      }
       const undeliverableRunIds: string[] = [];
       const blocked: {
         inputId: string;
@@ -171,7 +195,14 @@ async function recoverSessionSendDeliveriesForAgents(
       for (const input of pending) {
         assertCurrent();
         const delivery = readSessionSendDelivery(input.message);
-        if (!delivery || input.state !== "interrupted") {
+        if (input.state !== "interrupted") {
+          continue;
+        }
+        if (
+          !delivery &&
+          (!input.message["__openclaw"]?.chatInputRecovery ||
+            Date.now() - input.acceptedAt > CHAT_INPUT_RECOVERY_MAX_AGE_MS)
+        ) {
           continue;
         }
         let attempts = 0;
@@ -195,10 +226,27 @@ async function recoverSessionSendDeliveriesForAgents(
                 !retained?.snapshot.current ||
                 !row ||
                 row.input_id !== input.id ||
+                row.run_id !== input.runId ||
                 row.state !== "interrupted" ||
                 row.consumed_event_id != null ||
                 row.message_json !== JSON.stringify(input.message)
               ) {
+                return;
+              }
+              const assertInputCurrent = () => {
+                assertCurrent();
+                retained.assertCurrent();
+              };
+              if (!delivery) {
+                await runtime.resumeChatInput(
+                  {
+                    ...scope,
+                    runId: input.runId,
+                    message: input.message,
+                    requestHash: row.request_hash,
+                  },
+                  { signal, assertCurrent: assertInputCurrent },
+                );
                 return;
               }
               communication = await prepareSessionSendRecoveryCommunication({
@@ -206,10 +254,7 @@ async function recoverSessionSendDeliveriesForAgents(
                 delivery,
                 inputProvenance: input.message.provenance,
                 target: scope,
-                assertCurrent: () => {
-                  assertCurrent();
-                  retained.assertCurrent();
-                },
+                assertCurrent: assertInputCurrent,
                 signal,
               });
               if (!communication) {
@@ -220,8 +265,7 @@ async function recoverSessionSendDeliveriesForAgents(
               }
               await communication.refresh();
               const guard = () => {
-                assertCurrent();
-                retained.assertCurrent();
+                assertInputCurrent();
                 communication!.assertCurrent();
               };
               guard();
@@ -310,6 +354,16 @@ async function recoverSessionSendDeliveriesForAgents(
           if (signal.aborted) {
             return;
           }
+          if (!delivery) {
+            // Retain the existing interrupted notice when current policy blocks replay.
+            context.logGateway.warn(
+              `Chat input recovery blocked: ${formatErrorMessageForDisplay(error, formatErrorMessageWithCode(error))} ${JSON.stringify({ sessionKeyHash: sha256HexPrefixCore(sessionKey, 16), inputId: input.id, ageMs: Math.max(0, Date.now() - input.acceptedAt) })}`,
+            );
+            if (isTransient(error)) {
+              break;
+            }
+            continue;
+          }
           blockedCount++;
           if (error instanceof SessionSendEndpointChangedError) {
             undeliverableRunIds.push(input.runId);
@@ -338,6 +392,9 @@ async function recoverSessionSendDeliveriesForAgents(
           context.logGateway.warn(
             `Session delivery recovery blocked after ${attempts} attempts: ${formatErrorMessageForDisplay(error, causes.join("; "))} ${JSON.stringify({ sessionKeyHash: sha256HexPrefixCore(sessionKey, 16), inputId: input.id, ageMs: Math.max(0, Date.now() - input.acceptedAt) })}`,
           );
+          if (isTransient(error)) {
+            break;
+          }
         }
       }
       if (blocked.length > 0) {

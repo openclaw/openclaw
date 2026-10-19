@@ -2,6 +2,9 @@
 // --cpu-profile: source-mapped reload/live/streaming tables and per-run/median cpu-profile.json.
 // --cpu-profile-compare <baseline cpu-profile.json>: profile and diff against that report.
 // Sampling inflates timings: never compare profiled runs with unprofiled runs.
+// --session-event-duration-ms 135000 --session-event-ancestor-refs extends the native churn.
+// Pair built bundles with --fixture-now-ms and --live-start-at-ms (one run per process).
+// OPENCLAW_CONTROL_UI_BUILD_ID supplies the matching identity outside a Git checkout.
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -230,11 +233,17 @@ const { values } = parseArgs({
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-live-churn": { type: "boolean", default: false },
     "session-event-churn": { type: "boolean", default: false },
+    "session-event-duration-ms": { type: "string", default: "30000" },
+    "session-event-ancestor-refs": { type: "boolean", default: false },
+    "fixture-now-ms": { type: "string" },
+    "live-start-at-ms": { type: "string" },
     "duplicate-boot-reads": { type: "boolean", default: false },
     "closed-menu-members": { type: "boolean", default: false },
     "capture-ms": { type: "string", default: "0" },
     "sidebar-row-transfer": { type: "string", default: "full" },
     "bundle-dir": { type: "string" },
+    port: { type: "string" },
+    "sandbox-port": { type: "string" },
     runs: { type: "string", default: "3" },
     "latency-ms": { type: "string", default: "35" },
     "frame-gap-ms": { type: "string", default: "4" },
@@ -256,6 +265,9 @@ if (values["sidebar-list-churn"] && values.untraced) {
 }
 if (values["sidebar-live-churn"] && (!values["live-events"] || values["sidebar-list-churn"])) {
   throw new Error("sidebar-live-churn requires live-events and excludes sidebar-list-churn");
+}
+if (values["session-event-ancestor-refs"] && !values["session-event-churn"]) {
+  throw new Error("session-event-ancestor-refs requires session-event-churn");
 }
 const sidebarRowTransfer = values["sidebar-row-transfer"];
 if (!["full", "delta", "interleaved"].includes(sidebarRowTransfer)) {
@@ -281,6 +293,27 @@ const runs = Number(values.runs);
 const latencyMs = Number(values["latency-ms"]);
 const frameGapMs = Number(values["frame-gap-ms"]);
 const captureMs = Number(values["capture-ms"]);
+const sessionEventDurationMs = Number(values["session-event-duration-ms"]);
+const fixtureNowMs =
+  values["fixture-now-ms"] === undefined ? undefined : Number(values["fixture-now-ms"]);
+const liveStartAtMs =
+  values["live-start-at-ms"] === undefined ? undefined : Number(values["live-start-at-ms"]);
+const port = values.port === undefined ? undefined : Number(values.port);
+const sandboxPort =
+  values["sandbox-port"] === undefined ? undefined : Number(values["sandbox-port"]);
+if (
+  (port !== undefined || sandboxPort !== undefined) &&
+  (!values["bundle-dir"] ||
+    port === sandboxPort ||
+    [port, sandboxPort].some(
+      (value) =>
+        value === undefined || !Number.isInteger(value) || value < 40_000 || value > 65_535,
+    ))
+) {
+  throw new Error(
+    "Explicit port and sandbox-port require a built bundle and distinct ports from 40000 to 65535",
+  );
+}
 if (
   !Number.isInteger(runs) ||
   runs < 1 ||
@@ -290,33 +323,51 @@ if (
   !Number.isFinite(frameGapMs) ||
   frameGapMs < 0 ||
   !Number.isFinite(captureMs) ||
-  captureMs < 0
+  captureMs < 0 ||
+  !Number.isSafeInteger(sessionEventDurationMs) ||
+  sessionEventDurationMs < 250 ||
+  sessionEventDurationMs % 125 !== 0 ||
+  [fixtureNowMs, liveStartAtMs].some(
+    (value) => value !== undefined && (!Number.isSafeInteger(value) || value < 0),
+  )
 ) {
-  throw new Error("Expected 1–20 runs and nonnegative finite wire delays and capture duration");
+  throw new Error(
+    "Expected 1–20 runs, nonnegative wire delays/timestamps, and session duration in 125ms steps (at least 250ms)",
+  );
 }
 if (sidebarRowTransfer === "interleaved" && (runs < 14 || runs % 2 !== 0)) {
   throw new Error("Interleaved sidebar transfer requires an even run count of at least 14");
 }
+if (liveStartAtMs !== undefined && (runs !== 1 || !values["live-events"])) {
+  throw new Error("live-start-at-ms requires one live-events run");
+}
 const artifactDir = path.resolve(values.output, new Date().toISOString().replaceAll(":", "-"));
 await mkdir(artifactDir, { recursive: true });
-const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-const dirty = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" });
+const explicitBuildId = process.env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim();
+const head = explicitBuildId
+  ? null
+  : execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+const buildId = explicitBuildId ?? head!;
+const dirty = explicitBuildId
+  ? null
+  : execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" });
 const bundleDir = values["bundle-dir"]
   ? path.resolve(values["bundle-dir"])
   : path.join(artifactDir, "ui");
 const server = values["bundle-dir"]
-  ? await startBuiltControlUiE2eServer(bundleDir)
-  : await startProductionControlUiE2eServer(bundleDir, head);
+  ? await startBuiltControlUiE2eServer(bundleDir, undefined, port)
+  : await startProductionControlUiE2eServer(bundleDir, buildId);
 const sandbox = createSandboxHostHttpServer();
 await new Promise<void>((resolve, reject) => {
   sandbox.once("error", reject);
-  sandbox.listen(0, "127.0.0.1", resolve);
+  sandbox.listen(sandboxPort ?? 0, "127.0.0.1", resolve);
 });
 const address = sandbox.address();
 if (!address || typeof address === "string") {
   throw new Error("Sandbox did not bind");
 }
 const fixture = createControlUiTeamScaleFixture({
+  now: fixtureNowMs,
   baseUrl: server.baseUrl,
   sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
   sandboxPort: address.port,
@@ -324,6 +375,8 @@ const fixture = createControlUiTeamScaleFixture({
   sidebarListChurn: values["sidebar-list-churn"],
   sidebarLiveChurn: values["sidebar-live-churn"],
   sessionEventChurn: values["session-event-churn"],
+  sessionEventDurationMs,
+  sessionEventAncestorRefs: values["session-event-ancestor-refs"],
   duplicateBootReads: values["duplicate-boot-reads"],
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
@@ -339,7 +392,7 @@ const results = [];
 try {
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
-    serverBuildId: head,
+    serverBuildId: buildId,
     serverVersion: JSON.parse(await readFile("package.json", "utf8")).version,
   });
   browser = await chromium.launch({
@@ -364,7 +417,7 @@ try {
   await context.exposeBinding("__teamScaleList", (_source, params: Record<string, unknown>) => {
     const { result, previousRows } = sidebarLists.list(params);
     const response =
-      params.rowMode === "sidebar"
+      params.rowMode === "sidebar" || params.ifRowsRevision !== undefined
         ? {
             ...result,
             ...shareSidebarSessionRows(
@@ -456,9 +509,10 @@ try {
       key: controlUiBundledSettingsStorageKey(server.baseUrl),
       pins: fixture.sidebarEntries,
       mode:
-        values["sidebar-list-churn"] ||
-        values["sidebar-live-churn"] ||
-        values["session-event-churn"]
+        !values["session-event-ancestor-refs"] &&
+        (values["sidebar-list-churn"] ||
+          values["sidebar-live-churn"] ||
+          values["session-event-churn"])
           ? "roster"
           : "chip",
     },
@@ -471,6 +525,13 @@ try {
   async function settle() {
     try {
       await page.locator(".chat-pane__header").first().waitFor();
+      if (values["session-event-ancestor-refs"]) {
+        await page
+          .locator(
+            `.sidebar-recent-session[data-session-key="${fixture.scenario.sessions![2]!.key}"]`,
+          )
+          .waitFor({ state: "visible" });
+      }
       await page
         .locator('.sidebar-rail [data-sidebar-entry^="session:"]')
         .nth(29)
@@ -523,7 +584,9 @@ try {
   try {
     await page.locator("#sidebar-session-owner-title").click();
     await page
-      .locator(`.sidebar-session-owner-filter [role="option"][data-value="involving-me"]`)
+      .locator(
+        `.sidebar-session-owner-filter [role="option"][data-value="${values["session-event-ancestor-refs"] ? "all" : "involving-me"}"]`,
+      )
       .click();
   } catch (error) {
     await writeFile(
@@ -843,6 +906,15 @@ try {
         ],
       );
     if (values["live-events"]) {
+      if (liveStartAtMs !== undefined) {
+        const remainingMs = liveStartAtMs - Date.now();
+        if (remainingMs < 0) {
+          throw new Error("Missed paired live-start barrier");
+        }
+        await new Promise((resolve) => {
+          setTimeout(resolve, Math.max(0, remainingMs));
+        });
+      }
       const before = await readLivePresentation();
       await cdp.send("Performance.enable");
       const cpuBefore = (await cdp.send("Performance.getMetrics")).metrics;
@@ -871,7 +943,7 @@ try {
       await page.waitForFunction(
         (count) => Reflect.get(window, "__coldLoad").readLive().sentEvents === count,
         fixture.liveEvents.length,
-        { timeout: 35_000 },
+        { timeout: Math.max(35_000, fixture.liveEvents.at(-1)!.atMs + 5_000) },
       );
       const plannedWindowMs =
         fixture.liveEvents.at(-1)!.atMs + (values["sidebar-list-churn"] ? 16_000 : 750);
@@ -923,6 +995,26 @@ try {
         JSON.stringify({ traceEvents: liveTrace }),
       );
       const after = await readLivePresentation();
+      const ancestorLink = page.locator(
+        `.sidebar-rail [data-sidebar-entry="session:${fixture.selectedSessionKey}"] a`,
+      );
+      const ancestorBaseline = values["session-event-ancestor-refs"]
+        ? {
+            text: await ancestorLink.getAttribute("aria-label"),
+            visible: await ancestorLink.isVisible(),
+            socketCount: await page.evaluate(() =>
+              Reflect.get(window, "openclawControlUiE2eGateway").socketCount(),
+            ),
+          }
+        : undefined;
+      if (
+        ancestorBaseline &&
+        (!ancestorBaseline.text?.includes("Synthetic ancestor baseline verified") ||
+          !ancestorBaseline.visible ||
+          ancestorBaseline.socketCount !== 1)
+      ) {
+        throw new Error("Ancestor-reference replay lost its raw baseline or rendered outcome");
+      }
       const liveMetrics = await page.evaluate(() => Reflect.get(window, "__coldLoad").readLive());
       // Independent coordinators drift; pair request starts within half their minimum cooldown.
       const pairedRefreshes = values["sidebar-list-churn"]
@@ -946,6 +1038,7 @@ try {
       const responseTasks = summarizeResponseTasks(liveTrace);
       live = {
         ...liveMetrics,
+        ancestorBaseline,
         milliseconds: Object.fromEntries(
           ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"].map(
             (name) => [
@@ -959,16 +1052,17 @@ try {
         head,
         sidebarRowTransfer: values["sidebar-list-churn"] ? runTransfer : undefined,
         sidebarLists: sidebarReads,
-        sidebarWindows: sidebarReads
-          ? summarizeSidebarWindows(
-              liveMetrics.rpcs,
-              liveMetrics.rpcOffset,
-              sidebarReads,
-              responseTasks,
-              activeStreamMs,
-              liveMetrics.elapsedMs,
-            )
-          : undefined,
+        sidebarWindows:
+          sidebarReads && !values.untraced
+            ? summarizeSidebarWindows(
+                liveMetrics.rpcs,
+                liveMetrics.rpcOffset,
+                sidebarReads,
+                responseTasks,
+                activeStreamMs,
+                liveMetrics.elapsedMs,
+              )
+            : undefined,
         pairedRefreshes,
         pairingMeasurement:
           "Conditional request starts after six seconds, paired within half the five-second minimum cooldown; response arrival skew is separate.",
@@ -1080,6 +1174,7 @@ try {
     JSON.stringify(
       {
         head,
+        buildId,
         dirty,
         bundleDir,
         fixture: fixture.counts,
@@ -1098,6 +1193,12 @@ try {
         latencyMs,
         frameGapMs,
         captureMs,
+        sessionEventDurationMs,
+        sessionEventAncestorRefs: values["session-event-ancestor-refs"],
+        fixtureNowMs,
+        liveStartAtMs,
+        port,
+        sandboxPort,
         results,
       },
       null,

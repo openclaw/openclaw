@@ -438,6 +438,7 @@ it.each([
   };
   const unregister = registerGatewayRecoveryRuntime({
     prepareRestartRecovery: unused,
+    resumeChatInput: unused,
     dispatchSessionMethod: unused,
     dispatchAgent: unused,
     waitForAgent: unused,

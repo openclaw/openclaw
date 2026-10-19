@@ -1,4 +1,3 @@
-// OC Path tests cover universal plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parseJsonc } from "../jsonc/parse.js";
@@ -6,144 +5,112 @@ import { parseJsonl } from "../jsonl/parse.js";
 import { parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
 import { REDACTED_SENTINEL } from "../sentinel.js";
-import { resolveOcPath, setOcPath } from "../universal.js";
+import { resolveOcPath, setOcPath, type OcAst } from "../universal.js";
 import { parseYaml } from "../yaml/parse.js";
 
-function expectLeaf(
-  match: ReturnType<typeof resolveOcPath>,
-  expected: { leafType: string; valueText: string },
-) {
-  expect(match?.kind).toBe("leaf");
-  if (match?.kind === "leaf") {
-    expect(match.leafType).toBe(expected.leafType);
-    expect(match.valueText).toBe(expected.valueText);
-  }
+function resolve(ast: OcAst, uri: string) {
+  return resolveOcPath(ast, parseOcPath(uri));
 }
 
-function expectNode(match: ReturnType<typeof resolveOcPath>, descriptor: string) {
-  expect(match?.kind).toBe("node");
-  if (match?.kind === "node") {
-    expect(match.descriptor).toBe(descriptor);
-  }
+function edit(ast: OcAst, uri: string, value: string, options?: Parameters<typeof setOcPath>[3]) {
+  return setOcPath(ast, parseOcPath(uri), value, options);
 }
 
-function expectInsertionPoint(match: ReturnType<typeof resolveOcPath>, container: string) {
-  expect(match?.kind).toBe("insertion-point");
-  if (match?.kind === "insertion-point") {
-    expect(match.container).toBe(container);
-  }
+function expectEditError(ast: OcAst, uri: string, value: string, reason: string) {
+  expect(() => edit(ast, uri, value)).toThrow(expect.objectContaining({ reason }));
 }
 
-describe("resolveOcPath — md AST", () => {
-  const md = parseMd("---\nname: github\n---\n\n## Boundaries\n\n- enabled: true\n").ast;
+function expectLeaf(match: ReturnType<typeof resolve>, valueText: string, leafType = "string") {
+  expect(match).toMatchObject({ kind: "leaf", leafType, valueText });
+}
 
+function expectNode(match: ReturnType<typeof resolve>, descriptor: string) {
+  expect(match).toMatchObject({ kind: "node", descriptor });
+}
+
+function expectInsertion(match: ReturnType<typeof resolve>, container: string) {
+  expect(match).toMatchObject({ kind: "insertion-point", container });
+}
+
+describe("resolveOcPath", () => {
   it("returns root for file-only path", () => {
-    const m = resolveOcPath(md, parseOcPath("oc://X.md"));
-    expect(m?.kind).toBe("root");
+    const md = parseMd("---\nname: github\n---\n\n## Boundaries\n\n- enabled: true\n").ast;
+    expect(resolve(md, "oc://X.md")?.kind).toBe("root");
   });
 
   it("keeps a wrapped prose item addressable when a later line contains a colon", () => {
     const ast = parseMd("## Tools\n- Install dependencies\n  Note: first\n  second\n").ast;
-    const path = parseOcPath("oc://X.md/tools/install-dependencies-note-first-second");
-    expectNode(resolveOcPath(ast, path), "md-item");
+    expectNode(resolve(ast, "oc://X.md/tools/install-dependencies-note-first-second"), "md-item");
   });
-});
-
-describe("resolveOcPath — jsonc AST", () => {
-  const ast = parseJsonc('{ "k": 42, "s": "x", "b": true, "n": null, "arr": [1,2,3] }').ast;
 
   it("returns leaf:null for null value", () => {
-    const m = resolveOcPath(ast, parseOcPath("oc://config/n"));
-    expectLeaf(m, { valueText: "null", leafType: "null" });
+    const ast = parseJsonc('{ "k": 42, "s": "x", "b": true, "n": null, "arr": [1,2,3] }').ast;
+    expectLeaf(resolve(ast, "oc://config/n"), "null", "null");
   });
 
   it("returns node:jsonc-array for array value", () => {
-    const m = resolveOcPath(ast, parseOcPath("oc://config/arr"));
-    expectNode(m, "jsonc-array");
+    const ast = parseJsonc('{ "k": 42, "s": "x", "b": true, "n": null, "arr": [1,2,3] }').ast;
+    expectNode(resolve(ast, "oc://config/arr"), "jsonc-array");
   });
-});
-
-describe("resolveOcPath — jsonl AST", () => {
-  const ast = parseJsonl('{"event":"start","n":1}\n{"event":"step","n":2}\n').ast;
 
   it("returns node:jsonl-line for line address", () => {
-    const m = resolveOcPath(ast, parseOcPath("oc://log/L1"));
-    expectNode(m, "jsonl-line");
+    const ast = parseJsonl('{"event":"start","n":1}\n{"event":"step","n":2}\n').ast;
+    expectNode(resolve(ast, "oc://log/L1"), "jsonl-line");
   });
-});
 
-describe("resolveOcPath — insertion-point detection", () => {
   it("returns insertion-point for md section append", () => {
     const md = parseMd("## Tools\n").ast;
-    const m = resolveOcPath(md, parseOcPath("oc://X.md/tools/+"));
-    expectInsertionPoint(m, "md-section");
+    expectInsertion(resolve(md, "oc://X.md/tools/+"), "md-section");
   });
 
   it("returns insertion-point for md file-level", () => {
     const md = parseMd("## Tools\n").ast;
-    const m = resolveOcPath(md, parseOcPath("oc://X.md/+"));
-    expectInsertionPoint(m, "md-file");
+    expectInsertion(resolve(md, "oc://X.md/+"), "md-file");
   });
 
   it("returns insertion-point for md frontmatter +key", () => {
     const md = parseMd("---\nname: x\n---\n").ast;
-    const m = resolveOcPath(md, parseOcPath("oc://X.md/[frontmatter]/+description"));
-    expectInsertionPoint(m, "md-frontmatter");
+    expectInsertion(resolve(md, "oc://X.md/[frontmatter]/+description"), "md-frontmatter");
   });
 
   it("returns insertion-point for jsonl file-root +", () => {
     const ast = parseJsonl("").ast;
-    const m = resolveOcPath(ast, parseOcPath("oc://log/+"));
-    expectInsertionPoint(m, "jsonl-file");
+    expectInsertion(resolve(ast, "oc://log/+"), "jsonl-file");
   });
 
   it("returns null when insertion target is not a container", () => {
     const ast = parseJsonc('{ "k": 42 }').ast;
-    const m = resolveOcPath(ast, parseOcPath("oc://config/k/+"));
-    expect(m).toBeNull();
+    expect(resolve(ast, "oc://config/k/+")).toBeNull();
   });
-});
-
-describe("resolveOcPath — yaml AST", () => {
   it("preserves source line lookup for numeric map keys", () => {
     const ast = parseYaml("name: x\n1: one\n").ast;
-    const m = resolveOcPath(ast, parseOcPath("oc://workflow.yaml/1"));
-
-    expectLeaf(m, { valueText: "one", leafType: "string" });
+    const m = resolve(ast, "oc://workflow.yaml/1");
+    expectLeaf(m, "one");
     expect(m?.line).toBe(2);
   });
 });
 
-describe("setOcPath — jsonc leaf with coercion", () => {
+describe("setOcPath", () => {
   it('coerces "true"/"false" when leaf was boolean', () => {
     const ast = parseJsonc('{ "k": true }').ast;
-    const r = setOcPath(ast, parseOcPath("oc://config/k"), "false");
-    expect(JSON.parse(r.raw)).toEqual({ k: false });
+    expect(JSON.parse(edit(ast, "oc://config/k", "false").raw)).toEqual({ k: false });
   });
 
   it("rejects non-numeric string for number leaf", () => {
     const ast = parseJsonc('{ "k": 1 }').ast;
-    expect(() => setOcPath(ast, parseOcPath("oc://config/k"), "not-a-number")).toThrow(
-      expect.objectContaining({ reason: "parse-error" }),
-    );
+    expectEditError(ast, "oc://config/k", "not-a-number", "parse-error");
   });
 
   it("rejects non-bool string for boolean leaf", () => {
     const ast = parseJsonc('{ "k": true }').ast;
-    expect(() => setOcPath(ast, parseOcPath("oc://config/k"), "maybe")).toThrow(
-      expect.objectContaining({ reason: "parse-error" }),
-    );
+    expectEditError(ast, "oc://config/k", "maybe", "parse-error");
   });
 
   it("resolves slash-deep JSONC paths", () => {
     const ast = parseJsonc(
       '{ "agents": { "entries": { "main": { "tools": { "exec": { "security": "deny" } } } } } }',
     ).ast;
-    const r = setOcPath(
-      ast,
-      parseOcPath("oc://openclaw.json/agents/entries/main/tools/exec/security"),
-      "allowlist",
-    );
+    const r = edit(ast, "oc://openclaw.json/agents/entries/main/tools/exec/security", "allowlist");
     expect(JSON.parse(r.raw)).toEqual({
       agents: { entries: { main: { tools: { exec: { security: "allowlist" } } } } },
     });
@@ -151,9 +118,9 @@ describe("setOcPath — jsonc leaf with coercion", () => {
 
   it("replaces a JSONC leaf with parsed JSON when requested", () => {
     const ast = parseJsonc('{ "token": "${TOKEN}" }').ast;
-    const r = setOcPath(
+    const r = edit(
       ast,
-      parseOcPath("oc://openclaw.json/token"),
+      "oc://openclaw.json/token",
       '{"source":"file","provider":"secrets","id":"/test"}',
       { valueJson: true },
     );
@@ -164,44 +131,29 @@ describe("setOcPath — jsonc leaf with coercion", () => {
 
   it("rejects non-finite parsed JSON replacement values", () => {
     const ast = parseJsonc('{ "limit": 1 }').ast;
-    expect(() =>
-      setOcPath(ast, parseOcPath("oc://openclaw.json/limit"), "1e999", {
-        valueJson: true,
-      }),
-    ).toThrow(expect.objectContaining({ reason: "parse-error" }));
+    expect(() => edit(ast, "oc://openclaw.json/limit", "1e999", { valueJson: true })).toThrow(
+      expect.objectContaining({ reason: "parse-error" }),
+    );
   });
-});
-
-describe("setOcPath — jsonl leaf", () => {
   it("replaces whole line via JSON value", () => {
     const ast = parseJsonl('{"event":"start"}\n').ast;
-    const r = setOcPath(ast, parseOcPath("oc://log/L1"), '{"event":"replaced"}');
-    const out = r.raw;
-    expect(JSON.parse(expectDefined(out.split("\n")[0], "replaced JSONL line"))).toEqual({
-      event: "replaced",
-    });
+    const { raw } = edit(ast, "oc://log/L1", '{"event":"replaced"}');
+    expect(JSON.parse(raw)).toEqual({ event: "replaced" });
   });
 
   it("rejects malformed JSON for whole-line replacement", () => {
     const ast = parseJsonl('{"event":"start"}\n').ast;
-    expect(() => setOcPath(ast, parseOcPath("oc://log/L1"), "not json")).toThrow(
-      expect.objectContaining({ reason: "parse-error" }),
-    );
+    expectEditError(ast, "oc://log/L1", "not json", "parse-error");
   });
-});
-
-describe("setOcPath — md insertion", () => {
   it.each(["description:\n", "description:\n  "])(
     "does not expose an empty inserted value as an editable field: %j",
     (value) => {
       const ast = parseMd("## Tools\n## Other\n- keep: stable\n").ast;
-      const inserted = setOcPath(ast, parseOcPath("oc://X.md/tools/+"), value);
+      const inserted = edit(ast, "oc://X.md/tools/+", value);
       const before = structuredClone(inserted);
-      const field = parseOcPath("oc://X.md/tools/description/description");
-      expect(resolveOcPath(inserted, field)).toBeNull();
-      expect(() => setOcPath(inserted, field, "updated")).toThrow(
-        expect.objectContaining({ reason: "no-item-kv" }),
-      );
+      const field = "oc://X.md/tools/description/description";
+      expect(resolve(inserted, field)).toBeNull();
+      expectEditError(inserted, field, "updated", "no-item-kv");
       expect(inserted).toEqual(before);
       expect(inserted.raw).toContain("## Other\n- keep: stable\n");
     },
@@ -210,51 +162,32 @@ describe("setOcPath — md insertion", () => {
   it.each(["\n", "\r\n"])("edits a wrapped field immediately after insertion with %j", (eol) => {
     const raw = "## Tools\n- keep: stable\n## Other\n- sibling: unchanged\n".replaceAll("\n", eol);
     const ast = parseMd(raw).ast;
-    const inserted = setOcPath(
-      ast,
-      parseOcPath("oc://X.md/tools/+"),
-      "description: first line\n  second line",
-    );
-    const field = parseOcPath("oc://X.md/tools/description/description");
-    expectLeaf(resolveOcPath(inserted, field), {
-      leafType: "string",
-      valueText: "first line\n  second line",
-    });
-    const edited = setOcPath(inserted, field, "updated");
-    expect(edited.raw).toBe(
-      "## Tools\n- keep: stable\n- description: updated\n## Other\n- sibling: unchanged\n".replaceAll(
-        "\n",
-        eol,
-      ),
-    );
-    expectLeaf(resolveOcPath(parseMd(edited.raw).ast, field), {
-      leafType: "string",
-      valueText: "updated",
-    });
+    const inserted = edit(ast, "oc://X.md/tools/+", "description: first line\n  second line");
+    const field = "oc://X.md/tools/description/description";
+    expectLeaf(resolve(inserted, field), "first line\n  second line");
+    const edited = edit(inserted, field, "updated");
+    const expected =
+      "## Tools\n- keep: stable\n- description: updated\n## Other\n- sibling: unchanged\n";
+    expect(edited.raw).toBe(expected.replaceAll("\n", eol));
+    expectLeaf(resolve(parseMd(edited.raw).ast, field), "updated");
     expect(ast.raw).toBe(raw);
   });
 
-  it.each([["oc://X.md/tools/+", "## Tools\n- keep: stable\n"]])(
-    "refuses sentinel-bearing Markdown insertion values at %s",
-    (uri, raw) => {
-      const md = parseMd(raw).ast;
-      const before = structuredClone(md);
-      for (const value of [REDACTED_SENTINEL, `before${REDACTED_SENTINEL}after`]) {
-        expect(() => setOcPath(md, parseOcPath(uri), value)).toThrow(
-          expect.objectContaining({ code: "OC_EMIT_SENTINEL", path: uri }),
-        );
-        expect(md).toEqual(before);
-      }
-    },
-  );
+  it("refuses sentinel-bearing Markdown insertion values", () => {
+    const uri = "oc://X.md/tools/+";
+    const md = parseMd("## Tools\n- keep: stable\n").ast;
+    const before = structuredClone(md);
+    for (const value of [REDACTED_SENTINEL, `before${REDACTED_SENTINEL}after`]) {
+      expect(() => edit(md, uri, value)).toThrow(
+        expect.objectContaining({ code: "OC_EMIT_SENTINEL", path: uri }),
+      );
+      expect(md).toEqual(before);
+    }
+  });
 
   it("keeps the insertion-value guard separate from new frontmatter keys", () => {
     const md = parseMd("---\nname: x\n---\n").ast;
-    const result = setOcPath(
-      md,
-      parseOcPath(`oc://X.md/[frontmatter]/+${REDACTED_SENTINEL}`),
-      "safe",
-    );
+    const result = edit(md, `oc://X.md/[frontmatter]/+${REDACTED_SENTINEL}`, "safe");
     expect(result.raw).toBe(`---\nname: x\n${REDACTED_SENTINEL}: safe\n---\n`);
   });
 
@@ -277,68 +210,47 @@ describe("setOcPath — md insertion", () => {
   ])("preserves output and input AST when inserting a %s", (_kind, raw, path, value, expected) => {
     const md = parseMd(raw).ast;
     const before = structuredClone(md);
-    const result = setOcPath(md, parseOcPath(path), value);
-    if (result.kind !== "md") {
-      throw new Error("expected a successful Markdown insertion");
-    }
+    const result = edit(md, path, value);
+    expect(result.kind).toBe("md");
     expect(result.raw).toBe(expected);
     expect(md).toEqual(before);
   });
 
   it("rejects duplicate frontmatter key on insertion", () => {
     const md = parseMd("---\nname: x\n---\n").ast;
-    expect(() => setOcPath(md, parseOcPath("oc://X.md/[frontmatter]/+name"), "y")).toThrow(
-      expect.objectContaining({ reason: "type-mismatch" }),
-    );
+    expectEditError(md, "oc://X.md/[frontmatter]/+name", "y", "type-mismatch");
   });
-});
-
-describe("setOcPath — jsonc insertion", () => {
   it("appends to array with `+`", () => {
     const ast = parseJsonc('{ "items": [1, 2] }').ast;
-    const r = setOcPath(ast, parseOcPath("oc://config/items/+"), "3");
-    expect(JSON.parse(r.raw)).toEqual({ items: [1, 2, 3] });
+    expect(JSON.parse(edit(ast, "oc://config/items/+", "3").raw)).toEqual({ items: [1, 2, 3] });
   });
 
   it("inserts at index with `+nnn`", () => {
     const ast = parseJsonc('{ "items": [1, 3] }').ast;
-    const r = setOcPath(ast, parseOcPath("oc://config/items/+1"), "2");
-    expect(JSON.parse(r.raw)).toEqual({ items: [1, 2, 3] });
+    expect(JSON.parse(edit(ast, "oc://config/items/+1", "2").raw)).toEqual({ items: [1, 2, 3] });
   });
 
   it("rejects duplicate object key", () => {
     const ast = parseJsonc('{ "plugins": { "github": "x" } }').ast;
-    expect(() => setOcPath(ast, parseOcPath("oc://config/plugins/+github"), '"y"')).toThrow(
-      expect.objectContaining({ reason: "unresolved" }),
-    );
+    expectEditError(ast, "oc://config/plugins/+github", '"y"', "unresolved");
   });
 
   it("rejects +key on array", () => {
     const ast = parseJsonc('{ "items": [1, 2] }').ast;
-    expect(() => setOcPath(ast, parseOcPath("oc://config/items/+abc"), "3")).toThrow(
-      expect.objectContaining({ reason: "type-mismatch" }),
-    );
+    expectEditError(ast, "oc://config/items/+abc", "3", "type-mismatch");
   });
 
   it("inserts complex object via JSON value", () => {
     const ast = parseJsonc('{ "plugins": {} }').ast;
-    const r = setOcPath(
-      ast,
-      parseOcPath("oc://config/plugins/+gitlab"),
-      '{"token":"xyz","enabled":true}',
-    );
+    const r = edit(ast, "oc://config/plugins/+gitlab", '{"token":"xyz","enabled":true}');
     expect(JSON.parse(r.raw)).toEqual({
       plugins: { gitlab: { token: "xyz", enabled: true } },
     });
   });
-});
-
-describe("setOcPath — jsonl insertion (session append)", () => {
   it("appends a JSON line with `+`", () => {
     const ast = parseJsonl('{"event":"start"}\n').ast;
-    const r = setOcPath(ast, parseOcPath("oc://log/+"), '{"event":"step","n":1}');
-    const out = r.raw;
-    const lines = out.split("\n").filter((l) => l.length > 0);
+    const { raw } = edit(ast, "oc://log/+", '{"event":"step","n":1}');
+    const lines = raw.split("\n").filter((l) => l.length > 0);
     expect(lines).toHaveLength(2);
     expect(JSON.parse(expectDefined(lines[1], "appended JSONL line"))).toEqual({
       event: "step",
@@ -348,41 +260,32 @@ describe("setOcPath — jsonl insertion (session append)", () => {
 
   it("rejects malformed JSON value", () => {
     const ast = parseJsonl("").ast;
-    expect(() => setOcPath(ast, parseOcPath("oc://log/+"), "not json")).toThrow(
-      expect.objectContaining({ reason: "parse-error" }),
-    );
+    expectEditError(ast, "oc://log/+", "not json", "parse-error");
   });
 
   it("rejects non-root insertion target", () => {
     const ast = parseJsonl('{"a":1}\n').ast;
-    expect(() => setOcPath(ast, parseOcPath("oc://log/L1/+"), "{}")).toThrow(
-      expect.objectContaining({ reason: "not-writable" }),
-    );
+    expectEditError(ast, "oc://log/L1/+", "{}", "not-writable");
   });
-});
-
-describe("setOcPath — cross-cutting properties", () => {
   it("is non-mutating across all kinds", () => {
     const md = parseMd("---\nname: x\n---\n").ast;
     const before = JSON.stringify(md);
-    setOcPath(md, parseOcPath("oc://X.md/[frontmatter]/name"), "new");
+    edit(md, "oc://X.md/[frontmatter]/name", "new");
     expect(JSON.stringify(md)).toBe(before);
 
     const jsonc = parseJsonc('{ "k": 1 }').ast;
     const before2 = JSON.stringify(jsonc);
-    setOcPath(jsonc, parseOcPath("oc://config/k"), "99");
+    edit(jsonc, "oc://config/k", "99");
     expect(JSON.stringify(jsonc)).toBe(before2);
 
     const jsonl = parseJsonl('{"a":1}\n').ast;
     const before3 = JSON.stringify(jsonl);
-    setOcPath(jsonl, parseOcPath("oc://log/L1/a"), "99");
+    edit(jsonl, "oc://log/L1/a", "99");
     expect(JSON.stringify(jsonl)).toBe(before3);
   });
 
   it("reports an unresolved edit", () => {
     const ast = parseJsonc("{}").ast;
-    expect(() => setOcPath(ast, parseOcPath("oc://config/missing"), "v")).toThrow(
-      expect.objectContaining({ reason: "unresolved" }),
-    );
+    expectEditError(ast, "oc://config/missing", "v", "unresolved");
   });
 });

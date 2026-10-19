@@ -118,6 +118,7 @@ function recoveryRuntime(
     dispatchSessionMethod: unexpected,
     waitForAgent: unexpected,
     sendRecoveryNotice: unexpected,
+    resumeChatInput: unexpected,
   };
 }
 

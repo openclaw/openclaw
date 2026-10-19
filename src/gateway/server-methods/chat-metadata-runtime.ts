@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
 import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import {
@@ -13,14 +12,12 @@ import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   withCurrentReadAuthority,
   type CurrentReadAuthority,
 } from "../../shared/current-read-authority.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
-import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
 import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { listUserProfileAuthLinksAsync } from "../../state/user-model-accounts.js";
@@ -104,12 +101,8 @@ export function createGatewayChatMetadataRuntime(params: {
 } {
   const deps: ChatMetadataRuntimeDeps = {
     getConfig: params.getConfig,
-    getContext: params.getContext,
     getPreparedOwner: getPublishedPreparedModelCatalogOwnerSnapshot,
-    getPreparedAuthStore: getPreparedRuntimeAuthProfileStoreSnapshot,
     getAuthStoreRevision: getRuntimeAuthProfileStoreMetadataRevision,
-    getSkillsVersion: getSkillsSnapshotVersion,
-    getPluginRegistryVersion: getActivePluginRegistryVersion,
     buildCommands: async ({ cfg, agentId }) => {
       const { buildCommandsListResult } = await import("./commands-list-result.js");
       return buildCommandsListResult({ cfg, agentId, includeArgs: true, scope: "text" });
@@ -200,7 +193,7 @@ export function createGatewayChatMetadataRuntime(params: {
     }
     const projection = deps
       .buildProjection({
-        context: deps.getContext(),
+        context: params.getContext(),
         facts: agent,
         requesterProfileId: defaultProfileId,
         ...authority,
@@ -288,7 +281,7 @@ export function createGatewayChatMetadataRuntime(params: {
             ? current.modelLists
             : createChatMetadataModelList({
                 facts,
-                context: deps.getContext(),
+                context: params.getContext(),
                 maxEntries: CHAT_METADATA_CACHE_MAX_ENTRIES,
               }),
         agentsById: new Map(),

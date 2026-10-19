@@ -13,6 +13,7 @@ import {
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { formatErrorMessage } from "./errors.js";
 import { heartbeatLog } from "./heartbeat-log.js";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "./heartbeat-wake-contracts.js";
@@ -455,12 +456,12 @@ function createSessionEventWakeRuntime() {
             }
             return attempts.run(attempt, () => currentHandler(request, signal));
           }, "heartbeat:wake");
-        } catch {
-          if (wake.retired) {
+        } catch (error) {
+          if (!wake.retired && (signal.aborted || getGatewayRestartDrainSignal().aborted)) {
+            retry(wake);
             continue;
           }
-          retry(wake);
-          continue;
+          result = { status: "failed", reason: formatErrorMessage(error) };
         }
         if (wake.retired) {
           continue;

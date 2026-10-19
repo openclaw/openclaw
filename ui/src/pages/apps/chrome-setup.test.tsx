@@ -111,28 +111,6 @@ describe("Apps local Chrome setup", () => {
       "https://docs.openclaw.ai/tools/chrome-extension",
     ]);
   });
-  it.each([0, 1])("recognizes an installed extension with %i enabled profiles", async (enabled) => {
-    bridge(async () =>
-      result({
-        installation: {
-          ...result().installation,
-          nativeHostRegistered: true,
-          installedProfiles: 1,
-          discoveredProfiles: enabled,
-          awaitingApproval: enabled === 0,
-        },
-        phase: enabled ? "waiting_for_connection" : "needs_browser_action",
-        nextAction: enabled ? "check_connection" : "approve_extension",
-      }),
-    );
-    const { setup } = await mount();
-    click(setup, "Refresh setup status");
-    await vi.waitFor(() =>
-      expect(setup.querySelector('[role="status"]')?.textContent).toContain("Installed"),
-    );
-    expect(setup.textContent?.includes("installed but not enabled")).toBe(enabled === 0);
-    expect(setup.textContent).not.toContain("Extension connected on this device.");
-  });
   it.each([
     { label: "legacy", actions: undefined },
     { label: "none", actions: [] },

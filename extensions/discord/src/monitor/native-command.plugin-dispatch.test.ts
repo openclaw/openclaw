@@ -26,12 +26,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import * as nativeCommandRoute from "./native-command-route.js";
+import { nativeCommandContext } from "./native-command.dispatch.test-support.js";
 import {
   createMockCommandInteraction as createInteraction,
   createRouteState,
   type MockCommandInteraction,
 } from "./native-command.test-helpers.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 const runtimeModuleMocks = vi.hoisted(() => ({
@@ -133,12 +133,8 @@ async function createNativeCommand(
 ) {
   return createDiscordNativeCommand({
     command: commandSpec,
-    cfg,
-    discordConfig: cfg.channels?.discord ?? {},
-    accountId: "default",
-    sessionPrefix: "discord:slash",
+    ...nativeCommandContext(cfg),
     ephemeralDefault: true,
-    threadBindings: createNoopThreadBindingManager("default"),
     dispatchReplyFromConfig,
   });
 }
@@ -243,12 +239,8 @@ async function createPluginCommand(params: {
   }
   return createDiscordNativeCommand({
     command: candidate,
-    cfg: params.cfg,
-    discordConfig: params.cfg.channels?.discord ?? {},
-    accountId: "default",
-    sessionPrefix: "discord:slash",
+    ...nativeCommandContext(params.cfg),
     ephemeralDefault: true,
-    threadBindings: createNoopThreadBindingManager("default"),
   });
 }
 

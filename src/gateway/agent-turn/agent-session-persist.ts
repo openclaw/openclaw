@@ -48,6 +48,7 @@ import {
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
 } from "../session-lifecycle-plugin-hooks.js";
+import { readSessionSendDeliveryAdmission } from "../session-send-delivery.js";
 import {
   cronContinuationHasReusableRuntime,
   resolveAgentSessionWorkStartError,
@@ -361,18 +362,25 @@ export async function persistAgentSessionPhase(params: {
                   runId: params.runId,
                   sessionId: params.request.expectedExistingSessionId ?? merged.sessionId,
                 })
-              : transitionMainSessionRecovery(merged as InternalSessionEntry, {
-                  kind: "claim_foreground",
-                  cycleId: randomUUID(),
-                  lifecycleGeneration: params.lifecycleGeneration,
-                  sessionId: merged.sessionId,
-                  sessionKey: params.canonicalSessionKey,
-                  claimId: mainRestartRecoveryOwnerLease?.claimId ?? randomUUID(),
-                  runId: params.runId,
-                });
+              : readSessionSendDeliveryAdmission({
+                    runId: params.runId,
+                    agentId: params.sessionAgentId,
+                    sessionKey: params.canonicalSessionKey,
+                    sessionId: merged.sessionId,
+                  })
+                ? undefined // The selected command claims ownership; future queued inputs must not fence it.
+                : transitionMainSessionRecovery(merged as InternalSessionEntry, {
+                    kind: "claim_foreground",
+                    cycleId: randomUUID(),
+                    lifecycleGeneration: params.lifecycleGeneration,
+                    sessionId: merged.sessionId,
+                    sessionKey: params.canonicalSessionKey,
+                    claimId: mainRestartRecoveryOwnerLease?.claimId ?? randomUUID(),
+                    runId: params.runId,
+                  });
             if (
               params.isRestartRecoveryResumeRun &&
-              recoveryTransition.kind !== "recovery_validated"
+              recoveryTransition?.kind !== "recovery_validated"
             ) {
               rejectMutation(
                 ErrorCodes.UNAVAILABLE,
@@ -380,7 +388,7 @@ export async function persistAgentSessionPhase(params: {
                   "recovery was skipped.",
               );
             }
-            if (recoveryTransition.kind === "foreground_claimed") {
+            if (recoveryTransition?.kind === "foreground_claimed") {
               mainRestartRecoveryOwnerLease = {
                 ...recoveryTransition.claim,
                 storePath: params.storePath,

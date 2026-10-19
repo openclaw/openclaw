@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => {
     withOpenClawStateLease: vi.fn(),
     leaseAssertOwned: vi.fn(),
     preflightClawPackage: vi.fn(),
+    callGatewayFromCli: vi.fn(),
+    sleep: vi.fn(),
   };
 });
 
@@ -78,8 +80,17 @@ vi.mock("../claws/add-stateless.js", async () => ({
 }));
 
 // mock-isolation: CLI unit tests bypass live Gateway ownership probes; the owner guard has its own test.
-vi.mock("./claws-cli.state-owner.js", () => ({
-  offlineClawAction: (_command: string, action: (...args: unknown[]) => Promise<void>) => action,
+vi.mock("./local-state-owner.js", () => ({
+  runWithLocalStateOwner: async ({ runLocal }: { runLocal: () => Promise<void> }) =>
+    await runLocal(),
+}));
+vi.mock("./gateway-rpc.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-rpc.js")>()),
+  callGatewayFromCliWithTransport: mocks.callGatewayFromCli,
+}));
+vi.mock("../utils/sleep.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/sleep.js")>()),
+  sleep: mocks.sleep,
 }));
 
 const { registerClawsCli } = await import("./claws-cli.js");
@@ -103,6 +114,23 @@ async function runCli(args: string[]) {
   }
 }
 
+async function addWithAgentReadiness(beforeWait?: () => void) {
+  const manifestPath = await writeManifest({
+    ...cliTestHelpers.minimalManifest,
+    agent: { id: "worker" },
+  });
+  const apply = mocks.applyClawAddPlanStateless.getMockImplementation();
+  if (!apply) {
+    throw new Error("Missing Add fixture implementation");
+  }
+  mocks.applyClawAddPlanStateless.mockImplementationOnce(async (plan, options) => {
+    beforeWait?.();
+    await options.cronGateway.waitUntilAgentAvailable(plan.agent.finalId);
+    return apply(plan, options);
+  });
+  await runCli(["claws", "add", manifestPath, "--json"]);
+}
+
 describe("claws cli", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
@@ -123,6 +151,8 @@ describe("claws cli", () => {
       config: {},
       mcpServers: {},
     });
+    mocks.callGatewayFromCli.mockReset();
+    mocks.sleep.mockReset().mockResolvedValue(undefined);
     mocks.preflightClawPackage.mockReset();
     mocks.preflightClawPackage.mockResolvedValue({
       ok: false,
@@ -410,5 +440,64 @@ describe("claws cli", () => {
     const [, options] = mocks.applyClawAddPlanStateless.mock.calls[0]!;
     options.assertCurrent();
     expect(mocks.leaseAssertOwned).toHaveBeenCalledOnce();
+  });
+
+  it("accepts an already-applied Gateway config revision", async () => {
+    mocks.callGatewayFromCli.mockResolvedValue({
+      config: { agents: { entries: { worker: {} } } },
+      configRevisionHash: "revision-new",
+      appliedConfigHash: "revision-new",
+    });
+
+    await addWithAgentReadiness();
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({ status: "complete" });
+
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith("config.get", { timeout: "5000" }, {});
+    expect(mocks.sleep).not.toHaveBeenCalled();
+  });
+
+  it("waits for the requested agent in an applied revision after a cached response", async () => {
+    mocks.callGatewayFromCli
+      .mockResolvedValueOnce({
+        config: { agents: { entries: { other: {} } } },
+        configRevisionHash: "revision-old",
+        appliedConfigHash: "revision-old",
+      })
+      .mockResolvedValueOnce({
+        config: { agents: { entries: { worker: {} } } },
+        configRevisionHash: "revision-new",
+        appliedConfigHash: "revision-old",
+      })
+      .mockResolvedValueOnce({
+        config: { agents: { entries: { worker: {} } } },
+        configRevisionHash: "revision-new",
+        appliedConfigHash: "revision-new",
+      });
+
+    await addWithAgentReadiness();
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({ status: "complete" });
+
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(3);
+    expect(mocks.sleep).toHaveBeenCalledTimes(2);
+    expect(mocks.sleep).toHaveBeenCalledWith(100);
+  });
+
+  it("reports the last Gateway error after the reload deadline", async () => {
+    mocks.callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
+
+    await addWithAgentReadiness(() => {
+      vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(15_000);
+    });
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      status: "failed",
+      error: {
+        code: "add_failed",
+        message: "Gateway did not apply the Claw agent configuration in time: gateway unavailable",
+      },
+    });
+
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
+    expect(mocks.sleep).toHaveBeenCalledOnce();
   });
 });

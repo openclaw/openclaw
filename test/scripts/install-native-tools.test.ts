@@ -62,8 +62,8 @@ function makePeripheryFixture(version = "3.8.0") {
     binDir,
     installDir,
     callsPath,
-    run: () =>
-      spawnSync("bash", ["scripts/install-periphery.sh", installDir], {
+    run: (script = "scripts/install-periphery.sh") =>
+      spawnSync("bash", [script, installDir], {
         cwd: process.cwd(),
         encoding: "utf8",
         env: {
@@ -85,13 +85,20 @@ function expectOption(args: string[], option: string, value: string): void {
 }
 
 describe.runIf(process.platform !== "win32")("native tool installers", () => {
-  it.each(installers)("bounds stalled downloads in $script", ({ script, url }) => {
+  it.each(
+    installers.flatMap(({ script, url }) =>
+      [28, 56].map((exitCode) => ({ script, url, exitCode })),
+    ),
+  )("bounds downloads in $script (exit $exitCode)", ({ script, url, exitCode }) => {
     const root = tempDirs.make("openclaw-native-tool-installer-");
     const binDir = path.join(root, "bin");
     const argsPath = path.join(root, "curl-args.txt");
     const curlPath = path.join(binDir, "curl");
     mkdirSync(binDir);
-    writeExecutable(curlPath, ['printf "%s\\n" "$@" >"$OPENCLAW_TEST_CURL_ARGS_PATH"', "exit 28"]);
+    writeExecutable(curlPath, [
+      'printf "%s\\n" "$@" >"$OPENCLAW_TEST_CURL_ARGS_PATH"',
+      `exit ${exitCode}`,
+    ]);
 
     const result = spawnSync("bash", [script, path.join(root, "install")], {
       cwd: process.cwd(),
@@ -103,16 +110,17 @@ describe.runIf(process.platform !== "win32")("native tool installers", () => {
       },
     });
 
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(28);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
     const args = readFileSync(argsPath, "utf8").trimEnd().split("\n");
     expectOption(args, "--connect-timeout", "10");
     expectOption(args, "--max-time", "120");
     expectOption(args, "--retry", "3");
+    expect(args).toContain("--retry-all-errors");
     expectOption(args, "--retry-max-time", "120");
     expect(args).toContain(url);
   });
 
-  it("rejects a Periphery archive with the wrong digest before extraction or execution", () => {
+  it.each(installers)("rejects wrong digests in $script", ({ script }) => {
     const fixture = makePeripheryFixture();
     const unzipCalls = path.join(fixture.binDir, "unzip-calls.txt");
     writeExecutable(path.join(fixture.binDir, "unzip"), [
@@ -121,8 +129,8 @@ describe.runIf(process.platform !== "win32")("native tool installers", () => {
     ]);
 
     // This ZIP is extractable, but its real SHA-256 is not the pinned release digest.
-    const result = fixture.run();
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBeGreaterThan(0);
+    const result = fixture.run(script);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
     expect(result.stderr).toContain("checksum mismatch");
     expect(existsSync(unzipCalls)).toBe(false);
     expect(existsSync(fixture.callsPath)).toBe(false);

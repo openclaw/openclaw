@@ -1,4 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -25,6 +26,7 @@ import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
+import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import {
@@ -228,7 +230,14 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       ),
     );
   const startupError = () =>
-    params.context.unavailableGatewayMethods?.has(params.method)
+    params.context.unavailableGatewayMethods?.has(params.method) &&
+    // Only the recovery owner's exact saved request can enter before fresh chat.
+    !(
+      params.method === "chat.send" &&
+      isRecord(params.requestParams) &&
+      typeof params.requestParams.idempotencyKey === "string" &&
+      readChatInputRecoveryAdmission(params.requestParams.idempotencyKey)
+    )
       ? errorShape(ErrorCodes.UNAVAILABLE, `${params.method} unavailable during gateway startup`, {
           retryable: true,
           retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,

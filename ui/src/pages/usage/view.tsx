@@ -1,5 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { renderProviderUsageDetails } from "../../components/solid/provider-usage.tsx";
 import {
@@ -17,14 +18,14 @@ import { formatIsoDate } from "./helpers.ts";
 import { UsageMosaic } from "./metrics-view.tsx";
 import { buildPeakErrorHours, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageEmptyState, renderUsageLoadingStatus } from "./page-shell.tsx";
-import { buildQuerySuggestions } from "./query.ts";
+import { applySuggestionToQuery, buildQuerySuggestions, removeQueryToken } from "./query.ts";
 import type { UsageProps } from "./types.ts";
 import { DailyChartCompact, CostBreakdownCompact } from "./view-chart.tsx";
 import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
 import { SessionDetailPanel } from "./view-details.tsx";
 import { renderUsageHeatmap } from "./view-heatmap.tsx";
 import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
-import { UsageQuerySection } from "./view-query-section.tsx";
+import { UsageQueryFilter } from "./view-query-filter.tsx";
 import { SessionsCard } from "./view-sessions-card.tsx";
 
 registerEnglishCatalog(registerUsageEnglish);
@@ -109,6 +110,9 @@ export function renderUsage(props: UsageProps) {
   const querySuggestions = createMemo(() =>
     buildQuerySuggestions(props.filters.queryDraft, queryTerms(), filterOptions()),
   );
+  const hasDraftQuery = () => props.filters.queryDraft.trim().length > 0;
+  const hasQuery = () => props.filters.query.trim().length > 0;
+  const queryWarnings = () => props.data.overview?.queryWarnings ?? [];
   const primarySelectedEntry = createMemo(() =>
     props.filters.selectedSessions.length === 1 && props.data.overview?.selectedRowCount !== 0
       ? (props.data.selectedSession ??
@@ -411,24 +415,122 @@ export function renderUsage(props: UsageProps) {
               </div>
             </div>
 
-            <UsageQuerySection
-              filters={props.filters}
-              actions={props.callbacks.filters}
-              loading={props.data.loading}
-              hasDraftQuery={props.filters.queryDraft.trim().length > 0}
-              hasQuery={props.filters.query.trim().length > 0}
-              hasOverviewData={overview().hasOverviewData}
-              matchingSessions={
-                props.data.sessionPage?.total ??
-                props.data.overview?.total ??
-                props.data.sessions.length
-              }
-              totalSessions={totalSessions()}
-              filterOptions={filterOptions()}
-              queryTerms={queryTerms()}
-              querySuggestions={querySuggestions()}
-              queryWarnings={props.data.overview?.queryWarnings ?? []}
-            />
+            <div class="usage-query-section">
+              <div class="usage-query-bar">
+                <input
+                  class="usage-query-input"
+                  type="text"
+                  value={props.filters.queryDraft}
+                  aria-label={t("usage.query.placeholder")}
+                  placeholder={t("usage.query.placeholder")}
+                  onInput={(event) =>
+                    props.callbacks.filters.onQueryDraftChange(event.currentTarget.value)
+                  }
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      props.callbacks.filters.onApplyQuery();
+                    }
+                  }}
+                />
+                <div class="usage-query-actions">
+                  <button
+                    class="btn btn--sm"
+                    onClick={() => props.callbacks.filters.onApplyQuery()}
+                    disabled={props.data.loading || (!hasDraftQuery() && !hasQuery())}
+                  >
+                    {t("usage.query.apply")}
+                  </button>
+                  {hasDraftQuery() || hasQuery() ? (
+                    <button
+                      class="btn btn--sm"
+                      onClick={() => props.callbacks.filters.onClearQuery()}
+                    >
+                      {t("usage.filters.clear")}
+                    </button>
+                  ) : undefined}
+                </div>
+              </div>
+              <div class="usage-filter-row">
+                <For each={["channel", "provider", "model", "tool"] as const}>
+                  {(filterKey) => (
+                    <UsageQueryFilter
+                      filterKey={filterKey}
+                      label={t(`usage.filters.${filterKey}`)}
+                      options={filterOptions()[filterKey]}
+                      queryDraft={props.filters.queryDraft}
+                      queryTerms={queryTerms()}
+                      onQueryDraftChange={props.callbacks.filters.onQueryDraftChange}
+                    />
+                  )}
+                </For>
+                <span class="usage-query-hint">{t("usage.query.tip")}</span>
+                {/* Last in the row, so the count arriving with data moves nothing. */}
+                <span class="usage-query-hint usage-query-count">
+                  {!overview().hasOverviewData
+                    ? undefined
+                    : hasQuery()
+                      ? t("usage.query.matching", {
+                          shown: String(
+                            props.data.sessionPage?.total ??
+                              props.data.overview?.total ??
+                              props.data.sessions.length,
+                          ),
+                          total: String(totalSessions()),
+                        })
+                      : t("usage.query.inRange", { total: String(totalSessions()) })}
+                </span>
+              </div>
+              {queryTerms().length > 0 ? (
+                <div class="usage-query-chips">
+                  <For each={queryTerms()}>
+                    {(term) => {
+                      const label = term.raw;
+                      return (
+                        <span class="usage-query-chip">
+                          {label}
+                          <openclaw-tooltip prop:content={t("usage.filters.remove")}>
+                            <button
+                              aria-label={t("usage.filters.remove")}
+                              onClick={() =>
+                                props.callbacks.filters.onQueryDraftChange(
+                                  removeQueryToken(props.filters.queryDraft, label),
+                                )
+                              }
+                            >
+                              <Icon name="x" />
+                            </button>
+                          </openclaw-tooltip>
+                        </span>
+                      );
+                    }}
+                  </For>
+                </div>
+              ) : undefined}
+              {querySuggestions().length > 0 ? (
+                <div class="usage-query-suggestions">
+                  <For each={querySuggestions()}>
+                    {(suggestion) => (
+                      <button
+                        class="usage-query-suggestion"
+                        onClick={() =>
+                          props.callbacks.filters.onQueryDraftChange(
+                            applySuggestionToQuery(props.filters.queryDraft, suggestion.value),
+                          )
+                        }
+                      >
+                        {suggestion.label}
+                      </button>
+                    )}
+                  </For>
+                </div>
+              ) : undefined}
+              {queryWarnings().length > 0 ? (
+                <div class="callout warning usage-callout usage-callout--tight">
+                  {queryWarnings().join(" · ")}
+                </div>
+              ) : undefined}
+            </div>
 
             {props.data.error ? (
               <div class="callout danger usage-callout">{props.data.error}</div>

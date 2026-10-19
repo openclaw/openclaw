@@ -3154,12 +3154,10 @@ export const en: TranslationMap & {
       },
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · waiting for worker setup",
-      resuming:
-        "Interrupted by a Gateway restart. This saved message will resume when the session is ready.",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:
-        "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
+        "Interrupted before the agent started it. If it does not resume, copy it and send again.",
       earlier: "Show earlier messages",
       latest: "Show latest messages",
     },
