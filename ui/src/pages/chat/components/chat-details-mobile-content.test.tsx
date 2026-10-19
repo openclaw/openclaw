@@ -240,6 +240,14 @@ it("replaces the People activation owner while retaining the mobile host content
       page: { key: "people", title: "People", details: { kind: "people" } },
     });
     expect(activate).toHaveBeenCalledOnce();
+    for (const status of ["loading", "ready"] as const) {
+      element.bindings = { ...element.bindings!, peopleMentions: { ...mentions, status } };
+      await element.updateComplete;
+      flush();
+      expect(activate).toHaveBeenCalledOnce();
+      expect(release).not.toHaveBeenCalled();
+      expect(view.container.querySelector(".chat-details-mobile-root")).toBe(root);
+    }
     element.bindings = {
       ...element.bindings!,
       peopleMentions: { ...mentions, activate: activateReplacement },

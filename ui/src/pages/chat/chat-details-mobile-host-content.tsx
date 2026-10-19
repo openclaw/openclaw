@@ -117,7 +117,9 @@ function MobileHostContent(
   });
   const route = () => props.host.destination.page?.details;
   const activePeople = createMemo(() =>
-    props.host.open && route()?.kind === "people" ? props.bindings?.peopleMentions : undefined,
+    props.host.open && route()?.kind === "people"
+      ? props.bindings?.peopleMentions?.activate
+      : undefined,
   );
   // Subpage navigation keeps the host's external close-return target.
   const open = (value: MobileDetailsRoute, title: string) => {
@@ -563,8 +565,8 @@ function MobileHostContent(
       {inventory.lifecycle}
       {automation?.lifecycle}
       <Show when={activePeople()} keyed>
-        {(mentions) => {
-          onSettled(() => mentions.activate());
+        {(activate) => {
+          onSettled(activate);
           return null;
         }}
       </Show>
