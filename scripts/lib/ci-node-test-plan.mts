@@ -4334,6 +4334,17 @@ export function createSelectedNodeTestShardBundles(
     ...packSelectedNodeTestJobs(projected, options.runnerBackend, canonicalFamilies, groupSeconds),
   ];
   for (const job of selectedJobs) {
+    if (job.planConcurrency === 2 && job.groups.length === 1) {
+      // Packing is settled: no sibling can overlap this child. Keep the prior
+      // two-worker ceiling instead of unlocking the serial host's wider default.
+      job.planConcurrency = 1;
+      job.env = {
+        ...job.env,
+        OPENCLAW_VITEST_MAX_WORKERS: String(
+          Math.min(2, Number(job.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2)),
+        ),
+      };
+    }
     job.runner = resolveSelectedNodeTestRunner(job, options.runnerBackend);
   }
   return applyNativeSoloTimings(selectedJobs, options.runnerBackend);

@@ -816,7 +816,12 @@ describe("CI changed Node test plan", () => {
             expect(group.configs).toEqual([buildVitestRunPlans([target])[0]?.config]);
           }
           expect(group.runner).toBe(owner.runner);
-          for (const key of ["planConcurrency", "pretestBuildMode", "timeoutMinutes"] as const) {
+          expect(job.planConcurrency).toBe(
+            job.groups?.length === 1 && ownerJob.planConcurrency === 2
+              ? 1
+              : ownerJob.planConcurrency,
+          );
+          for (const key of ["pretestBuildMode", "timeoutMinutes"] as const) {
             expect(job[key], key).toEqual(ownerJob[key]);
           }
           expect(job.predictedSeconds).toBeGreaterThan(0);
@@ -902,7 +907,12 @@ describe("CI changed Node test plan", () => {
               "minTotalMemoryBytes",
               "pretestBuildMode",
             ]);
-            expectSameFields(job, ownerJob, ["env", "runner", "planConcurrency", "timeoutMinutes"]);
+            const singleton = job.groups.length === 1 && ownerJob.planConcurrency === 2;
+            expect(job.planConcurrency).toBe(singleton ? 1 : ownerJob.planConcurrency);
+            expect(job.env).toEqual(
+              singleton ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" } : ownerJob.env,
+            );
+            expectSameFields(job, ownerJob, ["runner", "timeoutMinutes"]);
           }
         }
       }
@@ -1143,9 +1153,12 @@ describe("CI changed Node test plan", () => {
         expect(group.env).toEqual(owner.env);
         expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
         expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
-        expect(job.env).toEqual(ownerJob.env);
+        const singleton = job.groups?.length === 1 && ownerJob.planConcurrency === 2;
+        expect(job.env).toEqual(
+          singleton ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" } : ownerJob.env,
+        );
         expect(job.runner).toBe(ownerJob.runner);
-        expect(job.planConcurrency).toBe(ownerJob.planConcurrency);
+        expect(job.planConcurrency).toBe(singleton ? 1 : ownerJob.planConcurrency);
       }
     }
     const cheapFiles = vi
