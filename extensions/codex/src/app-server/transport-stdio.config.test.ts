@@ -1,16 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { withEphemeralCodexAuthStore } from "./auth-start-options.js";
+import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveManagedCodexAppServerStartOptions } from "./managed-binary.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import type { CodexConfigReadResponse, CodexInitializeResponse } from "./protocol.js";
 import { createStdioTransport } from "./transport-stdio.js";
-import { closeCodexAppServerTransportAndWait } from "./transport.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 vi.unmock("node:child_process");
@@ -132,64 +131,26 @@ async function readNativeConfig(startOptions: CodexAppServerStartOptions, env: N
   const closed = new Promise<void>((resolve) => {
     child.once("close", () => resolve());
   });
-  const lines = createInterface({ input: child.stdout });
-  let stderr = "";
-  child.stderr.on("data", (chunk: Buffer) => {
-    stderr = (stderr + chunk.toString()).slice(-4_000);
-  });
-  child.stdin.on("error", () => {});
+  const client = CodexAppServerClient.fromTransportForTests(child);
   try {
-    return await new Promise<CodexConfigReadResponse>((resolve, reject) => {
-      const timeout = setTimeout(
-        () => reject(new Error(`Native config read timed out: ${stderr}`)),
-        60_000,
-      );
-      const send = (message: object) => child.stdin.write(`${JSON.stringify(message)}\n`);
-      child.once("error", reject);
-      child.once("close", () => {
-        clearTimeout(timeout);
-        reject(new Error(`Native config process closed before config/read: ${stderr}`));
-      });
-      lines.on("line", (line) => {
-        try {
-          const message = JSON.parse(line) as {
-            id?: number;
-            error?: unknown;
-            result?: CodexInitializeResponse | CodexConfigReadResponse;
-          };
-          if (message.error) {
-            throw new Error(JSON.stringify(message.error));
-          }
-          if (message.id === 1) {
-            const initialized = message.result as CodexInitializeResponse;
-            expect(initialized.userAgent).toContain(`/${CODEX_APP_SERVER_VERSION} `);
-            send({ method: "initialized", params: {} });
-            send({
-              id: 2,
-              method: "config/read",
-              params: { includeLayers: false, cwd: startOptions.cwd },
-            });
-          } else if (message.id === 2) {
-            clearTimeout(timeout);
-            resolve(message.result as CodexConfigReadResponse);
-          }
-        } catch (error) {
-          clearTimeout(timeout);
-          reject(new Error("Native config response failed", { cause: error }));
-        }
-      });
-      send({
-        id: 1,
-        method: "initialize",
-        params: {
-          clientInfo: { name: "openclaw_config_test", version: "1.0.0" },
-          capabilities: { experimentalApi: true },
-        },
-      });
-    });
+    const deadline = performance.now() + 60_000;
+    const initialized = await client.request<CodexInitializeResponse>(
+      "initialize",
+      {
+        clientInfo: { name: "openclaw_config_test", version: "1.0.0" },
+        capabilities: { experimentalApi: true },
+      },
+      { timeoutMs: Math.max(1, deadline - performance.now()) },
+    );
+    expect(initialized.userAgent).toContain(`/${CODEX_APP_SERVER_VERSION} `);
+    client.notify("initialized", {});
+    return await client.request(
+      "config/read",
+      { includeLayers: false, cwd: startOptions.cwd },
+      { timeoutMs: Math.max(1, deadline - performance.now()) },
+    );
   } finally {
-    lines.close();
-    expect(await closeCodexAppServerTransportAndWait(child)).toMatchObject({ exited: true });
+    expect(await client.closeAndWait()).toMatchObject({ exited: true });
     await closed;
   }
 }

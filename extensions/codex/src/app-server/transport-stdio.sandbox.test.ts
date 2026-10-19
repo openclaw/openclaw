@@ -1,15 +1,15 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
+import { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
+import { isJsonObject } from "./protocol.js";
 import { createStdioTransport } from "./transport-stdio.js";
-import { closeCodexAppServerTransportAndWait } from "./transport.js";
 import { buildTurnStartParams } from "./turn-params.js";
 import { createCodexUserInputTestParams } from "./user-input-bridge.test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -169,76 +169,43 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
         { transport: "stdio", command, commandSource: "config", args, cwd, headers: {} },
         { ...env, PATH: "/usr/bin:/bin", SHELL: "/bin/sh" },
       );
-      const lines = createInterface({ input: child.stdout });
+      const client = CodexAppServerClient.fromTransportForTests(child);
       context.onTestFinished(async () => {
-        lines.close();
-        expect(await closeCodexAppServerTransportAndWait(child)).toMatchObject({ exited: true });
+        expect(await client.closeAndWait()).toMatchObject({ exited: true });
       });
-      const pending = new Map<
-        number,
-        { resolve: (value: unknown) => void; reject: (error: Error) => void }
-      >();
-      let nextId = 0;
       let approvals = 0;
       let commandOutput = "";
       const { promise: completed, resolve: finishTurn } = createDeferred<unknown>();
-      const send = (message: object) => child.stdin.write(`${JSON.stringify(message)}\n`);
-      const request = (method: string, params: object) =>
-        new Promise<unknown>((resolve, reject) => {
-          const id = ++nextId;
-          pending.set(id, { resolve, reject });
-          send({ id, method, params });
-        });
-      child.stdin.on("error", () => {});
-      child.stderr.resume();
-      child.once("close", () => {
-        for (const waiter of pending.values()) {
-          waiter.reject(new Error("Native child closed"));
-        }
+      client.addRequestHandler(({ method }) => {
+        approvals += 1;
+        return method === "item/permissions/requestApproval"
+          ? { permissions: {}, scope: "turn" }
+          : { decision: "decline" };
       });
-      lines.on("line", (line) => {
-        const message = JSON.parse(line) as {
-          id?: number;
-          method?: string;
-          result?: unknown;
-          error?: unknown;
-          params?: { item?: { type: string; aggregatedOutput?: string }; turn?: unknown };
-        };
-        if (message.method && message.id !== undefined) {
-          approvals += 1;
-          send({
-            id: message.id,
-            result:
-              message.method === "item/permissions/requestApproval"
-                ? { permissions: {}, scope: "turn" }
-                : { decision: "decline" },
-          });
-        } else if (message.id !== undefined) {
-          const waiter = pending.get(message.id);
-          pending.delete(message.id);
-          if (message.error) {
-            waiter?.reject(new Error(JSON.stringify(message.error)));
-          } else {
-            waiter?.resolve(message.result);
-          }
-        } else if (
+      client.addNotificationHandler((message) => {
+        const params = message.params;
+        if (!isJsonObject(params)) {
+          return;
+        }
+        if (
           message.method === "item/completed" &&
-          message.params?.item?.type === "commandExecution"
+          isJsonObject(params.item) &&
+          params.item.type === "commandExecution"
         ) {
-          commandOutput += message.params.item.aggregatedOutput ?? "";
+          commandOutput += params.item.aggregatedOutput ?? "";
         } else if (message.method === "turn/completed") {
-          finishTurn(message.params?.turn);
+          finishTurn(params.turn);
         }
       });
-      const initialized = await request("initialize", {
+      const initialized = await client.request("initialize", {
         clientInfo: { name: "openclaw_sandbox_test", version: "1.0.0" },
         capabilities: { experimentalApi: true },
       });
       expect(initialized).toMatchObject({
         userAgent: expect.stringContaining(`/${CODEX_APP_SERVER_VERSION} `),
       });
-      send({ method: "initialized", params: {} });
-      const thread = (await request("thread/start", {
+      client.notify("initialized", {});
+      const thread = await client.request("thread/start", {
         cwd,
         model: "gpt-5.6-luna",
         modelProvider: "loopback-fixture",
@@ -246,7 +213,7 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
         approvalsReviewer: "user",
         sandbox: "workspace-write",
         ephemeral: true,
-      })) as { thread: { id: string }; sandbox: unknown };
+      });
       expect(thread.sandbox).toMatchObject({
         type: "workspaceWrite",
         excludeTmpdirEnvVar: excluded,
@@ -275,7 +242,7 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
         appServer,
         preserveNativeTurnSettings: true,
       });
-      await request("turn/start", turn);
+      await client.request("turn/start", turn);
       expect(await completed).toMatchObject({ status: "completed" });
       expect(approvals).toBe(0);
       expect(requestCount).toBe(2);

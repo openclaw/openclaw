@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { type RawData, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
@@ -15,6 +16,46 @@ describe("Codex app-server websocket transport", () => {
   const servers: WebSocketServer[] = [];
   const httpServers: http.Server[] = [];
   const tempDirs: string[] = [];
+
+  function tcpServer(autoPong = true) {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0, autoPong });
+    servers.push(server);
+    return server;
+  }
+
+  function serveRpc(server: WebSocketServer, method: string, header: string) {
+    const headers: Array<string | string[] | undefined> = [];
+    server.on("connection", (socket, request) => {
+      headers.push(request.headers[header]);
+      socket.on("message", (data) => {
+        const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
+        const result =
+          message.method === "initialize"
+            ? { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION}` }
+            : message.method === method
+              ? { data: [] }
+              : undefined;
+        if (result) {
+          socket.send(JSON.stringify({ id: message.id, result }));
+        }
+      });
+    });
+    return headers;
+  }
+
+  async function heartbeatFixture(autoPong = true) {
+    const server = tcpServer(autoPong);
+    const connected = createDeferred<void>();
+    const ping = createDeferred<void>();
+    server.once("connection", (socket) => {
+      socket.once("ping", () => ping.resolve());
+      socket.once("message", () => connected.resolve());
+    });
+    const transport = createTransport(await websocketUrl(server));
+    transport.stdin.write("{}\n");
+    await connected.promise;
+    return { transport, receivedPing: ping.promise };
+  }
 
   function createTransport(url: string) {
     const transport = createWebSocketTransport({
@@ -78,27 +119,8 @@ describe("Codex app-server websocket transport", () => {
     const localRegistration = vi
       .spyOn(processRegistration, "prepareCodexAppServerProcessRegistration")
       .mockRejectedValue(new Error("local inspection unavailable"));
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    servers.push(server);
-    const authHeaders: Array<string | undefined> = [];
-    server.on("connection", (socket, request) => {
-      authHeaders.push(request.headers.authorization);
-      socket.on("message", (data) => {
-        const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
-        if (message.method === "initialize") {
-          socket.send(
-            JSON.stringify({
-              id: message.id,
-              result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION}` },
-            }),
-          );
-          return;
-        }
-        if (message.method === "model/list") {
-          socket.send(JSON.stringify({ id: message.id, result: { data: [] } }));
-        }
-      });
-    });
+    const server = tcpServer();
+    const authHeaders = serveRpc(server, "model/list", "authorization");
     const url = await websocketUrl(server);
     const client = await CodexAppServerClient.start({
       transport: "websocket",
@@ -131,24 +153,16 @@ describe("Codex app-server websocket transport", () => {
   });
 
   it("forces socket shutdown when the peer cannot finish the close handshake", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    servers.push(server);
+    const server = tcpServer();
     server.once("connection", (socket) => {
       socket.once("message", () => {
         socket.pause();
         socket.send(JSON.stringify({ method: "probe/ready" }));
       });
     });
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected websocket test server port");
-    }
     const client = await CodexAppServerClient.start({
       transport: "websocket",
-      url: `ws://127.0.0.1:${address.port}`,
+      url: await websocketUrl(server),
     });
     clients.push(client);
     const received = new Promise<void>((resolve) => {
@@ -163,25 +177,7 @@ describe("Codex app-server websocket transport", () => {
 
   it("keeps an idle remote websocket healthy with protocol-level ping frames", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    servers.push(server);
-    let resolveConnected: (() => void) | undefined;
-    const connected = new Promise<void>((resolve) => {
-      resolveConnected = resolve;
-    });
-    let resolvePing: (() => void) | undefined;
-    const receivedPing = new Promise<void>((resolve) => {
-      resolvePing = resolve;
-    });
-    server.once("connection", (socket) => {
-      socket.once("ping", () => resolvePing?.());
-      socket.once("message", () => resolveConnected?.());
-    });
-    const url = await websocketUrl(server);
-
-    const transport = createTransport(url);
-    transport.stdin.write("{}\n");
-    await connected;
+    const { transport, receivedPing } = await heartbeatFixture();
 
     await vi.advanceTimersByTimeAsync(20_000);
     await expect(receivedPing).resolves.toBeUndefined();
@@ -192,29 +188,10 @@ describe("Codex app-server websocket transport", () => {
 
   it("closes a remote websocket only after five consecutive unanswered pings", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0, autoPong: false });
-    servers.push(server);
-    let resolveConnected: (() => void) | undefined;
-    const connected = new Promise<void>((resolve) => {
-      resolveConnected = resolve;
-    });
-    let resolvePing: (() => void) | undefined;
-    const receivedPing = new Promise<void>((resolve) => {
-      resolvePing = resolve;
-    });
-    server.once("connection", (socket) => {
-      socket.once("ping", () => resolvePing?.());
-      socket.once("message", () => resolveConnected?.());
-    });
-    const url = await websocketUrl(server);
-
-    const transport = createTransport(url);
+    const { transport, receivedPing } = await heartbeatFixture(false);
     const exited = new Promise<unknown>((resolve) => {
       transport.once("exit", (code) => resolve(code));
     });
-    transport.stdin.write("{}\n");
-    await connected;
-
     await vi.advanceTimersByTimeAsync(20_000);
     await expect(receivedPing).resolves.toBeUndefined();
 
@@ -255,39 +232,28 @@ describe("Codex app-server websocket transport", () => {
   });
 
   it("preserves UTF-8 JSON-RPC bytes split across writable chunks", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    servers.push(server);
-    let resolveConnection: (() => void) | undefined;
-    const connected = new Promise<void>((resolve) => {
-      resolveConnection = resolve;
-    });
-    let resolveMessage: ((message: string) => void) | undefined;
-    const message = new Promise<string>((resolve) => {
-      resolveMessage = resolve;
-    });
+    const server = tcpServer();
+    const connected = createDeferred<void>();
+    const message = createDeferred<string>();
     server.once("connection", (socket) => {
-      socket.once("message", (data) => resolveMessage?.(rawDataToText(data)));
-      resolveConnection?.();
+      socket.once("message", (data) => message.resolve(rawDataToText(data)));
+      connected.resolve();
     });
     const url = await websocketUrl(server);
     const transport = createTransport(url);
-    await connected;
+    await connected.promise;
     const frame = Buffer.from('{"jsonrpc":"2.0","method":"😀"}\n');
     const emojiStart = frame.indexOf(Buffer.from("😀"));
     transport.stdin.write(frame.subarray(0, emojiStart + 2));
     transport.stdin.write(frame.subarray(emojiStart + 2));
-    await expect(message).resolves.toBe('{"jsonrpc":"2.0","method":"😀"}');
+    await expect(message.promise).resolves.toBe('{"jsonrpc":"2.0","method":"😀"}');
   });
 
   it("flushes an unterminated JSON-RPC frame when stdin finishes", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    servers.push(server);
-    let resolveMessage: ((message: string) => void) | undefined;
-    const message = new Promise<string>((resolve) => {
-      resolveMessage = resolve;
-    });
+    const server = tcpServer();
+    const message = createDeferred<string>();
     server.once("connection", (socket) => {
-      socket.once("message", (data) => resolveMessage?.(rawDataToText(data)));
+      socket.once("message", (data) => message.resolve(rawDataToText(data)));
       socket.send("{}");
     });
     const url = await websocketUrl(server);
@@ -298,7 +264,7 @@ describe("Codex app-server websocket transport", () => {
     await clientReady;
     transport.stdin.write('{"jsonrpc":"2.0","method":"final"}');
     transport.stdin.end?.();
-    await expect(message).resolves.toBe('{"jsonrpc":"2.0","method":"final"}');
+    await expect(message.promise).resolves.toBe('{"jsonrpc":"2.0","method":"final"}');
   }, 5_000);
 
   it("can speak JSON-RPC over the canonical unix control socket", async () => {
@@ -319,25 +285,7 @@ describe("Codex app-server websocket transport", () => {
     });
     const server = new WebSocketServer({ server: httpServer });
     servers.push(server);
-    const upgradeExtensions: Array<string | undefined> = [];
-    server.on("connection", (socket, request) => {
-      upgradeExtensions.push(request.headers["sec-websocket-extensions"]);
-      socket.on("message", (data) => {
-        const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
-        if (message.method === "initialize") {
-          socket.send(
-            JSON.stringify({
-              id: message.id,
-              result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION}` },
-            }),
-          );
-          return;
-        }
-        if (message.method === "thread/list") {
-          socket.send(JSON.stringify({ id: message.id, result: { data: [] } }));
-        }
-      });
-    });
+    const upgradeExtensions = serveRpc(server, "thread/list", "sec-websocket-extensions");
 
     const client = await CodexAppServerClient.start({
       transport: "unix",

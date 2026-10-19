@@ -13,7 +13,12 @@ import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { importCodexThreadHistoryToTranscript } from "./transcript-mirror.js";
 import { resolveCodexUpstreamForkBoundary } from "./upstream-fork-boundary.js";
 import { forkCodexUpstreamSession } from "./upstream-session-fork.js";
-import { createForkTestRuntime, forkResponse } from "./upstream-session-fork.test-support.js";
+import {
+  codexForkTurn,
+  createForkTestRuntime,
+  forkParams,
+  forkResponse,
+} from "./upstream-session-fork.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   ...(await importOriginal()),
@@ -32,20 +37,8 @@ afterEach(async () => {
 
 function turn(id: string, texts: string[]): CodexTurn {
   const user: CodexThreadItem = {
-    id: `${id}-user`,
-    type: "userMessage",
+    ...codexForkTurn(id, "").items[0]!,
     content: texts.map((text) => ({ type: "text", text, text_elements: [] })),
-    title: null,
-    status: null,
-    name: null,
-    tool: null,
-    server: null,
-    command: null,
-    cwd: null,
-    query: null,
-    aggregatedOutput: null,
-    text: "",
-    changes: [],
   };
   return {
     id,
@@ -182,13 +175,11 @@ describe("fork boundaries from imported Codex history", () => {
 
       const result = await forkCodexUpstreamSession(
         {
+          ...forkParams(),
           targetKey,
-          assertCurrent: () => {},
           source: { ...history.target, entryId: history.users.at(-1)!.entryId },
           upstream: {
-            catalogId: "codex",
-            hostId: "gateway:local",
-            kind: "codex-app-server",
+            ...forkParams().upstream,
             threadId: history.thread.id,
             ref: { connectionFingerprint: "fingerprint" },
           },
@@ -229,10 +220,10 @@ describe("fork boundaries from imported Codex history", () => {
         sessionId: child.sessionId,
         sessionKey: child.key,
       });
-      expect(childEntries.map((entry) => entry.role)).toEqual(["user", "assistant"]);
-      expect(
-        childEntries.filter((entry) => entry.role === "user").map((entry) => entry.message),
-      ).toEqual([expect.objectContaining({ content: "one" })]);
+      expect(childEntries).toMatchObject([
+        { role: "user", message: { content: "one" } },
+        { role: "assistant" },
+      ]);
       expect(bindingStore.read(identity)).toEqual(sourceBinding);
       expect(getSessionEntry(history.target)).toEqual(sourceEntry);
       expect(getSessionEntry(history.target)?.label).toBe(name);
@@ -255,11 +246,7 @@ describe("fork boundaries from imported Codex history", () => {
     await expect(history.resolve()).resolves.toEqual({
       ok: true,
       editorText: "edit me",
-      boundary: {
-        beforeTurnId: "turn-2",
-
-        lastRetainedTurnId: "turn-1",
-      },
+      boundary: { beforeTurnId: "turn-2", lastRetainedTurnId: "turn-1" },
     });
   });
 
@@ -291,7 +278,6 @@ describe("fork boundaries from imported Codex history", () => {
         editorText: text,
         boundary: {
           beforeTurnId: `turn-${count - 1}`,
-
           lastRetainedTurnId: `turn-${count - 2}`,
         },
       });

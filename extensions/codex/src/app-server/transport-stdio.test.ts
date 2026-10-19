@@ -21,12 +21,16 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 function startOptions(command: string): CodexAppServerStartOptions {
-  return {
-    transport: "stdio",
-    command,
-    args: ["app-server", "--listen", "stdio://"],
-    headers: {},
-  };
+  return { transport: "stdio", command, args: ["app-server", "--listen", "stdio://"], headers: {} };
+}
+
+function spawnEnv(
+  env: Record<string, string>,
+  baseEnv: NodeJS.ProcessEnv,
+  clearEnv: string[] = [],
+  platform?: NodeJS.Platform,
+) {
+  return { ...resolveCodexAppServerSpawnEnv({ env, clearEnv }, baseEnv, platform) };
 }
 
 describe("createStdioTransport", () => {
@@ -212,64 +216,36 @@ describe("resolveCodexAppServerSpawnEnv", () => {
   });
 
   it("applies configured env overrides before clearing denied env vars", () => {
-    expect({
-      ...resolveCodexAppServerSpawnEnv(
-        {
-          env: {
-            OPENAI_API_KEY: "configured-openai-key",
-            KEEP: "override",
-          },
-          clearEnv: ["OPENAI_API_KEY", "CODEX_API_KEY", "MISSING"],
-        },
-        {
-          OPENAI_API_KEY: "parent-openai-key",
-          CODEX_API_KEY: "parent-codex-key",
-          KEEP: "parent",
-        },
+    expect(
+      spawnEnv(
+        { OPENAI_API_KEY: "configured-openai-key", KEEP: "override" },
+        { OPENAI_API_KEY: "parent-openai-key", CODEX_API_KEY: "parent-codex-key", KEEP: "parent" },
+        ["OPENAI_API_KEY", "CODEX_API_KEY", "MISSING"],
       ),
-    }).toEqual({
-      KEEP: "override",
-    });
+    ).toEqual({ KEEP: "override" });
   });
 
   it("clears denied env vars case-insensitively on Windows", () => {
-    expect({
-      ...resolveCodexAppServerSpawnEnv(
-        {
-          env: {
-            OpenAI_Api_Key: "configured-openai-key",
-            Other: "configured",
-          },
-          clearEnv: ["OPENAI_API_KEY", " CODEX_API_KEY ", ""],
-        },
-        {
-          Codex_Api_Key: "parent-codex-key",
-          KEEP: "parent",
-        },
+    expect(
+      spawnEnv(
+        { OpenAI_Api_Key: "configured-openai-key", Other: "configured" },
+        { Codex_Api_Key: "parent-codex-key", KEEP: "parent" },
+        ["OPENAI_API_KEY", " CODEX_API_KEY ", ""],
         "win32",
       ),
-    }).toEqual({
-      KEEP: "parent",
-      Other: "configured",
-    });
+    ).toEqual({ KEEP: "parent", Other: "configured" });
   });
 
   it("strips inherited runtime loader injection before spawn", () => {
-    expect({
-      ...resolveCodexAppServerSpawnEnv(
+    expect(
+      spawnEnv(
         {
-          env: {
-            NODE_PATH: "/configured/node_modules",
-            DYLD_INSERT_LIBRARIES: "/configured/inject.dylib",
-          },
+          NODE_PATH: "/configured/node_modules",
+          DYLD_INSERT_LIBRARIES: "/configured/inject.dylib",
         },
-        {
-          NODE_PATH: "/ambient/node_modules",
-          LD_PRELOAD: "/ambient/inject.so",
-          KEEP: "safe",
-        },
+        { NODE_PATH: "/ambient/node_modules", LD_PRELOAD: "/ambient/inject.so", KEEP: "safe" },
       ),
-    }).toEqual({ KEEP: "safe" });
+    ).toEqual({ KEEP: "safe" });
   });
 
   it("uses a null-prototype env map and ignores prototype-polluting keys", () => {
@@ -277,22 +253,12 @@ describe("resolveCodexAppServerSpawnEnv", () => {
       '{"__proto__":"polluted","constructor":"polluted","prototype":"polluted","SAFE":"1"}',
     );
 
-    const env = resolveCodexAppServerSpawnEnv(
-      {
-        env: overrides,
-      },
-      {
-        BASE: "1",
-      },
-    );
+    const env = resolveCodexAppServerSpawnEnv({ env: overrides }, { BASE: "1" });
 
     expect(Object.getPrototypeOf(env)).toBeNull();
-    expect({ ...env }).toEqual({
-      BASE: "1",
-      SAFE: "1",
-    });
-    expect(Object.hasOwn(env, "__proto__")).toBe(false);
-    expect(Object.hasOwn(env, "constructor")).toBe(false);
-    expect(Object.hasOwn(env, "prototype")).toBe(false);
+    expect({ ...env }).toEqual({ BASE: "1", SAFE: "1" });
+    for (const key of ["__proto__", "constructor", "prototype"]) {
+      expect(Object.hasOwn(env, key)).toBe(false);
+    }
   });
 });

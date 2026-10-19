@@ -42,12 +42,24 @@ function attestedHarnessPrompt(upstreamText: string) {
   return attachCodexMirrorAttestation(prompt, fingerprintCodexMirrorSourceMessage(prompt));
 }
 
+function entry(
+  index: number,
+  message: SessionTranscriptMessageEntry["message"],
+): SessionTranscriptMessageEntry {
+  return {
+    entryId: `entry-${index}`,
+    parentId: index ? `entry-${index - 1}` : null,
+    seq: index,
+    role: "user",
+    message,
+  };
+}
+
 async function resolveFromTurns(params: {
   turns: readonly CodexTurn[];
   userMessageOrdinal: number;
-  localPrefixTexts: readonly (string | undefined)[];
-  localIdentities?: readonly (string | undefined)[];
-  historyMode?: "legacy" | "paginated";
+  localPrefixTexts: readonly string[];
+  localIdentities?: readonly string[];
 }) {
   const identities =
     params.localIdentities ??
@@ -58,35 +70,22 @@ async function resolveFromTurns(params: {
           .map((nativeItem) => `${nativeTurn.id}:${nativeItem.id}`),
       )
       .slice(-params.localPrefixTexts.length);
-  const entries: SessionTranscriptMessageEntry[] = params.localPrefixTexts.map((text, index) => ({
-    entryId: `entry-${index}`,
-    parentId: index > 0 ? `entry-${index - 1}` : null,
-    seq: index,
-    role: "user",
-    message: identities[index]
-      ? attachCodexMirrorIdentity(
-          {
-            role: "user",
-            content: text ?? [{ type: "image", data: "", mimeType: "image/png" }],
-            timestamp: index,
-          },
-          identities[index],
-        )
-      : { role: "user", content: text ?? "", timestamp: index },
-  }));
-  return await resolveEntries(
-    params.turns,
-    entries,
-    `entry-${params.userMessageOrdinal}`,
-    params.historyMode,
+  const entries = params.localPrefixTexts.map((text, index) =>
+    entry(
+      index,
+      attachCodexMirrorIdentity(
+        { role: "user", content: text, timestamp: index },
+        identities[index]!,
+      ),
+    ),
   );
+  return await resolveEntries(params.turns, entries, `entry-${params.userMessageOrdinal}`);
 }
 
 async function resolveEntries(
   turns: readonly CodexTurn[],
   entries: SessionTranscriptMessageEntry[],
   entryId: string,
-  historyMode: "legacy" | "paginated" = "legacy",
   canonicalThreadId?: string,
 ) {
   transcriptMocks.readVisibleEntries.mockResolvedValue(entries);
@@ -99,7 +98,7 @@ async function resolveEntries(
     threadId: "thread-1",
     canonicalThreadId,
     control: {
-      readThread: vi.fn(async (id: string) => ({ id, historyMode })),
+      readThread: vi.fn(async (id: string) => ({ id, historyMode: "legacy" })),
       listTurnPage: vi.fn(async () => ({ data: [...turns] })),
     } as unknown as Parameters<typeof resolveCodexUpstreamForkBoundary>[0]["control"],
   });
@@ -139,11 +138,7 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
 
     expect(result).toEqual({
       ok: true,
-      boundary: {
-        beforeTurnId: "turn-2",
-
-        lastRetainedTurnId: "turn-review",
-      },
+      boundary: { beforeTurnId: "turn-2", lastRetainedTurnId: "turn-review" },
     });
   });
 
@@ -169,37 +164,19 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
   });
 
-  it.each([true])(
-    "validates a recorded harness prompt and its local content (edited: %s)",
-    async (edited) => {
-      const message = attestedHarnessPrompt("harness context\nvisible question");
-      if (message.role !== "user") {
-        throw new Error("Attestation changed the user fixture's role");
-      }
-      const result = await resolveEntries(
-        [turn("turn-1", [user("harness context\nvisible question")])],
-        [
-          {
-            entryId: "entry-0",
-            parentId: null,
-            seq: 0,
-            role: "user",
-            message: edited ? { ...message, content: "changed question" } : message,
-          },
-        ],
-        "entry-0",
-      );
+  it("rejects local edits to an attested harness prompt", async () => {
+    const message = attestedHarnessPrompt("harness context\nvisible question");
+    if (message.role !== "user") {
+      throw new Error("Attestation changed the user fixture's role");
+    }
+    const result = await resolveEntries(
+      [turn("turn-1", [user("harness context\nvisible question")])],
+      [entry(0, { ...message, content: "changed question" })],
+      "entry-0",
+    );
 
-      expect(result).toMatchObject(
-        edited
-          ? { ok: false, code: "drift-mismatch" }
-          : {
-              ok: true,
-              boundary: { beforeTurnId: "turn-1" },
-            },
-      );
-    },
-  );
+    expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
+  });
 
   it.each([
     { name: "matching long text", prefix: "x".repeat(70 * 1024), suffix: "Q1", matches: true },
@@ -214,23 +191,14 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
     "compares complete attested harness prompts with $name",
     async ({ prefix, suffix, matches }) => {
       const entries: SessionTranscriptMessageEntry[] = [
-        {
-          entryId: "entry-0",
-          parentId: null,
-          seq: 0,
-          role: "user",
-          message: attestedHarnessPrompt(`${prefix}Q1`),
-        },
-        {
-          entryId: "entry-1",
-          parentId: "entry-0",
-          seq: 1,
-          role: "user",
-          message: attachCodexMirrorIdentity(
+        entry(0, attestedHarnessPrompt(`${prefix}Q1`)),
+        entry(
+          1,
+          attachCodexMirrorIdentity(
             { role: "user", content: "target", timestamp: 1 },
             "turn-2:target-user",
           ),
-        },
+        ),
       ];
       const turns = [
         turn("turn-1", [
@@ -249,7 +217,6 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
             turns,
             entries,
             `entry-${targetIndex}`,
-            "legacy",
             canonicalThreadId,
           );
           expect(result).toMatchObject(

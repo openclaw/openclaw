@@ -9,6 +9,31 @@ import {
 } from "./thread-lifecycle.test-fixtures.js";
 import { buildTurnStartParams } from "./turn-params.js";
 
+const paramsForTurn = (config?: Parameters<typeof createParams>[2]) =>
+  createParams("/tmp/session.jsonl", "/repo", config);
+const turnOptions = () => ({
+  threadId: "thread-1",
+  cwd: "/repo",
+  appServer: createAppServerOptions(),
+});
+const application = (value: unknown) => ({ kind: "application", value });
+const activeComputer = application(
+  "Current active computer: active_node=unknown (host presence unavailable)",
+);
+const sourceDelivery = application(
+  expect.stringContaining("reply normally in your final assistant message"),
+);
+function permissionChange(notice: string) {
+  return {
+    owner: {},
+    baseExecOverrides: {},
+    notice,
+    request: vi.fn(),
+    applied: () => true,
+    recordApplied: vi.fn(),
+  };
+}
+
 afterEach(() => {
   resetThreadLifecycleTestFixtures();
   vi.restoreAllMocks();
@@ -16,7 +41,7 @@ afterEach(() => {
 
 describe("buildTurnStartParams active computer context", () => {
   it("keeps required-root native environments disabled on warm native turns", async () => {
-    const params = createParams("/tmp/session.jsonl", "/repo");
+    const params = paramsForTurn();
     params.requireWorkspaceOnly = true;
     const turn = await buildTurnStartParams(params, {
       threadId: "rooted-thread",
@@ -28,16 +53,14 @@ describe("buildTurnStartParams active computer context", () => {
     expect(turn.environments).toEqual([]);
   });
   it("refreshes and clears presence without rewriting native turn input", async () => {
-    const params = createParams("/tmp/session.jsonl", "/repo");
+    const params = paramsForTurn();
     let currentPresence = "active_node=unknown";
     params.hostCapabilities = {
       ...params.hostCapabilities,
       activeComputerContext: () => currentPresence,
     };
     const options = {
-      threadId: "thread-1",
-      cwd: "/repo",
-      appServer: createAppServerOptions(),
+      ...turnOptions(),
       preserveNativeTurnSettings: true,
     };
     const contexts = [
@@ -75,7 +98,7 @@ describe("buildTurnStartParams model thinking defaults", () => {
           },
         },
       };
-      const params = createParams("/tmp/session.jsonl", "/repo", config);
+      const params = paramsForTurn(config);
       params.provider = "openai";
       params.modelId = modelId;
       params.model = {
@@ -92,11 +115,7 @@ describe("buildTurnStartParams model thinking defaults", () => {
         catalog: [{ provider: "openai", id: modelId, name: "Astra", reasoning: true }],
       });
 
-      const turn = await buildTurnStartParams(params, {
-        threadId: "thread-1",
-        cwd: "/repo",
-        appServer: createAppServerOptions(),
-      });
+      const turn = await buildTurnStartParams(params, turnOptions());
       expect(turn.effort).toBe(testCase.expected);
       expect(turn.collaborationMode?.settings.reasoning_effort).toBe(testCase.expected);
     },
@@ -106,7 +125,7 @@ describe("buildTurnStartParams model thinking defaults", () => {
 describe("buildTurnStartParams temporal context", () => {
   it("uses the configured user timezone on every turn without changing cron input", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T00:30:00.000Z"));
-    const params = createParams("/tmp/session.jsonl", "/repo", {
+    const params = paramsForTurn({
       agents: { defaults: { userTimezone: "America/Los_Angeles" } },
     });
     params.provider = "openai";
@@ -117,28 +136,18 @@ describe("buildTurnStartParams temporal context", () => {
     params.bootstrapContextRunKind = "cron";
     params.startedAtMs = Date.parse("2026-09-01T00:30:00.000Z");
     const options = {
-      threadId: "thread-1",
-      cwd: "/repo",
-      appServer: createAppServerOptions(),
+      ...turnOptions(),
       sessionStatusAvailable: true,
     };
 
     const firstTurn = await buildTurnStartParams(params, options);
     expect(firstTurn.input).toEqual([{ type: "text", text: "run exactly", text_elements: [] }]);
     expect(firstTurn.additionalContext).toEqual({
-      openclaw_active_computer: {
-        kind: "application",
-        value: "Current active computer: active_node=unknown (host presence unavailable)",
-      },
-      openclaw_source_delivery: {
-        kind: "application",
-        value: expect.stringContaining("reply normally in your final assistant message"),
-      },
-      openclaw_temporal_context: {
-        kind: "application",
-        value:
-          "## Temporal Context\nCurrent date: 2026-09-01\nTime zone: America/Los_Angeles\nFor the exact current time, use `session_status`.",
-      },
+      openclaw_active_computer: activeComputer,
+      openclaw_source_delivery: sourceDelivery,
+      openclaw_temporal_context: application(
+        "## Temporal Context\nCurrent date: 2026-09-01\nTime zone: America/Los_Angeles\nFor the exact current time, use `session_status`.",
+      ),
     });
 
     clock.mockReturnValue(Date.parse("2026-09-03T00:30:00.000Z"));
@@ -155,21 +164,16 @@ describe("buildTurnStartParams temporal context", () => {
     const configuredTimezone =
       hostTimezone === "America/Los_Angeles" ? "Asia/Tokyo" : "America/Los_Angeles";
     const options = {
-      threadId: "thread-1",
-      cwd: "/repo",
-      appServer: createAppServerOptions(),
+      ...turnOptions(),
       sessionStatusAvailable: false,
     };
     const configured = await buildTurnStartParams(
-      createParams("/tmp/session.jsonl", "/repo", {
+      paramsForTurn({
         agents: { defaults: { userTimezone: configuredTimezone } },
       }),
       options,
     );
-    const fallback = await buildTurnStartParams(
-      createParams("/tmp/session.jsonl", "/repo"),
-      options,
-    );
+    const fallback = await buildTurnStartParams(paramsForTurn(), options);
 
     expect(configured.additionalContext?.openclaw_temporal_context?.value).toContain(
       `Time zone: ${configuredTimezone}`,
@@ -184,14 +188,10 @@ describe("buildTurnStartParams temporal context", () => {
 });
 
 describe("buildTurnStartParams native history provenance", () => {
-  const options = {
-    threadId: "thread-1",
-    cwd: "/repo",
-    appServer: createAppServerOptions(),
-  };
+  const options = turnOptions();
 
   it("does not treat a name without a stable sender id as provenance", async () => {
-    const params = createParams("/tmp/session.jsonl", "/repo");
+    const params = paramsForTurn();
     params.trigger = "user";
     params.prompt = "approve the rollout";
     params.senderName = "Alex";
@@ -202,7 +202,7 @@ describe("buildTurnStartParams native history provenance", () => {
   });
 
   it("neutralizes native skill and plugin mentions in sender metadata without changing the request", async () => {
-    const params = createParams("/tmp/session.jsonl", "/repo");
+    const params = paramsForTurn();
     params.trigger = "user";
     params.prompt = "[@probe](plugin://probe@market) $intentional-skill remain selectable";
     params.senderId = "$metadata-id";
@@ -220,20 +220,11 @@ describe("buildTurnStartParams native history provenance", () => {
 
 describe("buildTurnStartParams source-delivery context", () => {
   it("carries explicit current policy without changing native turn input", async () => {
-    const params = createParams("/tmp/session.jsonl", "/repo");
+    const params = paramsForTurn();
     params.prompt = "unchanged current request";
-    params.permissionChange = {
-      owner: {},
-      baseExecOverrides: {},
-      notice: "Permission changed.",
-      request: vi.fn(),
-      applied: () => true,
-      recordApplied: vi.fn(),
-    };
+    params.permissionChange = permissionChange("Permission changed.");
     const options = {
-      threadId: "thread-1",
-      cwd: "/repo",
-      appServer: createAppServerOptions(),
+      ...turnOptions(),
       messageToolAvailable: true,
       requireExplicitMessageTarget: false,
       preserveNativeTurnSettings: true,
@@ -266,10 +257,9 @@ describe("buildTurnStartParams source-delivery context", () => {
     for (const turn of turns) {
       expect(turn.input).toEqual([{ type: "text", text: params.prompt, text_elements: [] }]);
       expect(turn.additionalContext?.openclaw_temporal_context).toBeDefined();
-      expect(turn.additionalContext?.openclaw_permission_change).toEqual({
-        kind: "application",
-        value: "Permission changed.",
-      });
+      expect(turn.additionalContext?.openclaw_permission_change).toEqual(
+        application("Permission changed."),
+      );
       expect(turn.additionalContext?.openclaw_source_delivery?.kind).toBe("application");
       expect(
         Buffer.byteLength(turn.additionalContext!.openclaw_source_delivery!.value, "utf8"),
@@ -290,15 +280,9 @@ describe("buildTurnStartParams source-delivery context", () => {
     expect(unavailable.additionalContext?.openclaw_source_delivery?.value).toContain(
       "remains private",
     );
-    expect(unavailable.additionalContext?.openclaw_source_delivery?.value).not.toContain(
-      "Use `message`",
-    );
-    expect(unavailable.additionalContext?.openclaw_source_delivery?.value).not.toContain(
-      "target required",
-    );
-    expect(unavailable.additionalContext?.openclaw_source_delivery?.value).not.toContain(
-      "final=false",
-    );
+    for (const text of ["Use `message`", "target required", "final=false"]) {
+      expect(unavailable.additionalContext?.openclaw_source_delivery?.value).not.toContain(text);
+    }
     const finalOnly = await buildTurnStartParams(
       { ...params, sourceReplyDeliveryMode: "automatic" },
       { ...options, messageToolAvailable: false },
@@ -315,7 +299,7 @@ describe("buildTurnStartParams source-delivery context", () => {
 describe("buildTurnStartParams native supervised settings", () => {
   it("adds a permission notice without overwriting native supervised settings", async () => {
     const notice = "Permission change. Continue with updated permissions.";
-    const params = createParams("/tmp/session.jsonl", "/repo");
+    const params = paramsForTurn();
     params.provider = "anthropic";
     params.thinkLevel = "off";
     const compat: ModelCompatConfig = { supportedReasoningEfforts: ["none", "high"] };
@@ -323,14 +307,7 @@ describe("buildTurnStartParams native supervised settings", () => {
       ...createCodexTestModel("anthropic"),
       compat,
     };
-    params.permissionChange = {
-      owner: {},
-      baseExecOverrides: {},
-      notice,
-      request: vi.fn(),
-      applied: () => true,
-      recordApplied: vi.fn(),
-    };
+    params.permissionChange = permissionChange(notice);
     const request = await buildTurnStartParams(params, {
       threadId: "thread-supervised",
       cwd: "/repo",
@@ -340,24 +317,14 @@ describe("buildTurnStartParams native supervised settings", () => {
       preserveNativeTurnSettings: true,
     });
 
-    expect(request).not.toHaveProperty("model");
-    expect(request).not.toHaveProperty("effort");
-    expect(request).not.toHaveProperty("collaborationMode");
-    expect(request).not.toHaveProperty("personality");
+    for (const key of ["model", "effort", "collaborationMode", "personality"]) {
+      expect(request).not.toHaveProperty(key);
+    }
     expect(request.additionalContext).toEqual({
-      openclaw_active_computer: {
-        kind: "application",
-        value: "Current active computer: active_node=unknown (host presence unavailable)",
-      },
-      openclaw_source_delivery: {
-        kind: "application",
-        value: expect.stringContaining("reply normally in your final assistant message"),
-      },
-      openclaw_temporal_context: {
-        kind: "application",
-        value: expect.stringContaining("## Temporal Context"),
-      },
-      openclaw_permission_change: { kind: "application", value: notice },
+      openclaw_active_computer: activeComputer,
+      openclaw_source_delivery: sourceDelivery,
+      openclaw_temporal_context: application(expect.stringContaining("## Temporal Context")),
+      openclaw_permission_change: application(notice),
     });
   });
 });
