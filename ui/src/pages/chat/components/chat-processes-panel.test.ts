@@ -156,6 +156,7 @@ it("keeps details process observation through refreshes and follows its presente
   details.props = {
     sessionKey: "agent:main:parent",
     currentAgentId: "main",
+    selectedSession: undefined,
     messages: [],
     onOpenProcesses: () => {},
   };
