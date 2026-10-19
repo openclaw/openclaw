@@ -1,5 +1,5 @@
 import type { SkillsWorkshopListResult, SkillWorkshopChange } from "@openclaw/gateway-protocol";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -11,6 +11,13 @@ import { SkillWorkshopPage } from "./skill-workshop-page.tsx";
 
 const SKILL = "actual-budget-operations";
 const VERSION = "20260929T010000000Z-patch";
+const mutationAccess = { methods: ["skills.workshop.archive", "skills.workshop.restore"] };
+const skillRead = {
+  name: SKILL,
+  filePath: "SKILL.md",
+  content: "Synthetic procedure",
+  files: ["SKILL.md"],
+};
 
 const list: SkillsWorkshopListResult = {
   agentId: "research",
@@ -63,6 +70,15 @@ function workshopGateway(changes: SkillWorkshopChange[] = [change]) {
   });
 }
 
+function requests(
+  overrides: Record<string, (params: { agentId: string; versionId?: string }) => unknown>,
+) {
+  const fallback = workshopGateway();
+  return vi.fn((method: string, params: { agentId: string; versionId?: string }) =>
+    overrides[method] ? Promise.resolve(overrides[method](params)) : fallback(method),
+  );
+}
+
 async function mount(context: ApplicationContext) {
   const mounted = mountSolid(() => <SkillWorkshopPage />, {
     wrapper: createSolidApplicationContextProvider(context).wrapper,
@@ -77,8 +93,6 @@ function button(page: HTMLElement, label: string) {
     (entry) => entry.textContent?.trim() === label,
   );
 }
-
-afterEach(() => document.body.replaceChildren());
 
 describe("Skill Workshop page", () => {
   it("keeps the selected agent loading when the former agent's list fails", async () => {
@@ -122,20 +136,9 @@ describe("Skill Workshop page", () => {
       valid: true,
       issues: [],
     });
-    const workshopRequest = workshopGateway();
-    const request = vi.fn((method: string) => {
-      if (method === "config.get") {
-        return configRead();
-      }
-      if (method === "skills.workshop.read") {
-        return Promise.resolve({
-          name: SKILL,
-          filePath: "SKILL.md",
-          content: "Synthetic procedure",
-          files: ["SKILL.md"],
-        });
-      }
-      return workshopRequest(method);
+    const request = requests({
+      "config.get": () => configRead(),
+      "skills.workshop.read": () => skillRead,
     });
     const context = createContext(request, { methods: ["config.patch"] });
     const runtimeConfig = createRuntimeConfigCapability(context.gateway);
@@ -172,11 +175,7 @@ describe("Skill Workshop page", () => {
     const request = workshopGateway([
       { ...change, action: "restore", actor: "user", summary: "restored", versionId: undefined },
     ]);
-    const page = await mount(
-      createContext(request, {
-        methods: ["skills.workshop.archive", "skills.workshop.restore"],
-      }),
-    );
+    const page = await mount(createContext(request, mutationAccess));
     await vi.waitFor(() => expect(button(page, "Undo")).toBeDefined());
 
     button(page, "Undo")?.click();
@@ -192,27 +191,12 @@ describe("Skill Workshop page", () => {
   it("keeps a new agent's restore pending when the former agent's archive fails", async () => {
     const archive = createDeferredCore<unknown>();
     const restore = createDeferredCore<unknown>();
-    const workshopRequest = workshopGateway();
-    const request = vi.fn((method: string) => {
-      if (method === "skills.workshop.archive") {
-        return archive.promise;
-      }
-      if (method === "skills.workshop.restore") {
-        return restore.promise;
-      }
-      if (method === "skills.workshop.read") {
-        return Promise.resolve({
-          name: SKILL,
-          filePath: "SKILL.md",
-          content: "Synthetic procedure",
-          files: ["SKILL.md"],
-        });
-      }
-      return workshopRequest(method);
+    const request = requests({
+      "skills.workshop.archive": () => archive.promise,
+      "skills.workshop.restore": () => restore.promise,
+      "skills.workshop.read": () => skillRead,
     });
-    const context = createContext(request, {
-      methods: ["skills.workshop.archive", "skills.workshop.restore"],
-    });
+    const context = createContext(request, mutationAccess);
     const page = await mount(context);
     await vi.waitFor(() => expect(button(page, "Archive")).toBeDefined());
     button(page, "Archive")!.click();
@@ -247,7 +231,7 @@ describe("Skill Workshop page", () => {
         workshopGateway([
           { ...change, summary: "an older patch", versionId: "20260101T000000000Z-patch" },
         ]),
-        { methods: ["skills.workshop.archive", "skills.workshop.restore"] },
+        mutationAccess,
       ),
     );
     await vi.waitFor(() => expect(page.textContent).toContain("an older patch"));
@@ -256,23 +240,20 @@ describe("Skill Workshop page", () => {
 
   it("opens the skill a chat notice links to, even when it is archived", async () => {
     const archivedVersion = "20260930T010000000Z-archive";
-    const request = vi.fn(async (method: string) => {
-      if (method === "skills.workshop.list") {
-        return {
-          ...list,
-          archived: [
-            ...list.archived,
-            {
-              name: "release-notes",
-              live: false,
-              versions: [{ id: archivedVersion, action: "archive", createdAtMs: Date.now() }],
-            },
-          ],
-        };
-      }
-      return method === "skills.workshop.changes"
-        ? { changes: [] }
-        : { content: "", files: ["SKILL.md"] };
+    const request = requests({
+      "skills.workshop.list": () => ({
+        ...list,
+        archived: [
+          ...list.archived,
+          {
+            name: "release-notes",
+            live: false,
+            versions: [{ id: archivedVersion, action: "archive", createdAtMs: Date.now() }],
+          },
+        ],
+      }),
+      "skills.workshop.changes": () => ({ changes: [] }),
+      "skills.workshop.read": () => ({ content: "", files: ["SKILL.md"] }),
     });
     const page = await mount(createContext(request, { search: "?skill=release-notes" }));
 
@@ -295,7 +276,7 @@ describe("Skill Workshop page", () => {
   it("offers no undo to an operator without admin scope", async () => {
     const page = await mount(
       createContext(workshopGateway(), {
-        methods: ["skills.workshop.archive", "skills.workshop.restore"],
+        ...mutationAccess,
         scopes: ["operator.read"],
       }),
     );
@@ -306,19 +287,12 @@ describe("Skill Workshop page", () => {
   it("compares a saved version's own metadata against today's", async () => {
     const skillFile = (description: string) =>
       `---\nname: ${SKILL}\ndescription: ${description}\n---\n\nSynthetic procedure`;
-    const workshopRequest = workshopGateway();
-    const request = vi.fn(async (method: string, params?: { versionId?: string }) =>
-      method === "skills.workshop.read"
-        ? {
-            name: SKILL,
-            filePath: "SKILL.md",
-            content: skillFile(
-              params?.versionId ? "Synthetic old summary" : list.skills[0]!.description,
-            ),
-            files: ["SKILL.md"],
-          }
-        : workshopRequest(method),
-    );
+    const request = requests({
+      "skills.workshop.read": ({ versionId }) => ({
+        ...skillRead,
+        content: skillFile(versionId ? "Synthetic old summary" : list.skills[0]!.description),
+      }),
+    });
     const page = await mount(createContext(request));
     await vi.waitFor(() => expect(page.textContent).toContain("Synthetic procedure"));
 
@@ -329,16 +303,13 @@ describe("Skill Workshop page", () => {
     await vi.waitFor(() =>
       expect(page.querySelector(".sw-detail__desc")?.textContent).toBe("Synthetic old summary"),
     );
-    const lines = Array.from(page.querySelectorAll(".sw-diff__line"), (line) => [
-      line.classList.contains("sw-diff__line--remove")
-        ? "-"
-        : line.classList.contains("sw-diff__line--add")
-          ? "+"
-          : " ",
-      line.querySelector(".sw-diff__text")?.textContent,
-    ]);
-    expect(lines).toContainEqual(["-", "description: Synthetic old summary"]);
-    expect(lines).toContainEqual(["+", `description: ${list.skills[0]!.description}`]);
+    const diffText = (kind: "remove" | "add") =>
+      Array.from(
+        page.querySelectorAll(`.sw-diff__line--${kind} .sw-diff__text`),
+        (line) => line.textContent,
+      );
+    expect(diffText("remove")).toContain("description: Synthetic old summary");
+    expect(diffText("add")).toContain(`description: ${list.skills[0]!.description}`);
     expect(page.querySelector(".sw-diff__same")).toBeNull();
   });
 
