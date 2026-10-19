@@ -1,7 +1,33 @@
 import { describe, expect, it } from "vitest";
+import { buildServiceEnvironment } from "../../daemon/service-env.js";
+import { createSecretEgressProxyEnvironment } from "../../secrets/egress-proxy/environment.js";
 import { mergeInstallInvocationEnv } from "./install.js";
 
 describe("mergeInstallInvocationEnv", () => {
+  it("retains recorded operator overrides through intermediate install projections", () => {
+    const ca = "/state/secret-egress-proxy/operator-ca.pem";
+    const env = mergeInstallInvocationEnv({
+      env: {
+        ...createSecretEgressProxyEnvironment(
+          "http://proxy.invalid",
+          "/arbitrary/temporary-ca.pem",
+        ),
+        NODE_EXTRA_CA_CERTS: ca,
+      },
+    });
+    expect(
+      buildServiceEnvironment({ env, platform: "linux", port: 18789 }).NODE_EXTRA_CA_CERTS,
+    ).toBe(ca);
+  });
+
+  it("drops an expired Gateway proxy CA while preserving the installed corporate CA", () => {
+    const env = mergeInstallInvocationEnv({
+      env: { NODE_EXTRA_CA_CERTS: "/state/a/secret-egress-proxy/gateway-expired/trust-bundle.pem" },
+      existingServiceEnv: { NODE_EXTRA_CA_CERTS: "/opt/corporate-ca.pem" },
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/opt/corporate-ca.pem");
+  });
+
   it("uses only the current shell's HOMEBREW_PREFIX", () => {
     const existingServiceEnv = { HOMEBREW_PREFIX: "/opt/homebrew" };
     const env = mergeInstallInvocationEnv({ env: {}, existingServiceEnv, platform: "darwin" });

@@ -63,6 +63,7 @@ import {
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
+import { omitSecretEgressProxyEnvironment } from "../../secrets/egress-proxy/environment.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
@@ -121,7 +122,9 @@ export function mergeInstallInvocationEnv(params: {
   const platform = params.platform ?? process.platform;
   const normalizeInstallEnvKey = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
   const currentEnv: NodeJS.ProcessEnv = {};
-  for (const [rawKey, rawValue] of Object.entries(params.env)) {
+  for (const [rawKey, rawValue] of Object.entries(
+    omitSecretEgressProxyEnvironment(params.env, platform, { preserveProvenance: true }),
+  )) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (!key || isDangerousHostEnvVarName(key)) {
       continue;
@@ -132,14 +135,16 @@ export function mergeInstallInvocationEnv(params: {
     return currentEnv;
   }
   const preservedServiceEnv: NodeJS.ProcessEnv = {};
-  for (const [rawKey, rawValue] of Object.entries(params.existingServiceEnv)) {
+  for (const [rawKey, rawValue] of Object.entries(
+    omitSecretEgressProxyEnvironment(params.existingServiceEnv, platform),
+  )) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (!key) {
       continue;
     }
     const upper = key.toUpperCase();
     if (upper === OPENCLAW_WRAPPER_ENV_KEY) {
-      const value = rawValue.trim();
+      const value = rawValue?.trim();
       if (value) {
         preservedServiceEnv[normalizeInstallEnvKey(upper)] = value;
       }
@@ -162,7 +167,7 @@ export function mergeInstallInvocationEnv(params: {
     ) {
       continue;
     }
-    const value = rawValue.trim();
+    const value = rawValue?.trim();
     if (!value) {
       continue;
     }
