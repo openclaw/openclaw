@@ -27,6 +27,7 @@ import { useSessionMenuEntries } from "../../../components/session-menu-view.tsx
 import { createSessionOwnerMenu } from "../../../components/session-owner-menu.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import {
+  createMenuControls,
   Menu,
   type MenuEntry,
   type MenuItem,
@@ -117,6 +118,7 @@ function ChatHeaderSessionMenuContent(
   const preparation = () => liveProps.prewarm;
   const presentation = createParkedProjection(() => ({ ...liveProps }), open, preparation);
   const props = createProjection(presentation, {}, { key: "id" });
+  const controls = createMenuControls();
   let menu: MenuHandle | undefined;
   let stopShortcut: (() => void) | undefined;
   const quickActions = useChatQuickActionEntries(() => props.sessionActions, false, "quick:");
@@ -144,6 +146,7 @@ function ChatHeaderSessionMenuContent(
     createSessionOwnerMenu(open, preparation),
   );
   const view = useSessionMenuEntries(actions, readState, {
+    controls,
     openInExtra: () => [
       {
         id: "continue-in-terminal",
@@ -171,6 +174,7 @@ function ChatHeaderSessionMenuContent(
       },
       () => props.sharing ?? {},
     ),
+    controls,
   );
   openMenus.set(host, () => menu?.open() ?? false);
   const shortcut = (event: KeyboardEvent) => {
@@ -463,6 +467,7 @@ function ChatHeaderSessionMenuContent(
   const label = () => t("chat.sidebar.sessionMenu", { session: liveProps.session.label });
   return (
     <Menu
+      controls={controls}
       id={menuId}
       lazy
       prewarm={liveProps.prewarm && !liveProps.compact}

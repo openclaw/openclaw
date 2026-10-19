@@ -13,7 +13,7 @@ export function PersonName(props: {
   return (
     <Show when={props.link} fallback={<span class={props.class}>{props.label}</span>}>
       <a
-        ref={(element) => props.ref?.(element)}
+        ref={props.ref}
         class={[props.class, "person-activity-link"]}
         href={props.link?.href}
         onClick={(event) => props.link?.open(event)}
