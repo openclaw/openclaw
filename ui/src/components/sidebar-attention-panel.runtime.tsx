@@ -60,7 +60,6 @@ export type SidebarAttentionPanelParams = {
   onKeydown: (event: KeyboardEvent) => void;
   onNavigate: ApplicationContext["navigate"];
   onOpen: (item: SidebarAttentionItem) => void;
-  onScroll: () => void;
   listRef?: (element: HTMLDivElement | null) => void;
   focusRef?: (registry: SidebarAttentionFocus | null) => void;
   onSelectTab: (tab: IssueTab) => void;
@@ -424,7 +423,6 @@ export function SidebarAttentionPanel(
               role="tabpanel"
               aria-labelledby={`sidebar-issues-tab-${props.selectedTab}`}
               tabindex={0}
-              onScroll={() => props.onScroll()}
             >
               <Show when={showMentionStatus()}>
                 <div class="sidebar-issues-panel__mentions-note" role="status">

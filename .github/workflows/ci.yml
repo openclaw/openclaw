@@ -3645,7 +3645,6 @@ jobs:
         id: plan
         env:
           OPENCLAW_CI_CHECK_PLAN_INPUT_JSON: ${{ needs.preflight.outputs.check_plan_input_json }}
-          OPENCLAW_CI_TYPE_PLAN_SERIAL: ${{ github.event_name == 'pull_request' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.event.pull_request.head.repo.full_name == github.repository && github.run_attempt == 1 && needs.preflight.outputs.frozen_target != 'true' && '1' || vars.OPENCLAW_CI_TYPE_PLAN_SERIAL }}
         run: node scripts/ci-check-plan.mts
 
       - name: Check narrow PR global guards

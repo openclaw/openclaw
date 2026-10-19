@@ -290,8 +290,20 @@ receipts. Final-handle closure retires row facts while retaining physical valida
 and owner-published quarantine decisions.
 Canonical validation compares admitted catalog facts with the pending-table DDL
 from the schema source; fresh workers do not bootstrap a comparison database.
-Receipt metadata follows retained session scopes rather than all deleted sessions;
-reads of absent keys can still register a scope. Replacement files still require
+Idle receipt metadata has a 1 MiB estimated-byte LRU budget per physical database
+in each isolate. Active completion and Workshop effect scopes pin their shared
+cells and physical admission before asynchronous source preparation, releasing
+both with the effect scope. Pins can exceed the idle budget; release prunes it
+again. Writes and deletion still invalidate pinned receipts. Reads touch local
+recency without a cross-thread handshake. Eviction
+retires shared cells and their published snapshots; old tokens cannot certify a
+cached row, and oversized scopes use a database-wide receipt that invalidates on
+every write without retaining a scope cell. These
+receipts carry freshness, not writer authority; pending writers retain their live
+grants and conservatively invalidate replacement receipts at settlement. Session
+deletion also retires every model-context page partition, including pages from a
+previously longer transcript. Final database closure retires the whole generation.
+Replacement files still require
 admission through the same owner. Schemas, stored data, and update behavior are
 unchanged.
 

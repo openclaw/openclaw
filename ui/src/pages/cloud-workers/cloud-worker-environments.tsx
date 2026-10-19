@@ -128,7 +128,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   function syncInventoryInputs() {
     const current = [
       context.runtimeConfig.state.configSnapshot?.appliedConfigHash,
-      canCall("crabbox.images.list"),
+      canCallGatewayMethod(context.gateway.snapshot, "crabbox.images.list", "operator.admin"),
     ] as const;
     const changed = previousInputs?.some((value, index) => value !== current[index]);
     previousInputs = current;

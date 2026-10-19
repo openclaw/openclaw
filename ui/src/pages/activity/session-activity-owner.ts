@@ -7,6 +7,7 @@ import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { requestSessionListParams } from "../../lib/sessions/session-requests.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { activityPulseBoundaries } from "./activity-pulse-window.ts";
 import {
@@ -433,7 +434,7 @@ export function createSessionActivity(notify: () => void) {
             activityPulseBoundaries: boundaries,
             excludeSubagents: true,
             includeActivitySummary: true,
-            sortBy: "activity",
+            sortBy: "activity" as const,
             ...(filters.personId ? { involvingProfileId: filters.personId } : {}),
             ...(filters.query ? { search: filters.query } : {}),
             ...(filters.time === "all"
@@ -443,7 +444,7 @@ export function createSessionActivity(notify: () => void) {
                     filters.time === "24h" ? 1440 : filters.time === "7d" ? 10080 : 43200,
                 }),
           }),
-    };
+    } as const;
     const queryKey = JSON.stringify(request);
     const sameQuery = currentClient === client && currentQueryKey === queryKey;
     const sameFilters =
@@ -498,10 +499,11 @@ export function createSessionActivity(notify: () => void) {
     }
     const readRevision = ++historyRevision;
     notify();
-    void client
-      .request<SessionsListResult>("sessions.list", request, { signal: pending.controller.signal })
+    void requestSessionListParams(client, request, () => pendingRequest === pending, {
+      signal: pending.controller.signal,
+    })
       .then((result) => {
-        if (pendingRequest === pending) {
+        if (result && pendingRequest === pending) {
           if (filters === "current") {
             const next = reconcileCurrentWork(result, pendingChanges);
             incomplete = changesOverflowed || next.requiresRefresh;

@@ -5629,7 +5629,7 @@ describe("main-session startup recovery", () => {
         await resetSubagentRegistryForTests({ persist: false });
         await markStartupOrphanedMainSessionsForRecovery({ cfg, agentIds: new Set(["main"]) });
         expect(
-          await readSessionEntrySummariesInWorker({ ...target, mainSessionRecovery: true }),
+          await readSessionEntrySummariesInWorker({ ...target, mainSessionRecovery: "claims" }),
         ).toEqual([]);
         expect(
           await recoverRestartAbortedMainSessions({ cfg, agentIds: new Set(["main"]) }),

@@ -341,7 +341,6 @@ export function createTalkClientAgentConsultRunner(params: {
               }
               assertConsultCurrent();
               if (owner) {
-                assertConsultCurrent();
                 owner.identity = { runId, sessionId };
                 owner.completionClaim = prepareEmbeddedAgentRunCompletionClaim(
                   sessionId,

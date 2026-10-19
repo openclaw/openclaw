@@ -817,6 +817,11 @@ Three complementary mechanisms mark sessions whose turn did not finish:
   clears the prior interruption and is not replayed. Stale transcript lock files
   are cleaned up at the same time.
 
+Startup selects these candidates in the session database worker, so unrelated
+session summaries do not cross into the Gateway process. Pending canonical
+validation still runs when no recovery candidate exists, and marking rechecks
+the current row and live ownership before committing.
+
 Agents still undergoing database startup inspection retain their recovery work.
 When admission finishes, the same startup recovery owner scans their stores with
 the original cutoff, so newly admitted turns are not mistaken for crash orphans.

@@ -1,18 +1,7 @@
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { Server as HttpsServer } from "node:https";
-import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { connectGatewayClient } from "../../src/gateway/test-helpers.e2e.js";
 import type { OpenClawTestInstance } from "./openclaw-test-instance.js";
-
-export const commandSecretFixture = {
-  getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-  resolveCommandSecretRefsViaGateway: async ({ config }: { config: OpenClawConfig }) => ({
-    resolvedConfig: config,
-    diagnostics: [],
-    targetStatesByPath: {},
-    hadUnresolvedTargets: false,
-  }),
-};
 
 export async function readRequestText(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];

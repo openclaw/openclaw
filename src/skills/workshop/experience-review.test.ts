@@ -17,6 +17,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { readSqliteDatabaseScopedWriteTokensForPath } from "../../infra/sqlite-database-admission.js";
 import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
 import {
   initializeGlobalHookRunner,
@@ -201,7 +202,7 @@ describe("runSkillExperienceReview", () => {
     );
   });
 
-  it("keeps a later append live without MAIN SQL and denies unprepared use after revocation", async () => {
+  it("keeps prepared effects live through receipt pressure without MAIN SQL and denies revocation", async () => {
     const candidate = await createExperienceReviewCandidate(
       "review-append",
       [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
@@ -233,6 +234,12 @@ describe("runSkillExperienceReview", () => {
             // The model response resumes before the next tool can prepare its source scope.
             assertCurrent!();
             await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+              expect(
+                readSqliteDatabaseScopedWriteTokensForPath(
+                  candidate.source.storePath,
+                  Array.from({ length: 5_000 }, (_, index) => `unrelated-review-${index}`),
+                ),
+              ).toHaveLength(5_000);
               assertCurrent!();
             });
             expect(refreshedSql.queries).toEqual([]);

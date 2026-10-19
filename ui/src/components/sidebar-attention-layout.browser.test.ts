@@ -120,7 +120,6 @@ function panelParams(entries: readonly SidebarInboxEntry[]): PanelFixtureParams 
     onKeydown: () => {},
     onNavigate: () => {},
     onOpen: () => {},
-    onScroll: () => {},
     onSelectTab: () => {},
     overflowAbove: false,
     overflowBelow: false,

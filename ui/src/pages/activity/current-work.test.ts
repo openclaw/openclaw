@@ -274,6 +274,8 @@ it("refreshes a conflicting delete generation without confusing global owners du
 it.each(["current", { personId: null, time: "all", query: "" }] as const)(
   "retains certified rows through a busy overlapping %j read without overflowing",
   async (query) => {
+    // Keep the busy-read assertion separate from the owner's midnight rollover.
+    vi.setSystemTime(new Date(2026, 0, 15, 12));
     const { client, request, controller } = fixture;
     await controller.load(client, query);
     const pending = pendingRefresh(query);

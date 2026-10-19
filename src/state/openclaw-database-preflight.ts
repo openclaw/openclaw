@@ -160,7 +160,11 @@ export async function assertOpenClawDatabasesReady(
         causes.length === 1
         ? causes[0]
         : new Error(
-            formatIndeterminateDatabaseReadiness(schemas.indeterminate, options.operation),
+            formatIndeterminateDatabaseReadiness(
+              schemas.indeterminate,
+              options.operation,
+              indeterminateCauses,
+            ),
             {
               cause: new AggregateError(causes),
             },
@@ -365,11 +369,13 @@ export async function preflightOpenClawDatabaseSchemas(
     if (options.signal?.aborted || options.requireStartupMigrationReadiness) {
       throw failure;
     }
-    result.indeterminate.push({
+    const row: IndeterminateOpenClawDatabase = {
       kind: "state",
       path: statePath,
       reason: formatErrorMessage(failure),
-    });
+    };
+    indeterminateCauses.set(row, failure);
+    result.indeterminate.push(row);
     return result;
   } finally {
     await cleanupOpenClawStatePreflight({
@@ -630,11 +636,13 @@ export async function preflightOpenClawDatabaseSchemas(
         if (options.requireStartupMigrationReadiness) {
           throw error;
         }
-        inspection.indeterminate.push({
+        const failure: IndeterminateOpenClawDatabase = {
           kind: "agent",
           path: agentPath,
           reason: formatErrorMessage(error),
-        });
+        };
+        indeterminateCauses.set(failure, error);
+        inspection.indeterminate.push(failure);
       } finally {
         if (agentSnapshot) {
           let failure: { error: unknown } | undefined;

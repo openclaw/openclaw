@@ -382,6 +382,7 @@ describe("sidebar people workload", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       rowMode: "compact",
       source: "sidebar",
+      ifRowsRevision: "",
       configuredAgentsOnly: true,
       includeOwnerSessionCounts: true,
       limit: 1,

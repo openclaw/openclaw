@@ -3,10 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
-  CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
-  CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
   detectBundleManifestFormat,
   loadBundleManifest,
 } from "./bundle-manifest.js";
@@ -16,6 +13,9 @@ import {
   mkdirSafeDir,
 } from "./test-helpers/fs-fixtures.js";
 
+const AGENT_BUNDLE_MANIFEST_RELATIVE_PATH = "plugin.json";
+const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
+const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
 const AGENT_BUNDLE_MANIFEST_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 
 const tempDirs: string[] = [];

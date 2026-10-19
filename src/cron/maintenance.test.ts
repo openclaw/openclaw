@@ -77,7 +77,7 @@ it("runs Gateway retention with scheduling disabled and reconciles only unowned 
           { sessionKey, storePath: sessionStore },
           { sessionId: "old", updatedAt: now - 8 * DAY },
         );
-        startCronMaintenance(gatewayScheduler);
+        startCronMaintenance(gatewayScheduler, () => storePath);
         await vi.advanceTimersByTimeAsync(4_999);
         expect(readHistory().find((row) => row.id === "terminal")).toBeDefined();
         await vi.advanceTimersByTimeAsync(1);
@@ -227,7 +227,7 @@ it("rearms parked retention from a committed worker history write", async () => 
       const scheduler = createTestGatewayScheduler(clock.clock);
       try {
         await captureRuntimeConfigAsyncReader()();
-        startCronMaintenance(scheduler);
+        startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
         await clock.advanceBy(5_000);
         expect(scheduler.nextWakeAtMs).toBeNull();
         await recordCronRun({

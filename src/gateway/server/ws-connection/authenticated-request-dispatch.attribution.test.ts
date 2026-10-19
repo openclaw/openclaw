@@ -132,6 +132,21 @@ it.each([
     rowsOutcome: "full-with-base",
   },
   { params: { rowMode: "compact" }, payload: { sessions: [] }, rowsOutcome: "not-sidebar" },
+  {
+    params: { rowMode: "compact", ifRowsRevision: "" },
+    payload: { sessions: [] },
+    rowsOutcome: "full-no-base",
+  },
+  {
+    params: { rowMode: "compact", ifRowsRevision: "private-revision" },
+    payload: { rowsUnchanged: true },
+    rowsOutcome: "unchanged",
+  },
+  {
+    params: { rowMode: "compact", ifRowsRevision: "delta:private-revision" },
+    payload: { rowsDelta: { baseRevision: "private-revision" } },
+    rowsOutcome: "delta",
+  },
 ])(
   "attributes session response bytes as $rowsOutcome",
   async ({ params, payload, rowsOutcome }) => {
