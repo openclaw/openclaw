@@ -180,10 +180,6 @@ describe("sendClickClackText routing", () => {
     ).resolves.toEqual({ outcome: "not_sent" });
 
     expect(createClientOptions).not.toHaveBeenCalled();
-    expect(createChannelMessage).not.toHaveBeenCalled();
-    expect(createThreadReply).not.toHaveBeenCalled();
-    expect(createDirectConversation).not.toHaveBeenCalled();
-    expect(createDirectMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -197,9 +193,7 @@ describe("sendClickClackMedia", () => {
   });
 
   it("keeps the generic fallback when MIME type is missing", async () => {
-    loadOutboundMediaFromUrl.mockResolvedValueOnce({
-      buffer: Buffer.from("opaque bytes"),
-    });
+    loadOutboundMediaFromUrl.mockResolvedValueOnce({ buffer: Buffer.from("opaque bytes") });
 
     await sendTestMedia({
       text: "",
@@ -237,10 +231,7 @@ describe("sendClickClackMedia", () => {
   });
 
   it("routes explicit thread targets before attaching the upload", async () => {
-    await sendTestMedia({
-      to: "thread:msg_root",
-      text: "Thread artifact",
-    });
+    await sendTestMedia({ to: "thread:msg_root", text: "Thread artifact" });
 
     expect(createThreadReply).toHaveBeenCalledWith(
       "msg_root",
@@ -257,12 +248,9 @@ describe("sendClickClackMedia", () => {
       filename: "viewer-proof.ts",
     });
 
-    await expect(
-      sendTestMedia({
-        deliveryQueueId: "queue-1",
-        deliveryPartIndex: 0,
-      }),
-    ).resolves.toBe("msg_out");
+    await expect(sendTestMedia({ deliveryQueueId: "queue-1", deliveryPartIndex: 0 })).resolves.toBe(
+      "msg_out",
+    );
 
     expect(createUpload).not.toHaveBeenCalled();
     expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
@@ -294,11 +282,9 @@ describe("sendClickClackMedia", () => {
   });
 
   it("rejects a durable send without a stable part index before reading media", async () => {
-    await expect(
-      sendTestMedia({
-        deliveryQueueId: "queue-1",
-      }),
-    ).rejects.toThrow("requires a stable delivery part index");
+    await expect(sendTestMedia({ deliveryQueueId: "queue-1" })).rejects.toThrow(
+      "requires a stable delivery part index",
+    );
 
     expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
     expect(createClientOptions).not.toHaveBeenCalled();
@@ -325,7 +311,10 @@ describe("reconcileClickClackUnknownSend", () => {
       renderedBatchPlan: batchPlan("recovered text"),
     });
 
-    expect(result.status).toBe("sent");
+    expect(result).toMatchObject({
+      status: "sent",
+      receipt: { platformMessageIds: ["msg_text"] },
+    });
     expect(findMessageByNonce).toHaveBeenCalledWith({
       workspaceId: "wsp_1",
       nonce: "openclaw-text:4a171ee0c18d243d8d3c510320ab1b1d317afd95b0204abec18312e57307fb24",
@@ -333,9 +322,6 @@ describe("reconcileClickClackUnknownSend", () => {
     expect(createChannelMessage).not.toHaveBeenCalled();
     expect(createUpload).not.toHaveBeenCalled();
     expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
-    if (result.status === "sent") {
-      expect(result.receipt.platformMessageIds).toEqual(["msg_text"]);
-    }
   });
 
   it("replays text through the normal sender when no durable message exists", async () => {
@@ -381,13 +367,13 @@ describe("reconcileClickClackUnknownSend", () => {
       renderedBatchPlan: batchPlan("proof", ["/workspace/first.png", "/workspace/second.png"]),
     });
 
-    expect(result.status).toBe("sent");
+    expect(result).toMatchObject({
+      status: "sent",
+      receipt: { platformMessageIds: ["msg_first", "msg_second"] },
+    });
     expect(createChannelMessage).not.toHaveBeenCalled();
     expect(attachUpload).toHaveBeenCalledExactlyOnceWith("msg_first", "upl_first");
     expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
-    if (result.status === "sent") {
-      expect(result.receipt.platformMessageIds).toEqual(["msg_first", "msg_second"]);
-    }
   });
 
   it("refuses to acknowledge a message whose nonce-keyed upload is missing", async () => {

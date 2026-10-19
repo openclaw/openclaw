@@ -20,14 +20,6 @@ function createLookupFn(...addresses: string[]): LookupFn {
   }) as unknown as LookupFn;
 }
 
-function requestBodyJson(init: RequestInit | undefined): unknown {
-  const body = init?.body;
-  if (typeof body !== "string") {
-    throw new Error("expected string request body");
-  }
-  return JSON.parse(body);
-}
-
 function claimResponse(extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     token: "test-token",
@@ -67,13 +59,16 @@ describe("ClickClack setup-code claim", () => {
       api_base_url: apiBaseUrl,
       token: "test-token",
     });
-    expect(fetchMock).toHaveBeenCalledWith(
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
       claimUrl,
       expect.objectContaining({ method: "POST", redirect: "manual" }),
     );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
     const init = fetchMock.mock.calls[0]?.[1];
-    expect(requestBodyJson(init)).toEqual({ code: "ABCD-EFGH-JKMP" });
+    const body = init?.body;
+    if (typeof body !== "string") {
+      throw new Error("expected string request body");
+    }
+    expect(JSON.parse(body)).toEqual({ code: "ABCD-EFGH-JKMP" });
     const headers = new Headers(init?.headers);
     expect(headers.get("Authorization")).toBeNull();
     expect(headers.get("Content-Type")).toBe("application/json");
@@ -159,14 +154,10 @@ describe("ClickClack setup-code claim", () => {
   });
 
   it("rejects malformed claim responses", async () => {
-    fetchMock.mockResolvedValue(
-      Response.json(
-        claimResponse({
-          workspace: { id: "wsp_1", route_id: "clickclack", slug: "default" },
-          defaults: {},
-        }),
-      ),
-    );
+    const malformed = claimResponse({
+      workspace: { id: "wsp_1", route_id: "clickclack", slug: "default" },
+    });
+    fetchMock.mockResolvedValue(Response.json(malformed));
 
     await expect(
       claim({

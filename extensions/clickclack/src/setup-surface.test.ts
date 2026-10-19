@@ -31,6 +31,10 @@ import { clickClackSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 const { credentials, status, introNote, finalize } = clickClackSetupWizard;
+const credential = credentials[0];
+if (!credential) {
+  throw new Error("expected ClickClack token credential");
+}
 const account = {
   baseUrl: "https://clickclack.example",
   token: "ccb_test",
@@ -42,14 +46,7 @@ function channelConfig(
   return { channels: { clickclack: { ...account, ...overrides } } };
 }
 const configuredAccount = channelConfig();
-
-function tokenCredential() {
-  const credential = credentials[0];
-  if (!credential) {
-    throw new Error("expected ClickClack token credential");
-  }
-  return credential;
-}
+const tokenRef = { source: "file", provider: "vault", id: "/clickclack/token" };
 
 function expectCredential(
   cfg: CoreConfig,
@@ -57,7 +54,7 @@ function expectCredential(
   resolvedValue: string | undefined,
   extra: Record<string, unknown> = {},
 ) {
-  expect(tokenCredential().inspect({ cfg, accountId: "default" })).toMatchObject({
+  expect(credential.inspect({ cfg, accountId: "default" })).toMatchObject({
     accountConfigured: true,
     hasConfiguredValue,
     resolvedValue,
@@ -80,9 +77,8 @@ async function expectValidationNote(message: string, cfg = configuredAccount) {
 describe("ClickClack setup wizard", () => {
   beforeEach(() => {
     mocks.createClient.mockReset();
-    mocks.me.mockReset();
+    mocks.me.mockReset().mockResolvedValue({ id: "usr_bot", handle: "openclaw" });
     mocks.workspaces.mockReset();
-    mocks.me.mockResolvedValue({ id: "usr_bot", handle: "openclaw" });
     mocks.workspaces.mockResolvedValue([
       { id: "wsp_default", name: "Default", slug: "default", created_at: "2026-01-01" },
     ]);
@@ -107,9 +103,7 @@ describe("ClickClack setup wizard", () => {
       expectCredential(channelConfig({ token: undefined, tokenFile }), true, "ccb_file");
     });
 
-    const secretRefAccount = channelConfig({
-      token: { source: "file", provider: "vault", id: "/clickclack/token" },
-    });
+    const secretRefAccount = channelConfig({ token: tokenRef });
     expect(await status.resolveConfigured({ cfg: secretRefAccount })).toBe(true);
     expectCredential(secretRefAccount, true, undefined);
     expect(
@@ -122,12 +116,8 @@ describe("ClickClack setup wizard", () => {
   });
 
   it("switches the default account to env auth before URL and workspace prompts", async () => {
-    const credential = tokenCredential();
     const next = await credential.applyUseEnv?.({
-      cfg: channelConfig({
-        token: "ccb_stale",
-        tokenFile: "/run/secrets/stale",
-      }),
+      cfg: channelConfig({ token: "ccb_stale", tokenFile: "/run/secrets/stale" }),
       accountId: "default",
     });
 
@@ -167,9 +157,7 @@ describe("ClickClack setup wizard", () => {
   it("uses the resolved setup credential for live validation", async () => {
     await runSetupWizardFinalize({
       finalize,
-      cfg: channelConfig({
-        token: { source: "file", provider: "vault", id: "/clickclack/token" },
-      }),
+      cfg: channelConfig({ token: tokenRef }),
       credentialValues: { token: "ccb_resolved" },
     });
 

@@ -113,48 +113,36 @@ describe("ClickClack setup adapter", () => {
     });
   });
 
-  it("claims an exact v1 endpoint and keeps the returned API base path", async () => {
-    claimClickClackSetupCode.mockResolvedValue(
-      claimResponse({
-        contract_version: 1,
-        api_base_url: "https://api.clickclack.example/services/clickclack",
-      }),
-    );
+  it.each([
+    ["public", "abcd-efgh-jkmn", {}, exactClaimUrl],
+    [
+      "private",
+      "ABCD-EFGH-JKMN",
+      channelConfig({ apiBaseUrl: "http://127.0.0.1:8484" }),
+      "http://127.0.0.1:8484/api/bot-setup-codes/claim",
+    ],
+  ] as const)(
+    "claims an exact endpoint over %s transport and keeps its public API base",
+    async (_transport, code, cfg, claimUrl) => {
+      claimClickClackSetupCode.mockResolvedValue(
+        claimResponse({
+          contract_version: 1,
+          api_base_url: "https://api.clickclack.example/services/clickclack",
+        }),
+      );
 
-    await expect(prepare({ code: `${exactClaimUrl}#abcd-efgh-jkmn` })).resolves.toMatchObject({
-      baseUrl: "https://api.clickclack.example/services/clickclack",
-      token: "test-token",
-      workspace: "wsp_1",
-    });
-    expect(claimClickClackSetupCode).toHaveBeenCalledWith({
-      claimUrl: exactClaimUrl,
-      expectedClaimUrl: exactClaimUrl,
-      code: "ABCDEFGHJKMN",
-    });
-  });
-
-  it("uses a private API transport while validating the public exact endpoint", async () => {
-    claimClickClackSetupCode.mockResolvedValue(
-      claimResponse({
-        contract_version: 1,
-        api_base_url: "https://api.clickclack.example/services/clickclack",
-      }),
-    );
-
-    await expect(
-      prepare(
-        { code: `${exactClaimUrl}#ABCD-EFGH-JKMN` },
-        channelConfig({ apiBaseUrl: "http://127.0.0.1:8484" }),
-      ),
-    ).resolves.toMatchObject({
-      baseUrl: "https://api.clickclack.example/services/clickclack",
-    });
-    expect(claimClickClackSetupCode).toHaveBeenCalledWith({
-      claimUrl: "http://127.0.0.1:8484/api/bot-setup-codes/claim",
-      expectedClaimUrl: exactClaimUrl,
-      code: "ABCDEFGHJKMN",
-    });
-  });
+      await expect(prepare({ code: `${exactClaimUrl}#${code}` }, cfg)).resolves.toMatchObject({
+        baseUrl: "https://api.clickclack.example/services/clickclack",
+        token: "test-token",
+        workspace: "wsp_1",
+      });
+      expect(claimClickClackSetupCode).toHaveBeenCalledWith({
+        claimUrl,
+        expectedClaimUrl: exactClaimUrl,
+        code: "ABCDEFGHJKMN",
+      });
+    },
+  );
 
   it("rejects conflicting credentials before claiming a setup code", async () => {
     for (const credentials of [
@@ -170,29 +158,22 @@ describe("ClickClack setup adapter", () => {
   });
 
   it("rejects mismatched and malformed setup-code inputs before claiming", async () => {
-    await expect(prepare({ code: "ftp://clickclack.example/#ABCD-EFGH-JKMN" })).rejects.toThrow(
-      "HTTP(S)",
-    );
-    await expect(
-      prepare({
-        code: "https://clickclack.example/#ABCD-EFGH-JKMN",
-        baseUrl: "https://other.example",
-      }),
-    ).rejects.toThrow("does not match");
-    await expect(prepare({ ...codeInput, code: "not-a-code" })).rejects.toThrow(
-      "12 valid base32 characters",
-    );
-    await expect(
-      prepare({
-        code: "https://clickclack.example/?next=api#ABCD-EFGH-JKMN",
-      }),
-    ).rejects.toThrow("must not include a query");
-    await expect(
-      prepare({
-        code: `${exactClaimUrl}#ABCD-EFGH-JKMN`,
-        baseUrl: "https://api.clickclack.example",
-      }),
-    ).rejects.toThrow("does not match");
+    const invalid: Array<[ClickClackSetupInput, string]> = [
+      [{ code: "ftp://clickclack.example/#ABCD-EFGH-JKMN" }, "HTTP(S)"],
+      [
+        { code: "https://clickclack.example/#ABCD-EFGH-JKMN", baseUrl: "https://other.example" },
+        "does not match",
+      ],
+      [{ ...codeInput, code: "not-a-code" }, "12 valid base32 characters"],
+      [{ code: "https://clickclack.example/?next=api#ABCD-EFGH-JKMN" }, "must not include a query"],
+      [
+        { code: `${exactClaimUrl}#ABCD-EFGH-JKMN`, baseUrl: "https://api.clickclack.example" },
+        "does not match",
+      ],
+    ];
+    for (const [input, error] of invalid) {
+      await expect(prepare(input)).rejects.toThrow(error);
+    }
     expect(claimClickClackSetupCode).not.toHaveBeenCalled();
   });
 
@@ -291,19 +272,14 @@ describe("ClickClack setup adapter", () => {
   });
 
   it("clears stale competing credentials when the auth mode changes", () => {
-    const withToken = apply(
-      { ...baseInput, token: "ccb_new" },
-      channelConfig({ ...baseInput, tokenFile: "/run/secrets/old-token" }),
-    );
-    expect(withToken.channels?.clickclack).toMatchObject({ token: "ccb_new" });
-    expect(withToken.channels?.clickclack).not.toHaveProperty("tokenFile");
-
-    const withFile = apply(
-      { ...baseInput, tokenFile: "/run/secrets/new-token" },
-      channelConfig({ ...baseInput, token: "ccb_old" }),
-    );
-    expect(withFile.channels?.clickclack).toMatchObject({ tokenFile: "/run/secrets/new-token" });
-    expect(withFile.channels?.clickclack).not.toHaveProperty("token");
+    for (const [patch, previous, cleared] of [
+      [{ token: "ccb_new" }, { tokenFile: "/run/secrets/old-token" }, "tokenFile"],
+      [{ tokenFile: "/run/secrets/new-token" }, { token: "ccb_old" }, "token"],
+    ] as const) {
+      const next = apply({ ...baseInput, ...patch }, channelConfig({ ...baseInput, ...previous }));
+      expect(next.channels?.clickclack).toMatchObject(patch);
+      expect(next.channels?.clickclack).not.toHaveProperty(cleared);
+    }
 
     const withEnv = apply(
       { useEnv: true },

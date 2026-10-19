@@ -15,6 +15,8 @@ import type {
   ResolvedClickClackAccount,
 } from "./types.js";
 
+const location = { baseUrl: "http://127.0.0.1:8080", workspace: "wsp_1" };
+
 export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
   const runtime = createPluginRuntimeMock({
     agent: {
@@ -25,14 +27,8 @@ export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
     },
     channel: {
       routing: {
-        resolveAgentRoute: vi.fn(
-          (params: Parameters<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>[0]) =>
-            resolveAgentRoute(params),
-        ),
-        buildAgentSessionKey: vi.fn(
-          (params: Parameters<PluginRuntime["channel"]["routing"]["buildAgentSessionKey"]>[0]) =>
-            buildAgentSessionKey(params),
-        ),
+        resolveAgentRoute: vi.fn(resolveAgentRoute),
+        buildAgentSessionKey: vi.fn(buildAgentSessionKey),
       },
     },
     llm: {
@@ -42,17 +38,10 @@ export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
         model: "gpt-5.4-mini",
         agentId: "service-bot",
         usage: {},
-        ...(includeExecution
-          ? {
-              execution: {
-                mode: "direct-provider",
-                owner: { kind: "provider", id: "openai" },
-              },
-            }
-          : {}),
-        audit: {
-          caller: { kind: "plugin", id: "clickclack" },
-        },
+        ...(includeExecution && {
+          execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+        }),
+        audit: { caller: { kind: "plugin", id: "clickclack" } },
       }),
     },
   } as unknown as PluginRuntime);
@@ -120,10 +109,9 @@ export function createInboundDiscussionConfig(): CoreConfig {
   return {
     channels: {
       clickclack: {
+        ...location,
         enabled: true,
-        baseUrl: "http://127.0.0.1:8080",
         token: "test-token-placeholder",
-        workspace: "wsp_1",
         discussions: { enabled: true, workspace: "wsp_1" },
       },
     },
@@ -133,14 +121,14 @@ export function createInboundDiscussionConfig(): CoreConfig {
 export function createInboundAgentAccount(
   overrides: Partial<ResolvedClickClackAccount> = {},
 ): ResolvedClickClackAccount {
-  const base = {
+  const config = { ...location, allowFrom: ["*"], ...overrides.config };
+  return {
+    ...location,
     accountId: "default",
     enabled: true,
     configured: true,
-    baseUrl: "http://127.0.0.1:8080",
     apiEndpoint: "http://127.0.0.1:8080",
     token: "test-token-placeholder",
-    workspace: "wsp_1",
     replyMode: "agent",
     toolsAllow: [],
     defaultTo: "channel:general",
@@ -155,20 +143,8 @@ export function createInboundAgentAccount(
     requireMention: false,
     mentionPatterns: [],
     groups: {},
-    config: {
-      baseUrl: "http://127.0.0.1:8080",
-      workspace: "wsp_1",
-      allowFrom: ["*"],
-    },
-  } satisfies ResolvedClickClackAccount;
-
-  return {
-    ...base,
     ...overrides,
-    config: {
-      ...base.config,
-      ...overrides.config,
-    },
+    config,
   };
 }
 
