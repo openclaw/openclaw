@@ -54,7 +54,7 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   status?: OperatorApprovalStatus;
   terminalReason?: OperatorApprovalTerminalReason | null;
   runtimeEpoch?: string;
-  resolverKind?: OperatorApprovalResolver["kind"] | null;
+  resolver?: OperatorApprovalResolver | null;
   consumedAtMs?: number | null;
   consumedBy?: string | null;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;

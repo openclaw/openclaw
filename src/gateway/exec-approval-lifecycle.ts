@@ -156,7 +156,7 @@ export abstract class ExecApprovalLifecycle<TPayload> {
       decision: "deny",
       resolvedAtMs: Date.now(),
       resolvedBy: "storage-error",
-      resolverKind: "system",
+      resolver: { kind: "system", id: null },
       status: "denied",
       terminalReason: "storage-corrupt",
       retainForManagerLifetime: true,
@@ -441,7 +441,7 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     decision: ExecApprovalDecision | null;
     resolvedAtMs: number;
     resolvedBy: string | null;
-    resolverKind: OperatorApprovalResolver["kind"] | null;
+    resolver: OperatorApprovalResolver | null;
     status: OperatorApprovalStatus;
     terminalReason: OperatorApprovalTerminalReason | null;
     consumedAtMs?: number | null;
@@ -468,7 +468,7 @@ export abstract class ExecApprovalLifecycle<TPayload> {
       pending.record.resolutionSource = params.resolutionSource ?? "operator";
     }
     pending.record.resolvedBy = params.resolvedBy;
-    pending.record.resolverKind = params.resolverKind;
+    pending.record.resolver = params.resolver;
     pending.record.status = params.status;
     pending.record.terminalReason = params.terminalReason;
     pending.record.runtimeEpoch = this.runtimeEpoch;

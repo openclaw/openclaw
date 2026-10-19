@@ -22,6 +22,7 @@ import { cloneHookIsolationValue } from "../plugins/hook-isolation.js";
 import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
+  type PluginApprovalResolutionDetails,
   type PluginHookBeforeToolCallResult,
 } from "../plugins/types.js";
 import { isPlainObject } from "../utils.js";
@@ -92,18 +93,37 @@ export function mergeParamsWithApprovalOverrides(
 function notifyPluginApprovalResolution(
   approval: PluginApprovalRequest,
   resolution: PluginApprovalResolution,
+  details?: PluginApprovalResolutionDetails,
 ): void {
   const onResolution = approval.onResolution;
   if (typeof onResolution !== "function") {
     return;
   }
   try {
-    void Promise.resolve(onResolution(resolution)).catch((err: unknown) => {
+    const pending = details ? onResolution(resolution, details) : onResolution(resolution);
+    void Promise.resolve(pending).catch((err: unknown) => {
       log.warn(`plugin onResolution callback failed: ${String(err)}`);
     });
   } catch (err) {
     log.warn(`plugin onResolution callback failed: ${String(err)}`);
   }
+}
+
+/** Gateway decision responses carry ledger attribution only for recorded resolutions. */
+function readPluginApprovalResolutionDetails(
+  result: { resolvedAtMs?: unknown; resolver?: unknown } | undefined,
+): PluginApprovalResolutionDetails | undefined {
+  if (typeof result?.resolvedAtMs !== "number") {
+    return undefined;
+  }
+  const resolver = isPlainObject(result.resolver) ? result.resolver : undefined;
+  const kind = resolver?.kind;
+  return {
+    resolvedAtMs: result.resolvedAtMs,
+    ...(kind === "device" || kind === "channel" || kind === "runtime" || kind === "system"
+      ? { resolver: { kind, ...(typeof resolver?.id === "string" ? { id: resolver.id } : {}) } }
+      : {}),
+  };
 }
 
 function resolvePermittedPluginApprovalResolution(
@@ -242,9 +262,12 @@ async function requestPluginToolApprovalDecision(
   const gatewayTimeoutMs =
     addTimerTimeoutGraceMs(timeoutMs, 10_000) ?? DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000;
   const allowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions(approval);
-  const resolveDecision = (decision: unknown): HookOutcome | undefined => {
+  const resolveDecision = (
+    decision: unknown,
+    details?: PluginApprovalResolutionDetails,
+  ): HookOutcome | undefined => {
     const resolution = resolvePermittedPluginApprovalResolution(decision, allowedDecisions);
-    notifyPluginApprovalResolution(approval, resolution);
+    notifyPluginApprovalResolution(approval, resolution, details);
     if (
       resolution === PluginApprovalResolutions.ALLOW_ONCE ||
       resolution === PluginApprovalResolutions.ALLOW_ALWAYS ||
@@ -349,6 +372,8 @@ async function requestPluginToolApprovalDecision(
       decision?: unknown;
       deliveryRoute?: string;
       expiresAtMs?: number;
+      resolvedAtMs?: unknown;
+      resolver?: unknown;
     } = await withGatewayToolApprovalOwner(
       approval.pluginId,
       async () =>
@@ -385,8 +410,10 @@ async function requestPluginToolApprovalDecision(
     }
     const hasImmediateDecision = Object.hasOwn(requestResult ?? {}, "decision");
     let decision: unknown;
+    let details: PluginApprovalResolutionDetails | undefined;
     if (hasImmediateDecision) {
       decision = requestResult?.decision;
+      details = readPluginApprovalResolutionDetails(requestResult);
       if (decision === null) {
         notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
         return pluginApprovalFailure(
@@ -409,6 +436,8 @@ async function requestPluginToolApprovalDecision(
       const waitResult: {
         id?: string;
         decision?: unknown;
+        resolvedAtMs?: unknown;
+        resolver?: unknown;
       } = await callGatewayTool(
         "plugin.approval.waitDecision",
         // Buffer beyond the approval timeout so the gateway can clean up
@@ -419,9 +448,12 @@ async function requestPluginToolApprovalDecision(
       );
       // Bind the verdict to the request that parked this call. A stale or
       // misrouted reply must never release a different tool gate.
-      decision = waitResult?.id === id ? waitResult.decision : undefined;
+      if (waitResult?.id === id) {
+        decision = waitResult.decision;
+        details = readPluginApprovalResolutionDetails(waitResult);
+      }
     }
-    const outcome = resolveDecision(decision);
+    const outcome = resolveDecision(decision, details);
     if (outcome) {
       return outcome;
     }

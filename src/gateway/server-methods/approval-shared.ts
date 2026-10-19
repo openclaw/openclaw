@@ -69,6 +69,24 @@ type ResolvedApprovalEvent<TPayload> = {
 
 type ApprovalRequestDeliveryRoute = "approval-client" | "forwarder" | "turn-source" | "none";
 
+/**
+ * Ledger attribution for the requester's decision response. It matches the
+ * `approval.history` resolver shape for the same `operator.approvals` readers
+ * and is descriptive: runtime ids can be client-chosen labels.
+ */
+function projectApprovalResolutionAttribution<TPayload>(record: ExecApprovalRecord<TPayload>) {
+  if (record.resolvedAtMs === undefined) {
+    return {};
+  }
+  const resolver = record.resolver;
+  return {
+    resolvedAtMs: record.resolvedAtMs,
+    ...(resolver
+      ? { resolver: { kind: resolver.kind, ...(resolver.id ? { id: resolver.id } : {}) } }
+      : {}),
+  };
+}
+
 function isApprovalDecision(value: string): value is ExecApprovalDecision {
   return value === "allow-once" || value === "allow-always" || value === "deny";
 }
@@ -264,6 +282,7 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
       createdAtMs: terminalSnapshot.createdAtMs,
       expiresAtMs: terminalSnapshot.expiresAtMs,
       terminalReason: terminalReason ?? terminalSnapshot.terminalReason,
+      ...projectApprovalResolutionAttribution(terminalSnapshot),
     },
     undefined,
   );
@@ -317,6 +336,7 @@ export async function handlePendingApprovalRequest<
         decision: projectedDecision,
         createdAtMs: params.record.createdAtMs,
         expiresAtMs: params.record.expiresAtMs,
+        ...projectApprovalResolutionAttribution(params.record),
       },
       undefined,
     );

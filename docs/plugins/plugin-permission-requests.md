@@ -180,6 +180,35 @@ rewrite the parameters covered by the pending approval.
 `allowedDecisions` limits the buttons and commands shown to the user. The
 Gateway rejects a resolve attempt for any decision the request did not offer.
 
+### Resolver attribution
+
+When the Gateway records the resolution, `onResolution` receives a second
+argument with the attribution from the approval ledger, the same shape
+`approval.history` returns:
+
+```typescript
+onResolution(decision, details) {
+  // details: { resolvedAtMs: number; resolver?: { kind; id? } } | undefined
+  auditLog.record({ decision, at: details?.resolvedAtMs, by: details?.resolver });
+}
+```
+
+| `resolver.kind` | Meaning                                                                 |
+| --------------- | ----------------------------------------------------------------------- |
+| `device`        | A paired device resolved it; `id` is the device ID.                     |
+| `channel`       | A chat reviewer resolved it; `id` is `<channel>:<accountId>`.           |
+| `runtime`       | A Gateway client resolved it; `id` is the client's display name or ID.  |
+| `system`        | The Gateway ended it when the approval timed out.                       |
+
+`details` is omitted when the Gateway did not record a resolution: embedded
+runs, cancellations before or during the request, requests with no approval
+route, `report` and `deny` approval modes, and Gateway failures.
+
+Attribution is descriptive. A `runtime` ID can be a label the client chose, and
+a `channel` ID names the bot account rather than the person who answered.
+`onResolution` is not awaited and cannot change the outcome, so do not use it to
+refuse self-approval or to require that a person approved.
+
 ## Route approval prompts
 
 Approval prompts can resolve in local UI surfaces or in chat channels that

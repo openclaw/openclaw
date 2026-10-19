@@ -794,13 +794,27 @@ describe("createPluginApprovalHandlers", () => {
       const record = await registerApproval(manager);
 
       // Resolve before waiting
-      await manager.resolve(record.id, "allow-once");
+      await manager.resolve(record.id, "allow-once", "operator-ui");
 
       const opts = createMockOptions("plugin.approval.waitDecision", { id: record.id });
       await invokeHandler(handlers, opts);
       const result = expectResponseOk(opts.respond);
       expect(result.id).toBe(record.id);
       expect(result.decision).toBe("allow-once");
+      expect(result.resolvedAtMs).toEqual(expect.any(Number));
+      expect(result.resolver).toEqual({ kind: "runtime", id: "operator-ui" });
+    });
+
+    it("attributes an expired approval to the system", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = await registerApproval(manager);
+      await manager.expire(record.id);
+
+      const opts = createMockOptions("plugin.approval.waitDecision", { id: record.id });
+      await invokeHandler(handlers, opts);
+      const result = expectResponseOk(opts.respond);
+      expect(result.decision).toBeNull();
+      expect(result.resolver).toEqual({ kind: "system" });
     });
   });
 

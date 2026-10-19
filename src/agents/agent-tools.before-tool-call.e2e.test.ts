@@ -2432,6 +2432,26 @@ describe("before_tool_call requireApproval handling", () => {
     expect(onResolution).toHaveBeenCalledWith("deny");
   });
 
+  it("passes the recorded resolver attribution to the plugin", async () => {
+    const onResolution = vi.fn();
+    setApproval({ onResolution });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id",
+      decision: "allow-once",
+      resolvedAtMs: 1_700_000_000_000,
+      resolver: { kind: "device", id: "device-1" },
+    });
+
+    const result = await requestApproval({ params: { command: "echo ok" } });
+
+    expect(result).toHaveProperty("blocked", false);
+    expect(onResolution).toHaveBeenCalledWith("allow-once", {
+      resolvedAtMs: 1_700_000_000_000,
+      resolver: { kind: "device", id: "device-1" },
+    });
+  });
+
   it.each([
     { label: "an unknown decision", decision: "approved" },
     { label: "an excluded allow decision", decision: "allow-always", restricted: true },
