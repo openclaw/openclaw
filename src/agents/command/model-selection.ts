@@ -5,6 +5,7 @@ import {
   normalizeThinkLevel,
   type ThinkLevel,
 } from "../../auto-reply/thinking.js";
+import { formatThinkingLevelClampNotice } from "../../auto-reply/thinking.shared.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { hasSessionAutoModelSelection } from "../../config/sessions/model-override-provenance.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
@@ -72,7 +73,35 @@ import {
   parseAgentCommandModelRef,
 } from "./model-ref.js";
 import { prepareCommandModelCatalog } from "./model-selection-catalog.js";
+import type { AgentAttemptResult } from "./runtime-loaders.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
+
+export function withCommandThinkingClamp(
+  result: AgentAttemptResult,
+  params: {
+    requestedLevel?: ThinkLevel;
+    candidateThinkLevel?: ThinkLevel;
+    provider: string;
+    model: string;
+  },
+): AgentAttemptResult {
+  const thinking = result.meta.requestShaping?.thinking ?? params.candidateThinkLevel;
+  const thinkingClamp = formatThinkingLevelClampNotice({
+    requested: params.requestedLevel,
+    effective: thinking,
+    provider: result.meta.agentMeta?.provider ?? params.provider,
+    model: result.meta.agentMeta?.model ?? params.model,
+  });
+  return thinkingClamp
+    ? {
+        ...result,
+        meta: {
+          ...result.meta,
+          requestShaping: { ...result.meta.requestShaping, thinking, thinkingClamp },
+        },
+      }
+    : result;
+}
 
 export async function resolveEmbeddedModelSelection(params: {
   cfg: OpenClawConfig;
@@ -451,6 +480,7 @@ export async function resolveEmbeddedModelSelection(params: {
       });
     const preserveUnavailableSelection = shouldPreserveUnavailableSessionAuthProfileOverride({
       store,
+      recordedProvider: { provider: profile?.provider },
       cfg: authConfig,
       agentDir,
       entry,

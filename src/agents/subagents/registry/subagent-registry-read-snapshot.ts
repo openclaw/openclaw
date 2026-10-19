@@ -274,13 +274,7 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
     },
     { context, current: true },
   );
-  if (
-    reply &&
-    (!reply.ok ||
-      reply.type !== "subagents.runs" ||
-      reply.projection === "maintenance" ||
-      !reply.descendants)
-  ) {
+  if (reply && (reply.projection === "maintenance" || !reply.descendants)) {
     throw new Error("Subagent descendant read omitted its selection");
   }
   const persisted = reply?.runs ?? new Map<string, SubagentRunRecord>();
@@ -371,10 +365,7 @@ export async function prepareSubagentMaintenanceReadSnapshot(
         { type: "subagents.runs", scope: { kind: "maintenance" } },
         { context, current: true, live: options?.live },
       );
-      if (
-        reply &&
-        (!reply.ok || reply.type !== "subagents.runs" || reply.projection !== "maintenance")
-      ) {
+      if (reply && reply.projection !== "maintenance") {
         throw new Error("Unexpected subagent maintenance read result");
       }
       return reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();

@@ -155,7 +155,7 @@ export function patchChatSessionSettings(
       pendingBySession.delete(patchKey);
     }
   });
-  return operation;
+  return operation.then((result) => (result && "queued" in result ? null : result));
 }
 
 export function selectedGlobalScope(

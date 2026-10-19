@@ -13,6 +13,7 @@ import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { feishuGroupNameCache } from "./bot-group-name-state.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage as handleFeishuMessageImpl } from "./bot.js";
+import { withFeishuRuntimeDefaults } from "./bot.test-support.js";
 import { feishuDedupeState } from "./dedup-state.js";
 import { setFeishuRuntime } from "./runtime.js";
 
@@ -140,7 +141,7 @@ export function setupFeishuBroadcastTestHarness() {
   } as unknown as PluginRuntime;
 
   async function handleFeishuMessage(params: Parameters<typeof handleFeishuMessageImpl>[0]) {
-    mockCurrentConfig.mockReturnValue(params.cfg);
+    mockCurrentConfig.mockReturnValue(withFeishuRuntimeDefaults(params.cfg));
     await handleFeishuMessageImpl(params);
   }
 

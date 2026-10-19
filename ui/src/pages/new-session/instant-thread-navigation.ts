@@ -16,6 +16,7 @@ export function beginInstantThreadNavigation(
   const signal = lifecycleAbortSignal
     ? AbortSignal.any([controller.signal, lifecycleAbortSignal])
     : controller.signal;
+  // Each newer location must abort the owned navigation before asynchronous work commits.
   const stop = router.subscribe((state) => {
     if (state.location !== ownedLocation) {
       controller.abort();

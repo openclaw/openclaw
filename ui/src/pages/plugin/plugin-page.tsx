@@ -5,6 +5,7 @@ import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerLoginEnglish } from "../../i18n/locales/en-login.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -22,8 +23,10 @@ registerLoginEnglish();
 
 function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
   const context = useApplication();
-  const lifecycle = new PluginPageOwner(props, context, host);
-  const projection = projectOwner(lifecycle, (source) => source);
+  const { owner: lifecycle, view: projection } = projectCallbackOwner(
+    (notify) => new PluginPageOwner(props, context, host, notify),
+    (source) => source,
+  );
   const plugins = context.plugins && projectOwner(context.plugins, (source) => source).read;
   host.style.display = "contents";
   // Gateway receipts retire bundled views and frame-auth work before a replacement connection uses them.

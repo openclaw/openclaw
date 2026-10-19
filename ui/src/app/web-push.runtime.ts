@@ -198,6 +198,7 @@ export function startWebPushReconciliation(params: {
       ).catch(() => undefined);
     }
   };
+  // Connection receipts invalidate prior registration work before reconciling the new client.
   const stopGateway = params.gateway.subscribe(handleGateway);
   const stopEvents = params.gateway.subscribeEvents((event) => {
     const payload = event.payload;
@@ -297,6 +298,7 @@ export async function subscribeToWebPush(
   if (existingSubscription) {
     return await registerPushSubscription(client, existingSubscription, vapidPublicKey);
   }
+  // This browser API creates a push subscription; it does not observe rendering state.
   const pushSubscription = await pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: vapidPublicKey.buffer as ArrayBuffer,

@@ -1,6 +1,7 @@
 import type { BoardGetParams, ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
+import { projectGateway } from "../../reactive/application.ts";
 import { useOptionalApplication } from "../../reactive/context.ts";
 import { projectProgressCard } from "../../reactive/domain-keyed.ts";
 import { t } from "../../reactive/i18n.ts";
@@ -37,14 +38,10 @@ function SessionProgressWidgetContent(
   host: SolidBridgeElement<SessionProgressWidgetProps>,
 ) {
   const context = useOptionalApplication();
-  const gateway = projectSource(context?.gateway, {
-    read: (owner) => owner?.snapshot,
-    subscribe: (owner, notify) => owner?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
-  });
+  const gateway = context ? projectGateway(context.gateway) : undefined;
   const target = createMemo(() => resolveSessionTarget(props.widget, props.session));
   const identity = createMemo(() =>
-    resolveSessionProgressCardTarget(gateway.read() ?? {}, target()),
+    resolveSessionProgressCardTarget(gateway?.read().snapshot ?? {}, target()),
   );
   const [mounted, setMounted] = createSignal(false);
   onSettled(() => {
@@ -52,7 +49,7 @@ function SessionProgressWidgetContent(
   });
   const progressScope = createMemo(
     () => {
-      const snapshot = gateway.read();
+      const snapshot = gateway?.read().snapshot;
       const staticTarget = target();
       return {
         store:

@@ -13,7 +13,7 @@ import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   admitStoredChatComposerQueueItem,
-  removeStoredChatComposerQueueItem,
+  updateStoredChatComposerQueueItems,
 } from "../pages/chat/composer-persistence.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -899,7 +899,9 @@ describe("sidebar attention source publication", () => {
     expect(request.mock.calls).toHaveLength(calls);
     harness.update({ phase: "connected", hello });
     expect(store.entries.some((entry) => entry.type === "outbox")).toBe(false);
-    expect(removeStoredChatComposerQueueItem(host, host.sessionKey, row.id, row)).toBe(true);
+    expect(
+      updateStoredChatComposerQueueItems(host, host.sessionKey, [{ expected: row, next: null }]),
+    ).toBe(true);
     expect(store.entries.map((entry) => entry.type)).toEqual(["attention"]);
   });
 });

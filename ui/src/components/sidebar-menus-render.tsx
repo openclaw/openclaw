@@ -212,6 +212,7 @@ export function renderSidebarIdentityMenuForMenus(
         profileViewer: profileViewer(),
         canRetryConnection: canRetryGatewayStatus(host.connectionStatus),
         themeMode: host.themeMode,
+        onThemeChange: (mode, element) => host.sessionDataContext?.theme.setMode(mode, element),
         triggerWidth: position.width,
         ...menus.positionedMenuHandlers("identity"),
         onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),

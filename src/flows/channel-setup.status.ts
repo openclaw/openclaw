@@ -2,7 +2,6 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { listChatChannels } from "../channels/chat-meta.js";
-import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
   ChannelSetupPlugin,
   ChannelSetupStatus,
@@ -16,7 +15,6 @@ import {
   resolveChannelSetupEntries,
   shouldShowChannelInSetup,
 } from "../commands/channel-setup/discovery.js";
-import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -262,10 +260,10 @@ export async function collectChannelStatus(params: {
   workspaceDir?: string;
   options?: SetupChannelsOptions;
   accountOverrides: Partial<Record<ChannelChoice, string>>;
-  installedPlugins?: ChannelSetupPlugin[];
-  resolveAdapter?: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
+  installedPlugins: ChannelSetupPlugin[];
+  resolveAdapter: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
 }): Promise<ChannelStatusSummary> {
-  const installedPlugins = params.installedPlugins ?? listChannelSetupPlugins();
+  const { installedPlugins, resolveAdapter } = params;
   const workspaceDir = params.workspaceDir ?? resolveChannelSetupWorkspaceDir(params.cfg);
   const { installedCatalogEntries, installableCatalogEntries } = resolveChannelSetupEntries({
     cfg: params.cfg,
@@ -273,12 +271,6 @@ export async function collectChannelStatus(params: {
     workspaceDir,
   });
   const bundledSources = resolveBundledPluginSources({ workspaceDir });
-  const resolveAdapter =
-    params.resolveAdapter ??
-    ((channel: ChannelChoice) =>
-      resolveChannelSetupWizardAdapterForPlugin(
-        installedPlugins.find((plugin) => plugin.id === channel),
-      ));
   const statusEntries = (
     await Promise.all(
       installedPlugins

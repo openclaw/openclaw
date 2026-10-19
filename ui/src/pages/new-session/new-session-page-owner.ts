@@ -131,6 +131,7 @@ export class NewSessionPageOwner {
   };
 
   constructor(readonly host: PageHost) {
+    // The page owner publishes its child loader's status through the shared page projection.
     this.attachmentPanelLoader.subscribe(this.changed);
     this.draft = new NewSessionDraft(
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
@@ -194,6 +195,7 @@ export class NewSessionPageOwner {
       onError: (message) => this.submission.setError(message),
       onSubmit: () => void this.submission.submit(),
     });
+    // Dictation receipts reconcile draft availability before the page projection reads it.
     this.dictation.subscribe(this.changed);
   }
 
@@ -482,6 +484,3 @@ export class NewSessionPageOwner {
     };
   }
 }
-
-// Rollback can reattach the same host after its Solid root has been disposed.
-// Keep the synchronous draft owner with that host until the handoff releases it.

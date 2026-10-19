@@ -135,6 +135,7 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     snapshot = { themes: [], error: null };
     onChange();
   };
+  // Retire profile-scoped catalog data immediately when connection ownership changes.
   const stopGateway = gateway.subscribe(() => {
     const connected = gateway.snapshot.phase === "connected";
     const scopeChanged = gateway.connection.gatewayUrl !== ownerScope;
