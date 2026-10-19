@@ -27,21 +27,6 @@ type ChatPanePlacementComposerState =
   | { kind: "dispatch-required" }
   | { kind: "failed"; recoveryAction?: "restart" | "stop-first" };
 
-export type PlacementComposerPresentation = {
-  state: ChatPanePlacementComposerState;
-  blocksSend: boolean;
-  busyMessage: string | null;
-  startup: ApplicationPlacementStartupStatus | null;
-  diskSpace: Extract<NonNullable<GatewaySessionRow["placement"]>, { state: "active" }>["diskSpace"];
-  workerRuntimeInstall: Extract<
-    NonNullable<GatewaySessionRow["placement"]>,
-    { state: "active" | "provisioning" }
-  >["workerRuntimeInstall"];
-  runError: { summary: string } | null;
-  failedUnavailableMessage: string;
-  disabledBanner: ChatComposerDisabledBanner | undefined;
-};
-
 function resolvePlacementComposerState(params: {
   reclaimingKey: string | null;
   restartingKey: string | null;
@@ -113,7 +98,7 @@ export function resolvePlacementComposer(params: {
   workspaceResultReconciling: boolean;
   onRecover: () => void;
   onReclaim: () => void;
-}): PlacementComposerPresentation {
+}) {
   const controls = resolveChatPanePlacement(params);
   // Sync status does not reopen admission closed by Stop, Restart, or a local/durable Move.
   const canSendDuringWorkspaceSync =
@@ -203,7 +188,7 @@ export function resolvePlacementComposer(params: {
       actionStyle: "primary",
       disabledReason: recover ? controls.recoveryDisabledReason : controls.reclaimDisabledReason,
       onAction: recover ? params.onRecover : params.onReclaim,
-    },
+    } satisfies ChatComposerDisabledBanner,
   };
 }
 
@@ -275,13 +260,7 @@ export function resolveChatPanePlacement(params: {
   reclaimingKey: string | null;
   restartingKey?: string | null;
   row: GatewaySessionRow | undefined;
-}): {
-  moving: boolean;
-  restarting: boolean;
-  moveDisabledReason: string | undefined;
-  reclaimDisabledReason: string | undefined;
-  recoveryDisabledReason: string | undefined;
-} {
+}) {
   const moving =
     params.movingKey === params.row?.key ||
     (params.row?.placementMove !== undefined && params.row.placementMove.error === undefined);

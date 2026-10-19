@@ -664,9 +664,7 @@ async function refreshChat(
   void Promise.allSettled([sessionsRefresh, startupMetadataRefresh]);
   if (opts?.awaitHistory === true) {
     await historyRefresh;
-    return;
   }
-  await Promise.resolve();
 }
 
 export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {

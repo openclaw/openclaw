@@ -59,7 +59,7 @@ type IdentityChange =
   | { kind: "git-coauthor"; enabled: boolean };
 
 class ProfileState {
-  private readonly targetListeners = new Set<() => void>();
+  private publishTarget?: () => void;
   readonly modelAccountsTarget: ModelAccountsTargetSource = {
     read: () => ({
       gateway: this.context.gateway.snapshot,
@@ -67,8 +67,10 @@ class ProfileState {
       profileId: this.ownProfile?.id ?? null,
     }),
     subscribe: (listener) => {
-      this.targetListeners.add(listener);
-      return () => this.targetListeners.delete(listener);
+      this.publishTarget = listener;
+      return () => {
+        this.publishTarget = undefined;
+      };
     },
   };
   selfUser: AuthenticatedUser | null = null;
@@ -95,12 +97,10 @@ class ProfileState {
   ) {}
   publish() {
     this.invalidate();
-    for (const listener of this.targetListeners) {
-      listener();
-    }
+    this.publishTarget?.();
   }
   dispose() {
-    this.targetListeners.clear();
+    this.publishTarget = undefined;
     this.identityRequestId += 1;
     this.client = null;
     this.connected = false;

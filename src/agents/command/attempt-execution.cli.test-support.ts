@@ -311,7 +311,6 @@ export function registerCommandCliAdmissionTests({
       const onRuntimeTurnStarted = vi.fn();
       const callbacks = createAgentAttemptLifecycleCallbacks(
         {
-          currentTurnUserMessagePersisted: false,
           lifecycleFinishing: false,
           lifecycleEnded: false,
         },

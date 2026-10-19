@@ -345,7 +345,7 @@ function progressReceiptLabel(card: ToolCard, outcome: ToolCardOutcome) {
             : t("sessionProgressCard.receipt.cleared");
 }
 
-function ToolApprovalReviews(props: { card: ToolCard }) {
+export function ToolApprovalReviews(props: { card: ToolCard }) {
   const reviews = createMemo(() => readToolApprovalReviews(props.card.details));
   return (
     <Show when={reviews().length > 0}>
@@ -588,17 +588,6 @@ export function ChatToolIcon(
     <openclaw-chat-tool-icon {...attributes}>
       <ToolIcon name={props.name} tool={props.tool} />
     </openclaw-chat-tool-icon>
-  );
-}
-
-export function ChatToolApprovalReviews(
-  props: { card: ToolCard } & JSX.HTMLAttributes<HTMLElement>,
-) {
-  const attributes = omit(props, "card", "children");
-  return (
-    <openclaw-chat-tool-reviews {...attributes}>
-      <ToolApprovalReviews card={props.card} />
-    </openclaw-chat-tool-reviews>
   );
 }
 

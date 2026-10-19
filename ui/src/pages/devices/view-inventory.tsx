@@ -297,14 +297,13 @@ const COMMAND_LINE_LIMIT = 16;
 
 function CommandLine(props: { values: string[] }) {
   const visible = createMemo(() => props.values.slice(0, COMMAND_LINE_LIMIT));
-  const overflow = createMemo(() => props.values.length - visible().length);
-  const suffix = createMemo(() => (overflow() > 0 ? ` +${overflow()}` : ""));
+  const overflow = () => props.values.length - visible().length;
   return (
     <Show when={props.values.length > 0}>
       <dt class="settings-row__desc">{t("devices.inventory.commands")}</dt>
       <dd class="settings-row__value settings-row__value--mono">
         {formatList(visible())}
-        {suffix()}
+        {overflow() > 0 ? ` +${overflow()}` : ""}
       </dd>
     </Show>
   );

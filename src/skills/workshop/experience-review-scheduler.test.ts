@@ -39,7 +39,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 type TurnOptions = Partial<SkillExperienceReviewParams> & {
-  compacted?: boolean;
   sessionKey?: string;
 };
 function turn(
@@ -56,7 +55,6 @@ function turn(
       modelId: "gpt-test",
       modelIterations,
       skillWorkshopAvailable: true,
-      compacted: overrides.compacted,
       foregroundPromptContext: {
         agentId: "main",
         workspaceDir: "/workspace",
@@ -149,7 +147,7 @@ it.each([
 it("accumulates model iterations across turns and reviews once the session reaches ten", async () => {
   turn(4);
   countedTurn(4, 0);
-  countedTurn(3, 1, { compacted: true });
+  countedTurn(3, 1);
   await fireTimers();
   expect(runReview).toHaveBeenCalledTimes(1);
   expect(runReview.mock.calls[0]?.[0]).toMatchObject({ source, ctx: { runId: "run-3" } });

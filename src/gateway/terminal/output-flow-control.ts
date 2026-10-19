@@ -28,9 +28,7 @@ export class TerminalOutputController {
   private desiredPaused = false;
   private reassertTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly options: TerminalOutputControllerOptions) {
-    this.options = { ...options };
-  }
+  constructor(private readonly options: TerminalOutputControllerOptions) {}
 
   /** Cumulative UTF-16 end offset across streamed and detached output. */
   get endOffset(): number {

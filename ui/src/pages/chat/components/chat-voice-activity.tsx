@@ -118,14 +118,6 @@ export function ChatVoiceStatus(props: ChatVoiceStatusProps) {
   );
 }
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-microphone-activity": HTMLAttributes<HTMLElement>;
-    }
-  }
-}
-
 export function ComposerDictationStatus(props: {
   readDictation: () => ComposerDictationOwner | undefined;
 }) {

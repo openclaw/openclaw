@@ -87,6 +87,15 @@ the original manager and service identity. This does not start the service or
 rewrite its definition. A later refusal still uses the recorded stop to restore
 the previous Gateway; a service that was already stopped remains stopped.
 
+If service inspection times out, repair names the stalled probe or inspection
+phase. An unavailable manager does not mean the Gateway was started manually.
+Repair reports any verified Gateway owner and known service definition, leaves
+that definition unchanged, and keeps Doctor and plugin maintenance pending when
+the Gateway still owns the state. Stop the managed Gateway with
+`openclaw gateway stop` (or `systemctl --user stop openclaw-gateway` for the default
+systemd user service), then run `openclaw update repair` again. Keep the same
+profile and state-directory overrides for both commands.
+
 On macOS, a failed LaunchAgent state probe is recorded as a failed recovery
 attempt with its reason. OpenClaw leaves the service definition unchanged and
 prints `LaunchAgent state could not be inspected`. Run

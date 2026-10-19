@@ -70,7 +70,7 @@ export async function resolveReactionSyntheticEvent(
 
   const { resolveFeishuAccount } = await import("./accounts.js");
   const account = resolveFeishuAccount({ cfg, accountId });
-  const reactionNotifications = account.config.reactionNotifications ?? "own";
+  const reactionNotifications = account.config.reactionNotifications;
   if (reactionNotifications === "off") {
     return null;
   }
@@ -413,7 +413,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     });
   }
 
-  const connectionMode = account.config.connectionMode ?? "websocket";
+  const connectionMode = account.config.connectionMode;
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {
     throw new Error(`Feishu account "${accountId}" webhook mode requires verificationToken`);
   }

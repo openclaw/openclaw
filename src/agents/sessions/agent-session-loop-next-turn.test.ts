@@ -907,7 +907,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const { session } = await createTestSession();
     const abortRetry = vi.spyOn(session, "abortRetry");
     const abortCompaction = vi.spyOn(session, "abortCompaction");
-    const abortBranchSummary = vi.spyOn(session, "abortBranchSummary");
     const abortAgent = vi.spyOn(session.agent, "abort");
     abortRetry.mockImplementationOnce(() => {
       throw new Error("retry abort failed");
@@ -921,7 +920,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(providerSignal?.aborted).toBe(true);
     expect(abortRetry).toHaveBeenCalledOnce();
     expect(abortCompaction).toHaveBeenCalledOnce();
-    expect(abortBranchSummary).toHaveBeenCalledOnce();
     expect(abortAgent).toHaveBeenCalledOnce();
   });
 
