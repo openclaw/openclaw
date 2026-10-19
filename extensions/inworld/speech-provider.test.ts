@@ -6,9 +6,8 @@ const { inworldTTSMock, listInworldVoicesMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("./tts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./tts.js")>();
   return {
-    ...actual,
+    ...(await importOriginal<typeof import("./tts.js")>()),
     inworldTTS: inworldTTSMock,
     listInworldVoices: listInworldVoicesMock,
   };
@@ -32,6 +31,16 @@ const policy = {
   allowNormalization: true,
   allowSeed: true,
 };
+const overrides = { voice: "Ashley", model: "inworld-tts-1.5-mini", temperature: 0.6 };
+const synthesisParams = {
+  text: "Hello",
+  apiKey: "key",
+  baseUrl: "https://api.inworld.ai",
+  voiceId: "Ashley",
+  modelId: "inworld-tts-1.5-mini",
+  temperature: 0.6,
+  timeoutMs: 30_000,
+};
 
 afterAll(() => {
   vi.doUnmock("./tts.js");
@@ -40,6 +49,27 @@ afterAll(() => {
 
 describe("buildInworldSpeechProvider", () => {
   const provider = buildInworldSpeechProvider();
+  const directive = (key: string, value: string) =>
+    provider.parseDirectiveToken?.({ key, value, policy });
+  async function expectSynthesis(telephony: boolean) {
+    const audioBuffer = Buffer.from(telephony ? "pcm" : "opus");
+    inworldTTSMock.mockResolvedValueOnce(audioBuffer);
+    const req = { ...request, providerOverrides: overrides };
+    const result = telephony
+      ? await provider.synthesizeTelephony?.(req)
+      : await provider.synthesize({ ...req, target: "voice-note" });
+    expect(inworldTTSMock).toHaveBeenCalledWith({
+      ...synthesisParams,
+      audioEncoding: telephony ? "PCM" : "OGG_OPUS",
+      ...(telephony ? { sampleRateHertz: 22_050 } : {}),
+    });
+    expect(result).toEqual({
+      audioBuffer,
+      ...(telephony
+        ? { outputFormat: "pcm", sampleRate: 22_050 }
+        : { outputFormat: "ogg_opus", fileExtension: ".ogg", voiceCompatible: true }),
+    });
+  }
 
   afterEach(() => {
     inworldTTSMock.mockReset();
@@ -53,10 +83,7 @@ describe("buildInworldSpeechProvider", () => {
     const blankRequest = { ...request, providerConfig: {}, timeoutMs: 5_000 };
 
     expect(
-      await provider.isConfiguredAsync?.({
-        providerConfig: { apiKey: "   " },
-        timeoutMs: 30_000,
-      }),
+      await provider.isConfiguredAsync?.({ providerConfig: { apiKey: "   " }, timeoutMs: 30_000 }),
     ).toBe(false);
 
     await expect(provider.listVoices?.({ ...blankRequest, apiKey: "   " })).rejects.toThrow(
@@ -74,10 +101,7 @@ describe("buildInworldSpeechProvider", () => {
   });
 
   it("forwards the core-resolved voice-list timeout", async () => {
-    await provider.listVoices?.({
-      providerConfig: { apiKey: "test-key" },
-      timeoutMs: 30_000,
-    });
+    await provider.listVoices?.({ providerConfig: { apiKey: "test-key" }, timeoutMs: 30_000 });
 
     expect(listInworldVoicesMock).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: "test-key", timeoutMs: 30_000 }),
@@ -85,28 +109,23 @@ describe("buildInworldSpeechProvider", () => {
   });
 
   it("normalizes provider-owned speech config from raw provider config", () => {
-    const resolved = provider.resolveConfig?.({
-      cfg: {},
-      timeoutMs: 30_000,
-      rawConfig: {
-        providers: {
-          inworld: {
-            apiKey: "basic-key",
-            baseUrl: "https://custom.inworld.example.com/",
-            voiceId: "Ashley",
-            modelId: "inworld-tts-1.5-mini",
-            temperature: 0.8,
-          },
-        },
-      },
-    });
-
-    expect(resolved).toEqual({
+    const config = {
       apiKey: "basic-key",
-      baseUrl: "https://custom.inworld.example.com",
       voiceId: "Ashley",
       modelId: "inworld-tts-1.5-mini",
       temperature: 0.8,
+    };
+    expect(
+      provider.resolveConfig?.({
+        cfg: {},
+        timeoutMs: 30_000,
+        rawConfig: {
+          providers: { inworld: { ...config, baseUrl: "https://custom.inworld.example.com/" } },
+        },
+      }),
+    ).toEqual({
+      ...config,
+      baseUrl: "https://custom.inworld.example.com",
     });
   });
 
@@ -132,36 +151,24 @@ describe("buildInworldSpeechProvider", () => {
   });
 
   it("parses Inworld TTS directive overrides", () => {
-    expect(provider.parseDirectiveToken?.({ key: "voice", value: "Ashley", policy })).toEqual({
+    expect(directive("voice", "Ashley")).toEqual({
       handled: true,
       overrides: { voiceId: "Ashley" },
     });
-    expect(
-      provider.parseDirectiveToken?.({
-        key: "model",
-        value: "inworld-tts-1.5-mini",
-        policy,
-      }),
-    ).toEqual({
+    expect(directive("model", "inworld-tts-1.5-mini")).toEqual({
       handled: true,
       overrides: { modelId: "inworld-tts-1.5-mini" },
     });
-    expect(provider.parseDirectiveToken?.({ key: "temperature", value: "0.7", policy })).toEqual({
+    expect(directive("temperature", "0.7")).toEqual({
       handled: true,
       overrides: { temperature: 0.7 },
     });
   });
 
-  it.each(["3"])("warns on invalid directive temperature %s", (value) => {
-    expect(
-      provider.parseDirectiveToken?.({
-        key: "temperature",
-        value,
-        policy,
-      }),
-    ).toEqual({
+  it("warns on invalid directive temperature", () => {
+    expect(directive("temperature", "3")).toEqual({
       handled: true,
-      warnings: [`invalid Inworld temperature "${value}"`],
+      warnings: ['invalid Inworld temperature "3"'],
     });
   });
 
@@ -181,55 +188,10 @@ describe("buildInworldSpeechProvider", () => {
   });
 
   it("synthesizes voice-note targets with native OGG_OPUS output", async () => {
-    inworldTTSMock.mockResolvedValueOnce(Buffer.from("opus"));
-
-    const result = await provider.synthesize({
-      ...request,
-      providerOverrides: { voice: "Ashley", model: "inworld-tts-1.5-mini", temperature: 0.6 },
-      target: "voice-note",
-    });
-
-    expect(inworldTTSMock).toHaveBeenCalledWith({
-      text: "Hello",
-      apiKey: "key",
-      baseUrl: "https://api.inworld.ai",
-      voiceId: "Ashley",
-      modelId: "inworld-tts-1.5-mini",
-      audioEncoding: "OGG_OPUS",
-      temperature: 0.6,
-      timeoutMs: 30_000,
-    });
-    expect(result).toEqual({
-      audioBuffer: Buffer.from("opus"),
-      outputFormat: "ogg_opus",
-      fileExtension: ".ogg",
-      voiceCompatible: true,
-    });
+    await expectSynthesis(false);
   });
 
   it("synthesizes telephony PCM at 22050 Hz", async () => {
-    inworldTTSMock.mockResolvedValueOnce(Buffer.from("pcm"));
-
-    const result = await provider.synthesizeTelephony?.({
-      ...request,
-      providerOverrides: { voice: "Ashley", model: "inworld-tts-1.5-mini", temperature: 0.6 },
-    });
-
-    expect(inworldTTSMock).toHaveBeenCalledWith({
-      text: "Hello",
-      apiKey: "key",
-      baseUrl: "https://api.inworld.ai",
-      voiceId: "Ashley",
-      modelId: "inworld-tts-1.5-mini",
-      audioEncoding: "PCM",
-      sampleRateHertz: 22_050,
-      temperature: 0.6,
-      timeoutMs: 30_000,
-    });
-    expect(result).toEqual({
-      audioBuffer: Buffer.from("pcm"),
-      outputFormat: "pcm",
-      sampleRate: 22_050,
-    });
+    await expectSynthesis(true);
   });
 });
