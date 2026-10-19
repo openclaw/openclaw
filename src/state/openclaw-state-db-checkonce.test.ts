@@ -209,6 +209,17 @@ it("readmits startup checkpoint storage after a tracked header change", () => {
   );
   const read = () => withCheckpoint(callback, options);
   expect(read()).toBe(0);
+  revokeSqliteDatabaseAdmissionsForPath(options.path);
+  const observation = observeSqliteReadSql(StatementSync.prototype);
+  try {
+    expect(read()).toBe(0);
+    // Keep the pre-transaction probe, admission read, and final catalog capture.
+    expect(observation.queries.filter((sql) => /^PRAGMA user_version\b/iu.test(sql))).toHaveLength(
+      3,
+    );
+  } finally {
+    observation.restore();
+  }
   using peer = openNodeSqliteDatabase(options.path);
   expectTrackedReadmission(peer, read, callback, 0);
 });

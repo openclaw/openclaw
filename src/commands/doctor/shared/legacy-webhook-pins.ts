@@ -120,13 +120,17 @@ function applyHistoricalWebhookPins(
       withExistingOpenClawStateDatabaseReadOnly(
         ({ db }) => {
           const query = getNodeSqliteKysely<DB>(db);
-          return [
-            query.selectFrom("gateway_boot_lifecycle").select("boot_id as evidence").limit(1),
-            query.selectFrom("channel_ingress_events").select("event_id as evidence").limit(1),
-            // The update ledger exists only after its first write.
-            tableExists(db, "update_runs") &&
-              query.selectFrom("update_runs").select("run_id as evidence").limit(1),
-          ].some((statement) => statement && executeSqliteQueryTakeFirstSync(db, statement));
+          let evidence = query
+            .selectFrom("gateway_boot_lifecycle")
+            .select("boot_id as evidence")
+            .unionAll(query.selectFrom("channel_ingress_events").select("event_id as evidence"));
+          // The update ledger exists only after its first write.
+          if (tableExists(db, "update_runs")) {
+            evidence = evidence.unionAll(
+              query.selectFrom("update_runs").select("run_id as evidence"),
+            );
+          }
+          return executeSqliteQueryTakeFirstSync(db, evidence.limit(1));
         },
         { env },
       ),

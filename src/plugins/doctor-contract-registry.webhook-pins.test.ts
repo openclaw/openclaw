@@ -3,12 +3,14 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -111,12 +113,22 @@ function expectUnchanged(
   expect(result).toEqual({ config, changes: [] });
 }
 
-function expectReads<T>(table: string, count: number, run: () => T): T {
+const installationEvidenceTables = [
+  "gateway_boot_lifecycle",
+  "channel_ingress_events",
+  "update_runs",
+];
+
+function expectReads<T>(table: string | string[], count: number, run: () => T): T {
   const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
   try {
     const result = run();
     expect(
-      sql.queries.filter((query) => query.toLowerCase().includes(`from "${table}"`)),
+      sql.queries.filter((query) =>
+        (Array.isArray(table) ? table : [table]).some((name) =>
+          query.toLowerCase().includes(`from "${name}"`),
+        ),
+      ),
     ).toHaveLength(count);
     return result;
   } finally {
@@ -253,7 +265,7 @@ it("uses no-op eligibility without publishing unreported hook edits", async () =
   expect(result.config.channels?.["nextcloud-talk"]).toEqual(workChannel(endpoint));
 });
 
-it.each(["previous boot", "published updater"])(
+it.each(["previous boot", "channel ingress", "update ledger", "published updater"])(
   "backs up and pins a %s install once, then preserves a removed pin",
   async (evidence) => {
     const { configPath, env, migrate } = await fixture();
@@ -261,6 +273,14 @@ it.each(["previous boot", "published updater"])(
     await fs.writeFile(configPath, original);
     if (evidence === "previous boot") {
       expect((await beginGatewayBootLifecycle(env, 1_800_000_000_000)).id).toBeDefined();
+    } else if (evidence === "channel ingress") {
+      await createChannelIngressQueue({
+        channelId: "nextcloud-talk",
+        stateDir: env.OPENCLAW_STATE_DIR,
+      }).enqueue("old-event", { text: "previous installation" });
+    } else if (evidence === "update ledger") {
+      openOpenClawStateDatabase({ env });
+      createUpdateRun({ trigger: "cli" }, { env });
     }
     const io = createConfigIO({
       env,
@@ -271,11 +291,14 @@ it.each(["previous boot", "published updater"])(
     });
     const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
     expect(snapshot.valid).toBe(true);
-    const result = expectReads("gateway_boot_lifecycle", evidence === "previous boot" ? 1 : 0, () =>
-      migrate(snapshot.sourceConfig, {
-        ...env,
-        ...(evidence === "published updater" ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {}),
-      }),
+    const result = expectReads(
+      installationEvidenceTables,
+      evidence === "published updater" ? 0 : 1,
+      () =>
+        migrate(snapshot.sourceConfig, {
+          ...env,
+          ...(evidence === "published updater" ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {}),
+        }),
     );
     expect(result.warnings).toBeUndefined();
     await replaceConfigFile({
@@ -313,7 +336,9 @@ it.each(["no database", "empty database"])(
       await closeStateDatabaseForTest();
     }
     const config = channelConfig();
-    const fresh = migrate(config);
+    const fresh = expectReads(installationEvidenceTables, state === "empty database" ? 1 : 0, () =>
+      migrate(config),
+    );
     expect(fresh.config.channels).toEqual(config.channels);
     expect(fresh.config.meta?.migrations?.webhookListeners).toBe(true);
     expect((await beginGatewayBootLifecycle(env, 1_800_000_000_000)).id).toBeDefined();

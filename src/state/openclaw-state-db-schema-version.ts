@@ -42,6 +42,7 @@ export function readStateSchemaContentVersion(
   db: EngineConnection,
   published?: number,
   readRow: StateSchemaContentVersionRowReader = readStateSchemaContentVersionRow,
+  physicalUserVersion?: number,
 ): number {
   if (isPostgresSqlConnection(db)) {
     const facts = getStateSchemaVersionAdmission(db);
@@ -56,8 +57,11 @@ export function readStateSchemaContentVersion(
   if (admitted) {
     return Math.max(published ?? admitted.userVersion, admitted.contentVersion);
   }
-  const schema = getAdmittedSqliteSchemaFacts(db);
-  const version = schema?.userVersion ?? readSqliteUserVersion(db);
+  // A caller's publication floor is not the physical header.
+  const version =
+    physicalUserVersion ??
+    getAdmittedSqliteSchemaFacts(db)?.userVersion ??
+    readSqliteUserVersion(db);
   const contentVersion = parseContentVersion(
     tableExists(db, "config_machine_state") ? readRow(db)?.value_json : undefined,
   );
@@ -150,7 +154,7 @@ export function assertSupportedStateSchemaVersion(
       prepared?.contentVersion ??
       (userVersion > OPENCLAW_STATE_SCHEMA_VERSION
         ? userVersion
-        : readStateSchemaContentVersion(db, userVersion, readRow));
+        : readStateSchemaContentVersion(db, userVersion, readRow, userVersion));
     if (contentVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
       throw createNewerSqliteSchemaVersionError(
         "OpenClaw state database",
