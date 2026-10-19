@@ -339,6 +339,30 @@ verify_git_rebase_recovery() {
         [[ ! -d "$git_dir/rebase-merge" && ! -d "$git_dir/rebase-apply" ]]
 }
 
+probe_git_remote_ref() {
+    local repo_dir="$1" ref="$2" attempt diagnostic probe_status
+    for attempt in 1 2 3; do
+        if diagnostic="$(git -C "$repo_dir" ls-remote --exit-code origin "$ref" 2>&1 >/dev/null)"; then
+            return 0
+        else
+            probe_status=$?
+        fi
+        # Exit 2 means an absent ref, not a failed connection or authentication.
+        (( probe_status != 2 )) || return 2
+        # Git errors can include credential-bearing URLs or HTTP trace headers.
+        printf '%s\n' "$diagnostic" | sed -E \
+            -e 's#[[:alpha:]][[:alnum:]+.-]*://[^[:space:]]+#[redacted-url]#g' \
+            -e 's/([Aa]uthorization|[Pp]roxy-[Aa]uthorization|[Cc]ookie|[Ss]et-[Cc]ookie):.*/\1: [redacted]/g' \
+            -e 's/(gh[pousr]_[[:alnum:]_]+|github_pat_[[:alnum:]_]+)/[redacted]/g' >&2
+        if (( attempt == 3 )) || ! printf '%s\n' "$diagnostic" | grep -Eqi \
+            'Could not resolve (host|proxy)|Failed to connect|Connection (timed out|reset)|timed out|TLS connection was non-properly terminated|RPC failed; curl (5|6|7|18|28|35|52|55|56|92)( |$)|requested URL returned error: (408|429|5[0-9][0-9])'; then
+            return "$probe_status"
+        fi
+        printf 'Retrying Git ref lookup (%s/3)\n' "$((attempt + 1))" >&2
+        sleep "$attempt"
+    done
+}
+
 checkout_git_openclaw_ref() {
     local repo_dir="$1" ref="$2"
     local original_head="" original_status="" branch_worktree=""
@@ -405,7 +429,7 @@ checkout_git_openclaw_ref() {
     local namespace=""
     local probe_status=0
     for namespace in "${namespaces[@]}"; do
-        if git -C "$repo_dir" ls-remote --exit-code origin "refs/${namespace}/${ref}" >/dev/null 2>&1; then
+        if probe_git_remote_ref "$repo_dir" "refs/${namespace}/${ref}"; then
             if [[ "$namespace" == "heads" ]]; then
                 installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
                 local checkout_args=(-B "$ref")
