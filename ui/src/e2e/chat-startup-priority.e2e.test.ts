@@ -22,23 +22,29 @@ const secondaryMethods = [
   "sessions.groups.defaults",
   "mentions.list",
 ];
+const ownedSession = (key: string, label: string, updatedAt = 1) => ({
+  key,
+  label,
+  updatedAt,
+  kind: "direct",
+  owner: { actor: { type: "human", id: "reader" } },
+});
+const task = (id: string, title: string, createdAt = Date.now()) => ({
+  id,
+  title,
+  createdAt,
+  sessionKey,
+  agentId: "research",
+  cwd: "/workspace/client",
+  prompt: "Review the current rollout.",
+  tldr: "A synthetic suggestion.",
+});
 
 async function installStartupGateway(page: Page) {
   const config = { tools: { swarm: { enabled: true } } };
   return installMockGateway(page, {
-    defaultAgentId: "main",
-    assistantAgentId: "main",
-    mainSessionKey: "agent:main:main",
     sessionKey,
-    sessions: [
-      {
-        key: sessionKey,
-        kind: "direct",
-        label: "Selected conversation",
-        updatedAt: 1,
-        owner: { actor: { type: "human", id: "reader" } },
-      },
-    ],
+    sessions: [ownedSession(sessionKey, "Selected conversation")],
     historyMessages: [{ role: "assistant", content: historyText }],
     deferredMethods: ["chat.startup"],
     heldMethods: bulkMethods,
@@ -100,12 +106,12 @@ async function expectNoRequests(gateway: Gateway, methods: string[], phase: stri
 
 async function openPendingChat(page: Page, gateway: Gateway) {
   await page.goto(`${suite.server.baseUrl}chat/research/selected-conversation-12345678`);
-  const resolution = await gateway.waitForRequest("sessions.resolve");
-  expect(resolution.params).toMatchObject({ agentId: "research", shortId: "12345678" });
-  const startup = await gateway.waitForRequest("chat.startup");
-  expect(startup.params).toMatchObject({ sessionKey });
-  const subscription = await gateway.waitForRequest("sessions.subscribe");
-  expect(subscription.params).toEqual({});
+  expect((await gateway.waitForRequest("sessions.resolve")).params).toMatchObject({
+    agentId: "research",
+    shortId: "12345678",
+  });
+  expect((await gateway.waitForRequest("chat.startup")).params).toMatchObject({ sessionKey });
+  expect((await gateway.waitForRequest("sessions.subscribe")).params).toEqual({});
   await page
     .locator(".chat-pane-cache__pane--active .chat-thread .lazy-view-state--loading")
     .waitFor();
@@ -137,22 +143,36 @@ async function withPendingChat(run: (page: Page, gateway: Gateway) => Promise<vo
   });
 }
 
+async function settleStartup(page: Page, gateway: Gateway) {
+  await gateway.resolveDeferred("chat.startup");
+  await page.locator(".chat-thread").getByText(historyText, { exact: true }).waitFor();
+}
+
+async function expectProgress(page: Page, text: string) {
+  const details = await openChatDetails(page.locator(".chat-pane-cache__pane--active"));
+  await details
+    .getByRole("region", { name: "Progress note", exact: true })
+    .getByText(text, { exact: true })
+    .waitFor();
+}
+
+async function openNewSession(page: Page) {
+  await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
+  await page.waitForURL((url) => url.pathname === "/new");
+  await page.locator("openclaw-new-session-page").waitFor();
+}
+
 suite.define(() => {
   it("loads selected history before automatic rosters, including event refreshes, and keeps live messages", async () => {
     await withPendingChat(async (page, gateway) => {
       await expectNoRequests(gateway, secondaryMethods, "before history");
       await expectBulkReadsHeld(gateway);
       const fixtureTime = Date.now();
-      const suggestion = {
-        id: "startup-suggestion",
-        title: "Queued suggestion during startup",
-        prompt: "Review the current rollout.",
-        tldr: "A synthetic suggestion.",
-        cwd: "/workspace/client",
-        sessionKey,
-        agentId: "research",
-        createdAt: fixtureTime,
-      };
+      const suggestion = task(
+        "startup-suggestion",
+        "Queued suggestion during startup",
+        fixtureTime,
+      );
       await gateway.setMethodResponse("taskSuggestions.list", { suggestions: [suggestion] });
       await gateway.setMethodResponse("progressCard.get", {
         card: {
@@ -178,14 +198,13 @@ suite.define(() => {
 
       await setVisibility(page, "hidden");
       await gateway.resolveDeferred("chat.startup");
-      const transcript = page.locator(".chat-pane-cache__pane--active .chat-thread");
+      const activePane = page.locator(".chat-pane-cache__pane--active");
+      const transcript = activePane.locator(".chat-thread");
       await expect
         .poll(() =>
-          page
-            .locator(".chat-pane-cache__pane--active")
-            .evaluate(
-              (pane) => (pane as HTMLElement & { transcriptReady: boolean }).transcriptReady,
-            ),
+          activePane.evaluate(
+            (pane) => (pane as HTMLElement & { transcriptReady: boolean }).transcriptReady,
+          ),
         )
         .toBe(true);
       await expectNoRequests(gateway, ["taskSuggestions.list", "progressCard.get"], "while hidden");
@@ -197,7 +216,6 @@ suite.define(() => {
         await gateway.waitForRequest(method);
         expect(await gateway.getRequests(method)).toHaveLength(1);
       }
-      const activePane = page.locator(".chat-pane-cache__pane--active");
       await expect
         .poll(() =>
           activePane.evaluate((element) => {
@@ -209,16 +227,10 @@ suite.define(() => {
           }),
         )
         .toBe(true);
-      const details = await openChatDetails(activePane);
-      await details
-        .getByRole("region", { name: "Progress note", exact: true })
-        .getByText("Current rollout progress", { exact: true })
-        .waitFor();
+      await expectProgress(page, "Current rollout progress");
       await closeChatDetails(activePane);
       await page.getByText(suggestion.title, { exact: true }).waitFor();
-      const composer = page.locator(
-        ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
-      );
+      const composer = activePane.locator(".agent-chat__composer-combobox textarea");
       const draft = "Synthetic draft while background lists are pending.";
       await expect.poll(() => composer.isEnabled()).toBe(true);
       await composer.fill(draft);
@@ -260,17 +272,14 @@ suite.define(() => {
         if (pendingSnapshot) {
           await gateway.deferNext("progressCard.get");
         }
-        await gateway.resolveDeferred("chat.startup");
-        await page.locator(".chat-thread").getByText(historyText, { exact: true }).waitFor();
+        await settleStartup(page, gateway);
         await gateway.waitForRequest("progressCard.get");
         await expectBulkReadsReleased(gateway);
         expect(await gateway.getRequests("progressCard.get")).toHaveLength(1);
         if (visibility === "hidden document") {
           await setVisibility(page, "hidden");
         } else {
-          await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
-          await page.waitForURL((url) => url.pathname === "/new");
-          await page.locator("openclaw-new-session-page").waitFor();
+          await openNewSession(page);
           await expect
             .poll(() => page.locator(".chat-pane-cache__pane--active").isVisible())
             .toBe(false);
@@ -292,11 +301,7 @@ suite.define(() => {
           await gateway.resolveDeferred("progressCard.get");
         }
         // Sidebar hovercards mirror this markdown; verify the active pane's card.
-        const details = await openChatDetails(page.locator(".chat-pane-cache__pane--active"));
-        await details
-          .getByRole("region", { name: "Progress note", exact: true })
-          .getByText("Resumed progress", { exact: true })
-          .waitFor();
+        await expectProgress(page, "Resumed progress");
         // One coalesced follow-up reconciles events received during the pending snapshot.
         expect(await gateway.getRequests("progressCard.get")).toHaveLength(2);
       });
@@ -307,16 +312,7 @@ suite.define(() => {
     "reconciles an explicit suggestion refresh after an event while chat remains held (hidden: %s)",
     async (hidden) => {
       await withPendingChat(async (page, gateway) => {
-        const suggestion = {
-          id: "explicit-suggestion",
-          title: "Dismiss this suggestion",
-          prompt: "A synthetic suggestion to dismiss.",
-          tldr: "Synthetic explicit action.",
-          cwd: "/workspace/client",
-          sessionKey,
-          agentId: "research",
-          createdAt: Date.now(),
-        };
+        const suggestion = task("explicit-suggestion", "Dismiss this suggestion");
         await gateway.emitGatewayEvent("task.suggestion", { action: "created", suggestion });
         await gateway.deferNext("taskSuggestions.list");
         await page.locator(".task-suggestion__dismiss").click();
@@ -342,8 +338,7 @@ suite.define(() => {
         await gateway.resolveDeferred("taskSuggestions.list", { suggestions: [] });
         await page.getByText(latest.title, { exact: true }).waitFor();
         expect(await page.getByText(historyText, { exact: true }).count()).toBe(0);
-        await gateway.resolveDeferred("chat.startup");
-        await page.locator(".chat-thread").getByText(historyText, { exact: true }).waitFor();
+        await settleStartup(page, gateway);
       });
     },
   );
@@ -358,11 +353,7 @@ suite.define(() => {
         defaults: { model: null, modelProvider: null, contextTokens: null },
         sessions: [
           {
-            key: "agent:research:archived-fixture",
-            kind: "direct",
-            label: "Archived fixture",
-            owner: { actor: { type: "human", id: "reader" } },
-            updatedAt: 2,
+            ...ownedSession("agent:research:archived-fixture", "Archived fixture", 2),
             archived: true,
           },
         ],
@@ -386,8 +377,7 @@ suite.define(() => {
       await page
         .locator(".chat-pane-cache__pane--active .chat-thread .lazy-view-state--loading")
         .waitFor();
-      await gateway.resolveDeferred("chat.startup");
-      await page.locator(".chat-thread").getByText(historyText, { exact: true }).waitFor();
+      await settleStartup(page, gateway);
     });
   });
 
@@ -406,9 +396,7 @@ suite.define(() => {
             await gateway.waitForRequest(method);
           }
         } else {
-          await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
-          await page.waitForURL((url) => url.pathname === "/new");
-          await page.locator("openclaw-new-session-page").waitFor();
+          await openNewSession(page);
         }
         await expectBulkReadsReleased(gateway);
         if (outcome === "New Session navigation") {

@@ -1,4 +1,3 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
@@ -6,7 +5,6 @@ import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
-  defaultControlUiFeatureMethods,
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -16,6 +14,14 @@ import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Saved split conversation owner" });
 const homeKey = "agent:main:main";
+const composerSelector = ".agent-chat__composer-combobox textarea";
+const globalHome = (agentId: string) => ({
+  ok: true,
+  key: "global",
+  agentId,
+  kind: "global",
+  boardFace: "chat",
+});
 const savedLayout: ChatSplitLayout = {
   activePaneId: "confirmed",
   columnWeights: [0.4, 0.6],
@@ -39,10 +45,7 @@ suite.define(() => {
   it("keeps a known global Home and its draft when opening split view", async () => {
     await suite.withPage({ viewport: { width: 1600, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        sessionKey: "global",
         sessionScope: "global",
-        mainSessionKey: "global",
-        defaultAgentId: "main",
         assistantAgentId: "research",
         sessions: [
           {
@@ -53,7 +56,6 @@ suite.define(() => {
             updatedAt: 1,
           },
         ],
-        featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.startup"],
         methodResponses: {
           "agents.list": {
             defaultId: "main",
@@ -61,18 +63,12 @@ suite.define(() => {
             scope: "global",
             agents: [{ id: "main" }, { id: "research" }],
           },
-          "sessions.resolve": {
-            ok: true,
-            key: "global",
-            agentId: "research",
-            kind: "global",
-            boardFace: "chat",
-          },
+          "sessions.resolve": globalHome("research"),
         },
       });
       await page.goto(`${suite.server.baseUrl}chat/research`);
       await waitForCommittedChatRoute(page);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(composerSelector);
       await composer.fill("Keep this Research draft");
       await selectChatLayoutAction(page, "Open split view");
       await expect.poll(() => page.locator(".chat-split-view__cell").count()).toBe(2);
@@ -115,20 +111,13 @@ suite.define(() => {
                     cases: [
                       {
                         match: { reference: { key: homeKey } },
-                        response: {
-                          ok: true,
-                          key: "global",
-                          agentId: "main",
-                          kind: "global",
-                          boardFace: "chat",
-                        },
+                        response: globalHome("main"),
                       },
                     ],
                   },
                 }
               : {},
           sessions: [{ key: homeKey, kind: "direct", displayName: "Confirmed Home", updatedAt: 1 }],
-          featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.startup"],
           historyMessages: [
             {
               role: "assistant",
@@ -142,40 +131,31 @@ suite.define(() => {
         );
         await waitForCommittedChatRoute(page);
         const cells = page.locator(".chat-split-view__cell");
+        const unbound = cells.first();
+        const pane = unbound.locator("openclaw-chat-pane");
+        const composer = unbound.locator(composerSelector);
         await expect.poll(() => cells.count()).toBe(2);
-        await page
-          .locator(".agent-chat__composer-combobox textarea")
-          .last()
-          .waitFor({ state: "visible" });
-        await expectUnbound(cells.first());
+        await page.locator(composerSelector).last().waitFor({ state: "visible" });
+        await expectUnbound(unbound);
         if (sessionScope === "global") {
           await expect
-            .poll(() =>
-              cells.last().locator(".agent-chat__composer-combobox textarea").inputValue(),
-            )
+            .poll(() => cells.last().locator(composerSelector).inputValue())
             .toBe("Scoped Home draft");
         }
-        for (const method of ["chat.history", "chat.startup", "sessions.messages.subscribe"]) {
-          expect(
-            (await gateway.getRequests(method)).filter((request) => {
-              const params = asOptionalRecord(request.params);
-              return (
-                sessionScope !== "global" &&
-                (params?.sessionKey === "global" || params?.key === "global")
-              );
-            }),
-          ).toHaveLength(0);
+        if (sessionScope !== "global") {
+          for (const method of ["chat.history", "chat.startup", "sessions.messages.subscribe"]) {
+            expect(await gateway.getRequests(method, { sessionKey: "global" })).toEqual([]);
+            expect(await gateway.getRequests(method, { key: "global" })).toEqual([]);
+          }
         }
         const currentUrl = page.url();
-        await cells.first().click();
+        await unbound.click();
         expect(page.url()).toBe(currentUrl);
         await evaluateControlUiContext(page, (context) => context.revalidate("chat"));
         await waitForCommittedChatRoute(page);
-        expect(await cells.first().locator("openclaw-chat-pane").count()).toBe(0);
+        expect(await pane.count()).toBe(0);
         await openHomeFullPage(page);
-        await expect
-          .poll(() => paneKeys(cells.first().locator("openclaw-chat-pane")))
-          .toEqual([homeKey]);
+        await expect.poll(() => paneKeys(pane)).toEqual([homeKey]);
         await waitForCommittedChatRoute(page);
         await expect.poll(() => page.url()).toBe(currentUrl);
         const persisted = await page.evaluate(
@@ -196,7 +176,7 @@ suite.define(() => {
         await waitForCommittedChatRoute(page);
         await expect
           .poll(() =>
-            paneKeys(cells.first().locator("openclaw-chat-pane.chat-pane-cache__pane--visible")),
+            paneKeys(unbound.locator("openclaw-chat-pane.chat-pane-cache__pane--visible")),
           )
           .toEqual(["agent:research:global"]);
         expect(new URL(page.url()).pathname).toBe("/chat/research/~key/global");
@@ -213,7 +193,7 @@ suite.define(() => {
         await waitForCommittedChatRoute(page);
         await selectChatLayoutAction(cells.last(), "Close pane");
         await expect.poll(() => cells.count()).toBe(1);
-        await expectUnbound(cells.first());
+        await expectUnbound(unbound);
         await expect
           .poll(() =>
             page.evaluate(() => document.activeElement?.getAttribute("data-unbound-pane-id")),
@@ -222,14 +202,12 @@ suite.define(() => {
         await page.reload();
         await waitForCommittedChatRoute(page);
         expect(await cells.count()).toBe(1);
-        await expectUnbound(cells.first());
+        await expectUnbound(unbound);
         const sidebar = page.locator("openclaw-app-sidebar");
         await sidebar.locator(".sidebar-agent-card__main").click();
         await sidebar.locator('.sidebar-agent-menu [data-value="command:capabilities"]').click();
-        await expect.poll(() => cells.first().locator("openclaw-chat-pane").count()).toBe(1);
-        await expect
-          .poll(() => cells.first().locator(".agent-chat__composer-combobox textarea").inputValue())
-          .toBe("What can you do?");
+        await expect.poll(() => pane.count()).toBe(1);
+        await expect.poll(() => composer.inputValue()).toBe("What can you do?");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(errors).toEqual([]);
       });

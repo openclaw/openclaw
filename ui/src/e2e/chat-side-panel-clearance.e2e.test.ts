@@ -2,49 +2,29 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
-  controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
+import { polledAttribute } from "./chat-presentation.test-support.ts";
 import {
   activateChatHeaderPanelAction,
   failNextDeviceIdentityMint,
   focusChatSidePanel,
 } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { setupPages } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "chat side-panel shell clearance",
   startServerBeforeBrowser: true,
 });
+const withPage = setupPages(suite, () => ({ locale: "en-US", serviceWorkers: "block" }));
 
 const sessionKey = "agent:main:side-panel-clearance";
 const limitedScopes = ["operator.read", "operator.write"];
-const files = [
-  {
-    name: "chat-pane-render.ts",
-    path: "ui/src/pages/chat/chat-pane-render.ts",
-    kind: "modified",
-    size: 18_432,
-  },
-  { name: "sidebar.css", path: "ui/src/styles/chat/sidebar.css", kind: "read", size: 24_820 },
-];
-const historyMessages = [
-  {
-    id: "side-panel-clearance-user",
-    role: "user",
-    content: [{ type: "text", text: "Keep the panel header controls reachable." }],
-    timestamp: Date.now() - 60_000,
-  },
-  {
-    id: "side-panel-clearance-assistant",
-    role: "assistant",
-    content: [{ type: "text", text: "The panel header now clears every shell control." }],
-    timestamp: Date.now(),
-  },
-];
 
 function scenario(
   options: {
@@ -58,20 +38,11 @@ function scenario(
       "device.scopes.waitUpgrade",
       ...(options.home ? ["chat.history", "chat.send"] : []),
     ],
-    historyMessages,
+    historyMessages: [{ role: "assistant", content: "Keep the panel header controls reachable." }],
     methodResponses: {
       "sessions.files.list": {
-        browser: {
-          path: "ui/src/pages/chat",
-          entries: files.map(({ name, path }) => ({ kind: "file", name, path })),
-        },
-        files: files.map(({ name, path, kind, size }) => ({
-          name,
-          kind,
-          size,
-          missing: false,
-          path: `/workspace/openclaw/${path}`,
-        })),
+        browser: { path: "ui/src/pages/chat", entries: [] },
+        files: [],
         root: "/workspace/openclaw",
         sessionKey,
       },
@@ -84,22 +55,11 @@ function scenario(
 }
 
 async function seedSettings(page: Page, themeMode: "light" | "dark") {
-  const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-  await page.addInitScript(
-    ({ key, seededSessionKey, seededThemeMode }) => {
-      localStorage.setItem(
-        key,
-        JSON.stringify({
-          theme: "claw",
-          themeMode: seededThemeMode,
-          sidebarSessionLayouts: {
-            [seededSessionKey]: { columns: [], open: false, expanded: false },
-          },
-        }),
-      );
-    },
-    { key: settingsKey, seededSessionKey: sessionKey, seededThemeMode: themeMode },
-  );
+  await seedChatSettings(page, suite.server.baseUrl, {
+    theme: "claw",
+    themeMode,
+    sidebarSessionLayouts: { [sessionKey]: { columns: [], open: false, expanded: false } },
+  });
 }
 
 async function openExpandedFilesPanel(page: Page): Promise<void> {
@@ -123,51 +83,36 @@ async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<vo
   const panelCount = await panelControls.count();
   expect(panelCount).toBeGreaterThan(0);
 
-  const geometry = await page.evaluate(() => {
-    const rect = (element: Element) => {
-      const box = element.getBoundingClientRect();
-      return { bottom: box.bottom, left: box.left, right: box.right, top: box.top };
-    };
-    const header = document.querySelector(".chat-pane__header");
-    if (!header) {
-      throw new Error("Focused main panel has no task toolbar");
-    }
-    const headerRect = rect(header);
-    const headerStyle = getComputedStyle(header);
-    const panels = [...document.querySelectorAll(".chat-pane__actions button:not([hidden])")]
-      .map(rect)
-      .filter((button) => button.bottom > button.top && button.right > button.left);
-    const shells = [
-      ...document.querySelectorAll(
-        ":is(.shell-chrome-controls, .macos-titlebar-controls, .sidebar-rail, .sidebar-session-toolbar) button:not([hidden])",
-      ),
-    ]
-      .map(rect)
-      .filter((shell) => shell.bottom > shell.top && shell.right > shell.left);
-    return {
-      contentLeft: headerRect.left + Number.parseFloat(headerStyle.paddingLeft),
-      contentRight: headerRect.right - Number.parseFloat(headerStyle.paddingRight),
-      panels,
-      shells,
-    };
-  });
-
-  expect(geometry.shells.length).toBeGreaterThan(0);
-  for (const panel of geometry.panels) {
-    for (const shell of geometry.shells) {
-      expect(
-        panel.left >= shell.right + 4 ||
-          panel.right <= shell.left - 4 ||
-          panel.top >= shell.bottom + 4 ||
-          panel.bottom <= shell.top - 4,
-      ).toBe(true);
-    }
-  }
   expect(
-    geometry.panels.every(
-      (box) => box.left >= geometry.contentLeft - 0.5 && box.right <= geometry.contentRight + 0.5,
-    ),
-  ).toBe(true);
+    await page.evaluate(() => {
+      const visibleRects = (selector: string) =>
+        [...document.querySelectorAll(selector)]
+          .map((element) => element.getBoundingClientRect())
+          .filter((box) => box.width > 0 && box.height > 0);
+      const header = document.querySelector(".chat-pane__header")!;
+      const headerRect = header.getBoundingClientRect();
+      const headerStyle = getComputedStyle(header);
+      const panels = visibleRects(".chat-pane__actions button:not([hidden])");
+      const shells = visibleRects(
+        ":is(.shell-chrome-controls, .macos-titlebar-controls, .sidebar-rail, .sidebar-session-toolbar) button:not([hidden])",
+      );
+      const left = headerRect.left + Number.parseFloat(headerStyle.paddingLeft);
+      const right = headerRect.right - Number.parseFloat(headerStyle.paddingRight);
+      return {
+        hasShellControls: shells.length > 0,
+        contained: panels.every((box) => box.left >= left - 0.5 && box.right <= right + 0.5),
+        clear: panels.every((panel) =>
+          shells.every(
+            (shell) =>
+              panel.left >= shell.right + 4 ||
+              panel.right <= shell.left - 4 ||
+              panel.top >= shell.bottom + 4 ||
+              panel.bottom <= shell.top - 4,
+          ),
+        ),
+      };
+    }),
+  ).toEqual({ hasShellControls: true, contained: true, clear: true });
   for (let index = 0; index < panelCount; index += 1) {
     await panelControls.nth(index).click({ trial: true });
   }
@@ -177,13 +122,7 @@ suite.define(() => {
   it.each([844, 640])(
     "keeps the mobile empty panel picker below the composer at height %s",
     async (height) => {
-      await suite.withPage(
-        {
-          viewport: { width: 390, height },
-          hasTouch: true,
-          locale: "en-US",
-          serviceWorkers: "block",
-        },
+      await withPage(
         async ({ page, context }) => {
           await seedSettings(page, "light");
           await installMockGateway(page, {
@@ -257,6 +196,7 @@ suite.define(() => {
           await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
           await expect.poll(() => picker.isVisible()).toBe(false);
         },
+        { viewport: { width: 390, height }, hasTouch: true },
       );
     },
   );
@@ -264,8 +204,7 @@ suite.define(() => {
   it.each(["ltr", "rtl"] as const)(
     "keeps session Actions clickable beside an attachment in %s",
     async (direction) => {
-      await suite.withPage(
-        { locale: "en-US", serviceWorkers: "block", viewport: { width: 1416, height: 707 } },
+      await withPage(
         async ({ page }) => {
           const title = "QA worktree attachment delivery";
           const filename = "worktree-report.txt";
@@ -363,17 +302,13 @@ suite.define(() => {
             await expectActionsReachable();
           }
         },
+        { viewport: { width: 1416, height: 707 } },
       );
     },
   );
 
   it("keeps stacked page tabs clear of the collapsed navigation rail", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1600 },
-      },
+    await withPage(
       async ({ page }) => {
         await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}sessions`);
@@ -390,7 +325,7 @@ suite.define(() => {
         expect(expandedCenter).toBeGreaterThan(24);
 
         await page.locator('[data-navigation-view][aria-pressed="true"]').click();
-        await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-collapsed");
+        await polledAttribute(shell, "class").toContain("shell--nav-collapsed");
         await expect.poll(rowCenter).toBeGreaterThanOrEqual(expandedCenter);
         const controls = page.locator(".sidebar-rail [data-navigation-view]");
         const controlBoxes = await controls.evaluateAll((buttons) =>
@@ -407,76 +342,56 @@ suite.define(() => {
           await controls.nth(index).click({ trial: true });
         }
       },
+      { viewport: { height: 900, width: 1600 } },
     );
   });
 
-  it.each<{
-    name: string;
-    home?: boolean;
-    deviceLess?: boolean;
-    direction?: string;
-    expectedControl: string;
-    navCollapsed?: boolean;
-    operatorScopes?: string[];
-  }>([
-    {
-      expectedControl: ".sidebar-brand__search",
-      name: "expanded navigation",
+  it.each([
+    ["expanded navigation", false, false, false],
+    ["collapsed navigation", true, false, false],
+    ["collapsed navigation with Home and attention", true, true, false],
+    ["collapsed RTL limited-access status and attention", true, false, true],
+  ] as const)(
+    "keeps focused main controls clear of shell chrome for %s",
+    async (_name, navCollapsed, home, deviceLess) => {
+      await withPage(
+        async ({ page }) => {
+          if (deviceLess) {
+            await failNextDeviceIdentityMint(page);
+          }
+          await seedSettings(page, "dark");
+          await installMockGateway(
+            page,
+            scenario({
+              home,
+              operatorScopes: deviceLess ? limitedScopes : undefined,
+            }),
+          );
+          await openExpandedFilesPanel(page);
+          await page.evaluate(
+            (direction) => {
+              document.documentElement.dir = direction;
+            },
+            deviceLess ? "rtl" : "ltr",
+          );
+          if (navCollapsed) {
+            await page.locator('[data-navigation-view][aria-pressed="true"]').click();
+            await polledAttribute(page.locator(".shell"), "class").toContain(
+              "shell--nav-collapsed",
+            );
+            await page.locator(".sidebar-rail__bottom .sidebar-issues-button").waitFor();
+          }
+          const expectedControl = home
+            ? ".sidebar-rail__bottom .sidebar-footer-bar__home"
+            : deviceLess
+              ? ".sidebar-rail__bottom .sidebar-issues-button"
+              : ".sidebar-brand__search";
+          await page.locator(expectedControl).waitFor();
+          await waitForShellLayout(page);
+          await expectPanelHeaderControlsClearShellChrome(page);
+        },
+        { colorScheme: "dark", viewport: { height: 900, width: 1600 } },
+      );
     },
-    {
-      expectedControl: ".sidebar-brand__search",
-      name: "collapsed navigation",
-      navCollapsed: true,
-    },
-    {
-      home: true,
-      expectedControl: ".sidebar-rail__bottom .sidebar-footer-bar__home",
-      name: "collapsed navigation with Home and attention",
-      navCollapsed: true,
-    },
-    {
-      deviceLess: true,
-      direction: "rtl",
-      expectedControl: ".sidebar-rail__bottom .sidebar-issues-button",
-      name: "collapsed RTL limited-access status and attention",
-      navCollapsed: true,
-      operatorScopes: limitedScopes,
-    },
-  ])("keeps focused main controls clear of shell chrome for $name", async (testCase) => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1600 },
-      },
-      async ({ page }) => {
-        if (testCase.deviceLess) {
-          await failNextDeviceIdentityMint(page);
-        }
-        await seedSettings(page, "dark");
-        await installMockGateway(
-          page,
-          scenario({
-            home: testCase.home,
-            operatorScopes: testCase.operatorScopes,
-          }),
-        );
-        await openExpandedFilesPanel(page);
-        await page.evaluate((direction) => {
-          document.documentElement.dir = direction;
-        }, testCase.direction ?? "ltr");
-        if (testCase.navCollapsed) {
-          await page.locator('[data-navigation-view][aria-pressed="true"]').click();
-          await expect
-            .poll(() => page.locator(".shell").getAttribute("class"))
-            .toContain("shell--nav-collapsed");
-          await page.locator(".sidebar-rail__bottom .sidebar-issues-button").waitFor();
-        }
-        await page.locator(testCase.expectedControl).waitFor();
-        await waitForShellLayout(page);
-        await expectPanelHeaderControlsClearShellChrome(page);
-      },
-    );
-  });
+  );
 });

@@ -1,14 +1,34 @@
-// Control UI E2E tests cover slash command relevance and keyboard ordering.
 import { text } from "node:stream/consumers";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CommandEntry } from "../../../packages/gateway-protocol/src/index.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { polledAttribute, polledText } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { setupPages } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI slash command ranking",
 });
+const withPage = setupPages(suite, () => ({ viewport: { width: 1280, height: 900 } }));
+
+function makeCommand(
+  name: string,
+  description: string,
+  category: CommandEntry["category"],
+  args?: CommandEntry["args"],
+): CommandEntry {
+  return {
+    name,
+    description,
+    category,
+    acceptsArgs: true,
+    scope: "both",
+    source: "plugin",
+    textAliases: [`/${name}`],
+    ...(args ? { args } : {}),
+  };
+}
 
 async function installCommands(
   page: Page,
@@ -48,7 +68,7 @@ suite.define(() => {
   it.each(["/export-session", "/export"])(
     "shows an empty export result and retains staged attachments for %s",
     async (command) => {
-      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      await withPage(async ({ page }) => {
         const gateway = await installMockGateway(page, { historyMessages: [] });
         const downloads: string[] = [];
         page.on("download", (download) => downloads.push(download.suggestedFilename()));
@@ -80,7 +100,7 @@ suite.define(() => {
   );
 
   it("downloads a populated conversation as Markdown without sending a chat request", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+    await withPage(async ({ page }) => {
       const question = "What can you export?";
       const answer = "A readable conversation.";
       const gateway = await installMockGateway(page, {
@@ -120,28 +140,22 @@ suite.define(() => {
   it.each(["Enter", "Tab", "pointer"])(
     "shows the first argument after selecting from a scrolled command menu with %s",
     async (selection) => {
-      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      await withPage(async ({ page }) => {
         const choices = Array.from(
           { length: 16 },
           (_, index) => `choice-${String(index).padStart(2, "0")}`,
         );
-        const commands = Array.from({ length: 16 }, (_, index): CommandEntry => ({
-          acceptsArgs: true,
-          args: [
+        const description = "Choose a synthetic viewport option.";
+        const commands = Array.from({ length: 16 }, (_, index) =>
+          makeCommand(`viewport-${String(index).padStart(2, "0")}`, description, "tools", [
             {
               name: "choice",
-              description: "Choose a synthetic viewport option.",
+              description,
               type: "string",
               choices: choices.map((value) => ({ value, label: value })),
             },
-          ],
-          category: "tools",
-          description: "Choose a synthetic viewport option.",
-          name: `viewport-${String(index).padStart(2, "0")}`,
-          scope: "both",
-          source: "plugin",
-          textAliases: [`/viewport-${String(index).padStart(2, "0")}`],
-        }));
+          ]),
+        );
         const gateway = await installCommands(page, commands, "slash-viewport-session", true);
         const composer = await openChat(page, gateway);
         await expect.poll(() => composer.isEnabled()).toBe(true);
@@ -151,18 +165,15 @@ suite.define(() => {
         const scroll = picker.locator(".slash-menu__scroll");
         const options = picker.getByRole("option");
         await expect.poll(() => options.count()).toBeGreaterThanOrEqual(commands.length);
-        const targetIndex = await options
-          .locator(".slash-menu-name")
-          .evaluateAll((names) =>
-            names.findIndex((name) => name.textContent?.trim().startsWith("/viewport-15")),
-          );
+        const names = options.locator(".slash-menu-name");
+        const targetIndex = await names.evaluateAll((nodes) =>
+          nodes.findIndex((node) => node.textContent?.trim().startsWith("/viewport-15")),
+        );
         expect(targetIndex).toBeGreaterThan(10);
         for (let index = 0; index < targetIndex; index += 1) {
           await composer.press("ArrowDown");
         }
-        await expect
-          .poll(() => options.nth(targetIndex).getAttribute("aria-selected"))
-          .toBe("true");
+        await polledAttribute(options.nth(targetIndex), "aria-selected").toBe("true");
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         if (selection === "pointer") {
           await options.nth(targetIndex).click();
@@ -174,12 +185,10 @@ suite.define(() => {
         await expect.poll(() => composer.inputValue()).toBe("/viewport-15 ");
         const active = picker.locator("[role='option'][aria-selected='true']");
         const first = options.first();
-        await expect.poll(() => first.locator(".slash-menu-name").textContent()).toBe("choice-00");
+        await polledText(first.locator(".slash-menu-name")).toBe("choice-00");
         // Pointer selection may activate the option under the cursor after the viewport changes.
         if (selection !== "pointer") {
-          await expect
-            .poll(() => active.locator(".slash-menu-name").textContent())
-            .toBe("choice-00");
+          await polledText(active.locator(".slash-menu-name")).toBe("choice-00");
         }
         expect(
           await scroll.evaluate((element) => element.scrollHeight > element.clientHeight),
@@ -205,9 +214,7 @@ suite.define(() => {
         }
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         await composer.fill("/viewport-");
-        await expect
-          .poll(() => active.locator(".slash-menu-name").textContent())
-          .toContain("/viewport-00");
+        await polledText(active.locator(".slash-menu-name")).toContain("/viewport-00");
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBe(0);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       });
@@ -215,26 +222,10 @@ suite.define(() => {
   );
 
   it("keeps visible search results and keyboard selection in relevance order", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const commands: CommandEntry[] = [
-        {
-          acceptsArgs: true,
-          category: "tools",
-          description: "Generate setup codes.",
-          name: "pair",
-          scope: "both",
-          source: "plugin",
-          textAliases: ["/pair"],
-        },
-        {
-          acceptsArgs: true,
-          category: "session",
-          description: "Pair a specific device.",
-          name: "pair-device",
-          scope: "both",
-          source: "plugin",
-          textAliases: ["/pair-device"],
-        },
+    await withPage(async ({ page }) => {
+      const commands = [
+        makeCommand("pair", "Generate setup codes.", "tools"),
+        makeCommand("pair-device", "Pair a specific device.", "session"),
       ];
       const gateway = await installCommands(page, commands, "slash-command-ranking-session");
       const composer = await openChat(page, gateway);
@@ -244,20 +235,16 @@ suite.define(() => {
       const picker = page.locator(".slash-menu[role='listbox']");
       await picker.waitFor({ state: "visible" });
       const options = picker.getByRole("option");
+      const names = options.locator(".slash-menu-name");
       await expect
-        .poll(
-          async () =>
-            await options
-              .locator(".slash-menu-name")
-              .evaluateAll((names) => names.slice(0, 3).map((name) => name.textContent?.trim())),
+        .poll(() =>
+          names.evaluateAll((nodes) => nodes.slice(0, 3).map((node) => node.textContent?.trim())),
         )
         .toEqual(["/pair", "/pair-device", "/openclaw"]);
 
       await composer.press("ArrowDown");
-      await expect.poll(() => options.nth(1).getAttribute("aria-selected")).toBe("true");
-      await expect
-        .poll(() => options.nth(1).locator(".slash-menu-name").textContent())
-        .toContain("/pair-device");
+      await polledAttribute(options.nth(1), "aria-selected").toBe("true");
+      await polledText(options.nth(1).locator(".slash-menu-name")).toContain("/pair-device");
 
       await composer.press("Enter");
       await expect.poll(() => composer.inputValue()).toBe("/pair-device ");

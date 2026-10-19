@@ -1,10 +1,16 @@
 import { expect, it } from "vitest";
 import { openChatLayoutMenu } from "../test-helpers/chat-layout-menu.ts";
 import {
-  controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  board,
+  dashboardLayout,
+  seedChatSettings,
+  splitColumns,
+  splitTranscripts,
+} from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 // Closing a focused pane preserves keyboard ownership, independently of draft persistence.
@@ -39,80 +45,23 @@ suite.define(() => {
           label: "Personal Home",
           updatedAt: 80,
         };
-        await page.addInitScript(
-          ({ storageKey, sessions, closedIndex, survivingIndex, dashboard }) => {
-            localStorage.setItem(
-              storageKey,
-              JSON.stringify({
-                ...(dashboard
-                  ? {
-                      sidebarSessionLayouts: {
-                        [sessions[survivingIndex]!.key]: {
-                          columns: [
-                            {
-                              id: "dashboard-column",
-                              side: "right",
-                              panels: [{ id: "dashboard", slot: "dashboard" }],
-                              activePanelId: "dashboard",
-                              width: 480,
-                              height: 360,
-                            },
-                          ],
-                          mainPanelId: "dashboard",
-                          open: true,
-                          expanded: true,
-                        },
-                      },
-                    }
-                  : {}),
-                chatSplitLayout: {
-                  activePaneId: `p${closedIndex + 1}`,
-                  columnWeights: sessions.map(() => 1 / sessions.length),
-                  columns: sessions.map((row, index) => ({
-                    id: `c${index + 1}`,
-                    paneWeights: [1],
-                    panes: [{ id: `p${index + 1}`, sessionKey: row.key }],
-                  })),
+        await seedChatSettings(page, suite.server.baseUrl, {
+          chatSplitLayout: splitColumns(rows, closed),
+          ...(!composerVisible
+            ? {
+                sidebarSessionLayouts: {
+                  [rows[surviving]!.key]: dashboardLayout("dashboard-column", "dashboard", true),
                 },
-              }),
-            );
-          },
-          {
-            storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-            sessions: rows,
-            closedIndex: closed,
-            survivingIndex: surviving,
-            dashboard: !composerVisible,
-          },
-        );
+              }
+            : {}),
+        });
         const gateway = await installMockGateway(page, {
           sessionKey: rows[closed]!.key,
           operatorScopes: editable ? undefined : ["operator.read"],
-          methodResponses: {
-            "board.get": {
-              sessionKey: rows[surviving]!.key,
-              revision: 1,
-              tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-              widgets: [],
-            },
-          },
+          methodResponses: { "board.get": board(rows[surviving]!.key) },
           sessions: [...rows, home],
-          featureMethods: [
-            ...defaultControlUiFeatureMethods,
-            "chat.history",
-            "chat.send",
-            "board.get",
-          ],
-          sessionTranscripts: Object.fromEntries(
-            [...rows, home].map((row) => [
-              row.key,
-              {
-                messages: [
-                  { role: "assistant", content: `Conversation ${row.label}`, timestamp: 1 },
-                ],
-              },
-            ]),
-          ),
+          featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
+          sessionTranscripts: splitTranscripts([...rows, home]),
         });
         await page.goto(`${suite.server.baseUrl}chat/main/close-${closed}`);
         const paneA = page

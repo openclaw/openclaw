@@ -145,6 +145,7 @@ suite.define(() => {
           "chat.metadata": { commands, models: [] },
         },
       });
+      const { getRequests } = gateway;
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("chat.startup");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -204,7 +205,7 @@ suite.define(() => {
       await menu.getByText("Selected for this session", { exact: true }).waitFor();
       await waitForMenuFocusHandoff(page, menu, "skills");
       await expect.poll(() => back.evaluate((node) => node.matches(":focus"))).toBe(true);
-      expect(await gateway.getRequests("skills.library.activate")).toHaveLength(0);
+      expect(await getRequests("skills.library.activate")).toHaveLength(0);
       await focusFirstAction(page, aliceItem);
       await waitForMenuFocusHandoff(page, menu, `library:${alice.entry.skillId}`);
       await readAction.waitFor({ state: "visible" });
@@ -246,7 +247,7 @@ suite.define(() => {
       expect(await page.getByLabel("Retained revision", { exact: true }).count()).toBe(0);
       const panel = page.locator(".skill-reader-dialog");
       expect(await panel.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
-      expect(await gateway.getRequests("skills.library.activate")).toHaveLength(0);
+      expect(await getRequests("skills.library.activate")).toHaveLength(0);
       await page.getByRole("button", { name: "Close", exact: true }).click();
 
       menu = await openSkills(page);
@@ -259,7 +260,7 @@ suite.define(() => {
       await item("Back").click();
       menu = await openSkills(page);
       await gateway.setMethodResponse("skills.library.list", projection([]));
-      const metadataBeforeActivation = (await gateway.getRequests("chat.metadata")).length;
+      const metadataBeforeActivation = (await getRequests("chat.metadata")).length;
       await gateway.deferNext("chat.metadata");
       await selected(alice.entry.skillId).click();
       await item("Detach").click();
@@ -274,20 +275,18 @@ suite.define(() => {
         await gateway.emitGatewayEvent("chat.metadata.changed", {});
       }
       await page.screenshot({ path: `${suite.artifactDir}/metadata-refresh-held.png` });
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(metadataBeforeActivation + 1);
+      expect(await getRequests("chat.metadata")).toHaveLength(metadataBeforeActivation + 1);
       await gateway.resolveDeferred("chat.metadata", { commands: [] });
       await gateway.waitForRequest("chat.metadata", { after: metadataBeforeActivation + 1 });
       await menu.getByText(/updated for the next turn/u).waitFor();
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(metadataBeforeActivation + 2);
+      expect(await getRequests("chat.metadata")).toHaveLength(metadataBeforeActivation + 2);
       await page.screenshot({ path: `${suite.artifactDir}/metadata-refresh-complete.png` });
 
       await gateway.setMethodResponse("skills.library.activate", activation([bob]));
       await gateway.setMethodResponse("skills.library.list", projection([bob]));
       await item("Attach release-notes · Bob", false).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("skills.library.activate")).length)
-        .toBe(2);
-      expect((await gateway.getRequests("skills.library.activate"))[1]?.params).toEqual({
+      await expect.poll(async () => (await getRequests("skills.library.activate")).length).toBe(2);
+      expect((await getRequests("skills.library.activate"))[1]?.params).toEqual({
         action: "attach",
         sessionKey,
         skillId: bob.entry.skillId,
@@ -300,10 +299,8 @@ suite.define(() => {
       await gateway.setMethodResponse("skills.library.list", projection([newer]));
       await bobItem.click();
       await item("Refresh revision").click();
-      await expect
-        .poll(async () => (await gateway.getRequests("skills.library.activate")).length)
-        .toBe(3);
-      expect((await gateway.getRequests("skills.library.activate"))[2]?.params).toEqual({
+      await expect.poll(async () => (await getRequests("skills.library.activate")).length).toBe(3);
+      expect((await getRequests("skills.library.activate"))[2]?.params).toEqual({
         action: "refresh",
         sessionKey,
         skillId: bob.entry.skillId,
@@ -315,12 +312,12 @@ suite.define(() => {
       await navigateToControlUiSession(page, bobSessionKey);
       menu = await openSkills(page);
       await menu.getByText("No managed skills selected.", { exact: true }).waitFor();
-      expect((await gateway.getRequests("skills.library.list")).at(-1)?.params).toEqual({
+      expect((await getRequests("skills.library.list")).at(-1)?.params).toEqual({
         sessionKey: bobSessionKey,
       });
-      expect(await gateway.getRequests("skills.library.activate")).toHaveLength(3);
-      expect(await gateway.getRequests("skills.library.save")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+      expect(await getRequests("skills.library.activate")).toHaveLength(3);
+      expect(await getRequests("skills.library.save")).toHaveLength(0);
+      expect(await getRequests("sessions.patch")).toHaveLength(0);
     });
   });
 });
