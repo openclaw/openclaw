@@ -10,6 +10,10 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import {
+  AGENT_PROGRESS_CARD_SCHEMA_SQL,
+  OPENCLAW_AGENT_BOARD_SCHEMA_SQL,
+} from "../state/openclaw-agent-schema-history.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import {
   clearSessionProgressCardForReset,
@@ -137,10 +141,20 @@ describe("session progress card store", () => {
   it("treats a missing lazy table as no card without creating it", () => {
     db.close();
     db = new DatabaseSync(":memory:");
+    db.exec(
+      OPENCLAW_AGENT_SCHEMA_SQL.replace(OPENCLAW_AGENT_BOARD_SCHEMA_SQL, "").replace(
+        AGENT_PROGRESS_CARD_SCHEMA_SQL,
+        "",
+      ),
+    );
 
     expect(reset()).toBe(false);
     expect(read()).toBeNull();
-    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([]);
+    expect(
+      db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get("session_progress_cards"),
+    ).toBeUndefined();
   });
 
   it("creates lazy storage once and retains admitted facts across warm writes and reads", () => {

@@ -55,8 +55,12 @@ function workshopGateway(overrides: Replies = {}, changes: SkillWorkshopChange[]
   return requests({
     "skills.workshop.list": list,
     "skills.workshop.changes": { changes },
-    "skills.workshop.restore": { change },
-    "skills.workshop.archive": { change },
+    "skills.workshop.restore": {
+      change: { ...change, id: "change-2", action: "restore", actor: "user" },
+    },
+    "skills.workshop.archive": {
+      change: { ...change, id: "change-3", action: "archive", actor: "user" },
+    },
     ...overrides,
   });
 }

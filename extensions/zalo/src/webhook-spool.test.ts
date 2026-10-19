@@ -117,7 +117,9 @@ describe("Zalo durable webhook ingress", () => {
       await interrupted.accept(rawEvent({ messageId: "restart" }));
       await interrupted.stop();
 
-      const deliver = vi.fn<IngressOptions["deliver"]>((_update, life) => life.onAdopted());
+      const deliver = vi.fn<IngressOptions["deliver"]>(async (_update, life) => {
+        await life.onAdopted();
+      });
       const recovered = createIngress(queue, deliver);
       recovered.start();
       try {
@@ -130,7 +132,9 @@ describe("Zalo durable webhook ingress", () => {
   });
 
   it("preserves old replay-guard parity for the same message id with changed payload bytes", async () => {
-    const deliver = vi.fn<IngressOptions["deliver"]>((_update, life) => life.onAdopted());
+    const deliver = vi.fn<IngressOptions["deliver"]>(async (_update, life) => {
+      await life.onAdopted();
+    });
     await withIngress(deliver, async (ingress, queue) => {
       const enqueue = vi.spyOn(queue, "enqueue");
       ingress.start();
