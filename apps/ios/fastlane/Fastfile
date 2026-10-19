@@ -217,16 +217,23 @@ rescue JSON::ParserError => e
 end
 
 def resolve_simulator_device(name)
-  devices = available_simulator_devices
-  exact = devices.find { |device| device["name"] == name }
-  return exact if exact
+  # Hosted images need not contain pre-created Watch devices. The runtime owns
+  # the supported device types; with_screenshot_simulator creates our device.
+  stdout, stderr, status = Open3.capture3("xcrun", "simctl", "list", "runtimes", "--json")
+  UI.user_error!("Failed to list Watch simulator runtimes: #{stderr.strip}") unless status.success?
+  runtime = JSON.parse(stdout).fetch("runtimes")
+    .select { |entry| entry["isAvailable"] && entry.fetch("identifier").include?(".watchOS-") }
+    .max_by { |entry| Gem::Version.new(entry.fetch("version")) }
+  UI.user_error!("No available watchOS runtime. Install one for the selected Xcode with: xcodebuild -downloadPlatform watchOS") unless runtime
 
-  watch_devices = devices.select { |device| device["name"].to_s.include?("Apple Watch") }
-  fallback = watch_devices.find { |device| device["name"].to_s.include?("Ultra") } || watch_devices.first
-  UI.user_error!("No available Apple Watch simulators found.") unless fallback
-
-  UI.important("Apple Watch simulator '#{name}' was not found; using '#{fallback.fetch("name")}'.")
-  fallback
+  devices = runtime.fetch("supportedDeviceTypes")
+  device = devices.find { |entry| entry.fetch("name") == name } ||
+    devices.find { |entry| entry.fetch("name").include?("Ultra") } || devices.first
+  UI.user_error!("watchOS #{runtime.fetch("version")} has no supported Watch device types.") unless device
+  UI.important("Using #{device.fetch("name")} on watchOS #{runtime.fetch("version")} for Watch screenshots.")
+  { "name" => device.fetch("name"), "deviceTypeIdentifier" => device.fetch("identifier"), "runtime" => runtime.fetch("identifier") }
+rescue JSON::ParserError => e
+  UI.user_error!("Invalid JSON from simctl runtime list: #{e.message}")
 end
 
 def screenshot_phase(diagnostics, phase, device: nil, udid: nil, log_path: nil, &operation)

@@ -5879,6 +5879,14 @@ jobs:
 
       - *install_watch_rust_toolchain
 
+      - name: Ensure watchOS screenshot runtime
+        run: |
+          echo "Runner image: ${ImageOS:-unknown} / ${ImageVersion:-unknown}"
+          xcodebuild -version
+          xcrun simctl list runtimes
+          xcodebuild -downloadPlatform watchOS -buildVersion "$(xcrun --sdk watchsimulator --show-sdk-version)"
+          xcrun simctl list runtimes
+
       # The default lane builds the simulator target once for all three families.
       - name: Capture iPhone, iPad, and Watch screenshots
         id: device_screenshots

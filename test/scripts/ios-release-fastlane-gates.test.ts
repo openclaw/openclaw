@@ -943,6 +943,9 @@ def available_simulator_devices
   ] + @owned.values + (@scenario == "busy" ? [{ "name" => "Unrelated", "udid" => "unrelated", "state" => "Booted" }] : [])
 end
 def write_watch_screenshot_mode_defaults(*); end
+def resolve_simulator_device(name)
+  available_simulator_devices.find { |device| device.fetch("name") == name }
+end
 def set_watch_status_bar_override(*)
   false
 end
