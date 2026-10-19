@@ -19,6 +19,9 @@ export const client = { getXApi: vi.mocked(getXApi) };
 
 export type Payload = { version: number; rawEvent: string };
 type Plan = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
+const unexpected = (message: string) => async () => {
+  throw new Error(`Unexpected ${message}`);
+};
 
 export function post(id: string, authorId: string, text = "@roboclawbot please help"): XPost {
   return {
@@ -86,23 +89,16 @@ export function fixture(options: {
       page(options.posts.filter((value) => ids.includes(value.id))),
     ),
     getPublicPosts: vi.fn(async (ids: string[]): Promise<XPage> => ({
-      ...page(
-        [post("500", "10", "Original thread"), ...options.posts].filter((value) =>
-          ids.includes(value.id),
-        ),
+      data: [post("500", "10", "Original thread"), ...options.posts].filter((value) =>
+        ids.includes(value.id),
       ),
       includes: { tweets: [], users: [{ id: "10", username: "author", protected: false }] },
+      meta: {},
     })),
     searchConversation: vi.fn(async () => page([post("500", "10", "Original thread")])),
-    getUserByUsername: vi.fn(async () => {
-      throw new Error("Unexpected user lookup");
-    }),
-    getUsersByUsernames: vi.fn<XApiClient["getUsersByUsernames"]>(async () => {
-      throw new Error("Unexpected batch user lookup");
-    }),
-    uploadMedia: vi.fn<XApiClient["uploadMedia"]>(async () => {
-      throw new Error("Unexpected media upload");
-    }),
+    getUserByUsername: vi.fn(unexpected("user lookup")),
+    getUsersByUsernames: vi.fn<XApiClient["getUsersByUsernames"]>(unexpected("batch user lookup")),
+    uploadMedia: vi.fn<XApiClient["uploadMedia"]>(unexpected("media upload")),
     reply: vi.fn(async (params: Parameters<XApiClient["reply"]>[0]) => {
       const assertCurrent = await params.assertActive?.();
       assertCurrent?.();
@@ -110,24 +106,23 @@ export function fixture(options: {
       return String(900 + replies.length);
     }),
     ensureActivitySubscriptions: vi.fn(async () => {}),
-    openActivityStream: vi.fn(async (): Promise<Response> => {
-      throw new Error("Unexpected stream");
-    }),
+    openActivityStream: vi.fn<() => Promise<Response>>(unexpected("stream")),
   } satisfies XApiClient;
   client.getXApi.mockResolvedValue(api);
   const resolveStable = vi.fn(resolveStableChannelMessageIngress);
   const dispatch = vi.fn(async (plan: Plan) => {
+    const sessionKey = options.visibleSessionKey ?? "agent:maintainer:work:example";
     await plan.replyOptions?.onVisibleWorkSessions?.(
       options.visibleSessionUrl === null
         ? []
         : [
             {
-              sessionKey: options.visibleSessionKey ?? "agent:maintainer:work:example",
+              sessionKey,
               url: options.visibleSessionUrl ?? "https://example.test/work/42",
               label: "Work session",
             },
           ],
-      { createdSessionKey: options.visibleSessionKey ?? "agent:maintainer:work:example" },
+      { createdSessionKey: sessionKey },
     );
     if (!plan.delivery.deliver) {
       throw new Error("Missing X text delivery adapter");
