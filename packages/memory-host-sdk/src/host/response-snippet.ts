@@ -1,5 +1,6 @@
 import { consumeResponseBytes, decodeTextPrefix } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { racePromiseWithAbortSignal } from "@openclaw/retry";
 
 const DEFAULT_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const DEFAULT_ERROR_BODY_MAX_CHARS = 1_000;
@@ -80,28 +81,18 @@ async function readChunkWithAbort(
   signal: AbortSignal | undefined,
   fallbackMessage: string,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
-  if (!signal) {
-    return await reader.read();
-  }
-  if (signal.aborted) {
-    void reader.cancel().catch(() => undefined);
-    throw toAbortError(signal, fallbackMessage);
-  }
-
-  let removeAbortListener: (() => void) | undefined;
-  const abortPromise = new Promise<ReadableStreamReadResult<Uint8Array>>((_resolve, reject) => {
-    const onAbort = () => {
-      reject(toAbortError(signal, fallbackMessage)); // Cancel resolves pending reads.
-      void reader.cancel().catch(() => undefined);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
-  });
-
   try {
-    return await Promise.race([reader.read(), abortPromise]);
-  } finally {
-    removeAbortListener?.();
+    return await racePromiseWithAbortSignal(
+      () => reader.read(),
+      signal,
+      (aborted) => toAbortError(aborted, fallbackMessage),
+    );
+  } catch (error) {
+    if (signal?.aborted) {
+      // Cancel resolves pending reads, so the abort must win before cancelling.
+      void reader.cancel().catch(() => undefined);
+    }
+    throw error;
   }
 }
 

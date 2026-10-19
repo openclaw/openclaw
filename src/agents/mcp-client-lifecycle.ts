@@ -218,12 +218,9 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
     ): Promise<T> => {
       const requestSignal = parentSignal ?? getSessionMcpRequestSignal();
       const abortController = new AbortController();
-      const onParentAbort = () => abortController.abort(requestSignal?.reason);
-      if (requestSignal?.aborted) {
-        onParentAbort();
-      } else {
-        requestSignal?.addEventListener("abort", onParentAbort, { once: true });
-      }
+      const signal = requestSignal
+        ? AbortSignal.any([requestSignal, abortController.signal])
+        : abortController.signal;
       const timeoutError = new SdkError(SdkErrorCode.RequestTimeout, "Request timed out", {
         timeout: timeoutMs,
       });
@@ -249,7 +246,7 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
           armTimeout(deadline + humanInputRemainingMs);
         }
         return () => {
-          if (--humanInputWaits === 0 && !finished && !abortController.signal.aborted) {
+          if (--humanInputWaits === 0 && !finished && !signal.aborted) {
             const elapsed = Math.min(Date.now() - humanInputStartedAt, humanInputRemainingMs);
             humanInputRemainingMs -= elapsed;
             deadline += elapsed;
@@ -258,7 +255,6 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
         };
       };
       try {
-        const signal = abortController.signal;
         signal.throwIfAborted();
         const result = await request(signal, holdForHumanInput);
         requestSignal?.throwIfAborted();
@@ -268,7 +264,6 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
         throw error;
       } finally {
         finished = true;
-        requestSignal?.removeEventListener("abort", onParentAbort);
         clearTimeout(timeout);
       }
     },

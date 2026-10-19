@@ -77,6 +77,38 @@ it("validates default admission once after earlier store writes", async () => {
   expect(observations).toEqual(["after"]);
 });
 
+it("cancels admission behind a store writer without running its validator later", async () => {
+  const scope = "store-cancel-validation";
+  const entered = createDeferred();
+  const releaseWriter = createDeferred();
+  const writer = runExclusiveSessionStoreWrite(scope, async () => {
+    entered.resolve();
+    await releaseWriter.promise;
+  });
+  await entered.promise;
+  const controller = new AbortController();
+  const reason = new Error("cancel queued admission");
+  const assertAllowed = vi.fn();
+  const pending = admit({
+    scope,
+    identities: ["session-cancel-validation"],
+    signal: controller.signal,
+    assertAllowed,
+  });
+  const rejected = expect(pending).rejects.toBe(reason);
+  try {
+    await waitForImmediate();
+    controller.abort(reason);
+    await rejected;
+    expect(assertAllowed).not.toHaveBeenCalled();
+  } finally {
+    releaseWriter.resolve();
+    await writer;
+  }
+  expect(assertAllowed).not.toHaveBeenCalled();
+  expect(workActive(scope, ["session-cancel-validation"])).toBe(false);
+});
+
 it("atomically hands admitted work across an interrupted RPC boundary", async () => {
   const scope = "store-rpc-handoff";
   const identities = ["agent:main:main", "session-rpc-handoff"];
