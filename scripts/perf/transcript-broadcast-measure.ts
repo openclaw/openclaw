@@ -1402,11 +1402,11 @@ try {
     }
     await delay(startAt - Date.now());
   }
-  const measurementStartedAt = Date.now();
   const initialRetainedResources =
     retentionScenario || soakScenario
       ? await readGatewayResources(gateway, { collectGarbage: true })
       : undefined;
+  const measurementStartedAt = Date.now();
   const measuredGateway = gateway;
   const samples = [];
   const memorySamples: Array<{
