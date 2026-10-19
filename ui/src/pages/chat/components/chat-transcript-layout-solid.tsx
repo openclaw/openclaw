@@ -108,14 +108,17 @@ function RowContent(props: { value: TranscriptContent }): JSX.Element {
   );
 }
 
-function TranscriptRows(props: { snapshot: TranscriptLayoutProps }) {
+function TranscriptRows(props: {
+  snapshot: TranscriptLayoutProps;
+  columnRef: (element: HTMLDivElement) => void;
+}) {
   const virtualRows = createMemo(() => {
     return props.snapshot.virtualizer.getVirtualItems();
   });
   return (
     <>
       <Show when={props.snapshot.header}>{(header) => <ChatHistoryBoundary {...header()} />}</Show>
-      <div class="chat-virtual-sizer">
+      <div class="chat-virtual-sizer" ref={(element) => props.columnRef(element)}>
         {props.snapshot.overlay}
         <div
           class="chat-virtual-block"
@@ -170,6 +173,7 @@ function TranscriptRows(props: { snapshot: TranscriptLayoutProps }) {
 /** One Solid root per session, independent of the caller's render computation. */
 export class ChatTranscriptRenderer {
   private element?: HTMLDivElement;
+  private column?: HTMLDivElement;
   private accepted?: TranscriptLayoutProps;
   private committed?: TranscriptLayoutProps;
   private lifecycle?: SolidRenderLifecycle<TranscriptLayoutProps>;
@@ -182,6 +186,10 @@ export class ChatTranscriptRenderer {
   private readonly mediaDisconnect = new Set<() => void>();
   private readonly listeners = new Set<() => void>();
   private readonly presentationChanged = () => this.publishPresentation?.();
+
+  get columnElement(): HTMLDivElement | undefined {
+    return this.column;
+  }
 
   subscribe(listener: () => void): () => void {
     return registerListener(this.listeners, listener);
@@ -314,7 +322,12 @@ export class ChatTranscriptRenderer {
             <TranscriptMessageElementsContext value={next.messageElements}>
               <TranscriptMediaDisconnect value={this.mediaDisconnect}>
                 <ContentPresentation value={active}>
-                  <TranscriptRows snapshot={snapshot()} />
+                  <TranscriptRows
+                    snapshot={snapshot()}
+                    columnRef={(element) => {
+                      this.column = element;
+                    }}
+                  />
                 </ContentPresentation>
               </TranscriptMediaDisconnect>
             </TranscriptMessageElementsContext>
@@ -353,5 +366,6 @@ export class ChatTranscriptRenderer {
     this.commitQueued = false;
     this.layoutEffects.clear();
     this.element = undefined;
+    this.column = undefined;
   }
 }

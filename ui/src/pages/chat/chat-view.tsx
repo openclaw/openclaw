@@ -423,7 +423,7 @@ function ChatContent(input: { props: ChatProps }) {
         }
         if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.transcriptSearch, event)) {
           event.preventDefault();
-          toggleTranscriptSearch(input.props.paneId, event);
+          toggleTranscriptSearch(input.props.paneId, event, frame().threadProps.onFocusComposer);
         }
       }}
     >

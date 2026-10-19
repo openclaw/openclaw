@@ -75,6 +75,21 @@ function escape() {
 }
 
 describe("transcript search Escape", () => {
+  it("returns to the composer when the shortcut origin has been removed", async () => {
+    const pane = createPane();
+    const trigger = pane.container.appendChild(document.createElement("button"));
+    trigger.focus();
+    trigger.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true }),
+    );
+    await waitForSolid(() => expect(document.activeElement).toBe(pane.search()));
+    trigger.remove();
+    pane.search().dispatchEvent(escape());
+    await waitForSolid(() => expect(document.activeElement).toBe(pane.composer));
+    expect(pane.onClearReply).not.toHaveBeenCalled();
+    expect(pane.onAbort).not.toHaveBeenCalled();
+  });
+
   it("closes from the search button after its tooltip and restores focus without clearing reply or stopping", async () => {
     const pane = createPane();
     await pane.openSearch();

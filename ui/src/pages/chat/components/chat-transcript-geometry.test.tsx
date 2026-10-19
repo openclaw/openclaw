@@ -100,13 +100,17 @@ describe("chat transcript geometry", () => {
     const container = document.body.appendChild(document.createElement("div"));
     container.innerHTML =
       '<div class="chat-virtual-row" data-index="0" style="height: 100.375px"></div>';
-    const row = expectDefined(container.firstElementChild, "measured row");
+    const row = expectDefined(
+      container.querySelector<HTMLElement>(".chat-virtual-row"),
+      "measured row",
+    );
     vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 50.1875));
     const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
       count: 1,
       estimateSize: () => 100,
       getScrollElement: () => container,
       getItemKey: () => "fractional",
+      measureElement: () => 100,
       observeElementRect: (_, callback) => {
         callback({ width: 800, height: 600 });
       },
@@ -123,8 +127,9 @@ describe("chat transcript geometry", () => {
     virtualizer._willUpdate();
     virtualizer.getVirtualItems();
     try {
+      virtualizer.measureElement(row);
       const commit = readConnectedTranscriptRows(container, virtualizer);
-      expect(virtualizer.itemSizeCache.has("fractional")).toBe(false);
+      expect(virtualizer.itemSizeCache.get("fractional")).toBe(100);
       expect(commit?.()).toBe(true);
       expect(virtualizer.itemSizeCache.get("fractional")).toBe(100.375);
       expect(readConnectedTranscriptRows(container, virtualizer)?.()).toBe(false);
