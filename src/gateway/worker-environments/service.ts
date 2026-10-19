@@ -1,5 +1,6 @@
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode, WorkerProvider } from "../../plugins/types.js";
@@ -510,12 +511,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         failures.push(error);
       }
     }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "Worker environment shutdown failed");
-    }
+    throwCollectedErrors(failures, "Worker environment shutdown failed");
   };
 
   const providerSupportsExecutionMode = (providerId: string, mode: WorkerExecutionMode) =>
