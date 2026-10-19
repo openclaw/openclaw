@@ -994,7 +994,7 @@ packages/ai/src/transports/openai-responses-client.ts	8
 packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
-packages/ai/src/transports/openai-responses-debug.ts	9
+packages/ai/src/transports/openai-responses-debug.ts	8
 packages/ai/src/transports/openai-responses-params-internal.ts	2
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
@@ -1087,7 +1087,6 @@ src/agents/agent-bundle-lsp-runtime.ts	3
 src/agents/agent-bundle-mcp-combined.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
-src/agents/agent-bundle-mcp-runtime.ts	1
 src/agents/agent-command.ts	1
 src/agents/agent-hooks/compaction-safeguard.ts	9
 src/agents/agent-project-settings-snapshot.ts	4

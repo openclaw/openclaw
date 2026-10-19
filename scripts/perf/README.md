@@ -311,6 +311,53 @@ concurrency on both revisions, and report the actual database size. For a roughl
 stops its Gateway and model fixture on completion or interruption and retains
 synthetic state for inspection. Never target a running Gateway's state.
 
+For session-event frame comparisons, add `--session-row-deltas` to negotiate
+row patches and `--session-envelope-refs` to also negotiate
+`session-event-field-refs` (the latter requires row patches). Both are opt-in;
+the default client capabilities are unchanged. A suitable starting swarm for
+each 16-core half is `--clients 38 --runs 8 --rounds 5 --chunks 500`.
+Add `--exact-clients 1 --activity-summaries` to model one transcript subscriber
+and 37 roster viewers receiving Activity recap changes. `--exact-clients`
+defaults to all clients; a mixed audience negotiates optional roster message
+bodies. Recap mode creates ordinary shared sessions, since recaps exclude
+subagents, and requests `sessions.activitySummary.ensure` after each completed
+turn cohort. Measured rounds must observe both recap model requests and recap
+change events; the model fixture serves the recaps without external inference.
+`--list-interval-ms 1000` adds concurrent compact `sessions.list` polling, one
+request at a time per client, and reports successful latency samples and
+p50/p95/p99. Invalid or failed list responses reject the run.
+Add `--diagnostics` identically on both sides to capture per-round Gateway and
+replay-controller event-loop delay (20 ms sampling), GC pause totals, and bounded
+internal operation aggregates without starting CPU or heap profiling. List
+samples also retain the response ID, client index, round, start/end timestamps,
+and duration; `p99Request` identifies the nearest-rank round p99. For a multi-round
+pair, sort all `sessionsList.requests` by duration to identify its pooled p99.
+These records contain timing and identity only, never RPC payloads. Gateway
+metrics cover its main isolate, not worker isolates. Capture adds overhead, so
+compare equally instrumented pairs and keep earlier uncaptured runs distinct.
+
+`eventBytes` measures the exact received, uncompressed JSON frame bytes,
+including the event envelope, before parsing. `sessionEventSizes` splits session
+frame counts and bytes by the existing bounded reason labels and the fixture's
+exact-message subscription membership (`subscribed` or `roster`). Exact clients
+subscribe to the same measured sessions; parent events are roster deliveries.
+Per-round `representativeFrames` retains the largest first-client
+`sessions.changed` frame per bucket as field names and sizes only. Member sizes
+include the JSON key, colon, and value, excluding object braces and separating
+commas; nested session fields describe the full row or patch's `set` object.
+`initialFullFrame` includes setup/warmup and estimates a numeric field-reference
+encoding using matching envelope/full-row fields. This estimate is a diagnostic,
+not a measured candidate result. No message content or row values are retained
+in these size reports. Wire compression and transport headers are not measured.
+
+Pass the same future `--start-at <epoch-ms>` to both sides of a concurrent pair.
+The barrier runs after readiness, warmup, and event drain, and fails if its
+deadline has passed. Hold the shared measurement lock around each pair, use
+independent identical fixtures and ports, then swap the two CPU halves for the
+next pair. Keep fixture generation sequential; `--transcript-mib 1` retains the
+5,000-session roster shape without multi-GB transcript writes when measuring
+event envelopes. Record the actual fixture database size.
+
 For completed-attempt retention, use `--scenario attempt-retention --clients 1
 --runs 10 --rounds 10 --chunks 1 --prompt-kib 128 --heap-snapshot`. Each round
 resets the ten child session generations, submits deterministic synthetic prompt

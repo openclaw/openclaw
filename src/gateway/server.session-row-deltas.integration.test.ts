@@ -75,11 +75,21 @@ function expectFullSessionRowFrame(
 test("capable and legacy sockets produce identical session payloads and consumer state", async () => {
   const readRetention = observeSessionEventRowRetention();
   const capable = await harness.openClient({
-    caps: ["session-scoped-events", "session-row-deltas", "roster-message-bodies-optional"],
+    caps: [
+      "session-scoped-events",
+      "session-row-deltas",
+      "session-event-field-refs",
+      "roster-message-bodies-optional",
+    ],
   });
   const legacy = await harness.openClient({ caps: ["session-scoped-events"] });
   const roster = await harness.openClient({
-    caps: ["session-scoped-events", "session-row-deltas", "roster-message-bodies-optional"],
+    caps: [
+      "session-scoped-events",
+      "session-row-deltas",
+      "session-event-field-refs",
+      "roster-message-bodies-optional",
+    ],
   });
   const keys = Array.from({ length: 5 }, (_, depth) => `agent:main:row-delta-depth-${depth}`);
   const key = keys.at(-1);

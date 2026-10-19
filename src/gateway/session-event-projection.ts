@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -112,6 +113,7 @@ export function prepareSessionEventProjection(
     >();
     const diff = createSessionRowDeltaDiffer();
     const deltaPayloads = new WeakMap<object, Map<string, Record<string, unknown>>>();
+    const fieldRefPayloads = new WeakMap<object, Record<string, unknown>>();
     const bodylessPayloads = new WeakMap<object, Record<string, unknown>>();
     const baselineIds = new WeakMap<object, number>();
     let nextBaselineId = 0;
@@ -211,16 +213,43 @@ export function prepareSessionEventProjection(
         : undefined;
       let wirePayload: Record<string, unknown> = projected;
       if (rowDelivery) {
+        if (
+          hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_EVENT_FIELD_REFS)
+        ) {
+          let compact = fieldRefPayloads.get(projected);
+          if (!compact) {
+            compact = { ...projected };
+            const sessionFieldRefs: number[] = [];
+            // Reference the reconstructed JSON row, independent of patch insertion order.
+            const fields = Object.entries(row)
+              .filter(([, value]) => value !== undefined)
+              .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+            for (const [index, [field, value]] of fields.entries()) {
+              if (
+                field !== "key" &&
+                field !== "agentId" &&
+                Object.hasOwn(projected, field) &&
+                isDeepStrictEqual(projected[field], value)
+              ) {
+                sessionFieldRefs.push(index);
+                delete compact[field];
+              }
+            }
+            compact.sessionFieldRefs = sessionFieldRefs;
+            fieldRefPayloads.set(projected, compact);
+          }
+          wirePayload = compact;
+        }
         const cacheKey = JSON.stringify([rowDelivery.key, rowDelivery.bases.map(baselineId)]);
-        let cached = deltaPayloads.get(projected);
+        let cached = deltaPayloads.get(wirePayload);
         if (!cached) {
           cached = new Map();
-          deltaPayloads.set(projected, cached);
+          deltaPayloads.set(wirePayload, cached);
         }
         let deltaPayload = cached.get(cacheKey);
         if (!deltaPayload) {
           deltaPayload = {
-            ...projected,
+            ...wirePayload,
             session: rowDelivery.wire[0],
             ...(Array.isArray(projected.ancestorSessions)
               ? { ancestorSessions: rowDelivery.wire.slice(1) }
