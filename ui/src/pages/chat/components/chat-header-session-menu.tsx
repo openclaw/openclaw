@@ -37,6 +37,7 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
 import { useChatQuickActionEntries, type HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 import {
@@ -114,7 +115,10 @@ function ChatHeaderSessionMenuContent(
   const menuId = `chat-header-session-${++nextMenuId}`;
   const [compactView, setCompactView] = createSignal<CompactMenuView>("root");
   const [open, setOpen] = createSignal(false);
-  const preparation = () => liveProps.prewarm;
+  const [intent, setIntent] = createSignal(false);
+  nativeListener("pointerenter", () => setIntent(true))(host);
+  nativeListener("focusin", () => setIntent(true))(host);
+  const preparation = () => liveProps.prewarm && (intent() || open());
   const presentation = createParkedProjection(() => ({ ...liveProps }), open, preparation);
   const props = createProjection(presentation, {}, { key: "id" });
   let menu: MenuHandle | undefined;
@@ -465,7 +469,7 @@ function ChatHeaderSessionMenuContent(
     <Menu
       id={menuId}
       lazy
-      prewarm={liveProps.prewarm && !liveProps.compact}
+      prewarm={preparation() && !liveProps.compact}
       class={[
         "session-menu chat-header-session-menu",
         {

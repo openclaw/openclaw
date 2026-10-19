@@ -69,6 +69,7 @@ type FixtureOptions = {
   sessionEventChurn?: boolean;
   duplicateBootReads?: boolean;
   closedMenuMembers?: boolean;
+  sessionMenuDetails?: boolean;
   largeSnapshot?: boolean;
 };
 
@@ -104,6 +105,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     {
       avatars: options.sidebarLiveChurn,
       sharing: options.closedMenuMembers,
+      offlineOwners: options.sessionMenuDetails ? 48 : 0,
     },
   );
   const assets = new Map<string, FixtureAsset>(avatarAssets);
@@ -337,6 +339,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       ...defaultControlUiFeatureMethods,
       "sessions.list",
       "sessions.describe",
+      "sessions.assignOwner",
       "sessions.catalog.list",
       "agents.list",
       "agent.identity.get",

@@ -331,6 +331,7 @@ const fixture = createControlUiTeamScaleFixture({
   sessionEventChurn: values["session-event-churn"],
   duplicateBootReads: values["duplicate-boot-reads"],
   closedMenuMembers: values["closed-menu-members"] || values["session-menu-details"],
+  sessionMenuDetails: values["session-menu-details"],
   largeSnapshot: values["large-snapshot"],
 });
 const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply() : undefined;
@@ -1023,10 +1024,12 @@ try {
           .length,
       }));
       const trigger = ".chat-header-session-menu__trigger";
+      await page.locator(trigger).hover();
       const header = await probeColdLoadOverlays(page, artifactDir, run, [
         ["session", trigger, ".chat-header-session-menu__panel .oc-menu-item"],
       ]);
       await page.locator(trigger).click();
+      await page.locator('.chat-header-session-menu__panel[data-phase="open"]').waitFor();
       const owners = await probeColdLoadOverlays(page, artifactDir, run, [
         ["owners", '[data-value="submenu:assign-owner"]', ".session-menu__avatar"],
       ]);

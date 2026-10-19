@@ -11,7 +11,7 @@ function personId(index: number) {
 export function createTeamScalePeople(
   count: number,
   now: number,
-  options: { avatars?: boolean; sharing?: boolean } = {},
+  options: { avatars?: boolean; sharing?: boolean; offlineOwners?: number } = {},
 ) {
   const avatars = options.avatars ?? false;
   const people: ControlUiMockPresenceUser[] = Array.from({ length: count }, (_, index) => ({
@@ -44,7 +44,7 @@ export function createTeamScalePeople(
   }));
   const sharingPeople = options.sharing ? people.slice(34, 82) : [];
   const avatarAssets = new Map<string, { body: Buffer; contentType: string }>();
-  if (options.sharing) {
+  if (options.sharing || options.offlineOwners) {
     const asset = {
       contentType: "image/png",
       body: Buffer.from(
@@ -52,7 +52,14 @@ export function createTeamScalePeople(
         "base64",
       ),
     };
-    for (const profile of profiles.slice(34, 82)) {
+    const offline = profiles.slice(0, options.offlineOwners ?? 0).map((profile, index) => ({
+      ...profile,
+      id: `offline-owner-${index + 1}`,
+      displayName: `Offline owner ${index + 1}`,
+      emails: [],
+    }));
+    profiles.push(...offline);
+    for (const profile of [...profiles.slice(34, 82), ...offline]) {
       profile.hasAvatar = true;
       profile.avatarMime = "image/png";
       avatarAssets.set(`/api/users/${profile.id}/avatar`, asset);

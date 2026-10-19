@@ -222,44 +222,60 @@ async function select(menu: HeaderMenuElement, value: string) {
 }
 
 describe("chat header session menu", () => {
-  it("leaves owner avatars unmounted while prewarming a closed menu", async () => {
-    const frames: FrameRequestCallback[] = [];
-    const idle = new Map<number, IdleRequestCallback>();
-    let nextIdle = 0;
-    const animation = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      frames.push(callback);
-      return frames.length;
-    });
-    vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
-      idle.set(++nextIdle, callback);
-      return nextIdle;
-    });
-    vi.stubGlobal("cancelIdleCallback", (id: number) => idle.delete(id));
-    const owner = createSessionOwnerMenuHarness();
-    await profileDirectory(owner.context.gateway).load();
-    const menu = await mountMenu({ context: owner.context, prewarm: true }, false);
-    for (let turn = 0; turn < 20 && (frames.length || idle.size); turn++) {
-      for (const callback of frames.splice(0)) {
-        callback(0);
-      }
-      for (const [id, callback] of [...idle]) {
-        idle.delete(id);
-        callback({ didTimeout: false, timeRemaining: () => 10 });
+  it.each(["pointer", "keyboard"])(
+    "prepares closed menu avatars only on %s intent",
+    async (intent) => {
+      const frames: FrameRequestCallback[] = [];
+      const idle = new Map<number, IdleRequestCallback>();
+      let nextIdle = 0;
+      const animation = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
+        idle.set(++nextIdle, callback);
+        return nextIdle;
+      });
+      vi.stubGlobal("cancelIdleCallback", (id: number) => idle.delete(id));
+      const owner = createSessionOwnerMenuHarness();
+      await profileDirectory(owner.context.gateway).load();
+      const menu = await mountMenu({ context: owner.context, prewarm: true }, false);
+      const prepare = () => {
+        for (let turn = 0; turn < 20 && (frames.length || idle.size); turn++) {
+          for (const callback of frames.splice(0)) {
+            callback(0);
+          }
+          for (const [id, callback] of [...idle]) {
+            idle.delete(id);
+            callback({ didTimeout: false, timeRemaining: () => 10 });
+          }
+          flush();
+        }
+      };
+      prepare();
+      expect(panel(menu).querySelectorAll('[role^="menuitem"]')).toHaveLength(0);
+      expect(menu.querySelectorAll(".session-menu__avatar")).toHaveLength(0);
+      if (intent === "pointer") {
+        menu.dispatchEvent(new PointerEvent("pointerenter"));
+      } else {
+        menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!.focus();
       }
       flush();
-    }
-    expect(item(menu, "Assign to…")).toBeDefined();
-    expect(menu.querySelectorAll(".session-menu__avatar")).toHaveLength(0);
-    animation.mockRestore();
-    expect(menu.openMenu()).toBe(true);
-    flush();
-    await menu.updateComplete;
-    item(menu, "Assign to…").click();
-    flush();
-    await menu.updateComplete;
-    expect(item(menu, "Research")).toBeDefined();
-    expect(menu.querySelectorAll(".session-menu__avatar").length).toBeGreaterThan(0);
-  });
+      prepare();
+      expect(item(menu, "Assign to…")).toBeDefined();
+      expect(menu.querySelectorAll(".session-menu__avatar").length).toBeGreaterThan(0);
+      expect(panel(menu).matches(":popover-open")).toBe(false);
+      animation.mockRestore();
+      expect(menu.openMenu()).toBe(true);
+      flush();
+      await menu.updateComplete;
+      item(menu, "Assign to…").click();
+      flush();
+      await menu.updateComplete;
+      expect(item(menu, "Research")).toBeDefined();
+      expect(menu.querySelectorAll(".session-menu__avatar").length).toBeGreaterThan(0);
+    },
+  );
 
   it("keeps current session actions and their DOM identity across reopening", async () => {
     const menu = await mountMenu({}, false);
