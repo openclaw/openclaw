@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { SQLInputValue } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, aroundEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -11,13 +12,33 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { captureEnv } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import { doctorCommand } from "./doctor.js";
 
 export type SessionSqliteMigrationManifest = ActiveSessionSqliteMigrationRun["manifest"];
+
+export function stateRows(env: NodeJS.ProcessEnv, query: string) {
+  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => db.prepare(query).all(), { env });
+}
+
+export function writeState(env: NodeJS.ProcessEnv, ...statements: [string, ...SQLInputValue[]][]) {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      for (const [query, ...values] of statements) {
+        db.prepare(query).run(...values);
+      }
+    },
+    { env },
+  );
+}
 
 export function expectNoIssue(report: DoctorSessionSqliteReport, code: string) {
   expect(report.targets.flatMap((target) => target.issues)).not.toContainEqual(
@@ -38,20 +59,18 @@ export type TestStore = {
 };
 
 export const RECOVERY_TRANSCRIPT_LINES = Object.freeze([
-  JSON.stringify({
-    type: "session",
-    id: "session-1",
-    version: 3,
-    timestamp: "2026-08-30T00:00:00Z",
-    cwd: "/fixture",
-  }),
-  JSON.stringify({
-    type: "message",
-    id: "one",
-    parentId: null,
-    message: { role: "user", content: "preserved history" },
-  }),
+  '{"type":"session","id":"session-1","version":3,"timestamp":"2026-08-30T00:00:00Z","cwd":"/fixture"}',
+  '{"type":"message","id":"one","parentId":null,"message":{"role":"user","content":"preserved history"}}',
 ]);
+
+const legacyEntry = {
+  channel: "cli",
+  chatType: "direct",
+  sessionFile: "session-1.jsonl",
+  sessionId: "session-1",
+  sessionStartedAt: 1000,
+  updatedAt: 2000,
+};
 
 export async function runPublicSessionSqlite(
   store: TestStore,
@@ -132,23 +151,12 @@ export function canonicalTestPath(filePath: string): string {
   }
 }
 
-function restoreEnvValue(key: keyof NodeJS.ProcessEnv, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[key];
-    return;
-  }
-  process.env[key] = value;
-}
-
 function writePrivate(file: string, contents: string) {
   fs.writeFileSync(file, contents, { mode: 0o600 });
 }
 
 export function useDoctorSessionSqliteTestFixture() {
-  const previousEnv = {
-    OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-  };
+  const previousEnv = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-doctor-session-sqlite-");
   // Platform-alias cases keep their requested lexical root; drain its canonical owner path.
   const explicitRoots = new Set<string>();
@@ -184,8 +192,7 @@ export function useDoctorSessionSqliteTestFixture() {
   afterEach(() => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    restoreEnvValue("OPENCLAW_CONFIG_PATH", previousEnv.OPENCLAW_CONFIG_PATH);
-    restoreEnvValue("OPENCLAW_STATE_DIR", previousEnv.OPENCLAW_STATE_DIR);
+    previousEnv.restore();
   });
 
   function createLegacyStore(
@@ -209,24 +216,8 @@ export function useDoctorSessionSqliteTestFixture() {
     const unreferencedJsonlPath = path.join(sessionDir, "orphan.jsonl");
     fs.mkdirSync(sessionDir, { recursive: true });
     writePrivate(configPath, "{}\n");
-    writePrivate(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            channel: "cli",
-            chatType: "direct",
-            sessionFile: "session-1.jsonl",
-            sessionId: "session-1",
-            sessionStartedAt: 1000,
-            updatedAt: 2000,
-            ...params.entryOverrides,
-          },
-        },
-        null,
-        2,
-      ),
-    );
+    const entries = { "agent:main:main": { ...legacyEntry, ...params.entryOverrides } };
+    writePrivate(storePath, JSON.stringify(entries, null, 2));
     writePrivate(
       transcriptPath,
       `${(params.transcriptLines ?? ['{"type":"session","sessionId":"session-1"}', '{"type":"event","id":"evt-1"}']).join("\n")}\n`,
@@ -259,10 +250,7 @@ export function useDoctorSessionSqliteTestFixture() {
   }> {
     const store = createLegacyStore({ agentDirName: shared ? "alpha" : undefined });
     const report = await importLegacyStore(store);
-    let sqlitePath = report.targets[0]?.sqlitePath;
-    if (!sqlitePath) {
-      throw new Error("expected imported agent SQLite path");
-    }
+    let sqlitePath = expectDefined(report.targets[0]?.sqlitePath, "imported agent SQLite path");
     closeOpenClawAgentDatabasesForTest();
     if (shared) {
       const sharedPath = path.join(store.stateDir, "shared.sqlite");
@@ -323,12 +311,14 @@ export function useDoctorSessionSqliteTestFixture() {
     const store = createLegacyStore({ transcriptLines });
     const imported = await importLegacyStore(store);
     expect(imported.targets[0]?.issues).toEqual([]);
-    const manifest = readMigrationManifest(imported.migrationRun?.manifestPath);
-    const archivePath = manifest.targets[0]!.completedMoves.find(
+    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+    const manifest = readMigrationManifest(manifestPath);
+    const target = manifest.targets[0]!;
+    const archivePath = target.completedMoves.find(
       (move) => move.kind === "transcript",
     )!.archivePath;
     closeOpenClawAgentDatabasesForTest();
-    return { store, imported, archivePath };
+    return { store, imported, archivePath, manifestPath, manifest, target };
   }
 
   return {

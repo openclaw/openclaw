@@ -12,14 +12,19 @@ import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
-import { jsonl, messageEvent } from "./doctor-session-sqlite.fixtures.test-support.js";
+import {
+  jsonl,
+  messageEvent,
+  seedRetainedSource,
+} from "./doctor-session-sqlite.fixtures.test-support.js";
 import {
   runDoctorSessionSqlite,
   settleRetainedDoctorSessionSources,
 } from "./doctor-session-sqlite.js";
+import { expectMissing } from "./doctor-session-sqlite.publication-spies.test-support.js";
+import { writeState } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -137,7 +142,8 @@ it("settles every receipt sharing an orphan archive after interrupted index publ
 
 it("archives unindexed history pointer sidecars with their receipt-bound transcripts", async () => {
   await withOpenClawTestState({ label: "orphan-pointer-settlement" }, async (state) => {
-    const { cfg, storePath } = await seedDeferredPluginSessionSource(state, "default");
+    const f = await seedRetainedSource(state);
+    const { storePath } = f;
     const sessionsDir = path.dirname(storePath);
     const history = path.join(sessionsDir, "history.jsonl");
     const trajectory = path.join(sessionsDir, "history.trajectory.jsonl");
@@ -156,17 +162,10 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
       }),
     );
     fs.writeFileSync(pointer, pointerBytes);
-    const run = () =>
-      runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
     // The unavailable plugin defers archival; this import discovers the history into the receipt.
-    const imported = await run();
+    const imported = await f.run();
     const target = expectDefined(imported.targets[0], "imported target");
-    const receipt = readDeferredPluginSessionImport({
-      cfg,
-      env: state.env,
-      target,
-      sqlitePath: target.sqlitePath,
-    });
+    const receipt = f.readReceipt(target);
     expect(receipt?.sources.map((source) => source.path)).toEqual(
       expect.arrayContaining([history, trajectory, pointer]),
     );
@@ -191,16 +190,14 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
       protectedPaths: [storePath],
       run: async (authority) => {
         // A later run settles from the receipt without rediscovering the unindexed history.
-        const report = await run();
+        const report = await f.run();
         await settleRetainedDoctorSessionSources(report, ["fixture-plugin"], authority, () =>
           authority.assertCurrent(),
         );
         expect(report.targets.flatMap((entry) => entry.issues)).toEqual([]);
       },
     });
-    for (const file of [storePath, history, trajectory, pointer]) {
-      expect(fs.existsSync(file)).toBe(false);
-    }
+    expectMissing(storePath, history, trajectory, pointer);
     const settledMoves = archivedMoves(pointer);
     expect(settledMoves).toHaveLength(1);
     const settledArchive = expectDefined(settledMoves[0], "pointer archive").archivePath;
@@ -216,24 +213,18 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
       pending: [],
       resolvedPluginIds: ["fixture-plugin"],
     });
-    const inspect = () =>
-      runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "inspect" });
+    const inspect = () => f.run("inspect");
     expect((await inspect()).targets.flatMap((entry) => entry.issues)).toEqual([]);
 
     // Earlier releases archived the transcript but left its verified pointer live.
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        db.prepare(
-          "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
-        ).run();
-      },
-      { env: state.env },
-    );
+    writeState(state.env, [
+      "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
+    ]);
     fs.writeFileSync(pointer, pointerBytes);
     expect((await inspect()).targets.flatMap((entry) => entry.issues)).toContainEqual(
       expect.objectContaining({ code: "plugin_migration_source_retained" }),
     );
-    await run();
+    await f.run();
     expect(fs.existsSync(pointer)).toBe(false);
     const recovered = archivedMoves(pointer).filter((move) => move.archivePath !== settledArchive);
     expect(recovered).toHaveLength(1);
@@ -241,8 +232,10 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
       fs.readFileSync(expectDefined(recovered[0], "stranded pointer archive").archivePath),
     ).toEqual(pointerBytes);
     expect((await inspect()).targets.flatMap((entry) => entry.issues)).toEqual([]);
-    const repeated = await run();
-    expect(repeated.totals.archivedTranscriptFiles).toBe(0);
-    expect(repeated.totals.archivedUnreferencedJsonlFiles).toBe(0);
+    const repeated = await f.run();
+    expect(repeated.totals).toMatchObject({
+      archivedTranscriptFiles: 0,
+      archivedUnreferencedJsonlFiles: 0,
+    });
   });
 });

@@ -18,15 +18,32 @@ import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { readOnlySqliteValidationSnapshot } from "../infra/session-sqlite-migration-readers.js";
 import { migrateLegacyAcpSessionMetadata } from "../infra/state-migrations.session-store.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   seedDeferredPluginSessionSource,
   seedStaleDeferredPluginSessionImport,
 } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import { expectIssue } from "./doctor-session-sqlite.fixtures.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
-import { expectNoIssue } from "./doctor-session-sqlite.test-support.js";
+import { expectFiles } from "./doctor-session-sqlite.publication-spies.test-support.js";
+import { expectNoIssue, stateRows, writeState } from "./doctor-session-sqlite.test-support.js";
+
+async function staleFixture(state: OpenClawTestState) {
+  const source = await seedStaleDeferredPluginSessionImport(state);
+  const { cfg, scope, storePath } = source;
+  return {
+    ...source,
+    source: path.join(path.dirname(storePath), "legacy-kept.jsonl"),
+    run: (mode: "import" | "recover" = "import") =>
+      runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode }),
+    entry: (sessionKey: string) => loadExactSessionEntry({ ...scope, sessionKey })?.entry,
+    events: (sessionId = "legacy-kept") => loadTranscriptEventsSync({ ...scope, sessionId }),
+    write: (sessionKey: string, entry: Parameters<typeof upsertSessionEntryCore>[1]) =>
+      upsertSessionEntryCore({ ...scope, sessionKey }, entry),
+    ready: () => assertSessionStoreMigrationComplete({ cfg, env: state.env }),
+  };
+}
 
 it.each([2, 32])(
   "bounds manifest reads for a stale receipt with %i archived transcripts",
@@ -67,14 +84,9 @@ it.each([2, 32])(
         .find((move) => move.sourcePath === storePath)!;
       // Interrupted archival can leave the index present while its transcripts are already archived.
       fs.renameSync(indexMove.archivePath, storePath);
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          db.prepare(
-            "UPDATE migration_sources SET removed_source = 0, report_json = json_set(report_json, '$.databaseIdentity', '123:456') WHERE migration_kind = 'deferred-plugin-session-import'",
-          ).run();
-        },
-        { env: state.env },
-      );
+      writeState(state.env, [
+        "UPDATE migration_sources SET removed_source = 0, report_json = json_set(report_json, '$.databaseIdentity', '123:456') WHERE migration_kind = 'deferred-plugin-session-import'",
+      ]);
       const manifests = migrationRun.listSessionSqliteMigrationManifestPaths(state.env);
       expect(manifests.length).toBeGreaterThan(0);
       const reads = vi.spyOn(fs, "readFileSync");
@@ -110,9 +122,8 @@ it.each([
   "settles a foreign receipt with history available=$available and plugin pending=$pending",
   async ({ available, pending }) => {
     await withOpenClawTestState({ label: "stale-session-receipt" }, async (state) => {
-      const { cfg, storePath, scope, foreignReport } =
-        await seedStaleDeferredPluginSessionImport(state);
-      const options = { cfg, env: state.env, allAgents: true };
+      const f = await staleFixture(state);
+      const { storePath, foreignReport } = f;
       if (!pending) {
         await recordDeferredPluginMigrations({
           env: state.env,
@@ -120,21 +131,15 @@ it.each([
           resolvedPluginIds: ["brave"],
         });
       }
-      await upsertSessionEntryCore(
-        { ...scope, sessionKey: "agent:main:deleted" },
-        { label: "Live settings" },
-      );
-      const source = path.join(path.dirname(storePath), "legacy-kept.jsonl");
+      await f.write("agent:main:deleted", { label: "Live settings" });
+      const source = f.source;
       const original = fs.readFileSync(source);
       fs.unlinkSync(storePath);
       if (!available) {
         fs.unlinkSync(source);
       }
 
-      const report = await runDoctorSessionSqlite({
-        ...options,
-        mode: available ? "recover" : "import",
-      });
+      const report = await f.run(available ? "recover" : "import");
       const issues = report.targets.flatMap((target) => target.issues);
       expect(issues).toContainEqual(
         expect.objectContaining({ code: "retained_plugin_receipt_superseded" }),
@@ -142,17 +147,12 @@ it.each([
       expect(issues).not.toContainEqual(
         expect.objectContaining({ code: "retained_plugin_source_conflict" }),
       );
-      expect(
-        loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" })?.entry.label,
-      ).toBe("Live settings");
+      expect(f.entry("agent:main:deleted")?.label).toBe("Live settings");
       if (available) {
-        expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toHaveLength(2);
-        expect(
-          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:recovered:legacy-kept" })?.entry
-            .archivedAt,
-        ).toBeTruthy();
+        expect(f.events("legacy-kept")).toHaveLength(2);
+        expect(f.entry("agent:main:recovered:legacy-kept")?.archivedAt).toBeTruthy();
         if (pending) {
-          expect(fs.readFileSync(source)).toEqual(original);
+          expectFiles(original, source);
         } else {
           expect(fs.existsSync(source)).toBe(false);
           expect(
@@ -162,7 +162,7 @@ it.each([
           ).toContainEqual(original);
         }
       } else {
-        expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toEqual([]);
+        expect(f.events("legacy-kept")).toEqual([]);
         expect(issues).toContainEqual(
           expect.objectContaining({
             code: "historical_transcript_deferred",
@@ -170,20 +170,17 @@ it.each([
           }),
         );
       }
-      const superseded = withExistingOpenClawStateDatabaseReadOnly(
-        ({ db: stateDb }) =>
-          stateDb
-            .prepare("SELECT report_json FROM migration_runs WHERE status = 'superseded'")
-            .all(),
-        { env: state.env },
+      const superseded = stateRows(
+        state.env,
+        "SELECT report_json FROM migration_runs WHERE status = 'superseded'",
       );
       expect(superseded).toHaveLength(1);
       expect(JSON.parse(String(superseded?.[0]?.report_json))).toMatchObject({
         receipt: JSON.parse(foreignReport),
         reason: expect.stringContaining("different database"),
       });
-      expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
-      const repeated = await runDoctorSessionSqlite({ ...options, mode: "import" });
+      expect(f.ready).not.toThrow();
+      const repeated = await f.run();
       expect(repeated.totals.importedTranscriptEvents).toBe(0);
       if (available) {
         expectNoIssue(repeated, "retained_plugin_receipt_superseded");
@@ -194,11 +191,13 @@ it.each([
 
 it("preserves live generations and archived deletions while recovering foreign history", async () => {
   await withOpenClawTestState({ label: "stale-receipt-live-owners" }, async (state) => {
-    const { cfg, scope, storePath } = await seedStaleDeferredPluginSessionImport(state);
-    await upsertSessionEntryCore(
-      { ...scope, sessionKey: "agent:main:kept" },
-      { sessionId: "current-kept", label: "Current generation", updatedAt: Date.now() },
-    );
+    const f = await staleFixture(state);
+    const { scope, storePath } = f;
+    await f.write("agent:main:kept", {
+      sessionId: "current-kept",
+      label: "Current generation",
+      updatedAt: Date.now(),
+    });
     await expect(
       deleteSessionEntryLifecycle({
         ...scope,
@@ -206,36 +205,26 @@ it("preserves live generations and archived deletions while recovering foreign h
         target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
       }),
     ).resolves.toMatchObject({ deleted: true });
-    const archivedHistory = loadTranscriptEventsSync({ ...scope, sessionId: "legacy-deleted" });
-    const report = await runDoctorSessionSqlite({
-      cfg,
-      env: state.env,
-      allAgents: true,
-      mode: "import",
+    const archivedHistory = f.events("legacy-deleted");
+    const report = await f.run();
+    expect(f.entry("agent:main:kept")).toMatchObject({
+      sessionId: "current-kept",
+      label: "Current generation",
     });
-    expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry).toMatchObject(
-      { sessionId: "current-kept", label: "Current generation" },
-    );
-    expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toHaveLength(2);
+    expect(f.events("legacy-kept")).toHaveLength(2);
     expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" })).toBeUndefined();
-    expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-deleted" })).toEqual(
-      archivedHistory,
-    );
+    expect(f.events("legacy-deleted")).toEqual(archivedHistory);
     const snapshot = readOnlySqliteValidationSnapshot({ agentId: "main", storePath });
     if (!snapshot.ok) {
       throw snapshot.error;
     }
     expect(snapshot.snapshot.transcriptEventCountsBySessionId.has("legacy-deleted")).toBe(false);
-    expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
-      expect.objectContaining({
-        code: "historical_transcript_deferred",
-        message: expect.stringContaining(
-          "existing deletion and archive state remain authoritative",
-        ),
-      }),
-    );
+    expectIssue(report, {
+      code: "historical_transcript_deferred",
+      message: expect.stringContaining("existing deletion and archive state remain authoritative"),
+    });
     expect(fs.existsSync(storePath)).toBe(true);
-    expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
+    expect(f.ready).not.toThrow();
   });
 });
 
@@ -243,8 +232,9 @@ it.each(["changed", "unreadable"] as const)(
   "recovers independently of a foreign receipt's %s source",
   async (kind) => {
     await withOpenClawTestState({ label: "stale-receipt-source" }, async (state) => {
-      const { cfg, storePath, scope } = await seedStaleDeferredPluginSessionImport(state);
-      const source = path.join(path.dirname(storePath), "legacy-kept.jsonl");
+      const f = await staleFixture(state);
+      const { storePath } = f;
+      const source = f.source;
       fs.unlinkSync(storePath);
       if (kind === "changed") {
         fs.appendFileSync(source, "\n");
@@ -261,22 +251,19 @@ it.each(["changed", "unreadable"] as const)(
                 return readIdentity(file, ...args);
               })
           : undefined;
-      const options = { cfg, env: state.env, allAgents: true, mode: "import" as const };
-      const first = await runDoctorSessionSqlite(options).finally(() => unreadable?.mockRestore());
+      const first = await f.run().finally(() => unreadable?.mockRestore());
       if (kind === "unreadable") {
-        expect(first.targets.flatMap((target) => target.issues)).toContainEqual(
-          expect.objectContaining({
-            code: "historical_transcript_deferred",
-            message: expect.stringContaining("fixture retained input unreadable"),
-          }),
-        );
-        expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toEqual([]);
+        expectIssue(first, {
+          code: "historical_transcript_deferred",
+          message: expect.stringContaining("fixture retained input unreadable"),
+        });
+        expect(f.events("legacy-kept")).toEqual([]);
       } else {
-        expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toHaveLength(2);
+        expect(f.events("legacy-kept")).toHaveLength(2);
       }
-      const recovered = await runDoctorSessionSqlite(options);
+      const recovered = await f.run();
       expect(recovered.totals.importedTranscriptEvents).toBe(kind === "unreadable" ? 2 : 0);
-      expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toHaveLength(2);
+      expect(f.events("legacy-kept")).toHaveLength(2);
       if (kind === "changed") {
         expectNoIssue(recovered, "retained_plugin_receipt_superseded");
       }
@@ -286,11 +273,13 @@ it.each(["changed", "unreadable"] as const)(
 
 it("keeps canonical ACP metadata authoritative on the next Doctor pass", async () => {
   await withOpenClawTestState({ label: "stale-receipt-acp-repeat" }, async (state) => {
-    const { cfg, scope } = await seedStaleDeferredPluginSessionImport(state);
-    await upsertSessionEntryCore(
-      { ...scope, sessionKey: "agent:main:kept" },
-      { sessionId: "legacy-kept", label: "Canonical settings", updatedAt: Date.now() },
-    );
+    const f = await staleFixture(state);
+    const { cfg } = f;
+    await f.write("agent:main:kept", {
+      sessionId: "legacy-kept",
+      label: "Canonical settings",
+      updatedAt: Date.now(),
+    });
     const migrate = () =>
       migrateLegacyAcpSessionMetadata({
         cfg,
@@ -298,18 +287,13 @@ it("keeps canonical ACP metadata authoritative on the next Doctor pass", async (
         legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
       });
     expect((await migrate()).warnings).toEqual([]);
-    await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+    await f.run();
     expect((await migrate()).warnings).toEqual([]);
-    expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label).toBe(
-      "Canonical settings",
-    );
-    expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toHaveLength(2);
-    expect(
-      withExistingOpenClawStateDatabaseReadOnly(
-        ({ db }) => db.prepare("SELECT count(*) AS count FROM acp_sessions").get(),
-        { env: state.env },
-      ),
-    ).toEqual({ count: 0 });
+    expect(f.entry("agent:main:kept")?.label).toBe("Canonical settings");
+    expect(f.events("legacy-kept")).toHaveLength(2);
+    expect(stateRows(state.env, "SELECT count(*) AS count FROM acp_sessions")?.[0]).toEqual({
+      count: 0,
+    });
   });
 });
 
@@ -327,15 +311,11 @@ it.each(["receipt", "physical", "foreign"] as const)(
         binding === "foreign"
           ? "123:456"
           : sessionVerification.databaseIdentity(sqlitePath, binding);
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          db.prepare("UPDATE migration_sources SET report_json = ? WHERE source_key = ?").run(
-            JSON.stringify(recorded),
-            original.sourceKey,
-          );
-        },
-        { env: state.env },
-      );
+      writeState(state.env, [
+        "UPDATE migration_sources SET report_json = ? WHERE source_key = ?",
+        JSON.stringify(recorded),
+        original.sourceKey,
+      ]);
       const before = readDeferredPluginSessionImportReceipt(params);
       const source = path.join(path.dirname(storePath), "legacy-kept.jsonl");
       fs.writeFileSync(source, "");
@@ -356,15 +336,10 @@ it.each(["receipt", "physical", "foreign"] as const)(
           expect(verify).toHaveBeenCalledOnce();
           expect(readDeferredPluginSessionImportReceipt(params)).toEqual(before);
           expect(
-            withExistingOpenClawStateDatabaseReadOnly(
-              ({ db }) =>
-                db
-                  .prepare(
-                    "SELECT count(*) AS count FROM migration_runs WHERE status = 'superseded'",
-                  )
-                  .get(),
-              { env: state.env },
-            ),
+            stateRows(
+              state.env,
+              "SELECT count(*) AS count FROM migration_runs WHERE status = 'superseded'",
+            )?.[0],
           ).toEqual({ count: 0 });
         }
       } finally {
