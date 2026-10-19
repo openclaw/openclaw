@@ -101,6 +101,7 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   }
   if (fresh) {
     const now = Date.now();
+    // sqlite-allow-raw: PostgreSQL bootstrap publishes the matching state schema metadata.
     db.prepare(
       `INSERT INTO schema_meta
         (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
@@ -108,10 +109,10 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
     ).run(OPENCLAW_STATE_SCHEMA_VERSION, VERSION, now, now);
     writeStateSchemaContentVersion(db);
   }
-  const meta = db
+  const meta = db // sqlite-allow-raw: Schema admission verifies identity fields before ordinary store queries.
     .prepare("SELECT schema_version, role, agent_id FROM schema_meta WHERE meta_key = 'primary'")
     .get();
-  const content = db
+  const content = db // sqlite-allow-raw: Schema admission compares physical and content schema versions.
     .prepare(
       "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
     )
@@ -284,6 +285,7 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
   invalidateLocalSqliteSchemaAdmissions(db);
+  // sqlite-allow-raw: The schema owner installs a verified fragment under its transaction.
   db.exec(fragment.sql);
   admitPostgresPhysicalFacts({
     anchor: db.anchor,
