@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
+import { providerResponse } from "../../agents/embedded-agent-runner.wire.test-support.js";
 import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
@@ -20,41 +21,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
-
-function successfulResponse(model: string) {
-  const text = "Fallback report";
-  const item = {
-    id: "fallback-message",
-    type: "message",
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  const response = {
-    id: "fallback-response",
-    model,
-    status: "completed",
-    output: [item],
-    usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-  };
-  const cursor = { item_id: item.id, output_index: 0, content_index: 0 };
-  const events = [
-    { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
-    { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
-    {
-      type: "response.content_part.added",
-      ...cursor,
-      part: { type: "output_text", text: "", annotations: [] },
-    },
-    { type: "response.output_text.delta", ...cursor, delta: text },
-    { type: "response.output_text.done", ...cursor, text },
-    { type: "response.output_item.done", output_index: 0, item },
-    { type: "response.completed", response },
-  ];
-  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
-    headers: { "content-type": "text/event-stream" },
-  });
-}
 
 it("continues one cron user turn when the primary times out after provider dispatch", async () => {
   await withOpenClawTestState({ label: "cron-fallback-transcript" }, async (state) => {
@@ -114,7 +80,14 @@ it("continues one cron user turn when the primary times out after provider dispa
       const body = JSON.parse(await request.text()) as { model: string };
       requests.push(body.model);
       if (body.model !== "primary") {
-        return successfulResponse(body.model);
+        return providerResponse({
+          api: "openai-responses",
+          model: body.model,
+          id: "fallback-response",
+          messageId: "fallback-message",
+          text: "Fallback report",
+          calls: [],
+        }).response;
       }
       const { signal } = request;
       return await new Promise<Response>((_resolve, reject) => {

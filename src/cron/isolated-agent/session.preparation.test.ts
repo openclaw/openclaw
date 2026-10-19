@@ -51,6 +51,28 @@ afterEach(() => {
   memorySessionActorOwners.reset();
 });
 
+async function withoutHostSql<T>(run: () => Promise<T>) {
+  const observer = observeHostDataSql();
+  try {
+    const result = await run();
+    expect(observer.queries).toEqual([]);
+    return result;
+  } finally {
+    observer.restore();
+  }
+}
+
+function readInput(sessionKey: string, storePath: string, guarded = true) {
+  return {
+    agentId: "main",
+    env: { ...state.env },
+    storePath,
+    sessionKeys: [sessionKey, `${sessionKey}-missing`],
+    lifecycleSessionKey: guarded ? sessionKey : undefined,
+    projection: "full" as const,
+  };
+}
+
 it("prepares a missing start timestamp from the bounded transcript header without host SQLite", async () => {
   const sessionKey = "agent:main:cron:header";
   const scope = { agentId: "main", env: state.env, sessionKey, sessionId: "header-session" };
@@ -64,22 +86,18 @@ it("prepares a missing start timestamp from the bounded transcript header withou
       timestamp: new Date(now - 60_000).toISOString(),
     },
   ]);
-  const observer = observeHostDataSql();
-  try {
-    const prepared = await prepareCronSession({
+  const prepared = await withoutHostSql(() =>
+    prepareCronSession({
       cfg: { session: { reset: { mode: "none" } } },
       agentId: "main",
       sessionKey,
       nowMs: now,
-    });
-    expect(prepared.sessionEntry.sessionStartedAt).toBe(now - 60_000);
-    expect(prepared.isNewSession).toBe(false);
-    for (const call of observer.calls) {
-      expect(call).not.toHaveBeenCalled();
-    }
-  } finally {
-    observer.restore();
-  }
+    }),
+  );
+  expect(prepared).toMatchObject({
+    sessionEntry: { sessionStartedAt: now - 60_000 },
+    isNewSession: false,
+  });
 });
 
 it("captures store ownership before dispatch without host SQLite", async () => {
@@ -93,30 +111,16 @@ it("captures store ownership before dispatch without host SQLite", async () => {
     subagentRecovery: { wedgedAt: 1, wedgedReason: "Synthetic recovery tombstone" },
   };
   replaceSessionEntrySync({ agentId: "main", env: state.env, storePath, sessionKey }, entry);
-  const input = {
-    agentId: "main",
-    env: { ...state.env },
-    storePath,
-    sessionKeys: [sessionKey, "agent:main:cron:missing"],
-    projection: "full" as const,
-  };
+  const input = readInput(sessionKey, storePath, false);
   observed.dispatch = () => {
     observed.dispatch = undefined;
     input.storePath = state.path("replacement.sqlite");
     input.env.OPENCLAW_STATE_DIR = state.path("replacement-state");
     input.sessionKeys[0] = "agent:main:cron:other";
   };
-  const observer = observeHostDataSql();
-  try {
-    const result = await readSessionEntriesFromStoreInWorker(input);
-    expect(result.entries).toEqual([{ sessionKey, entry: expect.objectContaining(entry) }]);
-    for (const call of observer.calls) {
-      expect(call).not.toHaveBeenCalled();
-    }
-    expect(fs.existsSync(input.storePath)).toBe(false);
-  } finally {
-    observer.restore();
-  }
+  const result = await withoutHostSql(() => readSessionEntriesFromStoreInWorker(input));
+  expect(result.entries).toEqual([{ sessionKey, entry: expect.objectContaining(entry) }]);
+  expect(fs.existsSync(input.storePath)).toBe(false);
 });
 
 it.each(["incognito", "internal-effects"] as const)(
@@ -147,63 +151,48 @@ it.each(["incognito", "internal-effects"] as const)(
   },
 );
 
-it("rejects a read revoked during dispatch and joins worker close", async () => {
+it.each(["revoked", "redirected"])("rejects a %s read at dispatch", async (interruption) => {
   const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-  const sessionKey = "agent:main:cron:closed";
-  writeSessionEntry(database, sessionKey, { sessionId: "closed-session", updatedAt: 1 });
+  const sessionKey = `agent:main:cron:${interruption}`;
+  writeSessionEntry(database, sessionKey, { sessionId: "original-source", updatedAt: 1 });
   // Exercise worker dispatch rather than the retained row-facts hit.
   sessionChanges.invalidate({ sessionKey, storePath: database.path, factsInvalidated: true });
+  let storePath = database.path;
   let closing: Promise<boolean> | undefined;
-  // The close comes from outside the read, not from the read's writer FIFO context.
-  const runExternalClose = AsyncLocalStorage.snapshot();
-  observed.dispatch = () => {
-    observed.dispatch = undefined;
-    closing = runExternalClose(() => closeOpenClawAgentDatabaseByPathAsync(database.path, "main"));
-  };
-  await expect(
-    readSessionEntriesFromStoreInWorker({
+  if (interruption === "revoked") {
+    // Closing must not inherit the read's writer FIFO context.
+    const runExternalClose = AsyncLocalStorage.snapshot();
+    observed.dispatch = () => {
+      observed.dispatch = undefined;
+      closing = runExternalClose(() =>
+        closeOpenClawAgentDatabaseByPathAsync(database.path, "main"),
+      );
+    };
+  } else {
+    const replacementRoot = state.path("replacement-root");
+    const replacement = openOpenClawAgentDatabase({
       agentId: "main",
       env: state.env,
-      storePath: database.path,
-      sessionKeys: [sessionKey, "agent:main:cron:closed-missing"],
-      lifecycleSessionKey: sessionKey,
-      projection: "full",
-    }),
-  ).rejects.toThrow(/revoked/);
-  expect(closing).toBeDefined();
-  await closing;
-  expect(fs.existsSync(database.path)).toBe(true);
-});
-
-it("rejects a configured alias redirected while its read is in flight", async () => {
-  const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-  const replacementRoot = state.path("replacement-root");
-  const replacement = openOpenClawAgentDatabase({
-    agentId: "main",
-    env: state.env,
-    path: path.join(replacementRoot, "agents", "main", "agent", "openclaw-agent.sqlite"),
-  });
-  const sessionKey = "agent:main:cron:alias";
-  writeSessionEntry(database, sessionKey, { sessionId: "original-source", updatedAt: 1 });
-  writeSessionEntry(replacement, sessionKey, { sessionId: "replacement-source", updatedAt: 1 });
-  sessionChanges.invalidate({ sessionKey, storePath: database.path, factsInvalidated: true });
-  const alias = state.path("alias-full");
-  fs.symlinkSync(state.stateDir, alias, "junction");
-  observed.dispatch = () => {
-    observed.dispatch = undefined;
-    fs.unlinkSync(alias);
-    fs.symlinkSync(replacementRoot, alias, "junction");
-  };
+      path: path.join(replacementRoot, "agents", "main", "agent", "openclaw-agent.sqlite"),
+    });
+    writeSessionEntry(replacement, sessionKey, { sessionId: "replacement-source", updatedAt: 1 });
+    const alias = state.path("alias-full");
+    fs.symlinkSync(state.stateDir, alias, "junction");
+    storePath = path.join(alias, "agents", "main", "agent", "openclaw-agent.sqlite");
+    observed.dispatch = () => {
+      observed.dispatch = undefined;
+      fs.unlinkSync(alias);
+      fs.symlinkSync(replacementRoot, alias, "junction");
+    };
+  }
   await expect(
-    readSessionEntriesFromStoreInWorker({
-      agentId: "main",
-      env: state.env,
-      storePath: path.join(alias, "agents", "main", "agent", "openclaw-agent.sqlite"),
-      sessionKeys: [sessionKey, "agent:main:cron:alias-missing"],
-      lifecycleSessionKey: sessionKey,
-      projection: "full",
-    }),
-  ).rejects.toThrow(/outside captured discovery custody/);
+    readSessionEntriesFromStoreInWorker(readInput(sessionKey, storePath)),
+  ).rejects.toThrow(interruption === "revoked" ? /revoked/ : /outside captured discovery custody/);
+  if (interruption === "revoked") {
+    expect(closing).toBeDefined();
+    await closing;
+    expect(fs.existsSync(database.path)).toBe(true);
+  }
 });
 
 it("keeps a provider-owned CLI session with the default reset policy", () => {
@@ -215,7 +204,6 @@ it("keeps a provider-owned CLI session with the default reset policy", () => {
     updatedAt: startedAt,
     sessionStartedAt: startedAt,
     lastInteractionAt: startedAt,
-    model: "claude-opus-4-6",
     modelProvider: "claude-cli",
     cliSessionBindings: { "claude-cli": { sessionId: "cli-conversation-xyz" } },
   };
@@ -228,8 +216,10 @@ it("keeps a provider-owned CLI session with the default reset policy", () => {
     store: { [sessionKey]: entry },
     lifecycleTimestamps: { sessionStartedAt: startedAt, lastInteractionAt: startedAt },
   });
-  expect(result.isNewSession).toBe(false);
-  expect(result.sessionEntry.sessionId).toBe("old-session-id");
+  expect(result).toMatchObject({
+    isNewSession: false,
+    sessionEntry: { sessionId: "old-session-id" },
+  });
   expect(getCliSessionBinding(result.sessionEntry, "claude-cli")).toEqual({
     sessionId: "cli-conversation-xyz",
   });
