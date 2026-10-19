@@ -8,8 +8,12 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { SessionListOptions, SessionListSnapshot } from "../../lib/sessions/index.ts";
-import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
+import { sessionChanged } from "../../lib/sessions/session-rpc.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -17,18 +21,38 @@ import {
   createApplicationGateway,
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { DashboardsPage } from "./dashboards-page.tsx";
 import { page as dashboardRoute } from "./route.ts";
 import type { DashboardsRouteData } from "./view.tsx";
 
-function result(...sessionRows: GatewaySessionRow[]): SessionsListResult {
+function pageContext(overrides: {
+  sessions: Partial<ApplicationContext["sessions"]>;
+  gateway?: ApplicationContext["gateway"];
+  agentSelection?: Partial<ApplicationContext["agentSelection"]>;
+}): ApplicationContext {
   return {
-    ts: 1,
-    path: "(multiple)",
-    count: sessionRows.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: sessionRows,
+    basePath: "",
+    gateway: createApplicationGateway().gateway,
+    agentSelection: { state: { selectedId: "main", scopeId: null }, subscribe: () => () => {} },
+    agents: { state: { agentsList: null } },
+    ...overrides,
+  } as ApplicationContext;
+}
+
+async function mountDashboard(context: ApplicationContext, initial?: DashboardsRouteData) {
+  const [data, setData] = createSignal(initial);
+  const { renderSolid: Page } = await dashboardRoute.component();
+  return {
+    ...mountSolid(() => <Page data={data()} loaderPending={false} presented />, {
+      wrapper: createSolidApplicationContextProvider(context).wrapper,
+    }),
+    setData,
   };
+}
+
+function cardTitles(element: HTMLElement) {
+  return Array.from(element.querySelectorAll("[data-dashboard-session] h2"), (heading) =>
+    heading.textContent?.trim(),
+  );
 }
 
 function row(
@@ -41,7 +65,7 @@ function row(
 
 function routeData(...rows: GatewaySessionRow[]): DashboardsRouteData {
   return {
-    result: result(...rows),
+    result: sessionsResult(rows),
     error: null,
     basePath: "",
     fallbackAgentId: "main",
@@ -58,11 +82,14 @@ function snapshot(
   return { result: listResult, agentId, loading: false, error };
 }
 
-function changeValue(control: HTMLInputElement | HTMLSelectElement, value: string) {
+function changeValue(control: HTMLInputElement | HTMLSelectElement, value: string, settle = true) {
   control.value = value;
   control.dispatchEvent(
     new Event(control instanceof HTMLInputElement ? "input" : "change", { bubbles: true }),
   );
+  if (settle) {
+    flush();
+  }
 }
 
 function createDashboardClient() {
@@ -76,24 +103,11 @@ function createDashboardClient() {
 }
 
 function controlPreviewFrames(): () => void {
-  const frames = new Map<number, FrameRequestCallback>();
-  let nextFrameId = 0;
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-    const id = ++nextFrameId;
-    frames.set(id, callback);
-    return id;
-  });
-  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
-    frames.delete(id);
-  });
-  return () => {
-    const pendingFrameIds = [...frames.keys()];
-    for (const id of pendingFrameIds) {
-      const callback = frames.get(id);
-      frames.delete(id);
-      callback?.(0);
-    }
-  };
+  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+  const { requestAnimationFrame, cancelAnimationFrame } = globalThis;
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation(requestAnimationFrame);
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(cancelAnimationFrame);
+  return () => vi.advanceTimersToNextFrame();
 }
 
 async function settleDashboardPreviews(element: HTMLElement, runFrame: () => void) {
@@ -102,16 +116,10 @@ async function settleDashboardPreviews(element: HTMLElement, runFrame: () => voi
   flush();
   const previews = element.querySelectorAll<HTMLElement>("openclaw-dashboard-preview");
   expect(previews.length).toBeGreaterThan(0);
+  const selector = 'openclaw-board-document openclaw-board-view [data-test-id="board-empty"]';
   for (const preview of previews) {
-    // The first visible preview also waits for the lazy board module to load.
     await waitForSolid(
-      () => {
-        const board = preview.querySelector("openclaw-board-document");
-        expect(board, preview.textContent ?? "").not.toBeNull();
-        const view = board?.querySelector("openclaw-board-view");
-        expect(view, board?.textContent ?? "").not.toBeNull();
-        expect(view?.querySelector('[data-test-id="board-empty"]')).not.toBeNull();
-      },
+      () => expect(preview.querySelector(selector), preview.textContent ?? "").not.toBeNull(),
       { timeout: 10_000 },
     );
   }
@@ -122,17 +130,18 @@ describe("DashboardsPage", () => {
 
   afterEach(() => {
     cleanupSolid();
-    document.body.replaceChildren();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("subscribes to the exact query and preserves owner rows through agent-scope and route updates", async () => {
     const runFrame = controlPreviewFrames();
-    const selectionListeners = new Set<() => void>();
+    const selectionState = { selectedId: "main", scopeId: null as string | null };
+    const selectionListeners = new Set<(state: typeof selectionState) => void>();
     const listListeners = new Map<string, (snapshot: SessionListSnapshot) => void>();
     const snapshots = new Map<string, SessionListSnapshot>();
     const queryKey = (options: SessionListOptions) => options.agentId ?? "all";
-    const allResult = result(row("agent:main:before", "Before"));
+    const allResult = sessionsResult([row("agent:main:before", "Before")]);
     snapshots.set("all", snapshot(allResult));
     snapshots.set("writer", snapshot(null));
     const refreshList = vi.fn(async () => undefined);
@@ -143,13 +152,14 @@ describe("DashboardsPage", () => {
         return () => listListeners.delete(key);
       },
     );
-    const selectionState = { selectedId: "main", scopeId: null as string | null };
-    const context = {
-      basePath: "",
-      gateway: {
-        snapshot: { client: createDashboardClient(), phase: "connected", hello: null },
-        subscribe: () => () => undefined,
-      },
+    const source = createApplicationGateway();
+    source.publish({
+      ...source.gateway.snapshot,
+      client: createDashboardClient(),
+      phase: "connected",
+    });
+    const context = pageContext({
+      gateway: source.gateway,
       sessions: {
         listSnapshot(query: SessionListOptions) {
           return snapshots.get(queryKey(query))!;
@@ -159,28 +169,13 @@ describe("DashboardsPage", () => {
       },
       agentSelection: {
         state: selectionState,
-        subscribe(listener: () => void) {
+        subscribe(listener) {
           selectionListeners.add(listener);
           return () => selectionListeners.delete(listener);
         },
       },
-      agents: { state: { agentsList: null } },
-    } as unknown as ApplicationContext;
-    const [seed, setSeed] = createSignal<DashboardsRouteData | undefined>(
-      routeData(row("agent:main:before", "Before")),
-    );
-    const route = await dashboardRoute.component();
-    const mounted = mountSolid(
-      () =>
-        route.renderSolid({
-          get data() {
-            return seed();
-          },
-          loaderPending: false,
-          presented: true,
-        }),
-      { wrapper: createSolidApplicationContextProvider(context).wrapper },
-    );
+    });
+    const mounted = await mountDashboard(context, routeData(row("agent:main:before", "Before")));
     const element = mounted.container;
     flush();
 
@@ -197,48 +192,54 @@ describe("DashboardsPage", () => {
     const retiredListener = listListeners.get("all")!;
 
     selectionState.scopeId = "writer";
-    selectionListeners.forEach((listener) => listener());
+    selectionListeners.forEach((listener) => listener(selectionState));
     await waitForSolid(() => expect(refreshList).toHaveBeenCalledTimes(1));
     expect(refreshList).toHaveBeenCalledWith({ ...expectedQuery, agentId: "writer" });
     expect(element.textContent).toContain("Before");
 
-    const publishWriter = (next: SessionListSnapshot) => {
+    const publishWriter = (title: string | null, error: string | null = null) => {
+      const next = snapshot(
+        title === null ? null : sessionsResult([row("agent:writer:current", title)]),
+        "writer",
+        error,
+      );
       snapshots.set("writer", next);
       listListeners.get("writer")?.(next);
+      flush();
     };
-    publishWriter(snapshot(null, "writer", "Writer initial load failed"));
-    flush();
+    publishWriter(null, "Writer initial load failed");
     expect(element.querySelector('[role="alert"]')?.textContent).toContain(
       "Writer initial load failed",
     );
     expect(element.querySelector('[aria-busy="true"]')).toBeNull();
     expect(refreshList).toHaveBeenCalledTimes(1);
 
-    const writerRow = row("agent:writer:current", "Writer dashboard");
-    publishWriter(snapshot(result(writerRow), "writer"));
+    publishWriter("Writer dashboard");
     await waitForSolid(() => expect(element.textContent).toContain("Writer dashboard"));
-    setSeed(undefined);
+    mounted.setData(undefined);
     flush();
     expect(element.textContent).toContain("Writer dashboard");
-    setSeed(routeData(row("agent:main:stale-route", "Stale route")));
+    mounted.setData(routeData(row("agent:main:stale-route", "Stale route")));
     flush();
     expect(element.textContent).toContain("Writer dashboard");
     expect(element.textContent).not.toContain("Stale route");
     await settleDashboardPreviews(element, runFrame);
     retiredListener(
-      snapshot(result(row("agent:main:retired", "Retired")), null, "Retired scope refresh failed"),
+      snapshot(
+        sessionsResult([row("agent:main:retired", "Retired")]),
+        null,
+        "Retired scope refresh failed",
+      ),
     );
     flush();
     expect(element.textContent).not.toContain("Retired");
 
     const writerListener = listListeners.get("writer")!;
-    publishWriter(snapshot(result({ ...writerRow }), "writer", "Writer refresh failed"));
-    flush();
+    publishWriter("Writer dashboard", "Writer refresh failed");
     expect(element.textContent).toContain("Writer dashboard");
     expect(element.querySelector('[role="alert"]')?.textContent).toContain("Writer refresh failed");
     expect(element.querySelector('[role="alert"] button')).toBeNull();
-    publishWriter(snapshot(result(row("agent:writer:current", "Recovered dashboard")), "writer"));
-    flush();
+    publishWriter("Recovered dashboard");
     await settleDashboardPreviews(element, runFrame);
     expect(element.textContent).toContain("Recovered dashboard");
     expect(element.querySelector('[role="alert"]')).toBeNull();
@@ -250,7 +251,7 @@ describe("DashboardsPage", () => {
   });
 
   it.each([false, true])(
-    "retains every dashboard page across row events and retires late pages (retired: %s)",
+    "keeps pages across row events; retires late pages: %s",
     async (retired) => {
       const runFrame = controlPreviewFrames();
       const firstRow = row("agent:main:new", "New dashboard", { sessionId: "new", hasBoard: true });
@@ -259,17 +260,14 @@ describe("DashboardsPage", () => {
         hasBoard: true,
       });
       const page = (rows: GatewaySessionRow[], offset: number, hasMore: boolean) => ({
-        ...result(...rows),
+        ...sessionsResult(rows),
         totalCount: 2,
         offset,
         limitApplied: 1,
         hasMore,
         nextOffset: hasMore ? 1 : null,
       });
-      let resolvePage!: (value: SessionsListResult) => void;
-      const pendingPage = new Promise<SessionsListResult>((resolve) => {
-        resolvePage = resolve;
-      });
+      const pendingPage = Promise.withResolvers<SessionsListResult>();
       const requests: unknown[] = [];
       const boardClient = createDashboardClient();
       const client = createTestGatewayClient(async (method, params) => {
@@ -278,12 +276,12 @@ describe("DashboardsPage", () => {
         }
         if (method === "sessions.list") {
           if (!Reflect.get(params ?? {}, "hasBoard")) {
-            return result();
+            return sessionsResult([]);
           }
           requests.push(params);
           return Reflect.get(params ?? {}, "offset")
             ? retired
-              ? pendingPage
+              ? pendingPage.promise
               : page([secondRow], 1, false)
             : page([firstRow], 0, true);
         }
@@ -292,22 +290,14 @@ describe("DashboardsPage", () => {
       const source = createApplicationGateway();
       source.publish({ ...source.gateway.snapshot, client, phase: "connected" });
       const sessions = createTestSessionCapability(source.gateway);
-      const context = {
-        basePath: "",
-        gateway: source.gateway,
-        sessions,
-        agentSelection: { state: { selectedId: "main", scopeId: null }, subscribe: () => () => {} },
-        agents: { state: { agentsList: null } },
-      } as unknown as ApplicationContext;
-      const mounted = mountSolid(() => <DashboardsPage />, {
-        wrapper: createSolidApplicationContextProvider(context).wrapper,
-      });
+      const context = pageContext({ gateway: source.gateway, sessions });
+      const mounted = await mountDashboard(context);
       const element = mounted.container;
       try {
         await waitForSolid(() => expect(requests).toHaveLength(2));
         if (retired) {
           source.publish({ ...source.gateway.snapshot, phase: "reconnecting", client: null });
-          resolvePage(page([secondRow], 1, false));
+          pendingPage.resolve(page([secondRow], 1, false));
           flush();
           expect(element.textContent).toContain("New dashboard");
           expect(element.textContent).not.toContain("Old dashboard");
@@ -317,28 +307,23 @@ describe("DashboardsPage", () => {
           expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(2),
         );
         await settleDashboardPreviews(element, runFrame);
-        source.publishEvent({
-          type: "event",
-          event: "sessions.changed",
-          payload: {
+        source.publishEvent(
+          sessionChanged({
             reason: "patch",
             sessionKey: firstRow.key,
             ancestorSessions: [],
             session: { ...firstRow, displayName: "Updated dashboard", updatedAt: 2 },
-          },
-        });
+          }),
+        );
         flush();
-        expect(element.textContent).toContain("Updated dashboard");
-        expect(element.textContent).toContain("Old dashboard");
+        expect(cardTitles(element)).toEqual(["Updated dashboard", "Old dashboard"]);
         expect(requests).toHaveLength(2);
         expect(sessions.listSnapshot(dashboardSessionListQuery()).result?.sessions).toHaveLength(2);
         const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
         changeValue(search, "old");
-        flush();
-        expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
-        expect(element.textContent).toContain("Old dashboard");
+        expect(cardTitles(element)).toEqual(["Old dashboard"]);
       } finally {
-        resolvePage(page([secondRow], 1, false));
+        pendingPage.resolve(page([secondRow], 1, false));
         mounted.unmount();
         sessions.dispose();
       }
@@ -360,50 +345,35 @@ describe("DashboardsPage", () => {
         createdActor: { type: "human", id: "peter", label: "Peter" },
       }),
     );
-    const context = {
-      gateway: createApplicationGateway().gateway,
-      agentSelection: { state: { scopeId: null }, subscribe: () => () => {} },
+    const context = pageContext({
       sessions: {
         listSnapshot: () => ({ result: null, error: null, loading: false }),
         subscribeList: () => () => {},
       },
-    } as unknown as ApplicationContext;
-    const route = await dashboardRoute.component();
-    const { container } = mountSolid(
-      () => route.renderSolid({ data, loaderPending: false, presented: true }),
-      { wrapper: createSolidApplicationContextProvider(context).wrapper },
-    );
+    });
+    const { container } = await mountDashboard(context, data);
     flush();
 
     const element = container.querySelector<HTMLElement>("openclaw-dashboards-page")!;
     expect(element).not.toBeNull();
-    expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(3);
+    expect(cardTitles(element)).toEqual(["Zulu monitor", "Bravo health", "Alpha signals"]);
     expect(element.querySelector(".dashboard-preview")?.hasAttribute("inert")).toBe(true);
 
     const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
     expect(search).not.toBeNull();
     changeValue(search, "signals");
-    flush();
-    expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
-    expect(element.textContent).toContain("Alpha signals");
+    expect(cardTitles(element)).toEqual(["Alpha signals"]);
 
     changeValue(search, "");
-    flush();
     const selects = element.querySelectorAll<HTMLSelectElement>("select");
     const authorSelect = selects.item(0);
     const sortSelect = selects.item(1);
     changeValue(authorSelect, "mira");
-    flush();
-    expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
+    expect(cardTitles(element)).toEqual(["Alpha signals"]);
     expect(element.textContent).toContain("By Mira");
 
-    changeValue(authorSelect, "");
+    changeValue(authorSelect, "", false);
     changeValue(sortSelect, "title");
-    flush();
-    expect(
-      Array.from(element.querySelectorAll(".dashboard-card__heading h2"), (heading) =>
-        heading.textContent?.trim(),
-      ),
-    ).toEqual(["Alpha signals", "Bravo health", "Zulu monitor"]);
+    expect(cardTitles(element)).toEqual(["Alpha signals", "Bravo health", "Zulu monitor"]);
   });
 });
