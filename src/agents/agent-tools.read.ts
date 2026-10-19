@@ -36,6 +36,7 @@ import {
   normalizeFileToolPathParamsFromKeys,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
+import type { SkillInstructionDeliveryMarkers } from "./agent-tools.read.types.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { writeHostFile } from "./host-file-write.js";
@@ -117,18 +118,7 @@ export function createSkillInstructionDeliveryCache(): SkillInstructionDeliveryC
  * unconsumed markers, so an in-flight settlement that crossed the clear omits
  * until a fresh delivery re-establishes one.
  */
-export type SkillInstructionDeliveryMarkers = {
-  /** Capture this invocation's skill.used emission marker from a settled delivery. */
-  captureInvocationFingerprint(toolCallId: string, fingerprint: string): void;
-  /** Consume this invocation's emission marker; absent when unestablishable. */
-  takeInvocationFingerprint(toolCallId: string): string | undefined;
-  /** Drop an invocation's marker when its delivery failed or was reset. */
-  deleteInvocationFingerprint(toolCallId: string): void;
-  /** Epoch clear: drop unconsumed markers together with the delivery cache. */
-  clear(): void;
-  /** Monotonic epoch generation; clear() advances it. */
-  generation(): number;
-};
+export type { SkillInstructionDeliveryMarkers } from "./agent-tools.read.types.js";
 
 const MAX_INVOCATION_FINGERPRINTS = 1_024;
 

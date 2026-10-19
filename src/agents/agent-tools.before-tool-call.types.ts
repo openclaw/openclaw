@@ -14,7 +14,7 @@ import type {
   PluginHookToolRequesterContext,
 } from "../plugins/types.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
-import type { SkillInstructionDeliveryMarkers } from "./agent-tools.read.js";
+import type { SkillInstructionDeliveryMarkers } from "./agent-tools.read.types.js";
 import type { AgentTool } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
