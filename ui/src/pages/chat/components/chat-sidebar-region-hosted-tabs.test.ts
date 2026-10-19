@@ -233,6 +233,44 @@ it.each([false, true])("closes pages before the empty panel (native=%s)", async 
   expect(region.callbacks!.closeSlot).toHaveBeenCalledExactlyOnceWith("browser");
 });
 
+it.each(["native", "header"] as const)(
+  "closes the desktop Files panel with its last hosted tab through %s Close",
+  async (source) => {
+    const { shell, region, panel, changed } = await mount({
+      tabs: [firstTab],
+      slot: "workspace",
+    });
+    region.presentation = "desktop";
+    region.layout = openSlot({ columns: [] }, "workspace");
+    region.callbacks!.closeSlot = vi.fn((slot) => {
+      region.layout = closeSlot(region.layout, slot);
+    });
+    panel.closeHostedTab.mockImplementation(async () => {
+      panel.hostedTabs = [];
+      await changed();
+    });
+    await region.updateComplete;
+    shell
+      .querySelector('[data-region-header="side"]')!
+      .dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
+    if (source === "native") {
+      const command = new CustomEvent("openclaw:native-close-focused-panel", {
+        cancelable: true,
+      });
+      window.dispatchEvent(command);
+      expect(command.defaultPrevented).toBe(true);
+    } else {
+      shell.querySelector<HTMLButtonElement>('button[aria-label="Close tab: First page"]')!.click();
+    }
+    await panel.closeHostedTab.mock.results[0]!.value;
+    await region.updateComplete;
+    await waitForSolid(() => {
+      expect(region.callbacks!.closeSlot).toHaveBeenCalledExactlyOnceWith("workspace");
+      expect(region.layout.open).toBe(false);
+    });
+  },
+);
+
 it.each([
   { sessionChanged: false, source: "native" },
   { sessionChanged: true, source: "native" },

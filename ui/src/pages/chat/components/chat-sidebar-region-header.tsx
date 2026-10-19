@@ -622,7 +622,11 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
             </Show>
           }
         >
-          <Show when={!props.mobileHost || state().tabs.length > 0}>
+          <Show
+            when={
+              !props.mobileHost || (state().tabs.length > 0 && !isSidebarNewTabActive(props.layout))
+            }
+          >
             <Show when={props.onOpenMobileLauncher} fallback={<TypeMenu {...props} />}>
               <button
                 type="button"

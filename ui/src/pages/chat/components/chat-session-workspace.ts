@@ -75,6 +75,7 @@ function openFile(
     requestPath?: string;
     sessionKey?: string;
     disposition?: "pinned" | "preview";
+    intent?: "navigate";
   } = {},
 ) {
   const requestPath = opts.requestPath ?? path;
@@ -306,6 +307,7 @@ function openFile(
     {
       line: opts.line,
       disposition: opts.disposition,
+      intent: opts.intent,
       label: pathDisplayName(path),
       revalidate: true,
       resolveLabel: (result) => result.file?.name,
@@ -394,6 +396,7 @@ function openArtifact(
   workspace: SessionWorkspaceState,
   artifactId: string,
   disposition?: "pinned" | "preview",
+  intent?: "navigate",
 ) {
   const query = {
     sessionKey: workspace.sessionKey,
@@ -449,6 +452,7 @@ function openArtifact(
     `Failed to load artifact ${artifactId}`,
     {
       disposition,
+      intent,
       label:
         workspace.list?.artifacts?.find((artifact) => artifact.id === artifactId)?.title ||
         t("chat.workspaceFiles.artifacts"),
@@ -461,6 +465,7 @@ export function createSessionWorkspaceProps(
   state: SessionWorkspaceHost,
   options?: {
     presentation?: "desktop" | "mobile";
+    openIntent?: "navigate";
     transcriptAttachments?: TranscriptAttachments;
     /** Mobile host owns persistent expansion on editable focus. */
     onSearchFocus?: () => void;
@@ -666,6 +671,7 @@ export function createSessionWorkspaceProps(
           : {};
       void openFile(state, workspace, path, {
         ...opts,
+        intent: options?.openIntent,
         disposition: options?.presentation === "desktop" ? (disposition ?? "preview") : undefined,
       });
     },
@@ -691,6 +697,7 @@ export function createSessionWorkspaceProps(
         workspace,
         artifactId,
         options?.presentation === "desktop" ? (disposition ?? "preview") : undefined,
+        options?.openIntent,
       ),
     onOpenDiff: diffContent ? () => state.handleOpenSidebar(diffContent) : undefined,
   };

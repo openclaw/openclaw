@@ -413,6 +413,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         ]) {
           const button = container.querySelector<HTMLElement>(selector)!;
           expect(button.checkVisibility()).toBe(true);
+          expect(button.scrollWidth).toBeLessThanOrEqual(button.clientWidth);
           expect(button.getBoundingClientRect().right).toBeLessThanOrEqual(bounds.right);
         }
         expect(container.querySelector(".chat-pane__subagents-running")?.textContent).toContain(

@@ -12,9 +12,11 @@ import {
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import type { PresentationValue } from "../../../lib/presentation.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
+import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
@@ -37,6 +39,7 @@ export type ChatDetailsViewProps = {
   presentation: PresentationValue;
   setRef: (details: ChatDetails | undefined) => void;
   mobile: boolean;
+  mobileHost?: ChatMobileHost;
   conversationVisible?: boolean;
   externalTrigger?: boolean;
 };
@@ -51,7 +54,6 @@ const DETAILS_DOCK_MIN_WIDTH = 1200;
 export function ChatDetails(props: ChatDetailsViewProps) {
   let host!: HTMLElement;
   const isPresented = usePanePresentation(() => props.presentation);
-  // Keep unchanged layout inputs stable when the pane publishes new chat data.
   const isMobile = createMemo(() => props.mobile);
   const isConversationVisible = createMemo(() => props.conversationVisible !== false);
   const hasExternalTrigger = createMemo(() => props.externalTrigger ?? false);
@@ -89,7 +91,14 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     setChoice((previous) => ({ ...previous, intent: nextIntent }));
   const [wideEnough, setWideEnough] = createSignal(false);
   const canDock = () => !isMobile() && isConversationVisible() && wideEnough();
-  const opened = () => isPresented() && (intent() === "open" || (intent() === "auto" && canDock()));
+  const opened = () =>
+    isPresented() &&
+    (props.mobileHost
+      ? props.mobileHost.open &&
+        !props.mobileHost.suspended &&
+        props.mobileHost.destination.area === "details" &&
+        (!props.mobileHost.destination.page || Boolean(props.mobileHost.destination.page.details))
+      : intent() === "open" || (intent() === "auto" && canDock()));
   // Load on first presentation, then retain disclosure state while closed.
   const [sessionOpened] = createSignal<boolean>((previous) => previous === true || opened());
   const docked = () => opened() && canDock();
@@ -114,20 +123,26 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     mobile: isMobile(),
     conversationVisible: isConversationVisible(),
     externalTrigger: hasExternalTrigger(),
-    elements: layoutElements(),
+    elements: {
+      pane: layoutElements()?.pane,
+      header: layoutElements()?.header,
+      frame: layoutElements()?.frame,
+      footer: layoutElements()?.footer,
+    },
     presentation: presentation(),
+    mobileHost: Boolean(props.mobileHost),
+    detailsMount: props.mobileHost?.detailsMount,
   });
   const mountSurface = ({
     mobile,
     conversationVisible,
     elements,
+    detailsMount,
   }: ReturnType<typeof readLayout>) => {
     // Fullscreen panels hide the conversation frame, but not the pane or mobile header.
-    const parent = mobile
-      ? host
-      : conversationVisible
-        ? (elements?.frame ?? host)
-        : (elements?.pane ?? host);
+    const parent =
+      detailsMount ??
+      (mobile ? host : conversationVisible ? (elements?.frame ?? host) : (elements?.pane ?? host));
     if (surface.parentElement !== parent) {
       parent.append(surface);
     }
@@ -138,7 +153,11 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     externalTrigger,
     elements,
     presentation: currentPresentation,
+    mobileHost,
   }: ReturnType<typeof readLayout>) => {
+    if (mobileHost) {
+      return;
+    }
     const footerBounds = conversationVisible
       ? elements?.footer?.getBoundingClientRect()
       : undefined;
@@ -197,6 +216,10 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     }
   };
   const close = (restoreFocus = false) => {
+    if (props.mobileHost) {
+      props.mobileHost.close();
+      return;
+    }
     hide();
     setIntent("closed");
     if (restoreFocus && host.isConnected) {
@@ -218,11 +241,16 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       return;
     }
     opener = { presentation: presentation(), element: source };
+    if (props.mobileHost) {
+      props.mobileHost.navigate({ area: "details" }, source);
+      return;
+    }
     setIntent("open");
   };
   const outside = (event: Event) => {
     if (
       opened() &&
+      !props.mobileHost &&
       !docked() &&
       !event.composedPath().includes(host) &&
       !event.composedPath().includes(panel)
@@ -242,33 +270,46 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       close(true);
     }
   };
+  // Unrelated session updates must not retire an open progress menu.
+  const layoutState = createMemo(() => ({ open: opened(), dock: docked(), ...readLayout() }), {
+    equals: (before, after) =>
+      before.open === after.open &&
+      before.dock === after.dock &&
+      before.mobile === after.mobile &&
+      before.conversationVisible === after.conversationVisible &&
+      before.externalTrigger === after.externalTrigger &&
+      before.elements.pane === after.elements.pane &&
+      before.elements.header === after.elements.header &&
+      before.elements.frame === after.elements.frame &&
+      before.elements.footer === after.elements.footer &&
+      before.presentation === after.presentation &&
+      before.mobileHost === after.mobileHost &&
+      before.detailsMount === after.detailsMount,
+  });
   // Synchronize the native popover and pane geometry with presentation intent.
-  createEffect(
-    () => [opened(), docked(), readLayout()] as const,
-    ([open, dock, layout]) => {
-      hide();
-      // Let Portal register delegated events before onSettled first mounts the surface.
-      // It can later move outside the header’s render root into the pane or frame.
-      if (surface.parentElement) {
-        mountSurface(layout);
-      }
-      panel.hidden = !open;
-      panel.popover = dock ? null : "manual";
-      panel.style.cssText = "";
-      panel.classList.toggle("chat-details--docked", dock);
-      layout.elements?.frame?.style.setProperty(
-        "--chat-details-space",
-        dock ? DETAILS_WIDTH + "px" : "0px",
-      );
-      if (open && !dock) {
-        position(layout);
-        // Keep native Tab entry beside its header trigger after portaling the content.
-        panel.showPopover({
-          source: focusSource(layout.mobile, layout.externalTrigger, layout.presentation),
-        });
-      }
-    },
-  );
+  createEffect(layoutState, ({ open, dock, ...layout }) => {
+    hide();
+    // Let Portal register delegated events before onSettled first mounts the surface.
+    // It can later move outside the header’s render root into the pane or frame.
+    if (surface.parentElement) {
+      mountSurface(layout);
+    }
+    panel.hidden = !open;
+    panel.popover = dock || layout.mobileHost ? null : "manual";
+    panel.style.cssText = "";
+    panel.classList.toggle("chat-details--docked", dock);
+    layout.elements?.frame?.style.setProperty(
+      "--chat-details-space",
+      dock ? DETAILS_WIDTH + "px" : "0px",
+    );
+    if (open && !dock && !layout.mobileHost) {
+      position(layout);
+      // Keep native Tab entry beside its header trigger after portaling the content.
+      panel.showPopover({
+        source: focusSource(layout.mobile, layout.externalTrigger, layout.presentation),
+      });
+    }
+  });
   const reposition = () => {
     const layout = readLayout();
     mountSurface(layout);
@@ -276,7 +317,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   };
   createResizeObserver(
     () =>
-      [layoutElements()?.pane, layoutElements()?.frame, layoutElements()?.footer].filter(
+      [props.elements?.pane, props.elements?.frame, props.elements?.footer].filter(
         (element): element is HTMLElement => Boolean(element),
       ),
     reposition,
@@ -287,7 +328,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     const stop = [
       listen(window, "resize", reposition),
       listen(document, "pointerdown", outside),
-      // Child overlays consume Escape at document/root level before the inspector.
+      // Child overlays consume Escape before the inspector.
       listen(window, "keydown", (event) => {
         if (event instanceof KeyboardEvent) {
           escape(event);
@@ -331,14 +372,14 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       </button>
       <Portal mount={surface}>
         <div
-          ref={(element) => (panel = element)}
+          ref={[(element) => (panel = element), elementRef(props.chat?.onScrollPortRef)]}
           class="chat-details"
           id={panelId}
           popover="manual"
           role={docked() ? "complementary" : "dialog"}
           aria-label={t("chat.sessionDetails.title")}
         >
-          <Show when={props.mobile || props.externalTrigger}>
+          <Show when={!props.mobileHost && (props.mobile || props.externalTrigger)}>
             <div class="chat-details__toolbar">
               <span>{t("chat.sessionDetails.title")}</span>
               <button
@@ -364,7 +405,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                     <ChatDetailsSession
                       props={props.chat}
                       presented={isPresented() && opened()}
-                      dismissed={intent() === "closed"}
+                      dismissed={props.mobileHost ? !props.mobileHost.open : intent() === "closed"}
                     />
                   </Loading>
                 </Show>

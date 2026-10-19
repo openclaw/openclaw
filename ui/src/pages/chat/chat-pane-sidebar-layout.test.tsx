@@ -15,6 +15,7 @@ import { getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import "./components/chat-sidebar-region.runtime.tsx";
 import {
   closeSlot,
+  isSidebarSlotVisible,
   openSlot,
   promoteSidebarPanel,
   setSidebarDock,
@@ -234,6 +235,75 @@ describe("chat pane sidebar layout", () => {
             ? outside
             : container.querySelector(".sidebar-region__header"),
       );
+    },
+  );
+
+  it.each(["subagents", "processes"] as const)(
+    "keeps the selected %s after the native launcher closes and the owner refreshes",
+    async (slot) => {
+      const { pane, state } = createMountedPanes([]);
+      getPaneTestRuntime(pane).mergedChrome = false;
+      state.updateSidebarLayout(openSlot({ columns: [] }, "workspace"));
+      const [layout, setLayout] = createSignal(state.sidebarLayout);
+      const mounted = mountSolid(() => {
+        const definitions = sidebarPanelDefinitions().map((definition) =>
+          Object.assign(definition, {
+            available: ["workspace", "subagents", "processes"].includes(definition.slot),
+            content: <div data-native-slot={definition.slot}>{definition.label}</div>,
+          }),
+        );
+        const controls = () => {
+          layout();
+          return pane.render().layout!.region.callbacks;
+        };
+        return (
+          <SidebarRegionView
+            panelIdPrefix="chat-panel-launcher-intent"
+            presentationId="launcher-intent"
+            presentation="desktop"
+            availableWidth={1400}
+            callbacks={controls()}
+            layout={layout()}
+            narrow={false}
+            panelDefinitions={definitions}
+            primary={<main>Conversation</main>}
+            regionError={undefined}
+          />
+        );
+      });
+      const draw = async () => {
+        setLayout(state.sidebarLayout);
+        flush();
+        await mounted.container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
+      };
+      await draw();
+      const newTab = mounted.container.querySelector<HTMLButtonElement>(
+        'button[aria-label="New tab"]',
+      );
+      expect(newTab).not.toBeNull();
+      newTab!.click();
+      await draw();
+      const option = [
+        ...mounted.container.querySelectorAll<HTMLButtonElement>(".side-panel-launcher button"),
+      ].find(
+        (button) =>
+          button.querySelector(".side-panel-type-option__label")?.textContent ===
+          (slot === "subagents" ? "Subagents" : "Processes"),
+      );
+      expect(option).toBeDefined();
+      option!.click();
+      // The user action must open the panel; a later owner update must not manufacture success.
+      expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(true);
+      await draw();
+      expect(mounted.container.querySelector(".side-panel-launcher")).toBeNull();
+      const content = mounted.container.querySelector('[data-native-slot="' + slot + '"]');
+      expect(content).not.toBeNull();
+      expect(content!.closest("[data-region]")?.hasAttribute("hidden")).toBe(false);
+
+      state.updateSidebarLayout({ ...state.sidebarLayout });
+      await draw();
+      expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(true);
+      expect(mounted.container.querySelector('[data-native-slot="' + slot + '"]')).toBe(content);
     },
   );
 

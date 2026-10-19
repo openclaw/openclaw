@@ -36,6 +36,7 @@ export function openWorkspaceItem<T>(
   missingMessage: string,
   options: {
     disposition?: "pinned" | "preview";
+    intent?: "navigate";
     navigation?: SessionWorkspaceNavigation;
     line?: number | null;
     revalidate?: boolean;
@@ -80,6 +81,7 @@ export function openWorkspaceItem<T>(
         id: itemId,
         label: options.label,
         disposition: intent.disposition,
+        intent: options.intent,
       },
     } as const;
     const preview = openSessionWorkspacePreview(

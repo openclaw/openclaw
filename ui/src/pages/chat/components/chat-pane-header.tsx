@@ -1,5 +1,5 @@
 import { dynamic } from "@solidjs/web";
-import { Show, createMemo, createUniqueId, onSettled } from "solid-js";
+import { Show, createMemo, createUniqueId, onCleanup, onSettled, type Element } from "solid-js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
@@ -47,7 +47,11 @@ import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
-import { ChatPaneLayoutMenu, type ChatPaneLayoutMenuProps } from "./chat-header-panel-actions.tsx";
+import {
+  ChatDashboardMenu,
+  ChatPaneLayoutMenu,
+  type ChatPaneLayoutMenuProps,
+} from "./chat-header-panel-actions.tsx";
 import { ChatHeaderSessionMenu } from "./chat-header-session-menu.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
@@ -70,6 +74,8 @@ type ChatPaneParentSession = {
 
 export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   onHeaderRef?: (element: HTMLElement) => void | (() => void);
+  dashboardWidgetMenu?: Parameters<typeof ChatDashboardMenu>[0]["widgetMenu"];
+  setDashboardControls?: (action: Element | undefined) => void;
   presented: PresentationValue;
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
@@ -437,6 +443,16 @@ export function canRevealSessionWorkspace(params: {
 }
 
 export function ChatPaneHeader(props: ChatPaneHeaderProps) {
+  // One retained picker follows Dashboard between its side and main surfaces.
+  const dashboardControls = (
+    <ChatDashboardMenu
+      {...props}
+      mobile={props.mergedChrome}
+      widgetMenu={props.dashboardWidgetMenu}
+    />
+  );
+  onSettled(() => props.setDashboardControls?.(dashboardControls));
+  onCleanup(() => props.setDashboardControls?.(undefined));
   const drawerLabel = () => (props.navDrawerOpen ? t("nav.collapse") : t("nav.expand"));
   const hasSharingControl = () => props.sharingControl !== undefined;
   const presented = usePanePresentation(() => props.presented);

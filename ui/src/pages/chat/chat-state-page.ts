@@ -516,6 +516,22 @@ export function createPageState(
         : content?.kind === "file"
           ? { id: `file:${content.path}`, label: content.name }
           : null);
+    if (fileTab && content) {
+      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
+        // A second app link changes host context on the retained instance.
+        preview.content = content;
+        preview.label = fileTab.label;
+        const workspace = getSessionWorkspace(state);
+        workspace.previews = [...workspace.previews];
+      }
+    } else {
+      state.sidebarContent = content;
+    }
+    // Internal catalog navigation updates the retained reader, never the panel selection.
+    if (content?.fileTab?.intent === "navigate") {
+      return;
+    }
     const targetSlot = fileTab ? "workspace" : "detail";
     let opened = openSlot(state.sidebarLayout, targetSlot);
     const targetPanel = opened.columns
@@ -529,18 +545,6 @@ export function createPageState(
       availableWidth > 0 && availableWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
-    if (fileTab && content) {
-      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
-      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
-        // A second app link changes host context on the retained instance.
-        preview.content = content;
-        preview.label = fileTab.label;
-        const workspace = getSessionWorkspace(state);
-        workspace.previews = [...workspace.previews];
-      }
-    } else {
-      state.sidebarContent = content;
-    }
     state.updateSidebarLayout(fitted);
     if (targetPanel) {
       state.updateSidebarActivePanel(targetPanel.id);

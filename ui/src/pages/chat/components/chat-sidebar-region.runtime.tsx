@@ -186,7 +186,7 @@ function Region(props: RegionProps, host: RegionElement) {
       await hosted.closeHostedTab(hostedTabId);
       await host.updateComplete;
       if (
-        props.mobileHost &&
+        (props.presentation === "desktop" || props.mobileHost) &&
         isCurrentClose() &&
         sidebarActivePanel(props.layout)?.id === active.id &&
         readRegionHostedTabs(host, active) === hosted &&
