@@ -535,6 +535,11 @@ queue and remains best-effort until persisted; approval-owner writes do not
 depend on that queue. The activity ledger cannot recreate either source after
 loss.
 
+Identity and decision overflow cleanup uses the existing timestamp/id indexes to
+find the retention boundary. Each write deletes the oldest overflow rows within
+the budget left after expiry cleanup, without building a set of all retained IDs.
+The transaction, retention limits, and deletion order are unchanged.
+
 Every generic decision-fact write rereads the immutable execution context and
 requires the full context, execution, and run tuple. Projection validates the
 same tuple again; a mismatch is `unknown`, not reassigned by context or run
