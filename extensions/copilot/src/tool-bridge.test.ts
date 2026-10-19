@@ -74,10 +74,8 @@ async function captureOptions(input: BridgeInput, tools = [makeTool()]) {
 }
 
 function sdkToolNamed(bridge: Bridge, name: string) {
-  return expectDefined(
-    bridge.promptToolPolicy.apply().tools.find((tool) => tool.name === name),
-    name,
-  );
+  const tool = bridge.promptToolPolicy.apply().tools.find((candidate) => candidate.name === name);
+  return expectDefined(tool, name);
 }
 
 function createTerminalTracker(runId: string) {
@@ -114,10 +112,7 @@ describe("createCopilotToolBridge", () => {
   it("returns empty arrays for unsupported providers without calling the seam", async () => {
     const createOpenClawCodingTools = vi.fn(() => [makeTool()]);
 
-    const result = await createBridge({
-      createOpenClawCodingTools,
-      modelProvider: "openai",
-    });
+    const result = await createBridge({ createOpenClawCodingTools, modelProvider: "openai" });
 
     expect(result.codeModeEngaged).toBe(false);
     expect(result.promptToolPolicy.apply()).toEqual({ tools: [], callableToolNames: [] });
@@ -167,9 +162,8 @@ describe("createCopilotToolBridge", () => {
       bridge.sourceTools.find((tool) => tool.name === "exec"),
       "bound code-mode source control",
     );
-    const sdk = sdkToolNamed(bridge, "exec");
     const copiedSourceExecute = source.execute;
-    const copiedSdkHandler = sdk.handler;
+    const copiedSdkHandler = sdkToolNamed(bridge, "exec").handler;
     active = false;
 
     await expect(copiedSourceExecute?.("call-1", { code: "return 1" })).rejects.toThrow(
@@ -210,11 +204,11 @@ describe("createCopilotToolBridge", () => {
           turnTainted = true;
         }
       });
-      const createTools = (options: CopilotCodingToolsOptions = {}) => {
-        const filesystemTools = createRealOpenClawCodingTools(options).filter((tool) =>
+      const createTools = (options: CopilotCodingToolsOptions = {}) => [
+        ...createRealOpenClawCodingTools(options).filter((tool) =>
           ["write", "edit", "apply_patch"].includes(tool.name),
-        );
-        const networkTool = wrapToolWithBeforeToolCallHook(
+        ),
+        wrapToolWithBeforeToolCallHook(
           makeTool({ name: "web_fetch", resultContentSource: "network" }),
           {
             agentId: "main",
@@ -224,9 +218,8 @@ describe("createCopilotToolBridge", () => {
             onToolOutcome: options.onToolOutcome,
           },
           { emitDiagnostics: false },
-        );
-        return [...filesystemTools, networkTool];
-      };
+        ),
+      ];
       const createMemoryBridge = (sessionId: string, isTurnTainted: () => boolean) =>
         createBridge({
           agentId: "main",
@@ -340,9 +333,7 @@ describe("createCopilotToolBridge", () => {
       const result = await createBridge({
         attemptParams: {
           config: {},
-          conversationToolPolicy: {
-            deny: ["exec", "process", "write", "edit", "ask_user"],
-          },
+          conversationToolPolicy: { deny: ["exec", "process", "write", "edit", "ask_user"] },
           runId: "policy-run",
           sessionKey: "agent:agent-1:policy-session",
           workspaceDir,
@@ -451,10 +442,7 @@ describe("createCopilotToolBridge tool conversion", () => {
         .mockRejectedValueOnce(new Error(message))
         .mockResolvedValueOnce(textToolResult("Memory forgotten.", { action: "deleted" }));
       const terminal = createTerminalTracker("run-copilot-forget");
-      const sdkTool = await toSdk(tool, {
-        ...terminal,
-        onToolCompleted,
-      });
+      const sdkTool = await toSdk(tool, { ...terminal, onToolCompleted });
       const result = await invoke(
         sdkTool,
         memoryArgs,
@@ -491,10 +479,7 @@ describe("createCopilotToolBridge tool conversion", () => {
       content: [{ text: '{"status":"error","error":"backend unavailable"}', type: "text" }],
       details: { status: "error", error: "backend unavailable" },
     };
-    const sdkTool = await toSdk(makeTool({}, sourceResult), {
-      onAgentToolResult,
-      onToolCompleted,
-    });
+    const sdkTool = await toSdk(makeTool({}, sourceResult), { onAgentToolResult, onToolCompleted });
 
     const result = await invoke(sdkTool, {});
     await flushAsync();
@@ -506,10 +491,7 @@ describe("createCopilotToolBridge tool conversion", () => {
       isError: true,
     });
     expect(onToolCompleted).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: "backend unavailable",
-        result: sourceResult,
-      }),
+      expect.objectContaining({ error: "backend unavailable", result: sourceResult }),
     );
   });
 
@@ -529,18 +511,17 @@ describe("createCopilotToolBridge tool conversion", () => {
       opts.toolSearchCatalogExecutor,
       "Copilot catalog executor",
     );
-    await expect(
-      executeCatalog({
-        tool: target,
-        toolName: "memory_forget",
-        source: "openclaw",
-        sourceName: "memory-lancedb",
-        toolCallId: "catalog-forget-1",
-        parentToolCallId: "tool-search-1",
-        input: memoryArgs,
-        acceptResultBeforeProjection: async (result) => result,
-      }),
-    ).rejects.toThrow("catalog delete failed");
+    const pending = executeCatalog({
+      tool: target,
+      toolName: "memory_forget",
+      source: "openclaw",
+      sourceName: "memory-lancedb",
+      toolCallId: "catalog-forget-1",
+      parentToolCallId: "tool-search-1",
+      input: memoryArgs,
+      acceptResultBeforeProjection: async (result) => result,
+    });
+    await expect(pending).rejects.toThrow("catalog delete failed");
 
     expect(observeToolTerminal).toHaveBeenCalledWith({
       toolCallId: "catalog-forget-1",
@@ -672,9 +653,7 @@ describe("createCopilotToolBridge tool conversion", () => {
       await started.promise;
       await flushAsync();
       expect(queuedExecute).not.toHaveBeenCalled();
-      await expect(run(otherBridge, "next")).resolves.toMatchObject({
-        resultType: "success",
-      });
+      await expect(run(otherBridge, "next")).resolves.toMatchObject({ resultType: "success" });
       controller.abort();
       gate.resolve();
       await first;
