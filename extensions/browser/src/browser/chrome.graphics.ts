@@ -20,13 +20,6 @@ import type {
   BrowserGraphicsDiagnostics,
 } from "./client.types.js";
 
-type ChromeGraphicsProbeOptions = {
-  httpTimeoutMs?: number;
-  handshakeTimeoutMs?: number;
-  commandTimeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
-};
-
 function readChromeString(value: unknown): string {
   return normalizeOptionalString(value) ?? "";
 }
@@ -154,17 +147,13 @@ function normalizeChromeGraphicsInfo(
   };
 }
 
-export async function inspectChromeGraphicsDiagnostics(
+async function inspectChromeGraphicsDiagnostics(
   cdpUrl: string,
-  options: ChromeGraphicsProbeOptions = {},
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<BrowserGraphicsDiagnostics> {
   const observedAt = Date.now();
   try {
-    const endpoint = await getChromeWebSocketEndpoint(
-      cdpUrl,
-      options.httpTimeoutMs,
-      options.ssrfPolicy,
-    );
+    const endpoint = await getChromeWebSocketEndpoint(cdpUrl, 300, ssrfPolicy);
     if (!endpoint) {
       return {
         status: "unavailable",
@@ -176,8 +165,8 @@ export async function inspectChromeGraphicsDiagnostics(
       endpoint.url,
       async (send) => await send("SystemInfo.getInfo"),
       {
-        handshakeTimeoutMs: options.handshakeTimeoutMs,
-        commandTimeoutMs: options.commandTimeoutMs,
+        handshakeTimeoutMs: 600,
+        commandTimeoutMs: 1_000,
         handshakeRetries: 0,
         lookup: endpoint.lookup,
       },
@@ -194,12 +183,15 @@ export async function inspectChromeGraphicsDiagnostics(
 
 export async function getCachedChromeGraphicsDiagnostics(
   running: RunningChrome,
-  load: () => Promise<BrowserGraphicsDiagnostics>,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<BrowserGraphicsDiagnostics> {
   if (running.graphicsDiagnostics) {
     return running.graphicsDiagnostics;
   }
-  running.graphicsDiagnosticsPending ??= load();
+  running.graphicsDiagnosticsPending ??= inspectChromeGraphicsDiagnostics(
+    `http://127.0.0.1:${running.cdpPort}`,
+    ssrfPolicy,
+  );
   try {
     const diagnostics = await running.graphicsDiagnosticsPending;
     if (diagnostics.status === "available") {
