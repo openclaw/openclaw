@@ -2,18 +2,14 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import { SettingsRow, SettingsSection } from "../components/solid/settings-ui.tsx";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { CustomPluginUiDisabled } from "./control-ui-disabled.solid.tsx";
 
 export function PluginManager() {
   const context = useApplication();
   const [reloading, setReloading] = createSignal(false);
   const [reloadError, setReloadError] = createSignal("");
-  const source = projectSource(context.plugins, {
-    read: (runtime) => runtime,
-    subscribe: (runtime, notify) => runtime.subscribe(notify),
-    equality: "revision",
-  });
+  const source = projectOwner(context.plugins, (runtime) => runtime);
   const replacements = createMemo(() => source.read().registrations("replacements"));
   const surfaces = createMemo(() => [
     ...new Set(replacements().map((entry) => entry.value.surface)),

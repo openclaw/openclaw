@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SmsDeliveryRecord } from "./delivery-observations.js";
 import { formatSmsProbeLines, probeSmsAccount } from "./status.js";
 import type { ResolvedSmsAccount } from "./types.js";
@@ -87,10 +87,6 @@ function probeService(use_inbound_webhook_on_number: boolean) {
 function fetchInputUrl(input: Parameters<typeof fetch>[0]): string {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 }
-
-afterEach(() => {
-  vi.useRealTimers();
-});
 
 describe("SMS status probe", () => {
   it("reports a healthy Twilio SMS webhook", async () => {
@@ -281,16 +277,29 @@ describe("SMS status probe", () => {
     });
   });
 
-  it("returns durable delivery state before the outer probe deadline when Twilio hangs", async () => {
-    vi.useFakeTimers();
-    const fetchImpl = vi.fn<typeof fetch>(async () => await new Promise<Response>(() => {}));
-    const outbound = { messageSid: "SM-timeout", status: "delivered", lastObservedAt: 2 };
-    const pending = probeDelivery(outbound, fetchImpl);
+  it.each(["webhook", "history"] as const)(
+    "preserves sibling and durable delivery facts when the %s request times out",
+    async (lookup) => {
+      const webhookTimedOut = lookup === "webhook";
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        if (fetchInputUrl(input).includes("IncomingPhoneNumbers.json") === webhookTimedOut) {
+          throw Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+        }
+        return Response.json(webhookTimedOut ? inbound("SM-inbound") : createWebhookResponse());
+      });
+      const outbound = { messageSid: "SM-timeout", status: "delivered", lastObservedAt: 2 };
+      const result = await probeDelivery(outbound, fetchImpl);
+      const error = `Twilio ${webhookTimedOut ? "webhook" : "message history"} check failed: timed out after 900ms`;
 
-    await vi.advanceTimersByTimeAsync(900);
-
-    const result = await pending;
-    expectUnavailable(result, "timed out after 900ms");
-    expect(result.recentOutbound).toMatchObject(outbound);
-  });
+      expect(result).toMatchObject({
+        ok: false,
+        error,
+        webhook: webhookTimedOut ? { status: "unavailable", reason: error } : { status: "matches" },
+        recentOutbound: outbound,
+      });
+      if (webhookTimedOut) {
+        expect(result.recentInbound).toMatchObject({ sid: "SM-inbound", status: "received" });
+      }
+    },
+  );
 });
