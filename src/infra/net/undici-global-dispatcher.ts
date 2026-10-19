@@ -20,9 +20,6 @@ import {
 } from "./undici-runtime.js";
 
 export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
-const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
-  allowH2: false as const,
-});
 
 let lastAppliedTimeoutKey: string | null = null;
 let lastAppliedProxyBootstrapKey: string | null = null;
@@ -87,7 +84,7 @@ function createTimedProxylineManagedDispatcher(
             ...options,
             bodyTimeout: options.bodyTimeout ?? state.timeoutMs,
             headersTimeout: options.headersTimeout ?? state.timeoutMs,
-            ...HTTP1_ONLY_DISPATCHER_OPTIONS,
+            allowH2: false,
           },
           handler,
         ),
