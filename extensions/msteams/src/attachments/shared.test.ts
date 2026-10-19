@@ -78,7 +78,8 @@ async function expectRedirectAuthorization(
 
 function mockFetchWithRedirect(redirectMap: Record<string, string>) {
   return vi.fn<typeof fetch>(async (input, init) => {
-    const target = redirectMap[String(input)];
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const target = redirectMap[url];
     if (target && init?.redirect === "manual") {
       return new Response(null, {
         status: 302,
