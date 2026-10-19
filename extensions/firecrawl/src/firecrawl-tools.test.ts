@@ -31,8 +31,8 @@ function firecrawlConfig(
   return { ...overrides, plugins: { entries: { firecrawl: { config } } } };
 }
 
-function mockJsonResponse(payload: unknown) {
-  const fetchSpy = vi.fn<typeof fetch>(async () => Response.json(payload));
+function mockJsonResponse(payload: unknown, init?: ResponseInit) {
+  const fetchSpy = vi.fn<typeof fetch>(async () => Response.json(payload, init));
   global.fetch = fetchSpy;
   return {
     fetchSpy,
@@ -72,20 +72,29 @@ describe("firecrawl tools", () => {
   let runActualFirecrawlScrape: typeof import("./firecrawl-client.js").runFirecrawlScrape;
   let ssrfMock: { mockRestore: () => void } | undefined;
 
+  function search(options: Partial<Parameters<typeof runActualFirecrawlSearch>[0]> = {}) {
+    return runActualFirecrawlSearch({
+      cfg: credentialConfig,
+      query: expect.getState().currentTestName ?? "Firecrawl operation",
+      ...options,
+    });
+  }
+
+  function scrape(options: Partial<Parameters<typeof runActualFirecrawlScrape>[0]> = {}) {
+    return runActualFirecrawlScrape({
+      cfg: credentialConfig,
+      url: "https://example.com/firecrawl-operation",
+      extractMode: "markdown",
+      ...options,
+    });
+  }
+
   function runOperation(
     operation: "search" | "scrape",
     cfg = credentialConfig,
     options: { signal?: AbortSignal; access?: "keyless" } = {},
   ) {
-    const query = expect.getState().currentTestName ?? "Firecrawl operation";
-    return operation === "search"
-      ? runActualFirecrawlSearch({ cfg, query, ...options })
-      : runActualFirecrawlScrape({
-          cfg,
-          url: "https://example.com/firecrawl-operation",
-          extractMode: "markdown",
-          ...options,
-        });
+    return operation === "search" ? search({ cfg, ...options }) : scrape({ cfg, ...options });
   }
 
   beforeAll(async () => {
@@ -153,18 +162,12 @@ describe("firecrawl tools", () => {
   });
 
   it("wraps and safely truncates upstream error details from Firecrawl API failures", async () => {
-    global.fetch = vi.fn(async () =>
-      Response.json(
-        { error: `${"x".repeat(999)}🚀tail` },
-        { status: 400, statusText: "Bad Request" },
-      ),
-    ) as typeof fetch;
+    mockJsonResponse(
+      { error: `${"x".repeat(999)}🚀tail` },
+      { status: 400, statusText: "Bad Request" },
+    );
 
-    const failure = runActualFirecrawlSearch({
-      cfg: credentialConfig,
-      query: "bounded Firecrawl HTTP failure",
-      timeoutSeconds: 5,
-    });
+    const failure = search({ timeoutSeconds: 5 });
     await expect(failure).rejects.toMatchObject({ status: 400, statusCode: 400 });
     await expect(failure).rejects.toSatisfy(
       (error: unknown) =>
@@ -203,107 +206,89 @@ describe("firecrawl tools", () => {
         success: true,
         data: {
           markdown: `target status ${statusCode}`,
-          metadata: {
-            sourceURL: "https://example.com/firecrawl-target-recovery",
-            statusCode,
-          },
+          metadata: { sourceURL: "https://example.com/recovery", statusCode },
         },
       });
     });
     global.fetch = fetchMock as typeof fetch;
-    const params = {
-      cfg: credentialConfig,
-      url: "https://example.com/firecrawl-target-recovery",
-      extractMode: "markdown" as const,
-    };
-
     for (let attempt = 0; attempt < 2; attempt++) {
-      await expect(runActualFirecrawlScrape(params)).rejects.toThrow(
+      await expect(scrape()).rejects.toThrow(
         "Firecrawl fetch failed (404): target returned an unsuccessful HTTP status.",
       );
     }
-    const recovered = await runActualFirecrawlScrape(params);
+    const recovered = await scrape();
 
     expect(recovered.status).toBe(200);
     expect(recovered).not.toHaveProperty("cached");
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it.each(["search", "scrape"] as const)(
-    "propagates %s cancellation into guarded fetch",
-    async (operation) => {
-      const controller = new AbortController();
-      const reason = new Error(`${operation} cancelled by operator`);
-      let transportSignal: AbortSignal | undefined;
-      const fetchMock = vi.fn(
-        async (_input: RequestInfo | URL, init?: RequestInit) =>
-          await new Promise<Response>((_resolve, reject) => {
-            transportSignal = init?.signal ?? undefined;
-            transportSignal?.addEventListener("abort", () => reject(reason), {
-              once: true,
-            });
-            queueMicrotask(() => controller.abort(reason));
-          }),
-      );
-      global.fetch = fetchMock as typeof fetch;
-      const request = runOperation(operation, credentialConfig, { signal: controller.signal });
-
-      await expect(request).rejects.toBe(reason);
-      expect(fetchMock).toHaveBeenCalledOnce();
-      expect(transportSignal?.aborted).toBe(true);
-      expect(transportSignal?.reason).toBe(reason);
-    },
-  );
-
-  it.each(["search", "scrape"] as const)(
-    "rejects cancelled %s responses and allows retry",
-    async (operation) => {
-      const controller = new AbortController();
-      const reason = new Error(`${operation} cancelled after dispatch`);
-      let transportSignal: AbortSignal | undefined;
-      const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        const cancelledRequest = fetchMock.mock.calls.length === 1;
-        if (cancelledRequest) {
+  it.each(["search", "scrape"] as const)("cancels guarded %s fetch", async (operation) => {
+    const controller = new AbortController();
+    const reason = new Error(`${operation} cancelled by operator`);
+    let transportSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
           transportSignal = init?.signal ?? undefined;
-          controller.abort(reason);
-        }
-        const resultLabel = cancelledRequest ? "cancelled" : "fresh";
-        return Response.json({
-          success: true,
-          data:
-            operation === "search"
-              ? [{ url: `https://${resultLabel}.example/result`, title: resultLabel }]
-              : {
-                  markdown: `${resultLabel} scrape result`,
-                  metadata: {
-                    sourceURL: "https://example.com/firecrawl-cancelled-scrape",
-                    statusCode: 200,
-                  },
-                },
-        });
-      });
-      global.fetch = fetchMock as typeof fetch;
-      const request = runOperation(operation, credentialConfig, { signal: controller.signal });
+          transportSignal?.addEventListener("abort", () => reject(reason), {
+            once: true,
+          });
+          queueMicrotask(() => controller.abort(reason));
+        }),
+    );
+    global.fetch = fetchMock as typeof fetch;
+    const request = runOperation(operation, credentialConfig, { signal: controller.signal });
 
-      await expect(request).rejects.toBe(reason);
-      expect(transportSignal?.aborted).toBe(true);
-      expect(transportSignal?.reason).toBe(reason);
+    await expect(request).rejects.toBe(reason);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(transportSignal).toMatchObject({ aborted: true });
+    expect(transportSignal?.reason).toBe(reason);
+  });
 
-      const retry = await runOperation(operation);
-      if (operation === "search") {
-        expect(retry).toMatchObject({ results: [{ url: "https://fresh.example/result" }] });
-        expect(retry).not.toHaveProperty("cached");
-      } else {
-        expect(retry).toMatchObject({ status: 200 });
-        expect(retry.text).toContain("fresh scrape result");
+  it.each(["search", "scrape"] as const)("rejects late %s, then retries", async (operation) => {
+    const controller = new AbortController();
+    const reason = new Error(`${operation} cancelled after dispatch`);
+    let transportSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const cancelledRequest = fetchMock.mock.calls.length === 1;
+      if (cancelledRequest) {
+        transportSignal = init?.signal ?? undefined;
+        controller.abort(reason);
       }
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    },
-  );
+      const resultLabel = cancelledRequest ? "cancelled" : "fresh";
+      return Response.json({
+        success: true,
+        data:
+          operation === "search"
+            ? [{ url: `https://${resultLabel}.example/result`, title: resultLabel }]
+            : {
+                markdown: `${resultLabel} scrape result`,
+                metadata: { sourceURL: "https://example.com/cancelled", statusCode: 200 },
+              },
+      });
+    });
+    global.fetch = fetchMock as typeof fetch;
+    const request = runOperation(operation, credentialConfig, { signal: controller.signal });
 
-  it("bounds oversized successful Firecrawl search results at the provider owner", async () => {
-    mockJsonResponse({
-      success: true,
+    await expect(request).rejects.toBe(reason);
+    expect(transportSignal).toMatchObject({ aborted: true });
+    expect(transportSignal?.reason).toBe(reason);
+
+    const retry = await runOperation(operation);
+    if (operation === "search") {
+      expect(retry).toMatchObject({ results: [{ url: "https://fresh.example/result" }] });
+      expect(retry).not.toHaveProperty("cached");
+    } else {
+      expect(retry).toMatchObject({ status: 200 });
+      expect(retry.text).toContain("fresh scrape result");
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      name: "oversized results",
       data: {
         news: Array.from({ length: 25 }, (_, index) => ({
           url: `https://example.com/firecrawl/${index}`,
@@ -312,24 +297,12 @@ describe("firecrawl tools", () => {
           markdown: "m".repeat(15_000),
         })),
       },
-    });
-
-    const result = await runActualFirecrawlSearch({
-      cfg: credentialConfig,
-      query: "bounded successful Firecrawl search",
-      count: 2,
-      sources: ["news"],
-      scrapeResults: true,
-    });
-
-    expect(result.results).toHaveLength(2);
-    expect(result.truncated).toBe(true);
-    expect(JSON.stringify(result).length).toBeLessThan(23_000);
-  });
-
-  it("bounds final Firecrawl search text after short special-token replacement expands", async () => {
-    mockJsonResponse({
-      success: true,
+      options: { count: 2, sources: ["news"], scrapeResults: true },
+      expectedCount: 2,
+      maxLength: 23_000,
+    },
+    {
+      name: "special-token expansion",
       data: [
         {
           url: "https://example.com/firecrawl/sanitized",
@@ -337,15 +310,16 @@ describe("firecrawl tools", () => {
           description: "<s>".repeat(1_000),
         },
       ],
-    });
-
-    const result = await runActualFirecrawlSearch({
-      cfg: credentialConfig,
-      query: "sanitized Firecrawl search",
-    });
-
+      options: {},
+      expectedCount: 1,
+      maxLength: 21_000,
+    },
+  ])("bounds search $name", async ({ data, options, expectedCount, maxLength }) => {
+    mockJsonResponse({ success: true, data });
+    const result = await search(options);
+    expect(result.results).toHaveLength(expectedCount);
     expect(result.truncated).toBe(true);
-    expect(JSON.stringify(result).length).toBeLessThan(21_000);
+    expect(JSON.stringify(result).length).toBeLessThan(maxLength);
     expect(JSON.stringify(result)).not.toContain("<s>");
   });
 
@@ -358,12 +332,7 @@ describe("firecrawl tools", () => {
         metadata: { title: "<s>".repeat(1_333) },
       },
     });
-    const result = await runActualFirecrawlScrape({
-      cfg: credentialConfig,
-      url: "https://example.com/firecrawl-sanitized",
-      extractMode: "markdown",
-      maxChars: 50_000,
-    });
+    const result = await scrape({ maxChars: 50_000 });
 
     expect(result.truncated).toBe(true);
     expect(result.text.length).toBeLessThan(50_200);
@@ -374,13 +343,11 @@ describe("firecrawl tools", () => {
   it("honors the existing configured Firecrawl maxCharsCap for standalone scrapes", async () => {
     mockJsonResponse({ success: true, data: { markdown: "x".repeat(8_000) } });
 
-    const result = await runActualFirecrawlScrape({
+    const result = await scrape({
       cfg: firecrawlConfig(
         { webFetch: { apiKey: "firecrawl-cap-test" } },
         { tools: { web: { fetch: { maxCharsCap: 1_200 } } } },
       ),
-      url: "https://example.com/firecrawl-hard-cap",
-      extractMode: "markdown",
       maxChars: 1_000_000,
     });
 
@@ -391,50 +358,36 @@ describe("firecrawl tools", () => {
   it("normalizes Firecrawl authorization headers before requests", async () => {
     const response = mockJsonResponse({ success: true, data: [] });
 
-    await runActualFirecrawlSearch({
+    await search({
       cfg: firecrawlConfig({ webSearch: { apiKey: "firecrawl-test-\r\nkey" } }),
-      query: "normalized Firecrawl authorization",
       timeoutSeconds: 5,
     });
 
     expect(response.headers().get("Authorization")).toBe("Bearer firecrawl-test-key");
   });
 
-  it("omits Firecrawl authorization for keyless scrape requests", async () => {
-    const response = mockJsonResponse({
-      success: true,
-      data: {
-        markdown: "# Keyless",
-        metadata: { sourceURL: "https://example.com/keyless-firecrawl", statusCode: 200 },
-      },
-    });
-
-    await runActualFirecrawlScrape({
-      cfg: firecrawlConfig({ webFetch: { baseUrl: "https://api.firecrawl.dev" } }),
-      url: "https://example.com/keyless-firecrawl",
-      extractMode: "markdown",
-      access: "keyless",
-    });
-
-    expect(response.headers().has("Authorization")).toBe(false);
-    expect(response.fetchSpy).toHaveBeenCalledExactlyOnceWith(
-      "https://api.firecrawl.dev/v2/scrape",
-      expect.anything(),
-    );
-  });
-
-  it("never sends a configured Firecrawl key on keyless search", async () => {
-    const response = mockJsonResponse({ success: true, data: { web: [] } });
-
-    const result = await runActualFirecrawlSearch({
-      cfg: credentialConfig,
-      query: "keyless ignores configured key",
-      access: "keyless",
-    });
-
-    expect(response.headers().has("Authorization")).toBe(false);
-    expect(result.provider).toBe("firecrawl-free");
-  });
+  it.each(["scrape", "search"] as const)(
+    "omits authorization for keyless %s",
+    async (operation) => {
+      const response = mockJsonResponse({
+        success: true,
+        data: operation === "scrape" ? { markdown: "# Keyless" } : { web: [] },
+      });
+      const result = await runOperation(
+        operation,
+        operation === "search" ? credentialConfig : firecrawlConfig({}),
+        { access: "keyless" },
+      );
+      expect(response.headers().has("Authorization")).toBe(false);
+      expect(response.fetchSpy).toHaveBeenCalledExactlyOnceWith(
+        `https://api.firecrawl.dev/v2/${operation}`,
+        expect.anything(),
+      );
+      if (operation === "search") {
+        expect(result.provider).toBe("firecrawl-free");
+      }
+    },
+  );
 
   it.each([
     ["search", "web_search (firecrawl)"],
@@ -447,9 +400,7 @@ describe("firecrawl tools", () => {
 
   it("rejects combining includeDomains and excludeDomains", async () => {
     await expect(
-      runActualFirecrawlSearch({
-        cfg: credentialConfig,
-        query: "conflicting domain filters",
+      search({
         includeDomains: ["firecrawl.dev"],
         excludeDomains: ["example.com"],
       }),
@@ -459,8 +410,7 @@ describe("firecrawl tools", () => {
   it("forwards domain, time, and location search filters to Firecrawl", async () => {
     const response = mockJsonResponse({ success: true, data: { web: [] } });
 
-    await runActualFirecrawlSearch({
-      cfg: credentialConfig,
+    await search({
       query: "openclaw",
       count: 25,
       excludeDomains: ["example.com"],
@@ -495,11 +445,7 @@ describe("firecrawl tools", () => {
     const fetchSpy = vi.fn(async () => new Response("should not be called"));
     global.fetch = fetchSpy as typeof fetch;
 
-    const request = runActualFirecrawlScrape({
-      cfg: credentialConfig,
-      url,
-      extractMode: "markdown",
-    });
+    const request = scrape({ url });
     await expect(request).rejects.toThrow(message);
     await expect(request).rejects.not.toThrow("token=secret");
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -522,31 +468,28 @@ describe("firecrawl tools", () => {
     });
   });
 
-  it.each(["paid", "fetch"] as const)(
-    "forwards exact %s web-provider cancellation",
-    async (kind) => {
-      const provider =
-        kind === "paid" ? createFirecrawlWebSearchProvider() : createFirecrawlWebFetchProvider();
-      const tool = provider.createTool({ config: { test: true } } as never);
-      expect(tool).not.toBeNull();
-      const controller = new AbortController();
-      const run = kind === "fetch" ? runFirecrawlScrape : runFirecrawlSearch;
-      const args =
-        kind === "fetch"
-          ? { url: "https://example.com/cancellation" }
-          : { query: `${kind} cancellation` };
+  it.each(["paid", "fetch"] as const)("cancels the %s web provider", async (kind) => {
+    const provider =
+      kind === "paid" ? createFirecrawlWebSearchProvider() : createFirecrawlWebFetchProvider();
+    const tool = provider.createTool({ config: { test: true } } as never);
+    expect(tool).not.toBeNull();
+    const controller = new AbortController();
+    const run = kind === "fetch" ? runFirecrawlScrape : runFirecrawlSearch;
+    const args =
+      kind === "fetch"
+        ? { url: "https://example.com/cancellation" }
+        : { query: `${kind} cancellation` };
 
-      await tool!.execute(args, { signal: controller.signal });
+    await tool!.execute(args, { signal: controller.signal });
 
-      expect(run).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
 
-      const reason = new Error(`${kind} provider cancelled`);
-      controller.abort(reason);
-      run.mockClear();
-      await expect(tool!.execute(args, { signal: controller.signal })).rejects.toBe(reason);
-      expect(run).not.toHaveBeenCalled();
-    },
-  );
+    const reason = new Error(`${kind} provider cancelled`);
+    controller.abort(reason);
+    run.mockClear();
+    await expect(tool!.execute(args, { signal: controller.signal })).rejects.toBe(reason);
+    expect(run).not.toHaveBeenCalled();
+  });
 
   it("keeps the compare-helper fetch facade owned by the Firecrawl extension", async () => {
     const webFetch = {
@@ -617,30 +560,27 @@ describe("firecrawl tools", () => {
     expect(result.details).toEqual({ ok: true, params: expected });
   });
 
-  it.each(["search", "scrape"] as const)(
-    "forwards exact standalone %s cancellation",
-    async (operation) => {
-      const controller = new AbortController();
-      const tool = captureFirecrawlTools()(`firecrawl_${operation}`);
-      const args =
-        operation === "search"
-          ? { query: "standalone cancellation" }
-          : { url: "https://example.com" };
+  it.each(["search", "scrape"] as const)("cancels standalone %s", async (operation) => {
+    const controller = new AbortController();
+    const tool = captureFirecrawlTools()(`firecrawl_${operation}`);
+    const args =
+      operation === "search"
+        ? { query: "standalone cancellation" }
+        : { url: "https://example.com" };
 
-      await tool.execute("call-cancel", args, controller.signal);
+    await tool.execute("call-cancel", args, controller.signal);
 
-      const networkOwner = operation === "search" ? runFirecrawlSearch : runFirecrawlScrape;
-      expect(networkOwner).toHaveBeenCalledWith(
-        expect.objectContaining({ signal: controller.signal }),
-      );
+    const networkOwner = operation === "search" ? runFirecrawlSearch : runFirecrawlScrape;
+    expect(networkOwner).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
 
-      controller.abort(new Error(`${operation} preflight aborted`));
-      await expect(tool.execute("call-preflight", args, controller.signal)).rejects.toBe(
-        controller.signal.reason,
-      );
-      expect(networkOwner).toHaveBeenCalledOnce();
-    },
-  );
+    controller.abort(new Error(`${operation} preflight aborted`));
+    await expect(tool.execute("call-preflight", args, controller.signal)).rejects.toBe(
+      controller.signal.reason,
+    );
+    expect(networkOwner).toHaveBeenCalledOnce();
+  });
 
   it.each([
     {
@@ -748,7 +688,7 @@ describe("firecrawl tools", () => {
       { webSearch: { apiKey: "firecrawl-key", baseUrl } },
       { tools: { web: { search: { cacheTtlMinutes: 0 } } } },
     );
-    const result = await runActualFirecrawlSearch({
+    const result = await search({
       cfg,
       query: "guarded Firecrawl search",
       timeoutSeconds: 5,
@@ -763,23 +703,21 @@ describe("firecrawl tools", () => {
           headers: { location: "http://127.0.0.1/private" },
         }),
       );
-      await expect(
-        runActualFirecrawlSearch({ cfg, query: "guarded Firecrawl search" }),
-      ).rejects.toThrow(/private|internal/);
+      await expect(search({ cfg, query: "guarded Firecrawl search" })).rejects.toThrow(
+        /private|internal/,
+      );
       expect(fetchSpy).toHaveBeenCalledTimes(2);
     }
   });
 
-  describe.each([
+  it.each([
     ["search", "Firecrawl Search API error"],
     ["scrape", "Firecrawl fetch failed"],
-  ] as const)("malformed Firecrawl %s responses", (operation, label) => {
-    it("rejects null with a stable provider error", async () => {
-      mockJsonResponse(null);
-      await expect(
-        runOperation(operation, firecrawlConfig({}), { access: "keyless" }),
-      ).rejects.toThrow(`${label}: malformed JSON response`);
-    });
+  ] as const)("rejects null %s responses", async (operation, label) => {
+    mockJsonResponse(null);
+    await expect(
+      runOperation(operation, firecrawlConfig({}), { access: "keyless" }),
+    ).rejects.toThrow(`${label}: malformed JSON response`);
   });
 
   it("bounds successful Firecrawl JSON bodies before parsing", async () => {
@@ -792,12 +730,9 @@ describe("firecrawl tools", () => {
     const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
     global.fetch = vi.fn(async () => streamed.response) as typeof fetch;
 
-    await expect(
-      runActualFirecrawlSearch({
-        query: "openclaw bounded search response",
-        access: "keyless",
-      }),
-    ).rejects.toThrow("Firecrawl Search API error: JSON response exceeds 16777216 bytes");
+    await expect(search({ access: "keyless" })).rejects.toThrow(
+      "Firecrawl Search API error: JSON response exceeds 16777216 bytes",
+    );
 
     expect(streamed.getReadCount()).toBeLessThan(32);
     expect(streamed.wasCanceled()).toBe(true);
