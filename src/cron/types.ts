@@ -171,6 +171,8 @@ export type CronRunOutcome = {
   error?: string;
   /** True once agent execution begins; retries after this point can replay side effects. */
   executionStarted?: boolean;
+  /** Lifecycle-owned restart fact; transient input to cron settlement, not a public event. */
+  interruptedByRestart?: boolean;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   errorClassification?: CronRunErrorClassification;
@@ -409,7 +411,7 @@ export type CronToolsAllowProvenance =
 export type CronStoredJob = CronJob & {
   /** Original authenticated source for a same-conversation continuation, never a public grant. */
   operatorSource?: {
-    source: import("../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
+    source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
     executionRevision: string;
   };
   /** Captured inference owner; private and independent of scheduled tool authority. */

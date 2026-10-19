@@ -14,12 +14,17 @@ export function createAnchoredOverlay(
   overlay: Overlay,
   trigger: () => HTMLElement,
   target: () => AnchorTarget,
-  options: { sameRoot?: boolean; anchored?: boolean; paused?: () => boolean } = {},
+  options: {
+    sameRoot?: boolean;
+    anchored?: boolean;
+    paused?: () => boolean;
+    parent?: Overlay;
+  } = {},
 ) {
   let binding: OverlayAnchorBinding | undefined;
   const bindTrigger = (anchor: HTMLElement) => {
     overlay.bindTrigger(anchor);
-    overlay.setParent(findOverlayParent(anchor));
+    overlay.setParent(options.parent ?? findOverlayParent(anchor));
   };
   // Direction-dependent placement reads committed DOM, never the effect's compute phase.
   const update = (anchor: HTMLElement, placement?: Placement) =>

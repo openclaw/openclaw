@@ -18,7 +18,7 @@ import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menu
 import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
-import type { MenuEntry, MenuItem } from "./solid/menu.tsx";
+import { createMenuControls, type MenuEntry, type MenuItem } from "./solid/menu.tsx";
 import "./viewer-facepile.ts";
 import "./theme-mode-toggle.ts";
 
@@ -140,6 +140,7 @@ function renderIdentityGateways(
 }
 
 export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JSX.Element {
+  const controls = createMenuControls();
   const position = params.position;
   const profileName = () =>
     params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
@@ -271,6 +272,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
                 basePath={params.basePath}
                 gatewayVersion={params.gatewayVersion}
                 menuAttributes={menuAttributes}
+                copyButtonRef={controls.ref()}
               />
             ),
           },
@@ -294,6 +296,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
   };
   return (
     <SidebarDropdown
+      controls={controls}
       class="sidebar-customize-menu sidebar-identity-menu"
       position={position}
       anchor={params.anchor}

@@ -8,14 +8,17 @@ import {
   LOBSTER_PET_PALETTES,
 } from "../../components/lobster-pet-palettes.ts";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import {
   imageToAvatarDataUrl,
   svgToAvatarDataUrl,
   type AvatarDataUrlResult,
 } from "./avatar-image.ts";
 import "./avatar-picker.css";
+
+registerEnglishCatalog(registerSettingsEnglish);
 
 export type GeneratedAvatar = AgentsAvatarGenerateResult;
 

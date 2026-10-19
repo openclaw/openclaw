@@ -73,6 +73,11 @@ Sidebar replies include an opaque `rowsRevision`. A client can send it as
 `sessions` array when the authorized rows are unchanged. Counts, defaults, and
 facets still describe the current full window.
 
+Compact and dashboard callers can opt into the same shared-fact and conditional
+row contract by sending `ifRowsRevision: ""` on the initial read. Subsequent reads
+send the returned revision, scoped to the same query and connection. Omitting
+`ifRowsRevision` preserves their ordinary full row arrays without shared facts.
+
 Clients that also accept row deltas send `ifRowsRevision: "delta:<revision>"`.
 When that query's previous row identities are still retained, `sessions` contains only
 changed or inserted rows, and `rowsDelta` contains `baseRevision` and `order`.
@@ -479,6 +484,20 @@ connection, full `session` and `ancestorSessions` row slots in `sessions.changed
 and `session.message` use either `{ key, agentId?, version, full }` or
 `{ key, agentId?, base, version, set, remove }`. Other clients retain the existing
 payloads. Ancestor references, top-level receipts, and message bodies are unchanged.
+
+Web clients also advertise `session-event-field-refs`. Together with
+`session-row-deltas`, this allows duplicate envelope values to be replaced by
+`sessionFieldRefs`: an array of zero-based indexes into the decoded `session`
+row's own field names sorted in JavaScript's default string order. Undefined
+fields are omitted, just as in JSON. Each index restores the matching field and
+value to the envelope; only equal values are referenced. Fields with different
+values, including clearing receipts absent from the row, remain explicit.
+Routing keys remain explicit too. The decoder restores these fields and removes
+`sessionFieldRefs` before dispatch, preserving the same complete payload for all
+listeners. Invalid indexes or conflicts with explicit envelope fields discard
+the frame and use the same reconnect recovery as an invalid row patch. Clients
+without this additive capability continue receiving explicit envelope fields;
+the protocol version is unchanged.
 
 The decoder replaces changed top-level fields from `set` and deletes fields named
 by `remove`; nested objects and arrays replace whole. A patch requires the same

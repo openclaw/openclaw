@@ -15,6 +15,7 @@ import { useApplication, useOptionalApplication } from "../lib/reactive/context.
 import { listen } from "../lib/reactive/listener.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
+import { createTimeout } from "../lib/reactive/timers.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
@@ -119,10 +120,15 @@ function AppSidebarContent(
   const snapshotProjection = projectOwner(snapshot, (current) => current.read());
   const snapshotPending = createMemo(() => snapshotProjection.read().pending);
   const snapshotModel = createMemo(() => snapshotProjection.read().model);
-  const people = (owner.peopleView = createSidebarPeople(owner, owner.people, () => {
-    Object.values(props);
-    return projection.read();
-  }));
+  const people = (owner.peopleView = createSidebarPeople(
+    owner,
+    owner.people,
+    () => {
+      Object.values(props);
+      return projection.read();
+    },
+    context,
+  ));
   const prepared = createMemo(
     () => {
       projection.revision();
@@ -184,8 +190,15 @@ function AppSidebarContent(
       return projection.revision();
     },
     () => props.navigationVisible,
-    // Shell inputs finish preparing a hidden first mount; owner traffic stays parked.
-    () => Object.values(props),
+    // Connection and selection prepare a hidden view; cosmetic shell writes keep it parked.
+    () => [
+      props.connected,
+      props.router,
+      props.activeRouteId,
+      props.sessionKey,
+      props.navigationView,
+      props.sidebarAgentsMode,
+    ],
   );
   const observed = new WeakMap<object, object>();
   const observe = <T extends object>(target: T): T => {
@@ -251,6 +264,10 @@ function AppSidebarContent(
       return snapshotProjection.read().saved;
     },
   });
+  const subtitleRefresh = createTimeout(() => {
+    owner.sessionProjection.invalidate();
+    owner.invalidate();
+  });
   createEffect(
     () => {
       prepared();
@@ -270,14 +287,8 @@ function AppSidebarContent(
       // The projection owns the display deadline; this mounted view owns its timer.
       const deadline = owner.sessionProjection.subtitleDeadline;
       if (owner.isConnected && Number.isFinite(deadline)) {
-        const timer = globalThis.setTimeout(
-          () => {
-            owner.sessionProjection.invalidate();
-            owner.invalidate();
-          },
-          Math.max(0, deadline - Date.now()),
-        );
-        return () => globalThis.clearTimeout(timer);
+        subtitleRefresh.schedule(Math.max(0, deadline - Date.now()));
+        return subtitleRefresh.cancel;
       }
       return undefined;
     },
@@ -301,6 +312,7 @@ function AppSidebarContent(
 }
 
 export type AppSidebarMethods = {
+  activeNavigationViewElement(): HTMLElement | undefined;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;
   findSidebarHovercardRowByKey(
@@ -318,6 +330,7 @@ export const AppSidebar = defineSolidBridge<AppSidebarProps, AppSidebarMethods>(
     connected: (host) => sidebarOwners.get(host)?.attach(),
     disconnected: (host) => sidebarOwners.get(host)?.detach(),
     methods: {
+      activeNavigationViewElement: (host) => sidebarOwners.get(host)?.activeNavigationViewElement(),
       dismissTransientMenus: dismissSidebarTransientMenus,
       expandedAgentId: (host) => sidebarOwners.get(host)?.expandedAgentId() ?? "",
       findSidebarHovercardRowByKey: (host, key) =>

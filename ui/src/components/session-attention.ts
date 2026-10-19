@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { compactApprovalCommand } from "../app/approval-presentation.ts";
@@ -25,7 +25,7 @@ import {
   summarizeSidebarSessionAttention,
   type SidebarSessionAttention,
 } from "./app-sidebar-session-types.ts";
-import { SidebarProjectionMemo } from "./sidebar-projection-memo.ts";
+import { SidebarProjectionMemo } from "./sidebar-projection-cache.ts";
 
 type SessionAttentionResolver = (
   row: Partial<GatewaySessionRow> & { key: string },
@@ -50,7 +50,6 @@ export function createSessionAttention(
     subscribe: (state, notify) => state.subscribe(notify),
     equality: "revision",
   });
-  const [ready, setReady] = createSignal(false);
   const [clock, setClock] = createSignal(0);
   const presentationClock = createParkedProjection(clock, presented);
   let resolverMemo = new SidebarProjectionMemo<SessionAttentionResolver>();
@@ -64,36 +63,47 @@ export function createSessionAttention(
       setClock((revision) => revision + 1);
     }
   };
-  const client = createMemo(() => {
-    const snapshot = gateway.read().snapshot;
-    return ready() &&
-      snapshot.phase === "connected" &&
-      canUseQuestionPrompts(snapshot) &&
-      isGatewayMethodAdvertised({ hello: snapshot.hello }, "question.list") === true
-      ? snapshot.client
-      : null;
-  });
-  createEffect(client, (current) => {
-    setQuestionPromptClient(questions, current);
-    if (current) {
-      refreshPendingQuestionsWithRetry(
-        questions,
-        current,
-        () =>
-          host.isConnected &&
-          context.gateway.snapshot.phase === "connected" &&
-          context.gateway.snapshot.client === current,
-      );
-    }
-    return () => disposeQuestionPromptState(questions);
-  });
   onSettled(() => {
-    setReady(true);
-    return context.gateway.subscribeEvents((event) => {
+    let client: ApplicationContext["gateway"]["snapshot"]["client"] | undefined;
+    const synchronize = () => {
+      const snapshot = context.gateway.snapshot;
+      const next =
+        snapshot.phase === "connected" &&
+        canUseQuestionPrompts(snapshot) &&
+        isGatewayMethodAdvertised({ hello: snapshot.hello }, "question.list") === true
+          ? snapshot.client
+          : null;
+      if (client === next) {
+        return;
+      }
+      if (client !== undefined) {
+        disposeQuestionPromptState(questions);
+      }
+      client = next;
+      setQuestionPromptClient(questions, next);
+      if (next) {
+        refreshPendingQuestionsWithRetry(
+          questions,
+          next,
+          () =>
+            host.isConnected &&
+            context.gateway.snapshot.phase === "connected" &&
+            context.gateway.snapshot.client === next,
+        );
+      }
+    };
+    const stopGateway = context.gateway.subscribe(synchronize);
+    const stopEvents = context.gateway.subscribeEvents((event) => {
       if (host.isConnected) {
         handleQuestionPromptEvent(questions, event);
       }
     });
+    synchronize();
+    return () => {
+      stopGateway();
+      stopEvents();
+      disposeQuestionPromptState(questions);
+    };
   });
   onCleanup(() => {
     globalThis.clearTimeout(agentStatusExpiryTimer);

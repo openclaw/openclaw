@@ -15,7 +15,6 @@ it.each(["minimize", "close-resource", "explicit-desktop"])(
       const host = {
         dispatchEvent: () => true,
         getBoundingClientRect: () => new DOMRect(0, 0, 1440, 900),
-        querySelector: () => null,
       };
       const state = createPageState(context, renderLifecycle, host);
       state.updateSidebarLayout(openSlot(state.sidebarLayout, "desktop"), {
@@ -74,7 +73,6 @@ it("owns attachment views in Files without replacing Detail content", () => {
     {
       dispatchEvent: () => true,
       getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 0),
-      querySelector: () => null,
     },
   );
   const detailContent = {

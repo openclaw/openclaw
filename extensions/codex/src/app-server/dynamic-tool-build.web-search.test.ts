@@ -18,7 +18,9 @@ const {
 } = await import("./dynamic-tool-build.test-support.js");
 
 type ToolOptions = Parameters<typeof createOpenClawCodingTools>[0];
-type SearchCase = Partial<Pick<RunParams, "config" | "toolsAllow" | "senderId">> & {
+type SearchCase = Partial<
+  Pick<RunParams, "config" | "toolsAllow" | "senderId" | "preparedWebSearchPolicy">
+> & {
   name: string;
   excludes?: string[];
   source: string[];
@@ -131,10 +133,24 @@ it.each([
     source: ["web_search", "message"],
     exposed: ["web_search", "message"],
   }),
+  ...[undefined, ["message"]].map((toolsAllow) =>
+    searchCase(`prepared search allowance with runtime cap ${JSON.stringify(toolsAllow)}`, {
+      preparedWebSearchPolicy: { allowed: true, persistentAllowed: true },
+      toolsAllow,
+      allowed: toolsAllow === undefined,
+      skipsPolicyLookup: true,
+    }),
+  ),
+  searchCase("prepared requester denial", {
+    preparedWebSearchPolicy: { allowed: false, persistentAllowed: false },
+    ...denied,
+    skipsPolicyLookup: true,
+  }),
 ])("projects search tools and persistent policy for $name", async (testCase) => {
   params.config = testCase.config;
   params.toolsAllow = testCase.toolsAllow;
   params.senderId = testCase.senderId;
+  params.preparedWebSearchPolicy = testCase.preparedWebSearchPolicy;
   const factory = vi.fn((_options: ToolOptions) => testCase.source.map(createRuntimeDynamicTool));
   setCodexTestToolFactory(params, factory);
   const persistent = vi.fn();
@@ -154,7 +170,7 @@ it.each([
   expect(persistent).toHaveBeenCalledExactlyOnceWith(testCase.persistent);
   expect(allowed).toHaveBeenCalledExactlyOnceWith(testCase.allowed);
   if (testCase.skipsPolicyLookup) {
-    expect(hoisted.resolveWebSearchToolPolicy).not.toHaveBeenCalled();
+    expect(hoisted.resolveWebSearchToolPolicyAsync).not.toHaveBeenCalled();
   }
 });
 

@@ -1,5 +1,5 @@
 // Tests gateway active-run matching by logical session key and backing id.
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
 import {
@@ -248,6 +248,17 @@ it("projects direct subagent activity only for its own current-lifecycle session
     createdAt: 1,
     startedAt: 2,
   });
+  const physicalPaths = vi.fn((locator: string) => [locator]);
+  const project = createVisibleActiveSessionRunProjector(
+    undefined,
+    undefined,
+    undefined,
+    physicalPaths,
+  );
+  expect(
+    project({ storePath, requestedKey: childKey, canonicalKey: childKey, agentId: "main" }),
+  ).toEqual({ active: false, runIds: [] });
+  expect(physicalPaths).not.toHaveBeenCalled();
   registerAgentRunContext(runId, identity);
   cleanups.push(() => clearAgentRunContext(runId));
   expect(resolveState(childKey, { agentId: "main" })).toEqual({
@@ -258,6 +269,9 @@ it("projects direct subagent activity only for its own current-lifecycle session
   cleanups.push(() => releaseAgentRunContext(runId, claim));
   expect(claim).toBeDefined();
   expect(state()).toEqual({ active: true, runIds: [runId] });
+  expect(
+    project({ storePath, requestedKey: childKey, canonicalKey: childKey, agentId: "main" }),
+  ).toEqual({ active: true, runIds: [runId] });
   const releaseCapacityWait = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
   cleanups.push(() => releaseCapacityWait?.());
   expect(state()).toMatchObject({ active: true, status: "queued" });
@@ -265,6 +279,9 @@ it("projects direct subagent activity only for its own current-lifecycle session
   expect(state(parentKey)).toEqual({ active: false, runIds: [] });
   rotateAgentEventLifecycleGeneration();
   expect(state()).toEqual({ active: false, runIds: [] });
+  expect(
+    project({ storePath, requestedKey: childKey, canonicalKey: childKey, agentId: "main" }),
+  ).toEqual({ active: false, runIds: [] });
 });
 
 it("keeps terminal persistence visible only to chat history", async () => {

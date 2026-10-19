@@ -20,13 +20,12 @@ export async function readLatestTranscriptAssistantTextAsync(
     }
     return memory.read("session.history.latest-assistant", {});
   }
-  const receipt = resolveSessionTranscriptReadFence({
+  const admission = resolveSessionTranscriptReadFence({
     agentId: normalizeAgentId(
       scope.agentId ?? parseAgentSessionKey(scope.sessionKey)?.agentId ?? scope.defaultAgentId,
     ),
     sessionId: scope.sessionId,
   });
-  const admission = receipt && structuredClone(receipt);
   return withSessionTranscriptReadSource(scope, async (captured) => {
     const { owner, expectedIdentity, assertCurrent } = captured;
     if (!expectedIdentity) {

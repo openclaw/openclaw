@@ -30,7 +30,6 @@ export function preparePluginExecAuthorization(params: {
   const approvals = readCurrent();
   const policySnapshot = createExecApprovalPolicySnapshot({ file: approvals, agentId });
   const assertCurrent = () => {
-    params.assertActive();
     const current = resolvePolicy();
     if (
       current.security === "deny" ||

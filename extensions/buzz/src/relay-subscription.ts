@@ -28,8 +28,8 @@ export function openBuzzRelaySubscription(
   params: BuzzRelaySubscriptionParams,
   requestFilters: Filter[] = filters,
 ): ReturnType<Relay["prepareSubscription"]> {
-  // Relay.subscribe() synthesizes EOSE after 4.4 seconds. Buzz needs the relay's
-  // real EOSE before replacing or closing subscriptions, otherwise an async REQ
+  // Relay.subscribe() synthesizes EOSE after 4.4 seconds. Snapshot queries need
+  // real EOSE before cleanup, otherwise an async REQ
   // can register after CLOSE and remain orphaned on the server.
   relay.idleSince = undefined;
   relay.ongoingOperations += 1;

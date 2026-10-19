@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { zstdDecompressSync } from "node:zlib";
@@ -10,63 +9,61 @@ import {
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
 import { createFixtureLifetime, stopChildProcess } from "openclaw/plugin-sdk/test-env";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { identityRepeatedTurnEntrypoint } from "./agent-run-identity-runtime.test-support.js";
+import * as bundledPluginStaging from "./bundled-plugin-staging.js";
 import {
   appendQaChildOutputTail,
   createQaChildOutputTail,
   readQaChildOutputTail,
 } from "./child-output.js";
-import { buildQaRuntimeEnv } from "./gateway-child-env.js";
+import { createQaGatewaySetupHarness } from "./gateway-child-setup.test-support.js";
 import type { MockOpenAiRequestSnapshot } from "./providers/mock-openai/mock-openai-contracts.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
-import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 
 const lifetime = createFixtureLifetime();
-afterEach(() => lifetime.cleanup());
+const setup = createQaGatewaySetupHarness();
+afterEach(async () => {
+  await lifetime.cleanup();
+  await setup.cleanup();
+  vi.restoreAllMocks();
+});
 
 it(
   "runs both identity ingress turns in a cold process with distinct execution contexts",
   () =>
     lifetime.run(async () => {
       const repoRoot = path.resolve(import.meta.dirname, "../../..");
-      const root = lifetime.createTempDir("identity-repeated-child-");
-      const stateDir = path.join(root, "state");
-      const workspaceDir = path.join(root, "workspace");
-      const configPath = path.join(root, "openclaw.json");
       const mock = await lifetime.acquire(async () => {
         const server = await startQaMockOpenAiServer();
         return { ...server, cleanup: () => server.stop() };
       });
-      await fs.mkdir(workspaceDir, { recursive: true });
-      const config = buildQaGatewayConfig({
-        bind: "loopback",
-        gatewayPort: 1, // Direct ingress never starts or connects to a Gateway.
-        gatewayToken: "identity-child-test",
-        workspaceDir,
+      // The cold worker exercises compiled plugins, not repository staging.
+      const staging = vi
+        .spyOn(bundledPluginStaging, "createQaBundledPluginsDir")
+        .mockImplementation(async ({ tempRoot }) => ({
+          bundledPluginsDir: path.join(repoRoot, "dist", "extensions"),
+          stagedRoot: bundledPluginStaging.resolveQaStagedBundledPluginsRoot({
+            repoRoot,
+            tempRoot,
+          }),
+          runtimeHostVersion: undefined,
+        }));
+      const { stateDir, env } = await setup.prepare({
+        repoRoot,
         providerBaseUrl: `${mock.baseUrl}/v1`,
         providerMode: "mock-openai",
+        mutateConfig: (cfg) => ({
+          ...cfg,
+          logging: { ...cfg.logging, audit: { enabled: true, executionIdentity: true } },
+        }),
       });
-      config.logging = { ...config.logging, audit: { enabled: true, executionIdentity: true } };
-      await fs.writeFile(configPath, JSON.stringify(config));
-      const env = buildQaRuntimeEnv({
-        configPath,
-        gatewayToken: "identity-child-test",
-        homeDir: path.join(root, "home"),
-        stateDir,
-        tempRoot: root,
-        xdgConfigHome: path.join(root, "xdg-config"),
-        xdgDataHome: path.join(root, "xdg-data"),
-        xdgCacheHome: path.join(root, "xdg-cache"),
-        bundledPluginsDir: path.join(repoRoot, "dist", "extensions"),
-        developmentSourceRoot: null,
-        providerMode: "mock-openai",
-        baseEnv: Object.fromEntries(
-          ["PATH", "Path", "SystemRoot", "SYSTEMROOT", "WINDIR", "PATHEXT"].flatMap((key) =>
-            process.env[key] === undefined ? [] : [[key, process.env[key]]],
-          ),
-        ),
-      });
+      staging.mockRestore();
+      // Standalone compiled ingress must not inherit test-runner loaders or source selection.
+      delete env.NODE_OPTIONS;
+      delete env.NODE_PATH;
+      delete env.NODE_V8_COVERAGE;
+      delete env.OPENCLAW_DEV_SOURCE_ROOT;
       const sessionId = "identity-repeated-regression";
       const childUrl = resolveRuntimeWorkerUrl(identityRepeatedTurnEntrypoint);
       // Runtime transpilation must not consume the cold ingress execution deadline.

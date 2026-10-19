@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { CronCompactJob, CronJob, CronJobsListResult } from "../../api/types.ts";
+import type { CronCompactJob, CronJobsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
-import { getCronJobPayload } from "./payload.ts";
 import type { CronJobsState } from "./types.ts";
 
 export function readCanonicalCronJobsPage<Row>(
@@ -73,8 +72,8 @@ async function drainPendingCronJobsReload<Row>(
   await loadCronJobsProjectionPage(state, projection, { tableFilters });
 }
 
-type CronJobsPageOptions = { append?: boolean; tableFilters?: boolean };
-type CronJobsProjection<Row> = {
+export type CronJobsPageOptions = { append?: boolean; tableFilters?: boolean };
+export type CronJobsProjection<Row> = {
   compact?: true;
   readRows: (rows: Row[]) => Row[];
 };
@@ -83,10 +82,17 @@ const cronInventoryScopes = new WeakMap<
   CronJobsState<unknown>,
   CronJobsState["cronAgentId" | "cronSessionFilter"]
 >();
+const cronInventoryRequests = new WeakMap<CronJobsState<unknown>, object>();
 
-const fullCronJobsProjection: CronJobsProjection<CronJob> = {
-  readRows: (rows) => rows.filter((job) => getCronJobPayload(job) !== null),
-};
+export function isCronJobsScopeCurrent(state: CronJobsState<unknown>): boolean {
+  return cronInventoryScopes.get(state) === (state.cronSessionFilter ?? state.cronAgentId);
+}
+
+export function retireCronJobsRequest(state: CronJobsState<unknown>) {
+  cronInventoryRequests.delete(state);
+  state.cronLoading = false;
+  state.cronJobsLoadingMore = false;
+}
 
 function isCronInventoryTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -133,10 +139,6 @@ const compactCronJobsProjection: CronJobsProjection<CronCompactJob> = {
   },
 };
 
-export function loadCronJobsPage(state: CronJobsState, opts?: CronJobsPageOptions) {
-  return loadCronJobsProjectionPage(state, fullCronJobsProjection, opts);
-}
-
 export function loadCompactCronJobsPage(
   state: CronJobsState<CronCompactJob>,
   opts?: CronJobsPageOptions,
@@ -144,7 +146,7 @@ export function loadCompactCronJobsPage(
   return loadCronJobsProjectionPage(state, compactCronJobsProjection, opts);
 }
 
-async function loadCronJobsProjectionPage<Row>(
+export async function loadCronJobsProjectionPage<Row>(
   state: CronJobsState<Row>,
   projection: CronJobsProjection<Row>,
   opts?: CronJobsPageOptions,
@@ -153,7 +155,10 @@ async function loadCronJobsProjectionPage<Row>(
     return;
   }
   const scope = state.cronSessionFilter ?? state.cronAgentId;
-  const isCurrentScope = () => (state.cronSessionFilter ?? state.cronAgentId) === scope;
+  const request = {};
+  const isCurrentScope = () =>
+    cronInventoryRequests.get(state) === request &&
+    (state.cronSessionFilter ?? state.cronAgentId) === scope;
   // An editor can survive scope hydration; its inventory cannot. Retire both
   // retained rows and late responses before a failed replacement can expose them.
   if (cronInventoryScopes.has(state) && cronInventoryScopes.get(state) !== scope) {
@@ -176,6 +181,7 @@ async function loadCronJobsProjectionPage<Row>(
     return;
   }
   const loadingKey = append ? "cronJobsLoadingMore" : "cronLoading";
+  cronInventoryRequests.set(state, request);
   state[loadingKey] = true;
   state.cronJobsError = null;
   try {
@@ -227,7 +233,10 @@ async function loadCronJobsProjectionPage<Row>(
       state.cronJobsError = formatUiError(err);
     }
   } finally {
-    state[loadingKey] = false;
-    await drainPendingCronJobsReload(state, projection);
+    if (cronInventoryRequests.get(state) === request) {
+      cronInventoryRequests.delete(state);
+      state[loadingKey] = false;
+      await drainPendingCronJobsReload(state, projection);
+    }
   }
 }

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onSettled } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
@@ -45,6 +45,16 @@ export function PaletteSessionSettingsView(properties: {
   const [query, setQuery] = createSignal("");
   let focusTarget: FocusTarget | undefined;
   const focusTargets: Partial<Record<FocusTarget, HTMLElement>> = {};
+  const focusControls = new Set<HTMLElement>();
+  const controlRef = () => {
+    let control: HTMLElement;
+    onCleanup(() => focusControls.delete(control));
+    return (element: HTMLElement) => {
+      focusControls.delete(control);
+      focusControls.add((control = element));
+    };
+  };
+  let readAgentControls: (() => readonly HTMLElement[]) | undefined;
   let trigger!: HTMLButtonElement;
   let popover!: PopoverHandle;
   const close = () => {
@@ -114,11 +124,12 @@ export function PaletteSessionSettingsView(properties: {
     ) {
       return;
     }
-    // AgentSelect owns its native controls; query their rendered order for arrow-key navigation.
     const panel = event.currentTarget;
-    const controls = [
-      ...panel.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled)"),
-    ];
+    const controls = [...focusControls, ...(readAgentControls?.() ?? [])]
+      .filter((control) => panel.contains(control) && !control.matches(":disabled"))
+      .toSorted((left, right) =>
+        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      );
     if (!controls.length) {
       return;
     }
@@ -145,10 +156,13 @@ export function PaletteSessionSettingsView(properties: {
             type="button"
             class="palette-session-settings__back"
             aria-label={t("common.back")}
-            ref={(node) => {
-              back(node);
-              focusTargets.back = node;
-            }}
+            ref={[
+              controlRef(),
+              (node) => {
+                back(node);
+                focusTargets.back = node;
+              },
+            ]}
           >
             <Icon name="arrowLeft" />
           </button>
@@ -160,9 +174,12 @@ export function PaletteSessionSettingsView(properties: {
           aria-label={t("common.search")}
           placeholder={t("common.search")}
           value={query()}
-          ref={(node) => {
-            focusTargets.search = node;
-          }}
+          ref={[
+            controlRef(),
+            (node) => {
+              focusTargets.search = node;
+            },
+          ]}
           onInput={(event) => setQuery(event.currentTarget.value)}
         />
         <div class="palette-session-settings__choices">
@@ -192,7 +209,7 @@ export function PaletteSessionSettingsView(properties: {
             class="palette-session-settings__row"
             type="button"
             disabled={view().locked}
-            ref={connect}
+            ref={[controlRef(), connect]}
           >
             <span class="palette-session-settings__icon">
               <Icon name="plus" />
@@ -229,7 +246,7 @@ export function PaletteSessionSettingsView(properties: {
         aria-description={props.machine.disabledReason}
         aria-disabled={props.machine.disabledReason ? "true" : undefined}
         disabled={view().locked}
-        ref={choose}
+        ref={[controlRef(), choose]}
       >
         <span class="palette-session-settings__icon" aria-hidden="true">
           <Icon
@@ -267,6 +284,9 @@ export function PaletteSessionSettingsView(properties: {
   }
 
   function SettingsSummary() {
+    onCleanup(() => {
+      readAgentControls = undefined;
+    });
     onSettled(() => {
       if (focusTarget === "workspace") {
         focusTargets.workspace?.focus({ preventScroll: true });
@@ -283,6 +303,9 @@ export function PaletteSessionSettingsView(properties: {
         <div class="palette-session-settings__title">{t("commandPalette.newSessionSettings")}</div>
         <div class="palette-session-settings__agent">
           <AgentSelect
+            focusTargetsRef={(readTargets) => {
+              readAgentControls = readTargets;
+            }}
             params={{
               agents: place().agents(),
               variant: "default",
@@ -298,17 +321,23 @@ export function PaletteSessionSettingsView(properties: {
           />
         </div>
         {view().placementLocked ? (
-          <RequiredSessionPlacement gateway={properties.options.draft.gateway} />
+          <RequiredSessionPlacement
+            gateway={properties.options.draft.gateway}
+            retryRef={controlRef()}
+          />
         ) : (
           <>
             <button
               class="palette-session-settings__row palette-session-settings__workspace"
               type="button"
               disabled={view().locked}
-              ref={(node) => {
-                workspace(node);
-                focusTargets.workspace = node;
-              }}
+              ref={[
+                controlRef(),
+                (node) => {
+                  workspace(node);
+                  focusTargets.workspace = node;
+                },
+              ]}
             >
               <span class="palette-session-settings__icon">
                 <Icon name="folder" />
@@ -343,7 +372,7 @@ export function PaletteSessionSettingsView(properties: {
                       : undefined
                 }
                 disabled={view().locked || place().remotePlacement}
-                ref={worktree}
+                ref={[controlRef(), worktree]}
               >
                 <span class="palette-session-settings__icon">
                   <Icon name="gitBranch" />
@@ -403,6 +432,7 @@ export function PaletteSessionSettingsView(properties: {
                 >
                   <input
                     type="checkbox"
+                    ref={controlRef()}
                     checked={properties.options.preferences.remember}
                     disabled={view().locked || !properties.options.preferences.available}
                     onChange={(event) =>
@@ -422,7 +452,7 @@ export function PaletteSessionSettingsView(properties: {
               {properties.options.preferences.failed ? (
                 <div class="palette-session-settings__error" role="alert">
                   {t("commandPalette.settingsSaveFailed")}{" "}
-                  <button type="button" class="btn btn--sm" ref={retry}>
+                  <button type="button" class="btn btn--sm" ref={[controlRef(), retry]}>
                     {t("common.retry")}
                   </button>
                 </div>

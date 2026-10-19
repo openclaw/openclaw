@@ -1,9 +1,12 @@
 import { createSignal, Show } from "solid-js";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { EmojiSearchPanel } from "./emoji-search-panel.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 import "../styles/agent-emoji-picker.css";
+
+registerEnglishCatalog(registerSettingsEnglish);
 
 const favorites = [
   "🦞",

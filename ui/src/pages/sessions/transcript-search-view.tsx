@@ -4,8 +4,11 @@ import type { SessionsSearchHit } from "../../../../packages/gateway-protocol/sr
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+
+registerSessionOrganizationEnglish();
 
 registerCommandPaletteEnglish();
 

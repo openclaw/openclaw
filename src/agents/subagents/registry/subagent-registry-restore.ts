@@ -1,6 +1,8 @@
 import { performance } from "node:perf_hooks";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import { ADMIN_SCOPE } from "../../../gateway/method-scopes.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { measureStartup, type GatewayStartupTrace } from "../../../gateway/server-startup-trace.js";
@@ -14,7 +16,9 @@ import {
   GatewayDrainingError,
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { createLazyRuntimeModule } from "../../../shared/lazy-runtime.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { decodeRequesterOrigin } from "../../requester-origin.js";
 import { reserveRestoredSubagentControllerSources } from "../announce/subagent-announce-controller-source.js";
 import { applySubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
 import { readGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
@@ -27,8 +31,6 @@ import {
 } from "./subagent-child-owner-match.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { callSubagentRegistryGateway } from "./subagent-registry-deps.js";
-import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
-import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import {
   getCurrentSubagentRunOwner,
   waitForSubagentRetirementPublication,
@@ -42,12 +44,16 @@ import type { createSubagentRegistryPublicApi } from "./subagent-registry-public
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
 import { restoreSubagentRunMetadata } from "./subagent-registry-restore-metadata.js";
-import { settleRestoredRequesterTurns } from "./subagent-registry-restore-requester.js";
+import { createRestoredRequesterActivator } from "./subagent-registry-restore-requester.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
+
+const loadOperatorRecovery = createLazyRuntimeModule(
+  () => import("../../../gateway/operator-run-recovery.js"),
+);
 
 const restoredQueuedFailureSettlementClaims = new WeakSet<object>();
 
@@ -58,13 +64,19 @@ export function isRestoredQueuedFailureSettlementClaimed(entry: SubagentRunRecor
 export function createSubagentRegistryRestorer(config: {
   runs: Map<string, SubagentRunRecord>;
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
-  bindGatewayOwners: (startupTrace?: GatewayStartupTrace) => boolean | Promise<boolean>;
-  settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
-  retireSupersededRun: SubagentLifecycleOptions["retireSupersededRun"];
+  bindGatewayOwners: Parameters<typeof createRestoredRequesterActivator>[0]["bindGatewayOwners"];
+  settleRequesterTurn: Parameters<
+    typeof createRestoredRequesterActivator
+  >[0]["settleRequesterTurn"];
+  retireSupersededRun: Parameters<
+    typeof createRestoredRequesterActivator
+  >[0]["retireSupersededRun"];
   ensureListener: () => void;
   startSweeper: () => void;
   scheduleSweep: () => void;
-  recoverInterruptedRuns: () => Promise<void>;
+  recoverInterruptedRuns: Parameters<
+    typeof createRestoredRequesterActivator
+  >[0]["recoverInterruptedRuns"];
   resumeRun: (runId: string) => void;
   listSwarmRunsForGroup: ReturnType<
     typeof createSubagentRegistryPublicApi
@@ -94,12 +106,18 @@ export function createSubagentRegistryRestorer(config: {
   let restoreState: "idle" | "succeeded" = "idle";
   let activationRequested = false;
   let activated = false;
-  // A repeated activation must not enqueue the same restored collectors again.
-  let runsResumed = false;
   let restoreInFlight: Promise<void> | undefined;
   let activationInFlight: Promise<void> | undefined;
   // A later explicit restore must reconcile rows merged before an earlier failure.
   let restoredRowsPending = false;
+  const requesterActivator = createRestoredRequesterActivator({
+    runs,
+    bindGatewayOwners,
+    settleRequesterTurn,
+    retireSupersededRun: config.retireSupersededRun,
+    resumeRuns: resumeRestoredRuns,
+    recoverInterruptedRuns: config.recoverInterruptedRuns,
+  });
 
   async function completeRestore() {
     restoredRowsPending = false;
@@ -126,17 +144,7 @@ export function createSubagentRegistryRestorer(config: {
 
   async function activateRestoredRunsOnce(startupTrace?: GatewayStartupTrace) {
     activationRequested = true;
-    if (
-      restoreState !== "succeeded" ||
-      !(await measureStartup(startupTrace, "sidecars.subagent-bind", () =>
-        bindGatewayOwners(startupTrace),
-      ))
-    ) {
-      return;
-    }
-    // Post-ready only: collector cleanup retains the canonical sessions.delete RPC owner.
-    scheduleSweep();
-    if (activated) {
+    if (restoreState !== "succeeded" || !getGatewayContextResolver()?.()) {
       return;
     }
     const stateContext = captureOpenClawStateWorkerContext();
@@ -148,57 +156,38 @@ export function createSubagentRegistryRestorer(config: {
         throw new Error("Restored requester transfer lost its Gateway owner");
       }
     };
-    const cfg = getRuntimeConfig();
-    const activationFailures = await measureStartup(
+    const { resumeNeeded, failures } = await requesterActivator.activate({
+      cfg: getRuntimeConfig(),
+      stateContext,
+      assertCurrent,
       startupTrace,
-      "sidecars.subagent-requesters",
-      () =>
-        settleRestoredRequesterTurns({
-          cfg,
-          runs,
-          stateContext,
-          assertCurrent,
-          settleRequesterTurn,
-          retireSupersededRun: config.retireSupersededRun,
-        }),
-    );
+      alreadyActivated: activated,
+    });
     assertCurrent();
-    if (!runsResumed) {
-      await measureStartup(startupTrace, "sidecars.subagent-resume", () =>
-        resumeRestoredRuns(cfg, assertCurrent, startupTrace),
-      );
-      assertCurrent();
-      await measureStartup(
-        startupTrace,
-        "sidecars.subagent-interrupted",
-        config.recoverInterruptedRuns,
-      );
-      assertCurrent();
-      runsResumed = true;
+    // Keep the periodic sweep behind restore while healthy groups recover above.
+    if (resumeNeeded && runs.size > 0) {
+      startSweeper();
     }
-    if (activationFailures.length > 0) {
-      throw activationFailures[0];
+    scheduleSweep();
+    if (failures.length > 0) {
+      throw failures[0];
     }
     activated = true;
   }
 
   async function resumeRestoredRuns(
-    cfg: ReturnType<typeof getRuntimeConfig>,
+    capturedRuns: readonly SubagentRunRecord[],
     assertCurrent: () => void,
     startupTrace?: GatewayStartupTrace,
   ) {
     await measureStartup(startupTrace, "sidecars.subagent-reserve", () =>
-      reserveRestoredSubagentControllerSources([...runs.values()]),
+      reserveRestoredSubagentControllerSources(capturedRuns),
     );
     assertCurrent();
     if (runs.size === 0) {
       return;
     }
     ensureListener();
-    // Session-mode runs have no archive deadline but still need TTL cleanup.
-    startSweeper();
-    // Resume only this captured owner set; registration may change the live map while we yield.
-    const capturedRuns = [...runs];
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const assertReadCurrent = () => {
       assertCurrent();
@@ -206,17 +195,10 @@ export function createSubagentRegistryRestorer(config: {
         throw new Error("Restored subagent read lost its Gateway lifecycle");
       }
     };
-    let visited = 0;
     let sessionReadMs = 0;
-    let yieldMs = 0;
     try {
-      for (const [runId, snapshot] of capturedRuns) {
-        if (++visited % 128 === 0) {
-          const beforeYield = performance.now();
-          await yieldToEventLoop();
-          yieldMs += performance.now() - beforeYield;
-          assertCurrent();
-        }
+      for (const snapshot of capturedRuns) {
+        const runId = snapshot.runId;
         const selected = getCurrentSubagentRunOwner(runs, snapshot);
         // Recovery and cancellation prepare their own session reads.
         if (
@@ -285,7 +267,8 @@ export function createSubagentRegistryRestorer(config: {
             // Global session keys repeat across agent stores, including restored queues.
             groupId: JSON.stringify([entry.requesterAgentId, requesterSessionKey, groupId]),
             runId,
-            maxConcurrent: resolveSwarmConfig(cfg, entry.requesterAgentId).maxConcurrent,
+            maxConcurrent: resolveSwarmConfig(getRuntimeConfig(), entry.requesterAgentId)
+              .maxConcurrent,
             activeRunIds: listSwarmRunsForGroup(
               groupId,
               requesterSessionKey,
@@ -299,6 +282,9 @@ export function createSubagentRegistryRestorer(config: {
               .map((candidate) => candidate.schedulerSlotId ?? candidate.runId),
             start: async () => {
               await runWithGatewayIndependentRootWorkAdmission(async () => {
+                const { MAX_RECOVERY_SOURCE_BYTES } =
+                  await import("../../../gateway/operator-run-recovery-source.codec.js");
+                assertCurrent();
                 const launchEntry = runs.get(runId);
                 if (
                   !launchEntry ||
@@ -309,25 +295,124 @@ export function createSubagentRegistryRestorer(config: {
                 ) {
                   throw new Error("Restored collector launch lost its queued owner");
                 }
-                launchLifecycleGeneration = getAgentEventLifecycleGeneration();
-                const request = applySubagentLaunchAuthorization(
-                  launch.request,
-                  launch.authorization,
-                );
-                const gatewayRuntime = getGatewayContextResolver()?.()?.recoveryRuntime;
-                if (!gatewayRuntime) {
+                const launchGeneration = getAgentEventLifecycleGeneration();
+                launchLifecycleGeneration = launchGeneration;
+                const requesterRecovery = launch.requesterRecovery;
+                if (!isRecord(requesterRecovery)) {
+                  throw new Error(
+                    "Queued requester recovery source is unavailable; submit a new request.",
+                  );
+                }
+                if (
+                  requesterRecovery.facts === null ||
+                  (requesterRecovery.facts !== undefined &&
+                    Buffer.byteLength(JSON.stringify(requesterRecovery.facts), "utf8") >
+                      MAX_RECOVERY_SOURCE_BYTES)
+                ) {
+                  throw new Error(
+                    "Queued requester identity could not be retained; submit a new request.",
+                  );
+                }
+                const requesterFacts =
+                  requesterRecovery.facts === undefined
+                    ? undefined
+                    : decodeRequesterOrigin(requesterRecovery.facts);
+                if (requesterRecovery.facts !== undefined && !requesterFacts) {
+                  throw new Error("Queued requester identity is invalid; submit a new request.");
+                }
+                const capturedRequesterRecovery = structuredClone(requesterRecovery);
+                const gatewayContext = getGatewayContextResolver()?.();
+                const gatewayRuntime = gatewayContext?.recoveryRuntime;
+                if (!gatewayContext || !gatewayRuntime) {
                   throw new GatewayDrainingError();
                 }
-                const response = await gatewayRuntime.dispatchAgent(
-                  request as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
-                  launch.timeoutMs,
-                  launch.authorization
-                    ? { allowModelOverride: true, scopes: [ADMIN_SCOPE] }
-                    : undefined,
+                let accepted = false;
+                const assertLaunchCurrent = () => {
+                  assertCurrent();
+                  if (
+                    !isAgentEventLifecycleGenerationCurrent(launchGeneration) ||
+                    getGatewayContextResolver()?.() !== gatewayContext
+                  ) {
+                    throw new Error("Restored collector launch lost its Gateway lifecycle");
+                  }
+                  // The accepted execution owns its lifetime; clearing queuedLaunch is not revocation.
+                  if (accepted) {
+                    return;
+                  }
+                  const current = getCurrentSubagentRunOwner(runs, entry);
+                  if (
+                    !current ||
+                    current.killIntent ||
+                    current.killReconciliation ||
+                    !current.queuedLaunch ||
+                    !isDeepStrictEqual(
+                      current.queuedLaunch.requesterRecovery,
+                      capturedRequesterRecovery,
+                    ) ||
+                    (current.execution.status !== "queued" &&
+                      !(current.execution.status === "running" && current.swarmLaunchPending) &&
+                      current.collectorCompletion === undefined)
+                  ) {
+                    throw new Error("Restored collector launch lost its queued owner");
+                  }
+                };
+                assertLaunchCurrent();
+                const request = bindInProcessSessionRun(
+                  {
+                    ...applySubagentLaunchAuthorization(launch.request, launch.authorization),
+                    agentId: authority.childAgentId,
+                  },
+                  {
+                    sessionKey: entry.childSessionKey,
+                    sessionId: authority.sessionIdentity.sessionId,
+                    lifecycleRevision: authority.sessionIdentity.lifecycleRevision,
+                    runId,
+                  },
                 );
+                const operator =
+                  requesterRecovery.operator !== undefined
+                    ? await (
+                        await loadOperatorRecovery()
+                      ).restoreGatewayQueuedOperatorRecovery({
+                        source: requesterRecovery.operator,
+                        context: gatewayContext,
+                        assertCurrent: assertLaunchCurrent,
+                      })
+                    : undefined;
+                let response: unknown;
+                try {
+                  assertLaunchCurrent();
+                  if (requesterFacts && !authority.requesterAgentId) {
+                    throw new Error("Queued requester agent is unavailable; submit a new request.");
+                  }
+                  response = await gatewayRuntime.dispatchAgent(
+                    request as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
+                    launch.timeoutMs,
+                    {
+                      ...(launch.authorization
+                        ? { allowModelOverride: true, scopes: [ADMIN_SCOPE] }
+                        : {}),
+                      operatorRunAuthority: operator?.authority,
+                      agentToolCaller:
+                        requesterFacts && authority.requesterAgentId
+                          ? {
+                              agentId: authority.requesterAgentId,
+                              sessionKey: entry.requesterSessionKey,
+                              requesterOrigin: requesterFacts,
+                              assertCurrent: assertLaunchCurrent,
+                            }
+                          : undefined,
+                      assertAdmissionCurrent: assertLaunchCurrent,
+                    },
+                  );
+                  // The acceptance-returning dispatch has transferred work to its execution owner.
+                  accepted = true;
+                } finally {
+                  operator?.release();
+                }
                 const gatewayRunId = readGatewayRunId(response) ?? runId;
                 try {
-                  if (!isSameSubagentRunOwner(runs.get(runId), entry)) {
+                  if (!getCurrentSubagentRunOwner(runs, entry)) {
                     throw new Error("Restored collector launch owner changed before publication");
                   }
                   if (
@@ -402,7 +487,6 @@ export function createSubagentRegistryRestorer(config: {
     } finally {
       startupTrace?.detail("sidecars.subagent-activation", [
         ["registryActivationSessionReadMs", sessionReadMs],
-        ["registryActivationYieldMs", yieldMs],
       ]);
     }
   }
@@ -609,7 +693,7 @@ export function createSubagentRegistryRestorer(config: {
       restoredRowsPending = false;
       activationRequested = false;
       activated = false;
-      runsResumed = false;
+      requesterActivator.reset();
     },
   };
 }

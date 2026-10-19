@@ -11,7 +11,6 @@ import type { WorkflowStep } from "./ci-workflow.test-support.js";
 const WORKFLOW_PATH = ".github/workflows/ios-periphery-comment.yml";
 const PRODUCER_WORKFLOW_PATH = ".github/workflows/ios-periphery.yml";
 const MACOS_PRODUCER_WORKFLOW_PATH = ".github/workflows/macos-periphery.yml";
-const SHARED_PRODUCER_WORKFLOW_PATH = ".github/workflows/shared-openclawkit-periphery.yml";
 const ARTIFACT_NAME = "ios-periphery-dead-code-12345-2";
 
 type Workflow = {
@@ -127,6 +126,10 @@ async function runCommenter(
     liveHeadSha?: string;
     liveHeadShaAfter?: string;
     scanJobConclusion?: string;
+    scanAttempt?: number;
+    producerAttempt?: number;
+    producerConclusion?: string;
+    previousAttempts?: number[];
     scopeJobConclusion?: string;
     workflowRuns?: Partial<WorkflowRun>[];
   } = {},
@@ -171,16 +174,57 @@ async function runCommenter(
       actions: {
         listJobsForWorkflowRun(this: void, params: Record<string, unknown>) {
           apiCalls.push("listJobs");
-          expect(params).toMatchObject({ run_id: run.id, filter: "latest" });
+          expect(params).toMatchObject({ run_id: run.id, filter: "all" });
           return [
+            ...(options.previousAttempts ?? []).flatMap((run_attempt) =>
+              [
+                {
+                  name: `Detect ${platform} scan scope`,
+                  conclusion: "success",
+                  status: "completed",
+                  run_attempt,
+                },
+                {
+                  name: `Scan ${platform} dead code`,
+                  conclusion: "skipped",
+                  status: "completed",
+                  run_attempt,
+                },
+              ].concat(
+                platform === "macOS"
+                  ? [
+                      {
+                        name: "Build macOS Periphery reports",
+                        conclusion: "success",
+                        status: "completed",
+                        run_attempt,
+                      },
+                    ]
+                  : [],
+              ),
+            ),
             {
               conclusion: options.scopeJobConclusion ?? "success",
               name: `Detect ${platform} scan scope`,
+              run_attempt: run.run_attempt,
+              status: "completed",
             },
             {
               conclusion: options.scanJobConclusion ?? "success",
               name: `Scan ${platform} dead code`,
+              run_attempt: options.scanAttempt ?? options.producerAttempt ?? run.run_attempt,
+              status: "completed",
             },
+            ...(platform === "macOS"
+              ? [
+                  {
+                    conclusion: options.producerConclusion ?? "success",
+                    name: "Build macOS Periphery reports",
+                    run_attempt: options.producerAttempt ?? run.run_attempt,
+                    status: "completed",
+                  },
+                ]
+              : []),
           ];
         },
         listWorkflowRunArtifacts(this: void, params: Record<string, unknown>) {
@@ -374,12 +418,9 @@ describe("iOS Periphery comment workflow", () => {
   it("uses hosted macOS capacity for scans", () => {
     const iosWorkflow = readWorkflow(PRODUCER_WORKFLOW_PATH);
     const macosWorkflow = readWorkflow(MACOS_PRODUCER_WORKFLOW_PATH);
-    const sharedWorkflow = readWorkflow(SHARED_PRODUCER_WORKFLOW_PATH);
-
     expect(iosWorkflow.jobs?.scan?.["runs-on"]).toBe("xcode-27");
-    expect(macosWorkflow.jobs?.scan?.["runs-on"]).toBe("xcode-27");
-    expect(sharedWorkflow.jobs?.["scan-ios"]?.["runs-on"]).toBe("xcode-27");
-    expect(sharedWorkflow.jobs?.["scan-macos"]?.["runs-on"]).toBe("xcode-27");
+    expect(macosWorkflow.jobs?.["macos-index"]?.["runs-on"]).toBe("xcode-27");
+    expect(macosWorkflow.jobs?.["scan-ios"]?.["runs-on"]).toBe("xcode-27");
   });
 
   it.each([
@@ -449,6 +490,58 @@ describe("iOS Periphery comment workflow", () => {
     expect(result.downloadCount).toBe(0);
     expect(result.core.warnings).toEqual([`No ${ARTIFACT_NAME} artifact found.`]);
     expectUnavailableComment(result.updatedBodies);
+  });
+
+  it.each(["iOS", "macOS"] as const)(
+    "reads the retained %s producer after an unrelated failed-job rerun",
+    async (platform) => {
+      const result = await runReport(
+        findingArchive,
+        {
+          platform,
+          run: { run_attempt: 3 },
+          scanAttempt: platform === "macOS" ? 3 : 2,
+          producerAttempt: 2,
+        },
+        { name: `${platform.toLowerCase()}-periphery-dead-code-12345-2` },
+      );
+      expect(result.downloadCount).toBe(1);
+      expect(result.createdBodies[0]).toContain("unusedSyntheticFunction");
+      expect(result.core.warnings).toEqual([]);
+    },
+  );
+
+  it.each(["failure", "cancelled"])(
+    "does not fall back to an old report after a %s macOS producer rerun",
+    async (producerConclusion) => {
+      const result = await runReport(
+        findingArchive,
+        {
+          platform: "macOS",
+          producerAttempt: 3,
+          producerConclusion,
+          previousAttempts: [1, 2],
+          scanJobConclusion: producerConclusion === "cancelled" ? "skipped" : "failure",
+          run: { run_attempt: 3 },
+        },
+        { name: "macos-periphery-dead-code-12345-2" },
+      );
+      expect(result.downloadCount).toBe(0);
+      expectUnavailableComment(result.createdBodies);
+      expect(result.core.warnings).toEqual([
+        "No macos-periphery-dead-code-12345-3 artifact found.",
+      ]);
+    },
+  );
+
+  it("reads the newly produced macOS report after a producer rerun", async () => {
+    const result = await runReport(
+      findingArchive,
+      { platform: "macOS", producerAttempt: 3, previousAttempts: [1, 2], run: { run_attempt: 3 } },
+      { name: "macos-periphery-dead-code-12345-3" },
+    );
+    expect(result.downloadCount).toBe(1);
+    expect(result.createdBodies[0]).toContain("unusedSyntheticFunction");
   });
 
   it("reads deflated findings and escapes them before creating a PR comment", async () => {

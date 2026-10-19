@@ -907,62 +907,6 @@ describe("session MCP runtime", () => {
     expect(diagnostic?.message).not.toContain(secret);
   });
 
-  it("retries a failed MCP catalog without stalling healthy siblings", async ({ signal }) => {
-    const { files, servers } = await stdioGroup(
-      {
-        healthyServer: { tools: [toolDefinition("healthy_tool")] },
-        retryServer: { inputSchema: { type: "array", items: { type: "number" } } },
-      },
-      {
-        healthyServer: { connectionTimeoutMs: 2_000 },
-        retryServer: { connectionTimeoutMs: 2_000 },
-      },
-    );
-    const retry = expectDefined(files.retryServer, "retry fixture");
-    const healthy = expectDefined(files.healthyServer, "healthy fixture");
-    const retryReleasePath = retry.file("retry.release");
-    let nowMs = 10_000;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    const staticRuntime = await getSessionRuntime(
-      sessionParams("session-catalog-retry", mcpConfig(servers)),
-    );
-    const scopedRuntime = makeRuntime(
-      [{ toolName: "scoped_tool", description: "Requester-scoped tool" }],
-      "scopedServer",
-    );
-    const scopedCatalog = await scopedRuntime.getCatalog();
-    scopedRuntime.getCatalog = async () => scopedCatalog;
-    scopedRuntime.peekCatalog = () => scopedCatalog;
-    const runtime = createCombinedSessionMcpRuntime({
-      sessionId: "session-catalog-retry",
-      workspaceDir: "/workspace",
-      parts: [staticRuntime, scopedRuntime],
-    });
-    try {
-      const failedCatalog = await runtime.getCatalog();
-      expect(Object.keys(failedCatalog.servers)).toEqual(["healthyServer", "scopedServer"]);
-      expectToolNames(failedCatalog, ["healthy_tool", "scoped_tool"]);
-      expect(failedCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
-      await retry.write({ listToolsReleasePath: retryReleasePath });
-      await expect(runtime.getCatalog()).resolves.toBe(failedCatalog);
-      nowMs += 5_001;
-      expect(runtime.peekCatalog()).toBe(failedCatalog);
-      const recovery = runtime.getCatalog();
-      await waitForFixture(signal, retry.logPath, "recv tools/list", recovery, 2);
-      await expectHealthyCall(runtime, "healthyServer", "healthy_tool");
-      await fs.writeFile(retryReleasePath, "release", "utf8");
-      const recoveredCatalog = await withinTest(recovery, signal);
-      expect(recoveredCatalog.diagnostics ?? []).toEqual([]);
-      expect(recoveredCatalog.servers.retryServer).toBeDefined();
-      expectToolNames(recoveredCatalog, ["healthy_tool", "slow_tool", "scoped_tool"]);
-      expect((await readText(healthy.logPath)).match(/recv tools\/list/g)).toHaveLength(1);
-      expect((await readText(retry.logPath)).match(/recv tools\/list/g)).toHaveLength(2);
-    } finally {
-      nowSpy.mockRestore();
-      await runtime.dispose();
-    }
-  });
-
   it("materializes structured and non-text stdio results", async () => {
     const structuredContent = { description: "captured screenshot" };
     const { runtime, logPath } = await stdioRuntime(

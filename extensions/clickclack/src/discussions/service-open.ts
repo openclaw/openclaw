@@ -32,7 +32,10 @@ import {
   slugifyDiscussionLabel,
   truncateDiscussionDisplayTitle,
 } from "./naming.js";
-import { markClickClackDiscussionChannelIdentityRevoked } from "./revoked-channel-store.js";
+import {
+  clearClickClackDiscussionChannelRevoked,
+  markClickClackDiscussionChannelIdentityRevoked,
+} from "./revoked-channel-store.js";
 
 const CHANNEL_NAME_MUTATION_ATTEMPTS = 4;
 
@@ -42,16 +45,11 @@ type OpenDiscussionParams = {
   account: ResolvedClickClackAccount;
   clientFactory: (account: ResolvedClickClackAccount) => ClickClackClient;
   installationId: string;
-  bindingGenerationFactory: () => string;
   sessionKey: string;
   ensureTimer: () => Promise<void>;
   reconcilePendingOpen: (pending: PendingDiscussionOpen) => Promise<void>;
   withChannelMutationLock: <T>(run: () => Promise<T>) => Promise<T>;
   ensureBindingCapacity: (sessionKey: string) => Promise<void>;
-  finalizePendingBinding: (
-    sessionKey: string,
-    binding: ClickClackDiscussionBinding,
-  ) => Promise<void>;
   warn: (message: string) => void;
 };
 
@@ -211,6 +209,29 @@ function assertManagedChannelListContract(
   }
 }
 
+export async function finalizePendingDiscussionBinding(
+  runtime: PluginRuntime,
+  sessionKey: string,
+  binding: ClickClackDiscussionBinding,
+): Promise<void> {
+  const pending = await getPendingDiscussionOpen(runtime, sessionKey);
+  if (pending?.externalRef === binding.externalRef) {
+    // A matching binding is the durable commit record. Clear the fail-closed
+    // tombstone first, then the recovery reservation; every crash point can
+    // replay this sequence without orphaning the remote channel.
+    await clearClickClackDiscussionChannelRevoked({
+      runtime,
+      serverBaseUrl: binding.serverBaseUrl,
+      channelId: binding.channelId,
+    });
+    await clearDiscussionBindingGeneration({
+      runtime,
+      sessionKey,
+      expectedGeneration: pending.generation,
+    });
+  }
+}
+
 export async function openClickClackDiscussionBinding(
   params: OpenDiscussionParams,
 ): Promise<ClickClackDiscussionBinding | undefined> {
@@ -302,7 +323,6 @@ export async function openClickClackDiscussionBinding(
       accountId: account.accountId,
       credentialFingerprint,
       destinationIdentity,
-      createGeneration: params.bindingGenerationFactory,
     });
     const generationScope = { runtime, sessionKey, expectedGeneration: bindingGeneration };
     const externalRef = discussionExternalRef(
@@ -474,7 +494,7 @@ export async function openClickClackDiscussionBinding(
       params.warn(`unbound discussion channel remains quarantined: ${channel.id}`);
       throw error;
     }
-    await params.finalizePendingBinding(sessionKey, nextBinding);
+    await finalizePendingDiscussionBinding(runtime, sessionKey, nextBinding);
     return nextBinding;
   });
 }
@@ -485,16 +505,12 @@ export async function reconcilePendingDiscussionOpen(params: {
   clientFactory: (account: ResolvedClickClackAccount) => ClickClackClient;
   pending: PendingDiscussionOpen;
   allowRetry?: boolean;
-  finalizePendingBinding: (
-    sessionKey: string,
-    binding: ClickClackDiscussionBinding,
-  ) => Promise<void>;
   open: (sessionKey: string) => Promise<SessionDiscussionInfo>;
 }): Promise<void> {
   const { pending } = params;
   const currentBinding = await params.store.getAsync(pending.sessionKey);
   if (currentBinding?.externalRef === pending.externalRef) {
-    await params.finalizePendingBinding(pending.sessionKey, currentBinding);
+    await finalizePendingDiscussionBinding(params.runtime, pending.sessionKey, currentBinding);
     return;
   }
   // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.

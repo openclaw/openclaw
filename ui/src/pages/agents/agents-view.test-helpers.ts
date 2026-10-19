@@ -44,6 +44,10 @@ export function createAgentViewTestProps(
       agents: [{ id: "alpha", name: "Alpha" } as never, { id: "beta", name: "Beta" } as never],
     },
     selectedAgentId: "beta",
+    memoryTarget: {
+      read: () => (overrides.selectedAgentId === undefined ? "beta" : overrides.selectedAgentId),
+      subscribe: () => () => {},
+    },
     activePanel: "overview",
     config: {
       configForm: null,

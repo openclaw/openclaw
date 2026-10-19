@@ -600,29 +600,39 @@ export function prepareProjectedSessionPresentation(
       // Current authorization and temporal presentation precede reuse. The retained vector
       // owns bytes only; it never retains a connection or grants permission to a later read.
       const view = listView(opts);
+      const conditional =
+        view.conditional === true ||
+        opts.rowMode === "sidebar" ||
+        opts.ifRowsRevision !== undefined;
       const previous = view.rows;
-      if (previous?.length === rows.length && rows.every((row, index) => row === previous[index])) {
-        return { sessions: previous, rowHistory: view.rowHistory };
+      const unchanged =
+        previous?.length === rows.length && rows.every((row, index) => row === previous[index])
+          ? previous
+          : undefined;
+      if (unchanged && (!conditional || view.conditional)) {
+        return { sessions: unchanged, rowHistory: view.rowHistory };
       }
-      Object.freeze(rows);
+      // Promotion reuses the vector without adding a history generation.
+      const current = unchanged ?? rows;
+      Object.freeze(current);
       let sharedBytes = 0;
-      if (opts.rowMode === "sidebar") {
+      if (conditional) {
         // Prepare before admission so the byte limit includes everything this vector pins.
-        const shared = shareSidebarSessionRows(rows);
+        const shared = shareSidebarSessionRows(current);
         sharedBytes =
           shared.sessions.reduce((bytes, row) => bytes + sessionRowEncodingBytes(row), 0) +
           serializedJsonArrayBytes(shared.sessions);
       } else {
-        registerSerializedJsonArray(rows, rows.map(serializeSessionRow));
+        registerSerializedJsonArray(current, current.map(serializeSessionRow));
       }
       publicationState?.lists.setRows(
         view,
-        rows,
-        opts.rowMode === "sidebar",
+        current,
+        conditional,
         sharedBytes,
         sessionRowFactEncodingBytes,
       );
-      return { sessions: rows, rowHistory: view.rowHistory };
+      return { sessions: current, rowHistory: view.rowHistory };
     },
     snapshot(query: records.Lookup, options: PresentationOptions = {}) {
       const record = projection.describe(query);

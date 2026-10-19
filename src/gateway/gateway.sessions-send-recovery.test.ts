@@ -7,6 +7,7 @@ import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-ss
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
 import {
   closeProvider,
   listenProvider,
@@ -27,6 +28,7 @@ it(
       const target = "agent:main:dashboard:peer-target";
       let hold = true;
       let held = false;
+      let recoveredThemeCalls = 0;
       const providerServer = createServer((request, response) => {
         void (async () => {
           const raw = await readProviderBody(request);
@@ -46,11 +48,11 @@ it(
               !JSON.stringify(item.content).includes("OpenClaw runtime context:"),
           );
           const text = JSON.stringify(input[userIndex]?.content ?? "");
+          const outputIndex = input.findLastIndex((item) => item.type === "function_call_output");
           const sendMarker = text.match(
             /SEND_(PEER_UPDATE_[0-9]+|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE|ARCHIVED_SOURCE_UPDATE)/u,
           )?.[1];
           if (sendMarker) {
-            const outputIndex = input.findLastIndex((item) => item.type === "function_call_output");
             if (outputIndex > userIndex) {
               const output = JSON.parse(input[outputIndex]!.output!) as {
                 status?: string;
@@ -83,6 +85,21 @@ it(
               /PEER_UPDATE_[0-9]+|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE|ARCHIVED_SOURCE_UPDATE/gu,
             )
             ?.at(-1);
+          if (marker === "PEER_UPDATE_1") {
+            if (outputIndex > userIndex) {
+              const output: unknown = JSON.parse(input[outputIndex]!.output!);
+              expect(output).toMatchObject({
+                current: { mode: "dark", scope: "profile" },
+                application: "saved",
+              });
+            } else {
+              expect(body.tools?.some((tool) => tool.name === "theme")).toBe(true);
+              recoveredThemeCalls++;
+              expect(recoveredThemeCalls).toBe(1);
+              writeToolCall(response, "theme", { action: "set", mode: "dark" });
+              return;
+            }
+          }
           if (marker) {
             observed.push(marker);
           }
@@ -119,16 +136,24 @@ it(
         },
       });
       let client: Awaited<ReturnType<typeof acquireGatewayTestClient>> | undefined;
+      const deviceIdentity = generateStoredDeviceIdentity();
       const connect = () =>
         acquireGatewayTestClient(
           {
-            deviceIdentity: null,
+            deviceIdentity,
+            env: gateway.state.env,
             url: gateway.url,
             token: gateway.gatewayToken,
-            clientName: "cli",
-            mode: "cli",
+            clientName: "test",
+            mode: "test",
             role: "operator",
             scopes: ["operator.admin", "operator.read", "operator.write"],
+            // Reconnect with explicit credentials; this fixture has no local token cache.
+            hostDeps: {
+              loadDeviceAuthToken: () => null,
+              storeDeviceAuthToken: () => {},
+              clearDeviceAuthToken: () => {},
+            },
           },
           {
             timeoutMs: 30_000,
@@ -199,6 +224,17 @@ it(
         await gateway.state.writeConfig(config);
         await gateway.startGateway();
         client = await connect();
+        const requester = await client.request<{ profile: { id: string } }>(
+          "users.self",
+          {},
+          { signal },
+        );
+        const preferencesBefore = await client.request(
+          "users.prefs.get",
+          { keys: ["ui.themeMode"] },
+          { signal },
+        );
+        expect(preferencesBefore).toEqual({ status: "ok", entries: {} });
         const sessionIds = new Map<string, string>();
         for (const key of [target, source, resetSource, revokedSource, archivedSource]) {
           const created = await client.request<{ sessionId: string }>(
@@ -264,6 +300,14 @@ it(
           () => expect(gateway.logs()).toContain("Session delivery recovery blocked for "),
           { timeout: 30_000 },
         );
+        expect(recoveredThemeCalls).toBe(1);
+        expect(await client.request("users.self", {}, { signal })).toMatchObject({
+          profile: { id: requester.profile.id },
+        });
+        // Read the exact original person's durable effect independently of model output.
+        expect(
+          await client.request("users.prefs.get", { keys: ["ui.themeMode"] }, { signal }),
+        ).toEqual({ status: "ok", entries: { "ui.themeMode": "dark" } });
         const after = await history();
         // History retains the cancelled receipt; only permission failures can replay.
         expect(after.pendingInputs.items.map((item) => item.state)).toEqual([

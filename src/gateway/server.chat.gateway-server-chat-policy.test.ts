@@ -50,7 +50,8 @@ beforeAll(async () => {
     .spyOn(admission, "tryBeginGatewayRootWorkAdmission")
     .mockImplementation((origin) => {
       const lease = beginRoot(origin);
-      return lease && origin === "ws:connect"
+      // Handler completion can precede release of retained request work.
+      return lease && (origin === "ws:connect" || origin === "ws:chat.send")
         ? {
             ...lease,
             run: (run) =>
@@ -105,6 +106,38 @@ const {
 } = gatewaySuite;
 
 describe("gateway server chat", () => {
+  test("fixture cleanup joins the exact retained chat.send root", async () => {
+    const admission = await import("../process/gateway-work-admission.js");
+    const lease = admission.tryBeginGatewayRootWorkAdmission("ws:chat.send");
+    if (!lease) {
+      throw new Error("Expected admitted request fixture");
+    }
+    const release = createDeferred();
+    let retained: Promise<unknown> | undefined;
+    let joined: Promise<void> | undefined;
+    let settled = false;
+    try {
+      await lease.run(async () => {
+        retained = admission.runWithRetainedGatewayRootWork(() => release.promise);
+      });
+      lease.release();
+      joined = waitForConnectWork();
+      void joined.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      release.resolve();
+      await joined;
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      release.resolve();
+      lease.release();
+      await retained;
+      await joined;
+    }
+  });
+
   test("chat.send does not persist verboseLevel for operator.write callers", async () => {
     await withMainSessionStore(async () => {
       let scopedWs: WebSocket | undefined;

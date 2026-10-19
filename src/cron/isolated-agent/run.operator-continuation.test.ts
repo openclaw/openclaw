@@ -7,6 +7,13 @@ import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-
 import { withPreparedEmbeddedGatewayTools } from "../../agents/embedded-agent-runner/run/attempt-gateway-tools.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { markRestartAbortedMainSessions } from "../../agents/main-session-recovery/main-session-restart-recovery-marking.js";
+import { recoverStore } from "../../agents/main-session-recovery/main-session-restart-recovery-store.js";
+import {
+  createRestartRecoveryRequesterSource,
+  readRestartRecoveryRequesterSource,
+} from "../../agents/requester-run-recovery-source.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import {
@@ -16,7 +23,9 @@ import {
 } from "../../agents/tools/cron-tool.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { hasMainSessionRecoveryClaim } from "../../config/sessions/restart-recovery-state.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { resolveSessionWorkStartBlock } from "../../config/sessions/session-work-start.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as publicationIdentity from "../../gateway/github-publication-availability.js";
 import * as publicationTransport from "../../gateway/github-publication-git-transport.js";
@@ -24,6 +33,7 @@ import { createGitHubPublicationCoordinator } from "../../gateway/github-publica
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { createOperatorRecoveryFixture } from "../../gateway/operator-run-recovery.test-support.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
+import { createAgentEventTestHarness } from "../../gateway/server-chat.agent-events.test-harness.js";
 import {
   admission,
   cfg,
@@ -35,13 +45,29 @@ import {
   SESSION_ID,
   stateDir,
 } from "../../gateway/server-methods/requester-cron-authority.test-support.js";
+import { createMockGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime.test-support.js";
+import { prepareGatewayRunShutdown } from "../../gateway/server-run-shutdown.js";
+import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import {
+  getCurrentSessionControllerOwner,
+  isSessionControllerWorkActive,
+} from "../../sessions/session-controller.lifecycle.js";
+import {
+  beginReplyMessageInjectionTarget,
+  captureReplyMessageInjectionTarget,
+} from "../../sessions/session-controller.message-injection.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -58,6 +84,7 @@ import {
   loadSessionEntryMock,
   mockRunCronFallbackPassthrough,
   patchSessionEntryMock,
+  readSessionMessagesAsyncMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveConfiguredModelRefMock,
   resolveCronDeliveryPlanMock,
@@ -71,6 +98,9 @@ const session = await vi.importActual<typeof import("./session.js")>("./session.
 const accessor = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
   "../../config/sessions/session-accessor.js",
 );
+const transcriptReaders = await vi.importActual<
+  typeof import("../../gateway/session-transcript-readers.js")
+>("../../gateway/session-transcript-readers.js");
 installRequesterCronAuthorityTestHooks();
 
 beforeEach(() => {
@@ -95,6 +125,9 @@ describe("same-conversation scheduled operator continuation", () => {
   it.each([
     "operator",
     "paused force run",
+    "restart",
+    "restart with prior operator source",
+    "restart with prior operator source and steering",
     "guest",
     "legacy attribution",
     "foreign target",
@@ -103,6 +136,7 @@ describe("same-conversation scheduled operator continuation", () => {
     "role revoked during merge",
     "session replaced",
   ] as const)("preserves the %s boundary", async (scenario) => {
+    const restarting = scenario.startsWith("restart");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const config: OpenClawConfig = {
       ...cfg,
@@ -131,7 +165,8 @@ describe("same-conversation scheduled operator continuation", () => {
     });
     const fixture = createCronFixture(undefined, config);
     const { context } = fixture;
-    context.resolveGatewayContext = () => context;
+    const resolveGatewayContext = () => context;
+    context.resolveGatewayContext = resolveGatewayContext;
     const profile = ensureProfileForEmail("scheduled-operator@example.test");
     const recovery = await createOperatorRecoveryFixture({
       stateDir,
@@ -270,6 +305,28 @@ describe("same-conversation scheduled operator continuation", () => {
       fixture.context.cron.stop();
       await creatorCron.waitForIdle();
     }
+    if (scenario === "restart") {
+      // The other restart cases retain the fixture's earlier operator source.
+      const entry = { ...recovery.entry };
+      delete entry.restartRecoveryDeliveryRunId;
+      delete entry.restartRecoveryDeliverySourceRunId;
+      delete entry.restartRecoverySourceIngress;
+      delete entry.restartRecoveryOperatorSource;
+      await accessor.replaceSessionEntry(recovery.target, entry);
+    } else if (restarting) {
+      // A prior human admission can leave requester facts beside its operator source.
+      await accessor.replaceSessionEntry(recovery.target, {
+        ...recovery.entry,
+        restartRecoveryRequesterSource: expectDefined(
+          createRestartRecoveryRequesterSource({
+            ...recovery.target,
+            entry: recovery.entry,
+            requesterOrigin: { sessionKey: SESSION, operatorProfileId: profile.id },
+          }),
+          "prior human requester source",
+        ),
+      });
+    }
     // No operator request, original admitted run or human follow-up survives this point.
     const job = expectDefined((await fixture.read())[0], "durably stored continuation");
     if (scenario === "foreign target") {
@@ -367,6 +424,10 @@ describe("same-conversation scheduled operator continuation", () => {
           ),
         };
       });
+    const restartEntered = createDeferredCore();
+    const restartContinue = createDeferredCore();
+    let shutdownReleased: Promise<void> | undefined;
+    let interruptedRunId: string | undefined;
     let entered = 0;
     let offered: unknown;
     const results: unknown[] = [];
@@ -377,6 +438,86 @@ describe("same-conversation scheduled operator continuation", () => {
         params.preparedRunAdmission,
         "scheduled admission",
       ).admit("gateway", params.runId);
+      if (restarting && entered === 1) {
+        expect(params.toolsAllow).toEqual(["github_publish"]);
+        const recorder = expectDefined(params.userTurnTranscriptRecorder, "cron transcript owner");
+        expect(await recorder.persistApproved()).toBeDefined();
+        interruptedRunId = params.runId;
+        const lifecycleGeneration = getAgentEventLifecycleGeneration();
+        await params.onExecutionStarted?.({
+          lifecycleGeneration,
+        });
+        await persistGatewaySessionLifecycleEvent({
+          agentId: "main",
+          sessionKey: SESSION,
+          event: {
+            runId: params.runId,
+            sessionId: params.sessionId,
+            lifecycleGeneration,
+            ts: Date.now(),
+            data: { phase: "start" },
+          },
+        });
+        if (scenario === "restart with prior operator source and steering") {
+          const steeringAuthority = expectDefined(
+            await captureGatewayOperatorRunAuthority({
+              client: recovery.client,
+              context,
+              sourceAuthority: null,
+            }),
+            "fresh authenticated steering source",
+          );
+          try {
+            const steering = createUserTurnTranscriptRecorder({
+              input: { text: "Continue the scheduled task", provenance: { kind: "external_user" } },
+              target: () => ({
+                ...recovery.target,
+                sessionEntry: accessor.loadSessionEntry(recovery.target),
+                config,
+              }),
+              assertOriginalInputCommit: steeringAuthority.authority.assertCurrent,
+            });
+            const operation = expectDefined(getCurrentSessionControllerOwner(), "cron owner");
+            operation.setPhase("running");
+            operation.attachBackend({
+              kind: "embedded",
+              runId: params.runId,
+              toolAuthorityFingerprint: "scheduled-tools",
+              cancel() {},
+              messageInjectionV2: {
+                version: 2,
+                isAvailable: () => true,
+                queueMessage: async (_text, options, assertCurrent) => {
+                  assertCurrent();
+                  expect(
+                    await options?.userTurnTranscriptRecorder?.persistApproved(),
+                  ).toBeDefined();
+                },
+              },
+            });
+            const attempt = await beginReplyMessageInjectionTarget(
+              expectDefined(captureReplyMessageInjectionTarget(operation), "running cron target"),
+              "Continue the scheduled task",
+              {
+                isInboundUserMessage: true,
+                toolAuthorityFingerprint: "scheduled-tools",
+                assertCurrent: steeringAuthority.authority.assertCurrent,
+                waitForTranscriptCommit: true,
+                userTurnTranscriptRecorder: steering,
+              },
+            );
+            expect(await attempt.outcome).toEqual({ status: "accepted" });
+            expect(steering.getPersistedMessage?.()?.["__openclaw"]?.steerTargetRunId).toBe(
+              params.runId,
+            );
+          } finally {
+            steeringAuthority.release();
+          }
+        }
+        restartEntered.resolve();
+        await restartContinue.promise;
+        throw createAgentRunRestartAbortError();
+      }
       return withPreparedEmbeddedGatewayTools(
         {
           admittedRunContext: admitted,
@@ -449,7 +590,7 @@ describe("same-conversation scheduled operator continuation", () => {
       log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
-      runSchedulerOwned: createScheduledGatewayRunner(() => context),
+      runSchedulerOwned: createScheduledGatewayRunner(resolveGatewayContext),
       runIsolatedAgentJob: (request) =>
         runCronIsolatedAgentTurn({
           ...request,
@@ -471,11 +612,114 @@ describe("same-conversation scheduled operator continuation", () => {
         await execution.run(job.id, "force");
       } else {
         clock.setTime(expectDefined(reloaded.state.nextRunAtMs, "scheduled timer"));
-        await onTimer(schedulerState);
+        const tick = onTimer(schedulerState);
+        if (restarting) {
+          await restartEntered.promise;
+          const harness = createAgentEventTestHarness();
+          try {
+            const shutdown = await prepareGatewayRunShutdown({
+              resolveGatewayContext,
+              timeoutMs: 0,
+              warnings: [],
+              getPendingReplyCount: () => 0,
+              chatRunState: harness.chatRunState,
+              agentRunSeq: harness.agentRunSeq,
+              removeChatRun: () => undefined,
+              broadcast: harness.broadcast,
+              nodeSendToSession: harness.nodeSendToSession,
+              markMainSessionsAbortedForRestart: (params) =>
+                markRestartAbortedMainSessions({ ...params, cfg: config, stateDir }).then(
+                  () => undefined,
+                ),
+            });
+            shutdownReleased = shutdown.released;
+            const interrupted = expectDefined(
+              accessor.loadSessionEntry(recovery.target),
+              "interrupted cron parent",
+            );
+            expect(interrupted).toMatchObject({
+              status: "interrupted",
+              mainRestartRecovery: { cycleId: expect.any(String) },
+            });
+            expect(interrupted.restartRecoveryDeliverySourceRunId).toBe(
+              scenario === "restart" ? interruptedRunId : recovery.target.sourceRunId,
+            );
+            if (scenario !== "restart") {
+              expect(
+                readRestartRecoveryRequesterSource({ ...recovery.target, entry: interrupted }),
+              ).toMatchObject({ sessionKey: SESSION, operatorProfileId: profile.id });
+            }
+            expect(interrupted.restartRecoveryRuns).toContainEqual({
+              runId: interruptedRunId,
+              lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            });
+          } finally {
+            restartContinue.resolve();
+            await harness.handler.dispose();
+          }
+        }
+        await tick;
       }
       await finished.promise;
       await execution.waitForIdle();
       const state = expectDefined(execution.getJob(job.id), "finished scheduled job").state;
+      if (restarting) {
+        await shutdownReleased;
+        expect(state.lastRunStatus, state.lastError).toBe("error");
+        expect(execution.getJob(job.id)?.enabled).toBe(true);
+        expect(state.nextRunAtMs).toEqual(expect.any(Number));
+        expect(entered).toBe(1);
+        expect(writes).toEqual([]);
+        expect(job.operatorSource).toBeDefined();
+        rotateAgentEventLifecycleGeneration();
+        readSessionMessagesAsyncMock.mockImplementation(transcriptReaders.readSessionMessagesAsync);
+        const gatewayRuntime = createMockGatewayRecoveryRuntime();
+        vi.mocked(gatewayRuntime.dispatchAgent).mockResolvedValue({
+          runId: "unexpected-cron-recovery",
+          status: "ok",
+        });
+        const recover = () =>
+          recoverStore({
+            cfg: config,
+            storePath: recovery.target.storePath,
+            stateDir,
+            expectedTarget: { sessionKey: SESSION, sessionId: SESSION_ID },
+            handledSessionKeys: new Set(),
+            gatewayRuntime,
+          });
+        await recover();
+        await recover();
+        expect(gatewayRuntime.dispatchAgent).not.toHaveBeenCalled();
+        const saved = expectDefined(
+          accessor.loadSessionEntry(recovery.target),
+          "settled cron parent",
+        );
+        expect(saved.abortedLastRun).toBe(false);
+        expect(saved.lifecycleRunId).toBeUndefined();
+        expect(saved.activeWriterRunId).toBeUndefined();
+        expect(saved.status).toBe("interrupted");
+        expect(hasMainSessionRecoveryClaim(saved)).toBe(false);
+        expect(resolveSessionWorkStartBlock(SESSION, saved)).toBeUndefined();
+        expect(
+          isSessionControllerWorkActive(recovery.target.storePath, [SESSION, SESSION_ID]),
+        ).toBe(false);
+        execution.stop();
+        await execution.waitForIdle();
+        await execution.start();
+        clock.setTime(expectDefined(execution.getJob(job.id)?.state.nextRunAtMs, "restart retry"));
+        await onTimer(schedulerState);
+        await execution.waitForIdle();
+        expect(entered).toBe(2);
+        expect(writes).toEqual([{ sha: "a".repeat(40), merge_method: "merge" }]);
+        expect(execution.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+        execution.stop();
+        await execution.waitForIdle();
+        await execution.start();
+        await onTimer(schedulerState);
+        await execution.waitForIdle();
+        expect(entered).toBe(2);
+        return;
+      }
       if (scenario === "role revoked" || scenario === "session replaced") {
         expect(entered).toBe(0);
         expect(state.lastRunStatus, state.lastError).toBe("error");
@@ -528,6 +772,7 @@ describe("same-conversation scheduled operator continuation", () => {
         expect(receipt).not.toHaveBeenCalled();
       }
     } finally {
+      restartContinue.resolve();
       execution.stop();
       await execution.waitForIdle();
     }

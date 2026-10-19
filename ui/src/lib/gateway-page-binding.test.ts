@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/context.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { GatewayPageBinding } from "./gateway-page-binding.ts";
 
 function snapshot(
@@ -129,6 +130,52 @@ describe("GatewayPageBinding", () => {
       expect.objectContaining({ sourceChanged: true, identityChanged: true }),
     );
   });
+
+  it.each(["account", "recovery scope"] as const)(
+    "retains identity through profile hydration but retires the same client on a new %s",
+    (boundary) => {
+      const client = {} as GatewayBrowserClient;
+      const hello = gatewayHelloForMethods(["sessions.list"]);
+      hello.auth = { ...hello.auth, recoveryScope: "scope-alice" };
+      const connected = {
+        ...snapshot(client, "connected"),
+        hello,
+        selfUser: { id: "alice", name: "Alice" },
+      };
+      const source = createGateway(connected);
+      const identityChanges = vi.fn();
+      const invalidations = vi.fn();
+      const ensureInitialData = vi.fn();
+      const controller = new GatewayPageBinding(vi.fn(), {
+        getGateway: () => source.gateway,
+        onIdentityChange: identityChanges,
+        invalidateRequests: invalidations,
+        ensureInitialData,
+      });
+      controller.connect();
+      source.publish({ ...connected, phase: "reconnecting", hello: null, selfUser: undefined });
+      source.publish({ ...connected, selfUser: undefined });
+      source.publish(connected);
+      expect(identityChanges).not.toHaveBeenCalled();
+      expect(invalidations).toHaveBeenCalledTimes(2);
+      const stale = controller.capture();
+
+      source.publish({
+        ...connected,
+        ...(boundary === "account"
+          ? { selfUser: { id: "bob", name: "Bob" } }
+          : { hello: { ...hello, auth: { ...hello.auth, recoveryScope: "scope-bob" } } }),
+      });
+
+      expect(stale && controller.isCurrent(stale)).toBe(false);
+      expect(identityChanges).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ identityChanged: true, clientChanged: false }),
+      );
+      expect(invalidations).toHaveBeenCalledTimes(3);
+      expect(ensureInitialData).toHaveBeenCalledTimes(3);
+      controller.dispose();
+    },
+  );
 
   it("checks route data by exact source and snapshot identity", () => {
     const current = createGateway(snapshot({} as GatewayBrowserClient, "connected"));

@@ -48,9 +48,8 @@ export function toAcpSessionLineageMeta(row: AcpSessionLineageRow): AcpSessionLi
   const channel = normalizeOptionalString(row.channel);
   // Older rows may only carry spawnedBy; expose it as parentSessionId so ACP clients
   // can follow lineage without knowing which storage-era field populated it.
-  const parentSessionId =
-    normalizeOptionalString(row.parentSessionKey) ?? normalizeOptionalString(row.spawnedBy);
   const spawnedBy = normalizeOptionalString(row.spawnedBy);
+  const parentSessionId = normalizeOptionalString(row.parentSessionKey) ?? spawnedBy;
   const spawnDepth = asNonNegativeInteger(row.spawnDepth);
   const subagentRole = readEnum(row.subagentRole, SUBAGENT_ROLES);
   const subagentControlScope = readEnum(row.subagentControlScope, SUBAGENT_CONTROL_SCOPES);

@@ -23,8 +23,10 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
   normalizeCacheKey: (k: string) => k,
   postTrustedWebToolsJson,
   readCache: () => undefined,
+  readCachedSearchPayload: () => undefined,
   resolveCacheTtlMs: () => 300_000,
   writeCache,
+  writeCachedSearchPayload: writeCache,
 }));
 
 vi.mock("./config.js", async (importOriginal) => ({

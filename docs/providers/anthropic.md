@@ -557,6 +557,13 @@ metadata appended to large transcripts is included without reading the entire
 history. Metadata outside those windows may be unavailable. Desktop rows retain
 their Desktop title and remain colorless.
 
+Routine discovery reads at most 64 MiB of transcript metadata across 10,000 files.
+If it reaches either limit, the final discovered page reports `DISCOVERY_TRUNCATED`
+instead of claiming the inventory is complete. Search by an exact session ID to
+look up matching transcripts independently of that frontier; reading, continuing,
+and opening a known session in a terminal use the same bounded lookup. Per-file
+metadata windows and normal path, sidechain, and archive checks still apply.
+
 No additional OpenClaw config is required for discovery. The Anthropic plugin
 is bundled and enabled by default; a native macOS node advertises the read-only
 Claude session commands when the local Claude projects directory exists

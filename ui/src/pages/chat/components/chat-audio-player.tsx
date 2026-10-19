@@ -9,6 +9,7 @@ import {
   openAttachmentCardFromClick,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
+import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import {
@@ -489,6 +490,9 @@ function ChatAudioPlayerContent(
     );
   };
   const Player = () => {
+    const copyRef = attachmentContextCopyRef(() =>
+      props.voiceNote ? null : { name: props.label, href: downloadHref() },
+    );
     const viewport = createChatAttachmentViewportRef(() => {
       waveformVisible = true;
       void prepareWaveformAudio().catch(() => undefined);
@@ -514,7 +518,7 @@ function ChatAudioPlayerContent(
           "chat-assistant-attachment-card chat-assistant-attachment-card--audio",
           { "chat-assistant-attachment-card--voice-note": props.voiceNote },
         ]}
-        ref={viewport}
+        ref={[viewport, copyRef]}
         data-openable={!props.voiceNote && props.onExpand ? "" : undefined}
         onClick={(event) =>
           openAttachmentCardFromClick(event, props.voiceNote ? undefined : props.onExpand)

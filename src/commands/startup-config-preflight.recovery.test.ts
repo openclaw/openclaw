@@ -9,8 +9,10 @@ import {
 import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
+import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import * as metadataWorker from "../plugins/plugin-metadata-state-worker.js";
 import { ExitError } from "../runtime.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -132,6 +134,8 @@ it.each(["current", "webhook-repair"] as const)(
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
+        const registry = await import("../plugins/doctor-contract-registry.js");
+        const migrations = vi.spyOn(registry, "applyPluginDoctorCompatibilityMigrations");
         const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
         const verificationReads: number[] = [];
         options.measure = async (name, run) => {
@@ -145,10 +149,12 @@ it.each(["current", "webhook-repair"] as const)(
         };
         const ready = await runStartupConfigPreflight(options);
         expect(ready.snapshot.valid).toBe(true);
+        expect(readConfigMachineState(`webhookListeners:${configPath}`)).toBe(true);
         expect(verificationReads).toEqual([0]);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
         expect((await runStartupConfigPreflight(options)).snapshot.valid).toBe(true);
+        expect(migrations).toHaveBeenCalledTimes(1);
         expect(verificationReads).toEqual([0, 0]);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await fs.writeFile(configPath, replacement);
@@ -159,6 +165,41 @@ it.each(["current", "webhook-repair"] as const)(
     });
   },
 );
+
+it("records no-pin completion with a read-only included config and skips it on restart", async () => {
+  await withPreflightHome(async (_home, _stateDir, configPath) => {
+    const includedPath = path.join(path.dirname(configPath), "included.json");
+    const original = JSON.stringify({ $include: "included.json" });
+    const included = JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } });
+    await fs.writeFile(configPath, original);
+    await fs.writeFile(includedPath, included);
+    const registry = await import("../plugins/doctor-contract-registry.js");
+    const migrations = vi.spyOn(registry, "applyPluginDoctorCompatibilityMigrations");
+    await withEnvAsync({ OPENCLAW_CONFIG_READONLY: "1" }, async () => {
+      expect((await runStartupConfigPreflight({ gateway: true })).snapshot.valid).toBe(true);
+      expect(readConfigMachineState(`webhookListeners:${configPath}`)).toBe(true);
+      expect(migrations).toHaveBeenCalledTimes(1);
+      expect((await runStartupConfigPreflight({ gateway: true })).snapshot.valid).toBe(true);
+      expect(migrations).toHaveBeenCalledTimes(1);
+    });
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    expect(await fs.readFile(includedPath, "utf8")).toBe(included);
+  });
+});
+
+it("keeps startup available when saving no-pin completion fails", async () => {
+  await withPreflightHome(async (_home, _stateDir, configPath) => {
+    const original = JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } });
+    await fs.writeFile(configPath, original);
+    const machineState = await import("../state/config-machine-state-async.js");
+    vi.spyOn(machineState, "writeConfigMachineStateAsync").mockRejectedValue(
+      new Error("completion store is read-only"),
+    );
+    expect((await runStartupConfigPreflight({ gateway: true })).snapshot.valid).toBe(true);
+    expect(readStartupMigrationWarning()).toContain("Could not record webhook listener completion");
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  });
+});
 
 it.each([
   ["localhost", "loopback"],

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import {
@@ -22,8 +22,7 @@ function mountProgress(initialSource: ProgressCardProjectionSource) {
   const view = mountSolid(() => {
     const [source, setSource] = createSignal(initialSource);
     replaceSource = setSource;
-    progress = projectProgressCard(initialSource);
-    createEffect(source, (next) => progress.replaceSource(next));
+    progress = projectProgressCard(() => ({ ...source() }));
     const content = createMemo(() => redraw(progress.read()));
     return <>{content()}</>;
   });
@@ -32,6 +31,44 @@ function mountProgress(initialSource: ProgressCardProjectionSource) {
 }
 
 describe("session progress card projection", () => {
+  it("keeps source updates detached after explicit disposal while mounted", async () => {
+    const request = vi.fn().mockResolvedValue({ card: null });
+    const { gateway } = createApplicationGateway({
+      phase: "connected",
+      client: createTestGatewayClient(request),
+      hello: gatewayHelloForMethods(["progressCard.get"]),
+      offlineStable: false,
+      canvasPluginSurfaceUrl: null,
+      assistantAgentId: "main",
+      sessionKey: "",
+      lastError: null,
+      lastErrorCode: null,
+    });
+    const store = sessionProgressCardsForGateway(gateway);
+    const subscribe = vi.spyOn(store, "subscribe");
+    const host = mountProgress({
+      store,
+      target: { sessionKey: "agent:main:disposed-progress" },
+    });
+    onTestFinished(() => {
+      host.unmount();
+      subscribe.mockRestore();
+    });
+    await waitForSolid(() => expect(host.progress.read().loading).toBe(false));
+    expect(request).toHaveBeenCalledOnce();
+    expect(subscribe).toHaveBeenCalledOnce();
+
+    host.progress.dispose();
+    host.progress.dispose();
+    subscribe.mockClear();
+    request.mockClear();
+    host.replaceSource({ store, target: { sessionKey: "agent:main:retired-progress" } });
+    flush();
+
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("retains same-store snapshots across target changes and observes resets while hidden", async () => {
     const request = vi.fn(async (_method: string, params?: unknown) => {
       if (

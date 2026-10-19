@@ -69,7 +69,7 @@ async function runOneShot(
   const approved = opts.yes === true || !isPersistentSystemAgentOperation(operation);
   if (approved && isPersistentSystemAgentOperation(operation)) {
     await requireSystemAgentPersistentApplyInference(
-      { binding: opts.verifiedInference, runtime, deps: opts.deps },
+      { binding: opts.verifiedInference, runtime },
       (failures) => {
         if (failures[0] instanceof SystemAgentInferenceUnavailableError) {
           throw failures[0];

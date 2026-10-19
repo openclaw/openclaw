@@ -1,9 +1,10 @@
-import { onCleanup } from "solid-js";
+import { createEffect, onCleanup } from "solid-js";
 
 export function useStreamAutoFollow(options: {
   container: () => HTMLElement | undefined;
   enabled: () => boolean;
   identity: () => unknown;
+  content?: () => unknown;
 }) {
   let atBottom = true;
   let frame: number | undefined;
@@ -12,7 +13,7 @@ export function useStreamAutoFollow(options: {
       cancelAnimationFrame(frame);
     }
   });
-  return {
+  const follow = {
     reset() {
       atBottom = true;
     },
@@ -42,4 +43,11 @@ export function useStreamAutoFollow(options: {
       }
     },
   };
+  if (options.content) {
+    createEffect(
+      () => [options.content?.(), options.identity()],
+      ([, identity], previous) => follow.schedule(identity !== previous?.[1]),
+    );
+  }
+  return follow;
 }

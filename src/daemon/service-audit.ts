@@ -4,6 +4,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { resolveInlineCommandMatch } from "../infra/shell-inline-command.js";
 import { POSIX_SHELL_WRAPPERS } from "../infra/shell-wrapper-resolution.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
+import { isSecretEgressProxyEnv } from "../secrets/egress-proxy/environment.js";
 import { auditLaunchdDefinition } from "./service-audit-launchd.js";
 import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
 import { auditGatewayRuntime, SERVICE_RUNTIME_AUDIT_CODES } from "./service-audit-runtime.js";
@@ -52,6 +53,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayPasswordEmbedded: "gateway-password-embedded",
   gatewayManagedEnvEmbedded: "gateway-managed-env-embedded",
   gatewayPortMismatch: "gateway-port-mismatch",
+  gatewayEgressProxyEnvEmbedded: "gateway-egress-proxy-env-embedded",
   gatewayProxyEnvEmbedded: "gateway-proxy-env-embedded",
   gatewayTokenMismatch: "gateway-token-mismatch",
   gatewayTokenDrift: "gateway-token-drift",
@@ -357,6 +359,30 @@ export async function auditGatewayServiceConfig(params: {
       platform,
       definitionDrift,
     );
+  }
+
+  const environment = params.command?.environment ?? {};
+  const egressKeys = Object.keys(environment).filter((key) =>
+    isSecretEgressProxyEnv(environment, key, platform),
+  );
+  if (egressKeys.length > 0) {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.gatewayEgressProxyEnvEmbedded,
+      message:
+        "Gateway service contains temporary secret egress proxy environment values; reinstall to remove them.",
+      environmentKeys: egressKeys,
+      level: "recommended",
+    });
+    for (const key of egressKeys) {
+      definitionDrift.push({
+        kind: "outdated",
+        key: `Environment.${key}`,
+        current: "<process-owned>",
+        expected: "<removed>",
+        sourcePath: params.command?.sourcePath,
+        message: `Gateway service Environment.${key} belongs to a temporary secret egress proxy.`,
+      });
+    }
   }
 
   auditGatewayCommand(params.command?.programArguments, issues);

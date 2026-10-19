@@ -81,7 +81,7 @@ export function bindPostgresSearch(
     fullText: Object.keys(text).length
       ? {
           match(index, query) {
-            const column = relation(index);
+            const column = relation(index, query.kind === "contains" ? index.fields[0] : undefined);
             // Long intent prompts can exceed PostgreSQL's tsquery tree limit.
             // Ordinary queries keep the indexable single-tsquery predicate.
             if (
@@ -100,7 +100,7 @@ export function bindPostgresSearch(
                 throw new Error("Contains requires a declared PostgreSQL trigram index");
               }
               const pattern = `%${query.text.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
-              return /* kysely-allow-raw: PostgreSQL's literal trigram predicate returns boolean. */ sql<boolean>`${relation(index, index.fields[0])} ILIKE ${pattern} ESCAPE '\\'`;
+              return /* kysely-allow-raw: PostgreSQL's literal trigram predicate returns boolean. */ sql<boolean>`${column} ILIKE ${pattern} ESCAPE '\\'`;
             }
             return /* kysely-allow-raw: PostgreSQL's tsvector predicate returns boolean. */ sql<boolean>`${column} @@ ${tsquery(query, config)}`;
           },

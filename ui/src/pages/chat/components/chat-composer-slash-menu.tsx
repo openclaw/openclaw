@@ -581,6 +581,7 @@ export function SlashMenu(props: { menu: SlashMenu; host: SlashMenuHost; draft: 
     <Show when={mode()} keyed>
       {(activeMode) => (
         <ComposerMenu
+          getTextarea={() => props.host.getTextarea()}
           id={paneDomId(props.host.paneId, "slash-menu-listbox")}
           label={t(activeMode === "args" ? "chat.commands.arguments" : "chat.commands.menu")}
           activeId={getActiveSlashMenuOptionId(state(), props.host.paneId)}

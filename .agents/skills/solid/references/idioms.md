@@ -181,8 +181,10 @@ boundary still need the owned listener/ref pattern. Dashed events use
 `onWa-select`, not `onWaSelect`. Prefer the existing owned primitive to `wa-*`.
 
 Commit-on-change inputs need special care: unrelated props refreshes must not
-rewrite the DOM draft. Memoize the committed owner value before binding `value`
-(see the Settings input incident in [lessons](lessons.md)). Do not use a second
+rewrite the DOM draft. Memoize the committed owner value and bind it through the
+`lib/reactive/live-value.ts` ref factory (see [lessons](lessons.md)). Native JSX
+attributes can share a compiled effect: a memo alone does not prevent an equal
+`value` assignment when an ARIA or disabled binding changes. Do not use a second
 signal to synchronize that value. Controlled inputs that publish every keystroke
 have a different contract; preserve composition, caret, and undo behavior.
 

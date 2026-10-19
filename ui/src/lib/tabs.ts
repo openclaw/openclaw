@@ -3,11 +3,9 @@ import { createMemo, createSignal, onCleanup } from "solid-js";
 type TabsActivation = "auto" | "manual";
 
 export type TabsOptions = {
-  /** Omit for local selection; null deliberately leaves every tab unselected. */
-  active?: string | null;
-  defaultActive?: string | null;
+  /** Null deliberately leaves every tab unselected. */
+  active: string | null;
   activation?: TabsActivation;
-  orientation?: "horizontal" | "vertical";
   onSelect?: (value: string, tab: HTMLElement, event: MouseEvent | KeyboardEvent) => boolean | void;
   /** Returning false consumes direct activation without changing selection. */
   onActivate?: (
@@ -23,33 +21,29 @@ export function createTabList(
   root: () => HTMLElement,
 ) {
   const nodes = new Map<string, HTMLElement>();
-  // Local selection resets only when the caller changes its default.
-  const [localActive, setLocalActive] = createSignal(() => read().defaultActive ?? null);
-  const active = createMemo(() => (read().active === undefined ? localActive() : read().active));
+  const active = createMemo(() => read().active);
   const enabled = createMemo(() =>
     items()
       .filter((item) => !item.disabled)
       .map((item) => item.value),
   );
   // Preserve keyboard focus until selection changes or the focused tab disappears.
-  const [focus, setFocus] = createSignal(
-    (previous?: { active: string | null | undefined; value?: string }) => {
-      const selected = active();
-      const values = enabled();
-      return {
-        active: selected,
-        value:
-          previous &&
-          previous.active === selected &&
-          previous.value !== undefined &&
-          values.includes(previous.value)
-            ? previous.value
-            : selected != null && values.includes(selected)
-              ? selected
-              : values[0],
-      };
-    },
-  );
+  const [focus, setFocus] = createSignal((previous?: { active: string | null; value?: string }) => {
+    const selected = active();
+    const values = enabled();
+    return {
+      active: selected,
+      value:
+        previous &&
+        previous.active === selected &&
+        previous.value !== undefined &&
+        values.includes(previous.value)
+          ? previous.value
+          : selected != null && values.includes(selected)
+            ? selected
+            : values[0],
+    };
+  });
 
   function select(tab: HTMLElement, event: MouseEvent | KeyboardEvent, direct: boolean) {
     const next = tab.dataset.tabValue;
@@ -60,10 +54,8 @@ export function createTabList(
     if (direct && read().onActivate?.(next, tab, event) === false) {
       return;
     }
-    if (next !== active() && read().onSelect?.(next, tab, event) !== false) {
-      if (read().active === undefined) {
-        setLocalActive(next);
-      }
+    if (next !== active()) {
+      read().onSelect?.(next, tab, event);
     }
   }
 
@@ -94,10 +86,9 @@ export function createTabList(
       }
       return;
     }
-    const vertical = read().orientation === "vertical";
     const rtl = getComputedStyle(root()).direction === "rtl";
-    const nextKey = vertical ? "ArrowDown" : rtl ? "ArrowLeft" : "ArrowRight";
-    const previousKey = vertical ? "ArrowUp" : rtl ? "ArrowRight" : "ArrowLeft";
+    const nextKey = rtl ? "ArrowLeft" : "ArrowRight";
+    const previousKey = rtl ? "ArrowRight" : "ArrowLeft";
     if (![nextKey, previousKey, "Home", "End"].includes(event.key)) {
       return;
     }

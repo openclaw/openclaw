@@ -1,10 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import {
-  requestDevicePairJoinSetup,
-  type DevicePairJoinSetup,
-} from "../../lib/device-pair-setup.ts";
+import type { DevicePairJoinSetup } from "../../lib/device-pair-setup.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 
 registerNewSessionSetupEnglish();
@@ -73,6 +70,10 @@ export class ConnectMachineSetupState {
     this.errorValue = null;
     this.changed();
     try {
+      const { requestDevicePairJoinSetup } = await import("../../lib/device-pair-setup.ts");
+      if (!this.stillCurrent(requestId, client)) {
+        return;
+      }
       const setup = await requestDevicePairJoinSetup(client);
       if (!this.stillCurrent(requestId, client)) {
         return;

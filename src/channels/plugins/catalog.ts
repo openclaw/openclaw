@@ -139,12 +139,12 @@ function resolveInstallInfo(params: {
   workspaceDir?: string;
 }): ChannelPluginCatalogEntry["install"] | null {
   const clawhubSpec = normalizeOptionalString(params.install?.clawhubSpec);
+  const expectedPackageName = normalizeOptionalString(params.packageName);
   let npmSpec =
     normalizeOptionalString(params.install?.npmSpec) ??
-    (clawhubSpec ? undefined : normalizeOptionalString(params.packageName));
+    (clawhubSpec ? undefined : expectedPackageName);
   const packageVersion = normalizeOptionalString(params.packageVersion);
   const parsedNpmSpec = npmSpec ? parseRegistryNpmSpec(npmSpec) : null;
-  const expectedPackageName = normalizeOptionalString(params.packageName);
   const parsedPackageName = expectedPackageName ? parseRegistryNpmSpec(expectedPackageName) : null;
   if (
     npmSpec &&

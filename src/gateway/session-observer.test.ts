@@ -368,10 +368,10 @@ it("stops live model attempts at the budget when requests are superseded", async
 
 it("disables model work when digest persistence reports a missing entry", async () => {
   const persistDigest = vi.fn(async () => null);
-  const { ownedTimers, setTimeoutFn, clearTimeoutFn } = createObserverTimerTracker();
   const unrelated = vi.fn();
   const unrelatedTimer = setTimeout(unrelated, 60_000);
-  const harness = createHarness({ persistDigest, setTimeoutFn, clearTimeoutFn });
+  const { ownedTimers } = createObserverTimerTracker();
+  const harness = createHarness({ persistDigest });
   startAndAddToolNotes(harness.observer);
 
   await advance(12_000);

@@ -141,20 +141,25 @@ export function resolvePluginActivationStateShared(params: {
   if (explicitReason) {
     return decision("explicit", { explicitlyEnabled: true, reason: explicitReason });
   }
-  if (params.autoEnabledReason) {
-    return decision("auto", { explicitlyEnabled: false, reason: params.autoEnabledReason });
-  }
-  if (entry?.enabled === true) {
-    return decision("auto", { explicitlyEnabled: false, reason: "enabled by effective config" });
-  }
+  const autoEnabledReason =
+    params.autoEnabledReason ||
+    (entry?.enabled === true ? "enabled by effective config" : undefined) ||
+    (params.origin === "bundled" &&
+    resolveChannelConfigEnablement(params.rootConfig, params.id, params.channelIds) === true
+      ? "channel configured"
+      : undefined);
+  // Only promote auto-enable to a bundled default when the authored policy permits it.
   if (
     params.origin === "bundled" &&
-    resolveChannelConfigEnablement(params.rootConfig, params.id, params.channelIds) === true
+    params.enabledByDefault === true &&
+    (!autoEnabledReason ||
+      activationSource.plugins.allow.length === 0 ||
+      activationSource.plugins.allow.includes(policyId))
   ) {
-    return decision("auto", { explicitlyEnabled: false, reason: "channel configured" });
-  }
-  if (params.origin === "bundled" && params.enabledByDefault === true) {
     return decision("default", { explicitlyEnabled: false, reason: "bundled default enablement" });
+  }
+  if (autoEnabledReason) {
+    return decision("auto", { explicitlyEnabled: false, reason: autoEnabledReason });
   }
   if (params.origin === "bundled") {
     return decision("disabled", {

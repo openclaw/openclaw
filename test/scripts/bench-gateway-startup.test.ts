@@ -396,6 +396,34 @@ server.listen(port, "127.0.0.1", () => {
     ]);
   });
 
+  it.each([
+    { fast: 5, slow: 11, errors: 0, valid: true },
+    { fast: 11, slow: 12, errors: 0, valid: false },
+    { fast: 5, slow: 9, errors: 0, valid: false },
+    { fast: 5, slow: 11, errors: 1, valid: false },
+  ])(
+    "enforces independent slow-agent recovery (fast=$fast, slow=$slow, errors=$errors)",
+    ({ fast, slow, errors, valid }) => {
+      const result = testing.summarizeCase(
+        { config: {}, id: "slowAgentDatabase", name: "slow agent database" },
+        [
+          gatewaySample({
+            agentRecoveryMs: {
+              "bench-fast-01": 3,
+              "bench-fast-02": 4,
+              "bench-fast-03": 5,
+              "bench-fast-04": fast,
+              "bench-slow": slow,
+            },
+            integrityGateMs: { "gate-start": 2, "gate-passed": 10 },
+            agentDatabaseAdmissionErrors: errors,
+          }),
+        ],
+      );
+      expect(testing.collectResultFailures([result]).length === 0).toBe(valid);
+    },
+  );
+
   it("enforces the combined incident readiness budgets", () => {
     const result = testing.summarizeCase({ config: {}, id: "incidentCombined", name: "incident" }, [
       gatewaySample({

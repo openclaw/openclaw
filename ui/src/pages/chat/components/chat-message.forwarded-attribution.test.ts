@@ -9,6 +9,7 @@ import {
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
 import { SessionLinkTitler } from "../../../components/session-link-titling.ts";
+import { SESSION_TITLE_TARGET_SELECTOR } from "../../../components/session-progress-hovercard-target.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
@@ -76,7 +77,7 @@ function renderTestMessageGroup(
 }
 
 function titlerFor(key: string, title: string) {
-  const titler = new SessionLinkTitler(container);
+  const titler = new SessionLinkTitler();
   titler.client = new GatewayBrowserClient({ url: "ws://localhost" });
   const request = vi.spyOn(titler.client, "request").mockResolvedValueOnce({
     status: "ok",
@@ -84,6 +85,12 @@ function titlerFor(key: string, title: string) {
     agentId: key.split(":")[1],
     title,
   });
+  for (const target of container.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
+    titler.register(
+      target,
+      target.querySelector<HTMLElement>(".session-label") ?? document.createElement("span"),
+    );
+  }
   return { titler, request };
 }
 

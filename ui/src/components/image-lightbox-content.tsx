@@ -67,8 +67,6 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   let stopPanzoomChange: (() => void) | undefined;
   let originalBlobUrl = "";
   let originalUrlRequest = 0;
-  let resetVersion = 0;
-  let displayedResetVersion = -1;
   let displayedIndex = 0;
   let displayedSource = "";
   let slideAnimation: Animation | undefined;
@@ -452,49 +450,47 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   );
   // Source identity owns decoded-image leases and the native player, not just display state.
   createEffect(
-    galleryInputs,
-    ([
-      src,
-      originalSrc,
-      items,
-      loadDisplayImage,
-      readOriginalBlob,
-      connectVideo,
-      imageWidth,
-      imageHeight,
-      mediaKind,
-    ]) => {
-      cancelSwipe();
-      destroyPanzoom();
-      setScale(1);
-      gallery.reset(items, {
-        kind: mediaKind,
-        connectVideo,
+    () => ({ inputs: galleryInputs(), selected: galleryState(), title: props.imageTitle }),
+    ({ inputs, title }, previous) => {
+      const [
         src,
         originalSrc,
-        // Renaming the image updates the header without restarting its resource owner.
-        title: props.imageTitle,
-        width: imageWidth,
-        height: imageHeight,
+        items,
         loadDisplayImage,
         readOriginalBlob,
-      });
-      resetVersion += 1;
-    },
-  );
-  createEffect(
-    () => ({ selected: galleryState(), src: props.src, originalSrc: props.originalSrc }),
-    ({ src, originalSrc }) => {
+        connectVideo,
+        imageWidth,
+        imageHeight,
+        mediaKind,
+      ] = inputs;
+      const sourceChanged = previous?.inputs !== inputs;
+      if (sourceChanged) {
+        cancelSwipe();
+        destroyPanzoom();
+        setScale(1);
+        gallery.reset(items, {
+          kind: mediaKind,
+          connectVideo,
+          src,
+          originalSrc,
+          // Renaming the image updates the header without restarting its resource owner.
+          title,
+          width: imageWidth,
+          height: imageHeight,
+          loadDisplayImage,
+          readOriginalBlob,
+        });
+      }
       if (disposed || !host.isConnected) {
         return;
       }
-      const selectionChanged =
-        displayedResetVersion !== resetVersion || displayedIndex !== gallery.peek().index;
+      const selectionChanged = sourceChanged || displayedIndex !== gallery.peek().index;
       if (selectionChanged) {
-        displayedResetVersion = resetVersion;
         displayedIndex = gallery.peek().index;
-        destroyPanzoom();
-        setScale(1);
+        if (!sourceChanged) {
+          destroyPanzoom();
+          setScale(1);
+        }
       }
       gallery.connectPlayer(video());
       const source = video()?.getAttribute("src") ?? gallery.peek().current?.src ?? src;
@@ -529,6 +525,9 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
     <>
       <style>{imageLightboxStyles}</style>
       <openclaw-modal-dialog
+        prop:initialFocus={() =>
+          [...focusables].find((element) => element.isConnected && element.autofocus) ?? null
+        }
         class="mobile-edge-to-edge viewport-edge-to-edge"
         label={
           props.mediaKind === "video"

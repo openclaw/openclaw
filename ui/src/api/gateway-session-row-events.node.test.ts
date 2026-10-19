@@ -43,7 +43,7 @@ describe("session row event ingress", () => {
     h.send({ session: full(initial), ancestorSessions: [full(parent)] });
     const patch = event({
       key: "child",
-      runtimeMs: 20,
+      sessionFieldRefs: [4],
       session: {
         key: "child",
         agentId: "work",
@@ -90,6 +90,25 @@ describe("session row event ingress", () => {
     );
     expect(initial.optional).toBe("remove me");
     expect(h.reconnect).not.toHaveBeenCalled();
+  });
+
+  it("restores only referenced fields and rejects invalid references before committing rows", () => {
+    const h = harness();
+    const row = { key: "child", label: null, pinned: false, summary: { text: "Synthetic" } };
+    expect(h.send({ session: full(row), sessionFieldRefs: [1, 2, 3] })).toEqual(
+      event({ session: row, label: null, pinned: false, summary: row.summary }),
+    );
+    for (const sessionFieldRefs of [[-1], [4], [1.5], ["label"], null]) {
+      h.listener.mockClear();
+      h.send({
+        session: { key: "child", base: 1, version: 2, set: { label: "Changed" }, remove: [] },
+        sessionFieldRefs,
+      });
+      expect(h.listener).not.toHaveBeenCalled();
+    }
+    expect(h.send({ session: { key: "child", base: 1, version: 2, set: {}, remove: [] } })).toEqual(
+      event({ session: row }),
+    );
   });
 
   it("discards a divergent frame atomically and asks to reconnect once across listeners", () => {

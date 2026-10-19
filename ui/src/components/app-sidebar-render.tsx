@@ -47,6 +47,7 @@ function readSidebarNativeGateway(host: AppSidebarRenderHost): NativeGateway | n
 }
 
 export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element {
+  let menuTrigger: HTMLButtonElement | undefined;
   const chipAgent = createMemo(() => host.activeChipAgent()),
     cardAgentId = () => chipAgent().activeId,
     rosterAgent = () => chipAgent().agent,
@@ -92,8 +93,12 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element 
       when={host.sidebarAgentsMode !== "roster" && (cardAgent() || cached())}
       fallback={renderSidebarWorkspaceHeader(host)}
     >
-      <openclaw-tooltip prop:content={cardName()}>
+      <openclaw-tooltip
+        prop:content={cardName()}
+        prop:descriptionTarget={() => menuTrigger ?? null}
+      >
         <SidebarAgentCard
+          onTriggerRef={(element) => (menuTrigger = element)}
           compact={true}
           agentName={cardName()}
           agentId={cardAgentId()}
@@ -186,7 +191,7 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
   const name = () => brand().name;
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   return (
-    <openclaw-tooltip prop:content={name()}>
+    <openclaw-tooltip prop:content={name()} prop:descriptionTarget={() => button ?? null}>
       <div class="sidebar-workspace-header sidebar-workspace-header--rail">
         <button
           type="button"
@@ -305,6 +310,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
       transition: host.connectionFlagVisible,
       hover: hovered(),
       focus: focused(),
+      footerControlsOverlap: host.footerControlsOverlap,
     }),
     (request, previous) => {
       if (!request.kind || !(request.transition || request.hover || request.focus)) {
@@ -324,24 +330,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
       const anchor = identityAnchor.getBoundingClientRect();
       const { width, height } = flag.getBoundingClientRect();
       // The hidden flag has a box; anchor its resting rect without the slide transform.
-      const surfaces = identityAnchor
-        .closest(".shell")
-        ?.querySelectorAll<HTMLElement>(
-          "main.content :is(.chat-footer .agent-chat__composer-shell, .new-session-page__composer, .creation-composer, .cron-editor-actions)",
-        );
-      const overlaps = Array.from(surfaces ?? []).some((surface) => {
-        if (!surface.checkVisibility({ checkOpacity: true, visibilityProperty: true })) {
-          return false;
-        }
-        const rect = surface.getBoundingClientRect();
-        return (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          rect.left < anchor.right + width &&
-          rect.right > anchor.right &&
-          rect.top < anchor.bottom &&
-          rect.bottom > anchor.bottom - height
-        );
+      const overlaps = request.footerControlsOverlap?.({
+        left: anchor.right,
+        right: anchor.right + width,
+        top: anchor.bottom - height,
+        bottom: anchor.bottom,
       });
       setFlagOpen(!overlaps);
     },

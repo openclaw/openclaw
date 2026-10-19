@@ -1,7 +1,7 @@
 import { createMemo, createSignal, Show } from "solid-js";
 import type { SessionBranch } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
+import { createMenuControls, Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -19,6 +19,7 @@ let nextId = 0;
 
 function ChatPaneVersionsMenuContent(props: Props) {
   const id = `versions-${++nextId}`;
+  const controls = createMenuControls();
   const [helpAnchor, setHelpAnchor] = createSignal<HTMLButtonElement>();
   const [helpOpen, setHelpOpen] = createSignal(false);
   let help: PopoverHandle | undefined;
@@ -60,6 +61,7 @@ function ChatPaneVersionsMenuContent(props: Props) {
   return (
     <Show when={!props.menu.catalog && props.menu.branches.length > 1}>
       <Menu
+        controls={controls}
         lazy
         id={id}
         class="chat-pane__branches-menu"
@@ -77,7 +79,7 @@ function ChatPaneVersionsMenuContent(props: Props) {
         <div class="chat-pane__versions-heading">
           <span>{t("chat.sessionHeader.branches")}</span>
           <button
-            ref={setHelpAnchor}
+            ref={[controls.ref(), setHelpAnchor]}
             id={`${id}-help`}
             class="btn btn--ghost btn--icon chat-pane__versions-info"
             type="button"

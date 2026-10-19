@@ -18,6 +18,7 @@ export {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  externalContentStamp,
   FRESHNESS_TO_RECENCY,
   isoToPerplexityDate,
   MAX_SEARCH_COUNT,

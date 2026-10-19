@@ -871,7 +871,7 @@ it.each([
             });
             expect(record.verification.recovery).not.toHaveProperty("dataAtRisk");
             expect(renderUpdateRunReport(record).lines.join("\n")).toContain(
-              "running on the preserved migrated state",
+              "running on the retained state",
             );
           }
           return;

@@ -56,6 +56,7 @@ export function NewSessionDraftVisibility(props: { options: NewSessionComposerCa
 export function NewSessionPlusMenu(props: {
   options: NewSessionComposerCapabilityOptions;
   attachments: ChatComposerPlusMenuProps["attachments"];
+  inputHandle: ChatComposerPlusMenuProps["inputHandle"];
 }) {
   const menu = createMemo((): ChatComposerPlusMenuProps => {
     const options = props.options;
@@ -63,6 +64,7 @@ export function NewSessionPlusMenu(props: {
     const textarea = options.composerTextarea;
     return {
       attachments: props.attachments,
+      inputHandle: props.inputHandle,
       capabilityMenu: options.capabilityMenu,
       disabled,
       open: textarea.capabilityMenuOpen,

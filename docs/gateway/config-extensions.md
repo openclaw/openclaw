@@ -116,7 +116,8 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   and requester partitions, including creation and cleanup in progress. At the
   limit, the least-recently-used idle runtime is retired and its servers stop;
   that session reconnects on its next turn. Active runs, leases, app views, and
-  pending acquisitions are preserved. If every runtime is in use, the turn
+  pending acquisitions are preserved. An active turn protects its session runtime;
+  idle requester partitions in that session remain eligible for eviction. If every runtime is in use, the turn
   continues with a bounded warning once per capacity episode.
   Waiting for idle cleanup is bounded; unfinished cleanup retains its slot and continues
   under the lifecycle owner. Usable static or requester connections remain available. Previously advertised

@@ -49,6 +49,7 @@ export {
 } from "./app-sidebar-session-menu-renderers.tsx";
 export { renderSidebarPluginNavigationMenuForMenus } from "./app-sidebar-plugin-navigation-menu.tsx";
 export { renderSidebarPeopleFilterMenuForMenus } from "./app-sidebar-people-filter-menu.tsx";
+export { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
 
 export function renderSidebarRailPinMenuForMenus(
   menus: SidebarMenus,
@@ -314,6 +315,7 @@ export function renderSidebarSessionMenuForMenus(
         cloudWorkerStopAction: session().cloudWorkerStopAction,
       }),
       ...(!access.allowed ? { "assign-owner": access.reason } : {}),
+      ...(!host.connected ? { plugin: t("sessionsView.actionRequiresConnection") } : {}),
     };
   });
   return (
@@ -348,7 +350,7 @@ export function renderSidebarSessionMenuForMenus(
       lastActive={batchRows() ? "" : formatSidebarTimestamp(session().updatedAt)}
       anchor={menu}
       trigger={menus.triggers.get("session") ?? null}
-      disabled={!host.connected}
+      disabled={false}
       actionDisabledReasons={actionDisabledReasons()}
       navigationAllowed={Boolean(context())}
       copyMarkdownAllowed={canCopySessionMarkdown(context()?.gateway.snapshot)}

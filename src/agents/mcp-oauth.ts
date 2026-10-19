@@ -380,11 +380,11 @@ export async function startMcpOAuthAuthorization(
       const pendingChallenge = store.pendingAuthorizationChallenge;
       const configuredRedirectUrl =
         normalizeOptionalString(opts.redirectUrl) ??
-        normalizeOptionalString(config.oauth?.redirectUrl) ??
-        store.redirectUrl;
+        normalizeOptionalString(config.oauth?.redirectUrl);
+      const redirectUrl = configuredRedirectUrl ?? store.redirectUrl;
       const oauthConfig: McpOAuthConfig = {
         ...config.oauth,
-        ...(configuredRedirectUrl ? { redirectUrl: configuredRedirectUrl } : {}),
+        ...(redirectUrl ? { redirectUrl } : {}),
       };
       const attempt = {
         identity,
@@ -402,11 +402,7 @@ export async function startMcpOAuthAuthorization(
         result = await runMcpOAuthAuthorizationAttempt(attempt, lease, context);
       } catch (error) {
         opts.login?.assertCurrent();
-        if (
-          !normalizeOptionalString(opts.redirectUrl) &&
-          !normalizeOptionalString(config.oauth?.redirectUrl) &&
-          isMcpOAuthRedirectRegistrationError(error)
-        ) {
+        if (!configuredRedirectUrl && isMcpOAuthRedirectRegistrationError(error)) {
           result = await runMcpOAuthAuthorizationAttempt(
             {
               ...attempt,

@@ -39,6 +39,8 @@ A message that arrives while the Gateway is installing an updated worker runtime
 
 Graceful Gateway stop and restart interrupt OpenClaw worker turns as soon as draining begins, because worker protocol admission is closed during shutdown. The Gateway retains each interrupted turn's claim and pending workspace results for startup recovery instead of waiting for worker admission retries or failing the placement. Local embedded turns keep their normal drain behavior.
 
+Shutdown also cancels active worker provisioning and allocation recovery, then waits for their commands to settle before closing state. It retains the allocation's operation ID and recorded lease for restart recovery; stopping the Gateway does not request destruction of the machine.
+
 For node-backed sessions interrupted by a restart, recovery confirms the old worker has stopped, settles pending workspace results, and retires the interrupted turn while retaining the machine. An interrupted claim without a finishing acknowledgment enters the same result recovery flow, so edits already made on the retained machine are accepted before the next turn. The next message receives fresh authority; it does not replay the interrupted tool call automatically. Explicit Stop, Move, and failed-provider cleanup retain their normal teardown behavior.
 
 ## Synchronize workspace files

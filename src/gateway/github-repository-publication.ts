@@ -378,7 +378,6 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
 
           const initial = currentOwner();
           const assertCurrent = () => {
-            action.assertCurrent();
             assertReservation();
             bound.assertCurrent();
             if (!sameGitHubPublicationWorkspace(initial, currentOwner())) {

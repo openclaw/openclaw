@@ -10,6 +10,7 @@ import { SettingsSegmented, SettingsPage } from "../../components/solid/settings
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { NotificationsSection } from "./notifications-section.tsx";
 import { SetupSection } from "./setup.tsx";
 import { AppearanceSection } from "./view-appearance.tsx";
@@ -224,6 +225,172 @@ export function Config(props: ConfigProps) {
       sensitiveCount,
     };
   });
+  function RawEditor() {
+    const rawRef = createLiveValue(() => props.raw);
+    // Resolve the raw branch once; a dynamic children factory recreates the textarea on each edit.
+    const editor = (
+      <>
+        {state().hasRawChanges ? (
+          <details
+            class="config-diff"
+            open={view().rawDiffOpen}
+            onToggle={(event) => {
+              const open = event.currentTarget.open;
+              if (view().rawDiffOpen === open) {
+                return;
+              }
+              view().rawDiffOpen = open;
+              if (!open) {
+                view().rawDiffCache = undefined;
+              }
+              refresh();
+            }}
+          >
+            <summary class="config-diff__summary">
+              <span>{t("configView.viewPendingChangesRaw")}</span>
+              <svg
+                class="config-diff__chevron"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <polyline points="9 6 15 12 9 18" />
+              </svg>
+            </summary>
+            <div class="config-diff__content">
+              <For
+                each={state().rawDiff}
+                fallback={<div class="config-diff__item">{t("configView.rawDiffUnavailable")}</div>}
+              >
+                {(change) => (
+                  <div class="config-diff__item">
+                    <div class="config-diff__path">{formatConfigDiffPath(change.path)}</div>
+                    <div class="config-diff__values">
+                      <span class="config-diff__from">
+                        {renderRawDiffValue(
+                          change.path,
+                          change.from,
+                          props.uiHints,
+                          view().rawRevealed,
+                        )}
+                      </span>
+                      <span class="config-diff__arrow">→</span>
+                      <span class="config-diff__to">
+                        {renderRawDiffValue(
+                          change.path,
+                          change.to,
+                          props.uiHints,
+                          view().rawRevealed,
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </For>
+            </div>
+          </details>
+        ) : null}
+        <div class="settings-group">
+          <div class="settings-row settings-row--stacked">
+            <div class="config-raw-actions">
+              {props.onOpenFile && props.openFileAllowed !== false ? (
+                <button class="btn btn--sm" onClick={() => props.onOpenFile?.()}>
+                  <Icon name="fileText" />
+                  {t("configView.open")}
+                </button>
+              ) : null}
+              <button
+                class="btn btn--sm"
+                disabled={state().configBusy || !state().hasRawChanges}
+                onClick={() => props.onRawDiscard()}
+              >
+                {t("configView.rawDiscard")}
+              </button>
+              <button
+                class="btn btn--sm primary"
+                disabled={
+                  !props.connected ||
+                  !state().mutationAllowed ||
+                  state().configBusy ||
+                  !state().hasRawChanges
+                }
+                aria-busy={props.saving ? "true" : "false"}
+                onClick={() => props.onSave()}
+              >
+                {props.saving ? (
+                  <>
+                    <span class="config-action-spinner" aria-hidden="true">
+                      <Icon name="loader" />
+                    </span>
+                    {t("common.saving")}
+                  </>
+                ) : (
+                  t("common.save")
+                )}
+              </button>
+            </div>
+            <div class="field config-raw-field">
+              <span style={{ display: "flex", "align-items": "center", gap: "8px" }}>
+                {t("configView.rawConfig")}
+                {state().sensitiveCount > 0 ? (
+                  <>
+                    <span class="settings-count">
+                      {t(
+                        state().sensitiveCount === 1
+                          ? "configView.secretCount"
+                          : "configView.secretCountPlural",
+                        { count: String(state().sensitiveCount) },
+                      )}{" "}
+                      {t(view().rawRevealed ? "configView.visible" : "configView.redacted")}
+                    </span>
+                    <openclaw-tooltip
+                      prop:content={t(
+                        view().rawRevealed
+                          ? "configView.hideSensitive"
+                          : "configView.revealSensitive",
+                      )}
+                    >
+                      <button
+                        class={["btn btn--icon config-raw-toggle", { active: view().rawRevealed }]}
+                        aria-label={t("configView.toggleRawRedaction")}
+                        aria-pressed={view().rawRevealed ? "true" : "false"}
+                        onClick={() => {
+                          view().rawRevealed = !view().rawRevealed;
+                          refresh();
+                        }}
+                      >
+                        <Icon name={view().rawRevealed ? "eye" : "eyeOff"} />
+                      </button>
+                    </openclaw-tooltip>
+                  </>
+                ) : null}
+              </span>
+              {state().sensitiveCount > 0 && !view().rawRevealed ? (
+                <div class="callout info" style={{ "margin-top": "12px" }}>
+                  {t(
+                    state().sensitiveCount === 1
+                      ? "configView.sensitiveHidden"
+                      : "configView.sensitiveHiddenPlural",
+                    { count: String(state().sensitiveCount) },
+                  )}
+                </div>
+              ) : (
+                <textarea
+                  aria-label={t("configView.rawConfig")}
+                  placeholder={t("configView.rawConfig")}
+                  ref={rawRef}
+                  disabled={state().configBusy || !state().mutationAllowed}
+                  onInput={(event) => props.onRawChange(event.currentTarget.value)}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+    return <SettingsPage>{editor}</SettingsPage>;
+  }
   function FormEditor() {
     const editor = (
       <ConfigForm
@@ -446,170 +613,7 @@ export function Config(props: ConfigProps) {
             ) : null}
           </>
         ) : (
-          <SettingsPage>
-            {state().hasRawChanges ? (
-              <details
-                class="config-diff"
-                open={view().rawDiffOpen}
-                onToggle={(event) => {
-                  const open = event.currentTarget.open;
-                  if (view().rawDiffOpen === open) {
-                    return;
-                  }
-                  view().rawDiffOpen = open;
-                  if (!open) {
-                    view().rawDiffCache = undefined;
-                  }
-                  refresh();
-                }}
-              >
-                <summary class="config-diff__summary">
-                  <span>{t("configView.viewPendingChangesRaw")}</span>
-                  <svg
-                    class="config-diff__chevron"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <polyline points="9 6 15 12 9 18" />
-                  </svg>
-                </summary>
-                <div class="config-diff__content">
-                  <For
-                    each={state().rawDiff}
-                    fallback={
-                      <div class="config-diff__item">{t("configView.rawDiffUnavailable")}</div>
-                    }
-                  >
-                    {(change) => (
-                      <div class="config-diff__item">
-                        <div class="config-diff__path">{formatConfigDiffPath(change.path)}</div>
-                        <div class="config-diff__values">
-                          <span class="config-diff__from">
-                            {renderRawDiffValue(
-                              change.path,
-                              change.from,
-                              props.uiHints,
-                              view().rawRevealed,
-                            )}
-                          </span>
-                          <span class="config-diff__arrow">→</span>
-                          <span class="config-diff__to">
-                            {renderRawDiffValue(
-                              change.path,
-                              change.to,
-                              props.uiHints,
-                              view().rawRevealed,
-                            )}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </For>
-                </div>
-              </details>
-            ) : null}
-            <div class="settings-group">
-              <div class="settings-row settings-row--stacked">
-                <div class="config-raw-actions">
-                  {props.onOpenFile && props.openFileAllowed !== false ? (
-                    <button class="btn btn--sm" onClick={() => props.onOpenFile?.()}>
-                      <Icon name="fileText" />
-                      {t("configView.open")}
-                    </button>
-                  ) : null}
-                  <button
-                    class="btn btn--sm"
-                    disabled={state().configBusy || !state().hasRawChanges}
-                    onClick={() => props.onRawDiscard()}
-                  >
-                    {t("configView.rawDiscard")}
-                  </button>
-                  <button
-                    class="btn btn--sm primary"
-                    disabled={
-                      !props.connected ||
-                      !state().mutationAllowed ||
-                      state().configBusy ||
-                      !state().hasRawChanges
-                    }
-                    aria-busy={props.saving ? "true" : "false"}
-                    onClick={() => props.onSave()}
-                  >
-                    {props.saving ? (
-                      <>
-                        <span class="config-action-spinner" aria-hidden="true">
-                          <Icon name="loader" />
-                        </span>
-                        {t("common.saving")}
-                      </>
-                    ) : (
-                      t("common.save")
-                    )}
-                  </button>
-                </div>
-                <div class="field config-raw-field">
-                  <span style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-                    {t("configView.rawConfig")}
-                    {state().sensitiveCount > 0 ? (
-                      <>
-                        <span class="settings-count">
-                          {t(
-                            state().sensitiveCount === 1
-                              ? "configView.secretCount"
-                              : "configView.secretCountPlural",
-                            { count: String(state().sensitiveCount) },
-                          )}{" "}
-                          {t(view().rawRevealed ? "configView.visible" : "configView.redacted")}
-                        </span>
-                        <openclaw-tooltip
-                          prop:content={t(
-                            view().rawRevealed
-                              ? "configView.hideSensitive"
-                              : "configView.revealSensitive",
-                          )}
-                        >
-                          <button
-                            class={[
-                              "btn btn--icon config-raw-toggle",
-                              { active: view().rawRevealed },
-                            ]}
-                            aria-label={t("configView.toggleRawRedaction")}
-                            aria-pressed={view().rawRevealed ? "true" : "false"}
-                            onClick={() => {
-                              view().rawRevealed = !view().rawRevealed;
-                              refresh();
-                            }}
-                          >
-                            <Icon name={view().rawRevealed ? "eye" : "eyeOff"} />
-                          </button>
-                        </openclaw-tooltip>
-                      </>
-                    ) : null}
-                  </span>
-                  {state().sensitiveCount > 0 && !view().rawRevealed ? (
-                    <div class="callout info" style={{ "margin-top": "12px" }}>
-                      {t(
-                        state().sensitiveCount === 1
-                          ? "configView.sensitiveHidden"
-                          : "configView.sensitiveHiddenPlural",
-                        { count: String(state().sensitiveCount) },
-                      )}
-                    </div>
-                  ) : (
-                    <textarea
-                      aria-label={t("configView.rawConfig")}
-                      placeholder={t("configView.rawConfig")}
-                      value={props.raw}
-                      disabled={state().configBusy || !state().mutationAllowed}
-                      onInput={(event) => props.onRawChange(event.currentTarget.value)}
-                    />
-                  )}
-                </div>
-              </div>
-            </div>
-          </SettingsPage>
+          <RawEditor />
         )}
         {props.issues.length > 0 ? (
           <div class="config-content-callout">

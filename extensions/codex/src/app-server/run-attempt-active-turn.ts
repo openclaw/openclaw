@@ -47,7 +47,6 @@ import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import type { CodexStartedTurn } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { isCodexNativeDelegationDisabledForRun } from "./thread-requests.js";
 import {
   codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
@@ -561,8 +560,7 @@ export function activateCodexAttemptTurn(
     runId: params.runId,
     startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-    supportsCrossProfileSteering:
-      isCodexNativeDelegationDisabledForRun(params) || resourceState.nativeSpawnAdmissionInstalled,
+    supportsCrossProfileSteering: true,
     permissionChangeOwner: params.permissionChange?.owner,
     applyPermissionMode: async (
       mode: NonNullable<typeof params.permissionMode> | null,

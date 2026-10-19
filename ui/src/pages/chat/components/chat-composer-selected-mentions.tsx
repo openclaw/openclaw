@@ -1,22 +1,27 @@
-import { createEffect, createMemo, For, onCleanup, Show, type Accessor } from "solid-js";
+import { createMemo, For, onCleanup, onSettled, Show, type Accessor } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import { ComposerContent } from "./chat-composer-content.tsx";
 
 type MentionPerson = { profileId: string; label: string; name: string; avatarUrl?: string };
 
-function mentionOverflow(readPeople: Accessor<readonly MentionPerson[]>) {
+function mentionOverflow(
+  readPeople: Accessor<readonly MentionPerson[]>,
+  personElements: Map<string, HTMLElement>,
+  readMore: () => HTMLElement,
+) {
   let element: HTMLElement | undefined;
   let disposed = false;
   const sync = () => {
     if (disposed || !element?.isConnected) {
       return;
     }
-    const people = [...element.querySelectorAll<HTMLElement>(".composer-context-strip__person")];
-    const more = element.querySelector<HTMLElement>(".composer-context-strip__more");
+    const people = readPeople().flatMap((person) => personElements.get(person.profileId) ?? []);
+    const more = readMore();
     if (!people.length || !more) {
       return;
     }
@@ -53,22 +58,22 @@ function mentionOverflow(readPeople: Accessor<readonly MentionPerson[]>) {
       .join(", ");
     people[0]!.style.maxWidth = `${Math.max(0, available - (more.hidden ? 0 : moreWidth + gap))}px`;
   };
-  // Measure the current recipients after the keyed list and avatars have committed.
-  createEffect(readPeople, sync);
-  const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
-  onCleanup(() => {
-    disposed = true;
-    observer?.disconnect();
+  // Re-observe after recipient changes; native resize delivery sees committed keyed rows.
+  createResizeObserver(() => {
+    readPeople();
+    return element ? [element] : [];
+  }, sync);
+  onSettled(() => {
+    sync();
+    if (document.fonts?.status === "loading") {
+      void document.fonts.ready.then(sync);
+    }
+    return () => {
+      disposed = true;
+    };
   });
   return (node: HTMLElement) => {
     element = node;
-    observer?.observe(node);
-    queueMicrotask(() => {
-      sync();
-      if (document.fonts?.status === "loading") {
-        void document.fonts.ready.then(sync);
-      }
-    });
   };
 }
 
@@ -80,6 +85,8 @@ type SelectedHumanMentionsProps = {
 };
 
 export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
+  const personElements = new Map<string, HTMLElement>();
+  let more!: HTMLSpanElement;
   const people = createMemo(
     () => {
       const recipients = new Map(props.mentions?.map((mention) => [mention.profileId, mention]));
@@ -125,27 +132,41 @@ export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
         <span
           class="composer-context-strip__people"
           aria-hidden="true"
-          ref={mentionOverflow(people)}
+          ref={mentionOverflow(people, personElements, () => more)}
         >
           <For keyed={(person) => person.profileId} each={people()}>
-            {(person, index) => (
-              <span class="composer-context-strip__person" title={person().label}>
-                <ChatAuthorAvatar
-                  sender={{
-                    id: person().profileId,
-                    name: person().name,
-                    identity: { type: "profile", id: person().profileId },
-                    profileAvatarUrl: person().avatarUrl,
+            {(person, index) => {
+              onCleanup(() => personElements.delete(person().profileId));
+              return (
+                <span
+                  ref={(node) => {
+                    personElements.set(person().profileId, node);
                   }}
-                />
-                <bdi class="composer-context-strip__person-name">
-                  {person().name}
-                  {index() < people().length - 1 ? "," : ""}
-                </bdi>
-              </span>
-            )}
+                  class="composer-context-strip__person"
+                  title={person().label}
+                >
+                  <ChatAuthorAvatar
+                    sender={{
+                      id: person().profileId,
+                      name: person().name,
+                      identity: { type: "profile", id: person().profileId },
+                      profileAvatarUrl: person().avatarUrl,
+                    }}
+                  />
+                  <bdi class="composer-context-strip__person-name">
+                    {person().name}
+                    {index() < people().length - 1 ? "," : ""}
+                  </bdi>
+                </span>
+              );
+            }}
           </For>
-          <span class="composer-context-strip__more" dir="ltr" hidden></span>
+          <span
+            ref={(node) => (more = node)}
+            class="composer-context-strip__more"
+            dir="ltr"
+            hidden
+          />
         </span>
         <button
           type="button"

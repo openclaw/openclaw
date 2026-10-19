@@ -77,9 +77,7 @@ export const cronWakeHandler: GatewayRequestHandler = async ({
   }
   // The resolver normalizes agent ids. Reject conflicting raw spellings too,
   // so an explicitly named target is never silently rewritten.
-  const sessionKeyAgentId = sessionKey
-    ? parseAgentSessionKey(sessionKey)?.agentId?.trim().toLowerCase()
-    : undefined;
+  const sessionKeyAgentId = sessionKey ? parseAgentSessionKey(sessionKey)?.agentId : undefined;
   if (callerScope && agentId && normalizeAgentId(agentId) !== callerScope.agentId) {
     respond(
       false,
