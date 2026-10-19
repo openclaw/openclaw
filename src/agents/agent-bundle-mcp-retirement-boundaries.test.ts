@@ -23,18 +23,7 @@ import { resolveConversationCapabilityProfile } from "./conversation-capability-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const emptyConfig: OpenClawConfig = { plugins: { enabled: false }, mcp: { servers: {} } };
 
-async function withMcpFixture(
-  run: (fixture: {
-    workspaceDir: string;
-    config: (endpoint: string) => OpenClawConfig;
-    hold: () => {
-      entered: ReturnType<typeof createDeferred<void>>;
-      release: ReturnType<typeof createDeferred<void>>;
-    };
-    hooks: { onDelete?: (url: string) => Promise<void>; onList?: (url: string) => Promise<void> };
-  }) => Promise<void>,
-) {
-  const workspaceDir = tempDirs.make("mcp-retirement-boundary-");
+async function createFixture(workspaceDir: string) {
   const releases: Array<() => void> = [];
   const hooks: {
     onDelete?: (url: string) => Promise<void>;
@@ -46,48 +35,60 @@ async function withMcpFixture(
     onList: (endpoint) => hooks.onList?.(endpoint) ?? Promise.resolve(),
     text: (endpoint) => endpoint,
   });
+  return {
+    input(sessionId: string, endpoint: string, sessionKey = `agent:main:${sessionId}`) {
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        mcp: {
+          servers: { probe: { transport: "streamable-http", url: `${server.url}${endpoint}` } },
+        },
+      };
+      return { workspaceDir, sessionId, sessionKey, cfg };
+    },
+    hooks,
+    hold() {
+      const entered = createDeferred();
+      const release = createDeferred();
+      releases.push(() => release.resolve());
+      return {
+        entered,
+        release,
+        wait: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      };
+    },
+    releaseAll: () => releases.forEach((release) => release()),
+    close: server.close,
+  };
+}
+
+async function withMcpFixture(
+  run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
+) {
+  const workspaceDir = tempDirs.make("mcp-retirement-boundary-");
+  const fixture = await createFixture(workspaceDir);
   await withEnvAsync({ OPENCLAW_STATE_DIR: workspaceDir }, async () => {
     await disposeAllSessionMcpRuntimes();
     const scheduler = createTestGatewayScheduler();
     await setSessionMcpRuntimeScheduler(scheduler);
     try {
-      await run({
-        workspaceDir,
-        config: (endpoint) => ({
-          plugins: { enabled: false },
-          mcp: {
-            servers: { probe: { transport: "streamable-http", url: `${server.url}${endpoint}` } },
-          },
-        }),
-        hooks,
-        hold: () => {
-          const entered = createDeferred();
-          const release = createDeferred();
-          releases.push(() => release.resolve());
-          return { entered, release };
-        },
-      });
+      await run(fixture);
     } finally {
-      for (const release of releases) {
-        release();
-      }
+      fixture.releaseAll();
       await disposeAllSessionMcpRuntimes();
       await scheduler.stop();
-      await server.close();
+      await fixture.close();
     }
   });
 }
 
 it("retains an empty runtime until its live materialized handle releases", async () => {
-  await withMcpFixture(async ({ workspaceDir, config }) => {
-    const sessionId = "retained-empty";
-    const sessionKey = `agent:main:${sessionId}`;
-    const acquired = await acquireSessionMcpRuntime({
-      sessionId,
-      sessionKey,
-      workspaceDir,
-      cfg: config("/old"),
-    });
+  await withMcpFixture(async ({ input }) => {
+    const params = input("retained-empty", "/old");
+    const { sessionKey } = params;
+    const acquired = await acquireSessionMcpRuntime(params);
     const handle = await materializeBundleMcpToolsForRun(acquired);
     try {
       await expect(handle.tools[0]!.execute("before-removal", {})).resolves.toMatchObject({
@@ -95,7 +96,6 @@ it("retains an empty runtime until its live materialized handle releases", async
       });
       await reloadSessionMcpRuntimes({ cfg: emptyConfig });
       expect(acquired.runtime.activeLeases).toBe(1);
-      // Removed server authority stays revoked; the retained facade remains readable.
       await expect(acquired.runtime.getCatalog()).resolves.toMatchObject({ tools: [] });
       expect(peekSessionMcpRuntime({ sessionKey })).toBe(acquired.runtime);
       await reloadSessionMcpRuntimes({ cfg: emptyConfig });
@@ -109,32 +109,21 @@ it("retains an empty runtime until its live materialized handle releases", async
 });
 
 it("preserves a newer session binding while old empty cleanup drains", async () => {
-  await withMcpFixture(async ({ workspaceDir, config, hooks, hold }) => {
+  await withMcpFixture(async ({ input, hooks, hold }) => {
     const sessionKey = "agent:main:rebound";
-    const previous = await acquireSessionMcpRuntime({
-      sessionId: "old-binding",
-      sessionKey,
-      workspaceDir,
-      cfg: config("/old"),
-    });
+    const previous = await acquireSessionMcpRuntime(input("old-binding", "/old", sessionKey));
     await previous.runtime.getCatalog();
     await releaseSessionMcpRuntime(previous);
     const deletion = hold();
     hooks.onDelete = async (url) => {
       if (url === "/old") {
-        deletion.entered.resolve();
-        await deletion.release.promise;
+        await deletion.wait();
       }
     };
     const reloading = reloadSessionMcpRuntimes({ cfg: emptyConfig });
     await deletion.entered.promise;
     const retiring = retireSessionMcpRuntime({ sessionId: "old-binding", reason: "boundary-test" });
-    const next = await acquireSessionMcpRuntime({
-      sessionId: "new-binding",
-      sessionKey,
-      workspaceDir,
-      cfg: config("/new"),
-    });
+    const next = await acquireSessionMcpRuntime(input("new-binding", "/new", sessionKey));
     try {
       expect(peekSessionMcpRuntime({ sessionKey })).toBe(next.runtime);
       await expect(next.runtime.callTool("probe", "read", {})).resolves.toMatchObject({
@@ -157,16 +146,12 @@ it("preserves a newer session binding while old empty cleanup drains", async () 
 });
 
 it("preserves the runtime admitted by an in-flight static native preflight", async () => {
-  await withMcpFixture(async ({ workspaceDir, config, hooks, hold }) => {
-    const sessionId = "native-preflight";
-    const sessionKey = `agent:main:${sessionId}`;
-    const cfg = config("/native");
-    const original = await acquireSessionMcpRuntime({ sessionId, sessionKey, workspaceDir, cfg });
+  await withMcpFixture(async ({ input, hooks, hold }) => {
+    const params = input("native-preflight", "/native");
+    const { sessionId, sessionKey, workspaceDir, cfg } = params;
+    const original = await acquireSessionMcpRuntime(params);
     const listing = hold();
-    hooks.onList = async () => {
-      listing.entered.resolve();
-      await listing.release.promise;
-    };
+    hooks.onList = listing.wait;
     let prepared = false;
     const preflight = prepareCliBundleMcpConfig({
       enabled: true,
@@ -178,11 +163,9 @@ it("preserves the runtime admitted by an in-flight static native preflight", asy
         sessionId,
         sessionKey,
         capabilityProfile: resolveConversationCapabilityProfile({
+          ...params,
           config: cfg,
           agentId: "main",
-          sessionId,
-          sessionKey,
-          workspaceDir,
         }),
       },
     }).then((result) => {
@@ -202,9 +185,8 @@ it("preserves the runtime admitted by an in-flight static native preflight", asy
       listing.release.resolve();
       const result = await preflight;
       expect(result.backend.args).toContain("--mcp-config");
-      const current = expectDefined(peekSessionMcpRuntime({ sessionKey }), "prepared runtime");
-      expect(current).toBe(admitted);
-      await expect(current.callTool("probe", "read", {})).resolves.toMatchObject({
+      expect(peekSessionMcpRuntime({ sessionKey })).toBe(admitted);
+      await expect(admitted.callTool("probe", "read", {})).resolves.toMatchObject({
         content: [{ text: "/native" }],
       });
     } finally {

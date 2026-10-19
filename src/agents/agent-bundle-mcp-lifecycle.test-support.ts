@@ -1,4 +1,5 @@
 import http from "node:http";
+import { json } from "node:stream/consumers";
 
 export async function startMcpLifecycleServer(options: {
   toolName: string;
@@ -19,11 +20,7 @@ export async function startMcpLifecycleServer(options: {
         response.writeHead(405).end();
         return;
       }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const message = JSON.parse(Buffer.concat(chunks).toString()) as {
+      const message = (await json(request)) as {
         id?: number;
         method: string;
         params?: { protocolVersion?: string };
@@ -40,14 +37,8 @@ export async function startMcpLifecycleServer(options: {
         await options.onList?.(endpoint);
         result = { tools: [{ name: options.toolName, inputSchema: { type: "object" } }] };
       } else if (message.method === "tools/call") {
-        result = {
-          content: [
-            {
-              type: "text",
-              text: options.text(endpoint, Number(request.headers["mcp-session-id"])),
-            },
-          ],
-        };
+        const text = options.text(endpoint, Number(request.headers["mcp-session-id"]));
+        result = { content: [{ type: "text", text }] };
       }
       if (!result) {
         response.writeHead(202).end();
