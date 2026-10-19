@@ -182,6 +182,7 @@ suite.define(() => {
         buffer: Buffer.from("mobile composer attachment"),
       });
       await composer.locator(".chat-attachments-preview").waitFor({ state: "visible" });
+      await composer.locator("textarea").click();
       for (const [kind, trigger] of [
         ["model", '[data-chat-model-select="true"]'],
         ["effort", '[data-chat-thinking-select="true"]'],
@@ -627,6 +628,7 @@ suite.define(() => {
       await polledVisible(followUp).toBe(true);
       await polledCount(page.locator(".chat-send-btn--stop")).toBe(0);
       await page.setViewportSize({ width: 393, height: 852 });
+      await textarea.click();
 
       await textarea.fill("");
       const stop = page.getByRole("button", { name: "Stop generating" });

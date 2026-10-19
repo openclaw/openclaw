@@ -56,10 +56,13 @@ export function renderChatComposerView(
     renderComposerTextarea(context, props, state, view);
   const inputHandle = createChatAttachmentInputHandle();
   let shell: HTMLDivElement | undefined;
+  let placeholderElement: HTMLSpanElement | undefined;
   const { mobileEditing, keyboardNavigation } = createComposerMobileInteraction(
     context,
     props,
+    state,
     () => shell,
+    () => placeholderElement,
   );
   const [capabilityOpen, setCapabilityOpen] = createSignal(false);
   const capabilityAvailable = createMemo(() => Boolean(props.capabilityMenu));
@@ -249,7 +252,7 @@ export function renderChatComposerView(
       data-composer-keyboard={props.mobileKeyboardVisible ? "true" : undefined}
       data-composer-keyboard-navigation={keyboardNavigation() ? "true" : undefined}
     >
-      <div class="agent-chat__composer-float">
+      <div class="agent-chat__composer-float" ref={[elementRef(props.onComposerFloatRef)]}>
         <div class="chat-footer__context">
           {props.footerContent}
           <div class="agent-chat__composer-notices">
@@ -351,6 +354,9 @@ export function renderChatComposerView(
               focusComposerFromChrome(event, context().canCompose, state.composerTextarea)
             }
             onPointerDown={(event: PointerEvent) =>
+              focusComposerFromChrome(event, context().canCompose, state.composerTextarea)
+            }
+            onMouseDown={(event: MouseEvent) =>
               focusComposerFromChrome(event, context().canCompose, state.composerTextarea)
             }
             ref={[
@@ -489,7 +495,20 @@ export function renderChatComposerView(
                     />
                   )}
                 </Show>
-                <span class="agent-chat__composer-placeholder" aria-hidden="true">
+                <span
+                  class="agent-chat__composer-placeholder"
+                  aria-hidden="true"
+                  ref={[
+                    elementRef<HTMLSpanElement>((element) => {
+                      placeholderElement = element;
+                      return () => {
+                        if (placeholderElement === element) {
+                          placeholderElement = undefined;
+                        }
+                      };
+                    }),
+                  ]}
+                >
                   {context().dictation?.active || context().predictionText ? "" : placeholder()}
                 </span>
                 <Show when={context().predictionText}>

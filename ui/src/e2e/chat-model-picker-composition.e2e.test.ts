@@ -106,6 +106,7 @@ suite.define(() => {
         const openai = picker.locator(
           '[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]',
         );
+        await page.locator(".agent-chat__composer-combobox textarea").click();
         await trigger.click();
         await polledCount(picker.locator("[data-chat-model-provider-toggle]")).toBe(2);
         const auth = picker.locator(

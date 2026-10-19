@@ -73,6 +73,7 @@ suite.define(() => {
           await workspace.waitFor({ state: "hidden" });
         }
         await page.setViewportSize({ width, height: 729 });
+        await composer.locator("textarea").click();
         await page.mouse.move(0, 0);
         await expect
           .poll(() =>

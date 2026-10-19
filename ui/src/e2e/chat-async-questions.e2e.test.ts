@@ -316,6 +316,7 @@ suite.define(() => {
         await assertDock();
         await expectBrowser(panel).toContainText("1 unanswered question");
         await panel.getByRole("button", { name: "Expand question" }).click();
+        await expectBrowser(panel).not.toHaveClass(/chat-question-panel--collapsed/);
         await assertDock();
         await page.setViewportSize({ width: 1440, height: 1200 });
         await expect

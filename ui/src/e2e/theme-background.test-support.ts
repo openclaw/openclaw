@@ -259,6 +259,8 @@ export function expectAppArtwork(artwork: Awaited<ReturnType<typeof readArtwork>
 }
 
 export async function expectMobileComposer(composer: Locator) {
+  // Sample the final editor surface, after its focus-triggered height reveal.
+  await composer.evaluate(finishElementAnimations);
   const layout = await composer.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     const textarea = element.querySelector("textarea");
