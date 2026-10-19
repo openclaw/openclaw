@@ -150,6 +150,9 @@ it(
       sessionsSpawnHasThinking: boolean;
     }> = [];
     const childRequests: Array<{ task: string; reasoning: unknown }> = [];
+    const expectedChildTasks = Object.values(TASKS);
+    const receivedChildTasks = new Set<string>();
+    const allChildRequestsReceived = Promise.withResolvers<void>();
     let sequence = 0;
 
     try {
@@ -242,6 +245,10 @@ it(
           const childTask = Object.values(TASKS).find((task) => latest.includes(task));
           if (childTask) {
             childRequests.push({ task: childTask, reasoning: body.reasoning });
+            receivedChildTasks.add(childTask);
+            if (expectedChildTasks.every((task) => receivedChildTasks.has(task))) {
+              allChildRequestsReceived.resolve();
+            }
             finish(`Completed ${childTask}.`);
             return;
           }
@@ -389,9 +396,7 @@ it(
         "PR135296_INVALID: reject the invalid thinking level without creating a session.",
       );
 
-      await expect
-        .poll(() => childRequests.map((entry) => entry.task).toSorted(), { timeout: 30_000 })
-        .toEqual(Object.values(TASKS).toSorted());
+      await allChildRequestsReceived.promise;
 
       const listed = await gateway.client.request<{
         sessions?: Array<Record<string, unknown>>;

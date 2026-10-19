@@ -42,7 +42,6 @@ export function registerSessionsSpawnInputTests({
 
   registerSessionsSpawnVisibleThinkingTests({
     createTool,
-    inProcessCreationMock: hoisted.inProcessCreationMock,
     mockCallArg,
   });
 
