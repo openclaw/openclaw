@@ -23,6 +23,10 @@ const PROVIDER_ENDPOINT_CLASSES = new Set(
   ),
 );
 
+export function isPluginProviderEndpointClass(endpointClass: string): boolean {
+  return PROVIDER_ENDPOINT_CLASSES.has(endpointClass);
+}
+
 function normalizeProviderHosts(value: unknown): string[] {
   return normalizeTrimmedStringList(value).map((entry) => entry.toLowerCase());
 }
@@ -148,7 +152,7 @@ export function buildPluginMetadataProviderFacts(
 ) {
   const providerEndpoints = [...plugins, ...listOfficialExternalProviderEndpointManifests()]
     .flatMap((plugin) => prepareProviderEndpoints(plugin.providerEndpoints))
-    .filter((endpoint) => PROVIDER_ENDPOINT_CLASSES.has(endpoint.endpointClass));
+    .filter((endpoint) => isPluginProviderEndpointClass(endpoint.endpointClass));
   const providerRequests = new Map(
     [...collectPluginProviderRequestOwners(plugins)].map(([provider, { policy }]) => [
       provider,

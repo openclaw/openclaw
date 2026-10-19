@@ -537,7 +537,7 @@ export function acquireMcpAppViewRequest(
   return () => {
     if (!released) {
       released = true;
-      view.activeRequests = Math.max(0, view.activeRequests - 1);
+      view.activeRequests -= 1;
     }
   };
 }
