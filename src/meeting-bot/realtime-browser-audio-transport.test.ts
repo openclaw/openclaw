@@ -5,7 +5,9 @@ import type { MeetingBrowserRequestParams } from "./platform-adapter-contract.js
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import { createBrowserMeetingRealtimeAudioTransport } from "./realtime-browser-audio-transport.js";
 
-function setup() {
+function setup(
+  overrides: Partial<Parameters<typeof createBrowserMeetingRealtimeAudioTransport>[0]> = {},
+) {
   let nativeInput: ((audio: Buffer) => void) | undefined;
   const nativeTransport = {
     onFatal: vi.fn(),
@@ -56,6 +58,7 @@ function setup() {
         targetId: "tab-1",
         audioFormat: "pcm16-24khz",
         logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+        ...overrides,
       }),
   };
 }
@@ -110,5 +113,24 @@ describe("isolated meeting browser audio transport", () => {
     expect(received).not.toHaveBeenCalled();
     expect(next.nativeTransport.stop).toHaveBeenCalledOnce();
     await nextTransport.stop();
+  });
+
+  it("runs long-lived browser capture under the session continuation and releases it on stop", async () => {
+    vi.useFakeTimers();
+    const run = vi.fn();
+    run.mockImplementation(<T>(handler: () => T) => handler());
+    const release = vi.fn();
+    const fixture = setup({ captureContinuation: async () => ({ run, release }) });
+    const transport = await fixture.create();
+    // The start probe is the first long-lived browser call. It outlives the
+    // invocation that captured the continuation, so it must cross the hold.
+    expect(run).toHaveBeenCalled();
+    transport.startInput(vi.fn());
+    await setImmediate();
+    fixture.resolvePull({ isolated: true, base64: Buffer.from([1, 0]).toString("base64") });
+    await setImmediate();
+    expect(run.mock.calls.length).toBeGreaterThan(1);
+    await transport.stop();
+    expect(release).toHaveBeenCalledOnce();
   });
 });
