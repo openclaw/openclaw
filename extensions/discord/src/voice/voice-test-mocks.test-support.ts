@@ -9,46 +9,44 @@ import type { VoiceRealtimeSpeakerContext, VoiceSessionEntry } from "./session.j
 const mocks = await vi.hoisted(async () => {
   const { Readable } = await import("node:stream");
   type EventHandler = (...args: unknown[]) => unknown;
-  type MockConnection = {
-    destroy: ReturnType<typeof vi.fn>;
-    subscribe: ReturnType<typeof vi.fn>;
-    on: ReturnType<typeof vi.fn>;
-    off: ReturnType<typeof vi.fn>;
-    receiver: {
-      speaking: {
-        users: Map<string, number>;
-        emit: (event: string, userId: string) => void;
-        on: ReturnType<typeof vi.fn>;
-        off: ReturnType<typeof vi.fn>;
-      };
-      subscribe: ReturnType<typeof vi.fn>;
-    };
-    state: {
-      status: string;
-      networking: {
-        state: {
-          code: string;
-          dave: {
-            lastTransitionId?: number;
-            reinitializing?: boolean;
-            recoverFromInvalidTransition?: ReturnType<typeof vi.fn>;
-            session: {
-              setPassthroughMode: ReturnType<typeof vi.fn>;
-            };
-          };
-        };
-      };
-    };
-    daveSetPassthroughMode: ReturnType<typeof vi.fn>;
-    handlers: Map<string, EventHandler>;
+  type DaveState = {
+    lastTransitionId?: number;
+    reinitializing?: boolean;
+    recoverFromInvalidTransition?: Mock;
+    session: { setPassthroughMode: Mock };
   };
-
-  const createConnectionMockLocal = (): MockConnection => {
+  const createConnectionMockLocal = () => {
     const handlers = new Map<string, EventHandler>();
     const daveSetPassthroughMode = vi.fn() as Mock;
+    const dave: DaveState = { session: { setPassthroughMode: daveSetPassthroughMode } };
+    const state = { status: "ready", networking: { state: { code: "networking-ready", dave } } };
+    const subscribe: Mock = vi.fn(() => Readable.from([]));
     const speakingHandlers = new Map<string, EventHandler>();
-    const connection: MockConnection = {
-      destroy: vi.fn(() => {
+    const users = new Map<string, number>();
+    const speaking: {
+      users: Map<string, number>;
+      emit: (event: string, userId: string) => void;
+      on: Mock;
+      off: Mock;
+    } = {
+      users,
+      on: vi.fn((event: string, handler: EventHandler) => {
+        speakingHandlers.set(event, handler);
+      }),
+      off: vi.fn((event: string) => {
+        speakingHandlers.delete(event);
+      }),
+      emit: (event, userId) => {
+        if (event === "start") {
+          connection.receiver.speaking.users.set(userId, Date.now());
+        } else {
+          connection.receiver.speaking.users.delete(userId);
+        }
+        speakingHandlers.get(event)?.(userId);
+      },
+    };
+    const connection = {
+      destroy: vi.fn((): void => {
         connection.state.status = "destroyed";
       }) as Mock,
       subscribe: vi.fn() as Mock,
@@ -57,45 +55,15 @@ const mocks = await vi.hoisted(async () => {
       }),
       off: vi.fn() as Mock,
       receiver: {
-        speaking: {
-          users: new Map(),
-          on: vi.fn((event: string, handler: EventHandler) => {
-            speakingHandlers.set(event, handler);
-          }),
-          off: vi.fn((event: string) => {
-            speakingHandlers.delete(event);
-          }),
-          emit: (event, userId) => {
-            if (event === "start") {
-              connection.receiver.speaking.users.set(userId, Date.now());
-            } else {
-              connection.receiver.speaking.users.delete(userId);
-            }
-            speakingHandlers.get(event)?.(userId);
-          },
-        },
-        subscribe: vi.fn(() => Readable.from([])),
+        speaking,
+        subscribe,
       },
-      state: {
-        status: "ready",
-        networking: {
-          state: {
-            code: "networking-ready",
-            dave: {
-              session: {
-                setPassthroughMode: daveSetPassthroughMode,
-              },
-            },
-          },
-        },
-      },
+      state,
       daveSetPassthroughMode,
       handlers,
     };
     return connection;
   };
-
-  const getVoiceConnectionMockLocal = vi.fn((): MockConnection | undefined => undefined);
 
   const createRealtimeSessionMockLocal = (
     outputAudioMode: "response" | "continuous" = "response",
@@ -125,12 +93,11 @@ const mocks = await vi.hoisted(async () => {
       Map<string, VoiceRealtimeSpeakerContext>
     >(),
     createConnectionMock: createConnectionMockLocal,
-    getVoiceConnectionMock: getVoiceConnectionMockLocal,
+    getVoiceConnectionMock: vi.fn<() => ReturnType<typeof createConnectionMockLocal> | undefined>(),
     joinVoiceChannelMock: vi.fn(() => createConnectionMockLocal()),
     entersStateMock: vi.fn(
-      async (_target?: unknown, _state?: string, _timeoutOrSignal?: number | AbortSignal) => {
-        return undefined;
-      },
+      async (_target?: unknown, _state?: string, _timeoutOrSignal?: number | AbortSignal) =>
+        undefined,
     ),
     createAudioResourceMock: vi.fn(() => ({
       playbackDuration: 0,
@@ -181,17 +148,10 @@ const mocks = await vi.hoisted(async () => {
     resolveRealtimeVoiceAgentContextInstructionsMock:
       vi.fn<(...args: unknown[]) => Promise<string>>(),
     resolveVoiceIngressWithParticipantsMock: vi.fn() as Mock,
-    transcribeAudioFileMock: vi.fn<PluginRuntime["mediaUnderstanding"]["transcribeAudioFile"]>(
-      async () => ({ text: "hello from voice" }),
-    ),
+    transcribeAudioFileMock: vi.fn<PluginRuntime["mediaUnderstanding"]["transcribeAudioFile"]>(),
     prepareTtsRequestMock: vi.fn(async ({ cfg, text }: { cfg: unknown; text: string }) => ({
       cfg,
-      directives: {
-        cleanedText: text,
-        hasDirective: false,
-        overrides: {},
-        warnings: [],
-      },
+      directives: { cleanedText: text, hasDirective: false, overrides: {}, warnings: [] },
     })),
     textToSpeechStreamMock: vi.fn(async (): Promise<unknown> => ({
       success: false,
@@ -209,9 +169,7 @@ const mocks = await vi.hoisted(async () => {
         isProviderAvailable?: (provider: { id: string }) => boolean;
         assertProviderAvailable?: (provider: { id: string }) => void;
       }) => {
-        provider: {
-          id: string;
-        };
+        provider: { id: string };
         capabilities?: {
           supportsActivationNameGating?: boolean;
           handlesAgentConsult?: boolean;
@@ -226,18 +184,7 @@ const mocks = await vi.hoisted(async () => {
     })),
     registerRealtimeVoiceSelectionMock: vi.fn<typeof registerRealtimeVoiceSelection>(),
     createRealtimeVoiceBridgeSessionMock: vi.fn((_params?: unknown) => realtimeSessionMockLocal),
-    controlRealtimeVoiceAgentRunMock: vi.fn<typeof controlRealtimeVoiceAgentRun>(async () => ({
-      ok: false,
-      mode: "steer",
-      sessionKey: "discord:g1:c1",
-      active: false,
-      queued: false,
-      reason: "no_active_run",
-      message: "There is no active OpenClaw run to steer.",
-      speak: true,
-      show: true,
-      suppress: false,
-    })),
+    controlRealtimeVoiceAgentRunMock: vi.fn<typeof controlRealtimeVoiceAgentRun>(),
     createRealtimeSessionMock: createRealtimeSessionMockLocal,
     realtimeSessionMock: realtimeSessionMockLocal,
     resolveAudioInputBudgetMock:
@@ -301,18 +248,12 @@ vi.mock("./sdk-runtime.js", () => ({
 
 vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
-  return {
-    ...actual,
-    resolveAgentRoute: mocks.resolveAgentRouteMock,
-  };
+  return { ...actual, resolveAgentRoute: mocks.resolveAgentRouteMock };
 });
 
 vi.mock("openclaw/plugin-sdk/agent-scope-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-scope-runtime")>();
-  return {
-    ...actual,
-    resolveAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
-  };
+  return { ...actual, resolveAgentDir: vi.fn(() => "/tmp/openclaw-agent") };
 });
 
 vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", async (importOriginal) => {
@@ -387,24 +328,19 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
                   runAgentConsult: request.runAgentConsult,
                 });
                 providerSession = session;
+                const { bridge, handleBargeIn, submitToolResult, ...methods } = session;
                 return {
-                  outputAudioMode: session.bridge.outputAudioMode,
-                  pacesInputAudio: session.bridge.pacesInputAudio,
-                  supportsToolResultContinuation: session.bridge.supportsToolResultContinuation,
-                  supportsToolResultSuppression: session.bridge.supportsToolResultSuppression,
-                  acknowledgeMark: session.acknowledgeMark,
-                  close: session.close,
-                  connect: session.connect,
-                  ...(session.bridge.handleBargeIn ? { handleBargeIn: session.handleBargeIn } : {}),
+                  ...methods,
+                  outputAudioMode: bridge.outputAudioMode,
+                  pacesInputAudio: bridge.pacesInputAudio,
+                  supportsToolResultContinuation: bridge.supportsToolResultContinuation,
+                  supportsToolResultSuppression: bridge.supportsToolResultSuppression,
+                  ...(bridge.handleBargeIn ? { handleBargeIn } : {}),
                   isConnected: () => true,
-                  sendAudio: session.sendAudio,
-                  sendUserMessage: session.sendUserMessage,
-                  setMediaTimestamp: session.setMediaTimestamp,
                   submitToolResult: (callId, result, options) =>
                     options === undefined
-                      ? session.submitToolResult(callId, result)
-                      : session.submitToolResult(callId, result, options),
-                  triggerGreeting: session.triggerGreeting,
+                      ? submitToolResult.call(session, callId, result)
+                      : submitToolResult.call(session, callId, result, options),
                 };
               },
             },
