@@ -344,7 +344,6 @@ async function applyOwnedExecPolicy(
   policy: ExecPolicyResolved,
   assertCurrent: () => void,
 ): Promise<ExecPolicyShowPayload> {
-  assertCurrent();
   const context = captureOpenClawStateWorkerContext();
   const configSnapshot = await readConfigFileSnapshot();
   assertCurrent();
