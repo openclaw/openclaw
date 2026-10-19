@@ -67,7 +67,7 @@ export type StagedAdmissionFact = AdmissionFactValue &
   };
 export type ScopedWriteRevision = {
   identity: string;
-  // The revision and retirement flag share custody across all admission snapshots.
+  // Revision, retirement, and active effect pins share custody across admission snapshots.
   state: Int32Array<SharedArrayBuffer>;
 };
 
@@ -79,7 +79,7 @@ const scopeRetention = resolveGlobalSingleton(
 // Account for UTF-16 keys plus the UUID, shared cell, and map/snapshot entries.
 const writeScopeBytes = (key: string) => key.length * 2 + 256;
 
-/** Receipts cache row freshness, never writer authority. Retirement makes old tokens miss. */
+/** Idle receipts cache freshness; active effect guards retain their exact shared cells. */
 export function retainSqliteDatabaseWriteScope(
   record: Admission,
   key: string,
@@ -98,15 +98,34 @@ export function retainSqliteDatabaseWriteScope(
     retention.bytes += writeScopeBytes(key);
   }
   scopes.set(key, revision);
-  while (retention.bytes > MAX_WRITE_SCOPE_BYTES) {
-    const [oldest, value] = scopes.entries().next().value!;
+  pruneSqliteDatabaseWriteScopes(record);
+}
+
+/** Active effect scopes may exceed the idle budget until their final release. */
+export function pruneSqliteDatabaseWriteScopes(record: Admission): boolean {
+  const retention = scopeRetention.get(record.writeScopes)!;
+  if (retention.bytes <= MAX_WRITE_SCOPE_BYTES) {
+    return false;
+  }
+  let changed = false;
+  for (const [oldest, value] of record.writeScopes) {
+    // Claim an unpinned cell before another isolate can retain it for an effect.
+    const pins = Atomics.compareExchange(value.state, 2, 0, -1);
+    if (pins > 0 && Atomics.load(value.state, 1) === 0) {
+      continue;
+    }
     Atomics.store(value.state, 1, 1);
     // A writer missing this cell must fence receipts registered after its dispatch.
     advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
-    scopes.delete(oldest);
+    record.writeScopes.delete(oldest);
     retention.bytes -= writeScopeBytes(oldest);
     retention.retired.add(oldest);
+    changed = true;
+    if (retention.bytes <= MAX_WRITE_SCOPE_BYTES) {
+      break;
+    }
   }
+  return changed;
 }
 
 export type Admission = {

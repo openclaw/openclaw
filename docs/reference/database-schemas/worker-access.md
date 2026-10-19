@@ -290,8 +290,12 @@ receipts. Final-handle closure retires row facts while retaining physical valida
 and owner-published quarantine decisions.
 Canonical validation compares admitted catalog facts with the pending-table DDL
 from the schema source; fresh workers do not bootstrap a comparison database.
-Receipt metadata has a 1 MiB estimated-byte LRU budget per physical database in
-each isolate. Reads touch local recency without a cross-thread handshake. Eviction
+Idle receipt metadata has a 1 MiB estimated-byte LRU budget per physical database
+in each isolate. Active completion and Workshop effect scopes pin their shared
+cells and physical admission before asynchronous source preparation, releasing
+both with the effect scope. Pins can exceed the idle budget; release prunes it
+again. Writes and deletion still invalidate pinned receipts. Reads touch local
+recency without a cross-thread handshake. Eviction
 retires shared cells and their published snapshots; old tokens cannot certify a
 cached row, and oversized scopes use a database-wide receipt that invalidates on
 every write without retaining a scope cell. These

@@ -10,6 +10,7 @@ import {
   readSqliteDatabaseGeneration,
   advanceSqliteDatabaseGeneration,
   retainSqliteDatabaseWriteScope,
+  pruneSqliteDatabaseWriteScopes,
   type Admission,
   type ScopedWriteRevision,
 } from "./sqlite-database-admission-record.js";
@@ -33,6 +34,8 @@ export function sqliteSessionIdWriteScope(sessionId: string): { sessionId: strin
 export function createSqliteDatabaseWriteReceipts(owner: {
   admission(this: void, database: DatabaseSync): Admission | undefined;
   pathAdmission(this: void, location: string): Admission | undefined;
+  retain(this: void, record: Admission): void;
+  release(this: void, record: Admission): void;
   writeListeners: WeakMap<Admission, Set<() => void>>;
   readRevision(this: void, database: DatabaseSync): number | undefined;
   writer(this: void, database: DatabaseSync): Admission | undefined;
@@ -119,19 +122,32 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     }
   }
 
-  function ensureWriteScopes(record: Admission, keys: readonly string[]): void {
+  function ensureWriteScopes(
+    record: Admission,
+    keys: readonly string[],
+    pins?: ScopedWriteRevision[],
+  ): void {
     let changed = false;
     for (const key of keys) {
-      const previous = record.writeScopes.get(key);
-      if (!previous || Atomics.load(previous.state, 1) !== 0) {
-        retainSqliteDatabaseWriteScope(record, key, createScopeRevision());
+      let revision = record.writeScopes.get(key);
+      if (
+        !revision ||
+        Atomics.load(revision.state, 1) !== 0 ||
+        (pins && !pinWriteScope(revision))
+      ) {
+        revision = createScopeRevision();
+        if (pins) {
+          Atomics.store(revision.state, 2, 1);
+        }
         if (threadId === 0) {
           advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
         }
         changed = true;
-      } else {
-        retainSqliteDatabaseWriteScope(record, key, previous);
       }
+      if (pins) {
+        pins.push(revision);
+      }
+      retainSqliteDatabaseWriteScope(record, key, revision);
     }
     if (changed) {
       // Scope discovery is cold metadata, shared through the existing admission exchange.
@@ -140,11 +156,61 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     }
   }
 
+  function pinWriteScope(revision: ScopedWriteRevision): boolean {
+    let pins = Atomics.load(revision.state, 2);
+    while (pins >= 0) {
+      const previous = Atomics.compareExchange(revision.state, 2, pins, pins + 1);
+      if (previous === pins) {
+        return true;
+      }
+      pins = previous;
+    }
+    return false;
+  }
+
   function createScopeRevision(): ScopedWriteRevision {
     return {
       identity: randomUUID(),
-      state: new Int32Array(new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT)),
+      state: new Int32Array(new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT)),
     };
+  }
+
+  /** Keep exact receipts through asynchronous source preparation and its final effect. */
+  function retainSqliteDatabaseWriteScopesForPath(
+    location: string,
+    scope: readonly SqliteDatabaseWriteScope[],
+  ): (() => void) | undefined {
+    const record = owner.pathAdmission(location);
+    if (!record || isRetired(record)) {
+      return undefined;
+    }
+    const pins: ScopedWriteRevision[] = [];
+    let released = false;
+    const release = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      try {
+        for (const revision of pins) {
+          Atomics.sub(revision.state, 2, 1);
+        }
+        if (pins.length > 0 && !isRetired(record) && pruneSqliteDatabaseWriteScopes(record)) {
+          advanceSqliteDatabaseGeneration(record, "publicationRevision");
+          owner.publish(record, []);
+        }
+      } finally {
+        owner.release(record);
+      }
+    };
+    try {
+      owner.retain(record);
+      ensureWriteScopes(record, normalizedWriteScopes(scope), pins);
+      return release;
+    } catch (error) {
+      release();
+      throw error;
+    }
   }
 
   /** Deletion owners retire only scopes whose stored identity has actually been removed. */
@@ -429,6 +495,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     settleWorker,
     onSqliteDatabaseWriteSettled,
     retireSqliteDatabaseWriteScopes,
+    retainSqliteDatabaseWriteScopesForPath,
     withSqliteDatabaseWriteScope,
     withoutSqliteDatabaseWriteScope,
     readSqliteDatabaseScopedWriteToken,
