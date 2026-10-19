@@ -44,13 +44,11 @@ export function renderSidebarSessionIndicators(
   const pullRequest = createMemo(() => {
     const readSessionValue = readSession();
     const initialPullRequestValue = initialPullRequest();
-    return readSessionValue.worktreeId
-      ? host().sessionPullRequests.summary(
-          readSessionValue.key,
-          readSessionValue.worktreeId,
-          initialPullRequestValue,
-        )
-      : initialPullRequestValue;
+    return host().sessionPullRequests.summary(
+      readSessionValue.key,
+      readSessionValue.worktreeId ?? "",
+      initialPullRequestValue,
+    );
   });
   const ownerAttribution = createMemo(() => {
     const readSessionValue = readSession();
@@ -312,6 +310,7 @@ export function renderSidebarSessionIndicators(
               outboxAttentionCount={readSession().outboxAttentionCount}
               hasComposerDraft={readSession().hasComposerDraft === true}
               pullRequest={pullRequest()}
+              pullRequestCount={host().sessionPullRequests.count(readSession().key)}
               hasApproval={hasApproval()}
             />
           }

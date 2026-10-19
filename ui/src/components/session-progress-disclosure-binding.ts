@@ -1,5 +1,6 @@
 import { createEffect, onCleanup, useContext, type Accessor } from "solid-js";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import {
   subscribeTranscriptScroll,
@@ -272,22 +273,17 @@ function createDisclosure(
     }
     listeners = new AbortController();
     const signal = listeners.signal;
-    summary.addEventListener("wheel", wheel, { passive: false, signal });
-    summary.addEventListener("pointerdown", pointerDown, { signal });
-    summary.addEventListener("pointermove", pointerMove, { signal });
-    summary.addEventListener("pointerup", pointerEnd, { signal });
-    summary.addEventListener("pointercancel", pointerEnd, { signal });
-    summary.addEventListener("lostpointercapture", pointerEnd, { signal });
-    summary.ownerDocument.addEventListener("pointerdown", otherPointer, {
+    listen(summary.ownerDocument, "pointerdown", otherPointer, {
       capture: true,
       signal,
     });
-    summary.ownerDocument.defaultView?.addEventListener("blur", cancelDrag, { signal });
-    // Only viewport changes can clamp a retained manual extent. Streamed card
-    // revisions cannot resize it, even when the revised note is shorter.
-    summary.ownerDocument.defaultView?.addEventListener("resize", clampExtent, {
-      signal,
-    });
+    const window = summary.ownerDocument.defaultView;
+    if (window) {
+      listen(window, "blur", cancelDrag, { signal });
+      // Only viewport changes can clamp a retained manual extent. Streamed card
+      // revisions cannot resize it, even when the revised note is shorter.
+      listen(window, "resize", clampExtent, { signal });
+    }
     if (typeof ResizeObserver !== "undefined") {
       resizeObserver = new ResizeObserver(clampExtent);
       resizeObserver.observe(body);
@@ -393,6 +389,7 @@ function createDisclosure(
 
   function wheel(event: WheelEvent) {
     if (
+      !listeners ||
       event.defaultPrevented ||
       isControl(event) ||
       drag ||
@@ -420,7 +417,13 @@ function createDisclosure(
   }
 
   function pointerDown(event: PointerEvent) {
-    if (!event.isPrimary || event.button !== 0 || isControl(event) || event.defaultPrevented) {
+    if (
+      !listeners ||
+      !event.isPrimary ||
+      event.button !== 0 ||
+      isControl(event) ||
+      event.defaultPrevented
+    ) {
       return;
     }
     suppressClick = false;
@@ -491,7 +494,7 @@ function createDisclosure(
     resetScrollInput();
   }
 
-  return { update, click, dispose };
+  return { update, click, wheel, pointerDown, pointerMove, pointerEnd, dispose };
 }
 
 /** Retains gesture and resource ownership across progress snapshots. */
@@ -525,5 +528,9 @@ export function createComposerProgressDisclosure(input: Accessor<DisclosureInput
       body = value;
     },
     onClick: (event: MouseEvent) => disclosure?.click(event),
+    onWheel: (event: WheelEvent) => disclosure?.wheel(event),
+    onPointerDown: (event: PointerEvent) => disclosure?.pointerDown(event),
+    onPointerMove: (event: PointerEvent) => disclosure?.pointerMove(event),
+    onPointerEnd: (event: PointerEvent) => disclosure?.pointerEnd(event),
   };
 }

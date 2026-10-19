@@ -97,6 +97,8 @@ for editor temp-write/rename churn to settle, reads the final file, and rejects
 invalid external edits without rewriting `openclaw.json`. OpenClaw-owned config
 writes use the same schema gate before writing (see [Strict validation](/gateway/configuration#strict-validation)
 for the clobber/rollback rules that apply to every write).
+Diagnostics for rejected edits reuse the running Gateway's plugin metadata
+without rebuilding the plugin inventory.
 
 The adapter also watches included files and follows editor rename-replace writes.
 Native file events trigger the usual reload debounce. A background reconciliation

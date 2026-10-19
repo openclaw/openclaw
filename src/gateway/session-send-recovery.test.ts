@@ -10,6 +10,7 @@ import {
 import type { SessionPendingInput } from "../config/sessions/session-pending-input.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   AgentDatabaseAdmissionError,
   createAgentDatabaseInspectionRefusal,
@@ -35,6 +36,8 @@ const io = vi.hoisted(() => ({
   load: vi.fn(),
   report: vi.fn(),
   withdraw: vi.fn(),
+  restoreOperator:
+    vi.fn<typeof import("./operator-run-recovery.js").restoreGatewayQueuedOperatorRecovery>(),
 }));
 vi.mock(
   import("../agents/main-session-recovery/main-session-restart-recovery-shared.js"),
@@ -66,6 +69,10 @@ vi.mock(
     discardSessionPendingInput: io.withdraw,
   }),
 );
+vi.mock(import("./operator-run-recovery.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  restoreGatewayQueuedOperatorRecovery: io.restoreOperator,
+}));
 vi.mock(import("./session-utils-store-worker.js"), async (importOriginal) => ({
   ...(await importOriginal()),
   resolveGatewaySessionStoreTargetInWorker: io.load,
@@ -99,7 +106,7 @@ const input: SessionPendingInput = {
       sourceTool: "sessions_send",
       sourceSessionKey: delivery.source.sessionKey,
     },
-    __openclaw: { sessionSendDelivery: delivery },
+    __openclaw: { sessionSendDelivery: { ...delivery, operatorSource: null } },
   },
 };
 const config: OpenClawConfig = {
@@ -197,6 +204,7 @@ afterEach(() => {
 it("recovers a logical agent's saved input from its shared physical store", async () => {
   const sharedDelivery = {
     ...delivery,
+    operatorSource: null,
     target: { ...delivery.target, agentId: "secondary", sessionKey: "agent:secondary:target" },
   };
   const sharedInput = {
@@ -435,7 +443,9 @@ it("retries transient admission with the saved input and delivery identity, in o
     message: {
       ...input.message,
       idempotencyKey: "next-delivery:user",
-      __openclaw: { sessionSendDelivery: { ...delivery, runId: "next-delivery" } },
+      __openclaw: {
+        sessionSendDelivery: { ...delivery, runId: "next-delivery", operatorSource: null },
+      },
     },
   };
   io.pending.mockResolvedValue({ items: [input, next], total: 2 });
@@ -475,6 +485,50 @@ it("retries transient admission with the saved input and delivery identity, in o
   expect(attemptTimes).toEqual([0, 5_000, 5_000]);
   expect(io.report).not.toHaveBeenCalled();
 });
+
+it.each(["interrupted", "cancelled"] as const)(
+  "preserves returned-result semantics while respecting %s custody",
+  async (state) => {
+    const returnedDelivery: SessionSendDelivery = {
+      ...delivery,
+      returnedResult: { extraSystemPrompt: "Consume this result once; do not send it back." },
+    };
+    const returnedInput = {
+      ...input,
+      message: {
+        ...input.message,
+        __openclaw: { sessionSendDelivery: { ...returnedDelivery, operatorSource: null } },
+      },
+    };
+    io.pending.mockResolvedValue({ items: [returnedInput], total: 1 });
+    sourceEntry.communication = { send: "never" };
+    io.source.mockResolvedValue(sourceSnapshot(returnedInput, state));
+    dispatch.mockImplementation(async (_request, _timeout, options) => {
+      options.assertAdmissionCurrent();
+      expect(
+        readSessionSendDeliveryAdmission({
+          runId: delivery.runId,
+          agentId: "main",
+          sessionKey: delivery.target.sessionKey,
+          sessionId: "target-id",
+        })?.acceptedMessage,
+      ).toEqual(returnedInput.message);
+    });
+    await recover();
+    expect(dispatch).toHaveBeenCalledTimes(state === "interrupted" ? 1 : 0);
+    if (state === "interrupted") {
+      expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+        idempotencyKey: delivery.runId,
+        message: delivery.message,
+        extraSystemPrompt: "Consume this result once; do not send it back.",
+        expectedExistingSessionId: "target-id",
+        inputProvenance: input.message.provenance,
+      });
+      expect(dispatch.mock.calls[0]?.[2].replyExpectation).toBe("optional");
+    }
+    expectNoCalls(io.report, io.withdraw, warn);
+  },
+);
 
 it.each(["reset", "replaced", "archive", "permission", "consumed", "abort"] as const)(
   "rechecks %s before a delayed attempt",
@@ -565,10 +619,11 @@ const exhausted = {
 };
 
 it.each([
-  ["capacity", new WorkerTaskError(privateDiagnostic, "overloaded"), exhausted],
-  ["pending inspection", inspectionError("pending"), exhausted],
+  ["capacity", "endpoint", new WorkerTaskError(privateDiagnostic, "overloaded"), exhausted],
+  ["pending inspection", "endpoint", inspectionError("pending"), exhausted],
   [
     "failed inspection",
+    "endpoint",
     inspectionError("failed"),
     {
       reason: "store-unavailable",
@@ -578,6 +633,7 @@ it.each([
   ],
   [
     "unknown",
+    "endpoint",
     new Error(privateDiagnostic),
     {
       reason: "unknown",
@@ -585,12 +641,64 @@ it.each([
       description: "delivery failed",
     },
   ],
+  [
+    "requester preparation capacity",
+    "requester",
+    new WorkerTaskError(privateDiagnostic, "overloaded"),
+    exhausted,
+  ],
+  [
+    "requester authority refusal",
+    "requester",
+    new Error(privateDiagnostic),
+    {
+      reason: "requester-unavailable",
+      attempts: 1,
+      description: "original requester authority is unavailable; submit a new request",
+    },
+  ],
 ] as const)(
   "keeps path-bearing %s diagnostics out of saved recovery notices",
-  async (_name, error, { reason, attempts, description }) => {
-    io.load.mockRejectedValue(error);
-    await recoverWithTimers();
+  async (_name, stage, error, { reason, attempts, description }) => {
+    if (stage === "requester") {
+      const acceptedInput: SessionPendingInput = {
+        ...input,
+        message: {
+          ...input.message,
+          __openclaw: {
+            sessionSendDelivery: {
+              ...delivery,
+              operatorSource: {
+                kind: "channel",
+                snapshot: {
+                  reference: { version: 1, id: "d0ba40e9-13e6-4e6b-918f-62e8bc12ffbd" },
+                  profileId: "original-requester",
+                  scopes: ["operator.write"],
+                },
+              },
+            },
+          },
+        },
+      };
+      io.pending.mockResolvedValue({ items: [acceptedInput], total: 1 });
+      io.source.mockResolvedValue(sourceSnapshot(acceptedInput));
+      io.restoreOperator.mockRejectedValue(error);
+    } else {
+      io.load.mockRejectedValue(error);
+    }
+    const retries = Array.from({ length: attempts - 1 }, () => createDeferredCore());
+    for (const retry of retries) {
+      warn.mockImplementationOnce(() => retry.resolve());
+    }
+    const recovery = recoverSessionSendDeliveries(context, controller().signal);
+    for (const retry of retries) {
+      // A dynamic requester import can finish after an empty fake-timer drain.
+      await Promise.race([retry.promise, recovery]);
+      await vi.runAllTimersAsync();
+    }
+    await recovery;
     expect(dispatch).not.toHaveBeenCalled();
+    expect(io.restoreOperator).toHaveBeenCalledTimes(stage === "requester" ? attempts : 0);
     const report = io.report.mock.calls[0]![1].selectReport(undefined);
     expect(report.details.inputs[0]).toEqual({
       inputId: input.id,
@@ -606,8 +714,10 @@ it.each([
     expect(JSON.stringify(report)).not.toContain(privateDatabasePath);
     expect(JSON.stringify(report)).not.toContain(quarantineCommand);
     const logs = warn.mock.calls.map(([line]) => line).join("\n");
-    expect(logs).toContain(privateDatabasePath);
-    expect(logs).toContain(quarantineCommand);
+    if (reason !== "requester-unavailable") {
+      expect(logs).toContain(privateDatabasePath);
+      expect(logs).toContain(quarantineCommand);
+    }
   },
 );
 

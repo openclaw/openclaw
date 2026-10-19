@@ -17,6 +17,7 @@ type PaneMethods = Pick<
   | "discardStagedAttachments"
   | "resumeStagedAttachments"
   | "captureNavigationFace"
+  | "focusComposerInput"
 >;
 type PaneFacts = Pick<
   ChatPaneRuntime,
@@ -26,6 +27,7 @@ type PaneFacts = Pick<
   | "conversationPresented"
   | "hasQueuedMessageEdit"
   | "runActivity"
+  | "composerReady"
 >;
 export type ChatPaneElement = SolidBridgeElement<ChatPaneProps, PaneMethods> & PaneFacts;
 const runtimes = new WeakMap<HTMLElement, ChatPaneRuntime>();
@@ -56,6 +58,7 @@ export const ChatPaneView = defineSolidBridge<ChatPaneProps, PaneMethods>(
       "conversationPresented",
       "hasQueuedMessageEdit",
       "runActivity",
+      "composerReady",
     ] as const) {
       Object.defineProperty(element, key, { configurable: true, get: () => runtime[key] });
     }
@@ -90,6 +93,7 @@ export const ChatPaneView = defineSolidBridge<ChatPaneProps, PaneMethods>(
       discardStagedAttachments: (host) => runtimes.get(host)?.discardStagedAttachments(),
       resumeStagedAttachments: (host) => runtimes.get(host)?.resumeStagedAttachments(),
       captureNavigationFace: (host) => runtimes.get(host)?.captureNavigationFace(),
+      focusComposerInput: (host) => runtimes.get(host)?.focusComposerInput() ?? false,
     },
   },
 );

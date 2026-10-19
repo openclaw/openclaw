@@ -33,6 +33,9 @@ export type AppSidebarProps = {
   connectionRecovery: boolean;
   connectionFlagVisible: boolean;
   connectionFlagAllowed: boolean;
+  footerControlsOverlap:
+    | ((bounds: Pick<DOMRectReadOnly, "left" | "right" | "top" | "bottom">) => boolean)
+    | undefined;
   storedOutboxes: SidebarOutboxSummary | undefined;
   terminalAvailable: boolean;
   catalogOpenTarget: CatalogOpenTarget;
@@ -73,6 +76,7 @@ export const appSidebarProperties = {
   connectionRecovery: { default: false, attribute: false },
   connectionFlagVisible: { default: false, attribute: false },
   connectionFlagAllowed: { default: false, attribute: false },
+  footerControlsOverlap: { default: undefined, attribute: false },
   storedOutboxes: { default: undefined, attribute: false },
   terminalAvailable: { default: false, attribute: false },
   catalogOpenTarget: { default: "viewer", attribute: false },
@@ -118,6 +122,7 @@ export abstract class AppSidebarBase {
   declare connectionRecovery: AppSidebarProps["connectionRecovery"];
   declare connectionFlagVisible: AppSidebarProps["connectionFlagVisible"];
   declare connectionFlagAllowed: AppSidebarProps["connectionFlagAllowed"];
+  declare footerControlsOverlap: AppSidebarProps["footerControlsOverlap"];
   declare storedOutboxes: AppSidebarProps["storedOutboxes"];
   declare terminalAvailable: AppSidebarProps["terminalAvailable"];
   declare catalogOpenTarget: AppSidebarProps["catalogOpenTarget"];

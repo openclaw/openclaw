@@ -5,6 +5,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { SettingsPageHeader, LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -43,6 +44,7 @@ export function MemoryImportPage() {
   const gateway = projectGateway(context.gateway);
   const agents = projectAgents(context.agents);
   const selection = projectAgentSelection(context.agentSelection);
+  let presentationScopeKey = gatewayPresentationScope(context.gateway).key;
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const publish = () => setRevision((value) => value + 1);
   // Request state stays synchronous so a second activation observes the first immediately.
@@ -80,10 +82,12 @@ export function MemoryImportPage() {
   let applyEpoch = 0;
   let backfillEpoch = 0;
   let planError: string | null = null;
+  let workspaceAuthorized = false;
   let lastPlanValue: {
     client: MemoryImportClient;
     agentId: string;
     overwrite: boolean;
+    scopeKey: number;
     plan: MigrationsMemoryPlanResult;
   } | null = null;
   const read = <K extends keyof typeof state>(key: K) => {
@@ -95,10 +99,12 @@ export function MemoryImportPage() {
     () => {
       gateway.read();
       return [
-        context.gateway.snapshot.phase === "connected" ? context.gateway.snapshot.client : null,
+        context.gateway.snapshot.client,
+        context.gateway.snapshot.phase === "connected",
         canAdmin(),
         currentAgentId(),
         read("replaceExisting"),
+        gatewayPresentationScope(context.gateway).key,
       ] as const;
     },
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
@@ -114,11 +120,20 @@ export function MemoryImportPage() {
       ),
     }),
     onComplete: (value) => {
+      if (value.scopeKey !== gatewayPresentationScope(context.gateway).key) {
+        return;
+      }
       lastPlanValue = value;
       state.selectedByProvider = Object.fromEntries(
         value.plan.providers.map((provider) => [
           provider.providerId,
-          provider.items.filter((item) => item.status === "planned").map((item) => item.id),
+          provider.items
+            .filter(
+              (item) =>
+                item.status === "planned" &&
+                (state.selectedByProvider[provider.providerId]?.includes(item.id) ?? true),
+            )
+            .map((item) => item.id),
         ]),
       );
     },
@@ -136,25 +151,42 @@ export function MemoryImportPage() {
       planRequest.reset();
       return;
     }
-    await planRequest.run({ client, agentId, overwrite });
+    await planRequest.run({ client, agentId, overwrite, scopeKey: presentationScopeKey });
   }
   // Retire import attempts on target changes and request a new plan from the Gateway.
-  createEffect(planArgs, ([client, , agentId, overwrite], previous) => {
+  createEffect(planArgs, ([client, connected, allowed, agentId, overwrite, scopeKey], previous) => {
     if (previous) {
-      const connectionChanged = previous[0] !== client;
-      const targetChanged = connectionChanged || previous[2] !== agentId;
-      if (targetChanged || previous[3] !== overwrite) {
+      const identityChanged = previous[0] !== client || previous[5] !== scopeKey;
+      const targetChanged = identityChanged || previous[3] !== agentId;
+      const accessLost = connected && !allowed;
+      if (targetChanged || previous[4] !== overwrite || accessLost) {
         // A temporarily missing roster is not a new destination; retain the unknown apply's key.
         resetMutationState({
           preserveAttemptedImport:
-            previous[3] === overwrite &&
+            !identityChanged &&
+            !accessLost &&
+            previous[4] === overwrite &&
             (agentId === null || agentId === state.pendingImport?.agentId),
         });
       }
-      if (targetChanged) {
+      if (targetChanged || accessLost) {
         resetBackfillState();
       }
+      if (identityChanged || accessLost) {
+        lastPlanValue = null;
+        workspaceAuthorized = false;
+      }
+      if (previous[1] !== connected) {
+        applyEpoch += 1;
+        backfillEpoch += 1;
+        state.applyingProviderId = null;
+        state.backfillBusy = null;
+      }
     }
+    if (connected) {
+      workspaceAuthorized = allowed;
+    }
+    presentationScopeKey = scopeKey;
     void loadPlan();
   });
   onCleanup(() => {
@@ -186,7 +218,7 @@ export function MemoryImportPage() {
     const snapshot = context.gateway.snapshot;
     const agentId = currentAgentId();
     return value &&
-      snapshot.phase === "connected" &&
+      presentationScopeKey === gatewayPresentationScope(context.gateway).key &&
       value.client === snapshot.client &&
       value.agentId === agentId &&
       value.overwrite === state.replaceExisting
@@ -203,8 +235,17 @@ export function MemoryImportPage() {
     return planError;
   }
 
+  function workspaceAccessible(): boolean {
+    revision();
+    gateway.read();
+    return canAdmin();
+  }
+
   function canAdmin(): boolean {
-    return hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null);
+    const snapshot = context.gateway.snapshot;
+    return snapshot.phase === "connected"
+      ? hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
+      : workspaceAuthorized;
   }
 
   function resetMutationState(options: { preserveAttemptedImport?: boolean } = {}) {
@@ -224,7 +265,16 @@ export function MemoryImportPage() {
   }
 
   function refresh(): Promise<void> {
-    return currentAgentId() ? loadPlan() : context.agents.ensureList().then(() => undefined);
+    const agentId = currentAgentId();
+    if (context.agents.state.agentsError) {
+      return context.agents.refreshList().then(() => {
+        if (currentAgentId() === agentId) {
+          return loadPlan();
+        }
+        return undefined;
+      });
+    }
+    return agentId ? loadPlan() : context.agents.ensureList().then(() => undefined);
   }
 
   function toggleCollection(providerId: string, itemIds: readonly string[], selected: boolean) {
@@ -241,7 +291,7 @@ export function MemoryImportPage() {
   }
 
   function requestImport(providerId: string) {
-    if (!canAdmin()) {
+    if (context.gateway.snapshot.phase !== "connected" || !canAdmin()) {
       return;
     }
     const agentId = currentAgentId();
@@ -278,6 +328,7 @@ export function MemoryImportPage() {
 
   async function confirmImport() {
     if (
+      context.gateway.snapshot.phase !== "connected" ||
       !canAdmin() ||
       state.applyingProviderId !== null ||
       state.backfillBusy === "apply" ||
@@ -362,8 +413,10 @@ export function MemoryImportPage() {
   async function runBackfill(operation: "preview" | "apply" | "rollback") {
     const client = context.gateway.snapshot.client;
     const agentId = currentAgentId();
+    const scopeKey = presentationScopeKey;
     if (
       context.gateway.snapshot.phase !== "connected" ||
+      scopeKey !== gatewayPresentationScope(context.gateway).key ||
       !canAdmin() ||
       !client ||
       !agentId ||
@@ -378,6 +431,7 @@ export function MemoryImportPage() {
     const epoch = ++backfillEpoch;
     const isCurrent = () =>
       epoch === backfillEpoch &&
+      scopeKey === gatewayPresentationScope(context.gateway).key &&
       context.gateway.snapshot.phase === "connected" &&
       context.gateway.snapshot.client === client &&
       currentAgentId() === agentId;
@@ -476,7 +530,7 @@ export function MemoryImportPage() {
       <SettingsWorkspace>
         <MemoryImport
           connected={gateway.read().snapshot.phase === "connected"}
-          canAdmin={hasOperatorAdminAccess(gateway.read().snapshot.hello?.auth ?? null)}
+          canAdmin={workspaceAccessible()}
           agents={listSelectableAgents(agents.read().agentsList?.agents ?? [])}
           selectedAgentId={currentAgentId()}
           plan={plan()}

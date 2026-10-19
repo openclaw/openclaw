@@ -16,7 +16,7 @@ import type {
 import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
-import { buildExecApprovalCustomId } from "./approval-custom-id.js";
+import { buildExecApprovalCustomId, DISCORD_APPROVAL_DECISIONS } from "./approval-custom-id.js";
 import {
   DISCORD_APPROVAL_ALLOWED_MENTIONS,
   formatDiscordApprovalDisplayValue,
@@ -121,12 +121,9 @@ function createApprovalContainer(view: ApprovalViewModel): Container {
     : null;
   const decisionLabel =
     view.phase === "resolved"
-      ? formatChannelApprovalResolvedLabel(view, (decision) =>
-          decision === "allow-once"
-            ? "Allowed (once)"
-            : decision === "allow-always"
-              ? "Allowed (always)"
-              : "Denied",
+      ? formatChannelApprovalResolvedLabel(
+          view,
+          (decision) => DISCORD_APPROVAL_DECISIONS[decision].label,
         )
       : undefined;
   const title = pending
@@ -147,11 +144,7 @@ function createApprovalContainer(view: ApprovalViewModel): Container {
     view.phase === "expired"
       ? "#99AAB5"
       : view.phase === "resolved"
-        ? view.decision === "deny"
-          ? "#ED4245"
-          : view.decision === "allow-always"
-            ? "#5865F2"
-            : "#57F287"
+        ? DISCORD_APPROVAL_DECISIONS[view.decision].color
         : plugin
           ? view.severity === "critical"
             ? "#ED4245"

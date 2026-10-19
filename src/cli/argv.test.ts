@@ -22,6 +22,8 @@ it.each([
   ["leaf positional help", "docs help --help", "docs help --help"],
   ["group target help", "plugins help list --help", "plugins list --help"],
   ["terminator", "backup help -- --help", "backup help -- --help"],
+  ["target after terminator", "plugins help -- list", "plugins list --help"],
+  ["literal help flag after target", "plugins help list -- --help", "plugins help list -- --help"],
 ])("normalizes generated help commands: %s", (_name, argv, expected) => {
   expect(normalizeGeneratedHelpCommandArgv(cli(argv))).toEqual(cli(expected));
 });
@@ -29,6 +31,12 @@ it.each([
 it.each([
   ["self-help", "help --help", "help --help"],
   ["nested target", "help plugins list --help", "plugins list --help"],
+  ["nested target after terminator", "help plugins -- list", "plugins list --help"],
+  [
+    "literal root option after target",
+    "help plugins list -- --profile work",
+    "help plugins list -- --profile work",
+  ],
 ])("normalizes root help targets: %s", (_name, argv, expected) => {
   expect(normalizeRootHelpTargetArgv(cli(argv))).toEqual(cli(expected));
 });

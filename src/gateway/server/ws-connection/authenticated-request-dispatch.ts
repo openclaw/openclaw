@@ -26,6 +26,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
+import { errorShapeFromError } from "../../error-shape.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import { hasCurrentRemoteControlUiIngress } from "../../ingress-attribution.js";
 import {
@@ -523,10 +524,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             false,
             undefined,
             staleInstall?.error ??
-              errorShape(
-                ErrorCodes.UNAVAILABLE,
-                formatForLog(err),
-                err instanceof GatewayClientRequestError
+              errorShapeFromError(ErrorCodes.UNAVAILABLE, err, {
+                message: formatForLog(err),
+                ...(err instanceof GatewayClientRequestError
                   ? {
                       retryable: err.retryable,
                       retryAfterMs: err.retryAfterMs,
@@ -534,8 +534,8 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                     }
                   : startTimedOut
                     ? { retryable: true, details: { reason: "request-start-timeout" } }
-                    : undefined,
-              ),
+                    : undefined),
+              }),
           );
         } finally {
           settled.resolve();

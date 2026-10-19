@@ -51,6 +51,13 @@ precedes the rejected response in the current turn. Failures that may have cause
 side effects, unfinished tools, and asynchronous work still block it; the
 continuation does not replay the original task or increase the retry budget.
 
+Recovery history stays available across attempts within the same run. The run
+releases message payloads from replaced recovery envelopes and when it ends,
+including envelopes retained by copied attempt parameters. Each accepted
+transcript write keeps its original attempt's persistence callbacks until it
+finishes, even after a reused manager binds a newer attempt or the bounded
+teardown wait expires.
+
 ## Queueing and concurrency
 
 The session controller serializes turns by physical session identity before global capacity admission. Messaging channels choose a queue mode (steer/followup/collect/interrupt) over the same ordered inputs; direct native producers use that selector too. Nested compaction borrows the exact admitted turn rather than queuing behind itself. See [Command Queue](/concepts/queue).

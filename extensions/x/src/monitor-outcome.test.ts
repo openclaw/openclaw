@@ -30,7 +30,10 @@ beforeEach(() => {
 });
 afterEach(() => clearRuntimeConfigSnapshot());
 
-async function runTurn(finals: ReplyPayload[], route = true) {
+async function runTurn(
+  finals: ReplyPayload[],
+  { route = true, visibleSessionUrl }: { route?: boolean; visibleSessionUrl?: string | null } = {},
+) {
   const cfg: OpenClawConfig = structuredClone(config);
   if (route) {
     cfg.channels!.x!.failureRoute = failureRoute;
@@ -39,6 +42,7 @@ async function runTurn(finals: ReplyPayload[], route = true) {
   const test = fixture({
     cfg,
     finals,
+    visibleSessionUrl,
     posts: [post("501", "10")],
     queue: createQueue<Payload>({ onCompleted: () => completed.resolve() }),
   });
@@ -53,12 +57,36 @@ async function runTurn(finals: ReplyPayload[], route = true) {
 
 describe("X reply outcomes", () => {
   it("withholds an untagged failure narrative from X and drops it without a route", async () => {
-    const test = await runTurn([{ text: deletedTweet }], false);
+    const test = await runTurn([{ text: deletedTweet }], { route: false });
     expect(test.api.reply).not.toHaveBeenCalled();
     expect(routeSend).not.toHaveBeenCalled();
     expect(test.logger.info).toHaveBeenCalledWith(
       "reply withheld post=501 reason=unclassified route=none",
     );
+  });
+
+  it.each([
+    {
+      outcome: "refused",
+      text: "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
+    },
+    {
+      outcome: "queued",
+      text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
+    },
+  ])("posts runtime $outcome notices without declaring model success", async ({ text }) => {
+    const test = await runTurn(
+      [
+        { text, isStatusNotice: true },
+        { text: deletedTweet },
+        { text: "⚠️ Agent failed before reply", isError: true, isStatusNotice: true },
+      ],
+      { visibleSessionUrl: null },
+    );
+    expect(test.replies).toEqual([{ text, parent: "501" }]);
+    expect(routeSend).toHaveBeenCalledTimes(2);
+    expect(routeSend.mock.calls[0]![0].payloads[0]!.text).toContain("(no success tag)");
+    expect(routeSend.mock.calls[1]![0].payloads[0]!.text).toContain("(error reply)");
   });
 
   it("routes a declared failure through core outbound with the post, author, and a redacted summary", async () => {

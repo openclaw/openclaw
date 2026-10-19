@@ -15,7 +15,9 @@ import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import { MessageInjectionTargetUnavailableError } from "../../auto-reply/reply/message-injection-authority.js";
 import { emitMessageReceivedHooks } from "../../auto-reply/reply/message-received-hooks.js";
+import { refuseCollaborativeSteering } from "../../auto-reply/reply/queue/lifecycle.js";
 import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
+import type { ReplyOperationRunState } from "../../auto-reply/reply/reply-operation-run-state.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
@@ -200,6 +202,9 @@ export function createChatSendMessageInjectionStarter(params: {
           inboundAudio: hasInboundAudio(ctx),
           steeringMode: "all",
           isInboundUserMessage: true,
+          allowCollaborativeSteering:
+            cfg.messages?.queue?.allowCollaborativeSteering === true &&
+            (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user"),
           ...(isProgressCardRefreshInputProvenance(ctx.InputProvenance)
             ? { allowPendingUserInputAnswer: false as const, debounceMs: 0 }
             : {}),
@@ -244,8 +249,45 @@ export function createChatSendMessageInjectionStarter(params: {
 }
 
 type PreAckMessageInjectionResult =
-  | { status: "continue"; attempt: ReplyMessageInjectionAttempt | undefined }
+  | {
+      status: "continue";
+      attempt: ReplyMessageInjectionAttempt | undefined;
+      disposition?: "collaborative-steering-disabled";
+    }
   | { status: "handled" };
+
+/** Keep a terminal injection decision through detached preparation and reply dispatch. */
+export function createChatSendInjectionDisposition(
+  initialDisposition: "collaborative-steering-disabled" | undefined,
+  run: Parameters<typeof refuseCollaborativeSteering>[0],
+) {
+  let refused = initialDisposition !== undefined;
+  const runState: ReplyOperationRunState = refused
+    ? { admission: { status: "skipped", reason: "collaborative-steering-disabled" } }
+    : {};
+  const isRefused = () =>
+    refused ||
+    (runState.admission?.status === "skipped" &&
+      runState.admission.reason === "collaborative-steering-disabled");
+  return {
+    runState,
+    isRefused,
+    async observe(attempt: ReplyMessageInjectionAttempt | undefined) {
+      const outcome = await attempt?.outcome;
+      if (outcome?.status === "rejected" && outcome.reason === "collaborative_steering_disabled") {
+        refused = true;
+        runState.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
+        return undefined;
+      }
+      return attempt;
+    },
+    async settleRefusal() {
+      if (isRefused()) {
+        await refuseCollaborativeSteering(run, runState);
+      }
+    },
+  };
+}
 
 /** Wait for runtime ownership before ACK without waiting for transcript commitment. */
 export async function settleChatSendPreAckMessageInjection(params: {
@@ -270,7 +312,13 @@ export async function settleChatSendPreAckMessageInjection(params: {
     params.onSessionRoutingChanged();
     return { status: "handled" };
   }
-  return { status: "continue", attempt: undefined };
+  return {
+    status: "continue",
+    attempt: undefined,
+    ...(outcome.status === "rejected" && outcome.reason === "collaborative_steering_disabled"
+      ? { disposition: "collaborative-steering-disabled" as const }
+      : {}),
+  };
 }
 
 /** Pre-ACK steering is already owned; join it before fallible source preparation. */

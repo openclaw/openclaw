@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { JSDOM } from "jsdom";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
@@ -28,7 +29,12 @@ import {
 } from "./session-row-delta-sockets.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
-import { dispatchInboundMessageMock, installGatewayTestHooks, rpcReq } from "./test-helpers.js";
+import {
+  dispatchInboundMessageMock,
+  installGatewayTestHooks,
+  onceMessage,
+  rpcReq,
+} from "./test-helpers.js";
 
 let harness: GatewayServerHarness;
 let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
@@ -69,11 +75,21 @@ function expectFullSessionRowFrame(
 test("capable and legacy sockets produce identical session payloads and consumer state", async () => {
   const readRetention = observeSessionEventRowRetention();
   const capable = await harness.openClient({
-    caps: ["session-scoped-events", "session-row-deltas", "roster-message-bodies-optional"],
+    caps: [
+      "session-scoped-events",
+      "session-row-deltas",
+      "session-event-field-refs",
+      "roster-message-bodies-optional",
+    ],
   });
   const legacy = await harness.openClient({ caps: ["session-scoped-events"] });
   const roster = await harness.openClient({
-    caps: ["session-scoped-events", "session-row-deltas", "roster-message-bodies-optional"],
+    caps: [
+      "session-scoped-events",
+      "session-row-deltas",
+      "session-event-field-refs",
+      "roster-message-bodies-optional",
+    ],
   });
   const keys = Array.from({ length: 5 }, (_, depth) => `agent:main:row-delta-depth-${depth}`);
   const key = keys.at(-1);
@@ -137,16 +153,6 @@ test("capable and legacy sockets produce identical session payloads and consumer
   ];
   const rosterWire: string[] = [];
   const rosterFrames = collectSessionRowFrames(roster.ws, rosterWire);
-  const firstToolBatchesReceived = createDeferred();
-  const observeFirstToolBatches = () => {
-    if (rosterFrames.filter((frame) => frame.event === "session.message").length >= 13) {
-      firstToolBatchesReceived.resolve();
-    }
-  };
-  roster.ws.on("message", observeFirstToolBatches);
-  onTestFinished(() => {
-    roster.ws.off("message", observeFirstToolBatches);
-  });
   let fullBodiesFrom = Number.POSITIVE_INFINITY;
   let finishSubagents = () => {};
   onTestFinished(() => finishSubagents());
@@ -164,7 +170,19 @@ test("capable and legacy sockets produce identical session payloads and consumer
         throw new Error("Expected chat send root admission");
       }
       observeRelease(rootReleased.resolve);
-      await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+      const userReceived = onceMessage(legacy.ws, (frame) => {
+        const message = frame.payload?.message;
+        return (
+          frame.event === "session.message" &&
+          frame.payload?.sessionKey === key &&
+          isRecord(message) &&
+          message.role === "user"
+        );
+      });
+      await Promise.all([
+        replyOptions?.userTurnTranscriptRecorder?.persistApproved(),
+        userReceived,
+      ]);
       await replyOptions?.onAgentRunStart?.(runId);
       finishSubagents = await startSessionRowDeltaSubagents(keys);
       emitAgentEvent({
@@ -176,9 +194,6 @@ test("capable and legacy sockets produce identical session payloads and consumer
       });
       for (const [depth, childKey] of keys.entries()) {
         if (depth === 2) {
-          // Transcript dispatch can still be loading before the row publication drain sees it.
-          await firstToolBatchesReceived.promise;
-          roster.ws.off("message", observeFirstToolBatches);
           await drain();
           expect(rosterFrames.filter((frame) => frame.event === "session.message")).toHaveLength(
             13,
@@ -202,56 +217,73 @@ test("capable and legacy sockets produce identical session payloads and consumer
         };
         for (let index = 0; index < 2; index++) {
           const callId = `${depth}-${index}`;
-          await persistSessionTranscriptTurn(target, {
-            touchSessionEntry: true,
-            runId,
-            messages: [
-              {
-                eventId: `${callId}:call`,
-                message: {
-                  role: "assistant",
-                  content: [
-                    {
-                      type: "toolCall",
-                      id: callId,
-                      name: "exec",
-                      arguments: { command: "rg rowDelta src/gateway" },
-                    },
-                  ],
-                  timestamp: Date.now(),
-                },
-              },
-              {
-                eventId: `${callId}:result`,
-                message: {
-                  role: "toolResult",
-                  toolCallId: callId,
-                  toolName: "exec",
-                  content: [{ type: "text", text: "Synthetic tool output.\n".repeat(300) }],
-                  timestamp: Date.now(),
-                },
-              },
-              {
-                eventId: `${callId}:nested`,
-                message: createNestedToolActivity({
-                  runId,
-                  scopeId: `scope-${depth}`,
-                  afterEntryId: null,
-                  startOrder: index,
-                  parentToolCallId: callId,
-                  toolCallId: `${callId}-nested`,
-                  toolName: "read",
-                  input: { path: "src/gateway/server-session-events.ts" },
-                  result: {
-                    content: [{ type: "text", text: "Synthetic nested output.\n".repeat(300) }],
+          const messages = [
+            {
+              eventId: `${callId}:call`,
+              message: {
+                role: "assistant",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: callId,
+                    name: "exec",
+                    arguments: { command: "rg rowDelta src/gateway" },
                   },
-                  isError: false,
-                  startedAt: Date.now(),
-                  timestamp: Date.now(),
-                }),
+                ],
+                timestamp: Date.now(),
               },
-            ],
-          });
+            },
+            {
+              eventId: `${callId}:result`,
+              message: {
+                role: "toolResult",
+                toolCallId: callId,
+                toolName: "exec",
+                content: [{ type: "text", text: "Synthetic tool output.\n".repeat(300) }],
+                timestamp: Date.now(),
+              },
+            },
+            {
+              eventId: `${callId}:nested`,
+              message: createNestedToolActivity({
+                runId,
+                scopeId: `scope-${depth}`,
+                afterEntryId: null,
+                startOrder: index,
+                parentToolCallId: callId,
+                toolCallId: `${callId}-nested`,
+                toolName: "read",
+                input: { path: "src/gateway/server-session-events.ts" },
+                result: {
+                  content: [{ type: "text", text: "Synthetic nested output.\n".repeat(300) }],
+                },
+                isError: false,
+                startedAt: Date.now(),
+                timestamp: Date.now(),
+              }),
+            },
+          ];
+          // This tests individual message bodies; bursts intentionally coalesce into a reset.
+          for (const message of messages) {
+            let received: Promise<unknown> | undefined;
+            await persistSessionTranscriptTurn(target, {
+              touchSessionEntry: true,
+              runId,
+              messages: [message],
+              onMessageCommitted: ({ messageId }) => {
+                received = onceMessage(
+                  roster.ws,
+                  (frame) =>
+                    frame.event === "session.message" && frame.payload?.messageId === messageId,
+                );
+                void received.catch(() => undefined);
+              },
+            });
+            if (!received) {
+              throw new Error("Expected a committed tool message receipt");
+            }
+            await received;
+          }
         }
         const fresh = await loadGatewaySessionEntryReadOnlyAsync(childKey, { agentId: "main" });
         if (!fresh.entry) {

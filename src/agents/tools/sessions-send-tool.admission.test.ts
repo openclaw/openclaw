@@ -41,8 +41,13 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../admitted-run-context.js";
 import { attachActiveEmbeddedRun, detachActiveEmbeddedRun } from "../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../embedded-agent-runner/runs.test-support.js";
+import { withPreparedEmbeddedRunToolAuthority } from "../harness/tool-authority.runtime.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import {
   readFollowupRequest,
@@ -207,6 +212,7 @@ describe("sessions_send dispatch admission", () => {
     );
     const accepted = createDeferredCore();
     const receipt = createDeferredCore();
+    const sessionFile = "/synthetic/steering-custody/session.jsonl";
     let continuationSignal: AbortSignal | undefined;
     const capture = operatorContinuation.captureOperatorToolGatewayContinuationContext;
     const observeCapture = vi
@@ -244,16 +250,80 @@ describe("sessions_send dispatch admission", () => {
           incarnation: "target-session",
         }),
       });
-      attachActiveEmbeddedRun(
-        "target-session",
-        handle,
-        targetSessionKey,
-        undefined,
-        "main",
-        operation,
-      );
+      if (index === 1) {
+        attachActiveEmbeddedRun(
+          "target-session",
+          handle,
+          targetSessionKey,
+          undefined,
+          "main",
+          operation,
+        );
+      }
       return operation;
     });
+    const captured = await operatorCapture.captureGatewayOperatorRunAuthority({
+      client: owner,
+      context,
+      hasCurrentClientAuthority: source.isCurrent,
+    });
+    if (!captured) {
+      throw new Error("Expected the authenticated steering owner");
+    }
+    const requesterOrigin = {
+      sessionKey: requesterSessionKey,
+      operatorProfileId: captured.authority.profileId,
+    };
+    const admission = prepareAgentRunAdmission({
+      cfg: config,
+      operatorAuthority: captured.authority,
+      operationalRunInstance: createOperationalRunInstanceRef("selected-steer-run"),
+      facts: {
+        agentId: "main",
+        runId: "selected-steer-run",
+        ingress: { kind: "system", state: "present", boundary: "steering-custody-test" },
+      },
+    });
+    const nativeReady = createDeferredCore();
+    const native = (async () => {
+      try {
+        await withPreparedEmbeddedRunToolAuthority(
+          {
+            admittedRunContext: await admission.admit("embedded", "steering-custody-test"),
+            replyOperation: operations[0],
+          },
+          {
+            config,
+            agentId: "main",
+            sessionId: "target-session",
+            sessionKey: targetSessionKey,
+            runId: "selected-steer-run",
+            sessionFile,
+            workspaceDir: "/synthetic/steering-custody",
+            provider: "openai",
+            modelId: "gpt-test",
+            requesterOrigin,
+          },
+          undefined,
+          async (prepared) => {
+            selected.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+            attachActiveEmbeddedRun(
+              "target-session",
+              selected,
+              targetSessionKey,
+              sessionFile,
+              "main",
+              prepared.replyOperation,
+            );
+            nativeReady.resolve();
+            await receipt.promise;
+          },
+        );
+      } finally {
+        admission.close();
+        captured.release();
+      }
+    })();
     const gateway = vi
       .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
       .mockImplementation(async (request) => {
@@ -268,43 +338,47 @@ describe("sessions_send dispatch admission", () => {
     const mutation = vi
       .spyOn(sessionsSendDelivery, "callSessionsSendGateway")
       .mockImplementation(gateway);
-    const pending = withPluginRuntimeGatewayRequestScope(
-      {
-        client: owner,
-        context,
-        isWebchatConnect: () => false,
-        hasCurrentClientAuthority: source.isCurrent,
-      },
-      () =>
-        withOperatorToolGatewayAuthority(
-          {
-            authenticatedUserProfile: owner.authenticatedUserProfile,
-            scopes: owner.connect.scopes ?? [],
-          },
-          () =>
-            withGatewayToolCallerIdentity(
-              {
-                agentId: "main",
-                sessionKey: requesterSessionKey,
-                operatorAuthority:
-                  getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
-                gatewayContextResolver: () => context,
-                receiptAuthority: () => true,
-              },
-              () =>
-                createSessionsSendTool({
-                  agentSessionKey: requesterSessionKey,
-                  config,
-                  idempotencyKey: runId,
-                }).execute("steer-physical-owner", {
-                  sessionKey: targetSessionKey,
-                  message: "Continue with this guidance",
-                  mode: "steer",
-                  timeoutSeconds: 0,
-                }),
-            ),
-        ),
-    );
+    const pending = (async () => {
+      await awaitGateBeforeSettlement(nativeReady.promise, native, "Native owner was not prepared");
+      return await withPluginRuntimeGatewayRequestScope(
+        {
+          client: owner,
+          context,
+          isWebchatConnect: () => false,
+          hasCurrentClientAuthority: source.isCurrent,
+        },
+        () =>
+          withOperatorToolGatewayAuthority(
+            {
+              authenticatedUserProfile: owner.authenticatedUserProfile,
+              scopes: owner.connect.scopes ?? [],
+            },
+            () =>
+              withGatewayToolCallerIdentity(
+                {
+                  agentId: "main",
+                  sessionKey: requesterSessionKey,
+                  requesterOrigin,
+                  operatorAuthority:
+                    getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
+                  gatewayContextResolver: () => context,
+                  receiptAuthority: () => true,
+                },
+                () =>
+                  createSessionsSendTool({
+                    agentSessionKey: requesterSessionKey,
+                    config,
+                    idempotencyKey: runId,
+                  }).execute("steer-physical-owner", {
+                    sessionKey: targetSessionKey,
+                    message: "Continue with this guidance",
+                    mode: "steer",
+                    timeoutSeconds: 0,
+                  }),
+              ),
+          ),
+      );
+    })();
     try {
       await awaitGateBeforeSettlement(
         accepted.promise,
@@ -327,15 +401,18 @@ describe("sessions_send dispatch admission", () => {
     } finally {
       vi.useRealTimers();
       receipt.resolve();
-      await pending;
-      for (const [index, handle] of [selected, sibling].entries()) {
-        detachActiveEmbeddedRun("target-session", handle, targetSessionKey);
-        operations[index]!.complete();
+      try {
+        await Promise.all([pending, native]);
+      } finally {
+        for (const [index, handle] of [selected, sibling].entries()) {
+          detachActiveEmbeddedRun("target-session", handle, targetSessionKey);
+          operations[index]!.complete();
+        }
+        gateway.mockRestore();
+        mutation.mockRestore();
+        observeCapture.mockRestore();
+        source.release();
       }
-      gateway.mockRestore();
-      mutation.mockRestore();
-      observeCapture.mockRestore();
-      source.release();
     }
   });
 

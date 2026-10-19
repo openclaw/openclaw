@@ -27,10 +27,13 @@ it("separates equal versions with different contents when reusing recipient enco
       cfg,
     });
     const detach = connection.attachSessionRowProjection(projection);
-    const peers = ["current", "stale", "legacy"].map((id) => {
+    const peers = ["current", "stale", "current-refs", "stale-refs", "legacy"].map((id) => {
       const peer = createSessionRowEventPeer(profile, id, 1);
       if (id !== "legacy") {
         peer.client.connect.caps = ["session-row-deltas"];
+        if (id.endsWith("-refs")) {
+          peer.client.connect.caps.push("session-event-field-refs");
+        }
       }
       connection.clients.add(peer.client);
       connection.sessionEventSubscribers.subscribe(id);
@@ -54,17 +57,28 @@ it("separates equal versions with different contents when reusing recipient enco
       return decoded?.payload;
     };
     try {
-      publish(["stale"]);
+      publish(["stale", "stale-refs"]);
       decodeLast(peers[1]!);
+      decodeLast(peers[3]!);
       write("After");
       await projection.ensureMaterialized();
-      publish(["current"]);
+      publish(["current", "current-refs"]);
       decodeLast(peers[0]!);
+      decodeLast(peers[2]!);
       // Both sockets have version 1; the unchanged recipient is encoded first.
       publish(peers.map((peer) => peer.client.connId));
-      const expected = decodeLast(peers[2]!);
-      expect(decodeLast(peers[0]!)).toEqual(expected);
-      expect(decodeLast(peers[1]!)).toEqual(expected);
+      const expected = decodeLast(peers[4]!);
+      for (const peer of peers.slice(0, -1)) {
+        expect(decodeLast(peer)).toEqual(expected);
+        const payload = JSON.parse(peer.send.mock.lastCall![0]).payload;
+        if (peer.client.connId.endsWith("-refs")) {
+          expect(payload.sessionFieldRefs).toEqual(expect.any(Array));
+          expect(payload).not.toHaveProperty("label");
+        } else {
+          expect(payload).not.toHaveProperty("sessionFieldRefs");
+          expect(payload).toHaveProperty("label", "After");
+        }
+      }
       expect(expected).toMatchObject({ session: { label: "After" } });
     } finally {
       detach();

@@ -128,6 +128,8 @@ export class ShellChromeOwner {
 
   connect(): void {
     this.disconnect();
+    // A replacement shell can be constructed before the old context retires its intent.
+    this.pendingLazyAction = readLazyShellAction();
     const host = this.host;
     host.setNativeHistoryState(readNativeHistoryState());
     this.listeners = [
@@ -393,8 +395,7 @@ export class ShellChromeOwner {
       shouldCloseDebugOverlay(
         event,
         this.pendingDebugOverlayMode,
-        // Pending debug content owns this frame while its custom element loads.
-        host.element.querySelector(".debug-overlay"),
+        host.elements.pendingDebugOverlayFrame ?? null,
       )
     ) {
       event.preventDefault();
@@ -459,22 +460,6 @@ export class ShellChromeOwner {
       }
       event.preventDefault();
       window.dispatchEvent(new CustomEvent(DEBUG_OVERLAY_REQUEST_EVENT));
-      return;
-    }
-    if (
-      matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) &&
-      isSettingsTakeover(host.routeState.routeId)
-    ) {
-      if (host.navDrawerOpen && !this.shouldIgnoreSettingsEscape(event)) {
-        event.preventDefault();
-        host.closeNavDrawer({ restoreFocus: true });
-        return;
-      }
-      if (event.eventPhase === Event.CAPTURING_PHASE || this.shouldIgnoreSettingsEscape(event)) {
-        return;
-      }
-      event.preventDefault();
-      host.exitSettings();
       return;
     }
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, event)) {

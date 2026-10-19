@@ -15,6 +15,7 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCommandLaneSnapshot, setCommandLaneConcurrency } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import {
   getReservedRpcSourceInput,
@@ -87,7 +88,13 @@ function readEntry(fixture: Fixture, sessionKey: string) {
 /** Seeds a main session exactly as a Gateway restart leaves an interrupted turn. */
 async function seedInterruptedSession(
   fixture: Fixture,
-  params: { sessionKey: string; sessionId: string; message: string; patch?: Partial<SessionEntry> },
+  params: {
+    sessionKey: string;
+    sessionId: string;
+    message: string;
+    provenance?: InputProvenance;
+    patch?: Partial<SessionEntry>;
+  },
 ) {
   const target = { storePath: fixture.storePath, sessionKey: params.sessionKey };
   await replaceSessionEntry(target, {
@@ -102,6 +109,7 @@ async function seedInterruptedSession(
       message: {
         role: "user",
         content: params.message,
+        provenance: params.provenance,
         idempotencyKey: `${params.patch?.restartRecoveryDeliverySourceRunId ?? params.sessionId}:user`,
       },
     },
@@ -203,6 +211,60 @@ async function waitForChatTurn(runId: string, text: string) {
     },
     { timeout: 30_000 },
   );
+}
+
+async function unavailableDelegatedTurnLeavesConversationUsable(fixture: Fixture) {
+  const sessionKey = "agent:main:boundary-delegated";
+  const sessionId = "boundary-delegated-session";
+  const interruptedRunId = "boundary-delegated-old";
+  const delegated = "Delegated case: interrupted update.";
+  await seedInterruptedSession(fixture, {
+    sessionKey,
+    sessionId,
+    message: delegated,
+    provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+    patch: {
+      restartRecoveryDeliverySourceRunId: interruptedRunId,
+      restartRecoveryRuns: [{ runId: interruptedRunId, lifecycleGeneration: "old-gateway" }],
+    },
+  });
+  await expect(runStartupRecovery(fixture)).resolves.toMatchObject({
+    started: 0,
+    settled: 1,
+    failed: 0,
+  });
+  expect(promptTurns(delegated)).toHaveLength(0);
+  expect(readEntry(fixture, sessionKey)).toMatchObject({
+    sessionId,
+    status: "interrupted",
+    abortedLastRun: false,
+  });
+  expect(readEntry(fixture, sessionKey)?.mainRestartRecovery).toBeUndefined();
+  expect(readEntry(fixture, sessionKey)?.restartRecoveryTerminalRunIds).toContain(interruptedRunId);
+  await expect(runStartupRecovery(fixture)).resolves.toMatchObject({
+    started: 0,
+    settled: 0,
+    failed: 0,
+  });
+
+  const user = "Delegated case: fresh authenticated request.";
+  const runId = "boundary-delegated-new";
+  await expect(
+    fixture.client.request("chat.send", {
+      sessionKey,
+      sessionId,
+      message: user,
+      deliver: false,
+      idempotencyKey: runId,
+    }),
+  ).resolves.toMatchObject({ runId, status: "started" });
+  await waitForChatTurn(runId, user);
+  expect(readEntry(fixture, sessionKey)).toMatchObject({
+    sessionId,
+    status: "done",
+    abortedLastRun: false,
+  });
+  expect(resendTurns(delegated)).toHaveLength(0);
 }
 
 async function owedResendRunsBeforeFirstChatSend(fixture: Fixture) {
@@ -652,6 +714,7 @@ it("orders, joins, and cancels restart resends through the session mailbox", asy
       fixture.client.request("agent.wait", { runId: warmupRunId, timeoutMs: 30_000 }),
     ).resolves.toMatchObject({ status: "ok" });
 
+    await unavailableDelegatedTurnLeavesConversationUsable(fixture);
     await owedResendRunsBeforeFirstChatSend(fixture);
     await owedResendRunsBeforeChatSendDuringItsAdmission(fixture);
     await sameIdRetryJoinsPreparedResend(fixture);

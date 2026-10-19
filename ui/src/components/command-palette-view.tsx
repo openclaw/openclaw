@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, For, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, For, onCleanup, Show, untrack } from "solid-js";
 import type { GatewayAgentRow } from "../api/types.ts";
 import {
   pathForAgentPanel,
@@ -74,6 +74,7 @@ export type CommandPaletteProps = {
   primaryModelSearch: boolean;
   modelSearchError: string | null;
   sessionSearchPending: boolean;
+  remoteSearchOffline: boolean;
   catalogSearchPending: boolean;
   sessionSearchFailed: boolean;
   sessionSearchPartial: boolean;
@@ -278,6 +279,7 @@ function PaletteSearch(props: {
   const results = createMemo(() => resolvePaletteResults(current()));
   const notices = () =>
     [
+      current().remoteSearchOffline ? t("palette.searchOffline") : null,
       current().sessionSearchFailed
         ? t("palette.searchFailed")
         : current().sessionSearchIndexing
@@ -295,6 +297,7 @@ function PaletteSearch(props: {
     Boolean(current().searchQuery.trim()) &&
     !current().sessionSearchPending &&
     !current().catalogSearchPending &&
+    !current().remoteSearchOffline &&
     !current().modelSearchError &&
     !current().sessionSearchFailed &&
     !current().sessionSearchPartial &&
@@ -446,11 +449,6 @@ function PaletteSearch(props: {
 
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
   const current = () => props.readProps();
-  createEffect(
-    createMemo(() => current().mentionMenu.open),
-    () => current().onMentionChange(),
-    { defer: true },
-  );
   const results = createMemo(() => resolvePaletteResults(current()));
   const hideSearch = () => results().hideSearch;
   // The collapsing search remains mounted with its last presented projection.
@@ -478,7 +476,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             event.preventDefault();
             if (!current().composing) {
               current().mentionMenu.close();
-              current().onMentionChange();
             }
             return;
           }

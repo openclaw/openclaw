@@ -688,7 +688,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         invalidateManagedLists(options.agentId);
       }
     },
-    reset() {
+    reset(retireData = false) {
       retireForegroundRefresh();
       primaryList = { scope: primaryList.scope };
       eventRefreshCoordinator.reset();
@@ -700,7 +700,16 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           managedLists.delete(entry.key);
           continue;
         }
-        if (entry.snapshot.loading || entry.snapshot.error || entry.snapshot.startupPending) {
+        if (retireData) {
+          entry.receivedKeys.clear();
+          entry.retainedLimit = entry.query.limit;
+          entry.connectionEpoch = null;
+          publishManagedList(entry, { result: null, agentId: null, loading: false, error: null });
+        } else if (
+          entry.snapshot.loading ||
+          entry.snapshot.error ||
+          entry.snapshot.startupPending
+        ) {
           publishManagedList(entry, {
             ...entry.snapshot,
             loading: false,

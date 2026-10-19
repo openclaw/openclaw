@@ -130,7 +130,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     detachRouteAbort: (() => undefined) as () => void,
     trajectoryEndRecorded: false,
     nativeHookRelay: undefined as CodexNativeHookRelay | undefined,
-    nativeSpawnAdmissionInstalled: false,
     nativeSubagentMonitor: undefined as
       | Awaited<ReturnType<typeof codexNativeSubagentMonitorRuntime.register>>
       | undefined,
@@ -548,7 +547,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     decision: CodexThreadFinalConfigPatchDecision,
     relayClient: CodexAppServerClient,
   ) => {
-    state.nativeSpawnAdmissionInstalled = false;
     const previousRelay = state.nativeHookRelay;
     previousRelay?.unregister();
     await previousRelay?.drain();
@@ -647,29 +645,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     });
     await state.nativeHookRelay?.prepareInvocation();
     connection.assertCurrent();
-    state.nativeSpawnAdmissionInstalled = Boolean(
-      state.nativeHookRelay &&
-      requiresModelAdmission &&
-      decision.nativeModelInputTools?.includes("spawn_agent") &&
-      params.hostCapabilities.assertNativeSubagentSpawnAllowed,
-    );
-    if (!state.nativeSpawnAdmissionInstalled && !isCodexNativeDelegationDisabledForRun(params)) {
-      // A prior backend attempt may already have accepted another participant.
-      try {
-        params.hostCapabilities.assertNativeSubagentSpawnAllowed?.();
-      } catch (cause) {
-        // Revocation and ended-turn failures retain their own recovery guidance.
-        if (
-          !(cause instanceof Error) ||
-          !cause.message.startsWith("Several people have steered this turn:")
-        ) {
-          throw cause;
-        }
-        throw new Error(
-          "Several people have steered this turn, and this Codex setup cannot run native sub-agents safely for more than one person without native hook admission. Send the request again as a new message so it runs as its own turn.",
-          { cause },
-        );
-      }
+    if (!isCodexNativeDelegationDisabledForRun(params)) {
+      params.hostCapabilities.assertNativeSubagentSpawnAllowed?.();
     }
     return {
       configPatch: state.nativeHookRelay

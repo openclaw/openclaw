@@ -1,11 +1,12 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js";
+import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import type { ModelSetupWizardState } from "./state.ts";
 import { WIZARD_COPY } from "./wizard-copy.ts";
 
@@ -33,19 +34,22 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
     focusTargets.add(element);
   };
   // Focus the committed wizard step after its identity or completion actions change.
-  createEffect(
+  createPendingFocus(
     () =>
       props.state.phase === "step"
         ? props.state.step.id
         : `${props.state.phase}:${Boolean(props.doneAction)}`,
-    () => {
-      focusTargets = new Set([...focusTargets].filter((element) => element.isConnected));
-      const target = [...focusTargets]
-        .filter((element) => element.autofocus)
-        .toSorted((left, right) =>
-          left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-        )[0];
-      target?.focus({ preventScroll: true });
+    {
+      requested: () => true,
+      focus: () => {
+        focusTargets = new Set([...focusTargets].filter((element) => element.isConnected));
+        const target = [...focusTargets]
+          .filter((element) => element.autofocus)
+          .toSorted((left, right) =>
+            left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+          )[0];
+        target?.focus({ preventScroll: true });
+      },
     },
   );
   const copy = createMemo(() => WIZARD_COPY[props.mode]);

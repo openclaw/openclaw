@@ -603,6 +603,10 @@ async function applySessionDiffBaseline(params: {
     return diff;
   }
   const fingerprints = new Map(baseline.files.map((file) => [file.path, file.fingerprint]));
+  // No returned path can be hidden by this baseline; avoid another checkout scan.
+  if (!diff.files.some((file) => fingerprints.has(file.path))) {
+    return diff;
+  }
   const candidates =
     params.scope === "uncommitted"
       ? ((await collectBaselineCandidates({ cwd: diff.root }))?.candidates ?? [])

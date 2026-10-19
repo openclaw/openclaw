@@ -137,6 +137,14 @@ suite.define(() => {
             .count(),
         ).toBe(0);
 
+        await expect
+          .poll(() => dialog.getByRole("alert").textContent())
+          .toContain("sidebar rename rejected");
+        expect(await dialog.getByRole("textbox", { name: "Rename session" }).inputValue()).toBe(
+          "Unavailable rename",
+        );
+        await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        await dialog.waitFor({ state: "detached" });
         await error.getByRole("button", { name: "Dismiss error" }).click();
         await expect.poll(() => error.count()).toBe(0);
       } finally {

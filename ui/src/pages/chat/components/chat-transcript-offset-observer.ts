@@ -1,4 +1,5 @@
 import { elementScroll, observeElementOffset, type Virtualizer } from "@tanstack/virtual-core";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { isTranscriptScrollKey } from "../chat-scroll-input.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX, type ChatScrollToEndOptions } from "../scroll.ts";
 import type { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
@@ -324,14 +325,16 @@ export function observeTranscriptOffset(
   const commitComposerResize = () => owner.onComposerLayout(true);
   const listeners = new AbortController();
   const passive = { passive: true, signal: listeners.signal };
-  element?.addEventListener("scroll", commitComposerResize, { ...passive, capture: true });
-  element?.addEventListener("touchmove", moveTouch, passive);
-  for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
-    element?.addEventListener(type, interrupt, passive);
+  if (element) {
+    listen(element, "scroll", commitComposerResize, { ...passive, capture: true });
+    listen(element, "touchmove", moveTouch, passive);
+    for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
+      listen(element, type, interrupt, passive);
+    }
+    listen(element, "scrollend", finishScroll, passive);
+    listen(element, "touchend", finishTouch, passive);
+    listen(element, "touchcancel", finishTouch, passive);
   }
-  element?.addEventListener("scrollend", finishScroll, passive);
-  element?.addEventListener("touchend", finishTouch, passive);
-  element?.addEventListener("touchcancel", finishTouch, passive);
   const cleanup = observeElementOffset(instance, (offset, scrolling) => {
     if (element !== owner.getScrollElement()) {
       return;

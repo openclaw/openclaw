@@ -35,7 +35,7 @@ import { getChatComposerState, isChatRunWorking } from "./components/chat-compos
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
-import { showChatAnnotationEditor } from "./components/chat-selection-popup.ts";
+import { showChatAnnotationEditor } from "./components/chat-selection-popup.tsx";
 import type { ChatSwarmProgressProps } from "./components/chat-swarm-progress.solid.tsx";
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";

@@ -394,10 +394,6 @@ jobs:
         # compile coverage `check --all-targets` used to give.
         run: cargo +stable test --locked --all-targets
 
-      - name: Verify native macOS power lifecycle
-        working-directory: apps/linux/src-tauri
-        run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
-
   test-windows-power:
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Test Windows desktop

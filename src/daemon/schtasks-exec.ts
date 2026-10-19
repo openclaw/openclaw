@@ -1,4 +1,3 @@
-/** Executes Windows Task Scheduler commands with daemon-friendly timeouts. */
 import { runCommandWithTimeout } from "../process/exec.js";
 import { SCHTASKS_TIMEOUT_MS } from "./schtasks-budget.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";

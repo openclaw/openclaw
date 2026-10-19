@@ -87,7 +87,6 @@ vi.mock("../../deps.js", () => ({
   createDefaultDeps: () => ({}),
 }));
 
-const { createMessageCliHelpers } = await import("./helpers.js");
 const { registerMessageCommands } = await import("../register.message.js");
 const { initializeGlobalHookRunner, resetGlobalHookRunner } =
   await import("../../../plugins/hook-runner-global.js");
@@ -102,7 +101,56 @@ const baseSendOptions = {
 };
 
 function createRunMessageAction() {
-  return createMessageCliHelpers("discord").runMessageAction;
+  return async (action: string, opts: Record<string, unknown>) => {
+    const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined });
+    registerMessageCommands(program, {
+      programVersion: "test",
+      messageChannelOptions: "discord|telegram",
+      agentChannelOptions: "last|discord|telegram",
+    });
+    const commandPath = action === "list-pins" ? ["pins"] : action.split("-");
+    let command = program.commands.find((candidate) => candidate.name() === "message");
+    for (const name of commandPath) {
+      command = command?.commands.find((candidate) => candidate.name() === name);
+    }
+    if (!command) {
+      throw new Error(`unknown message fixture action: ${action}`);
+    }
+    const defaults: Record<string, unknown> =
+      action === "poll"
+        ? { pollQuestion: "Ship it?", pollOption: ["Yes", "No"] }
+        : action === "thread-create"
+          ? { threadName: "ops" }
+          : {};
+    const argv = ["message", ...commandPath];
+    for (const [key, value] of Object.entries({ ...defaults, ...opts })) {
+      const option = command.options.find((candidate) => candidate.attributeName() === key);
+      if (!option || value === undefined) {
+        continue;
+      }
+      const flag = option.long;
+      if (!flag) {
+        throw new Error(`missing fixture option flag: ${key}`);
+      }
+      if (value === true) {
+        argv.push(flag);
+      } else if (typeof value === "string") {
+        argv.push(`${flag}=${value}`);
+      } else if (Array.isArray(value)) {
+        if (option.variadic) {
+          argv.push(flag, ...value);
+        } else {
+          for (const item of value) {
+            argv.push(`${flag}=${item}`);
+          }
+        }
+      } else if (value !== false) {
+        // Exercise typed-invalid values through Commander's public option API.
+        command.setOptionValue(key, value);
+      }
+    }
+    return program.parseAsync(argv, { from: "user" });
+  };
 }
 
 async function runSendAction(opts: Record<string, unknown> = {}) {
@@ -358,11 +406,19 @@ describe("runMessageAction", () => {
   });
 
   it("keeps unknown actions on the local preload path", async () => {
-    mockChannelExecutionModes({ discord: "gateway" });
+    getChannelPluginMock.mockReturnValue({
+      actions: {
+        resolveExecutionMode: () => "gateway",
+        resolveCliActionRequest: ({ args }: { args: Record<string, unknown> }) => ({
+          action: "custom-action",
+          args,
+        }),
+      },
+    });
     const runMessageAction = createRunMessageAction();
 
     await expect(
-      runMessageAction("custom-action", {
+      runMessageAction("thread-create", {
         ...baseSendOptions,
         target: "channel:12345",
       }),
@@ -410,7 +466,7 @@ describe("runMessageAction", () => {
       accountId: "default",
       target: "@ops",
       message: "hi",
-      media: "./diagram.png",
+      mediaUrls: ["./diagram.png"],
       presentation: '{"blocks":[{"type":"buttons","buttons":[{"label":"OK","value":"ok"}]}]}',
       delivery: '{"pin":true}',
       forceDocument: true,
@@ -563,18 +619,20 @@ describe("runMessageAction", () => {
   });
 
   it.each([
-    ["pollDurationHours", "0", "--poll-duration-hours"],
-    ["pollDurationSeconds", "-1", "--poll-duration-seconds"],
-    ["durationMin", "", "--duration-min"],
-    ["deleteDays", Number.NaN, "--delete-days"],
-    ["limit", 1.2, "--limit"],
-    ["autoArchiveMin", null, "--auto-archive-min"],
-  ])("rejects non-positive or non-integer %s values", async (key, value, flag) => {
+    ["pollDurationHours", "0", "--poll-duration-hours", "poll"],
+    ["pollDurationSeconds", "-1", "--poll-duration-seconds", "poll"],
+    ["durationMin", "", "--duration-min", "timeout"],
+    ["deleteDays", Number.NaN, "--delete-days", "ban"],
+    ["limit", 1.2, "--limit", "read"],
+    ["autoArchiveMin", null, "--auto-archive-min", "thread-create"],
+  ])("rejects non-positive or non-integer %s values", async (key, value, flag, action) => {
     const runMessageAction = createRunMessageAction();
 
     await expect(
-      runMessageAction("send", {
+      runMessageAction(action, {
         ...baseSendOptions,
+        guildId: "g",
+        userId: "u",
         [key]: value,
       }),
     ).rejects.toThrow("exit");
@@ -757,7 +815,7 @@ describe("runMessageAction", () => {
   });
 
   it("passes action and maps account to accountId", async () => {
-    const { runMessageAction } = createMessageCliHelpers("discord");
+    const runMessageAction = createRunMessageAction();
 
     await expect(
       runMessageAction("poll", {

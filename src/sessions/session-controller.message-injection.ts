@@ -1,14 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { canSteerEmbeddedRunDuringCompaction } from "../agents/embedded-agent-runner/runs.probes.js";
 import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
+import { bindPreparedToolAuthority } from "../agents/harness/tool-authority-preparation.js";
 import {
-  bindMessageInjectionV2,
-  bindPreparedToolAuthority,
-  createLegacyToolAuthorityQueuePreflight,
-} from "../agents/harness/tool-authority-preparation.js";
+  captureRequesterOrigin,
+  resolveRequesterPrincipalKey,
+} from "../agents/requester-origin.js";
 import { hasInboundAudio } from "../auto-reply/reply/inbound-media.js";
 import {
-  createMessageInjectionAuthority,
   enqueueMessageInjection,
   MessageInjectionAuthorityError,
 } from "../auto-reply/reply/message-injection-authority.js";
@@ -16,8 +14,6 @@ import { hasPromptImageInput } from "../media/prompt-image-input.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   replyMessageInjectionTargetOwner,
-  type ReplyBackendHandle,
-  type ReplyBackendMessageInjection,
   type ReplyBackendQueueMessageOptions,
   type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionOptions,
@@ -25,17 +21,14 @@ import {
   type ReplyMessageInjectionResolution,
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
-  type ReplyTurnParticipants,
   type ReplyToolAuthorityOverlay,
   type ReplyToolAuthorityPreparation,
 } from "./session-controller.contracts.js";
-import {
-  resolveReplyBackendQueueMessageMismatch,
-  resolveReplyMessageInjectionFailure,
-} from "./session-controller.message-injection-failure.js";
+import { resolveReplyBackendMessageInjectionRejection } from "./session-controller.message-injection-backend.js";
+import { resolveReplyMessageInjectionFailure } from "./session-controller.message-injection-failure.js";
 import {
   getSessionControllerOperation,
-  getAttachedBackend,
+  getAttachedBackendAttachment,
   isReplyRunEvidenceStale,
   isCurrentSessionControllerOperation,
   getSessionControllerEntryForOperation,
@@ -54,7 +47,8 @@ export function captureReplyMessageInjectionTarget(
   }
   const entry = getSessionControllerEntryForOperation(operation);
   const attachment = entry.attachment;
-  if (!attachment) {
+  const backendAttachment = getAttachedBackendAttachment(operation);
+  if (!attachment || !backendAttachment) {
     return undefined;
   }
   const toolAuthority = "toolAuthority" in attachment ? attachment.toolAuthority : undefined;
@@ -70,7 +64,17 @@ export function captureReplyMessageInjectionTarget(
   return {
     [replyMessageInjectionTargetOwner]: {
       backendIdentity: backend,
-      admissionIdentity: attachment,
+      admissionIdentity: backendAttachment,
+      get toolAuthorityFingerprint() {
+        return "handle" in attachment
+          ? backend.toolAuthorityFingerprint
+          : (backend.toolAuthorityFingerprint ?? operation.toolAuthorityFingerprint);
+      },
+      get requesterPrincipalKey() {
+        return "handle" in attachment
+          ? toolAuthority?.requesterPrincipalKey
+          : operation.requesterPrincipalKey;
+      },
       acceptParticipant: (overlay) => participants?.accept(overlay),
       projectToolAuthorityFingerprint: (overlay) => {
         try {
@@ -93,9 +97,24 @@ export function captureReplyMessageInjectionTarget(
           return undefined;
         }
       },
+      projectRequesterToolAuthorityFingerprint: (requester) => {
+        try {
+          return toolAuthority?.projectRequester?.(requester);
+        } catch {
+          toolAuthority?.assertActive();
+          return undefined;
+        }
+      },
+      projectRequesterToolAuthorityFingerprintAsync: async (requester) => {
+        try {
+          return await toolAuthority?.projectRequesterAsync?.(requester);
+        } catch {
+          toolAuthority?.assertActive();
+          return undefined;
+        }
+      },
       resolve: (params) =>
-        getSessionControllerEntryForOperation(operation).attachment === attachment &&
-        getAttachedBackend(operation) === backend
+        getAttachedBackendAttachment(operation) === backendAttachment
           ? resolveReplyMessageInjectionRejection({ ...params, operation })
           : { reason: "no_active_run" },
       recordAccepted: (options) => {
@@ -109,63 +128,10 @@ export function captureReplyMessageInjectionTarget(
   };
 }
 
-function resolveReplyBackendMessageInjection(
-  backend: ReplyBackendHandle,
-  canInject: () => boolean,
-  sourceBound: boolean,
-  preparation?: ReplyToolAuthorityPreparation,
-): (ReplyBackendMessageInjection & ReturnType<typeof bindMessageInjectionV2>) | undefined {
-  const guarded = backend.messageInjectionV2;
-  const assertCurrent = createMessageInjectionAuthority(canInject);
-  const legacy =
-    preparation && !guarded?.queueMessageAsync
-      ? createLegacyToolAuthorityQueuePreflight(preparation)
-      : undefined;
-  if (guarded?.version === 2) {
-    return {
-      isAvailable: () => guarded.isAvailable(),
-      ...bindMessageInjectionV2(
-        guarded,
-        assertCurrent,
-        sourceBound ? "source-bound" : "run",
-        preparation && (() => ({ ...preparation, compatAssertCurrent: assertCurrent })),
-        legacy,
-      ),
-    };
-  }
-  if (sourceBound) {
-    assertCurrent();
-    return undefined;
-  }
-  const injection = backend.messageInjection;
-  if (!injection && !backend.queueMessage) {
-    return undefined;
-  }
-
-  return {
-    claimPendingUserInputAnswer: backend.claimPendingUserInputAnswer?.bind(backend),
-    cancelPendingUserInput: backend.cancelPendingUserInput?.bind(backend),
-    prepareQueueMessage: legacy?.prepareQueueMessage,
-    isAvailable: () => {
-      // Legacy handles already expose the only capability that matters here:
-      // queueMessage. Let the runtime accept or reject instead of guessing from
-      // unrelated token-stream state.
-      return injection ? injection.isAvailable() : !backend.isStopped?.();
-    },
-    queueMessage: (text, options) => {
-      legacy?.assertQueueCurrent();
-      assertCurrent();
-      if (injection) {
-        return injection.queueMessage(text, options);
-      }
-      return options ? backend.queueMessage!(text, options) : backend.queueMessage!(text);
-    },
-  };
-}
-
 function resolveReplyMessageInjectionRejection(params: {
   operation: ReplyOperation | undefined;
   options?: ReplyBackendQueueMessageOptions;
+  requesterToolAuthority?: ReplyMessageInjectionOptions["requesterToolAuthority"];
   inboundAudio?: boolean;
   personalToolParticipant?: ReplyMessageInjectionOptions["personalToolParticipant"];
   allowPendingUserInputAnswer?: false;
@@ -184,30 +150,57 @@ function resolveReplyMessageInjectionRejection(params: {
     return { reason: "stale_run" };
   }
   const attachment = getSessionControllerEntryForOperation(operation).attachment;
-  const backend = getAttachedBackend(operation);
-  // Native registration publishes commit capability; the released attachBackend contract
-  // delegates transcript waiting to its sink without requiring that observation.
-  if (
-    attachment &&
-    "handle" in attachment &&
-    params.options?.waitForTranscriptCommit === true &&
-    attachment.handle.supportsTranscriptCommitWait !== true
-  ) {
+  const backendAttachment = getAttachedBackendAttachment(operation);
+  const backend = backendAttachment?.handle;
+  const native = attachment && "handle" in attachment ? attachment.handle : undefined;
+  // Released backends may delegate commit waiting without advertising a capability.
+  const supportsTranscriptCommitWait = backend
+    ? backend.supportsTranscriptCommitWait !== false
+    : native?.supportsTranscriptCommitWait === true;
+  if (params.options?.waitForTranscriptCommit === true && !supportsTranscriptCommitWait) {
     return { reason: "transcript_commit_wait_unsupported" };
   }
   const toolAuthority =
     attachment && "toolAuthority" in attachment ? attachment.toolAuthority : undefined;
+  if (params.requesterToolAuthority) {
+    if (backend?.messageInjectionV2?.version !== 2) {
+      return { reason: "guarded_injection_unsupported" };
+    }
+    try {
+      if (!toolAuthority?.acceptsRequesterOrigin(params.requesterToolAuthority.requesterOrigin)) {
+        return { reason: "requester_origin_mismatch" };
+      }
+    } catch {
+      return { reason: "requester_origin_mismatch" };
+    }
+    // Fresh delegation cannot borrow a pending-answer shortcut from the incumbent.
+    const projected = normalizeOptionalString(params.options?.toolAuthorityFingerprint);
+    if (
+      !projected ||
+      projected !==
+        normalizeOptionalString(
+          backend.toolAuthorityFingerprint ?? operation.toolAuthorityFingerprint,
+        )
+    ) {
+      return { reason: "tool_authority_mismatch" };
+    }
+  }
   const canInject = () => {
     if (
       !isCurrentSessionControllerOperation(operation) ||
       operation.result ||
       operationState?.phase !== "running" ||
-      getSessionControllerEntryForOperation(operation).attachment !== attachment ||
-      getAttachedBackend(operation) !== backend
+      getAttachedBackendAttachment(operation) !== backendAttachment
     ) {
       return false;
     }
     toolAuthority?.assertActive();
+    if (
+      params.requesterToolAuthority &&
+      !toolAuthority?.acceptsRequesterOrigin(params.requesterToolAuthority.requesterOrigin)
+    ) {
+      return false;
+    }
     return true;
   };
   if (operationState?.turnKind === "direct") {
@@ -241,118 +234,6 @@ function resolveReplyMessageInjectionRejection(params: {
   });
 }
 
-/** The source and concrete execution owner compose their authority at the same V2 sink. */
-function resolveReplyBackendMessageInjectionRejection(params: {
-  sessionId: string;
-  backend: ReplyBackendHandle | undefined;
-  canInject: () => boolean;
-  toolAuthorityFingerprint?: string;
-  options?: ReplyBackendQueueMessageOptions;
-  personalToolParticipant?: ReplyMessageInjectionOptions["personalToolParticipant"];
-  personalToolParticipants?: ReplyTurnParticipants;
-  allowPendingUserInputAnswer?: false;
-  assertCurrent?: () => void;
-  preparation?: ReplyToolAuthorityPreparation;
-}): ReplyMessageInjectionResolution {
-  const { backend } = params;
-  const canInject = () => {
-    params.preparation?.compatAssertCurrent();
-    params.assertCurrent?.();
-    return params.canInject();
-  };
-  const injection = backend
-    ? resolveReplyBackendMessageInjection(
-        backend,
-        canInject,
-        params.assertCurrent !== undefined,
-        params.preparation && {
-          ...params.preparation,
-          assertCurrent: createMessageInjectionAuthority(() => {
-            params.preparation!.assertCurrent();
-            params.assertCurrent?.();
-            return params.canInject();
-          }),
-        },
-      )
-    : undefined;
-  if (!backend || !injection) {
-    return {
-      reason:
-        backend && params.assertCurrent && backend.messageInjectionV2?.version !== 2
-          ? "guarded_injection_unsupported"
-          : "injection_unavailable",
-    };
-  }
-  try {
-    const compactionAllowsSteering = canSteerEmbeddedRunDuringCompaction(params.sessionId, backend);
-    if (!injection.isAvailable() || !compactionAllowsSteering) {
-      return { reason: "injection_unavailable" };
-    }
-  } catch (error) {
-    return { reason: "injection_unavailable", errorMessage: String(error) };
-  }
-  if (
-    backend.supportsCrossProfileSteering === false &&
-    params.options?.isInboundUserMessage === true &&
-    params.personalToolParticipant?.operatorAuthority &&
-    params.personalToolParticipant.operatorAuthority.profileId !==
-      params.personalToolParticipants?.resolve(undefined, { allowTurnOwner: () => true })?.profileId
-  ) {
-    // Question answers through injection also record participants. Leave another
-    // profile's input with followup custody before any question-only bypass.
-    return { reason: "tool_authority_mismatch", backend };
-  }
-  const mismatch = resolveReplyBackendQueueMessageMismatch(backend, params.options, params);
-  const activeFingerprint = normalizeOptionalString(
-    backend.toolAuthorityFingerprint ?? params.toolAuthorityFingerprint,
-  );
-  const toolAuthorityMatched =
-    activeFingerprint !== undefined &&
-    normalizeOptionalString(params.options?.toolAuthorityFingerprint) === activeFingerprint;
-  const pendingInputAuthorityProven =
-    activeFingerprint !== undefined &&
-    normalizeOptionalString(params.options?.pendingInputAuthorityFingerprint) === activeFingerprint;
-  // Hidden coordination can settle its own question, but cannot own the visible
-  // answer to a new human turn through ordinary steering.
-  const hiddenPendingInputAuthorized =
-    mismatch === "input_visibility_mismatch" &&
-    params.options?.isInboundUserMessage === true &&
-    backend.messageInjectionV2?.version === 2 &&
-    activeFingerprint !== undefined &&
-    (pendingInputAuthorityProven || toolAuthorityMatched);
-  if (
-    ((mismatch === "tool_authority_mismatch" && pendingInputAuthorityProven) ||
-      hiddenPendingInputAuthorized) &&
-    params.allowPendingUserInputAnswer !== false &&
-    !hasPromptImageInput(params.options) &&
-    injection.claimPendingUserInputAnswer
-  ) {
-    return {
-      backend,
-      injection: {
-        isAvailable: () => true,
-        queueMessage: async (text, options) => {
-          if (!(await injection.claimPendingUserInputAnswer?.(text, options))) {
-            throw new Error("pending user input was not accepted");
-          }
-          options?.onQueueAccepted?.(true);
-          options?.onQueueSettled?.();
-        },
-      },
-    };
-  }
-  return mismatch
-    ? {
-        reason: mismatch,
-        backend,
-        cancelPendingUserInput:
-          mismatch !== "input_visibility_mismatch" || hiddenPendingInputAuthorized
-            ? injection.cancelPendingUserInput
-            : undefined,
-      }
-    : { backend, injection, prepareQueueMessage: injection.prepareQueueMessage };
-}
-
 export function beginReplyMessageInjectionTarget(
   target: ReplyMessageInjectionTarget,
   text: string,
@@ -375,12 +256,14 @@ export function canInjectReplyMessageTarget(
     const owner = target[replyMessageInjectionTargetOwner];
     const {
       toolAuthorityOverlay,
+      requesterToolAuthority,
       toolAuthorityPreparation,
       personalToolParticipant,
       assertCurrent,
       allowPendingUserInputAnswer,
       inboundAudio,
       canAdmit: _canAdmit,
+      allowCollaborativeSteering: _allowCollaborativeSteering,
       ...backendOptions
     } = options ?? {};
     toolAuthorityPreparation?.compatAssertCurrent();
@@ -390,13 +273,16 @@ export function canInjectReplyMessageTarget(
       owner.resolve({
         options: {
           ...backendOptions,
-          ...(toolAuthorityOverlay
+          ...(requesterToolAuthority || toolAuthorityOverlay
             ? {
-                toolAuthorityFingerprint:
-                  owner.projectToolAuthorityFingerprint(toolAuthorityOverlay),
+                toolAuthorityFingerprint: requesterToolAuthority
+                  ? owner.projectRequesterToolAuthorityFingerprint(requesterToolAuthority)
+                  : toolAuthorityOverlay &&
+                    owner.projectToolAuthorityFingerprint(toolAuthorityOverlay),
               }
             : {}),
         },
+        requesterToolAuthority,
         personalToolParticipant: toolAuthorityOverlay ?? personalToolParticipant,
         inboundAudio,
         allowPendingUserInputAnswer,
@@ -449,17 +335,87 @@ async function beginPreparedReplyMessageInjectionTarget(
   // Deferred preparation may install both caller policy and a transcript recorder.
   const {
     canAdmit,
-    toolAuthorityOverlay,
+    toolAuthorityOverlay: incomingOverlay,
+    allowCollaborativeSteering,
+    requesterToolAuthority,
     toolAuthorityPreparation,
     personalToolParticipant,
     assertCurrent,
-    allowPendingUserInputAnswer,
+    allowPendingUserInputAnswer: requestedPendingUserInputAnswer,
     inboundAudio,
     ...backendOptions
   } = options ?? {};
-  const projectedToolAuthorityFingerprint = toolAuthorityOverlay
-    ? await owner.projectToolAuthorityFingerprintAsync(toolAuthorityOverlay)
-    : backendOptions.toolAuthorityFingerprint;
+  const incomingRequester = incomingOverlay
+    ? resolveRequesterPrincipalKey({
+        ...incomingOverlay,
+        messageChannel: incomingOverlay.originatingChannel,
+      })
+    : undefined;
+  if (
+    !requesterToolAuthority &&
+    allowCollaborativeSteering === false &&
+    backendOptions.isInboundUserMessage &&
+    (!incomingOverlay?.inputProvenance ||
+      incomingOverlay.inputProvenance.kind === "external_user") &&
+    incomingRequester &&
+    owner.requesterPrincipalKey &&
+    incomingRequester !== owner.requesterPrincipalKey
+  ) {
+    assertSourceCurrent?.();
+    // Refusal belongs to this live target. A vanished or unavailable backend still
+    // returns its existing fallback decision, without lending another turn's identity.
+    const availability =
+      canAdmit?.() === false
+        ? { reason: "injection_unavailable" as const }
+        : owner.resolve({ inboundAudio, assertCurrent: assertSourceCurrent });
+    const acceptance = Promise.resolve(false);
+    void acceptance.then((accepted) => backendOptions.onQueueAccepted?.(accepted));
+    return {
+      targetRunId: target.runId,
+      acceptance,
+      outcome: Promise.resolve({
+        status: "rejected",
+        reason:
+          "injection" in availability ? "collaborative_steering_disabled" : availability.reason,
+      }),
+    };
+  }
+  let selectedOverlay = incomingOverlay;
+  let allowPendingUserInputAnswer = requestedPendingUserInputAnswer;
+  let projectedToolAuthorityFingerprint = requesterToolAuthority
+    ? await owner.projectRequesterToolAuthorityFingerprintAsync(requesterToolAuthority)
+    : selectedOverlay
+      ? await owner.projectToolAuthorityFingerprintAsync(selectedOverlay)
+      : backendOptions.toolAuthorityFingerprint;
+  if (
+    !requesterToolAuthority &&
+    allowCollaborativeSteering &&
+    backendOptions.isInboundUserMessage &&
+    incomingOverlay &&
+    incomingRequester &&
+    owner.requesterPrincipalKey &&
+    incomingRequester !== owner.requesterPrincipalKey &&
+    (!projectedToolAuthorityFingerprint ||
+      projectedToolAuthorityFingerprint !== owner.toolAuthorityFingerprint)
+  ) {
+    const collaborativeOverlay = { ...incomingOverlay, allowCollaborativeSteering: true as const };
+    const incumbentFingerprint =
+      await owner.projectToolAuthorityFingerprintAsync(collaborativeOverlay);
+    if (incumbentFingerprint && incumbentFingerprint !== projectedToolAuthorityFingerprint) {
+      selectedOverlay = collaborativeOverlay;
+      projectedToolAuthorityFingerprint = incumbentFingerprint;
+      // Collaboration permits ordinary input, not answering or canceling another
+      // requester's pending question. Compatible input keeps its strict preparation.
+      allowPendingUserInputAnswer = false;
+    }
+  }
+  const toolAuthorityOverlay = selectedOverlay;
+  const currentToolAuthorityOverlay = () => {
+    const overlay = options?.toolAuthorityOverlay;
+    return overlay && toolAuthorityOverlay?.allowCollaborativeSteering
+      ? { ...overlay, allowCollaborativeSteering: true as const }
+      : overlay;
+  };
   const sourceBound =
     assertCurrent !== undefined ||
     (toolAuthorityPreparation !== undefined && toolAuthorityPreparation.authorityKind !== "run");
@@ -473,7 +429,7 @@ async function beginPreparedReplyMessageInjectionTarget(
   const queueOptions: ReplyBackendQueueMessageOptions | undefined = options
     ? {
         ...backendOptions,
-        ...(toolAuthorityOverlay
+        ...(requesterToolAuthority || toolAuthorityOverlay
           ? { toolAuthorityFingerprint: projectedToolAuthorityFingerprint }
           : {}),
       }
@@ -483,33 +439,44 @@ async function beginPreparedReplyMessageInjectionTarget(
       ? { reason: "injection_unavailable" }
       : owner.resolve({
           options: queueOptions,
+          requesterToolAuthority,
           personalToolParticipant: toolAuthorityOverlay ?? personalToolParticipant,
           inboundAudio,
           allowPendingUserInputAnswer,
           // An overlay alone does not add a caller lifetime binding to legacy input.
           assertCurrent: sourceBound ? assertSourceCurrent : undefined,
-          preparation: toolAuthorityOverlay
-            ? bindPreparedToolAuthority(
-                bindWorkerToolPreparation(
-                  {
-                    assertCurrent: () => assertSourceCurrent?.(),
-                    compatAssertCurrent: () => {
-                      toolAuthorityPreparation?.compatAssertCurrent();
-                      const overlay = options?.toolAuthorityOverlay;
-                      assertPolicy(overlay && owner.projectToolAuthorityFingerprint(overlay));
+          preparation:
+            requesterToolAuthority || toolAuthorityOverlay
+              ? bindPreparedToolAuthority(
+                  bindWorkerToolPreparation(
+                    {
+                      assertCurrent: () => assertSourceCurrent?.(),
+                      compatAssertCurrent: () => {
+                        toolAuthorityPreparation?.compatAssertCurrent();
+                        const requester = options?.requesterToolAuthority;
+                        const overlay = currentToolAuthorityOverlay();
+                        assertPolicy(
+                          requester
+                            ? owner.projectRequesterToolAuthorityFingerprint(requester)
+                            : overlay && owner.projectToolAuthorityFingerprint(overlay),
+                        );
+                      },
+                      prepareCurrent: async () => {
+                        await toolAuthorityPreparation?.prepareCurrent();
+                        const requester = options?.requesterToolAuthority;
+                        const overlay = currentToolAuthorityOverlay();
+                        assertPolicy(
+                          requester
+                            ? await owner.projectRequesterToolAuthorityFingerprintAsync(requester)
+                            : overlay &&
+                                (await owner.projectToolAuthorityFingerprintAsync(overlay)),
+                        );
+                      },
                     },
-                    prepareCurrent: async () => {
-                      await toolAuthorityPreparation?.prepareCurrent();
-                      const overlay = options?.toolAuthorityOverlay;
-                      assertPolicy(
-                        overlay && (await owner.projectToolAuthorityFingerprintAsync(overlay)),
-                      );
-                    },
-                  },
-                  toolAuthorityPreparation ? [toolAuthorityPreparation] : [],
-                ),
-              )
-            : toolAuthorityPreparation,
+                    toolAuthorityPreparation ? [toolAuthorityPreparation] : [],
+                  ),
+                )
+              : toolAuthorityPreparation,
         });
   if (!("injection" in resolved)) {
     const immediateRejection = {
@@ -518,6 +485,7 @@ async function beginPreparedReplyMessageInjectionTarget(
       ...(resolved.errorMessage ? { errorMessage: resolved.errorMessage } : {}),
     };
     const cancelPendingImage =
+      allowPendingUserInputAnswer !== false &&
       options?.isInboundUserMessage === true &&
       hasPromptImageInput(options) &&
       (resolved.reason === "tool_authority_mismatch" ||
@@ -588,8 +556,20 @@ async function beginPreparedReplyMessageInjectionTarget(
   let queueAccepted = false;
   let participantRecorded = false;
   const recordParticipant = () => {
-    const participant = toolAuthorityOverlay ?? personalToolParticipant;
-    if (!participantRecorded && queueOptions?.isInboundUserMessage && participant) {
+    if (participantRecorded || !queueOptions?.isInboundUserMessage) {
+      return;
+    }
+    const participant = incomingOverlay
+      ? {
+          ...incomingOverlay,
+          requesterOrigin: captureRequesterOrigin({
+            ...incomingOverlay,
+            messageChannel: incomingOverlay.originatingChannel,
+            operatorProfileId: incomingOverlay.operatorAuthority?.profileId,
+          }),
+        }
+      : personalToolParticipant;
+    if (participant) {
       participantRecorded = true;
       owner.acceptParticipant?.(participant);
     }

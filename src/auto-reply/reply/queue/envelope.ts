@@ -232,6 +232,7 @@ export function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
     return {
       ...transcriptInput,
       senderIsOwner: source.run.senderIsOwner,
+      requesterOrigin: source.run.requesterOrigin,
       provenance: source.run.inputProvenance,
       idempotencyKey: `followup-collect:${source.run.sessionId}:${identityHash}`,
       ...(timestamp === undefined ? {} : { timestamp }),
@@ -243,6 +244,7 @@ export function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
     input: {
       ...initialTranscriptInput,
       senderIsOwner: source.run.senderIsOwner,
+      requesterOrigin: source.run.requesterOrigin,
       provenance: source.run.inputProvenance,
     },
     resolveInput: buildInput,

@@ -86,6 +86,7 @@ import {
   getThinkingSlider,
   getThinkingSliderValues,
   itemAt,
+  appendMessageActionFixture,
 } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import * as chatMessageConfirmation from "./components/chat-message-confirmation-view.tsx";
@@ -2731,11 +2732,7 @@ describe("chat slash menu accessibility", () => {
         description: `Skill ${index + 1}.`,
       })),
     );
-    const animationFrames: FrameRequestCallback[] = [];
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      animationFrames.push(callback);
-      return animationFrames.length;
-    });
+    const flushAnimationFrames = stubAnimationFrames();
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
       this: HTMLElement,
     ) {
@@ -2764,12 +2761,12 @@ describe("chat slash menu accessibility", () => {
     const { container } = createReactiveDraftHarness();
     document.body.append(container);
     inputDraftAtEnd(container, "Use $");
-    animationFrames.length = 0;
+    flushAnimationFrames();
 
     for (let index = 0; index < 4; index += 1) {
       keydownComposer(container, "ArrowDown");
     }
-    animationFrames.at(-1)?.(0);
+    flushAnimationFrames();
 
     const scrollRegion = container.querySelector<HTMLElement>(".skill-menu .slash-menu__scroll");
     const outerMenu = container.querySelector<HTMLElement>(".skill-menu");
@@ -3307,9 +3304,9 @@ describe("chat welcome", () => {
     expect(image?.getAttribute("src")).toBe("blob:identity-avatar");
     image?.dispatchEvent(new Event("load"));
     const identity = container.querySelector(".identity-avatar--agent");
-    expect(identity?.classList.contains("is-fallback")).toBe(false);
+    await waitForSolid(() => expect(identity?.classList.contains("is-fallback")).toBe(false));
     image?.dispatchEvent(new Event("error"));
-    expect(identity?.classList.contains("is-fallback")).toBe(true);
+    await waitForSolid(() => expect(identity?.classList.contains("is-fallback")).toBe(true));
     expect(identity?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
 
     container = renderWelcome({ assistantAvatar: null, assistantAvatarUrl: null });
@@ -4760,15 +4757,8 @@ describe("right-click Reply", () => {
       expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
 
       group.className = "chat-group assistant";
-      const siblingActionOwner = document.createElement("div");
-      siblingActionOwner.dataset.messageActionsFor = "message-0";
-      const copyButton = document.createElement("button");
-      copyButton.className = "chat-copy-btn";
-      copyButton.addEventListener("click", onCopy);
-      const actionOwner = document.createElement("div");
-      actionOwner.dataset.messageActionsFor = "message-1";
-      actionOwner.append(copyButton);
-      group.append(siblingActionOwner, actionOwner);
+      appendMessageActionFixture(group, "message-0");
+      appendMessageActionFixture(group, "message-1", onCopy);
       dispatchContextMenu(bubble);
       expect(
         [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
@@ -4782,6 +4772,7 @@ describe("right-click Reply", () => {
       dispatchContextMenu(bubble);
       getContextMenuAction("Copy as markdown").click();
       expect(onCopy).toHaveBeenCalledOnce();
+      expect(group.isConnected).toBe(true);
     },
   );
 
@@ -4793,9 +4784,7 @@ describe("right-click Reply", () => {
       { onSetReply },
       { messageId: "commentary", text: "Intermediate commentary" },
     );
-    const actionOwner = document.createElement("div");
-    actionOwner.dataset.messageActionsFor = "terminal";
-    group.append(actionOwner);
+    appendMessageActionFixture(group, "terminal");
     group.dataset.chatRowKey = 'agent-run:["run-1","send:send-1"]';
 
     const event = dispatchContextMenu(bubble);

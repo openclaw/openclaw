@@ -2,6 +2,7 @@
 
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
+import type { QuestionResourceActionResult } from "../../../../../packages/gateway-protocol/src/question-resource.js";
 import type { ApplicationContext } from "../../../app/context-types.ts";
 import {
   createGatewayRequestMock,
@@ -112,9 +113,15 @@ it("publishes uploaded resource selections through its host and follows controll
   const context = { gateway: application.gateway } as ApplicationContext;
   const selections = vi.fn();
   const bubbled = vi.fn();
+  let setDisabled!: (value: boolean) => void;
+  let setRequestId!: (value: string) => void;
   const view = mountSolid(
     () => {
       const [selected, setSelected] = createSignal<ReadonlySet<string>>(new Set());
+      const [disabled, updateDisabled] = createSignal(false);
+      const [requestId, updateRequestId] = createSignal("question-request");
+      setDisabled = updateDisabled;
+      setRequestId = updateRequestId;
       return (
         <div onResource-selection={bubbled}>
           <ChatQuestionResource
@@ -129,10 +136,10 @@ it("publishes uploaded resource selections through its host and follows controll
                 userOptions: { kind: "file" },
               },
             }}
-            requestId="question-request"
+            requestId={requestId()}
             sessionKey="agent:main:upload-session"
             selected={selected()}
-            disabled={false}
+            disabled={disabled()}
             onResource-selection={(event) => {
               selections(event.detail.values);
               setSelected(new Set(event.detail.values));
@@ -165,9 +172,98 @@ it("publishes uploaded resource selections through its host and follows controll
   );
   expect(bubbled).toHaveBeenCalledTimes(1);
   expect(bubbled.mock.calls[0]?.[0].target?.tagName).toBe("OPENCLAW-CHAT-QUESTION-RESOURCE");
-  const remove = await waitForSolid(() => view.getByRole("button", { name: "Remove" }));
+  const remove = await waitForSolid(() =>
+    view.getByRole<HTMLButtonElement>("button", { name: "Remove" }),
+  );
+  setDisabled(true);
+  await waitForSolid(() => expect(remove.disabled).toBe(true));
+  expect(view.getByText("notes.txt")).toBeTruthy();
+  expect(view.getByLabelText("Part")).toBe(input);
+  setDisabled(false);
+  await waitForSolid(() => expect(remove.disabled).toBe(false));
   remove.click();
   await waitForSolid(() => expect(view.queryByText("notes.txt")).toBeNull());
   expect(selections).toHaveBeenLastCalledWith([]);
   expect(bubbled).toHaveBeenCalledTimes(2);
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForSolid(() => expect(selections).toHaveBeenCalledTimes(3));
+  expect(view.getByText("notes.txt")).toBeTruthy();
+  setRequestId("replacement-request");
+  await waitForSolid(() => expect(view.queryByText("notes.txt")).toBeNull());
+  expect(view.getByLabelText("Part")).toBe(input);
+  expect(selections).toHaveBeenCalledTimes(3);
+});
+
+it("retires pending previews on disabled and request changes while retaining controls", async () => {
+  const first = Promise.withResolvers<QuestionResourceActionResult>();
+  const second = Promise.withResolvers<QuestionResourceActionResult>();
+  const request = createGatewayRequestMock(async () => ({
+    preview: { contents: [{ text: "Current preview" }] },
+  }));
+  request.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+  const application = createApplicationGateway();
+  application.publish({
+    ...application.gateway.snapshot,
+    phase: "connected",
+    client: createTestGatewayClient(request),
+  });
+  // SAFETY: Text resource previews consume only the Gateway capability.
+  const context = { gateway: application.gateway } as ApplicationContext;
+  let setDisabled!: (value: boolean) => void;
+  let setRequestId!: (value: string) => void;
+  const view = mountSolid(
+    () => {
+      const [disabled, updateDisabled] = createSignal(false);
+      const [requestId, updateRequestId] = createSignal("question-request");
+      setDisabled = updateDisabled;
+      setRequestId = updateRequestId;
+      return (
+        <ChatQuestionResource
+          question={{
+            questionId: "part",
+            header: "Part",
+            question: "Choose a part",
+            options: [
+              {
+                label: "Bracket",
+                preview: { type: "resource_link", name: "Bracket", uri: "parts://bracket" },
+              },
+            ],
+            resource: { viewId: "form-view", selection: "explicit" },
+          }}
+          requestId={requestId()}
+          sessionKey="agent:main:preview-session"
+          selected={new Set()}
+          disabled={disabled()}
+        />
+      );
+    },
+    { wrapper: createSolidApplicationContextProvider(context).wrapper },
+  );
+  const button = await waitForSolid(() =>
+    view.getByRole<HTMLButtonElement>("button", { name: "Preview resource: Bracket" }),
+  );
+  button.click();
+  button.click();
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
+  setDisabled(true);
+  await waitForSolid(() => {
+    expect(request.mock.calls[0]?.[2]?.signal?.aborted).toBe(true);
+    expect(button.disabled).toBe(true);
+  });
+  first.resolve({ preview: { contents: [{ text: "Retired disabled preview" }] } });
+  setDisabled(false);
+  await waitForSolid(() => expect(button.disabled).toBe(false));
+  expect(view.getByRole("button", { name: "Preview resource: Bracket" })).toBe(button);
+  button.click();
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+  setRequestId("replacement-request");
+  await waitForSolid(() => expect(request.mock.calls[1]?.[2]?.signal?.aborted).toBe(true));
+  second.resolve({ preview: { contents: [{ text: "Retired request preview" }] } });
+  expect(view.getByRole("button", { name: "Preview resource: Bracket" })).toBe(button);
+  button.click();
+  await waitForSolid(() => expect(view.getByText("Current preview")).toBeTruthy());
+  expect(view.queryByText("Retired disabled preview")).toBeNull();
+  expect(view.queryByText("Retired request preview")).toBeNull();
+  expect(request.mock.calls[2]?.[1]).toMatchObject({ requestId: "replacement-request" });
 });

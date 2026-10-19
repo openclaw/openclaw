@@ -30,6 +30,7 @@ import {
 } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { createProcessTool } from "../agents/bash-tools.process.js";
+import { filterToolsByPolicy } from "../agents/tool-policy-match.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
@@ -38,7 +39,6 @@ import {
   peekSystemEventEntries,
 } from "../infra/system-events.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
-import { buildMcpToolSchema } from "./mcp-http.schema.js";
 import type { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const activeAdmissions: PreparedAgentRunAdmission[] = [];
@@ -164,9 +164,18 @@ import {
   markMcpLoopbackToolCallStarted,
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "./mcp-http.loopback-runtime.js";
-import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 import {
+  angleSchema,
+  buildMockMcpToolSchema,
+  createMcpToolCacheResolver,
+  expectMcpResultText,
+  expectMcpToolNames,
   jsonHeaders,
+  makeCronTool,
+  makeMessageTool,
+  makeMockTool,
+  mcpToolsListBody,
+  objectSchema,
   mcpToolCallBody,
   mcpToolCallMessage,
   readMcpPayload,
@@ -286,6 +295,7 @@ async function createCliGrant(
     runtimeOwnerToken: runtime.ownerToken,
     admittedRunContext: options.admittedRunContext ?? (await activeAdmission(runId)),
     ...options,
+    toolPolicyConfig: options.toolPolicyConfig ?? getRuntimeConfigMock(),
   });
   const captureParams = { token: grant.token, runtimeOwnerToken: runtime.ownerToken, captureKey };
   const capture = activateMcpLoopbackClientGrantCapture(captureParams);
@@ -358,34 +368,6 @@ async function callMainSessionTool(params: {
   return readOkMcpPayload(await sendMainSessionToolCall(params));
 }
 
-function expectMcpToolNames(payload: McpToolResultPayload, expected: string[]) {
-  const names = (payload.result?.tools ?? []).map((tool) => tool.name);
-  for (const name of expected) {
-    expect(names).toContain(name);
-  }
-}
-
-function expectMcpResultText(payload: McpToolResultPayload, text: string, isError?: boolean) {
-  if (isError === undefined) {
-    expect(payload.result?.isError).not.toBe(true);
-  } else {
-    expect(payload.result?.isError).toBe(isError);
-  }
-  expect(payload.result?.content?.[0]?.text).toBe(text);
-}
-
-function objectSchema(properties: Record<string, unknown>, required?: string[]) {
-  return {
-    type: "object",
-    properties,
-    ...(required ? { required } : {}),
-  };
-}
-
-function angleSchema(property: unknown, required: string[] = []) {
-  return objectSchema({ angle: property }, required);
-}
-
 function getScopedToolsCall(index: number): ScopedToolsCall {
   const call = resolveGatewayScopedToolsMock.mock.calls[index]?.[0];
   if (typeof call !== "object" || call === null) {
@@ -402,67 +384,11 @@ function getBeforeToolCallHookInput(index: number): BeforeToolCallHookInput {
   return call as BeforeToolCallHookInput;
 }
 
-function makeMockTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool {
-  return {
-    name: "mockplugin_tool",
-    label: "Mock tool",
-    description: "mock tool",
-    parameters: { type: "object", properties: {} },
-    execute: async () => ({
-      content: [{ type: "text", text: "ok" }],
-    }),
-    ...overrides,
-  };
-}
-
-function makeMessageTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool {
-  return makeMockTool({
-    name: "message",
-    description: "send a message",
-    ...overrides,
-  });
-}
-
-function makeCronTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool {
-  return makeMockTool({
-    name: "cron",
-    description: "manage schedules",
-    ...overrides,
-  });
-}
-
 function mockScopedTools(tools: MockGatewayTool[]) {
   resolveGatewayScopedToolsMock.mockResolvedValue({
     agentId: "main",
     tools,
   });
-}
-
-function mcpToolsListBody(id = 1) {
-  return JSON.stringify({ jsonrpc: "2.0", id, method: "tools/list" });
-}
-
-function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
-  return buildMcpToolSchema(tools as unknown as Parameters<typeof buildMcpToolSchema>[0]);
-}
-
-type McpToolCacheParams = Parameters<McpLoopbackToolCache["resolve"]>[0];
-
-function createMcpToolCacheResolver({
-  cfg = {},
-  ...baseContext
-}: Partial<McpToolCacheParams["context"] & Pick<McpToolCacheParams, "cfg">> = {}) {
-  const cache = new McpLoopbackToolCache();
-  return (context: Partial<McpToolCacheParams["context"]> = {}) =>
-    cache.resolve({
-      cfg,
-      context: {
-        sessionKey: "agent:main:direct:test",
-        senderIsOwner: true,
-        ...baseContext,
-        ...context,
-      },
-    });
 }
 
 beforeEach(() => {
@@ -890,6 +816,14 @@ describe("mcp loopback server", () => {
     });
     const boundContext = {
       sessionKey: "agent:main:discord:channel:bound",
+      requesterOrigin: {
+        sessionKey: "agent:main:telegram:direct:42",
+        messageProvider: "telegram",
+        accountId: "requester-account",
+        chatType: "direct",
+        conversationId: "42",
+        senderId: "alice",
+      },
       runtimePolicySessionKey: "agent:worker:discord:default:direct:bound-user",
       runtimePolicyAgentId: "worker",
       agentId: "main",
@@ -978,15 +912,19 @@ describe("mcp loopback server", () => {
     expect((await sendWithCapture("capture-forged")).status).toBe(401);
     expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
 
-    expect((await sendWithCapture("capture-bound")).status).toBe(200);
-    expect((await sendWithCapture("capture-bound", "call")).status).toBe(200);
+    expectMcpToolNames(await readOkMcpPayload(await sendWithCapture("capture-bound")), ["message"]);
+    expectMcpResultText(
+      await readOkMcpPayload(await sendWithCapture("capture-bound", "call")),
+      "ok",
+    );
     const { runId: _runId, toolsAllow: _toolsAllow, ...resolvedContext } = boundContext;
     const expectedBoundContext = {
       ...resolvedContext,
       surface: "loopback",
     };
-    expect(getScopedToolsCall(0)).toMatchObject(expectedBoundContext);
-    expect(getScopedToolsCall(1)).toMatchObject(expectedBoundContext);
+    for (const [context] of resolveGatewayScopedToolsMock.mock.calls) {
+      expect(context).toMatchObject(expectedBoundContext);
+    }
     expect(getScopedToolsCall(0).includeNodeExecTool).toBe(true);
     expect(Array.from(getScopedToolsCall(0).excludeToolNames ?? [])).not.toContain("exec");
     expect(getBeforeToolCallHookInput(0).ctx).toMatchObject({
@@ -1006,6 +944,14 @@ describe("mcp loopback server", () => {
     expect(toolCallerIdentity).toMatchObject({
       agentId: "main",
       sessionKey: boundContext.sessionKey,
+      requesterOrigin: {
+        sessionKey: "agent:main:telegram:direct:42",
+        messageProvider: "telegram",
+        accountId: "requester-account",
+        chatType: "direct",
+        conversationId: "42",
+        senderId: "alice",
+      },
       operationalRunInstance: admittedRunContext.operationalRunInstance,
       turnSourceChannel: boundContext.messageProvider,
       turnSourceTo: boundContext.currentChannelId,
@@ -1060,6 +1006,41 @@ describe("mcp loopback server", () => {
       error: { code: -32000 },
     });
     expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps admitted CLI tool policy across config publication while new grants use current policy", async () => {
+    const initial = { session: { mainKey: "main" }, tools: { deny: ["sessions_list"] } };
+    const updated = { session: { mainKey: "main" }, tools: { deny: ["message"] } };
+    getRuntimeConfigMock.mockReturnValue(initial);
+    resolveGatewayScopedToolsMock.mockImplementation(async () => {
+      const scoped = getScopedToolsCall(resolveGatewayScopedToolsMock.mock.calls.length - 1);
+      return {
+        agentId: "main",
+        tools: filterToolsByPolicy(
+          [makeMessageTool(), makeMockTool({ name: "sessions_list" })],
+          scoped.cfg.tools,
+        ),
+      };
+    });
+    await startLoopbackServerForTest();
+    const first = await createCliGrant("policy-before", { toolPolicyConfig: initial });
+    const names = async (scope: typeof first.scope) => {
+      const payload = await readOkMcpPayload(await sendLoopbackToolsList(scope));
+      return payload.result?.tools?.map((tool) => tool.name);
+    };
+    expect(await names(first.scope)).toEqual(["message"]);
+
+    getRuntimeConfigMock.mockReturnValue(updated);
+    initial.tools.deny.push("message");
+    expect(await names(first.scope)).toEqual(["message"]);
+    expectMcpResultText(
+      await readOkMcpPayload(await sendLoopbackToolCall({ ...first.scope, name: "message" })),
+      "ok",
+    );
+    const next = await createCliGrant("policy-after", { toolPolicyConfig: updated });
+    expect(await names(next.scope)).toEqual(["sessions_list"]);
+    expect(first).not.toHaveProperty("toolPolicyConfig");
+    expect(first.context).not.toHaveProperty("toolPolicyConfig");
   });
 
   it("keeps prepared auth stores isolated between CLI grants", async () => {

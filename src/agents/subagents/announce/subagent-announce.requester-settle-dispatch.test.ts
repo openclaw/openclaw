@@ -347,8 +347,8 @@ describe("requester settle dispatch deadline", () => {
       expect(completeBatch).toHaveBeenCalledWith([child], 1, delivered, expect.any(Function));
       expect(append).not.toHaveBeenCalled();
       const onCommitted = completeBatch.mock.calls[0]![3]!;
-      onCommitted();
-      onCommitted();
+      await onCommitted();
+      await onCommitted();
       expect(append).toHaveBeenCalledExactlyOnceWith(delivered.finalAssistantVisibleText);
       await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(false);
       expect(deliver).toHaveBeenCalledOnce();

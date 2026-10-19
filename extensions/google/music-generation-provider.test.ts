@@ -1,15 +1,11 @@
-// Google tests cover music generation provider plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { createGoogleGenAIMock, generateContentMock } = vi.hoisted(() => {
-  const generateContentMockLocal = vi.fn();
-  const createGoogleGenAIMockLocal = vi.fn(() => {
-    return {
-      models: {
-        generateContent: generateContentMockLocal,
-      },
-    };
-  });
+  const generateContentMockLocal =
+    vi.fn<(request: GenerateContentRequest) => Promise<GoogleGenerateContentResponse>>();
+  const createGoogleGenAIMockLocal = vi.fn((_config: GoogleGenAIConfig) => ({
+    models: { generateContent: generateContentMockLocal },
+  }));
   return {
     createGoogleGenAIMock: createGoogleGenAIMockLocal,
     generateContentMock: generateContentMockLocal,
@@ -38,34 +34,6 @@ type GenerateContentRequest = {
   config?: unknown;
 };
 
-function lastGoogleGenAIConfig(): GoogleGenAIConfig {
-  const calls = createGoogleGenAIMock.mock.calls as unknown[][];
-  const config = calls.at(-1)?.[0];
-  if (!config) {
-    throw new Error("Expected GoogleGenAI config");
-  }
-  return config as GoogleGenAIConfig;
-}
-
-function allGoogleGenAIConfigs(): GoogleGenAIConfig[] {
-  return (createGoogleGenAIMock.mock.calls as unknown[][]).map((call) => {
-    const config = call[0];
-    if (!config) {
-      throw new Error("Expected GoogleGenAI config");
-    }
-    return config as GoogleGenAIConfig;
-  });
-}
-
-function firstGenerateContentRequest(): GenerateContentRequest {
-  const calls = generateContentMock.mock.calls as unknown[][];
-  const request = calls[0]?.[0];
-  if (!request) {
-    throw new Error("Expected generateContent request");
-  }
-  return request as GenerateContentRequest;
-}
-
 type GoogleMusicCandidate = NonNullable<GoogleGenerateContentResponse["candidates"]>[number];
 
 function googleMusicResponse(
@@ -73,35 +41,15 @@ function googleMusicResponse(
   finishReason?: string,
 ): GoogleGenerateContentResponse {
   return {
-    candidates: [
-      {
-        content: { parts },
-        ...(finishReason === undefined ? {} : { finishReason }),
-      },
-    ],
+    candidates: [{ content: { parts }, ...(finishReason === undefined ? {} : { finishReason }) }],
   };
 }
 
 function googleMusicAudioResponse(bytes = "mp3-bytes") {
   return googleMusicResponse(
-    [
-      {
-        inlineData: {
-          data: Buffer.from(bytes).toString("base64"),
-          mimeType: "audio/mpeg",
-        },
-      },
-    ],
+    [{ inlineData: { data: Buffer.from(bytes).toString("base64"), mimeType: "audio/mpeg" } }],
     "STOP",
   );
-}
-
-function mockGoogleAuth(): void {
-  vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-    apiKey: "google-key",
-    source: "env",
-    mode: "api-key",
-  });
 }
 
 type GenerateMusicRequest = Parameters<
@@ -109,6 +57,11 @@ type GenerateMusicRequest = Parameters<
 >[0];
 
 function generateMusic(overrides: Partial<GenerateMusicRequest> = {}) {
+  vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+    apiKey: "google-key",
+    source: "env",
+    mode: "api-key",
+  });
   return buildGoogleMusicGenerationProvider().generateMusic({
     provider: "google",
     model: "lyria-3-clip-preview",
@@ -116,6 +69,10 @@ function generateMusic(overrides: Partial<GenerateMusicRequest> = {}) {
     cfg: {},
     ...overrides,
   });
+}
+
+function googleConfig(google: { apiKey?: string; baseUrl: string }): GenerateMusicRequest["cfg"] {
+  return { models: { providers: { google: { models: [], ...google } } } };
 }
 
 describe("google music generation provider", () => {
@@ -137,23 +94,15 @@ describe("google music generation provider", () => {
   it("advertises Gemini music generation with a config-only Google API key", async () => {
     expect(
       await buildGoogleMusicGenerationProvider().isConfiguredAsync?.({
-        cfg: {
-          models: {
-            providers: {
-              google: {
-                apiKey: "google-config-only-key",
-                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: googleConfig({
+          apiKey: "google-config-only-key",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        }),
       }),
     ).toBe(true);
   });
 
   it("submits generation and returns inline audio bytes plus lyrics", async () => {
-    mockGoogleAuth();
     const audio = Buffer.from([0xfb, 0xff, 0x49, 0x44, 0x33, 0x04, 0x00, 0x00]);
     generateContentMock.mockResolvedValue(
       googleMusicResponse([
@@ -167,27 +116,21 @@ describe("google music generation provider", () => {
       ]),
     );
 
-    const result = await generateMusic({
-      instrumental: true,
-    });
-
-    const generateRequest = firstGenerateContentRequest();
-    expect(generateRequest.model).toBe("lyria-3-clip-preview");
-    expect(generateRequest.config).toEqual({
-      responseModalities: ["AUDIO", "TEXT"],
-    });
+    const result = await generateMusic({ instrumental: true });
+    const sent = generateContentMock.mock.calls[0]?.[0];
+    expect(sent?.model).toBe("lyria-3-clip-preview");
+    expect(sent?.config).toEqual({ responseModalities: ["AUDIO", "TEXT"] });
     expect(result.tracks).toHaveLength(1);
     expect(result.tracks[0]?.buffer).toEqual(audio);
     expect(result.tracks[0]?.mimeType).toBe("audio/mpeg");
     expect(result.lyrics).toEqual(["wake the city up"]);
-    expect(lastGoogleGenAIConfig().apiKey).toBe("google-key");
+    expect(createGoogleGenAIMock.mock.calls.at(-1)?.[0].apiKey).toBe("google-key");
   });
 
   it.each([
     ["non-canonical pad bits", "ZE=="],
     ["mixed alphabet", "aGVsbG8+_"],
   ])("rejects %s in inline audio", async (_scenario, data) => {
-    mockGoogleAuth();
     generateContentMock.mockResolvedValue(
       googleMusicResponse([{ inlineData: { data, mimeType: "audio/mpeg" } }], "STOP"),
     );
@@ -200,7 +143,6 @@ describe("google music generation provider", () => {
   });
 
   it("shares the configured timeout budget across a no-audio retry", async () => {
-    mockGoogleAuth();
     vi.spyOn(Date, "now")
       .mockReturnValueOnce(1_000)
       .mockReturnValueOnce(1_000)
@@ -209,19 +151,16 @@ describe("google music generation provider", () => {
       .mockResolvedValueOnce(googleMusicResponse([{ text: "[Verse]\nNeon lights" }], "STOP"))
       .mockResolvedValueOnce(googleMusicAudioResponse("recovered-audio"));
 
-    const result = await generateMusic({
-      timeoutMs: 5_000,
-    });
+    const result = await generateMusic({ timeoutMs: 5_000 });
 
     expect(generateContentMock).toHaveBeenCalledTimes(2);
     expect(result.tracks[0]?.buffer).toEqual(Buffer.from("recovered-audio"));
-    expect(allGoogleGenAIConfigs().map((config) => config.httpOptions?.timeout)).toEqual([
-      5_000, 3_500,
-    ]);
+    expect(createGoogleGenAIMock.mock.calls.map(([config]) => config.httpOptions?.timeout)).toEqual(
+      [5_000, 3_500],
+    );
   });
 
   it("fails after one retry when Lyria keeps returning no audio", async () => {
-    mockGoogleAuth();
     generateContentMock.mockResolvedValue(
       googleMusicResponse([{ text: "[Verse]\nStill no audio" }], "STOP"),
     );
@@ -245,7 +184,6 @@ describe("google music generation provider", () => {
       scenario: "candidate stop",
     },
   ])("does not retry a terminal $scenario response", async ({ expectedError, response }) => {
-    mockGoogleAuth();
     generateContentMock.mockResolvedValue(response);
 
     await expect(generateMusic()).rejects.toThrow(expectedError);
@@ -254,7 +192,6 @@ describe("google music generation provider", () => {
   });
 
   it("does not retry request errors", async () => {
-    mockGoogleAuth();
     generateContentMock.mockRejectedValue(new Error("HTTP 400 invalid request"));
 
     await expect(generateMusic()).rejects.toThrow("HTTP 400 invalid request");
@@ -262,70 +199,20 @@ describe("google music generation provider", () => {
     expect(generateContentMock).toHaveBeenCalledTimes(1);
   });
 
-  const baseUrlCases: Array<{
-    name: string;
-    baseUrl?: string;
-    expectedBaseUrl?: string;
-    prompt: string;
-    audio: string;
-  }> = [
-    {
-      name: "strips /v1beta suffix from configured baseUrl before passing to GoogleGenAI SDK",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      expectedBaseUrl: "https://generativelanguage.googleapis.com",
-      prompt: "ambient ocean",
-      audio: "mp3-bytes",
-    },
-    {
-      name: "does NOT strip /v1beta when it appears mid-path (end-anchor proof)",
-      baseUrl: "https://proxy.example.com/v1beta/route",
-      expectedBaseUrl: "https://proxy.example.com/v1beta/route",
-      prompt: "test",
-      audio: "x",
-    },
-    {
-      name: "does not set baseUrl when none is configured",
-      prompt: "test",
-      audio: "x",
-    },
-  ];
-
-  it.each(baseUrlCases)("$name", async ({ baseUrl, expectedBaseUrl, prompt, audio }) => {
-    mockGoogleAuth();
-    generateContentMock.mockResolvedValue(
-      googleMusicResponse([
-        {
-          inlineData: {
-            data: Buffer.from(audio).toString("base64"),
-            mimeType: "audio/mpeg",
-          },
-        },
-      ]),
-    );
-
-    await buildGoogleMusicGenerationProvider().generateMusic({
-      provider: "google",
-      model: "lyria-3-clip-preview",
-      prompt,
-      cfg: baseUrl ? { models: { providers: { google: { baseUrl, models: [] } } } } : {},
-      instrumental: true,
-    });
-
-    expect(lastGoogleGenAIConfig().httpOptions?.baseUrl).toBe(expectedBaseUrl);
+  it.each([
+    [
+      "https://generativelanguage.googleapis.com/v1beta",
+      "https://generativelanguage.googleapis.com",
+    ],
+    ["https://proxy.example.com/v1beta/route", "https://proxy.example.com/v1beta/route"],
+    [undefined, undefined],
+  ])("normalizes only a terminal /v1beta in %s", async (baseUrl, expectedBaseUrl) => {
+    generateContentMock.mockResolvedValue(googleMusicAudioResponse());
+    await generateMusic({ cfg: baseUrl ? googleConfig({ baseUrl }) : {}, instrumental: true });
+    expect(createGoogleGenAIMock.mock.calls.at(-1)?.[0].httpOptions?.baseUrl).toBe(expectedBaseUrl);
   });
 
   it("rejects unsupported wav output on clip model", async () => {
-    mockGoogleAuth();
-    const provider = buildGoogleMusicGenerationProvider();
-
-    await expect(
-      provider.generateMusic({
-        provider: "google",
-        model: "lyria-3-clip-preview",
-        prompt: "ambient ocean",
-        cfg: {},
-        format: "wav",
-      }),
-    ).rejects.toThrow("supports mp3 output");
+    await expect(generateMusic({ format: "wav" })).rejects.toThrow("supports mp3 output");
   });
 });

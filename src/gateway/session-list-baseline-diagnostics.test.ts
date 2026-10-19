@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -10,12 +11,67 @@ import {
   shareSidebarSessionRows,
 } from "./session-row-presentation.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import { prepareSessionRowPublicationView } from "./session-row-publication.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 beforeEach(() => resetDiagnosticEventsForTest());
 afterEach(() => {
   vi.restoreAllMocks();
   resetDiagnosticEventsForTest();
+});
+
+it("accounts for conditional encodings after legacy reads and releases shared rows fully", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+    const publication = prepareSessionRowPublicationView(projection)();
+    const present = () => prepareSessionRowPublication(projection, 1)();
+    const opts = { rowMode: "compact" } as const;
+    const row: GatewaySessionRow = {
+      key: "agent:main:one",
+      kind: "direct",
+      updatedAt: 1,
+      rowMode: "compact",
+      label: "synthetic ".repeat(256),
+    };
+    let retainedBytes = 0;
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "sessions.list.retention") {
+        retainedBytes = event.estimatedBytes;
+      }
+    });
+    const flush = async () => {
+      await setImmediate();
+      await waitForDiagnosticEventsDrained();
+      return retainedBytes;
+    };
+    try {
+      present().list([row], opts);
+      present().list([row], { ...opts, limit: 2 });
+      const legacyBytes = await flush();
+      present().list([row], { ...opts, ifRowsRevision: "" });
+      const encoded = JSON.stringify(row);
+      const packedBytes = encoded.length * 2 + Buffer.byteLength(`[${encoded}]`);
+      const factBytes = JSON.stringify({ label: row.label }).length * 2;
+      expect(await flush()).toBe(legacyBytes + packedBytes + factBytes);
+      const promoted = [...publication.lists.values()].find((view) => view.conditional)!;
+      expect(promoted.rowHistory).toBeUndefined();
+      present().list([{ ...row, updatedAt: 2 }], opts);
+      expect(promoted.rowHistory).toHaveLength(1);
+      expect(promoted.encodedBytes).toBeGreaterThan(row.label!.length * 3);
+      publication.lists.retireRows(promoted);
+      for (const view of publication.lists.values()) {
+        publication.lists.retireRows(view);
+      }
+      expect(await flush()).toBe(
+        [...publication.lists.values()].reduce((bytes, view) => bytes + view.bytes, 0),
+      );
+    } finally {
+      projection.dispose();
+      await flush();
+      unsubscribe();
+    }
+    expect(retainedBytes).toBe(0);
+  });
 });
 
 it("counts each retirement event once across invalidations and bounded evictions", async () => {

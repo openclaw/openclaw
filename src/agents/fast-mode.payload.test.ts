@@ -4,6 +4,7 @@ import {
   resolveRunFastModeForFallbackCandidate,
 } from "../auto-reply/reply/agent-runner-utils.js";
 import type { FollowupRun } from "../auto-reply/reply/queue.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamSimple } from "../llm/stream.js";
 import type { Model } from "../llm/types.js";
@@ -38,25 +39,28 @@ const model: Model<"openai-responses"> = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
+const selections = [
+  [false, "default"],
+  [true, "priority"],
+  ["ultrafast", "ultrafast"],
+] as const;
+const config = (defaults: AgentDefaultsConfig): OpenClawConfig => ({ agents: { defaults } });
+const models = (params: Record<string, unknown>) => ({ "openai/speed-fixture": { params } });
+
 async function captureRequest(
   cfg: OpenClawConfig,
-  fastMode: false | true | "ultrafast" | undefined,
+  fastMode: false | true | "auto" | "ultrafast" | undefined,
   turnOverride?: Record<string, unknown>,
+  prepared = false,
 ) {
-  const state = resolveFastModeState({
-    cfg,
-    provider: "openai",
-    model: model.id,
-    sessionEntry: { fastMode },
-  });
-  return capturePreparedRequest(cfg, state.requestMode, turnOverride);
-}
-
-async function capturePreparedRequest(
-  cfg: OpenClawConfig,
-  requestMode: false | true | "auto" | "ultrafast" | undefined,
-  turnOverride?: Record<string, unknown>,
-) {
+  const requestMode = prepared
+    ? fastMode
+    : resolveFastModeState({
+        cfg,
+        provider: "openai",
+        model: model.id,
+        sessionEntry: { fastMode },
+      }).requestMode;
   const preparedModel = attachModelProviderRuntimePluginHandle(model, {
     provider: "openai",
     modelId: model.id,
@@ -92,88 +96,58 @@ async function capturePreparedRequest(
   return requests.at(-1);
 }
 
-describe("configured speed through request assembly", () => {
+async function checkSpeeds(cfg: OpenClawConfig, inherited?: string, key?: string, compact = false) {
+  for (const [mode, tier] of [[undefined, inherited], ...selections] as const) {
+    if (tier === undefined) {
+      continue;
+    }
+    const override = key ? { [key]: mode } : undefined;
+    const payload = await captureRequest(cfg, key ? true : mode, override);
+    const threshold = tier === "ultrafast" ? 260_000 : 735_000;
+    const compaction = { type: "compaction", compact_threshold: threshold };
+    expect(payload).toMatchObject({
+      service_tier: tier,
+      ...(compact ? { context_management: [compaction] } : {}),
+    });
+  }
+}
+
+describe("fast-mode request assembly", () => {
   it.each(["serviceTier", "service_tier"])(
     "inherits %s without pinning it and honors session selections",
     async (key) => {
       for (const tier of ["flex", "auto", "ultrafast"]) {
-        const cfg: OpenClawConfig = {
-          agents: {
-            defaults: {
-              params: { [key === "serviceTier" ? "service_tier" : "serviceTier"]: "priority" },
-              models: { "openai/speed-fixture": { params: { [key]: tier } } },
-            },
-          },
-        };
-        for (const [fastMode, expected] of [
-          [undefined, tier],
-          [false, "default"],
-          [true, "priority"],
-          ["ultrafast", "ultrafast"],
-        ] as const) {
-          expect(await captureRequest(cfg, fastMode)).toMatchObject({
-            service_tier: expected,
-            context_management: [
-              {
-                type: "compaction",
-                compact_threshold: expected === "ultrafast" ? 260_000 : 735_000,
-              },
-            ],
-          });
-        }
+        const cfg = config({
+          params: { [key === "serviceTier" ? "service_tier" : "serviceTier"]: "priority" },
+          models: models({ [key]: tier }),
+        });
+        await checkSpeeds(cfg, tier, undefined, true);
       }
     },
   );
 
   it.each(["fastMode", "fast_mode"])("honors per-turn %s ahead of stored defaults", async (key) => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { params: { fastMode: "ultrafast", serviceTier: "flex" } } },
-    };
-    for (const [mode, expected] of [
-      [false, "default"],
-      [true, "priority"],
-      ["ultrafast", "ultrafast"],
-    ] as const) {
-      expect(await captureRequest(cfg, true, { [key]: mode })).toMatchObject({
-        service_tier: expected,
-      });
-    }
+    const cfg = config({ params: { fastMode: "ultrafast", serviceTier: "flex" } });
+    await checkSpeeds(cfg, undefined, key);
   });
 
   it.each(["fastModeDefault", "fastMode", "fast_mode"])(
     "lets session selections override %s",
     async (key) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            ...(key === "fastModeDefault"
-              ? { fastModeDefault: "ultrafast" }
-              : { params: { [key]: "ultrafast" } }),
-            models: { "openai/speed-fixture": { params: { serviceTier: "flex" } } },
-          },
-        },
-      };
-      for (const [fastMode, expected] of [
-        [undefined, "ultrafast"],
-        [false, "default"],
-        [true, "priority"],
-        ["ultrafast", "ultrafast"],
-      ] as const) {
-        expect(await captureRequest(cfg, fastMode)).toMatchObject({ service_tier: expected });
-      }
+      const cfg = config({
+        ...(key === "fastModeDefault"
+          ? { fastModeDefault: "ultrafast" }
+          : { params: { [key]: "ultrafast" } }),
+        models: models({ serviceTier: "flex" }),
+      });
+      await checkSpeeds(cfg, "ultrafast");
     },
   );
-});
 
-describe("fallback speed request provenance", () => {
   it.each(["flex", "auto"])(
     "inherits the candidate's %s tier without leaking the primary speed",
     async (tier) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: { models: { "openai/speed-fixture": { params: { serviceTier: tier } } } },
-        },
-      };
+      const cfg = config({ models: models({ serviceTier: tier }) });
       for (const explicit of [false, true]) {
         const run: FollowupRun["run"] = {
           config: cfg,
@@ -206,7 +180,9 @@ describe("fallback speed request provenance", () => {
           sessionCtx: {},
           hasRepliedRef: undefined,
         });
-        expect(await capturePreparedRequest(invocation.config, invocation.fastMode)).toMatchObject({
+        expect(
+          await captureRequest(invocation.config, invocation.fastMode, undefined, true),
+        ).toMatchObject({
           service_tier: explicit ? "default" : tier,
         });
       }

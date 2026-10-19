@@ -126,7 +126,7 @@ export interface SessionListHost {
     routeId: NavigationRouteId,
     options?: ApplicationNavigationOptions,
   ) => void;
-  readonly sessionPullRequests: Pick<SessionPullRequestIndicators, "summary">;
+  readonly sessionPullRequests: Pick<SessionPullRequestIndicators, "summary" | "count">;
   mainSessionRow(): GatewaySessionRow | null;
   setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;

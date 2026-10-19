@@ -408,6 +408,22 @@ export function startNodeHostConnection({
       workerCapacity = capacity;
       publishRunnerInventory();
     },
+    onProcessesChanged: (binding) => {
+      if (!gatewayHelloReceived) {
+        return;
+      }
+      // Retained processes outlive invocation routes; the current connection owns publication.
+      const generation = gatewayConnectionGeneration;
+      void publicationClient
+        .request("node.event", buildNodeEventParams("worker.processes.changed", binding))
+        .catch((error: unknown) => {
+          if (generation === gatewayConnectionGeneration) {
+            writeStderrLine(
+              `worker process notification failed: ${redactSensitiveText(String(error))}`,
+            );
+          }
+        });
+    },
     onWorkerHostingDisabled,
     onManifestChanged: (manifest) => {
       retireGatewayConnection();

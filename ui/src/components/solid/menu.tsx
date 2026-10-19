@@ -78,6 +78,7 @@ export type MenuHandle = {
   open(): boolean;
   close(): boolean;
   focusFirst(): void;
+  itemElements(): readonly HTMLElement[];
   itemElement(id: string): HTMLElement | undefined;
 };
 
@@ -367,6 +368,7 @@ export function Menu(props: BranchProps): JSX.Element {
         open: () => overlay.request(true, "first"),
         close: () => overlay.request(false, "return"),
         focusFirst: () => focusItem("first"),
+        itemElements: ownItems,
         itemElement: (id) => ownItems().find((item) => item.dataset.value === id),
       }),
     );

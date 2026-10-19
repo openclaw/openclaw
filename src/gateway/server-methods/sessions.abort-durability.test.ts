@@ -1,6 +1,7 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { expect, it, vi, type MockInstance } from "vitest";
+import { createMockSubsystemLogger } from "../../../test/helpers/mock-subsystem-logger.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -15,7 +16,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import {
@@ -23,32 +23,17 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
-import {
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { startGatewayEventSubscriptions } from "../server-runtime-subscriptions.js";
+import { createSubscriptionTestFixture } from "../server-runtime-subscriptions.test-support.js";
 import * as lifecycleState from "../session-lifecycle-state.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 import type { RespondFn } from "./types.js";
 
-const log: SubsystemLogger = {
-  subsystem: "sessions-abort-durability-test",
-  isEnabled: () => false,
-  trace: vi.fn(),
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  fatal: vi.fn(),
-  raw: vi.fn(),
-  child: () => log,
-};
+const log = createMockSubsystemLogger("sessions-abort-durability-test");
 
 it.each([
   { mode: "controller", outcome: "persisted" },
@@ -73,229 +58,210 @@ it.each([
           role: "gateway",
         },
       });
-      try {
-        const cfg = { agents: { entries: { main: {} } } };
-        setRuntimeConfigSnapshot(cfg, cfg);
-        const target = {
-          agentId: "main",
-          storePath: path.join(state.sessionsDir(), "sessions.json"),
-          sessionKey: "agent:main:abort-durability",
-        };
-        const sessionId = "abort-durability-session";
-        const runId = "abort-durability-run";
-        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-        const aborted = createDeferred();
-        const embeddedState = {
-          runId,
-          isAbortable: true,
-          abort: () => {
-            embeddedState.isAbortable = false;
-            aborted.resolve();
-          },
-        };
-        const embedded = createEmbeddedRunHandle(embeddedState);
-        const controllerTarget = captureSessionTarget({
-          storeScope: target.storePath,
-          sessionKey: target.sessionKey,
-          agentId: target.agentId,
-          incarnation: sessionId,
-        });
-        const registration = mode.startsWith("controller")
-          ? registerChatAbortController({
-              target: controllerTarget,
-              sessionKey: target.sessionKey,
-              sessionId,
-              agentId: target.agentId,
-              runId,
-              kind: "agent",
-              timeoutMs: 60_000,
-            })
-          : undefined;
-        const releaseController = registration?.entry
-          ? await claimRpcSourceForTest(registration.entry)
-          : undefined;
-        registration?.entry?.input.claim?.operation?.attachBackend({
-          kind: "embedded",
-          cancel: vi.fn(),
-          isAbortable: () => embeddedState.isAbortable,
-        });
-        registration?.controller.signal.addEventListener(
-          "abort",
-          () => {
-            embeddedState.abort();
-            releaseController?.();
-          },
-          { once: true },
-        );
-        const nativeOperation = mode.startsWith("controller")
-          ? registration?.entry?.input.claim?.operation
-          : createReplyOperation({
-              target: controllerTarget,
-              sessionKey: target.sessionKey,
-              sessionId,
-              agentId: target.agentId,
-              resetTriggered: false,
-            });
-        if (mode !== "controller") {
-          setActiveEmbeddedRun(
-            sessionId,
-            embedded,
-            target.sessionKey,
-            undefined,
-            target.agentId,
-            nativeOperation,
-          );
-          void aborted.promise.then(() => {
-            clearActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
-            nativeOperation?.complete();
-          });
-        }
-        const subscriptions = startGatewayEventSubscriptions({
-          scheduler: createTestGatewayScheduler(),
-          signal: new AbortController().signal,
-          log,
-          broadcast: context.broadcast,
-          broadcastToConnIds: context.broadcastToConnIds,
-          nodeHasSessionSubscribers: () => false,
-          nodeSendToSession: context.nodeSendToSession,
-          agentRunSeq: context.agentRunSeq,
-          chatRunState: context.chatRunState,
-          toolEventRecipients: context.chatRunState.toolEventRecipients,
-          sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-          sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-          restartRecoveryCandidates: new Map(),
-          resolveGatewayContext: context.resolveGatewayContext,
-          refreshConnectedUserProfiles: vi.fn(),
-        });
-        const writerEntered = createDeferred();
-        const releaseWriter = createDeferred();
-        let heldWriter: Promise<unknown> | undefined;
-        let request: Promise<void> | undefined;
-        let replacement: Promise<void> | undefined;
-        const writeFailure = new Error("terminal session write failed");
-        let persistenceSpy:
-          | MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>
-          | undefined;
-        const responseRows: Array<ReturnType<typeof loadSessionEntry>> = [];
-        const respond = vi.fn<RespondFn>(() => {
-          responseRows.push(loadSessionEntry(target));
-        });
-        try {
-          await replaceSessionEntry(target, { sessionId, updatedAt: 1_000 });
-          const startEvent = {
-            runId,
-            sessionId,
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-            ts: 1_000,
-            data: { phase: "start", startedAt: 1_000 },
-          };
-          await lifecycleState.persistGatewaySessionLifecycleEvent({
+      await using _ = {
+        [Symbol.asyncDispose]: () => state.restoreEnv().finally(stateOwner.release),
+      };
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const target = {
+        agentId: "main",
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+        sessionKey: "agent:main:abort-durability",
+      };
+      const sessionId = "abort-durability-session";
+      const runId = "abort-durability-run";
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const aborted = createDeferred();
+      const embeddedState = {
+        runId,
+        isAbortable: true,
+        abort: () => {
+          embeddedState.isAbortable = false;
+          aborted.resolve();
+        },
+      };
+      const embedded = createEmbeddedRunHandle(embeddedState);
+      const controllerTarget = captureSessionTarget({
+        storeScope: target.storePath,
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+        incarnation: sessionId,
+      });
+      const registration = mode.startsWith("controller")
+        ? registerChatAbortController({
+            target: controllerTarget,
             sessionKey: target.sessionKey,
+            sessionId,
             agentId: target.agentId,
-            event: startEvent,
+            runId,
+            kind: "agent",
+            timeoutMs: 60_000,
+          })
+        : undefined;
+      const releaseController = registration?.entry
+        ? await claimRpcSourceForTest(registration.entry)
+        : undefined;
+      registration?.entry?.input.claim?.operation?.attachBackend({
+        kind: "embedded",
+        cancel: vi.fn(),
+        isAbortable: () => embeddedState.isAbortable,
+      });
+      registration?.controller.signal.addEventListener(
+        "abort",
+        () => {
+          embeddedState.abort();
+          releaseController?.();
+        },
+        { once: true },
+      );
+      const nativeOperation = mode.startsWith("controller")
+        ? registration?.entry?.input.claim?.operation
+        : createReplyOperation({
+            target: controllerTarget,
+            sessionKey: target.sessionKey,
+            sessionId,
+            agentId: target.agentId,
+            resetTriggered: false,
           });
-          expect(loadSessionEntry(target)).toMatchObject({
-            lifecycleRunId: runId,
-            abortedLastRun: false,
-          });
-          expect(loadSessionEntry(target)?.status).toBeUndefined();
-          heldWriter = patchSessionEntryCore(target, async () => {
-            writerEntered.resolve();
-            await releaseWriter.promise;
-            return null;
-          });
-          await writerEntered.promise;
-          if (outcome === "replacement") {
-            replacement = lifecycleState.persistGatewaySessionLifecycleEvent({
-              sessionKey: target.sessionKey,
-              agentId: target.agentId,
-              event: { ...startEvent, runId: "replacement-run" },
-            });
-          }
-          if (outcome === "write-failed") {
-            persistenceSpy = vi
-              .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
-              .mockReturnValueOnce(async () => {
-                throw writeFailure;
-              });
-          }
-          request = Promise.resolve(
-            sessionAbortHandlers["sessions.abort"]!({
-              req: { type: "req", id: "abort-durability", method: "sessions.abort" },
-              params: {
-                key: target.sessionKey,
-                ...(mode.endsWith("session") ? {} : { runId }),
-              },
-              respond,
-              context,
-              client: null,
-              isWebchatConnect: () => false,
-            }),
-          );
-          void request.catch(() => {});
-          await aborted.promise;
-          if (mode === "embedded-run") {
-            clearActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
-          }
-          await setImmediate();
-          expect.soft(respond).not.toHaveBeenCalled();
-          expect(loadSessionEntry(target)?.status).toBeUndefined();
-          releaseWriter.resolve();
-          await heldWriter;
-          await replacement;
-          if (outcome === "write-failed") {
-            await expect(request).rejects.toThrow(writeFailure);
-            expect(respond).not.toHaveBeenCalled();
-            expect(loadSessionEntry(target)).toMatchObject({
-              lifecycleRunId: runId,
-              abortedLastRun: false,
-            });
-            expect(loadSessionEntry(target)?.status).toBeUndefined();
-            return;
-          }
-          await request;
-          expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
-            true,
-            expect.objectContaining({ ok: true, status: "aborted" }),
-          ]);
-          if (outcome === "replacement") {
-            expect(loadSessionEntry(target)).toMatchObject({
-              lifecycleRunId: "replacement-run",
-              abortedLastRun: false,
-            });
-            expect(loadSessionEntry(target)?.status).toBeUndefined();
-            return;
-          }
-          expect(responseRows[0]).toMatchObject({ status: "killed", abortedLastRun: true });
-          await closeOpenClawAgentDatabasesAsync(state.root);
-          closeOpenClawAgentDatabasesForTest(state.root);
-          expect(loadSessionEntry({ ...target, readConsistency: "latest" })).toMatchObject({
-            status: "killed",
-            abortedLastRun: true,
-            lastRunId: runId,
-          });
-          expect(loadSessionEntry(target)?.lifecycleRunId).toBeUndefined();
-        } finally {
-          releaseWriter.resolve();
-          await heldWriter;
-          await replacement;
-          await request?.catch(() => {});
+      if (mode !== "controller") {
+        setActiveEmbeddedRun(
+          sessionId,
+          embedded,
+          target.sessionKey,
+          undefined,
+          target.agentId,
+          nativeOperation,
+        );
+        void aborted.promise.then(() => {
           clearActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
           nativeOperation?.complete();
-          releaseController?.();
-          registration?.cleanup();
-          await subscriptions.agentUnsub();
-          subscriptions.heartbeatUnsub();
-          subscriptions.transcriptUnsub();
-          subscriptions.lifecycleUnsub();
-          persistenceSpy?.mockRestore();
+        });
+      }
+      const subscriptions = startGatewayEventSubscriptions({
+        ...createSubscriptionTestFixture().createParams(),
+        log,
+        broadcast: context.broadcast,
+        broadcastToConnIds: context.broadcastToConnIds,
+        nodeSendToSession: context.nodeSendToSession,
+        agentRunSeq: context.agentRunSeq,
+        chatRunState: context.chatRunState,
+        toolEventRecipients: context.chatRunState.toolEventRecipients,
+        resolveGatewayContext: context.resolveGatewayContext,
+      });
+      const writerEntered = createDeferred();
+      const releaseWriter = createDeferred();
+      let heldWriter: Promise<unknown> | undefined;
+      let request: Promise<void> | undefined;
+      let replacement: Promise<void> | undefined;
+      const writeFailure = new Error("terminal session write failed");
+      let persistenceSpy:
+        | MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>
+        | undefined;
+      const responseRows: Array<ReturnType<typeof loadSessionEntry>> = [];
+      const respond = vi.fn<RespondFn>(() => {
+        responseRows.push(loadSessionEntry(target));
+      });
+      const expectActiveRow = (lifecycleRunId = runId) => {
+        expect(loadSessionEntry(target)).toMatchObject({ lifecycleRunId, abortedLastRun: false });
+        expect(loadSessionEntry(target)?.status).toBeUndefined();
+      };
+      try {
+        await replaceSessionEntry(target, { sessionId, updatedAt: 1_000 });
+        const startEvent = {
+          runId,
+          sessionId,
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          ts: 1_000,
+          data: { phase: "start", startedAt: 1_000 },
+        };
+        await lifecycleState.persistGatewaySessionLifecycleEvent({
+          sessionKey: target.sessionKey,
+          agentId: target.agentId,
+          event: startEvent,
+        });
+        expectActiveRow();
+        heldWriter = patchSessionEntryCore(target, async () => {
+          writerEntered.resolve();
+          await releaseWriter.promise;
+          return null;
+        });
+        await writerEntered.promise;
+        if (outcome === "replacement") {
+          replacement = lifecycleState.persistGatewaySessionLifecycleEvent({
+            sessionKey: target.sessionKey,
+            agentId: target.agentId,
+            event: { ...startEvent, runId: "replacement-run" },
+          });
         }
+        if (outcome === "write-failed") {
+          persistenceSpy = vi
+            .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
+            .mockReturnValueOnce(async () => {
+              throw writeFailure;
+            });
+        }
+        request = Promise.resolve(
+          sessionAbortHandlers["sessions.abort"]!({
+            req: { type: "req", id: "abort-durability", method: "sessions.abort" },
+            params: {
+              key: target.sessionKey,
+              ...(mode.endsWith("session") ? {} : { runId }),
+            },
+            respond,
+            context,
+            client: null,
+            isWebchatConnect: () => false,
+          }),
+        );
+        void request.catch(() => {});
+        await aborted.promise;
+        if (mode === "embedded-run") {
+          clearActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
+        }
+        await setImmediate();
+        expect.soft(respond).not.toHaveBeenCalled();
+        expect(loadSessionEntry(target)?.status).toBeUndefined();
+        releaseWriter.resolve();
+        await heldWriter;
+        await replacement;
+        if (outcome === "write-failed") {
+          await expect(request).rejects.toThrow(writeFailure);
+          expect(respond).not.toHaveBeenCalled();
+          expectActiveRow();
+          return;
+        }
+        await request;
+        expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
+          true,
+          expect.objectContaining({ ok: true, status: "aborted" }),
+        ]);
+        if (outcome === "replacement") {
+          expectActiveRow("replacement-run");
+          return;
+        }
+        expect(responseRows[0]).toMatchObject({ status: "killed", abortedLastRun: true });
+        await closeOpenClawAgentDatabasesAsync(state.root);
+        closeOpenClawAgentDatabasesForTest(state.root);
+        expect(loadSessionEntry({ ...target, readConsistency: "latest" })).toMatchObject({
+          status: "killed",
+          abortedLastRun: true,
+          lastRunId: runId,
+        });
+        expect(loadSessionEntry(target)?.lifecycleRunId).toBeUndefined();
       } finally {
-        try {
-          await state.restoreEnv();
-        } finally {
-          stateOwner.release();
-        }
+        releaseWriter.resolve();
+        await heldWriter;
+        await replacement;
+        await request?.catch(() => {});
+        clearActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
+        nativeOperation?.complete();
+        releaseController?.();
+        registration?.cleanup();
+        await subscriptions.agentUnsub();
+        subscriptions.heartbeatUnsub();
+        subscriptions.transcriptUnsub();
+        subscriptions.lifecycleUnsub();
+        persistenceSpy?.mockRestore();
       }
     });
   },

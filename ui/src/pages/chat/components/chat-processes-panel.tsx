@@ -6,6 +6,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-b
 import { ProcessesPanelData } from "../processes-panel-data.ts";
 import {
   SessionPanelGroups,
+  syncSessionPanelInputs,
   useSessionPanel,
   type SessionPanelProps,
 } from "./chat-session-panel.tsx";
@@ -17,9 +18,18 @@ export type ChatProcessesPanel = SolidBridgeElement<SessionPanelProps>;
 
 export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
   "openclaw-chat-processes-panel",
-  (props) => {
+  (_props, host) => {
     const [finishedOpen, setFinishedOpen] = createSignal(false);
-    const panel = useSessionPanel(props, ProcessesPanelData, () => setSelected(null));
+    const panel = useSessionPanel(
+      host,
+      () => ({ sessionKey: host.sessionKey, agentId: host.agentId, presented: host.presented }),
+      ProcessesPanelData,
+      (identityChanged) => {
+        if (identityChanged) {
+          setSelected(null);
+        }
+      },
+    );
     const data = () => panel().snapshot;
     // Missing retained rows keep their detail state; access loss closes private output.
     const [selected, setSelected] = createSignal<string | null>((previous) =>
@@ -188,6 +198,7 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
     );
   },
   {
+    propertyChanged: syncSessionPanelInputs,
     properties: {
       sessionKey: { default: "", attribute: false },
       agentId: { default: "main", attribute: false },

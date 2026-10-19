@@ -24,6 +24,7 @@ type AgentSelectProps = {
   variant: "default" | "compact";
   onSelect: (value: string) => void;
   onCreateAgent: (() => void) | null;
+  focusTargetsRef?: (readTargets: () => readonly HTMLElement[]) => void;
 };
 export type AgentSelectElement = SolidBridgeElement<AgentSelectProps>;
 defineSolidBridge<AgentSelectProps>(
@@ -160,6 +161,11 @@ defineSolidBridge<AgentSelectProps>(
         id={id}
         ref={(handle) => {
           menu = handle;
+          props.focusTargetsRef?.(() => {
+            const elements = handle.itemElements();
+            const trigger = handle.overlay.trigger;
+            return trigger ? [trigger, ...elements] : elements;
+          });
         }}
         class={props.variant === "compact" ? "agent-select agent-select--compact" : "agent-select"}
         panelClass="agent-select__menu"
@@ -227,6 +233,7 @@ defineSolidBridge<AgentSelectProps>(
       variant: { default: "default", attribute: false },
       onSelect: { default: () => {}, attribute: false },
       onCreateAgent: { default: null, attribute: false },
+      focusTargetsRef: { default: undefined, attribute: false },
     },
   },
 );

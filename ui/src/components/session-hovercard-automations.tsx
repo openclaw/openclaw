@@ -2,7 +2,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import type { CronJob } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isCronJobRunning, resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
-import { loadCronJobsPage } from "../lib/cron/jobs.ts";
+import { loadCronJobsPage } from "../lib/cron/jobs-full.ts";
 import { createInitialCronState } from "../lib/cron/state.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { createGatewayConnectionLifecycle } from "../lib/gateway-connection-lifecycle.ts";
@@ -47,9 +47,9 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
     let current = createInitialCronState();
     let active = false;
     let notify = () => {};
-    const load = async (append = false) => {
+    const load = async (append = false, event?: unknown) => {
       const pendingState = current;
-      const pending = loadCronJobsPage(pendingState, { append });
+      const pending = loadCronJobsPage(pendingState, { append, event });
       notify();
       await pending;
       if (active && current === pendingState) {
@@ -84,7 +84,7 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
         });
         const stopEvents = gateway?.subscribeEvents((event) => {
           if (event.event === "cron") {
-            void load();
+            void load(false, event.payload);
           }
         });
         void load();

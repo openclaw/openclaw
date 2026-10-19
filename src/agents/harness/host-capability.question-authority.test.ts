@@ -19,15 +19,17 @@ const attempt = {
   workspaceDir: "/tmp/native-question-workspace",
   provider: "openai",
   modelId: "gpt-test",
-  messageProvider: "webchat",
+  messageProvider: "telegram",
+  senderId: "question-owner",
   senderIsOwner: true,
 };
 
 const caller = {
+  senderId: attempt.senderId,
   senderIsOwner: true,
   disableTools: false,
   traceAuthorized: false,
-  messageProvider: "webchat",
+  messageProvider: "telegram",
 };
 
 describe("native question creator capabilities", () => {

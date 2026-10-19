@@ -18,6 +18,7 @@ export interface SessionOrganizerDependencies {
     | "refreshSidebarSessions"
     | "resetSessionList"
     | "sessionMutationError"
+    | "sessionDraftSignal"
   >;
   readonly sidebarEntries: readonly string[];
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;

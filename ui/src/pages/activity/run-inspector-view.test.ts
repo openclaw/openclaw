@@ -171,6 +171,22 @@ it("renders every identity dimension with explicit text states and safe refs", (
   ).toBe("/operator/activity?view=run&run=parent-run");
 });
 
+it("labels a generic receipt's selected authority without claiming human intent or verification", () => {
+  const result = structuredClone(presentResult);
+  const receipt = result.decisionDisplays[0]!;
+  receipt.provenance = { state: "unverified" };
+  receipt.decision = { outcome: "unknown", reasonCode: "decision_fact_display_unverified" };
+  receipt.representedSubject = {
+    state: "present",
+    principal: { kind: "person", domainRef: hmacRef, principalRef: "recorded-person" },
+  };
+  const text = renderState(ready(result)).textContent;
+  expect(text).toContain("Recorded authority subject");
+  expect(text).toContain("recorded-person");
+  expect(text).toContain("It does not prove that the person requested or approved it");
+  expect(text).not.toContain("Verified producer");
+});
+
 it.each<[RunInspectorState, string]>([
   [{ status: "loading", waitingForGateway: true }, "Waiting for the Gateway"],
   [{ status: "disconnected" }, "Gateway disconnected"],

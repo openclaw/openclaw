@@ -58,7 +58,7 @@ type CaptureJoinOrigin = {
 };
 
 export class DiscordVoiceManager {
-  private sessions = new Map<string, VoiceSessionEntry>();
+  private readonly sessions = new Map<string, VoiceSessionEntry>();
   private readonly guildLifecycles = new Map<string, VoiceGuildLifecycle>();
   private nextGuildGeneration = 0;
   private readonly joinTasks = new Map<string, Promise<void>>();
@@ -128,8 +128,7 @@ export class DiscordVoiceManager {
         bindDiscordCaptureReceipts({ accountId: params.accountId, guildId, channelId }, this),
       readPolicy: this.readPolicy,
       admissionAllowFrom,
-      botUserId: () => this.botUserId,
-      getSession: (guildId) => this.sessions.get(guildId),
+      sessions: this.sessions,
       isEntryCurrent: (entry) => this.isEntryCurrent(entry),
       isFollowOwnedGuild: (guildId) => this.following.isFollowOwnedGuild(guildId),
       join: (entry, options) => this.join(entry, options),
@@ -141,11 +140,9 @@ export class DiscordVoiceManager {
       ...params,
       allowedChannels: this.allowedChannels,
       autoJoinChannels: this.autoJoinChannels,
-      botUserId: () => this.botUserId,
-      deleteRecoveryAttempt: (guildId) => this.receive.daveRecoveryAttempts.delete(guildId),
+      daveRecoveryAttempts: this.receive.daveRecoveryAttempts,
       stopTransport: (guildId) => this.voiceSessions.stopTransport(guildId),
-      getRecoveryAttempt: (guildId) => this.receive.daveRecoveryAttempts.get(guildId),
-      getSession: (guildId) => this.sessions.get(guildId),
+      sessions: this.sessions,
       hasVoiceLifecycle: (guildId) => {
         const lifecycle = this.guildLifecycles.get(guildId);
         return lifecycle?.status === "starting" || lifecycle?.status === "active";
@@ -153,7 +150,6 @@ export class DiscordVoiceManager {
       isAllowedVoiceChannel: (entry) => this.isAllowedVoiceChannel(entry),
       join: (entry, options) => this.join(entry, options),
       leave: (entry, options) => this.leave(entry, options),
-      listSessions: () => this.sessions.values(),
       voiceEnabled: this.voiceEnabled,
     });
     this.voiceSessions = new DiscordVoiceSessions({
@@ -161,7 +157,6 @@ export class DiscordVoiceManager {
       signal: this.abort.signal,
       isSessionGenerationCurrent: (entry) =>
         this.guildLifecycles.get(entry.guildId)?.generation === entry.generation,
-      botUserId: () => this.botUserId,
       destroyed: () => this.destroyed,
       getTranscripts: this.getTranscripts,
       membership: this.membership,

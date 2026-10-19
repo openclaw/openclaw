@@ -409,7 +409,7 @@ export type CronToolsAllowProvenance =
 export type CronStoredJob = CronJob & {
   /** Original authenticated source for a same-conversation continuation, never a public grant. */
   operatorSource?: {
-    source: import("../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
+    source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
     executionRevision: string;
   };
   /** Captured inference owner; private and independent of scheduled tool authority. */

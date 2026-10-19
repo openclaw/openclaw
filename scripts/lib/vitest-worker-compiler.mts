@@ -209,7 +209,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
               kind: "include",
               expr: {
                 kind: "importerId",
-                pattern: /[\\/]src[\\/]cli[\\/]program[\\/]message[\\/]helpers\.ts$/,
+                pattern: /[\\/]src[\\/]cli[\\/]program[\\/]register\.message\.ts$/,
                 params: { cleanUrl: false },
               },
             },
@@ -218,7 +218,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             // Preserve the broadcast fixture's exact native command substitution.
             if (
               importer &&
-              path.normalize(importer) === path.join(root, "src/cli/program/message/helpers.ts") &&
+              path.normalize(importer) === path.join(root, "src/cli/program/register.message.ts") &&
               id.startsWith(".") &&
               path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts") ===
                 path.join(root, "src/commands/message.ts")
