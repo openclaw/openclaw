@@ -53,6 +53,22 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => {
 
 const tempDirs = createTrackedTempDirs();
 
+type Entry = ReturnType<typeof listPluginDoctorStateMigrationEntries>[number];
+function entry(pluginId: string, migration: Entry["migration"]): Entry {
+  return { pluginId, channelIds: [], migration };
+}
+async function repairEnv() {
+  const root = await tempDirs.make("openclaw-plugin-doctor-");
+  return {
+    ...process.env,
+    HOME: root,
+    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+    OPENCLAW_STATE_DIR: root,
+  };
+}
+const plannedActions = () =>
+  controls.entries.map(({ pluginId, migration }) => ({ pluginId, id: migration.id }));
+
 afterEach(async () => {
   controls.entries = [];
   controls.failSettlement = false;
@@ -87,36 +103,25 @@ describe("plugin Doctor migrations", () => {
       });
       const undeclaredDetector = vi.fn(() => null);
       controls.entries = [
-        {
-          pluginId: "legacy-owner",
-          channelIds: [],
-          migration: {
-            id: "legacy-import",
-            label: "Legacy import",
-            sqliteOnly: { family: "state", postgresNote: "Preserve the source." },
-            detectLegacyState,
-            migrateLegacyState,
-          },
-        },
-        {
-          pluginId: "unrestricted-owner",
-          channelIds: [],
-          migration: {
-            id: "ordinary-repair",
-            label: "Ordinary repair",
-            detectLegacyState: undeclaredDetector,
-            migrateLegacyState: () => ({ changes: [], warnings: [] }),
-          },
-        },
+        entry("legacy-owner", {
+          id: "legacy-import",
+          label: "Legacy import",
+          sqliteOnly: { family: "state", postgresNote: "Preserve the source." },
+          detectLegacyState,
+          migrateLegacyState,
+        }),
+        entry("unrestricted-owner", {
+          id: "ordinary-repair",
+          label: "Ordinary repair",
+          detectLegacyState: undeclaredDetector,
+          migrateLegacyState: () => ({ changes: [], warnings: [] }),
+        }),
       ];
       const params = {
         detected: { stateDir, oauthDir: stateDir, doctorOnlyStateMigrations: true },
         config,
         env,
-        plannedActions: controls.entries.map(({ pluginId, migration }) => ({
-          pluginId,
-          id: migration.id,
-        })),
+        plannedActions: plannedActions(),
       };
       const first = await runPluginDoctorStateMigrationPlans(params);
       const replay = await runPluginDoctorStateMigrationPlans(params);
@@ -167,16 +172,12 @@ describe("plugin Doctor migrations", () => {
       warnings: [],
     }));
     controls.entries = [
-      {
-        pluginId: "memory-core",
-        channelIds: [],
-        migration: {
-          id: "memory-core-test",
-          label: "Memory Core test migration",
-          detectLegacyState: () => ({ preview: ["plugin state"] }),
-          migrateLegacyState,
-        },
-      },
+      entry("memory-core", {
+        id: "memory-core-test",
+        label: "Memory Core test migration",
+        detectLegacyState: () => ({ preview: ["plugin state"] }),
+        migrateLegacyState,
+      }),
     ];
 
     await expect(
@@ -212,82 +213,56 @@ describe("plugin Doctor migrations", () => {
     expect(migrateLegacyState).not.toHaveBeenCalled();
   });
   it.each([
-    {
-      name: "reordered",
-      actionIds: ["z-prepare", "a-finalize"],
-      plannedActions: [
-        { pluginId: "owner", id: "a-finalize" },
-        { pluginId: "owner", id: "z-prepare" },
-      ],
-    },
-    {
-      name: "removed",
-      actionIds: ["z-prepare", "a-finalize"],
-      plannedActions: [{ pluginId: "owner", id: "z-prepare" }],
-    },
-    {
-      name: "duplicated",
-      actionIds: ["z-prepare", "z-prepare"],
-      plannedActions: [
-        { pluginId: "owner", id: "z-prepare" },
-        { pluginId: "owner", id: "z-prepare" },
-      ],
-    },
-  ])("refuses a genuinely $name action within one owner", async ({ actionIds, plannedActions }) => {
-    const root = await tempDirs.make("openclaw-plugin-doctor-order-guard-");
-    const env = {
-      ...process.env,
-      HOME: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-      OPENCLAW_STATE_DIR: root,
-    };
-    const observed: string[] = [];
-    controls.entries = actionIds.map((id) => ({
-      pluginId: "owner",
-      channelIds: [],
-      trustedForDurableStores: false,
-      migration: {
-        id,
-        label: id,
-        phase: "after-session-repair" as const,
-        detectLegacyState: () => {
-          observed.push(`detect ${id}`);
-          return { preview: ["pending"] };
+    ["reordered", ["z-prepare", "a-finalize"], ["a-finalize", "z-prepare"]],
+    ["removed", ["z-prepare", "a-finalize"], ["z-prepare"]],
+    ["duplicated", ["z-prepare", "z-prepare"], ["z-prepare", "z-prepare"]],
+  ] as const)(
+    "refuses a genuinely %s action within one owner",
+    async (_name, actionIds, plannedIds) => {
+      const env = await repairEnv();
+      const observed: string[] = [];
+      controls.entries = actionIds.map((id) => ({
+        pluginId: "owner",
+        channelIds: [],
+        trustedForDurableStores: false,
+        migration: {
+          id,
+          label: id,
+          phase: "after-session-repair" as const,
+          detectLegacyState: () => {
+            observed.push(`detect ${id}`);
+            return { preview: ["pending"] };
+          },
+          migrateLegacyState: () => {
+            observed.push(`migrate ${id}`);
+            return { changes: [`migrated ${id}`], warnings: [] };
+          },
         },
-        migrateLegacyState: () => {
-          observed.push(`migrate ${id}`);
-          return { changes: [`migrated ${id}`], warnings: [] };
-        },
-      },
-    }));
+      }));
 
-    await expect(
-      runPostSessionPluginDoctorStateRepairs({
-        config: {},
-        env,
-        maintenanceAuthority: { assertCurrent() {} },
-        plannedActions,
-      }),
-    ).resolves.toEqual({
-      changes: [],
-      completedPluginIds: undefined,
-      requiredPluginIds: ["owner"],
-      warnings: [expect.stringContaining("immutable action order")],
-      warningDisposition: undefined,
-    });
-    expect(observed).toEqual([]);
-  });
+      await expect(
+        runPostSessionPluginDoctorStateRepairs({
+          config: {},
+          env,
+          maintenanceAuthority: { assertCurrent() {} },
+          plannedActions: plannedIds.map((id) => ({ pluginId: "owner", id })),
+        }),
+      ).resolves.toEqual({
+        changes: [],
+        completedPluginIds: undefined,
+        requiredPluginIds: ["owner"],
+        warnings: [expect.stringContaining("immutable action order")],
+        warningDisposition: undefined,
+      });
+      expect(observed).toEqual([]);
+    },
+  );
 
   it.each(["none", "later-action", "later-warning", "detector", "lease-settlement"] as const)(
     "preserves completed mutations and replay truth when failure is %s",
     async (failure) => {
-      const root = await tempDirs.make("openclaw-plugin-doctor-settlement-");
-      const env = {
-        ...process.env,
-        HOME: root,
-        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-        OPENCLAW_STATE_DIR: root,
-      };
+      const env = await repairEnv();
+      const root = env.OPENCLAW_STATE_DIR;
       const markers = [path.join(root, "first"), path.join(root, "second")] as const;
       controls.failSettlement = failure === "lease-settlement";
       controls.entries = markers.map((marker, index) => ({
@@ -321,10 +296,7 @@ describe("plugin Doctor migrations", () => {
         config: {},
         env,
         maintenanceAuthority: { assertCurrent() {} },
-        plannedActions: controls.entries.map(({ pluginId, migration }) => ({
-          pluginId,
-          id: migration.id,
-        })),
+        plannedActions: plannedActions(),
         // Replay certification needs a consumer; model the session owner's settlement hook.
         beforeCompletion: async () => {},
       };
@@ -367,13 +339,7 @@ describe("plugin Doctor migrations", () => {
   );
 
   it("runs default-phase detectors only when completion certification has a consumer", async () => {
-    const root = await tempDirs.make("openclaw-plugin-doctor-certification-");
-    const env = {
-      ...process.env,
-      HOME: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-      OPENCLAW_STATE_DIR: root,
-    };
+    const env = await repairEnv();
     const detected: string[] = [];
     controls.entries = (["default", "after-session-repair"] as const).map((phase) => ({
       pluginId: "owner",

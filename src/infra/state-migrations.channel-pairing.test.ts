@@ -251,51 +251,33 @@ describe("legacy channel pairing state migration", () => {
     expect(readChannelPairingStateSnapshot("telegram", state.env).allowFrom).toEqual({});
   });
 
-  it.each<{
-    filename: string;
-    accountIds: Record<string, string[]>;
-    configuredChannelIds: string[];
-    channels: string[];
-    reason: "unresolved" | "ambiguous";
-  }>([
-    {
-      filename: "telegram-ops..bot-allowFrom.json",
-      accountIds: { telegram: ["ops_bot"] },
-      configuredChannelIds: [],
-      channels: ["telegram"],
-      reason: "unresolved",
-    },
-    {
-      filename: "telegram-DEFAULT-allowFrom.json",
-      accountIds: { telegram: ["default"] },
-      configuredChannelIds: [],
-      channels: ["telegram"],
-      reason: "unresolved",
-    },
-    {
-      filename: "custom-channel-default-allowFrom.json",
-      accountIds: { telegram: [] },
-      configuredChannelIds: ["custom-channel"],
-      channels: ["custom-channel"],
-      reason: "unresolved",
-    },
-    {
-      filename: "telegram-business-allowFrom.json",
-      accountIds: { telegram: ["business"] },
-      configuredChannelIds: ["telegram-business"],
-      channels: ["telegram", "telegram-business"],
-      reason: "ambiguous",
-    },
-    {
-      filename: "telegram-business-ops..bot-allowFrom.json",
-      accountIds: { telegram: [], "telegram-business": ["ops_bot"] },
-      configuredChannelIds: ["telegram-business"],
-      channels: ["telegram", "telegram-business"],
-      reason: "unresolved",
-    },
+  it.each<[string, Record<string, string[]>, string[], string[], "unresolved" | "ambiguous"]>([
+    ["telegram-ops..bot-allowFrom.json", { telegram: ["ops_bot"] }, [], ["telegram"], "unresolved"],
+    ["telegram-DEFAULT-allowFrom.json", { telegram: ["default"] }, [], ["telegram"], "unresolved"],
+    [
+      "custom-channel-default-allowFrom.json",
+      { telegram: [] },
+      ["custom-channel"],
+      ["custom-channel"],
+      "unresolved",
+    ],
+    [
+      "telegram-business-allowFrom.json",
+      { telegram: ["business"] },
+      ["telegram-business"],
+      ["telegram", "telegram-business"],
+      "ambiguous",
+    ],
+    [
+      "telegram-business-ops..bot-allowFrom.json",
+      { telegram: [], "telegram-business": ["ops_bot"] },
+      ["telegram-business"],
+      ["telegram", "telegram-business"],
+      "unresolved",
+    ],
   ])(
-    "preserves $reason account source $filename",
-    async ({ filename, accountIds, configuredChannelIds, channels, reason }) => {
+    "preserves account source %s",
+    async (filename, accountIds, configuredChannelIds, channels, reason) => {
       const state = await fixture(
         { [filename]: { version: 1, allowFrom: ["1003"] } },
         {

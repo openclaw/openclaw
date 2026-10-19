@@ -19,6 +19,45 @@ function sha256(value: string | Buffer): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
+function durableHashes(databasePath: string) {
+  return {
+    database: sha256(fs.readFileSync(databasePath)),
+    wal: sha256(fs.readFileSync(`${databasePath}-wal`)),
+  };
+}
+
+function openWal(databasePath: string) {
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA wal_autocheckpoint = 0;
+      CREATE TABLE planner_probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO planner_probe(value) VALUES ('copied-state');
+    `);
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+}
+
+function copyWal(sourcePath: string, databasePath: string) {
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  for (const suffix of ["", "-wal"]) {
+    fs.copyFileSync(`${sourcePath}${suffix}`, `${databasePath}${suffix}`);
+  }
+}
+
+function requireDigest(plan: Awaited<ReturnType<typeof planFixture>>) {
+  const digest = plan.snapshot.stateDigest;
+  if (!digest) {
+    throw new Error("expected the copied state to have a bound digest");
+  }
+  return digest;
+}
+
 function writeWalIndexHeaderChecksum(header: Buffer): void {
   const readUint32 = (offset: number) =>
     endianness() === "LE" ? header.readUInt32LE(offset) : header.readUInt32BE(offset);
@@ -112,34 +151,18 @@ describe("legacy state migration plan identity", () => {
   it("does not treat SQLite shared-memory coordination as a copied-state mutation", async () => {
     const fixture = await makeFixture();
     const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const database = new DatabaseSync(databasePath);
-    database.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA wal_autocheckpoint = 0;
-      CREATE TABLE planner_probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
-      INSERT INTO planner_probe(value) VALUES ('copied-state');
-    `);
-    const durableBefore = {
-      database: sha256(fs.readFileSync(databasePath)),
-      wal: sha256(fs.readFileSync(`${databasePath}-wal`)),
-    };
+    const database = openWal(databasePath);
+    const durableBefore = durableHashes(databasePath);
     const sharedMemoryBefore = sha256(fs.readFileSync(`${databasePath}-shm`));
 
     try {
       const plan = await planFixture(fixture);
 
-      expect({
-        database: sha256(fs.readFileSync(databasePath)),
-        wal: sha256(fs.readFileSync(`${databasePath}-wal`)),
-      }).toEqual(durableBefore);
+      expect(durableHashes(databasePath)).toEqual(durableBefore);
       expect(sha256(fs.readFileSync(`${databasePath}-shm`))).toBe(sharedMemoryBefore);
       expect(plan.refusal?.code).toBe("candidate-artifact-digest-required");
 
-      const stateDigest = plan.snapshot.stateDigest;
-      if (!stateDigest) {
-        throw new Error("expected the copied state to have a bound digest");
-      }
+      const stateDigest = requireDigest(plan);
       database.exec("INSERT INTO planner_probe(value) VALUES ('durable-change');");
       const stale = await planFixture(fixture, stateDigest);
       expect(stale.refusal?.code).toBe("snapshot-identity-mismatch");
@@ -151,31 +174,17 @@ describe("legacy state migration plan identity", () => {
   it("does not create missing SQLite shared-memory state while planning", async () => {
     const fixture = await makeFixture();
     const sourcePath = path.join(fixture.root, "wal-source.sqlite");
-    const source = new DatabaseSync(sourcePath);
+    const source = openWal(sourcePath);
     try {
-      source.exec(`
-        PRAGMA journal_mode = WAL;
-        PRAGMA wal_autocheckpoint = 0;
-        CREATE TABLE planner_probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
-        INSERT INTO planner_probe(value) VALUES ('copied-state');
-      `);
       const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
-      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-      fs.copyFileSync(sourcePath, databasePath);
-      fs.copyFileSync(`${sourcePath}-wal`, `${databasePath}-wal`);
-      const durableBefore = {
-        database: sha256(fs.readFileSync(databasePath)),
-        wal: sha256(fs.readFileSync(`${databasePath}-wal`)),
-      };
+      copyWal(sourcePath, databasePath);
+      const durableBefore = durableHashes(databasePath);
 
       const plan = await planFixture(fixture);
 
       expect(plan.refusal?.code).toBe("candidate-artifact-digest-required");
       expect(fs.existsSync(`${databasePath}-shm`)).toBe(false);
-      expect({
-        database: sha256(fs.readFileSync(databasePath)),
-        wal: sha256(fs.readFileSync(`${databasePath}-wal`)),
-      }).toEqual(durableBefore);
+      expect(durableHashes(databasePath)).toEqual(durableBefore);
     } finally {
       source.close();
     }
@@ -189,10 +198,7 @@ describe("legacy state migration plan identity", () => {
     fs.writeFileSync(similarlyNamedPath, "first\n");
 
     const first = await planFixture(fixture);
-    const stateDigest = first.snapshot.stateDigest;
-    if (!stateDigest) {
-      throw new Error("expected the copied state to have a bound digest");
-    }
+    const stateDigest = requireDigest(first);
 
     fs.writeFileSync(similarlyNamedPath, "second\n");
     const stale = await planFixture(fixture, stateDigest);
@@ -227,18 +233,11 @@ describe("legacy state migration plan identity", () => {
   it("binds an authentic associated wal-index body outside volatile read marks", async () => {
     const fixture = await makeFixture();
     const sourcePath = path.join(fixture.root, "wal-index-source.sqlite");
-    const source = new DatabaseSync(sourcePath);
+    const source = openWal(sourcePath);
     try {
-      source.exec(`
-        PRAGMA journal_mode = WAL;
-        PRAGMA wal_autocheckpoint = 0;
-        CREATE TABLE planner_probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
-        INSERT INTO planner_probe(value) VALUES ('copied-state');
-      `);
       const authenticHeader = fs.readFileSync(`${sourcePath}-shm`).subarray(0, 48);
       const databasePath = path.join(fixture.stateDir, "copied.sqlite");
-      fs.copyFileSync(sourcePath, databasePath);
-      fs.copyFileSync(`${sourcePath}-wal`, `${databasePath}-wal`);
+      copyWal(sourcePath, databasePath);
       const fakeSharedMemory = Buffer.alloc(32_768, 0x5a);
       authenticHeader.copy(fakeSharedMemory, 0);
       authenticHeader.copy(fakeSharedMemory, 48);
@@ -259,17 +258,10 @@ describe("legacy state migration plan identity", () => {
   it("binds forged wal-index structural fields despite valid checksums and WAL salts", async () => {
     const fixture = await makeFixture();
     const sourcePath = path.join(fixture.root, "wal-index-structure-source.sqlite");
-    const source = new DatabaseSync(sourcePath);
+    const source = openWal(sourcePath);
     try {
-      source.exec(`
-        PRAGMA journal_mode = WAL;
-        PRAGMA wal_autocheckpoint = 0;
-        CREATE TABLE planner_probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
-        INSERT INTO planner_probe(value) VALUES ('copied-state');
-      `);
       const databasePath = path.join(fixture.stateDir, "copied.sqlite");
-      fs.copyFileSync(sourcePath, databasePath);
-      fs.copyFileSync(`${sourcePath}-wal`, `${databasePath}-wal`);
+      copyWal(sourcePath, databasePath);
       const forged = Buffer.alloc(32_768, 0x5a);
       fs.readFileSync(`${sourcePath}-shm`).copy(forged, 0, 0, 48);
       forged.writeUInt8(forged.readUInt8(13) ^ 1, 13);

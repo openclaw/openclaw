@@ -10,9 +10,9 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import {
-  migrateCanonicalTranscriptArchives,
-  TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
-  transcriptDirectiveArchivesNeedMigration,
+  migrateCanonicalTranscriptArchives as migrateArchives,
+  TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE as BATCH_SIZE,
+  transcriptDirectiveArchivesNeedMigration as needsMigration,
 } from "./state-migrations.transcript-directives-archives.js";
 import { repairHistoricalTranscriptEventJson } from "./state-migrations.transcript-directives-transform.js";
 
@@ -104,7 +104,32 @@ function fixture(emptySessionIds = false) {
         .prepare("SELECT count(*) AS n FROM session_transcript_archives WHERE archive_blob != ?")
         .get(original)?.n,
     );
-  return { database, controller, authority, run, options, cursor, rewritten };
+  const migrate = (
+    overrides: Partial<
+      Pick<Parameters<typeof migrateArchives>[0], "start" | "onArchive" | "writeCursor">
+    > = {},
+  ) => run(() => migrateArchives({ ...options, ...overrides }));
+  const inspect = <T>(operation: () => Promise<T>) =>
+    withSqliteReadOnlyWorkerScope(operation, {
+      signal: controller.signal,
+      deadlineOwnedByCaller: true,
+    });
+  const expectProgress = (rewrites: number, saved: unknown) => {
+    expect(database.isTransaction).toBe(false);
+    expect(rewritten()).toBe(rewrites);
+    expect(cursor()).toEqual(saved);
+  };
+  return {
+    database,
+    controller,
+    authority,
+    migrate,
+    inspect,
+    options,
+    cursor,
+    rewritten,
+    expectProgress,
+  };
 }
 
 describe("canonical archive migration progress", () => {
@@ -119,24 +144,15 @@ describe("canonical archive migration progress", () => {
         }
       };
       if (mode === "repair") {
-        await f.run(() =>
-          migrateCanonicalTranscriptArchives({
-            ...f.options,
-            onArchive: visit,
-          }),
-        );
+        await f.migrate({ onArchive: visit });
         expect(f.rewritten()).toBe(count);
         expect(f.cursor()).toEqual({ phase: "complete" });
       } else {
         expect(
-          await transcriptDirectiveArchivesNeedMigration(
-            f.database,
-            f.options.start,
-            (raw, owner) => {
-              visit();
-              return directiveLine(raw, owner);
-            },
-          ),
+          await needsMigration(f.database, f.options.start, (raw, owner) => {
+            visit();
+            return directiveLine(raw, owner);
+          }),
         ).toBe(false);
         expect(f.rewritten()).toBe(0);
       }
@@ -149,17 +165,16 @@ describe("canonical archive migration progress", () => {
     f.database.exec(`CREATE TRIGGER reject_archive BEFORE UPDATE OF archive_blob
       ON session_transcript_archives WHEN OLD.session_id = '040'
       BEGIN SELECT RAISE(ABORT, 'OpenClaw state database read admission is closed'); END`);
-    const failure = await f
-      .run(() => migrateCanonicalTranscriptArchives(f.options))
-      .catch((error: unknown) => error);
-    expect(f.database.isTransaction).toBe(false);
-    expect(f.rewritten()).toBe(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
+    const failure = await f.migrate().catch((error: unknown) => error);
     expect(String(failure)).toMatch(
       /040:retained.*OpenClaw state database read admission is closed/,
     );
-    expect(f.cursor()).toEqual({ sessionId: "031", generation: "retained" });
+    f.expectProgress(BATCH_SIZE, {
+      sessionId: "031",
+      generation: "retained",
+    });
     f.database.exec("DROP TRIGGER reject_archive");
-    await f.run(() => migrateCanonicalTranscriptArchives({ ...f.options, start: f.cursor() }));
+    await f.migrate({ start: f.cursor() });
     expect(f.rewritten()).toBe(count);
     expect(f.cursor()).toEqual({ phase: "complete" });
   });
@@ -168,25 +183,21 @@ describe("canonical archive migration progress", () => {
     const f = fixture();
     const interrupted = new Error("Doctor interrupted by SIGINT");
     await expect(
-      withSqliteReadOnlyWorkerScope(
-        () =>
-          f.run(() =>
-            migrateCanonicalTranscriptArchives({
-              ...f.options,
-              writeCursor(cursor) {
-                f.options.writeCursor(cursor);
-                if ("sessionId" in cursor && cursor.sessionId === "031") {
-                  queueMicrotask(() => f.controller.abort(interrupted));
-                }
-              },
-            }),
-          ),
-        { signal: f.controller.signal, deadlineOwnedByCaller: true },
+      f.inspect(() =>
+        f.migrate({
+          writeCursor(cursor) {
+            f.options.writeCursor(cursor);
+            if ("sessionId" in cursor && cursor.sessionId === "031") {
+              queueMicrotask(() => f.controller.abort(interrupted));
+            }
+          },
+        }),
       ),
     ).rejects.toThrow(interrupted);
-    expect(f.database.isTransaction).toBe(false);
-    expect(f.rewritten()).toBe(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
-    expect(f.cursor()).toEqual({ sessionId: "031", generation: "retained" });
+    f.expectProgress(BATCH_SIZE, {
+      sessionId: "031",
+      generation: "retained",
+    });
   });
 
   it("cancels archive inspection while decoding a batch", async () => {
@@ -194,19 +205,17 @@ describe("canonical archive migration progress", () => {
     const interrupted = new Error("Doctor interrupted by SIGINT");
     let calls = 0;
     await expect(
-      withSqliteReadOnlyWorkerScope(
-        () =>
-          transcriptDirectiveArchivesNeedMigration(f.database, f.options.start, (raw, owner) => {
-            const line = directiveLine(raw, owner);
-            if (++calls === TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE) {
-              f.controller.abort(interrupted);
-            }
-            return line;
-          }),
-        { signal: f.controller.signal, deadlineOwnedByCaller: true },
+      f.inspect(() =>
+        needsMigration(f.database, f.options.start, (raw, owner) => {
+          const line = directiveLine(raw, owner);
+          if (++calls === BATCH_SIZE) {
+            f.controller.abort(interrupted);
+          }
+          return line;
+        }),
       ),
     ).rejects.toBe(interrupted);
-    expect(calls).toBe(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
+    expect(calls).toBe(BATCH_SIZE);
     expect(f.rewritten()).toBe(0);
   });
 
@@ -215,19 +224,14 @@ describe("canonical archive migration progress", () => {
     const interrupted = new Error("Doctor interrupted by SIGTERM");
     const failure = new Error("archive cursor write failed");
     await expect(
-      withSqliteReadOnlyWorkerScope(
-        () =>
-          f.run(() =>
-            migrateCanonicalTranscriptArchives({
-              ...f.options,
-              writeCursor(cursor) {
-                f.options.writeCursor(cursor);
-                f.controller.abort(interrupted);
-                throw failure;
-              },
-            }),
-          ),
-        { signal: f.controller.signal, deadlineOwnedByCaller: true },
+      f.inspect(() =>
+        f.migrate({
+          writeCursor(cursor) {
+            f.options.writeCursor(cursor);
+            f.controller.abort(interrupted);
+            throw failure;
+          },
+        }),
       ),
     ).rejects.toMatchObject({ cause: failure });
     expect(f.database.isTransaction).toBe(false);
@@ -247,20 +251,13 @@ describe("canonical archive migration progress", () => {
       f.authority.assertOwned();
       expires = now + 100;
     };
-    await f.run(() =>
-      migrateCanonicalTranscriptArchives({
-        ...f.options,
-        onArchive(archivePath) {
-          if (
-            Number(path.basename(archivePath, ".jsonl")) %
-              TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE ===
-            0
-          ) {
-            now += 75;
-          }
-        },
-      }),
-    );
+    await f.migrate({
+      onArchive(archivePath) {
+        if (Number(path.basename(archivePath, ".jsonl")) % BATCH_SIZE === 0) {
+          now += 75;
+        }
+      },
+    });
     expect(now).toBeGreaterThan(100);
     expect(f.rewritten()).toBe(count);
     expect(f.cursor()).toEqual({ phase: "complete" });
@@ -273,25 +270,18 @@ describe("canonical archive migration progress", () => {
     }
     const interrupted = new Error("Doctor interrupted by SIGTERM");
     await expect(
-      withSqliteReadOnlyWorkerScope(
-        () =>
-          f.run(() =>
-            migrateCanonicalTranscriptArchives({
-              ...f.options,
-              writeCursor(cursor) {
-                f.options.writeCursor(cursor);
-                if ("sessionId" in cursor && cursor.sessionId === "063") {
-                  f.controller.abort(interrupted);
-                }
-              },
-            }),
-          ),
-        { signal: f.controller.signal, deadlineOwnedByCaller: true },
+      f.inspect(() =>
+        f.migrate({
+          writeCursor(cursor) {
+            f.options.writeCursor(cursor);
+            if ("sessionId" in cursor && cursor.sessionId === "063") {
+              f.controller.abort(interrupted);
+            }
+          },
+        }),
       ),
     ).rejects.toThrow(interrupted);
-    expect(f.database.isTransaction).toBe(false);
-    expect(f.cursor()).toEqual({ sessionId: "031", generation: "retained" });
-    expect(f.rewritten()).toBe(64);
+    f.expectProgress(64, { sessionId: "031", generation: "retained" });
     const publication = f.database
       .prepare(
         "SELECT published_at FROM session_transcript_archives WHERE session_id < '064' ORDER BY session_id",
