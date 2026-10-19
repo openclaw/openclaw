@@ -56,39 +56,52 @@ describe("memory-core doctor QMD migration", () => {
     };
   }
 
+  const statePath = (relative: string) => path.join(stateDir, relative);
+  const lockPayload = (pid: number) =>
+    `${JSON.stringify({ pid, createdAt: new Date().toISOString() })}\n`;
+  async function writeFiles(paths: string[], contents = "derived") {
+    for (const filePath of paths) {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, contents, "utf8");
+    }
+  }
+  async function expectNoop(migration: ReturnType<typeof getMigration>) {
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+  }
+  const lockPreview = (paths: string[]) => ({
+    preview: paths.map(
+      (filePath) =>
+        `- Retired Memory Core QMD file lock: ${filePath} -> remove only if definitely stale (coordination now uses SQLite leases)`,
+    ),
+  });
+
   it("preserves nonempty QMD homes and does not schedule them for migration", async () => {
-    const qmdHome = path.join(stateDir, "agents", "main", "qmd");
-    const canonicalAgentFile = path.join(
-      stateDir,
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
+    const qmdHome = statePath("agents/main/qmd");
+    const canonicalAgentFile = statePath("agents/main/agent/openclaw-agent.sqlite");
+    const retainedResetTranscript = statePath(
+      "agents/main/sessions/session-1.jsonl.reset.2026-08-23T07-10-59.000Z",
     );
-    const retainedResetTranscript = path.join(
-      stateDir,
-      "agents",
-      "main",
-      "sessions",
-      "session-1.jsonl.reset.2026-08-23T07-10-59.000Z",
-    );
-    const invalidAgentQmdHome = path.join(stateDir, "agents", "main!", "qmd");
+    const invalidAgentQmdHome = statePath("agents/main!/qmd");
     const externalModels = path.join(rootDir, "shared-qmd-models");
     const symlinkHomeTarget = path.join(rootDir, "symlink-qmd-home-target");
-    const symlinkHome = path.join(stateDir, "agents", "other", "qmd");
-    for (const filePath of [
-      path.join(qmdHome, "xdg-cache", "qmd", "index.sqlite"),
-      path.join(qmdHome, "xdg-config", "qmd", "index.yml"),
-      path.join(qmdHome, "sessions", "session.md"),
+    const symlinkHome = statePath("agents/other/qmd");
+    const derivedPaths = [
+      "xdg-cache/qmd/index.sqlite",
+      "xdg-config/qmd/index.yml",
+      "sessions/session.md",
+    ];
+    await writeFiles([
+      ...derivedPaths.map((relative) => path.join(qmdHome, relative)),
       canonicalAgentFile,
       retainedResetTranscript,
       path.join(invalidAgentQmdHome, "index.sqlite"),
       path.join(externalModels, "model.bin"),
       path.join(symlinkHomeTarget, "index.sqlite"),
-    ]) {
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, "derived", "utf8");
-    }
+    ]);
     await fs.writeFile(
       retainedResetTranscript,
       JSON.stringify({
@@ -102,17 +115,9 @@ describe("memory-core doctor QMD migration", () => {
     await fs.symlink(symlinkHomeTarget, symlinkHome);
 
     const migration = qmdWorkspaceMigration();
-    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
-    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
+    await expectNoop(migration);
 
-    for (const relativePath of [
-      "xdg-cache/qmd/index.sqlite",
-      "xdg-config/qmd/index.yml",
-      "sessions/session.md",
-    ]) {
+    for (const relativePath of derivedPaths) {
       await expect(fs.readFile(path.join(qmdHome, relativePath), "utf8")).resolves.toBe("derived");
     }
     await fs.access(canonicalAgentFile);
@@ -126,15 +131,11 @@ describe("memory-core doctor QMD migration", () => {
     await fs.access(path.join(externalModels, "model.bin"));
     expect((await fs.lstat(symlinkHome)).isSymbolicLink()).toBe(true);
     await fs.access(path.join(symlinkHomeTarget, "index.sqlite"));
-    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
-    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
+    await expectNoop(migration);
   });
 
   it("retires an empty QMD home", async () => {
-    const qmdHome = path.join(stateDir, "agents", "main", "qmd");
+    const qmdHome = statePath("agents/main/qmd");
     await fs.mkdir(qmdHome, { recursive: true });
     const migration = qmdWorkspaceMigration();
     expect(await migration.detectLegacyState(migrationParams())).not.toBeNull();
@@ -145,7 +146,7 @@ describe("memory-core doctor QMD migration", () => {
   });
 
   it("preserves QMD files created between inspection and removal without blocking Doctor", async () => {
-    const qmdHome = path.join(rootDir, "state", "agents", "main", "qmd");
+    const qmdHome = statePath("agents/main/qmd");
     const configPath = path.join(qmdHome, "index.yml");
     await fs.mkdir(qmdHome, { recursive: true });
     const remove = fs.rmdir;
@@ -165,27 +166,20 @@ describe("memory-core doctor QMD migration", () => {
   });
 
   it("removes only exact stale QMD lock sidecars and is idempotent", async () => {
-    const globalLockPath = path.join(stateDir, "qmd", "embed.lock.lock");
-    const agentLockPath = path.join(stateDir, "agents", "main", "qmd-write.lock.lock");
+    const globalLockPath = statePath("qmd/embed.lock.lock");
+    const agentLockPath = statePath("agents/main/qmd-write.lock.lock");
     const ignoredPaths = [
-      path.join(stateDir, "qmd", "other.lock.lock"),
-      path.join(stateDir, "agents", "main", "nested", "qmd-write.lock.lock"),
-      path.join(stateDir, "agents", "main!", "qmd-write.lock.lock"),
-      path.join(stateDir, "agents", "main", "qmd-write.lock.lock.extra"),
-    ];
-    const stalePayload = `${JSON.stringify({ pid: 2 ** 30, createdAt: new Date().toISOString() })}\n`;
-    for (const filePath of [globalLockPath, agentLockPath, ...ignoredPaths]) {
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, stalePayload, "utf8");
-    }
+      "qmd/other.lock.lock",
+      "agents/main/nested/qmd-write.lock.lock",
+      "agents/main!/qmd-write.lock.lock",
+      "agents/main/qmd-write.lock.lock.extra",
+    ].map(statePath);
+    await writeFiles([globalLockPath, agentLockPath, ...ignoredPaths], lockPayload(2 ** 30));
 
     const migration = qmdFileLockMigration();
-    await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
-      preview: [
-        `- Retired Memory Core QMD file lock: ${globalLockPath} -> remove only if definitely stale (coordination now uses SQLite leases)`,
-        `- Retired Memory Core QMD file lock: ${agentLockPath} -> remove only if definitely stale (coordination now uses SQLite leases)`,
-      ],
-    });
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual(
+      lockPreview([globalLockPath, agentLockPath]),
+    );
 
     await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
       changes: [
@@ -194,58 +188,41 @@ describe("memory-core doctor QMD migration", () => {
       ],
       warnings: [],
     });
-    await expect(fs.access(globalLockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.access(agentLockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.access(path.join(stateDir, "openclaw.sqlite"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(
-      fs.access(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    for (const filePath of [
+      globalLockPath,
+      agentLockPath,
+      statePath("openclaw.sqlite"),
+      statePath("agents/main/agent/openclaw-agent.sqlite"),
+    ]) {
+      await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+    }
     for (const filePath of ignoredPaths) {
       await fs.access(filePath);
     }
-    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
-    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
+    await expectNoop(migration);
   });
 
   it("retains live and ambiguous QMD locks and ignores symlink candidates", async () => {
-    const globalLockPath = path.join(stateDir, "qmd", "embed.lock.lock");
-    const malformedLockPath = path.join(stateDir, "agents", "main", "qmd-write.lock.lock");
-    const symlinkLockPath = path.join(stateDir, "agents", "other", "qmd-write.lock.lock");
+    const globalLockPath = statePath("qmd/embed.lock.lock");
+    const malformedLockPath = statePath("agents/main/qmd-write.lock.lock");
+    const symlinkLockPath = statePath("agents/other/qmd-write.lock.lock");
     const symlinkTargetPath = path.join(rootDir, "stale-lock-target");
-    await fs.mkdir(path.dirname(globalLockPath), { recursive: true });
-    await fs.mkdir(path.dirname(malformedLockPath), { recursive: true });
     await fs.mkdir(path.dirname(symlinkLockPath), { recursive: true });
-    await fs.writeFile(
-      globalLockPath,
-      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
-      "utf8",
-    );
-    await fs.writeFile(malformedLockPath, "{", "utf8");
-    await fs.writeFile(
-      symlinkTargetPath,
-      `${JSON.stringify({ pid: 2 ** 30, createdAt: new Date().toISOString() })}\n`,
-      "utf8",
-    );
+    await writeFiles([globalLockPath], lockPayload(process.pid));
+    await writeFiles([malformedLockPath], "{");
+    await writeFiles([symlinkTargetPath], lockPayload(2 ** 30));
     await fs.symlink(symlinkTargetPath, symlinkLockPath);
 
     const migration = qmdFileLockMigration();
-    await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
-      preview: [
-        `- Retired Memory Core QMD file lock: ${globalLockPath} -> remove only if definitely stale (coordination now uses SQLite leases)`,
-        `- Retired Memory Core QMD file lock: ${malformedLockPath} -> remove only if definitely stale (coordination now uses SQLite leases)`,
-      ],
-    });
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual(
+      lockPreview([globalLockPath, malformedLockPath]),
+    );
     await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
       changes: [],
-      warnings: [
-        `Retained retired Memory Core QMD file lock because its owner is live or ambiguous: ${globalLockPath}`,
-        `Retained retired Memory Core QMD file lock because its owner is live or ambiguous: ${malformedLockPath}`,
-      ],
+      warnings: [globalLockPath, malformedLockPath].map(
+        (filePath) =>
+          `Retained retired Memory Core QMD file lock because its owner is live or ambiguous: ${filePath}`,
+      ),
     });
     await fs.access(globalLockPath);
     await expect(fs.readFile(malformedLockPath, "utf8")).resolves.toBe("{");

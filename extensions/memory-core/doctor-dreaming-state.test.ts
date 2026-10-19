@@ -55,9 +55,7 @@ describe("memory-core dreaming state migration boundary", () => {
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 
-  function context() {
-    return createDoctorContext(env);
-  }
+  const context = () => createDoctorContext(env);
 
   function migrationParams() {
     return {
@@ -85,6 +83,15 @@ describe("memory-core dreaming state migration boundary", () => {
       await expect(fs.readFile(filePath, "utf8")).resolves.toBe(contents);
       await expect(fs.access(`${filePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
     }
+  }
+
+  async function expectNoMigration() {
+    const migration = dreamingStateMigration();
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
   }
 
   it("refuses pre-July dreaming JSON without importing or archiving it", async () => {
@@ -122,52 +129,46 @@ describe("memory-core dreaming state migration boundary", () => {
     const memoryPath = "memory/2026-07-01.md";
     const memoryKey = `memory:${memoryPath}:1:1`;
     const sessionKey = "main/session.jsonl";
+    const daily = { mtimeMs: 1, size: 42 };
+    const session = {
+      mtimeMs: 2,
+      size: 91,
+      contentHash: "july-hash",
+      lineCount: 3,
+      lastContentLine: 3,
+    };
+    const recall = {
+      key: memoryKey,
+      path: memoryPath,
+      startLine: 1,
+      endLine: 1,
+      source: "memory",
+      snippet: "Move backups to S3 Glacier.",
+      recallCount: 1,
+      totalScore: 0.9,
+      maxScore: 0.9,
+      queryHashes: ["hash-a"],
+      firstRecalledAt: timestamp,
+      lastRecalledAt: timestamp,
+    };
+    const phase = {
+      key: memoryKey,
+      lightHits: 1,
+      remHits: 2,
+      lastLightAt: timestamp,
+      lastRemAt: timestamp,
+    };
     const fixtures = [
-      {
-        namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
-        key: memoryPath,
-        value: { mtimeMs: 1, size: 42 },
-      },
-      {
-        namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-        key: sessionKey,
-        value: { mtimeMs: 2, size: 91, contentHash: "july-hash", lineCount: 3, lastContentLine: 3 },
-      },
-      {
-        namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-        key: `${sessionKey}:0`,
-        value: { scope: sessionKey, index: 0, hashes: ["seen-a", "seen-b"] },
-      },
-      {
-        namespace: SHORT_TERM_RECALL_NAMESPACE,
-        key: memoryKey,
-        value: {
-          key: memoryKey,
-          path: memoryPath,
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
-          snippet: "Move backups to S3 Glacier.",
-          recallCount: 1,
-          totalScore: 0.9,
-          maxScore: 0.9,
-          queryHashes: ["hash-a"],
-          firstRecalledAt: timestamp,
-          lastRecalledAt: timestamp,
-        },
-      },
-      {
-        namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-        key: memoryKey,
-        value: {
-          key: memoryKey,
-          lightHits: 1,
-          remHits: 2,
-          lastLightAt: timestamp,
-          lastRemAt: timestamp,
-        },
-      },
-    ];
+      [DREAMING_DAILY_INGESTION_NAMESPACE, memoryPath, daily],
+      [DREAMING_SESSION_INGESTION_FILES_NAMESPACE, sessionKey, session],
+      [
+        DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+        `${sessionKey}:0`,
+        { scope: sessionKey, index: 0, hashes: ["seen-a", "seen-b"] },
+      ],
+      [SHORT_TERM_RECALL_NAMESPACE, memoryKey, recall],
+      [SHORT_TERM_PHASE_SIGNAL_NAMESPACE, memoryKey, phase],
+    ] satisfies Array<[string, string, object]>;
     // Persist the v2026.7.1-beta.1 envelope independently of today's workspace writer.
     const normalizedWorkspace = path.resolve(workspaceDir).replace(/\\/g, "/");
     const workspaceKey = createHash("sha256")
@@ -176,47 +177,28 @@ describe("memory-core dreaming state migration boundary", () => {
       )
       .digest("hex");
     const stores = [];
-    for (const fixture of fixtures) {
+    for (const [namespace, key, value] of fixtures) {
       const store = context().openPluginStateKeyedStore({
-        namespace: fixture.namespace,
+        namespace,
         maxEntries: 50_000,
       });
-      await store.register(
-        `${workspaceKey}:${createHash("sha256").update(fixture.key).digest("hex")}`,
-        {
-          version: 1,
-          workspaceKey,
-          workspaceDir: path.resolve(workspaceDir),
-          key: fixture.key,
-          value: fixture.value,
-        },
-      );
+      await store.register(`${workspaceKey}:${createHash("sha256").update(key).digest("hex")}`, {
+        version: 1,
+        workspaceKey,
+        workspaceDir: path.resolve(workspaceDir),
+        key,
+        value,
+      });
       stores.push(store);
     }
     const before = await Promise.all(stores.map((store) => store.entries()));
-    const migration = dreamingStateMigration();
-    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
-    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
+    await expectNoMigration();
     expect(await Promise.all(stores.map((store) => store.entries()))).toEqual(before);
     await expectRetiredDreamingFilesUnchanged(paths, "{unread retired JSON");
-    expect((await readDailyIngestionState(workspaceDir)).files[memoryPath]).toEqual({
-      mtimeMs: 1,
-      size: 42,
-    });
+    expect((await readDailyIngestionState(workspaceDir)).files[memoryPath]).toEqual(daily);
     expect(await readSessionIngestionState(workspaceDir)).toEqual({
       version: 3,
-      files: {
-        [sessionKey]: {
-          mtimeMs: 2,
-          size: 91,
-          contentHash: "july-hash",
-          lineCount: 3,
-          lastContentLine: 3,
-        },
-      },
+      files: { [sessionKey]: session },
       seenMessages: { [sessionKey]: ["seen-a", "seen-b"] },
     });
     expect((await readRecallStore(workspaceDir, timestamp)).entries[memoryKey]?.recallCount).toBe(
@@ -260,15 +242,10 @@ describe("memory-core dreaming state migration boundary", () => {
       maxEntries: 50_000,
     });
     const before = await acknowledgements.entries();
-    const migration = dreamingStateMigration();
-    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
-    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
+    await expectNoMigration();
     expect(await acknowledgements.entries()).toEqual(before);
     await acknowledgements.clear();
-    const ambiguous = await migration.migrateLegacyState(migrationParams());
+    const ambiguous = await dreamingStateMigration().migrateLegacyState(migrationParams());
     expect(ambiguous.changes).toEqual([]);
     expect(ambiguous.warnings).toEqual([
       expect.stringContaining("Memory Core daily ingestion"),
