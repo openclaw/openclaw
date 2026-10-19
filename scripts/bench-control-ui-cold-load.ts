@@ -225,6 +225,7 @@ const { values } = parseArgs({
     "cpu-profile-compare": { type: "string" },
     "warm-reload": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
+    "transcript-messages": { type: "string" },
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "probe-dir": { type: "string" },
@@ -318,6 +319,8 @@ if (face !== "chat" && face !== "dashboard") {
 }
 const frameGapMs = Number(values["frame-gap-ms"]);
 const captureMs = Number(values["capture-ms"]);
+const transcriptMessages =
+  values["transcript-messages"] === undefined ? undefined : Number(values["transcript-messages"]);
 const sessionEventDurationMs = Number(values["session-event-duration-ms"]);
 const fixtureNowMs =
   values["fixture-now-ms"] === undefined ? undefined : Number(values["fixture-now-ms"]);
@@ -349,6 +352,8 @@ if (
   frameGapMs < 0 ||
   !Number.isFinite(captureMs) ||
   captureMs < 0 ||
+  (transcriptMessages !== undefined &&
+    (!Number.isSafeInteger(transcriptMessages) || transcriptMessages < 1)) ||
   !Number.isSafeInteger(sessionEventDurationMs) ||
   sessionEventDurationMs < 250 ||
   sessionEventDurationMs % 125 !== 0 ||
@@ -357,7 +362,7 @@ if (
   )
 ) {
   throw new Error(
-    "Expected a bounded run count, nonnegative wire delays/timestamps, and session duration in 125ms steps (at least 250ms)",
+    "Expected a bounded run count, positive transcript size, nonnegative wire delays/timestamps, and session duration in 125ms steps (at least 250ms)",
   );
 }
 if (
@@ -431,6 +436,7 @@ const fixture = createControlUiTeamScaleFixture({
   duplicateBootReads: values["duplicate-boot-reads"],
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
+  transcriptMessages,
 });
 const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply() : undefined;
 const extraInitScripts = await Promise.all(

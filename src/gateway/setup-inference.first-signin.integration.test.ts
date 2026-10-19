@@ -1,3 +1,4 @@
+import { X509Certificate } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAnthropicResponse } from "../../packages/ai/src/provider-transport-parity.test-support.js";
 import type { WizardNextResult } from "../../packages/gateway-protocol/src/index.js";
@@ -6,6 +7,7 @@ import {
   type UsersSelfResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import * as catalogRefresh from "../agents/prepared-model-runtime.refresh-scope.js";
@@ -19,7 +21,9 @@ import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
+import type { OperatorScope } from "./operator-scopes.js";
 import * as setupAdmission from "./server-methods/setup-admission.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import {
@@ -55,7 +59,7 @@ afterEach(() => {
 });
 
 it(
-  "replaces same-owner sign-in across devices and fences revoked retries through WebSocket",
+  "replaces same-owner sign-in, preserves other owners, and fences revoked retries through WebSocket",
   { timeout: 90_000 },
   async ({ signal }) => {
     const join = <T>(work: PromiseLike<T>) => withinTest(work, signal);
@@ -131,19 +135,46 @@ it(
         },
       },
       async (state) => {
-        const scopes = ["operator.admin"];
+        const scopes: OperatorScope[] = ["operator.admin"];
         const recoveryRestart = vi.fn(() => {
           throw new Error("Setup must complete without a recovery restart");
         });
+        const origin = "https://setup.example.test";
+        const authConfig = {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+            deviceAutoApprove: { enabled: true, scopes },
+          },
+          identityScopes: { "other-owner@example.test": scopes },
+        };
+        const tlsFingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
+        const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
+        const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
         const { client, server, port } = await startGatewayWithClient({
           configPath: state.configPath,
-          token: "synthetic-gateway-token",
+          auth: authConfig,
+          secure: true,
+          tlsFingerprint,
+          clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          origin,
+          edgeAuthHeaders: {
+            "x-forwarded-for": "203.0.113.50",
+            "x-forwarded-proto": "https",
+            "x-forwarded-user": "other-owner@example.test",
+          },
           scopes,
           hotReloadRecovery: recoveryRestart,
           cfg: {
             gateway: {
               mode: "local",
-              auth: { mode: "token", token: "synthetic-gateway-token" },
+              auth: authConfig,
+              trustedProxies: ["127.0.0.1"],
+              controlUi: { allowedOrigins: [origin] },
+              tls: { enabled: true, autoGenerate: false, certPath, keyPath },
             },
             agents: { defaults: { workspace: state.workspaceDir, skipBootstrap: true } },
             plugins: {
@@ -156,29 +187,40 @@ it(
           },
         });
         let owner: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+        let sameOwner: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
         try {
           await server.startupSettled;
-          const identity = loadOrCreateDeviceIdentity({ path: state.path("setup-owner.sqlite") });
-          const device = { deviceId: identity.deviceId, role: "operator", scopes };
-          const pending = await requestDevicePairing({
-            ...device,
-            publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-            clientId: "test",
-            clientMode: "backend",
-          });
-          await approveDevicePairing(pending.request.requestId, { callerScopes: scopes });
-          const rotated = await rotateDeviceToken(device);
-          if (!rotated.ok) {
-            throw new Error("Expected setup owner device token");
-          }
-          // Authenticated backend and shared-token clients share the durable Gateway owner.
-          owner = await connectGatewayClient({
-            mode: "backend",
-            url: `ws://127.0.0.1:${port}`,
-            deviceIdentity: identity,
-            deviceToken: rotated.entry.token,
-            scopes,
-          });
+          const connectOwner = async (label: string) => {
+            const identity = loadOrCreateDeviceIdentity({
+              path: state.path(label, "device.sqlite"),
+            });
+            const device = { deviceId: identity.deviceId, role: "operator", scopes };
+            const pending = await requestDevicePairing({
+              ...device,
+              publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+              clientId: "test",
+              clientMode: "backend",
+            });
+            await approveDevicePairing(pending.request.requestId, { callerScopes: scopes });
+            const rotated = await rotateDeviceToken(device);
+            if (!rotated.ok) {
+              throw new Error("Expected setup owner device token");
+            }
+            const actor = await connectGatewayClient({
+              mode: "backend",
+              url: `wss://127.0.0.1:${port}`,
+              tlsFingerprint,
+              deviceIdentity: identity,
+              deviceToken: rotated.entry.token,
+              scopes,
+            });
+            return { actor, device };
+          };
+          // Paired backend devices share the Gateway owner; the proxy authenticates a person.
+          const initialOwner = await connectOwner("setup-owner");
+          owner = initialOwner.actor;
+          const { device } = initialOwner;
+          sameOwner = (await connectOwner("replacement-owner")).actor;
           const auth = {
             agentId: "main",
             authChoice: "github-copilot",
@@ -187,10 +229,12 @@ it(
           const readProfiles = () =>
             loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
           const setupOwner = owner;
-          for (const actor of [setupOwner, client]) {
+          for (const actor of [setupOwner, sameOwner]) {
             const self = await actor.request<UsersSelfResult>("users.self", {});
             expect(self.profile.id).toBe(GATEWAY_OWNER_PROFILE_ID);
           }
+          const otherSelf = await client.request<UsersSelfResult>("users.self", {});
+          expect(otherSelf.profile.id).not.toBe(GATEWAY_OWNER_PROFILE_ID);
           const start = (sessionId: string, actor = setupOwner) =>
             actor.request("openclaw.setup.auth.start", { ...auth, sessionId });
           const startSignIn = async (sessionId: string, actor = setupOwner) => {
@@ -206,8 +250,32 @@ it(
           );
           expect(readProfiles()).toEqual({});
 
+          const beforeForeignStart = [...requests];
+          for (const [foreignSessionId, message] of [
+            [
+              "different-owner",
+              "OpenClaw setup is already in progress; try again when it finishes.",
+            ],
+            ["abandoned-signin", "wizard session already exists"],
+          ] as const) {
+            const foreignSettled = createDeferredCore<string[]>();
+            observation.settled = (options) => {
+              if (options.req.method === "openclaw.setup.auth.start") {
+                foreignSettled.resolve([...options.context.wizardSessions.keys()]);
+              }
+            };
+            await expect(start(foreignSessionId, client)).rejects.toThrow(message);
+            expect(await join(foreignSettled.promise)).toEqual(["abandoned-signin"]);
+            expect(await owner.request("wizard.next", { sessionId: "abandoned-signin" })).toEqual(
+              abandoned,
+            );
+            expect(requests).toEqual(beforeForeignStart);
+            expect(readProfiles()).toEqual({});
+          }
+          observation.settled = () => {};
+
           const sessionId = "replacement-signin";
-          let result = await startSignIn(sessionId, client);
+          let result = await startSignIn(sessionId, sameOwner);
           while (!result.done) {
             const step = result.step;
             if (!step) {
@@ -293,6 +361,9 @@ it(
             await join(Promise.all([finished.promise, reply]));
           }
         } finally {
+          if (sameOwner) {
+            await disconnectGatewayClient(sameOwner);
+          }
           if (owner) {
             await disconnectGatewayClient(owner);
           }

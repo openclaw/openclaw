@@ -116,18 +116,6 @@ export function loadChatComposerState(
   );
 }
 
-function persistChatComposerStateResult(
-  state: ChatComposerPersistenceState,
-  sessionKey: string = state.sessionKey,
-  options: ChatComposerPersistOptions = {},
-): ChatComposerPersistStatus {
-  return persistCapturedChatComposerStateResult(
-    state,
-    captureChatOutboxAdmission(state, sessionKey, options.agentId),
-    options,
-  );
-}
-
 function persistCapturedChatComposerStateResult(
   state: ChatComposerPersistenceState,
   captured: Pick<ReturnType<typeof captureChatOutboxAdmission>, "scope" | "awaitingDefaults"> & {
@@ -245,7 +233,13 @@ export function persistChatComposerState(
   sessionKey: string = state.sessionKey,
   options: ChatComposerPersistOptions = {},
 ): boolean {
-  return persistChatComposerStateResult(state, sessionKey, options) === "persisted";
+  return (
+    persistCapturedChatComposerStateResult(
+      state,
+      captureChatOutboxAdmission(state, sessionKey, options.agentId),
+      options,
+    ) === "persisted"
+  );
 }
 
 export type ChatQueueAdmissionResult = "admitted" | "source-changed" | "full" | "storage-failed";
@@ -521,10 +515,7 @@ export class ChatComposerPersistence {
     }
     this.ready = true;
     this.pending = null;
-    const { revisions, snapshot: stored } = loadCapturedChatComposerState(
-      state,
-      resolveUiConversationIdentity(state, state.sessionKey),
-    );
+    const { revisions, snapshot: stored } = loadChatComposerState(state, state.sessionKey);
     this.committedDraftRevision = revisions.committed;
     this.latestDraftRevision = revisions.latestAttempt;
     this.durableRestoreProtected =
@@ -554,10 +545,7 @@ export class ChatComposerPersistence {
     const restored = restoreChatComposerState(state, options);
     this.pending = null;
     this.clearTimer();
-    const { revisions } = loadCapturedChatComposerState(
-      state,
-      resolveUiConversationIdentity(state, state.sessionKey),
-    );
+    const { revisions } = loadChatComposerState(state, state.sessionKey);
     this.committedDraftRevision = revisions.committed;
     this.latestDraftRevision = revisions.latestAttempt;
     this.lastPersisted = this.snapshot(state, revisions.committed, revisions.committed);
@@ -852,10 +840,7 @@ export class ChatComposerPersistence {
           !this.isUnchanged(state) ||
           (this.lastPersisted && !isChatComposerOwnerCurrent(state, this.lastPersisted.owner))
         ) {
-          loadCapturedChatComposerState(
-            state,
-            resolveUiConversationIdentity(state, state.sessionKey),
-          );
+          loadChatComposerState(state, state.sessionKey);
         }
         this.retireDurableScope(connectedScope, this.latestDraftRevision);
       }
@@ -886,10 +871,7 @@ export class ChatComposerPersistence {
       state.chatReplyTarget = null;
       state.chatAttachments = [];
       this.pending = null;
-      const { revisions } = loadCapturedChatComposerState(
-        state,
-        resolveUiConversationIdentity(state, state.sessionKey),
-      );
+      const { revisions } = loadChatComposerState(state, state.sessionKey);
       this.committedDraftRevision = revisions.committed;
       this.latestDraftRevision = revisions.latestAttempt;
       // Read the replacement account; never clear its saved draft with old presentation.
@@ -956,7 +938,7 @@ export class ChatComposerPersistence {
         this.committedDraftRevision = adoptedRevision;
         this.latestDraftRevision = adoptedRevision;
         this.lastPersisted = this.snapshot(state, adoptedRevision, adoptedRevision);
-        persistChatComposerStateResult(state, state.sessionKey, {
+        persistChatComposerState(state, state.sessionKey, {
           agentId: resolveUiConversationIdentity(state, state.sessionKey).agentId,
           draft: state.chatMessage,
           mentions: state.chatMentions,

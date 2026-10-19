@@ -16,6 +16,7 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -80,7 +81,7 @@ it("coalesces background process changes without invalidating session rows and s
   } finally {
     vi.useRealTimers();
     await unsubs.agentUnsub();
-    unsubs.heartbeatUnsub();
+    heartbeatNotifications.onEvent = () => {};
     unsubs.transcriptUnsub();
     unsubs.lifecycleUnsub();
     resetProcessRegistryForTests();
@@ -189,7 +190,7 @@ it.for([
     } finally {
       finish.resolve();
       await unsubs?.agentUnsub();
-      unsubs?.heartbeatUnsub();
+      heartbeatNotifications.onEvent = () => {};
       unsubs?.transcriptUnsub();
       unsubs?.lifecycleUnsub();
       unsubs = undefined;

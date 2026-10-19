@@ -310,7 +310,6 @@ describe("LINE send helpers", () => {
     await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
     await sendModule.replyMessageLine("reply-token", [message] as never, {
       cfg: LINE_TEST_CFG,
-      verbose: true,
     });
 
     const pushed = pushMessageMock.mock.calls[0]?.[0] as {
@@ -485,7 +484,6 @@ describe("LINE send helpers", () => {
     });
     const result = await sendModule.pushMessageLine("line:user:U123", "Image caption", {
       cfg: LINE_TEST_CFG,
-      verbose: true,
       mediaUrl: "https://example.com/original.jpg",
       mediaKind: "image",
     });

@@ -26,11 +26,7 @@ export const ThemeBrandIcon = defineSolidBridge<{ branding?: ThemeBranding }>(
   { properties: { branding: { default: undefined, attribute: false } } },
 );
 
-export function ThemeBrandingIcon(props: {
-  branding?: ThemeBranding;
-  claw?: SolidJSX.Element;
-  neutral?: SolidJSX.Element;
-}) {
+export function ThemeBrandingIcon(props: { branding?: ThemeBranding; claw?: SolidJSX.Element }) {
   const publishedBranding = projectSource(null, {
     read: currentThemeBranding,
     subscribe: (_source, notify) => subscribeThemeBranding(notify),
@@ -39,7 +35,7 @@ export function ThemeBrandingIcon(props: {
   const branding = () => props.branding ?? publishedBranding.read();
   return (
     <Show when={branding().brandIcon !== "claw"} fallback={props.claw ?? <Icon name="lobster" />}>
-      <Show when={branding().brandIcon !== "mark"} fallback={props.neutral ?? <Icon name="mark" />}>
+      <Show when={branding().brandIcon !== "mark"} fallback={<Icon name="mark" />}>
         <ThemeBrandIcon branding={branding()} />
       </Show>
     </Show>

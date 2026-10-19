@@ -579,7 +579,6 @@ export async function prepareGatewayLifecycle(params: {
               maintenance: runtimeState.maintenance,
               stopMediaCleanup: stopMediaCleanupForClose,
               agentUnsub: runtimeState.agentUnsub,
-              heartbeatUnsub: runtimeState.heartbeatUnsub,
               transcriptUnsub: runtimeState.transcriptUnsub,
               lifecycleUnsub: runtimeState.lifecycleUnsub,
               chatRunState,

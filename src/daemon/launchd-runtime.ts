@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -384,15 +385,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
         failures.push(error);
       }
     }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(
-        failures,
-        "LaunchAgent bootstrap and disabled-policy restoration failed.",
-      );
-    }
+    throwCollectedErrors(failures, "LaunchAgent bootstrap and disabled-policy restoration failed.");
     if (boot.status === "rejected") {
       throw boot.reason;
     }

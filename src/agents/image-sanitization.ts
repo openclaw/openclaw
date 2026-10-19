@@ -11,8 +11,8 @@ export const DEFAULT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
 export function resolveImageSanitizationLimits(cfg?: OpenClawConfig): ImageSanitizationLimits {
   const configured = cfg?.agents?.defaults?.imageMaxDimensionPx;
-  if (typeof configured !== "number" || !Number.isFinite(configured)) {
+  if (configured === undefined) {
     return {};
   }
-  return { maxDimensionPx: Math.max(1, Math.floor(configured)) };
+  return { maxDimensionPx: configured };
 }

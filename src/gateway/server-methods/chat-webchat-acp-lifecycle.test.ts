@@ -1,6 +1,7 @@
 // Bound ACP events must persist a coherent source or target session owner.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { heartbeatNotifications } from "../../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
@@ -76,7 +77,7 @@ describe("bound ACP terminal lifecycle", () => {
   });
   afterEach(async () => {
     await unsubs?.agentUnsub();
-    unsubs?.heartbeatUnsub();
+    heartbeatNotifications.onEvent = () => {};
     unsubs?.transcriptUnsub();
     unsubs?.lifecycleUnsub();
     resetAgentEventsForTest();

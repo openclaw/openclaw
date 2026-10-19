@@ -13,6 +13,7 @@ import {
   pruneExpiredDeliveryQueueTombstones,
 } from "../infra/delivery-queue-sqlite.js";
 import { startDevicePairSetupMaintenance } from "../infra/device-bootstrap.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { formatErrorMessage as formatError } from "../infra/errors.js";
 import {
   createGatewayActiveWorkSnapshot,
@@ -491,12 +492,7 @@ export function startGatewayMaintenanceTimers(params: {
         sessionColdStorageMaintenance.stop(),
         stopMediaCleanup(),
       ]).then((results) => {
-        const failures = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length > 0) {
-          throw new AggregateError(failures, "Gateway periodic maintenance failed to stop");
-        }
+        throwSettledAggregate(results, "Gateway periodic maintenance failed to stop");
       });
       // Drain starts before shutdown joins; retain failures for its warning report.
       void periodicTasksStopPromise.catch(() => {});

@@ -1,7 +1,7 @@
 import { onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import type {
   LogbookDaysPayload,
   LogbookStatusPayload,
@@ -48,16 +48,8 @@ export function createLogbook() {
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let frameLoads = new Set<number>();
   let notify = () => {};
-  const projection = projectSource(state, {
-    read: (source) => source,
-    subscribe: (_source, listener) => {
-      notify = listener;
-      return () => {
-        notify = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(state, (source) => source);
+  notify = projection.publish;
   onCleanup(() => {
     clearInterval(pollTimer);
     client = null;

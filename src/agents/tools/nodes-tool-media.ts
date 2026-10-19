@@ -250,6 +250,9 @@ export async function executeNodeMediaAction(input: {
         height: payload.height,
         media: {
           mediaUrl: written.path,
+          // Inspected screenshots stay private; the FILE: path in the result
+          // text supports explicit sharing when the user asks.
+          outbound: false,
         },
       });
     }
@@ -320,14 +323,35 @@ async function createNodePhotoResult(params: {
     content.push({ type: "text", text: "No photos found." });
   }
   const mediaUrls = details.map((entry) => entry.path);
-  return await sanitizeToolResultImages(
+  const sanitized = await sanitizeToolResultImages(
     {
       content,
-      details: details.length > 0 ? { [params.kind]: details, media: { mediaUrls } } : [],
+      details:
+        details.length > 0
+          ? { [params.kind]: details, media: { mediaUrls, outbound: false } }
+          : [],
     },
     params.kind === "snaps" ? "nodes:camera_snap" : "nodes:photos_latest",
     params.imageSanitization,
   );
+  // When vision attempted to supply inline image blocks, the per-photo saved-path
+  // text was skipped; append an accurate summary based on whether images survived
+  // sanitization so the model always receives the private saved file path(s)
+  // without claiming images were loaded when none entered context.
+  const attemptedVisionImages = content.some((block) => block.type === "image");
+  if (attemptedVisionImages && details.length > 0) {
+    const retainedImageCount = sanitized.content.filter((block) => block.type === "image").length;
+    const savedPaths = details.map((entry) => JSON.stringify(entry.path)).join(", ");
+    const text =
+      retainedImageCount > 0
+        ? `Loaded ${retainedImageCount} photo${retainedImageCount === 1 ? "" : "s"} into private model context for inspection; not attached or sent to the user. Saved to ${savedPaths}. Share explicitly only when the user asks.`
+        : `Photo${details.length === 1 ? "" : "s"} saved to ${savedPaths}; not attached or sent to the user. Share explicitly only when the user asks.`;
+    return {
+      ...sanitized,
+      content: [...sanitized.content, { type: "text", text }],
+    };
+  }
+  return sanitized;
 }
 
 /**
