@@ -19,10 +19,11 @@ import { EMPTY_SESSION_MENU_DATA } from "./session-menu-actions.ts";
 import { SessionMenu } from "./session-menu-solid.tsx";
 
 it("keeps advertised native menu shortcuts ahead of composer autotype", async () => {
-  const actions: string[] = [];
+  const actions: unknown[] = [];
   const host = await mountMenu({
     archiveAllowed: true,
-    onAction: (action) => actions.push(action.kind),
+    groups: ["Research", "Personal"],
+    onAction: (action) => actions.push(action),
   });
   const root = host.parentElement!;
   const composer = root.appendChild(document.createElement("div"));
@@ -36,7 +37,22 @@ it("keeps advertised native menu shortcuts ahead of composer autotype", async ()
     document.activeElement!.dispatchEvent(
       new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true, composed: true }),
     );
-    await waitForSolid(() => expect(actions).toEqual(["toggle-archived"]));
+    await waitForSolid(() => expect(actions).toEqual([{ kind: "toggle-archived" }]));
+    expect(document.activeElement).not.toBe(input);
+
+    host.anchor = { x: 100, y: 100 };
+    await settleSessionMenu(host);
+    const group = await openSubmenu(host, "Move to group");
+    menuItem(group, "Personal").focus();
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "1", bubbles: true, cancelable: true, composed: true }),
+    );
+    await waitForSolid(() =>
+      expect(actions).toEqual([
+        { kind: "toggle-archived" },
+        { kind: "move-to-group", category: "Research" },
+      ]),
+    );
     expect(document.activeElement).not.toBe(input);
 
     host.anchor = { x: 100, y: 100 };

@@ -170,16 +170,6 @@ const CHAT_DROPDOWN_KEYS = new Set([
   "ArrowUp",
   "Escape",
 ]);
-// Shortcut menus own only advertised, enabled keys; every other printable key
-// can still transfer to the composer through the normal browser input pipeline.
-function keyboardShortcutTargetOwnsKey(target: HTMLElement, key: string): boolean {
-  return (
-    (target.matches("[data-chat-autotype-shortcuts][open]") ||
-      (target.matches('[role="menu"][popover]') && target.matches(":popover-open"))) &&
-    menuOwnsShortcut(target, key)
-  );
-}
-
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =
@@ -195,7 +185,7 @@ function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
         target instanceof HTMLElement &&
         (target.matches("dialog[open], [aria-modal='true']") ||
           target.matches(CHAT_PRINTABLE_KEY_TARGET_SELECTOR) ||
-          keyboardShortcutTargetOwnsKey(target, event.key) ||
+          menuOwnsShortcut(target, event.key) ||
           (event.key === " " && target.matches(CHAT_SPACE_ACTIVATION_SELECTOR))),
     );
 }
@@ -209,7 +199,7 @@ function openDropdownOwnsKey(root: HTMLElement, key: string): boolean {
       overlay.open &&
       overlay.surface.matches('[role="menu"][popover]') &&
       !overlay.surface.closest("[inert]") &&
-      (CHAT_DROPDOWN_KEYS.has(key) || keyboardShortcutTargetOwnsKey(overlay.surface, key)),
+      (CHAT_DROPDOWN_KEYS.has(key) || menuOwnsShortcut(overlay.surface, key)),
   );
 }
 

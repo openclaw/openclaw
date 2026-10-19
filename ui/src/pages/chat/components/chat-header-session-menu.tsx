@@ -12,7 +12,7 @@ import type { UiSettings } from "../../../app/settings.ts";
 import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
 import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
 import { boardWidgetMenuEntries } from "../../../components/board/board-widget-menu.tsx";
-import { activateMenuShortcut } from "../../../components/menu-shortcuts.ts";
+import { activateMenuShortcut } from "../../../components/menu-shortcut-activation.ts";
 import {
   EMPTY_SESSION_MENU_DATA,
   SessionMenuActions,
@@ -175,7 +175,7 @@ function ChatHeaderSessionMenuContent(
   openMenus.set(host, () => menu?.open() ?? false);
   const shortcut = (event: KeyboardEvent) => {
     if (!actions.handleKeydown(event, view.appearance)) {
-      activateMenuShortcut(host, event);
+      activateMenuShortcut(menu?.overlay.surface, event);
     }
   };
   onCleanup(() => {
