@@ -79,9 +79,12 @@ particular delivery served: it is created when directory skills are discovered
 — once per loaded version per bundle directory, through the same bundle digest
 that backs resource delivery integrity — stamped on the loaded entry, and
 every `skill.used` emission looks that retained field up. Worker
-materialization, the node session route, the remote transfer adapter, and
-library pins keep their own integrity-derived identities, and a skill that
-already carries a fingerprint is never re-hashed. It is operator telemetry
+materialization, the remote transfer adapter, and library pins keep their own
+integrity-derived identities, and a skill that already carries a fingerprint
+is never re-hashed. The node session route is an omission rather than a
+producer: a node-hosted skill has no bundle directory on the Gateway, serves
+instructions without this bundle fingerprint, and so cannot be correlated or
+compared by fingerprint on that route. It is operator telemetry
 only — the fingerprint is never served to the model, and whether a delivery's
 served bytes exactly match the loaded bundle is delivery integrity's existing
 behavior, not this attribute's concern. A

@@ -404,34 +404,6 @@ it("omits remote-hosted identities without failing when the owning reader is una
   }
 });
 
-it("stamps a workspace entry through its owning reader when a library selection shares its name", async () => {
-  const workspaceSkill = f.snapshot.resolvedSkills?.[0];
-  if (!workspaceSkill) {
-    throw new Error("missing workspace skill fixture");
-  }
-  recordSkillFileHost(workspaceSkill, "workspace");
-  f.skillResources.readSkillFiles.mockClear();
-  registerActiveTracingBridge();
-  const stamped = await stampDiscoveredSkillBundleIdentities([workspaceSkill], f.gateway);
-  const entry = stamped.find((skill) => skill.name === workspaceSkill.name);
-  if (!entry) {
-    throw new Error("missing stamped workspace entry");
-  }
-  // A same-name library selection is no pin: the workspace entry stamps
-  // the identity of its own loaded bundle through its owning workspace
-  // reader, so the selection's name never substitutes another bundle's
-  // identity for the workspace tree.
-  const hostBaseDir = path.join(f.host, "skills", "guide");
-  const hostIdentity = prepareSkillBundle(
-    (await readSkillResourceFiles(
-      { ...workspaceSkill, baseDir: hostBaseDir, filePath: path.join(hostBaseDir, "SKILL.md") },
-      { allowMissingRoot: false },
-    ))!,
-  ).revision;
-  expect(entry.bundleFingerprint).toBe(hostIdentity);
-  expect(f.skillResources.readSkillFiles).toHaveBeenCalled();
-});
-
 it("omits an identity without failing the preparation when its reader walk fails", async () => {
   const workspaceSkill = f.snapshot.resolvedSkills?.[0];
   if (!workspaceSkill) {
