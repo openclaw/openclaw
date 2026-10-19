@@ -11,28 +11,10 @@ const readyPreflight: FaceTimePreflightResult = {
   ok: true,
   helperConnected: true,
   checks: [
-    {
-      id: "helper-connected",
-      label: "FaceTime helper socket",
-      ok: true,
-      required: true,
-      message: "helper connected",
-    },
-    {
-      id: "process-tap",
-      label: "FaceTime app-audio process tap",
-      ok: true,
-      required: true,
-      message: "capture ready",
-    },
-    {
-      id: "realtime-provider",
-      label: "Realtime provider readiness",
-      ok: true,
-      required: true,
-      message: "openai:gpt-realtime-2.1",
-    },
-  ],
+    ["helper-connected", "FaceTime helper socket", "helper connected"],
+    ["process-tap", "FaceTime app-audio process tap", "capture ready"],
+    ["realtime-provider", "Realtime provider readiness", "openai:gpt-realtime-2.1"],
+  ].map(([id, label, message]) => ({ id, label, message, ok: true, required: true })),
 };
 
 const readyRuntime: FaceTimeRuntimeStatus = {
@@ -60,26 +42,26 @@ const readyRuntime: FaceTimeRuntimeStatus = {
   calls: [],
 };
 
-function readyCommandRunner() {
+function commandRunner(ready = true) {
+  const result = (stdout = "", code = 0) => ({ code, stdout, stderr: "" });
   return vi.fn(async (argv: string[]) => {
     if (argv[0] === "/bin/test" && (argv[1] === "-x" || argv[1] === "-d")) {
-      return { code: 0, stdout: "", stderr: "" };
+      return result("", ready ? 0 : 1);
+    }
+    if (!ready && argv[0] === "/usr/bin/xcode-select") {
+      return result("/Library/Developer/CommandLineTools\n");
     }
     if (argv[0] === "/usr/sbin/DevToolsSecurity") {
-      return { code: 0, stdout: "Developer mode is currently enabled.\n", stderr: "" };
+      return result(`Developer mode is currently ${ready ? "enabled" : "disabled"}.\n`);
     }
     if (argv[0] === "/usr/bin/csrutil") {
-      return {
-        code: 0,
-        stdout: "System Integrity Protection status: disabled.\n",
-        stderr: "",
-      };
+      return result(`System Integrity Protection status: ${ready ? "disabled" : "enabled"}.\n`);
     }
     if (argv[0] === "/bin/sh" && argv.at(-1) === "--status") {
-      return { code: 0, stdout: "current\n", stderr: "" };
+      return result(ready ? "current\n" : "missing\n");
     }
     if (argv[0] === "/bin/bash") {
-      return { code: 0, stdout: "true\n", stderr: "" };
+      return result(`${ready}\n`);
     }
     throw new Error(`unexpected command: ${argv.join(" ")}`);
   });
@@ -90,11 +72,21 @@ function runSetup(overrides: Partial<Parameters<typeof runFaceTimeSetup>[0]> = {
     config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
     nativePackageReady: true,
     pluginRoot: "/plugin",
-    runCommandWithTimeout: readyCommandRunner() as never,
+    runCommandWithTimeout: commandRunner() as never,
     runtimeStatus: readyRuntime,
     preflight: readyPreflight,
     ...overrides,
   });
+}
+
+function withFaceTimeTarget(overrides: Partial<FaceTimeRuntimeStatus["helperTargets"][number]>) {
+  return {
+    ...readyRuntime,
+    helperTargets: [
+      { ...readyRuntime.helperTargets[0]!, ...overrides },
+      readyRuntime.helperTargets[1]!,
+    ],
+  };
 }
 
 describe("FaceTime guided setup", () => {
@@ -114,7 +106,7 @@ describe("FaceTime guided setup", () => {
   ])(
     "reports SIP %s without recommending unnecessary protection changes",
     async (_name, stdout, code, actionId) => {
-      const readyRunner = readyCommandRunner();
+      const readyRunner = commandRunner();
       const report = await runSetup({
         runCommandWithTimeout: vi.fn(async (argv: string[]) =>
           argv[0] === "/usr/bin/csrutil" ? { code, stdout, stderr: "" } : readyRunner(argv),
@@ -135,31 +127,7 @@ describe("FaceTime guided setup", () => {
   );
 
   it("turns protected prerequisites into explicit operator actions", async () => {
-    const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
-      if (argv[0] === "/bin/test" && (argv[1] === "-x" || argv[1] === "-d")) {
-        return { code: 1, stdout: "", stderr: "" };
-      }
-      if (argv[0] === "/usr/bin/xcode-select") {
-        return { code: 0, stdout: "/Library/Developer/CommandLineTools\n", stderr: "" };
-      }
-      if (argv[0] === "/usr/sbin/DevToolsSecurity") {
-        return { code: 0, stdout: "Developer mode is currently disabled.\n", stderr: "" };
-      }
-      if (argv[0] === "/usr/bin/csrutil") {
-        return {
-          code: 0,
-          stdout: "System Integrity Protection status: enabled.\n",
-          stderr: "",
-        };
-      }
-      if (argv[0] === "/bin/sh" && argv.at(-1) === "--status") {
-        return { code: 0, stdout: "missing\n", stderr: "" };
-      }
-      if (argv[0] === "/bin/bash") {
-        return { code: 0, stdout: "false\n", stderr: "" };
-      }
-      throw new Error(`unexpected command: ${argv.join(" ")}`);
-    });
+    const runCommandWithTimeout = commandRunner(false);
 
     vi.mocked(readFile).mockResolvedValue(
       JSON.stringify({ data: [{ storeAssertionRecords: [{ assertionUUID: "active" }] }] }),
@@ -171,8 +139,7 @@ describe("FaceTime guided setup", () => {
       runtimeError: "listen EADDRINUSE: address already in use 127.0.0.1:45670",
     });
 
-    expect(report.ok).toBe(false);
-    expect(report.readyForTest).toBe(false);
+    expect(report).toMatchObject({ ok: false, readyForTest: false });
     expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
       ["/usr/bin/xcode-select", "-p"],
       expect.anything(),
@@ -210,18 +177,13 @@ describe("FaceTime guided setup", () => {
   it("shows automatic helper repair without declaring the machine ready", async () => {
     const report = await runSetup({
       runtimeStatus: {
-        ...readyRuntime,
+        ...withFaceTimeTarget({
+          connected: false,
+          attempts: 1,
+          retryScheduled: true,
+          lastError: "helper did not authenticate",
+        }),
         helperConnected: false,
-        helperTargets: [
-          {
-            ...readyRuntime.helperTargets[0]!,
-            connected: false,
-            attempts: 1,
-            retryScheduled: true,
-            lastError: "helper did not authenticate",
-          },
-          readyRuntime.helperTargets[1]!,
-        ],
       },
     });
 
@@ -240,9 +202,7 @@ describe("FaceTime guided setup", () => {
     vi.mocked(readFile).mockRejectedValue(new Error("operation not permitted"));
     const report = await runSetup();
 
-    expect(report.ok).toBe(true);
-    expect(report.readyForTest).toBe(true);
-    expect(report.liveCallProofRequired).toBe(true);
+    expect(report).toMatchObject({ ok: true, readyForTest: true, liveCallProofRequired: true });
     expect(report.checks.find((check) => check.id === "focus-mode")).toMatchObject({
       status: "verify-on-call",
       required: false,
@@ -258,19 +218,12 @@ describe("FaceTime guided setup", () => {
 
   it("requires a real app restart after stale helper detection", async () => {
     const report = await runSetup({
-      runtimeStatus: {
-        ...readyRuntime,
-        helperTargets: [
-          {
-            ...readyRuntime.helperTargets[0]!,
-            connected: false,
-            stale: true,
-            staleProcessId: 1234,
-            lastError: "Restart FaceTime to load the updated OpenClaw helper",
-          },
-          readyRuntime.helperTargets[1]!,
-        ],
-      },
+      runtimeStatus: withFaceTimeTarget({
+        connected: false,
+        stale: true,
+        staleProcessId: 1234,
+        lastError: "Restart FaceTime to load the updated OpenClaw helper",
+      }),
     });
 
     expect(report.readyForTest).toBe(false);
@@ -309,7 +262,7 @@ describe("FaceTime guided setup", () => {
   });
 
   it("requires Homebrew native repair before runtime activation or driver setup", async () => {
-    const runCommandWithTimeout = readyCommandRunner();
+    const runCommandWithTimeout = commandRunner();
     const report = await runSetup({
       nativePackageReady: false,
       runtimeStatus: undefined,
@@ -320,18 +273,12 @@ describe("FaceTime guided setup", () => {
     });
 
     expect(report.readyForTest).toBe(false);
-    expect(report.checks.find((check) => check.id === "native-package")).toMatchObject({
-      status: "action-required",
-      actionId: "install-native-package",
-    });
-    expect(report.checks.find((check) => check.id === "runtime")).toMatchObject({
-      status: "action-required",
-      actionId: "install-native-package",
-    });
-    expect(report.checks.find((check) => check.id === "audio-driver")).toMatchObject({
-      status: "action-required",
-      actionId: "install-native-package",
-    });
+    for (const id of ["native-package", "runtime", "audio-driver"]) {
+      expect(report.checks.find((check) => check.id === id)).toMatchObject({
+        status: "action-required",
+        actionId: "install-native-package",
+      });
+    }
     expect(report.actions).toContainEqual(
       expect.objectContaining({
         id: "install-native-package",

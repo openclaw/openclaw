@@ -9,7 +9,7 @@ import {
 import type { RealtimeVoicePlaybackItem } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "../../openai/api.js";
-import { resolveFaceTimeConfig } from "../src/config.js";
+import { resolveFaceTimeConfig, type FaceTimeConfig } from "../src/config.js";
 import { startFaceTimeTalkDriver, type FaceTimeTalkDriver } from "../src/talk-driver.js";
 
 const audio = vi.hoisted(() => ({
@@ -107,9 +107,12 @@ function providerFixture() {
   setActivePluginRegistry(registry);
 }
 
-function startParams(overrides: Partial<Parameters<typeof startFaceTimeTalkDriver>[0]> = {}) {
+function startParams(
+  realtime: Partial<FaceTimeConfig["realtime"]>,
+  overrides: Partial<Parameters<typeof startFaceTimeTalkDriver>[0]> = {},
+) {
   return {
-    config: resolveFaceTimeConfig({ ownerHandles: ["caller@example.test"] }),
+    config: resolveFaceTimeConfig({ ownerHandles: ["caller@example.test"], realtime }),
     fullConfig: {},
     runtime: createPluginRuntimeMock(),
     logger: { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() },
@@ -166,12 +169,7 @@ describe("FaceTime realtime provider boundary", () => {
   it("connects using the selected agent's API-key profile", async () => {
     const agentDir = "/synthetic/agents/voice-owner";
     const fullConfig: OpenClawConfig = {
-      agents: {
-        entries: {
-          main: {},
-          "voice-owner": { agentDir },
-        },
-      },
+      agents: { entries: { main: {}, "voice-owner": { agentDir } } },
     };
     providerMocks.isProviderAuthProfileConfiguredMock.mockImplementation(
       (params: { agentDir?: string }) => params.agentDir === agentDir,
@@ -186,94 +184,40 @@ describe("FaceTime realtime provider boundary", () => {
     );
 
     const { driver, socket } = await startConnectedDriver(
-      startParams({
-        fullConfig,
-        config: resolveFaceTimeConfig({
-          ownerHandles: ["caller@example.test"],
-          realtime: { provider: "openai", sessionKey: "agent:voice-owner:main" },
-        }),
-      }),
+      startParams({ provider: "openai", sessionKey: "agent:voice-owner:main" }, { fullConfig }),
     );
 
     expect(driver.realtimeActive()).toBe(true);
-    expect(sentEvents(socket)).toContainEqual(
-      expect.objectContaining({
-        type: "session.update",
-        session: expect.objectContaining({
-          instructions: expect.stringContaining("Agent context: shared voice agent context."),
-        }),
-      }),
-    );
+    expect(sentEvents(socket).find((event) => event.type === "session.update")).toMatchObject({
+      session: {
+        instructions: expect.stringContaining("Agent context: shared voice agent context."),
+      },
+    });
     expect(providerMocks.resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: fullConfig, agentDir }),
     );
   });
 
   it.each([
-    {
-      name: "disabled",
-      interrupt: false,
-      playedMs: 500,
-      completed: false,
-      audioMs: [1_000],
-      playedItemMs: [500],
-      truncatedMs: [],
-    },
-    {
-      name: "early echo guard",
-      interrupt: true,
-      playedMs: 100,
-      completed: false,
-      audioMs: [1_000],
-      playedItemMs: [100],
-      truncatedMs: [],
-    },
-    {
-      name: "completed but still audible",
-      interrupt: true,
-      playedMs: 500,
-      completed: true,
-      audioMs: [1_000],
-      playedItemMs: [500],
-      truncatedMs: [500],
-    },
-    {
-      name: "multiple audio items",
-      interrupt: true,
-      playedMs: 500,
-      completed: false,
-      audioMs: [200, 800],
-      playedItemMs: [200, 300],
-      truncatedMs: [200, 300],
-    },
-  ])(
-    "preserves provider interruption policy: $name",
-    async ({ interrupt, playedMs, completed, audioMs, playedItemMs, truncatedMs }) => {
+    // name, interrupt, playedMs, completed, audioMs, playedItemMs, truncatedMs
+    ["disabled", false, 500, false, [1_000], [500], []],
+    ["early echo guard", true, 100, false, [1_000], [100], []],
+    ["completed but still audible", true, 500, true, [1_000], [500], [500]],
+    ["multiple audio items", true, 500, false, [200, 800], [200, 300], [200, 300]],
+  ] satisfies [string, boolean, number, boolean, number[], number[], number[]][])(
+    "preserves provider interruption policy: %s",
+    async (_name, interrupt, playedMs, completed, audioMs, playedItemMs, truncatedMs) => {
       const { driver, socket } = await startConnectedDriver(
         startParams({
-          config: resolveFaceTimeConfig({
-            ownerHandles: ["caller@example.test"],
-            realtime: {
-              provider: "openai",
-              providers: {
-                openai: { apiKey: "test-api-key-inline", interruptResponseOnInputAudio: interrupt },
-              },
-            },
-          }),
+          provider: "openai",
+          providers: {
+            openai: { apiKey: "test-api-key-inline", interruptResponseOnInputAudio: interrupt },
+          },
         }),
       );
-      expect(sentEvents(socket)).toContainEqual(
-        expect.objectContaining({
-          type: "session.update",
-          session: expect.objectContaining({
-            audio: expect.objectContaining({
-              input: expect.objectContaining({
-                turn_detection: expect.objectContaining({ interrupt_response: interrupt }),
-              }),
-            }),
-          }),
-        }),
-      );
+      expect(sentEvents(socket).find((event) => event.type === "session.update")).toMatchObject({
+        session: { audio: { input: { turn_detection: { interrupt_response: interrupt } } } },
+      });
       emit(socket, { type: "response.created", response: { id: "response-1" } });
       for (const [index, durationMs] of audioMs.entries()) {
         const pcm = Buffer.alloc(durationMs * 48);

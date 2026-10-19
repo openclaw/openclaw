@@ -28,17 +28,9 @@ describe("FaceTime talk driver consult delivery", () => {
   it("never lets late cancellation of a superseded consult abort its successor", async () => {
     mocks.consult.mockImplementation(() => new Promise<{ text: string }>(() => {}));
     await startReadyFaceTimeTalkDriver();
-    const runTool = (callId: string) =>
-      void mocks.sessionParams?.onToolCall({
-        itemId: `item-${callId}`,
-        callId,
-        name: "openclaw_agent_consult",
-        args: { question: callId },
-      });
-
-    runTool("consult-a");
+    void consult("item-consult-a", "consult-a", "consult-a");
     await vi.waitFor(() => expect(mocks.consult).toHaveBeenCalledTimes(1));
-    runTool("consult-b");
+    void consult("item-consult-b", "consult-b", "consult-b");
     await vi.waitFor(() => expect(mocks.consult).toHaveBeenCalledTimes(2));
     const first = mocks.consult.mock.calls[0]?.[0] as {
       abortSignal: AbortSignal;
@@ -47,21 +39,13 @@ describe("FaceTime talk driver consult delivery", () => {
       };
     };
     const second = mocks.consult.mock.calls[1]?.[0] as typeof first;
-    const secondRun = second.onRunStarted({
-      runId: "run-b",
-      sessionId: "shared-session",
-      timeoutMs: 1_000,
-    });
-    const lateFirstRun = first.onRunStarted({
-      runId: "run-a",
-      sessionId: "shared-session",
-      timeoutMs: 1_000,
-    });
-
-    expect(first.abortSignal.aborted).toBe(true);
-    expect(lateFirstRun.abortSignal.aborted).toBe(true);
-    expect(second.abortSignal.aborted).toBe(false);
-    expect(secondRun.abortSignal.aborted).toBe(false);
+    const run = (params: typeof first, runId: string) =>
+      params.onRunStarted({ runId, sessionId: "shared-session", timeoutMs: 1_000 });
+    const secondRun = run(second, "run-b");
+    const lateFirstRun = run(first, "run-a");
+    expect(
+      [first, lateFirstRun, second, secondRun].map(({ abortSignal }) => abortSignal.aborted),
+    ).toEqual([true, true, false, false]);
   });
 
   it("retires old consult and playback ownership on provider continuity reset", async () => {
@@ -106,9 +90,7 @@ describe("FaceTime talk driver consult delivery", () => {
   });
 
   it("uses an unsuppressed terminal cancellation when the provider requires it", async () => {
-    (
-      mocks.bridge.bridge as { supportsToolResultSuppression?: boolean }
-    ).supportsToolResultSuppression = false;
+    mocks.bridge.bridge.supportsToolResultSuppression = false;
     mocks.consult.mockImplementationOnce(() => new Promise<{ text: string }>(() => {}));
     await startReadyFaceTimeTalkDriver();
 
@@ -169,8 +151,8 @@ describe("FaceTime talk driver consult delivery", () => {
       expect(onFailure).toHaveBeenCalledWith(new Error("delivery failed"));
       expect(mocks.bridge.submitToolResult).toHaveBeenCalledOnce();
       expect(mocks.bridge.close).toHaveBeenCalledOnce();
-      expect(driver.recentTalkEvents).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ type: "tool.result" })]),
+      expect(driver.recentTalkEvents).not.toContainEqual(
+        expect.objectContaining({ type: "tool.result" }),
       );
       if (kind === "working") {
         expect(mocks.consult).not.toHaveBeenCalled();
@@ -193,19 +175,15 @@ describe("FaceTime talk driver consult delivery", () => {
     "settles $settlement delivery correctly after $transition",
     async ({ settlement, transition }) => {
       const deliveryStarted = Promise.withResolvers<void>();
-      let finishDelivery = () => {};
+      const delivery = Promise.withResolvers<void>();
       mocks.consult
         .mockReset()
         .mockImplementation(() => new Promise(() => {}))
         .mockResolvedValueOnce({ text: "Answer." });
-      mocks.bridge.submitToolResult.mockImplementationOnce(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            finishDelivery = () =>
-              settlement === "accepted" ? resolve() : reject(new Error("late failure"));
-            deliveryStarted.resolve();
-          }),
-      );
+      mocks.bridge.submitToolResult.mockImplementationOnce(() => {
+        deliveryStarted.resolve();
+        return delivery.promise;
+      });
       const onFailure = vi.fn(async () => true);
       const driver = await startReadyFaceTimeTalkDriver(startParams({ onFailure }));
       void consult("item-delivery", "call-delivery", "Check my calendar.");
@@ -222,7 +200,11 @@ describe("FaceTime talk driver consult delivery", () => {
         await consult("item-replacement", "call-replacement", "Check my reminders instead.");
         expect(mocks.consult).toHaveBeenCalledTimes(2);
       }
-      finishDelivery();
+      if (settlement === "accepted") {
+        delivery.resolve();
+      } else {
+        delivery.reject(new Error("late failure"));
+      }
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -234,10 +216,8 @@ describe("FaceTime talk driver consult delivery", () => {
       } else {
         expect(onFailure).not.toHaveBeenCalled();
       }
-      expect(driver.recentTalkEvents).not.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: "tool.result", callId: "call-delivery" }),
-        ]),
+      expect(driver.recentTalkEvents).not.toContainEqual(
+        expect.objectContaining({ type: "tool.result", callId: "call-delivery" }),
       );
     },
   );
@@ -247,32 +227,28 @@ describe("FaceTime talk driver consult delivery", () => {
     await startReadyFaceTimeTalkDriver(
       startParams({
         callUUID: "17BC43FD-5800-4B54-86DB-698C49253C42",
-        fullConfig: {
-          agents: { entries: { lobster: {} } },
-        },
+        fullConfig: { agents: { entries: { lobster: {} } } },
       }),
     );
 
     void consult("item-1", "call-1", "Can you read SOUL.md?");
 
     await vi.waitFor(() =>
-      expect(mocks.consult).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "lobster",
-          sessionKey: "agent:lobster:facetime:17bc43fd-5800-4b54-86db-698c49253c42",
-          spawnedBy: "agent:lobster:main",
-          contextMode: "fork",
-          senderId: "caller@example.com",
-          senderIsOwner: true,
-          messageProvider: "voice",
-          lane: "facetime:17bc43fd-5800-4b54-86db-698c49253c42",
-          runIdPrefix: "facetime:17bc43fd-5800-4b54-86db-698c49253c42",
-          thinkLevel: "off",
-          extraSystemPrompt: expect.stringContaining(
-            "configured owner/user described by this agent's workspace context",
-          ),
-        }),
-      ),
+      expect(mocks.consult.mock.calls[0]?.[0]).toMatchObject({
+        agentId: "lobster",
+        sessionKey: "agent:lobster:facetime:17bc43fd-5800-4b54-86db-698c49253c42",
+        spawnedBy: "agent:lobster:main",
+        contextMode: "fork",
+        senderId: "caller@example.com",
+        senderIsOwner: true,
+        messageProvider: "voice",
+        lane: "facetime:17bc43fd-5800-4b54-86db-698c49253c42",
+        runIdPrefix: "facetime:17bc43fd-5800-4b54-86db-698c49253c42",
+        thinkLevel: "off",
+        extraSystemPrompt: expect.stringContaining(
+          "configured owner/user described by this agent's workspace context",
+        ),
+      }),
     );
     expect(mocks.consult.mock.calls[0]?.[0].extraSystemPrompt).toContain("answer immediately");
   });

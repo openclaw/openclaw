@@ -1,9 +1,22 @@
+import type {
+  RealtimeVoiceBridgeCallbacks,
+  RealtimeVoiceTool,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { expect, vi } from "vitest";
+
+type SessionParams = Required<
+  Pick<RealtimeVoiceBridgeCallbacks, "onEvent" | "onReady" | "onError" | "onClose" | "onToolCall">
+> &
+  Pick<RealtimeVoiceBridgeCallbacks, "onResponseDone" | "onTranscript"> & {
+    audioSink: { isOpen(): boolean; sendAudio(audio: Buffer): void; clearAudio(): void };
+    instructions?: string;
+    tools?: RealtimeVoiceTool[];
+  };
 
 const mocks = vi.hoisted(() => ({
   buildCancelResult: vi.fn((message: string) => ({ status: "cancelled", message })),
   bridge: {
-    bridge: { supportsToolResultContinuation: false },
+    bridge: { supportsToolResultContinuation: false, supportsToolResultSuppression: true },
     acknowledgeMark: vi.fn(),
     close: vi.fn(),
     connect: vi.fn<() => Promise<void>>(),
@@ -46,38 +59,7 @@ const mocks = vi.hoisted(() => ({
         onInputAudio(audio: Buffer): void;
         onPlaybackDrained(event: { generation: number; playedFrames: number }): void;
       },
-  sessionParams: undefined as
-    | undefined
-    | {
-        audioSink: {
-          isOpen(): boolean;
-          sendAudio(audio: Buffer): void;
-          clearAudio(): void;
-        };
-        instructions?: string;
-        tools?: Array<{ name: string; description: string }>;
-        onEvent(event: {
-          direction: "client" | "server";
-          type: string;
-          detail?: string;
-          responseId?: string;
-        }): void;
-        onResponseDone?(outcome: {
-          status: "completed" | "cancelled" | "failed" | "incomplete";
-          responseId?: string;
-          message?: string;
-        }): void;
-        onTranscript?(role: "user" | "assistant", text: string, final: boolean): void;
-        onReady(): void;
-        onError(error: Error): void;
-        onClose(reason: "completed" | "error"): void;
-        onToolCall(event: {
-          itemId: string;
-          callId: string;
-          name: string;
-          args: unknown;
-        }): void | Promise<void>;
-      },
+  sessionParams: undefined as SessionParams | undefined,
 }));
 
 // mock-isolation: The driver fixture owns synthetic Talk sessions, consult callbacks, and observations; no host runtime is started.
@@ -189,9 +171,7 @@ export function resetTalkDriverMocks() {
   mocks.pumpParams = undefined;
   mocks.sessionParams = undefined;
   mocks.bridge.bridge.supportsToolResultContinuation = false;
-  (
-    mocks.bridge.bridge as { supportsToolResultSuppression?: boolean }
-  ).supportsToolResultSuppression = true;
+  mocks.bridge.bridge.supportsToolResultSuppression = true;
   mocks.createSession.mockImplementation((params) => {
     mocks.sessionParams = params;
     return mocks.bridge;
