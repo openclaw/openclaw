@@ -225,6 +225,8 @@ type MarkdownContentProps = {
 
 /** Transcript text and inline media share the same incremental DOM owner. */
 export function MarkdownContent(props: MarkdownContentProps) {
+  // The markdown reconciler owns media containers outside Solid's DOM tree.
+  // Its callbacks mount media with this context; the reconciler retires each root.
   const solidOwner = getOwner();
   const presented = useContext(ContentPresentation);
   const fragment = document.createDocumentFragment();

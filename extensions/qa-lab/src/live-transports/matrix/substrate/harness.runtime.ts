@@ -2,16 +2,13 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   execCommand,
-  fetchHealthUrl,
   resolveComposeServiceUrl,
   waitForDockerServiceHealth,
-  waitForHealth,
 } from "../../../docker-runtime.js";
 import {
   MATRIX_QA_CLEANUP_TIMEOUT_MS,
   MATRIX_QA_INTERNAL_PORT,
   MATRIX_QA_SERVICE,
-  buildVersionsUrl,
   isMatrixVersionsReachable,
   waitForReachableMatrixBaseUrl,
   withMatrixQaHarnessTimeout,
@@ -86,12 +83,6 @@ export async function startMatrixQaHarness(params: {
           hostBaseUrl,
         });
       }
-      await waitForHealth(buildVersionsUrl(readyBaseUrl), {
-        label: "Matrix homeserver",
-        composeFile: files.composeFile,
-        fetchImpl: fetchHealthUrl,
-        sleepImpl: sleep,
-      });
       return readyBaseUrl;
     };
     let upstreamBaseUrl = await resolveReadyUpstreamBaseUrl(homeserverPort);

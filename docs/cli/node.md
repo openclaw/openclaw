@@ -262,7 +262,10 @@ Gateway reports a terminal token/password/bootstrap auth pause, the node host
 logs the close detail and exits non-zero so launchd/systemd/Task Scheduler can
 restart it with fresh config and credentials. While device pairing is pending,
 the node keeps reconnecting with exponential backoff capped at 30 seconds and
-connects automatically after approval.
+connects automatically after approval. Startup failures, such as an expired
+setup code or an unavailable Gateway credential, print a redacted
+`[openclaw] Reason:` without requiring debug mode, including in service logs.
+Set `OPENCLAW_DEBUG=1` to include stack traces.
 
 ## Automatic updates
 

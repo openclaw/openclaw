@@ -2,9 +2,9 @@ import fs from "node:fs";
 import { sha256Hex } from "./crypto-digest.js";
 import { readBackupEngineImage, type BackupEngine } from "./database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
+import { ignoreMissingPath } from "./errno.js";
 import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { hasNodeErrorCode } from "./path-guards.js";
 import {
   readSqliteFileGeneration,
   readStableSqliteFileGeneration,
@@ -73,10 +73,7 @@ function readWalIndexHeader(pathname: string): Buffer | null {
   try {
     descriptor = fs.openSync(file, "r");
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? null;
   }
   try {
     const before = fs.fstatSync(descriptor, { bigint: true });

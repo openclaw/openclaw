@@ -145,6 +145,7 @@ suite.define(() => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const text = "keep the attachment added during the pending text write";
+      const finalText = `${text} before leaving`;
       const fileName = "favicon-32.png";
       const firstPage = await context.newPage();
       await firstPage.addInitScript(() => {
@@ -206,15 +207,6 @@ suite.define(() => {
           ),
         )
         .toBeGreaterThan(0);
-      const photoInput = firstPage.locator(".agent-chat__photo-input");
-      const imagePath = path.join(process.cwd(), "ui/public/favicon-32.png");
-      // Load the lazy preview before its render is used to beat the persistence debounce.
-      await photoInput.setInputFiles(imagePath);
-      await firstPage
-        .getByRole("button", { name: `Open image ${fileName}`, exact: true })
-        .waitFor();
-      await firstPage.getByRole("button", { name: `Remove ${fileName}`, exact: true }).click();
-      await waitForCommittedNewSessionDraft(firstPage, "", 0);
       await firstPage.evaluate(() => {
         (globalThis as DurableWriteTeardownGlobal).durableWriteTeardown.blockNextRead = true;
       });
@@ -227,28 +219,37 @@ suite.define(() => {
         )
         .toBe(true);
 
-      await firstPage.evaluate((previewLabel) => {
-        const host = document.querySelector("openclaw-new-session-page")!;
-        const state = (globalThis as DurableWriteTeardownGlobal).durableWriteTeardown;
-        // Remove in the ready-preview turn, before protocol latency can expire the debounce.
-        const observer = new MutationObserver(() => {
-          if (
-            host.querySelector(".chat-attachment-image-button")?.getAttribute("aria-label") !==
-            previewLabel
-          ) {
-            return;
-          }
-          observer.disconnect();
-          state.teardownActive = true;
-          // The next task closes this window before the 200 ms debounce can start a write.
-          globalThis.setTimeout(() => {
-            state.teardownActive = false;
-          }, 0);
-          host.remove();
-        });
-        observer.observe(host, { childList: true, subtree: true, attributes: true });
-      }, `Open image ${fileName}`);
-      await photoInput.setInputFiles(imagePath);
+      await firstPage.evaluate(
+        ({ previewLabel, finalText: messageText }) => {
+          const host = document.querySelector("openclaw-new-session-page")!;
+          const state = (globalThis as DurableWriteTeardownGlobal).durableWriteTeardown;
+          // Lazy preview loading can outlast the debounce. Edit and leave in one turn
+          // so teardown must flush a pending snapshot that includes the attachment.
+          const observer = new MutationObserver(() => {
+            if (
+              host.querySelector(".chat-attachment-image-button")?.getAttribute("aria-label") !==
+              previewLabel
+            ) {
+              return;
+            }
+            observer.disconnect();
+            const message = host.querySelector<HTMLTextAreaElement>(".new-session-page__message")!;
+            message.value = messageText;
+            message.dispatchEvent(new InputEvent("input", { bubbles: true }));
+            state.teardownActive = true;
+            // The next task closes this window before the 200 ms debounce can start a write.
+            globalThis.setTimeout(() => {
+              state.teardownActive = false;
+            }, 0);
+            host.remove();
+          });
+          observer.observe(host, { childList: true, subtree: true, attributes: true });
+        },
+        { previewLabel: `Open image ${fileName}`, finalText },
+      );
+      await firstPage
+        .locator(".agent-chat__photo-input")
+        .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
       await expect
         .poll(() =>
           firstPage.evaluate(
@@ -257,7 +258,7 @@ suite.define(() => {
           ),
         )
         .toBe(true);
-      await waitForCommittedNewSessionDraft(firstPage, text, 1);
+      await waitForCommittedNewSessionDraft(firstPage, finalText, 1);
       await firstPage.close();
 
       const restoredPage = await context.newPage();
@@ -265,7 +266,7 @@ suite.define(() => {
       await restoredPage.goto(`${suite.server.baseUrl}new`);
       await expect
         .poll(() => restoredPage.locator(".new-session-page__message").inputValue())
-        .toBe(text);
+        .toBe(finalText);
       await restoredPage.getByRole("button", { name: `Open image ${fileName}` }).waitFor();
     } finally {
       await context.close();

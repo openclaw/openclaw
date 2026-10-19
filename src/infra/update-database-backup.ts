@@ -19,6 +19,7 @@ import {
   syncDirectory,
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessageWithCode } from "./errors.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { hasNodeErrorCode } from "./path-guards.js";
@@ -253,16 +254,9 @@ async function canonicalDatabaseInventory(
         canonical = await fs.realpath(spelling);
         present.add(canonical);
       } catch (error) {
-        if (!hasNodeErrorCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
         // A dangling alias is not proof that a database was absent.
-        const entry = await fs.lstat(spelling).catch((cause: unknown) => {
-          if (!hasNodeErrorCode(cause, "ENOENT")) {
-            throw cause;
-          }
-          return undefined;
-        });
+        const entry = await fs.lstat(spelling).catch(ignoreMissingPath);
         if (entry) {
           throw new Error(`Update database path cannot be resolved: ${spelling}`, { cause: error });
         }

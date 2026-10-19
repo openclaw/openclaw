@@ -57,11 +57,12 @@ async function openSkills(page: Page) {
   if (!(await menu.evaluate((node) => node.hasAttribute("open")))) {
     await pane.getByRole("button", { name: "Add attachment", exact: true }).click();
   }
-  const view = await menu.getAttribute("data-view");
-  if (view?.startsWith("library:")) {
+  if ((await menu.getAttribute("data-view"))?.startsWith("library:")) {
     await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
-  } else if (view !== "skills") {
-    await menu.getByRole("menuitem", { name: "Skills", exact: true }).click();
+  }
+  const root = menu.getByRole("menuitem", { name: "Skills", exact: true });
+  if ((await menu.getAttribute("data-view")) === "root") {
+    await root.click();
   }
   await menu.getByText("Selected for this session", { exact: true }).waitFor();
   await waitForMenuFocusHandoff(page, menu, "skills");

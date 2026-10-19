@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 import { chromium, type WebSocket as PlaywrightWebSocket } from "playwright";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { asOptionalRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { buildControlUiSessionPath } from "../../packages/session-url-contract/src/index.ts";
 import { parseAgentSessionKey } from "../../packages/session-url-contract/src/session-key-normalization.ts";
 import type { ControlUiReadiness } from "../../ui/src/app/control-ui-readiness.ts";
 import { resolvePlaywrightChromiumExecutablePath } from "../../ui/src/test-helpers/playwright-chromium.ts";
@@ -30,6 +31,7 @@ const { values } = parseArgs({
     "expect-session": { type: "string" },
     "open-details": { type: "boolean", default: false },
     "activity-session": { type: "string" },
+    "activity-patch-sessions": { type: "string" },
     "activity-cron": { type: "boolean", default: false },
     "activity-models": { type: "string", default: "openai/gpt-5.6-sol,openai/gpt-5.6-luna" },
   },
@@ -68,7 +70,14 @@ if (values["load-runs"]) {
 
 async function measureLoads(runs: number) {
   const activityModels = values["activity-models"].split(",").filter(Boolean);
-  if (values["activity-session"] && (runs !== 1 || activityModels.length === 0)) {
+  const patchSessions = values["activity-patch-sessions"]?.split(",").filter(Boolean) ?? [];
+  const activitySession = values["activity-session"] ?? patchSessions[0];
+  if (patchSessions.length && (values["activity-session"] || values["activity-cron"])) {
+    throw new Error(
+      "--activity-patch-sessions uses existing sessions and excludes turn/cron activity",
+    );
+  }
+  if (activitySession && (runs !== 1 || activityModels.length === 0)) {
     throw new Error("Active session measurement requires --load-runs 1 and at least one model");
   }
   const cronSession = parseAgentSessionKey(values["activity-session"]);
@@ -98,7 +107,7 @@ async function measureLoads(runs: number) {
   };
   let random = integer(values["phase-seed"], "--phase-seed");
   try {
-    if (values["activity-session"]) {
+    if (activitySession) {
       const endpoint = new URL(url);
       endpoint.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       endpoint.hash = "";
@@ -119,11 +128,13 @@ async function measureLoads(runs: number) {
         caps: [],
         ...(token ? { auth: { token } } : {}),
       });
-      await activityRpc("sessions.create", {
-        key: values["activity-session"],
-        visibility: "shared",
-        model: activityModels[0],
-      });
+      if (!patchSessions.length) {
+        await activityRpc("sessions.create", {
+          key: activitySession,
+          visibility: "shared",
+          model: activityModels[0],
+        });
+      }
     }
     if (activityClient && values["activity-cron"]) {
       const job = await activityRpc("cron.add", {
@@ -168,6 +179,7 @@ async function measureLoads(runs: number) {
               pendingProviders?: unknown;
               refreshFailed?: unknown;
               sessionModelRevision?: unknown;
+              models?: unknown;
             }
           | undefined,
       ) => ({
@@ -175,6 +187,7 @@ async function measureLoads(runs: number) {
         pendingProviders: payload?.pendingProviders,
         refreshFailed: payload?.refreshFailed,
         sessionModelRevision: payload?.sessionModelRevision,
+        models: payload?.models,
       });
       Reflect.set(Error, "stackTraceLimit", 30);
       new PerformanceObserver((list) => {
@@ -351,6 +364,28 @@ async function measureLoads(runs: number) {
           await page.waitForTimeout(Math.max(0, startedAt + step * intervalMs - Date.now()));
           const atMs = await page.evaluate(() => performance.now());
           const started = Date.now();
+          if (patchSessions.length) {
+            const key = patchSessions[step % patchSessions.length]!;
+            const pathname = buildControlUiSessionPath({
+              namespace: "chat",
+              sessionKey: key,
+              exactKey: true,
+            });
+            if (!pathname) {
+              throw new Error(`Invalid synthetic session key: ${key}`);
+            }
+            await page.evaluate(
+              (nextPath) => window.openclawControlUi!.navigate("chat", { pathname: nextPath }),
+              pathname,
+            );
+            await page.waitForFunction(
+              (nextKey) => window.openclawControlUi?.snapshot().sessionKey === nextKey,
+              key,
+            );
+            await activityRpc("sessions.patch", { key, label: `Synthetic activity ${step}` });
+            activity.push({ method: "sessions.patch", atMs, elapsedMs: Date.now() - started });
+            continue;
+          }
           const key = values["activity-session"]!;
           const kind = step % (activityCronJobId ? 5 : 4);
           const method = kind === 4 ? "cron.run" : kind === 3 ? "chat.send" : "sessions.patch";

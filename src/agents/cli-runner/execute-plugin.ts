@@ -388,9 +388,9 @@ export async function executePluginOwnedProcess(params: {
   onOutstandingWorkChange?: (active: boolean) => void;
   activeToolCount?: () => number;
   compactionActive?: () => boolean;
-  onCompactionActiveChange?: (listener: () => void) => () => void;
+  setOnCompactionActiveChange?: (listener: (() => void) | undefined) => void;
   getActiveLoopbackAskUserDeadline?: () => number | undefined;
-  onActiveLoopbackAskUserDeadlineChange?: (listener: () => void) => () => void;
+  setOnActiveLoopbackAskUserDeadlineChange?: (listener: (() => void) | undefined) => void;
   onNoOutputTimeout?: (error: FailoverError) => void;
   onInterrupted?: (reason: CliTerminalInterruption["reason"]) => boolean;
   mcpCapture?: {
@@ -459,8 +459,6 @@ export async function executePluginOwnedProcess(params: {
     reportOutstandingWork();
   };
   let watchdog: ReturnType<typeof createCliPluginWatchdog> | undefined;
-  let stopAskUserDeadlineListener: (() => void) | undefined;
-  let stopCompactionWorkListener: (() => void) | undefined;
 
   let messageInjection: CliBackendMessageInjection | undefined;
   const detachReplyBackend = attachCliReplyBackend(
@@ -524,10 +522,8 @@ export async function executePluginOwnedProcess(params: {
       },
       params.watchdogClock,
     );
-    stopAskUserDeadlineListener = params.onActiveLoopbackAskUserDeadlineChange?.(() =>
-      watchdog?.reset(),
-    );
-    stopCompactionWorkListener = params.onCompactionActiveChange?.(() => reportOutstandingWork());
+    params.setOnActiveLoopbackAskUserDeadlineChange?.(() => watchdog?.reset());
+    params.setOnCompactionActiveChange?.(() => reportOutstandingWork());
 
     watchdog.reset();
     if (
@@ -688,8 +684,8 @@ export async function executePluginOwnedProcess(params: {
   } finally {
     params.mcpCapture?.registerTurnInterrupt?.(undefined);
     watchdog?.dispose();
-    stopAskUserDeadlineListener?.();
-    stopCompactionWorkListener?.();
+    params.setOnActiveLoopbackAskUserDeadlineChange?.(undefined);
+    params.setOnCompactionActiveChange?.(undefined);
     params.onOutstandingWorkChange?.(false);
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.

@@ -38,6 +38,7 @@ export type ChatState = StreamCausalBoundaryState & {
   connected: boolean;
   chatSubmissions?: ApplicationChatSubmissions;
   hasPendingInitialTurn?: (sessionKey: string) => boolean;
+  isRouteSessionPending?: () => boolean;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
   /** Config changes retire preview tickets even when session permissions stay inherited. */
