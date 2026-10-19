@@ -6,6 +6,7 @@ const synthesizeSpeechMock = vi.hoisted(() =>
   vi.fn<typeof import("../tts/tts.js").synthesizeSpeech>(),
 );
 
+// mock-isolation: Exercise speech dispatch without loading the live TTS provider runtime.
 vi.mock("../tts/tts.js", () => ({ synthesizeSpeech: synthesizeSpeechMock }));
 
 vi.mock("../tts/tts-synthesis.js", () => ({ synthesizeTalkSpeech: synthesizeSpeechMock }));
