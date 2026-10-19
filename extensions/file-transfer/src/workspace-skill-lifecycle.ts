@@ -92,7 +92,12 @@ export function createNodeSkillLifecycle(options: NodeWorkspaceWorkerOptions): L
   return {
     async applySkillRoot(params) {
       workspace(params.workspaceDir);
-      params.beforePersistentApply?.();
+      const assertCurrent = () => {
+        options.signal.throwIfAborted();
+        params.assertPublicationAuthority?.();
+        params.beforePersistentApply?.();
+      };
+      assertCurrent();
       // Reuse the file plugin's bounded archive producer and binary upload protocol.
       const archive = await handleDirFetch({ path: params.extractedRoot, followSymlinks: false });
       if (!archive.ok) {
@@ -103,13 +108,10 @@ export function createNodeSkillLifecycle(options: NodeWorkspaceWorkerOptions): L
         ".openclaw/skill-installs",
         `${randomUUID()}.tgz`,
       );
-      const assertCurrent = () => {
-        options.signal.throwIfAborted();
-        params.beforePersistentApply?.();
-      };
       const {
         beforeInstall,
         beforePersistentApply: _guard,
+        assertPublicationAuthority: _publicationAuthority,
         logger: _logger,
         extractedRoot: _source,
         ...files

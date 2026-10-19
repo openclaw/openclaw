@@ -624,7 +624,8 @@ export async function installPackageDir<
         await params.authorizeMutation();
       }
       await movePathWithCopyFallback({
-        assertBeforeMutation: assertPublicationApply,
+        assertBeforeRename: assertPublicationApply,
+        assertBeforeMutation: assertPersistentApply,
         onDestinationPublished: (receipt) => {
           published.backup = receipt;
         },
@@ -660,7 +661,8 @@ export async function installPackageDir<
       await params.authorizeMutation();
     }
     await movePathWithCopyFallback({
-      assertBeforeMutation: assertPublicationApply,
+      assertBeforeRename: assertPublicationApply,
+      assertBeforeMutation: assertPersistentApply,
       onDestinationPublished: (receipt) => {
         published.install = receipt;
       },

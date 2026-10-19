@@ -325,6 +325,39 @@ describe("installPackageDir", () => {
     }
   });
 
+  it("checks publication authority before rename, not during copied-source cleanup", async () => {
+    const { sourceDir, targetDir } = await createFixture("publication-cleanup-authority");
+    let stageDir = "";
+    let publicationChecks = 0;
+    const realRename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      if (stageDir && String(args[0]) === stageDir) {
+        throw Object.assign(new Error("cross-device move"), { code: "EXDEV" });
+      }
+      return realRename(...args);
+    });
+
+    const result = await installPackageDir({
+      ...updateOptions(sourceDir, targetDir),
+      sourceHardlinks: "reject",
+      depsLogMessage: "Installing deps…",
+      assertPublicationAuthority: () => {
+        publicationChecks += 1;
+        if (publicationChecks > 2) {
+          throw new Error("publication authority was checked during cleanup");
+        }
+      },
+      afterInstall: async (installedDir: string) => {
+        stageDir = installedDir;
+        return { ok: true as const };
+      },
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(publicationChecks).toBe(2);
+    await expectText(targetDir, "new");
+  });
+
   it.runIf(process.platform !== "win32").each([true, false])(
     "requires explicit package-manager hardlink allowance (allowed=%s)",
     async (allowed) => {

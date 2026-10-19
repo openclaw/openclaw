@@ -74,7 +74,7 @@ vi.mock("../../infra/fs-safe-remove.js", async (importOriginal) => {
     removePathWithinRoot: async (options: Parameters<typeof actual.removePathWithinRoot>[0]) => {
       if (
         removePathState.beforeBackupCleanup &&
-        String(options.relativePath).includes(".openclaw-install-backups")
+        options.relativePath.includes(".openclaw-install-backups")
       ) {
         const hook = removePathState.beforeBackupCleanup;
         removePathState.beforeBackupCleanup = undefined;

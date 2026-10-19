@@ -273,7 +273,7 @@ export const defaultSkillUploadStore = {
               })
               .then(
                 (renewed) => {
-                  leaseLost ||= renewed === false;
+                  leaseLost ||= !renewed;
                 },
                 () => undefined,
               )
