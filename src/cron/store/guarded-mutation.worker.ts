@@ -12,7 +12,6 @@ import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
 import type { CronStoredJob, CronStoreFile } from "../types.js";
 import { planCronJobMutation } from "./job-mutations.js";
-import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
 import { updateCronRuntimeRow } from "./row-codec.js";
 import { recordSkippedCronRequestInDatabase } from "./run-history.kernel.js";
 import {
@@ -237,7 +236,7 @@ export function mutateCronJobsInWorker(
           return {
             outcome: {
               store,
-              names: readCronJobNamesInDatabase(db, undefined, input.storeKey),
+              names: inventory.names,
               changed: changes.changedIds.size > 0,
               notifications: plan.notifications,
               logs: plan.logs,
