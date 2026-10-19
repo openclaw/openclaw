@@ -8329,7 +8329,6 @@
 ["src/wizard/setup.workspace-validation.test.ts","../commands/onboard-helpers.js","e07f4539a627d4dd482a683ca0753632b96b336f52500c07620a90cec37d758d",1]
 ["src/wizard/setup.workspace-validation.test.ts","./setup.migration-import.js","dcdea622f342548ab61d7c55784118e8eaa47d4021307c812c8b5fe1ab93cc1a",1]
 ["src/worker/browser-runtime.test.ts","../plugin-sdk/facade-loader.js","377770f640fc82a2f3ed21c3948d4400efe9dcd565ba20e136534ea917b00389",1]
-["src/worker/worker-command.runtime.test.ts","../agents/bash-process-registry.js","925e78cd4ed66407fa54365331222103b1fb414f94c754429f2b9616d5448436",1]
 ["src/worker/worker-command.runtime.test.ts","./github-binding.runtime.js","98b7dd037788e598ae302585f673c6dcf6001b5225a0e0b765ac1dec47de3f20",1]
 ["src/worker/worker-command.runtime.test.ts","./worker.runtime.js","2f18afb3e39f3f93743e76529e1f7580e96cb4c09cf5b743f70324b4d20326b4",1]
 ["src/worker/worker-deploy-entry.test.ts","../infra/runtime-guard.js","32cd0a55a58776ca780cb5b8b5cfced475e51fe34555c072e906f49253972d0d",1]
