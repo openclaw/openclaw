@@ -1,7 +1,16 @@
 import "../../../styles/chat/side-panel.css";
 import "./chat-files-panel.tsx";
 import { render } from "@solidjs/web";
-import { For, Show, createEffect, createMemo, createSignal, getOwner, onCleanup } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  getOwner,
+  onCleanup,
+  runWithOwner,
+} from "solid-js";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "../../../components/panel-hosted-tabs.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
@@ -422,7 +431,8 @@ function Region(props: RegionProps, host: RegionElement) {
   queueMicrotask(() => {
     const root = host.parentElement?.querySelector<HTMLElement>(".sidebar-region__right-runtime");
     if (!disposed && root) {
-      dispose = render(() => <Panel />, root, undefined, { owner });
+      // render creates its root under the ambient owner; the microtask must restore it.
+      dispose = runWithOwner(owner, () => render(() => <Panel />, root));
     }
   });
   // Publish committed DOM geometry to the pane's transcript layout owner.

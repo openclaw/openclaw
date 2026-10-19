@@ -1,13 +1,16 @@
 /* @vitest-environment jsdom */
 
+import { createComponent, createRoot } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
-import { createControlUiPluginHost } from "../../../plugins/control-ui-host.ts";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import "../../../components/resizable-divider.ts";
+import { createControlUiPluginHost } from "../../../plugins/control-ui-host.ts";
 import {
   ControlUiPluginRuntime,
   type ControlUiPluginOwner,
 } from "../../../plugins/control-ui-runtime.ts";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import { createInitializationContext } from "../chat-pane.test-support.ts";
@@ -25,7 +28,7 @@ import {
   type SidebarLayout,
 } from "../sidebar-layout.ts";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
-import "./chat-sidebar-region.runtime.tsx";
+import { ChatSidebarRegion } from "./chat-sidebar-region.runtime.tsx";
 
 type Region = HTMLElementTagNameMap["openclaw-chat-sidebar-region"];
 
@@ -44,6 +47,7 @@ function element(markup: string): HTMLElement {
 async function createRegion(
   layout: SidebarLayout = openSlot({ columns: [] }, "detail"),
   definitions?: SidebarPanelDefinition[],
+  parent: HTMLElement = document.body,
 ) {
   const shell = document.createElement("div");
   shell.className = "sidebar-region";
@@ -82,7 +86,7 @@ async function createRegion(
   const rightRuntime = document.createElement("div");
   rightRuntime.className = "sidebar-region__right-runtime";
   shell.append(region, primary, rightRuntime);
-  document.body.append(shell);
+  parent.append(shell);
   regions.push(region);
   await region.updateComplete;
   return region;
@@ -99,6 +103,86 @@ afterEach(() => {
 });
 
 describe("chat sidebar region", () => {
+  it("preserves deferred content context across retention and application replacement", async () => {
+    const first = createInitializationContext();
+    const second = createInitializationContext();
+    first.gateway.snapshot.sessionKey = "session-first";
+    second.gateway.snapshot.sessionKey = "session-second";
+    const firstContent = element("<span data-context-probe>session-first</span>");
+    const secondContent = element("<span data-context-probe>session-second</span>");
+    const missingContent = element("<span data-context-probe>missing context</span>");
+    const provider = createApplicationContextProvider(first);
+    document.body.append(provider);
+    onTestFinished(() => provider.remove());
+    const definitions = sidebarPanelDefinitions().map((definition) =>
+      Object.defineProperty(definition, "content", {
+        // The real deferred SidebarPanel reads typed content under its owner.
+        get: () => {
+          if (definition.slot !== "detail") {
+            return null;
+          }
+          const context = useOptionalApplication();
+          return context?.gateway === first.gateway
+            ? firstContent
+            : context?.gateway === second.gateway
+              ? secondContent
+              : missingContent;
+        },
+      }),
+    );
+    const region = await createRegion(openSlot({ columns: [] }, "detail"), definitions, provider);
+    const probe = () => root(region).querySelector("[data-context-probe]");
+    await waitForSolid(() => expect(probe()?.textContent).toBe("session-first"));
+    const retained = probe();
+    region.layout = setSidebarOpen(region.layout, false);
+    await region.updateComplete;
+    region.layout = setSidebarOpen(region.layout, true);
+    await region.updateComplete;
+    expect(probe()).toBe(retained);
+
+    provider.setContext(second);
+    await waitForSolid(() => expect(probe()?.textContent).toBe("session-second"));
+    expect(probe()).not.toBe(retained);
+    expect(firstContent.isConnected).toBe(false);
+    root(region).remove();
+    await waitForSolid(() => expect(secondContent.isConnected).toBe(false));
+    expect(provider.querySelector("[data-context-probe]")).toBeNull();
+  });
+
+  it("does not mount a deferred outlet after its Solid region owner is disposed", async () => {
+    const content = vi.fn(() => document.createElement("span"));
+    const outlet = document.createElement("div");
+    outlet.className = "sidebar-region__right-runtime";
+    let dispose!: () => void;
+    const host = createRoot((disposeOwner) => {
+      dispose = disposeOwner;
+      return createComponent(ChatSidebarRegion, {
+        layout: openSlot({ columns: [] }, "detail"),
+        panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+          Object.defineProperty(definition, "content", {
+            get: () => (definition.slot === "detail" ? content() : null),
+          }),
+        ),
+      });
+    });
+    if (!(host instanceof HTMLElement)) {
+      throw new Error("Expected the real sidebar bridge host");
+    }
+    const shell = document.createElement("div");
+    shell.append(host, outlet);
+    document.body.append(shell);
+    onTestFinished(() => {
+      dispose();
+      shell.remove();
+    });
+    dispose();
+    // Keep the sibling outlet discoverable: DOM removal must not prevent this mount.
+    expect(host.parentElement?.querySelector(".sidebar-region__right-runtime")).toBe(outlet);
+    await Promise.resolve();
+    expect(content).not.toHaveBeenCalled();
+    expect(outlet.childElementCount).toBe(0);
+  });
+
   it("builds unopened panel options only when the operator opens the type menu", async () => {
     const readIcon = vi.fn(() => "terminal" as const);
     const definitions = sidebarPanelDefinitions().map((definition) =>
