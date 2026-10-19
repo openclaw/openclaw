@@ -206,6 +206,15 @@ suite.define(() => {
           ),
         )
         .toBeGreaterThan(0);
+      const photoInput = firstPage.locator(".agent-chat__photo-input");
+      const imagePath = path.join(process.cwd(), "ui/public/favicon-32.png");
+      // Load the lazy preview before its render is used to beat the persistence debounce.
+      await photoInput.setInputFiles(imagePath);
+      await firstPage
+        .getByRole("button", { name: `Open image ${fileName}`, exact: true })
+        .waitFor();
+      await firstPage.getByRole("button", { name: `Remove ${fileName}`, exact: true }).click();
+      await waitForCommittedNewSessionDraft(firstPage, "", 0);
       await firstPage.evaluate(() => {
         (globalThis as DurableWriteTeardownGlobal).durableWriteTeardown.blockNextRead = true;
       });
@@ -239,9 +248,7 @@ suite.define(() => {
         });
         observer.observe(host, { childList: true, subtree: true, attributes: true });
       }, `Open image ${fileName}`);
-      await firstPage
-        .locator(".agent-chat__photo-input")
-        .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
+      await photoInput.setInputFiles(imagePath);
       await expect
         .poll(() =>
           firstPage.evaluate(
