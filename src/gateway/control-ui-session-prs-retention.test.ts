@@ -5,6 +5,10 @@ import { runGitWorkerOperation } from "../infra/git-worker.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createControlUiSessionPullRequestSubscriptions as createSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import {
+  spyOnSessionPrLoader,
+  type SessionPrLoader,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
+import {
   createSessionPullRequestsFixture,
   githubJson,
   pullListItem,
@@ -91,12 +95,16 @@ function mockCheckout(
 }
 
 function subscribe(
-  options: Pick<Parameters<typeof createSubscriptions>[0], "load" | "broadcastToConnIds">,
+  options: Pick<Parameters<typeof createSubscriptions>[0], "broadcastToConnIds"> & {
+    load: SessionPrLoader;
+  },
 ) {
+  const { load, ...deps } = options;
+  spyOnSessionPrLoader(load);
   const subscriptions = createSubscriptions({
     scheduler: createTestGatewayScheduler("fake-timers"),
     prepareRead: fixture.prepareRead,
-    ...options,
+    ...deps,
   });
   subscriptionsToStop.add(subscriptions);
   return subscriptions;
