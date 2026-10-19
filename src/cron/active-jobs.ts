@@ -109,6 +109,26 @@ export function captureCronJobMessageSourceAuthority(params: {
   return captureCronJobMessageAuthority(params, true);
 }
 
+/** Source restoration precedes run admission, but still belongs to one live occurrence. */
+export function captureCronJobSourceAuthority(jobId: string): (() => void) | undefined {
+  const marker = getCurrentCronActiveJobMarker(jobId);
+  const owner = marker?.standingGrantAuthority;
+  if (!marker || !owner) {
+    return undefined;
+  }
+  return () => {
+    if (
+      getCurrentCronActiveJobMarker(jobId) !== marker ||
+      marker.messageSourceAuthorityRevoked ||
+      marker.jobRemoved ||
+      marker.cancellation?.kind === "requested"
+    ) {
+      throw new Error("Cron occurrence source authority is no longer active");
+    }
+    owner.assertCurrent();
+  };
+}
+
 export function captureCronJobStandingGrantAuthority(params: {
   jobId: string;
   operationalRunInstance: OperationalRunInstanceRef;

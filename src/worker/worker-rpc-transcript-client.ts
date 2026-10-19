@@ -7,7 +7,7 @@ import {
 import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { type WorkerConnection, WorkerConnectionInterruptedError } from "./worker-connection.js";
 import type { TranscriptResponseError } from "./worker-rpc-client-shared.js";
-import { fenceForOwnershipError, isTerminalConnection } from "./worker-rpc-client-shared.js";
+import { fenceForOwnershipError } from "./worker-rpc-client-shared.js";
 
 const TRANSCRIPT_SIZE_FRAME_ID = "00000000-0000-4000-8000-000000000000";
 
@@ -150,10 +150,7 @@ export class WorkerTranscriptCommitClient {
         }
         throw failure;
       } catch (error) {
-        if (
-          error instanceof WorkerConnectionInterruptedError &&
-          !isTerminalConnection(this.connection)
-        ) {
+        if (error instanceof WorkerConnectionInterruptedError && !this.connection.isTerminal()) {
           continue;
         }
         throw error;

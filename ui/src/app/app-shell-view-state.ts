@@ -11,7 +11,6 @@ import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { DevicePairSetupLoader } from "./app-shell-device-pair-setup.tsx";
@@ -97,9 +96,9 @@ export function readShellView(host: ShellViewHost) {
   const overlaySnapshot = context.overlays.snapshot;
   const controlUiRefreshRequired = overlaySnapshot.controlUiRefreshRequired;
   // Chat owns the live panes beneath its retained route island.
-  const historyRecovering = [
-    ...(host.routeOutlet?.querySelectorAll<ChatPaneElement>("openclaw-chat-pane") ?? []),
-  ].some((pane) => pane.conversationPresented && pane.historyRecovering);
+  const historyRecovering = (host.routeOutlet?.renderedElements?.("openclaw-chat-pane") ?? []).some(
+    (pane) => pane.conversationPresented && pane.historyRecovering,
+  );
   const connectionStatus = resolveGatewayStatus(
     gatewaySnapshot,
     controlUiRefreshRequired,

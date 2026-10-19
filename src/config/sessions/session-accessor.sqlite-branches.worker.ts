@@ -44,10 +44,7 @@ export function readSessionBranchSnapshot(
           : readSessionBranchSummaries(database, entry.sessionId, cached);
       return {
         status: "ok",
-        source:
-          typeof databaseIdentity === "string"
-            ? { sessionId: entry.sessionId, databaseIdentity }
-            : undefined,
+        source: { sessionId: entry.sessionId, databaseIdentity },
         ...watermark,
         appendSafe: summaries.appendSafe,
         branches: summaries.branches,

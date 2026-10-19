@@ -346,6 +346,7 @@ it.each([
       childAgentId: "main",
       sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
       requesterSessionKey: owner,
+      requesterTurnRunId: collect ? "draining-ancestor" : undefined,
       controllerSessionKey: owner,
       requesterAgentId: "main",
       requesterDisplayKey: "main",
@@ -362,8 +363,17 @@ it.each([
   const admission = await beginSessionEffect({
     scope: storePath,
     identities: [ancestorKey, "draining-ancestor-session"],
+    run: {
+      runId: ancestor.runId,
+      sessionKey: ancestorKey,
+      sessionId: "draining-ancestor-session",
+      agentId: "main",
+    },
     assertAllowed: () => {},
-    onInterrupt: () => entered.resolve(),
+    onInterrupt: () => {
+      entered.resolve();
+      return { runId: ancestor.runId };
+    },
   });
   const dispatch = vi.fn(async () => {});
   enqueueSwarmRun({

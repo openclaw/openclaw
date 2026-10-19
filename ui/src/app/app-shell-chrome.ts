@@ -461,22 +461,6 @@ export class ShellChromeOwner {
       window.dispatchEvent(new CustomEvent(DEBUG_OVERLAY_REQUEST_EVENT));
       return;
     }
-    if (
-      matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) &&
-      isSettingsTakeover(host.routeState.routeId)
-    ) {
-      if (host.navDrawerOpen && !this.shouldIgnoreSettingsEscape(event)) {
-        event.preventDefault();
-        host.closeNavDrawer({ restoreFocus: true });
-        return;
-      }
-      if (event.eventPhase === Event.CAPTURING_PHASE || this.shouldIgnoreSettingsEscape(event)) {
-        return;
-      }
-      event.preventDefault();
-      host.exitSettings();
-      return;
-    }
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, event)) {
       event.preventDefault();
       host.navigate("appearance");

@@ -22,6 +22,7 @@ import { PluginRuntimeCloseCompletedError } from "../../plugins/runtime-close-er
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { runWithSessionControllerCleanup } from "../../sessions/session-controller.cleanup-context.js";
 import { withSessionControllerSource } from "../../sessions/session-controller.context.js";
 import { trackSessionControllerSourceWork } from "../../sessions/session-controller.mailbox.js";
 import {
@@ -51,11 +52,14 @@ import {
 } from "./agent-restart-recovery-context.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
-import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
+import { prepareAgentRunExecutionIdentityFacts } from "./agent-run-execution-lineage.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { dispatchAgentRunWithMedia } from "./agent-run-media.js";
 import { buildAgentRunSourceContext } from "./agent-run-source-context.js";
-import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
+import {
+  resolveGatewayPluginSubagentToolPolicy,
+  settleUnstartedGatewayFollowup,
+} from "./agent-run-subagent.js";
 import { createAgentRunUndispatchedOutcome } from "./agent-run-undispatched-outcome.js";
 import {
   annotateAgentRunUserTurnPrompt,
@@ -73,7 +77,9 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
     // Autonomous turns prepare their own workspace and cannot borrow a previous chat run's gate.
     runWithAgentWorkspaceReadiness(undefined, () => executeAgentRun(params));
   try {
-    await (input ? withSessionControllerSource(input, run) : run());
+    await runWithSessionControllerCleanup(() =>
+      input ? withSessionControllerSource(input, run) : run(),
+    );
     cleanup.resolve();
   } catch (error) {
     // A resource-owner receipt proves completed disposal despite callback errors.
@@ -145,6 +151,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
     const assertDispatchCurrent = () => {
       params.assertContextCurrent?.();
       prepared.operatorAuthority?.assertCurrent();
+      prepared.userTurn.assertRequesterCurrent?.();
       abortController.signal.throwIfAborted();
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       if (
@@ -333,19 +340,8 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         const ingressAgentId = params.resolvedSessionKey
           ? params.activeSessionAgentId
           : params.agentId;
-        // Plugin-owned additive grants stay internal to the authenticated in-process run.
-        // Public agent params cannot supply them, and normal tool policy still filters them.
-        const runtimePluginToolGrant =
-          params.client?.internal?.agentRunTracking === "plugin_subagent" &&
-          params.client.internal.pluginRuntimeOwnerId ===
-            params.client.internal.runtimePluginToolGrant?.pluginId
-            ? params.client.internal.runtimePluginToolGrant
-            : undefined;
-        const pluginSubagentToolsAllow =
-          params.client?.internal?.agentRunTracking === "plugin_subagent" &&
-          Array.isArray(params.client.internal.pluginSubagentToolsAllow)
-            ? [...params.client.internal.pluginSubagentToolsAllow]
-            : undefined;
+        const { runtimePluginToolGrant, pluginSubagentToolsAllow } =
+          resolveGatewayPluginSubagentToolPolicy(params.client);
         const executionIdentityAdmission = resolveAgentRestartRecoveryExecutionIdentityAdmission({
           collectionEnabled: isExecutionIdentityCollectionEnabled(params.cfg),
           isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
@@ -353,12 +349,6 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           runId: params.runId,
           sessionEntry: params.sessionEntry,
         });
-        const agentRuntimeIdentity = params.client?.internal?.agentRuntimeIdentity;
-        const executionIdentitySpawnFacts =
-          agentRuntimeIdentity &&
-          params.context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) === true
-            ? resolveExecutionIdentitySpawnFacts(agentRuntimeIdentity)
-            : undefined;
         const restartRecoveryContext = resolveAgentRestartRecoveryContext({
           isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
           canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
@@ -369,6 +359,11 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           sessionEntry: params.sessionEntry,
         });
         const runContext = buildAgentRunSourceContext(params, restartRecoveryContext);
+        const executionIdentitySpawnFacts = prepareAgentRunExecutionIdentityFacts(
+          params,
+          runContext,
+          prepared.operatorAuthority?.profileId,
+        );
         // Awaited routing can retire this owner before final dispatch.
         params.assertContextCurrent?.();
         const callerContext = resolveChatSendCallerContext(params.client);
@@ -489,6 +484,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 inputProvenance: params.inputProvenance,
                 privateCompletion: prepared.userTurn.privateCompletion,
                 replyExpectation: prepared.userTurn.replyExpectation,
+                requesterOrigin: prepared.userTurn.requesterOrigin,
                 senderIsOwner: prepared.userTurn.senderIsOwner,
                 sessionEffects: params.sessionEffects,
                 skipInitialSessionTouch: params.skipAgentInitialSessionTouch,

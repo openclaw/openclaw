@@ -22,10 +22,19 @@ vi.mock("../flows/bundled-health-checks.js", () => ({ resolveCodexHealthApi }));
 // mock-isolation: Sandbox probes must not launch commands on the test host.
 vi.mock("../process/exec.js", () => ({ runExec, runCommandWithTimeout }));
 
-vi.mock("../agents/sandbox.js", () => ({
+vi.mock("../agents/sandbox/constants.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/sandbox/constants.js")>(
+    "../agents/sandbox/constants.js",
+  )),
   DEFAULT_SANDBOX_BROWSER_IMAGE: "browser-image",
   DEFAULT_SANDBOX_COMMON_IMAGE: "common-image",
   DEFAULT_SANDBOX_IMAGE: "default-image",
+}));
+
+vi.mock("../agents/sandbox/config.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/sandbox/config.js")>(
+    "../agents/sandbox/config.js",
+  )),
   resolveSandboxScope: vi.fn(() => "shared"),
 }));
 

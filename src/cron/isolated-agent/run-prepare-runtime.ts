@@ -55,7 +55,7 @@ const cronExternalContentRuntimeLoader = createLazyImportLoader(
 const cronAuthProfileRuntimeLoader = createLazyImportLoader(
   () => import("./run-auth-profile.runtime.js"),
 );
-export async function loadSessionAccessorRuntime() {
+async function loadSessionAccessorRuntime() {
   return await sessionAccessorRuntimeLoader.load();
 }
 
@@ -105,7 +105,7 @@ export function createCronSessionRowWriter(params: {
   };
 }
 
-export async function loadCronExternalContentRuntime() {
+async function loadCronExternalContentRuntime() {
   return await cronExternalContentRuntimeLoader.load();
 }
 
@@ -233,10 +233,7 @@ export async function buildCronCommandBody(params: {
   return { sourcePromptPrefix, isExternalHook, commandBody };
 }
 
-export function appendCronUnattendedRunPreamble(
-  commandBody: string,
-  opts: { externalHook: boolean },
-) {
+function appendCronUnattendedRunPreamble(commandBody: string, opts: { externalHook: boolean }) {
   // Keep the suffix static for prompt caching. External hooks cannot override
   // this trusted guidance or gain permission to remove jobs through fenced content.
   const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently. If you cannot complete the task, explain what blocked it and what you tried.`;

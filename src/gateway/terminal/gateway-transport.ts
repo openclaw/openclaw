@@ -3,7 +3,6 @@ import type {
   GatewayBufferedAmountFn,
 } from "../server-broadcast-types.js";
 import { TERMINAL_EVENT_DATA } from "./session-types.js";
-export { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./session-types.js";
 
 /** Adapts terminal ownership to targeted gateway delivery and pressure state. */
 export function createTerminalSessionTransport(

@@ -221,16 +221,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   // Tracks accounts that were manually stopped so we don't auto-restart them.
   const manuallyStopped = new Set<string>();
   const recoveryStopTimedOut = new Set<string>();
-  const recoveryStartRequested = new Set<string>();
   // Accounts whose crash recovery is already owned by the retry supervisor below
   // (backoff sleep plus its replacement start). `restartPending` cannot answer
-  // this: the timed-out-stop recovery sets it too, and that one needs the health
-  // monitor to keep driving it.
+  // this: a timed-out stop also publishes pending recovery.
   const pendingAutoRestarts = new Set<string>();
-  const clearRecoveryState = (key: string) => {
-    recoveryStopTimedOut.delete(key);
-    recoveryStartRequested.delete(key);
-  };
   let autostartSuppression: ChannelAutostartSuppression | null = null;
   let ambientAutostartSuppressedChannelIds = new Set(
     opts.ambientAutostartSuppressedChannelIds ?? [],
@@ -443,7 +437,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       const key = restartKey(channelId, id);
       restarts.delete(key);
       manuallyStopped.delete(key);
-      recoveryStartRequested.delete(key);
+      recoveryStopTimedOut.delete(key);
     }
   };
 
@@ -567,16 +561,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               startOutcomes.set(id, { status: "skipped", reason: "manual-stop" });
               return;
             }
-            if (!timedOutRecovery || !recoveryStartRequested.has(rKey)) {
-              if (timedOutRecovery) {
-                recoveryStartRequested.add(rKey);
-                setRuntime(channelId, id, { restartPending: true });
-              }
+            if (!timedOutRecovery) {
               startOutcomes.set(id, { status: "retry", reason: "task-owned" });
               return;
             }
-            // A repeated recovery request retires the stuck predecessor before replacement.
-            clearRecoveryState(rKey);
+            // Cleanup has joined; a task that ignored abort needs no second
+            // caller request to recover (#77651, #94008).
+            recoveryStopTimedOut.delete(rKey);
             restarts.delete(rKey);
             store.lifetimes.get(id)?.capabilityLease.revoke();
             store.lifetimes.delete(id);
@@ -924,13 +915,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 return;
               }
               if (manuallyStopped.has(rKey)) {
-                clearRecoveryState(rKey);
+                recoveryStopTimedOut.delete(rKey);
                 return;
               }
               if (getRuntime(channelId, id).terminalDisconnect) {
                 // Terminal startup/session failures win over pending recovery.
                 // Leaving recovery state behind would restart a channel that needs user action.
-                clearRecoveryState(rKey);
+                recoveryStopTimedOut.delete(rKey);
                 restarts.delete(rKey);
                 setRestartState(false);
                 log.info?.(`[${id}] auto-restart skipped, terminal disconnect`);
@@ -938,23 +929,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               }
               if (recoveryStopTimedOut.has(rKey)) {
                 recoveryStopTimedOut.delete(rKey);
-                if (!recoveryStartRequested.delete(rKey)) {
-                  setRestartState(false);
-                  releaseTask();
-                  return;
-                }
-                restarts.delete(rKey);
-                log.info?.(`[${id}] restarting after timed-out channel stop completed`);
-                setRestartState(true);
+                setRestartState(false);
                 releaseTask();
-                try {
-                  await startChannelInternal(channelId, id, {
-                    reason: "stop-recovery",
-                    preserveManualStop: true,
-                  });
-                } catch {
-                  // abort or startup failure — runtime state was recorded by startChannelInternal
-                }
                 return;
               }
               // Only plugin task lifetime counts. Deferred handoff and cleanup must not
@@ -1260,7 +1236,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             };
           }
           if (outcome.status === "rejected" && retainCleanupOwner) {
-            clearRecoveryState(rKey);
+            recoveryStopTimedOut.delete(rKey);
             if (stoppedCleanly && store.tasks.get(id) === task) {
               store.tasks.delete(id);
             }
@@ -1287,7 +1263,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             return outcome;
           }
-          clearRecoveryState(rKey);
+          recoveryStopTimedOut.delete(rKey);
           if (store.tasks.get(id) === task) {
             store.tasks.delete(id);
           }

@@ -82,7 +82,6 @@ export function resolveMemorySessionSyncPlan(params: {
   return {
     activePaths,
     existingRows,
-    existingHashes: existingRows ? new Map(existingRows.map((row) => [row.path, row.hash])) : null,
     indexAll: params.needsFullReindex || Boolean(params.targetSessionFiles),
   };
 }

@@ -527,7 +527,7 @@ export function holdSessionControllerSourceWithdrawal(
 
 /** The same notification is reused when the cancelled source later finishes draining. */
 function notifySessionControllerSourceAbandonment(
-  run: FollowupRun,
+  run: Pick<FollowupRun, "turnAdoptionLifecycle">,
   state: SessionControllerSourceCustody,
 ): void | Promise<void> {
   const prior = state.abandonment;
@@ -552,9 +552,9 @@ function notifySessionControllerSourceAbandonment(
   }
 }
 
-/** Completes one already-bound source's callbacks; never reacquires a mailbox. */
+/** Completes one captured source's callbacks; never reacquires a mailbox. */
 export function completeSessionControllerSourceLifecycle(
-  run: FollowupRun,
+  run: Pick<FollowupRun, "turnAdoptionLifecycle" | "controllerInput" | "controllerClaim">,
   state: SessionControllerSourceCustody,
   disposition?: "consumed",
 ): void {

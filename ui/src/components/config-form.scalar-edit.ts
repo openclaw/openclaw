@@ -16,6 +16,11 @@ type ScalarInputState = {
 };
 
 const scalarInputState = new WeakMap<ScalarControl, ScalarInputState>();
+const controlErrors = new WeakMap<ScalarControl, HTMLElement>();
+
+export function bindControlError(target: ScalarControl, error: HTMLElement): void {
+  controlErrors.set(target, error);
+}
 
 export function scalarValueBranch(value: unknown): ScalarValueBranch | undefined {
   const type = typeof value;
@@ -51,11 +56,10 @@ export function finishScalarEdit(target: ScalarControl): void {
 export function setControlValidity(
   target: HTMLInputElement | HTMLTextAreaElement,
   message: string,
-  errorContainer = ".settings-row",
 ): boolean {
   target.setCustomValidity(message);
   target.setAttribute("aria-invalid", String(Boolean(message)));
-  const error = target.closest(errorContainer)?.querySelector<HTMLElement>(".cfg-field__error");
+  const error = controlErrors.get(target);
   if (error) {
     error.hidden = !message;
     error.textContent = message;

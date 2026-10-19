@@ -15,23 +15,26 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 export function captureSubagentKillSources(params: {
   target: SessionTarget;
   entry: SubagentRunRecord;
-  legacy: boolean;
+  exactRun: boolean;
   sessionId?: string;
   captureQueued: boolean;
 }) {
-  const { target, entry, legacy, sessionId } = params;
+  const { target, entry, exactRun, sessionId } = params;
   const stop = captureSessionControllerStop({
-    inputs: legacy
+    inputs: exactRun
       ? matchingEntries(target)
           .flatMap((owner) => owner.mailbox?.entries ?? [])
-          .filter((input) => input.protocolRunId === entry.runId)
+          .filter(
+            (input) =>
+              input.protocolRunId === entry.runId && inputMatchesSessionId(input, sessionId),
+          )
       : selectedClaims(target).flatMap((claim) =>
           claim.inputs.filter((input) => inputMatchesSessionId(input, sessionId)),
         ),
     operations: [...selectedOperations([target])].filter(
       (operation) =>
         (sessionId === undefined || operation.hasOwnedSessionId(sessionId)) &&
-        (!legacy || hasOperationBackendRunId(operation, entry.runId)),
+        (!exactRun || hasOperationBackendRunId(operation, entry.runId)),
     ),
   });
   const queued: SubagentKillInputSnapshot[] = params.captureQueued
@@ -52,7 +55,7 @@ export function captureSubagentKillSources(params: {
             })) ?? [],
       )
     : [];
-  const admissions = legacy
+  const admissions = exactRun
     ? captureSessionWorkRunInterruptions({
         scope: target.storeScope,
         identities: [entry.childSessionKey, entry.childSessionIdentity?.sessionId],
@@ -73,7 +76,9 @@ export function captureSubagentKillSources(params: {
       operations: stop.operations,
     }),
     preparation: captureSessionControllerStop({
-      inputs: stop.activeInputs.filter((input) => !input.claim?.operation),
+      inputs: (exactRun ? stop.inputs : stop.activeInputs).filter(
+        (input) => !input.claim?.operation,
+      ),
     }),
   };
 }

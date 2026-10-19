@@ -14,7 +14,6 @@ import { canPrepareAgentSessionWorktree } from "../../gateway/agent-turn/agent-h
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { findDeliveryIntentOwners } from "../../infra/outbound/delivery-queue-storage.js";
 import type { CommandLane } from "../../process/lanes.js";
 import { isSessionControllerWorkActive } from "../../sessions/session-controller.lifecycle.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
@@ -24,6 +23,7 @@ import {
   readAdmittedHarnessCompletionInputAsync,
 } from "../agent-harness-completion-recovery.js";
 import { resolveExecDefaultsAsync } from "../exec-defaults.js";
+import { readRestartRecoveryRequesterSource } from "../requester-run-recovery-source.js";
 import {
   getMainSessionRecoveryRetryCount,
   isMainRestartRecoveryTerminalOnly,
@@ -38,6 +38,7 @@ import {
 } from "./main-session-restart-recovery-checkpoint.js";
 import {
   hasRestartRecoveryMessageActionAuthority,
+  pendingFinalRecoveryAction,
   requiresRestartRecoveryMessageActionAuthority,
 } from "./main-session-restart-recovery-delivery.js";
 import {
@@ -48,6 +49,7 @@ import {
 import { loadExpectedRestartRecoveryTarget } from "./main-session-restart-recovery-exact-target.js";
 import {
   prepareRequesterRestartRecovery,
+  finishDelegatedRestartRecovery,
   tombstoneMainRestartRecoveryWithNotice,
 } from "./main-session-restart-recovery-failure.js";
 import {
@@ -62,40 +64,6 @@ import {
   MAX_RECOVERY_RETRIES,
 } from "./main-session-restart-recovery-shared.js";
 import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
-
-async function pendingFinalRecoveryAction(
-  pending: NonNullable<SessionEntry["pendingFinalDelivery"]>,
-  stateDir?: string,
-): Promise<"complete" | "defer" | "fail" | "notice" | "retry"> {
-  const deliveries = pending.deliveries;
-  if (!deliveries?.length) {
-    return "fail";
-  }
-  if (deliveries.every(({ state }) => state === "delivered" || state === "suppressed")) {
-    return "complete";
-  }
-  const owners = await findDeliveryIntentOwners(
-    deliveries.map(({ id }) => id),
-    stateDir,
-  );
-  if (owners.some((owner) => owner?.status === "pending" || owner?.settlementPending)) {
-    return "defer";
-  }
-  if (
-    pending.kind === "replayable" &&
-    deliveries.every(({ state }) => state === "prepared") &&
-    owners.every((owner) => owner === null)
-  ) {
-    return "retry";
-  }
-  // Residual ambiguity (unknown custody, settled owners, unreplayable mixes):
-  // complete the session and record durable notice debt instead of failing it.
-  // A fire-and-forget failure notice is lost during the very outage that made
-  // the outcome ambiguous; the debt survives until the next same-route turn.
-  // Records without notice identity cannot carry debt, so they keep the
-  // visible fail path instead of completing silently.
-  return pending.context && pending.intentId ? "notice" : "fail";
-}
 
 export async function recoverStore(params: {
   storeAgentId?: string;
@@ -414,13 +382,21 @@ export async function recoverStore(params: {
         continue;
       }
 
-      // An admitted parent owns its input and operator source independently of
+      const requesterOrigin = expectedRecoverySourceRunId
+        ? readRestartRecoveryRequesterSource({
+            ...target,
+            entry,
+            sourceRunId: expectedRecoverySourceRunId,
+          })
+        : undefined;
+      // An admitted parent owns its input and retained source independently of
       // the child wake, whose membership and retry state may already have changed.
       // Gateway dispatch restores that exact source under current policy. Only
       // historical inputs without it still need the cohort failure settlement.
       if (
         !harnessCompletion &&
         !entry.restartRecoveryOperatorSource &&
+        !requesterOrigin &&
         entry.restartRecoverySourceIngress === "internal" &&
         expectedRecoverySourceRunId?.startsWith("announce:requester-settle:")
       ) {
@@ -502,17 +478,31 @@ export async function recoverStore(params: {
       if (
         !recoverableHarnessCompletion &&
         !completionSource &&
+        (source === "cron" || !requesterOrigin) &&
         requiresDelegatedRecoverySource(entry, source)
       ) {
-        const tombstone = await tombstoneMainRestartRecoveryWithNotice({
+        const outcome = await finishDelegatedRestartRecovery({
           ...target,
           cfg: params.cfg,
           entry,
           gatewayRuntime: params.gatewayRuntime,
           observation: recoveryView.observation,
           reason: "delegated recovery sender authority is unavailable",
+          assertCurrent: () => {
+            if (stopped()) {
+              throw new Error("Delegated restart recovery stopped before settlement");
+            }
+          },
         });
-        if (tombstone === "notice_failed") {
+        if (outcome === "settled") {
+          params.handledSessionKeys.add(resumeDedupeKey);
+          decision = {
+            decision: "settled",
+            reason: "delegated_authority_unavailable",
+            nextOwner: "none",
+          };
+          result.settled++;
+        } else if (outcome === "notice_failed") {
           result.failed++;
         } else {
           skip("delegated_authority_unavailable");

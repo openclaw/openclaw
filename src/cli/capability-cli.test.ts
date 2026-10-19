@@ -463,12 +463,7 @@ describe("capability cli", () => {
     firstGatewayCall,
     firstJsonOutput,
     expectRuntimeErrorContains,
-    expectInvalidNoDispatch: () => {
-      expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
-      expect(mocks.callGateway).not.toHaveBeenCalled();
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    },
+    dispatchMocks: mocks,
   });
 
   it.each([

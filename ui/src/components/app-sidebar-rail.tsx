@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, untrack, onCleanup } from "solid-js";
+import { createMemo, For, Show, onCleanup, untrack } from "solid-js";
 import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
@@ -25,6 +25,7 @@ import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
 import {
   renderSidebarAgentCard,
   renderAppSidebarFooterBar,
@@ -44,6 +45,7 @@ import {
   renderSessionUnreadBadge,
   renderSessionOwnerAvatar,
 } from "./solid/session-presentation.tsx";
+import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 type SidebarZone = ReturnType<AppSidebarRenderHost["reconciledSidebarZone"]>;
 type RailPinTouchPress = {
@@ -175,10 +177,24 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         onDrop={(event) => host.sessionOrganizer.handleSidebarZoneDrop(event)}
       >
         <For each={pins()} keyed={serializeSidebarEntry}>
-          {(entry) => renderRailPin(host, untrack(entry), zone)}
+          {(entry) => {
+            // The serialized entry is this pin's key; its live row facts come from zone.
+            const initialEntry = untrack(entry);
+            return renderRailPin(host, initialEntry, zone);
+          }}
         </For>
       </div>
-      <div class="sidebar-rail__bottom">{renderAppSidebarFooterBar(host)}</div>
+      <div class="sidebar-rail__bottom">
+        <Show
+          when={
+            host.sessionDataContext?.theme.branding.communityLinks &&
+            host.sessionDataContext.config.current.communityInvite
+          }
+        >
+          <SidebarCommunityInvite />
+        </Show>
+        {renderAppSidebarFooterBar(host)}
+      </div>
     </nav>
   );
 }
@@ -230,9 +246,12 @@ function renderRailPin(
           }),
         )
       : null;
+  let trigger: HTMLElement | undefined;
+  const triggerRef = (element: HTMLAnchorElement) => (trigger = element);
   const content =
     entry.type === "person" ? (
       <a
+        ref={triggerRef}
         class="sidebar-rail__button"
         draggable="false"
         href={person()?.href}
@@ -251,7 +270,7 @@ function renderRailPin(
         </Show>
       </a>
     ) : entry.type === "route" ? (
-      host.sidebarMenus.renderRoute(entry.route, host)
+      host.sidebarMenus.renderRoute(entry.route, host, triggerRef)
     ) : (
       <Show
         when={session()}
@@ -270,13 +289,14 @@ function renderRailPin(
                 </Show>
               }
             >
-              {(item) => renderAppSidebarPluginTab(host, item)}
+              {(item) => renderAppSidebarPluginTab(host, item, triggerRef)}
             </Show>
           ) : undefined
         }
       >
         {(row) => (
           <a
+            ref={triggerRef}
             class="sidebar-rail__button"
             draggable="false"
             href={host.sidebarSessionHref(row())}
@@ -319,14 +339,16 @@ function renderRailPin(
   };
   const openMenu = (event: MouseEvent | KeyboardEvent) => {
     if (!host.sidebarSnapshot) {
-      handleContextMenuEvent(event, pin?.querySelector("a, button") ?? null, (trigger, x, y) =>
-        host.sidebarMenus.openRailPinMenu(serialized, label(), x, y, trigger),
+      handleContextMenuEvent(event, trigger ?? pin ?? null, (menuTrigger, x, y) =>
+        host.sidebarMenus.openRailPinMenu(serialized, label(), x, y, menuTrigger),
       );
     }
   };
   onCleanup(() => {
     clearTimeout(press?.timer);
-    pin?.removeEventListener("click", captureClick, true);
+    if (host.sidebarMenus.railPins.get(serialized) === pin) {
+      host.sidebarMenus.railPins.delete(serialized);
+    }
   });
   const available = () =>
     entry.type === "person" ||
@@ -336,20 +358,33 @@ function renderRailPin(
   return (
     <Show when={available()}>
       <div
-        ref={(element) => {
-          pin = element;
-          element.addEventListener("click", captureClick, true);
-        }}
+        ref={[
+          (element: HTMLDivElement) => {
+            pin = element;
+            host.sidebarMenus.railPins.set(serialized, element);
+          },
+          nativeListener("click", captureClick, true),
+        ]}
         class={[
           "sidebar-rail__pin",
           drop()?.entry === serialized ? `sidebar-zone-entry--drop-${drop()?.position}` : undefined,
         ]}
         data-sidebar-entry={serialized}
+        tabindex={-1}
         title={host.sidebarMenus.railPinMenuPosition ? "" : label()}
         draggable={!host.sidebarSnapshot ? "true" : "false"}
         onContextMenu={openMenu}
         onKeyDown={openMenu}
+        onFocusIn={(event) => {
+          if (event.target instanceof HTMLElement && event.target.matches("a, button")) {
+            trigger = event.target;
+          }
+        }}
         onPointerDown={(event) => {
+          const target = event.target.closest<HTMLElement>("a, button");
+          if (target && pin?.contains(target)) {
+            trigger = target;
+          }
           clearTimeout(press?.timer);
           press = undefined;
           if (host.sidebarSnapshot || event.pointerType !== "touch" || !event.isPrimary) {
@@ -364,13 +399,18 @@ function renderRailPin(
           press = current;
           current.timer = setTimeout(() => {
             current.timer = undefined;
-            const trigger = pin?.querySelector<HTMLElement>("a, button");
-            if (host.sidebarSnapshot || !pin?.isConnected || !trigger) {
+            if (host.sidebarSnapshot || !pin?.isConnected) {
               press = undefined;
               return;
             }
             current.opened = true;
-            host.sidebarMenus.openRailPinMenu(serialized, label(), current.x, current.y, trigger);
+            host.sidebarMenus.openRailPinMenu(
+              serialized,
+              label(),
+              current.x,
+              current.y,
+              trigger ?? pin,
+            );
           }, 500);
         }}
         onPointerMove={(event) => {
@@ -489,11 +529,15 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
       <openclaw-mcp-app-catalog surface="sidebar" />
       <For each={entries()} keyed={serializeSidebarEntry}>
         {(entry) => {
-          const fixedEntry = untrack(entry);
-          const key = serializeSidebarEntry(fixedEntry);
+          // The For key is the complete serialized identity; labels stay live in the renderer.
+          const initialEntry = untrack(entry);
+          const key = serializeSidebarEntry(initialEntry);
           // Allocate once per entry; the rendered link owns its reactive fields.
-          const content = untrack(() =>
-            renderAppSidebarPageEntry(host, fixedEntry, rows, () => zone().pluginTabs),
+          const content = renderAppSidebarPageEntry(
+            host,
+            initialEntry,
+            rows,
+            () => zone().pluginTabs,
           );
           return (
             <div class="sidebar-pages__entry">

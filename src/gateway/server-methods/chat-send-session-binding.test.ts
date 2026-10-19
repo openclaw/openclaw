@@ -39,6 +39,7 @@ import {
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
@@ -410,6 +411,8 @@ it.each(admissionScenarios)(
             releaseSessionControllerClaim(claim);
           });
           expect(admission.activeRunAbort.controller.signal.aborted).toBe(false);
+          // The finished runtime still owns its source until the held dispatch settles.
+          expect(rpcSourceTesting.get(runId)).toBe(original);
         } else {
           rotateAgentEventLifecycleGeneration();
         }
@@ -447,14 +450,14 @@ it.each(admissionScenarios)(
         }
       } finally {
         namespaceRun.close();
+        reply?.complete();
+        release.resolve();
         if (queuedRun) {
           completeFollowupRunLifecycle(queuedRun);
           await queuedRun.controllerInput?.settlement.promise;
         } else {
           await options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
         }
-        reply?.complete();
-        release.resolve();
         if (owned) {
           await vi.waitFor(() => expect(rpcSourceTesting.has(runId)).toBe(false));
           owned.admission.cleanupAdmittedRun();
@@ -576,6 +579,9 @@ it.each(
           promptSource?.assertCurrent();
           return { ...source, owned, options };
         }
+        const external = vi
+          .spyOn(messageActionRunner, "runMessageAction")
+          .mockRejectedValue(new Error("Unexpected external message action"));
         try {
           const initial = await sendPrompt("reaction-original-source", "Original prompt");
           const initialRecorder = initial.owned.userTurn.recorder;
@@ -639,7 +645,6 @@ it.each(
             agentId: "main",
             sessionKey,
           });
-          const external = vi.fn();
           const tool = createMessageTool({
             config,
             preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
@@ -649,7 +654,6 @@ it.each(
             runId: executionRunId,
             currentChannelProvider: "webchat",
             messageActionTurnCapability: token,
-            runMessageAction: external,
           });
           const react = (args: Record<string, unknown> = {}) =>
             withGatewayToolCallerIdentity(caller, () =>
@@ -767,6 +771,9 @@ it.each(
           probe?.mockRestore();
           revokeMessageActionTurnCapability(token);
           execution.close();
+          for (const source of sources.values()) {
+            source.release.resolve();
+          }
           if (queuedReaction) {
             completeFollowupRunLifecycle(queuedReaction);
             await queuedReaction.controllerInput?.settlement.promise;
@@ -774,7 +781,6 @@ it.each(
           await Promise.all(
             [...sources.values()].map(async (source) => {
               const settled = source.options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
-              source.release.resolve();
               await settled;
               if (source.owned) {
                 await source.finished.promise;
@@ -790,6 +796,7 @@ it.each(
           }
           holdDispatch.mockRestore();
           observeDispatch.mockRestore();
+          external.mockRestore();
         }
       },
     );

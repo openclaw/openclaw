@@ -842,7 +842,12 @@ Plugin service starts taking at least 250 ms always log one compact
 `success` or `failure` outcome, even without opt-in tracing. Plugin and service IDs
 use encoded diagnostic segments; the record contains no service payload or error text.
 Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the complete breakdown and per-plugin
-import and registration timings.
+import and registration timings. `cli.main.gateway-run-select-environment-imports`
+separates the environment selector's module imports from its work;
+`cli.environment.*` breaks down trusted dotenv loading, config reads, validation,
+and recovery inside that work. These steps also appear in `process.bootstrap`.
+For external plugins, `modulePreparationMs` measures awaited source acquisition
+inside `loadMs`; it is not additional time to add to that total.
 
 Desktop permission narrowing and session identity checks remain on their required
 admission paths. Transcript projection repair, orphan settlement, channel

@@ -2,7 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
 import { appendSessionManagerActor } from "../../agents/sessions/session-manager-actor-append.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
@@ -54,67 +57,77 @@ const messageAppend = (actor: SessionActor, sessionId: string, message: unknown)
   },
 });
 
-it("publishes actor initialization from its absent transaction preimage", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const fixture = createSessionCompoundWorkerFixture();
-    const identity = readOpenClawAgentDatabaseIdentity(fixture.database);
-    if (typeof identity.identity !== "string") {
-      throw new Error("Fixture requires durable storage");
-    }
-    const scope = {
-      ...fixture.scope,
-      sessionKey: "agent:main:actor-first-maintenance",
-      sessionId: "actor-first-maintenance",
-    };
-    const actor = await createSessionActorFactory({
-      agentId: "main",
-      path: fixture.database.path,
-      env,
-    }).acquire(
-      {
-        sessionKey: scope.sessionKey,
-        database: {
-          kind: "file",
-          physicalIdentity: identity.identity,
-          birthtime: identity.birthtime,
-          nativeLocation: fixture.database.path,
-        },
-      },
-      { assertCurrent() {}, assertReadable() {} },
-    );
-    const ageChanges = vi.fn();
-    const stopAgeChanges = observeSessionEntryMaintenanceAgeChanges(identity.identity, ageChanges);
-    try {
-      const result = await appendSessionManagerActor({
-        actor,
-        toolResult: false,
-        assertCurrent() {},
-        append: {
-          kind: "message",
-          input: {
-            scope,
-            cwd: "/synthetic",
-            messageJson: JSON.stringify({ role: "user", content: "first input", timestamp: 2 }),
+it.each(["main", "secondary"])(
+  "publishes %s actor initialization in a shared store",
+  async (agentId) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env, statePath }) => {
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: statePath("shared.sqlite"),
+      });
+      const identity = readOpenClawAgentDatabaseIdentity(database);
+      if (typeof identity.identity !== "string") {
+        throw new Error("Fixture requires durable storage");
+      }
+      const scope = {
+        agentId,
+        storePath: database.path,
+        sessionKey: `agent:${agentId}:actor-first-maintenance`,
+        sessionId: "actor-first-maintenance",
+      };
+      const actor = await createSessionActorFactory({
+        agentId: "main",
+        path: database.path,
+        env,
+      }).acquire(
+        {
+          sessionKey: scope.sessionKey,
+          database: {
+            kind: "file",
+            physicalIdentity: identity.identity,
+            birthtime: identity.birthtime,
+            nativeLocation: database.path,
           },
-          initialization: { scope, entry: { sessionId: scope.sessionId, updatedAt: 2 } },
         },
-      });
-      expect(result.failure).toBeUndefined();
-      expect(result.committed).toMatchObject({
-        kind: "message",
-        value: { snapshot: { ok: true } },
-      });
-      expect(ageChanges).toHaveBeenCalledExactlyOnceWith({
-        sessionKey: scope.sessionKey,
-        entry: expect.objectContaining({ sessionId: scope.sessionId }),
-        previousEntry: undefined,
-      });
-    } finally {
-      stopAgeChanges();
-      await actor.release();
-    }
-  });
-});
+        { assertCurrent() {}, assertReadable() {} },
+      );
+      const ageChanges = vi.fn();
+      const stopAgeChanges = observeSessionEntryMaintenanceAgeChanges(
+        identity.identity,
+        ageChanges,
+      );
+      try {
+        const result = await appendSessionManagerActor({
+          actor,
+          toolResult: false,
+          assertCurrent() {},
+          append: {
+            kind: "message",
+            input: {
+              scope,
+              cwd: "/synthetic",
+              messageJson: JSON.stringify({ role: "user", content: "first input", timestamp: 2 }),
+            },
+            initialization: { scope, entry: { sessionId: scope.sessionId, updatedAt: 2 } },
+          },
+        });
+        expect(result.failure).toBeUndefined();
+        expect(result.committed).toMatchObject({
+          kind: "message",
+          value: { snapshot: { ok: true } },
+        });
+        expect(ageChanges).toHaveBeenCalledExactlyOnceWith({
+          sessionKey: scope.sessionKey,
+          entry: expect.objectContaining({ sessionId: scope.sessionId }),
+          previousEntry: undefined,
+        });
+      } finally {
+        stopAgeChanges();
+        await actor.release();
+      }
+    });
+  },
+);
 
 it("acquires existing incognito input from memory without opening a database", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {

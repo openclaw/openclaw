@@ -169,6 +169,8 @@ function readOpenClawMessageMeta(message: unknown): Record<string, unknown> | un
 export async function readLatestAssistantReply(params: {
   sessionKey: string;
   agentId?: string;
+  /** Only rows written by this run qualify. */
+  runId?: string;
   limit?: number;
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
@@ -184,11 +186,14 @@ export async function readLatestAssistantReply(params: {
     if (isAssistantReplyTranscriptArtifact(message)) {
       continue;
     }
+    const meta = readOpenClawMessageMeta(message);
+    if (params.runId !== undefined && meta?.runId !== params.runId) {
+      continue;
+    }
     const text = extractStoredAssistantText(message);
     if (!text?.trim()) {
       continue;
     }
-    const meta = readOpenClawMessageMeta(message);
     if (meta?.truncated !== true) {
       return text;
     }

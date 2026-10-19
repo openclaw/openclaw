@@ -323,8 +323,8 @@ function interceptWrites(callback: (phase: "before" | "after") => void | Promise
   });
 }
 
-it("publishes overlapping same-row mutations in FIFO order after each real commit ACK", async () => {
-  await register(entry("overlap"));
+it("publishes overlapping durable and runtime-only mutations in FIFO order", async () => {
+  await register({ ...entry("overlap"), cleanupHandled: false });
   const context = captureOpenClawStateWorkerContext();
   const registrationRows = await prepareSubagentRegistrationRows(
     "agent:main:subagent:overlap",
@@ -334,7 +334,11 @@ it("publishes overlapping same-row mutations in FIFO order after each real commi
   const reached = createDeferredCore();
   const release = createDeferredCore();
   let held = false;
+  let writes = 0;
   interceptWrites(async (phase) => {
+    if (phase === "before") {
+      writes++;
+    }
     if (phase === "after" && !held) {
       held = true;
       reached.resolve();
@@ -345,6 +349,7 @@ it("publishes overlapping same-row mutations in FIFO order after each real commi
     row.label = "first mutation";
   });
   let second: Promise<void> | undefined;
+  let third: Promise<void> | undefined;
   try {
     await awaitGateBeforeSettlement(
       reached.promise,
@@ -353,31 +358,110 @@ it("publishes overlapping same-row mutations in FIFO order after each real commi
     );
     expect(subagentRuns.get("overlap")?.label).toBeUndefined();
     const successorPlan = vi.fn((row: SubagentRunRecord) => {
-      row.cleanupCompletedAt = 42;
+      row.cleanupHandled = true;
     });
     second = change("overlap", successorPlan);
+    third = change("overlap", (row) => {
+      expect(row).toMatchObject({ label: "first mutation", cleanupHandled: true });
+      expect(registrationRows().get("overlap")?.cleanupHandled).toBe(true);
+      row.label = "last mutation";
+    });
     expect(successorPlan).not.toHaveBeenCalled();
     release.resolve();
-    await Promise.all([first, second]);
+    await Promise.all([first, second, third]);
+    expect(writes).toBe(2);
     expect(subagentRuns.get("overlap")).toMatchObject({
-      label: "first mutation",
-      cleanupCompletedAt: 42,
+      label: "last mutation",
+      cleanupHandled: true,
     });
     expect(loadSubagentRegistryFromSqlite().get("overlap")).toMatchObject({
-      label: "first mutation",
-      cleanupCompletedAt: 42,
+      label: "last mutation",
+      cleanupHandled: false,
     });
     expect(registrationRows().get("overlap")).toMatchObject({
-      label: "first mutation",
-      cleanupCompletedAt: 42,
+      label: "last mutation",
+      cleanupHandled: true,
     });
     expect(() => {
       subagentRuns.get("overlap")!.label = "uncommitted mutation";
     }).toThrow(TypeError);
   } finally {
     release.resolve();
-    await Promise.allSettled([first, second]);
+    await Promise.allSettled([first, second, third]);
   }
+});
+
+it("rejects a runtime-only mutation when its Gateway recovery owner changes", async () => {
+  await register({
+    ...entry("recovery-noop"),
+    cleanupHandled: false,
+    execution: { status: "terminal", endedAt: 2 },
+    requesterSettleWake: { status: "pending", attemptCount: 0 },
+  });
+  const expected = subagentRuns.get("recovery-noop")!;
+  const previousResolver = () => undefined;
+  bindGatewayContextResolver(expected, previousResolver);
+  const gateway = createGatewayContext();
+  let gatewayCurrent = true;
+  const resolver = () => (gatewayCurrent ? gateway : undefined);
+  const onPublished = vi.fn();
+
+  await expect(
+    mutateSubagentRuns(
+      [expected.runId],
+      (rows) => {
+        gatewayCurrent = false;
+        return {
+          value: undefined,
+          postimages: new Map([
+            [expected.runId, { ...rows.get(expected.runId)!, cleanupHandled: true }],
+          ]),
+        };
+      },
+      {
+        gatewayRecovery: { expected, previousResolver, resolver, gateway },
+        onPublished,
+      },
+    ),
+  ).rejects.toThrow("Subagent Gateway recovery owner changed");
+  expect(subagentRuns.get(expected.runId)).toBe(expected);
+  expect(expected.cleanupHandled).toBe(false);
+  expect(onPublished).not.toHaveBeenCalled();
+});
+
+it("persists an unchanged prepared-only registration", async () => {
+  await register(entry("warm-registration"));
+  const prepared = entry("prepared-registration");
+  await mutateSubagentRuns([prepared.runId], (rows) => ({ value: undefined, postimages: rows }), {
+    preparedRows: () => new Map([[prepared.runId, prepared]]),
+  });
+  expect(subagentRuns.has(prepared.runId)).toBe(true);
+  expect(loadSubagentRegistryFromSqlite().has(prepared.runId)).toBe(true);
+});
+
+it("persists payload removal when the resident predecessor is compacted", async () => {
+  await register({
+    ...entry("clear-retained-payload"),
+    task: "short task",
+    execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
+    cleanupCompletedAt: 3,
+    completion: {
+      required: false,
+      resultText: "retained result",
+      fallbackResultText: "retained fallback",
+    },
+  });
+  const resident = subagentRuns.get("clear-retained-payload");
+  expect(resident?.completion?.resultText).toBeUndefined();
+  expect(resident?.completion?.fallbackResultText).toBeUndefined();
+  await change("clear-retained-payload", (row) => {
+    delete row.completion!.resultText;
+    delete row.completion!.fallbackResultText;
+  });
+  const durable = loadSubagentRegistryFromSqlite().get("clear-retained-payload");
+  expect(durable).toBeDefined();
+  expect(durable?.completion?.resultText).toBeUndefined();
+  expect(durable?.completion?.fallbackResultText).toBeUndefined();
 });
 
 it("does not resurrect prepared rows deleted by a queued predecessor receipt", async () => {

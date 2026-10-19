@@ -214,6 +214,28 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     }
   });
 
+  it("fails over immediately for Anthropic spend-cap usage-limit wording", async () => {
+    const controller = createController(
+      vi.fn(async () => false),
+      true,
+    );
+    controller.observeAttempt({ providerRetryMaxRetries: 3 });
+    const onRetry = vi.fn();
+
+    await expect(
+      controller.maybeRetryTransient({
+        reason: "rate_limit",
+        message:
+          'HTTP 400: {"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC."}}',
+        onRetry,
+      }),
+    ).resolves.toBe(false);
+
+    expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(controller.transientRetryCount).toBe(0);
+  });
+
   it.each([
     [true, true, false],
     [false, true, false],

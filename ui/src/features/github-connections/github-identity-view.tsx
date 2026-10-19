@@ -300,18 +300,25 @@ function GitHubAuthorizationCode(
               {props.authorization.userCode}
             </code>
             <Show when={props.authorization.userCode} keyed>
-              {(userCode) => (
-                <button
-                  type="button"
-                  class="btn btn--sm"
-                  onClick={(event) =>
-                    void handleCopyButton(event, userCode, t("agentTools.githubCopyCode"))
-                  }
-                >
-                  <Icon name="copy" />
-                  <span data-copy-label>{t("agentTools.githubCopyCode")}</span>
-                </button>
-              )}
+              {(userCode) => {
+                let label!: HTMLSpanElement;
+                return (
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    onClick={(event) =>
+                      void handleCopyButton(event, userCode, t("agentTools.githubCopyCode"), {
+                        label,
+                      })
+                    }
+                  >
+                    <Icon name="copy" />
+                    <span ref={(element) => (label = element)} data-copy-label>
+                      {t("agentTools.githubCopyCode")}
+                    </span>
+                  </button>
+                );
+              }}
             </Show>
           </>
         }

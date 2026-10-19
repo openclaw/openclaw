@@ -124,6 +124,7 @@ export function reconcileWhamBlock(
 
 export type AuthProfileFailureReduction = {
   expectedProfile: AuthProfileCredential;
+  observedAt: number;
   reason: AuthProfileFailureReason;
   modelId?: string;
   whamResult: WhamCooldownProbeResult | null;
@@ -159,7 +160,10 @@ export function reduceAuthProfileFailure(
     isSameWhamCredential(expectedProfile, profile)
       ? whamResult
       : null;
-  // Quota observations are best effort; only the credential identity must still match.
+  // Successful use also advances lastProbeAt, including inherited profiles.
+  if (currentWhamResult && (previousStats?.lastProbeAt ?? 0) > input.observedAt) {
+    return undefined;
+  }
   if (reason === "no_error_details" && !currentWhamResult) {
     return undefined;
   }

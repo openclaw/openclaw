@@ -6,6 +6,7 @@ import {
   isChatTranscriptMetadata,
   isProgressCard,
 } from "../../lib/protocol-validators.generated/transcript.js";
+import { listen } from "../../lib/reactive/listener.ts";
 import * as json from "../../lib/snapshot-json.ts";
 import {
   getSessionCacheValue,
@@ -677,8 +678,8 @@ function flushActiveStores(): void {
 
 // Module-lifetime browser events flush every active store, including during page teardown.
 if (typeof window !== "undefined") {
-  window.addEventListener("pagehide", flushActiveStores);
-  document.addEventListener("visibilitychange", () => {
+  listen(window, "pagehide", flushActiveStores);
+  listen(document, "visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       flushActiveStores();
     }

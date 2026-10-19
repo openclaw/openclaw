@@ -151,9 +151,6 @@ export function captureConfigHealthStateStore(
           { context: captured.context },
         );
         assertCurrent();
-        if (reply && (!reply.ok || reply.type !== "config.health.read")) {
-          throw new Error("Unexpected config health read reply");
-        }
         return reply?.snapshot ?? { state: {}, basis: {} };
       } catch (error) {
         assertCurrent();

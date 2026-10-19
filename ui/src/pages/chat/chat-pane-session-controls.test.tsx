@@ -270,20 +270,22 @@ describe("chat pane composer controls", () => {
     const controls = renderControls(state as unknown as ChatPageHost, {
       agentDefaultModel: "openai/gpt-5.6-luna",
     });
-    const container = document.createElement("div");
-    mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
-      container,
-    });
+    const { container } = mountSolid(() =>
+      createComponent(ChatPaneModelControl, controls.composerControls),
+    );
+    flush();
 
     const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
     expect(trigger?.textContent).toContain("GPT-5.6 Sol");
     expect(trigger?.getAttribute("aria-label")).toBe("Chat model: GPT-5.6 Sol");
     expect(trigger?.dataset.chatModelLocked).toBe("true");
+    expect(state.request).not.toHaveBeenCalled();
+    trigger?.click();
+    flush();
     expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
       "GPT-5.6 Sol",
     );
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
-    expect(state.request).not.toHaveBeenCalled();
   });
 
   it.each([

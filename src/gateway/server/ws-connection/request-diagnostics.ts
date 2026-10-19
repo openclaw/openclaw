@@ -159,13 +159,13 @@ export class GatewayRpcDiagnostics {
       };
     }
     const rowsOutcome =
-      this.sessionsList?.rowMode !== "sidebar"
+      this.sessionsList?.rowMode !== "sidebar" && params?.ifRowsRevision === undefined
         ? "not-sidebar"
         : result?.rowsUnchanged === true
           ? "unchanged"
           : result?.rowsDelta !== undefined
             ? "delta"
-            : params?.ifRowsRevision === undefined
+            : params?.ifRowsRevision === undefined || params.ifRowsRevision === ""
               ? "full-no-base"
               : "full-with-base";
     this.emit({

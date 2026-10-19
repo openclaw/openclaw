@@ -5,7 +5,8 @@ import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-ag
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
-import { isReplyPayloadStatusNotice } from "../../auto-reply/reply-payload.js";
+import { isReplyPayloadStatusNotice, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { COLLABORATIVE_STEERING_DISABLED_TEXT } from "../../auto-reply/reply/dispatch-from-config.payloads.js";
 import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/dispatch-session-refresh-error.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
@@ -34,6 +35,7 @@ import {
   readChatSendReplyPayload,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
+import type { createChatSendInjectionDisposition } from "./chat-send-message-injection.js";
 import {
   classifyAcceptedChatSendFailure,
   shouldRetainAcceptedChatSendRetryIdentity,
@@ -44,10 +46,24 @@ import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-function formatReturnedAgentErrors(messages: string[]): string | undefined {
+function formatReturnedAgentErrors(params: {
+  payloads: Pick<ReplyPayload, "text">[];
+  runtimeError?: string;
+  runtimeFailed: boolean;
+  collaborativeSteeringRefused?: boolean;
+}): string | undefined {
+  if (params.collaborativeSteeringRefused) {
+    return COLLABORATIVE_STEERING_DISABLED_TEXT;
+  }
+  if (params.runtimeError !== undefined) {
+    return params.runtimeError;
+  }
+  const messages = params.payloads
+    .map((payload) => payload.text?.trim())
+    .filter((text): text is string => Boolean(text));
   const [primary, ...additional] = [...new Set(messages)];
   if (!primary || additional.length === 0) {
-    return primary;
+    return primary || (params.runtimeFailed ? "agent run failed" : undefined);
   }
   if (additional.length === 1) {
     return `${primary}\n\nAdditional error: ${additional[0]}`;
@@ -61,6 +77,7 @@ export function resolveChatSendReturnedOutcome(params: {
   deliveredReplies: readonly DeliveredChatSendReply[];
   agentRunStarted: boolean;
   isInternalTextSlashCommandTurn: boolean;
+  collaborativeSteeringRefused?: boolean;
 }) {
   const { runtimeOutcome, deliveredReplies, agentRunStarted, isInternalTextSlashCommandTurn } =
     params;
@@ -86,14 +103,12 @@ export function resolveChatSendReturnedOutcome(params: {
   const hasReturnedAgentError = runtimeClassification
     ? runtimeFailed
     : returnedAgentErrorPayloads.length > 0 && (agentRunStarted || !isInternalTextSlashCommandTurn);
-  const returnedAgentErrorMessage =
-    runtimeOutcome?.error ??
-    (formatReturnedAgentErrors(
-      returnedAgentErrorPayloads
-        .map((payload) => payload.text?.trim())
-        .filter((text): text is string => Boolean(text)),
-    ) ||
-      (runtimeFailed ? "agent run failed" : undefined));
+  const returnedAgentErrorMessage = formatReturnedAgentErrors({
+    payloads: returnedAgentErrorPayloads,
+    runtimeError: runtimeOutcome?.error,
+    runtimeFailed,
+    collaborativeSteeringRefused: params.collaborativeSteeringRefused,
+  });
   return {
     runtimeClassification,
     runtimeCancelled,
@@ -240,8 +255,9 @@ export function createChatSendDispatchErrorLifecycle(params: {
   context: GatewayRequestContext;
   isAgentRunStarted: () => boolean;
   isQueuedFollowupEnqueued: () => boolean;
-  classifyFailure?: (error: unknown) => AcceptedChatSendFailureDisposition;
+  hasObservedSideEffects?: () => boolean;
   isReplyDispatchRun?: () => boolean;
+  injectionDisposition?: ReturnType<typeof createChatSendInjectionDisposition>;
   persistUserTurnTranscript: () => Promise<unknown>;
   session: Pick<
     PreparedChatSendSession,
@@ -276,6 +292,15 @@ export function createChatSendDispatchErrorLifecycle(params: {
   let pendingDispatchLifecycleError: PendingDispatchLifecycleError | undefined;
   let persistDispatchErrorUserTurn: (() => Promise<void>) | undefined;
   let publishDispatchError: (() => void) | undefined;
+  const classifyFailure = (error: unknown): AcceptedChatSendFailureDisposition =>
+    params.injectionDisposition?.isRefused()
+      ? "reconcile"
+      : classifyAcceptedChatSendFailure({
+          error,
+          phase: "post-ack",
+          executionStarted: params.isAgentRunStarted(),
+          sideEffectsObserved: params.hasObservedSideEffects?.(),
+        });
 
   const broadcastError = (
     error: Pick<
@@ -311,12 +336,16 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
   };
 
-  const handleError = async (err: unknown) => {
+  const handleError = async (dispatchError: unknown) => {
+    let err = dispatchError;
+    try {
+      await params.injectionDisposition?.settleRefusal();
+    } catch (settlementError) {
+      err = new AggregateError([err, settlementError], "Refused input custody could not settle");
+    }
     const errorMessage = formatChatSendError(err);
     const errorKind = resolveStateContentionPresentation(err)?.errorKind;
-    const failureDisposition =
-      params.classifyFailure?.(err) ??
-      classifyAcceptedChatSendFailure({ error: err, phase: "post-ack" });
+    const failureDisposition = classifyFailure(err);
     const queuedFollowupEnqueued = isQueuedFollowupEnqueued();
     if (queuedFollowupEnqueued) {
       context.logGateway.warn(
@@ -588,5 +617,14 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
   };
 
-  return { broadcastError, finalize, handleError };
+  const settleRefusal = async (refused: boolean | undefined) => {
+    if (
+      refused &&
+      restartSafeAdmission &&
+      !(await terminalizeRestartSafeAdmission({ retryable: false, status: "failed" }))
+    ) {
+      throw new Error("chat admission ownership changed before refusal settlement");
+    }
+  };
+  return { broadcastError, classifyFailure, finalize, handleError, settleRefusal };
 }

@@ -996,6 +996,8 @@ const configs: UserConfig[] = [
     {
       "worker/worker": "src/worker/worker-deploy-entry.ts",
       "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js",
+      "worker/worker-chunk-fs-safe-watch-io":
+        "node_modules/@openclaw/fs-safe/dist/watch-io-worker.js",
     },
     true,
   ),

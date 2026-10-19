@@ -41,7 +41,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
   }
   active = true;
   return withPromiseModalHost<void>({ signal: options.signal, value: undefined }, (modal) => {
-    const { host, finish, render } = modal;
+    const { finish, render } = modal;
     const [cwd, setCwd] = createSignal(options.defaults.cwd);
     const [worktree, setWorktree] = createSignal(false);
     let repositoryStatus: RepositoryStatus = "checking";
@@ -173,10 +173,9 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
               ? "restricted"
               : "local";
       function Browser() {
+        let pathInput!: HTMLInputElement;
         onSettled(() => {
-          host
-            .querySelector<HTMLInputElement>(".new-session-page__browser-path")
-            ?.focus({ preventScroll: true });
+          pathInput.focus({ preventScroll: true });
         });
         const content = createMemo(() => ({
           browser: browserView(),
@@ -189,7 +188,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
           onApplyFolder: applyFolder,
           onRegisterProject: () => {},
         }));
-        return <PlaceBrowser params={content()} />;
+        return <PlaceBrowser params={content()} pathRef={(node) => (pathInput = node)} />;
       }
       function PickerRoot() {
         onSettled(() => {

@@ -511,6 +511,7 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
     admission = await beginSessionEffect({
       scope: storePath,
       identities: [sessionKey, sessionId],
+      run: { runId, sessionKey, sessionId, agentId: "main" },
       resolveGatewayContext,
       assertAllowed: () => {},
     });

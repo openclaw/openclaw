@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { OAuthClientProvider } from "@modelcontextprotocol/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import { handleMcpOAuthCallback } from "../gateway/mcp-oauth-callback.js";
@@ -160,7 +160,10 @@ function authorizationCode(authorizationUrl: string): string {
   return code;
 }
 
-vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({ auth: authMock }));
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
+  auth: authMock,
+}));
 
 function withTempHome<T>(run: (home: string) => T | Promise<T>, prefix: string) {
   return withBaseTempHome(run, {
@@ -554,8 +557,8 @@ describe("MCP OAuth provider", () => {
   it("resumes authorization after restart, retains failures, and supersedes older starts", async () => {
     await withTempHome(async () => {
       const { auth: realAuth } = await vi.importActual<
-        typeof import("@modelcontextprotocol/sdk/client/auth.js")
-      >("@modelcontextprotocol/sdk/client/auth.js");
+        typeof import("@modelcontextprotocol/client")
+      >("@modelcontextprotocol/client");
       authMock.mockImplementation(realAuth);
       const fixture = await startAuthorizationServer();
       const rawServer = {

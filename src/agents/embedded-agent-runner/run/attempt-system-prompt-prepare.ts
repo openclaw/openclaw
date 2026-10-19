@@ -397,6 +397,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     injectedWorkspaceFiles: params.bootstrap.bootstrapInjectionStats,
     skillsPrompt: attemptSystemPrompt.skillsPrompt,
     tools: params.effectiveTools,
+    catalogEntries: params.toolSearchCatalogRef?.current?.entries,
   };
   const systemPromptReport = buildSystemPromptReport(reportInputs);
   params.setup.prepStages?.mark("system-prompt");
@@ -479,6 +480,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
               systemPrompt,
               skillsPrompt: nextSystemPrompt.skillsPrompt,
               tools,
+              catalogEntries,
             }),
           );
           return systemPrompt;

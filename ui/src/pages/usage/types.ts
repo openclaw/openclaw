@@ -10,7 +10,6 @@ import type {
   SessionsUsageResult,
   SessionsUsageTotals,
 } from "./data-types.ts";
-import type { ProviderUsageSnapshot } from "./request-usage-snapshot.ts";
 
 export type UsageSessionEntry = SessionsUsageEntry;
 export type UsageTotals = SessionsUsageTotals;
@@ -44,7 +43,6 @@ export type UsageRouteData = {
   };
   result: SessionsUsageResult | null;
   costSummary: CostUsageSummary | null;
-  providerUsage: ProviderUsageSnapshot;
   loadedAtMs: number | null;
   error: string | null;
 };

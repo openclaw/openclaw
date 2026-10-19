@@ -22,8 +22,10 @@ tomorrow, without a new user message. Shutdown uses the same interruption and
 recovery marking as a managed restart, with the existing drain deadlines.
 Explicit session Stop/cancel remains terminal. The crash-loop breaker, recovery
 retry budgets, current-authority checks, and archived/reset exclusions still apply.
-In-flight cron occurrences keep their existing restart treatment; this does not
-add automatic continuation of an interrupted occurrence.
+In-flight cron occurrences keep their existing restart treatment. Main-session
+recovery does not replay a started cron occurrence, including when the conversation
+retains an earlier operator source. Cron records the interruption; a fresh
+authenticated turn or a future scheduled occurrence can continue the work.
 
 Inter-session steering updates remain context for the executing turn. When that
 turn retains a Control UI, channel, or authenticated operator source claim,
@@ -101,7 +103,11 @@ or the user chooses to retry it. Recovery of a turn already in the transcript
 does not depend on the browser returning.
 
 Accepted `sessions_send` agent updates recover from their saved input and original
-delivery ID. Temporary admission, worker capacity, and storage-readiness failures
+delivery ID. Stores still undergoing startup inspection are rediscovered after their
+existing admission owner finishes, without waiting for another Gateway restart.
+Each rescan uses the current configuration and communication permissions.
+Shared stores keep each session’s logical agent identity separate from the physical
+database owner. Temporary admission, worker capacity, and storage-readiness failures
 get up to three attempts, waiting 5 seconds and then 10 seconds between attempts.
 Recovery preserves the accepted identity when older saved delivery metadata omitted
 an unset lifecycle revision during JSON storage. An identical completed input returns
@@ -413,7 +419,8 @@ Worker-environment shutdown also names its computer, inference, transfer, tunnel
 and accepted-operation joins. For an attached worker, shutdown stops the exact
 remote environment before draining its workspace queue: a foreground command
 can hold that queue until the stop cancels it. Remote stop and drain acknowledgments
-share at most ten seconds of the remaining process cleanup budget. An unreachable
+share at most five seconds after shutdown begins, capped by the remaining process
+cleanup budget, including stops already started by reconciliation. An unreachable
 worker keeps its durable attachment for cleanup on reconnect; it is not reported
 as physically stopped. Local writes and transfer cleanup still settle before
 database retirement.
@@ -813,6 +820,11 @@ Three complementary mechanisms mark sessions whose turn did not finish:
   clears the prior interruption and is not replayed. Stale transcript lock files
   are cleaned up at the same time.
 
+Startup selects these candidates in the session database worker, so unrelated
+session summaries do not cross into the Gateway process. Pending canonical
+validation still runs when no recovery candidate exists, and marking rechecks
+the current row and live ownership before committing.
+
 Agents still undergoing database startup inspection retain their recovery work.
 When admission finishes, the same startup recovery owner scans their stores with
 the original cutoff, so newly admitted turns are not mistaken for crash orphans.
@@ -921,8 +933,14 @@ Recovery reads the interrupted turn's source before starting another run, even
 when a final reply is already pending. If the transcript cannot be read, the
 saved reply and any admitted completion claim remain available for a later
 attempt. Delegated requests and unverified internal inputs cannot resume
-automatically without surviving authority. Missing or invalid provenance does not
-establish a human sender for an internal claim. Legacy channel and Control UI
+automatically without surviving authority. When no pending final, harness
+completion, or independent recovery run remains owed, the interrupted input is
+retired atomically with one local transcript notice. Its source/run IDs remain
+terminal; no delivery success or sender authority is invented. The conversation
+keeps its identity and context and admits a fresh authenticated turn. Remaining
+custody retains the existing recovery block, and exhausted automatic attempts
+still require explicit recovery. Missing or invalid provenance does not establish
+a human sender for an internal claim. Legacy channel and Control UI
 turns retain their existing recovery checks. Child-completion follow-ups still use
 their existing recovery and delivery ownership checks. If their agent database is
 still undergoing startup inspection or preparation, a child result changes while
@@ -1060,8 +1078,12 @@ turn to audited read-only core tools and explicitly replay-safe plugin tools,
 including when Code Mode is disabled after the restart. Other interrupted
 Code Mode work resumes for model reconciliation: Full Access keeps its configured
 tool surface unless the current turn has an explicitly replay-safe checkpoint.
-Other sessions retain the restart-safe restriction. Old process-local runs and
-approval handles are not revived.
+Other sessions retain the restart-safe restriction. Recovery uses producer-owned
+checkpoint metadata in the transcript, not the rendered tool output: network
+wrapping, output truncation, and display hooks cannot change whether a current
+checkpoint is replay-safe. Missing or unowned checkpoint facts do not authorize
+Code Mode reconstruction. Older text-only checkpoints remain readable during
+upgrades. Old process-local runs and approval handles are not revived.
 
 ### Subagents
 
@@ -1278,7 +1300,23 @@ existing restart delivery and continuation behavior.
   waits for workers or database admission. Within `deliveryMs`,
   `deliveryNoticesMs` measures blocked-notice selection and persistence, and
   `retryWaitMs` measures retry backoff; these nested totals are not additional
-  phase time. Notice selection can wait for database writer admission even
+  phase time. Registry activation includes `registryActivationBindMs`,
+  `registryActivationRequestersMs`, `registryActivationResumeMs`, and
+  `registryActivationInterruptedMs`. Binding includes
+  `registryActivationAuthorityRestoreMs` (original operator authority and
+  requester reads) and `registryActivationPublishMs` (recovered owner writes,
+  including writer admission). Resume includes `registryActivationReserveMs`
+  (controller reservations) and `registryActivationSessionReadMs` (unfinished
+  child session reads). `registryActivationYieldMs` totals cooperative event-loop
+  waits across binding and resume. These are elapsed, overlapping totals, not
+  CPU time or a separate measurement of database queue time. Inventory hydration
+  precedes activation; `registryLoadMs` measures loading the activation module.
+  `registryActivationRuns` counts the captured inventory,
+  `registryActivationActiveRuns` counts visited nonterminal runs,
+  `registryActivationRecoveredRuns` counts restored Gateway owners, and
+  `registryActivationPublishedRuns` counts initial and recovered Gateway bindings.
+  Counts and partial timings remain visible on failure, without per-run output.
+  Notice selection can wait for database writer admission even
   when an unchanged notice does not need another write. Set
   `OPENCLAW_GATEWAY_STARTUP_TRACE=1` to also log each individual span. The phase
   runs after readiness; its duration does not measure time until the Gateway

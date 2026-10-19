@@ -81,9 +81,6 @@ import {
 
 export { resolveAgentRunExpiresAtMs, resolveChatRunExpiresAtMs } from "./chat-run-deadline.js";
 
-export { projectInFlightRunSnapshot, type InFlightRunSnapshot } from "./chat-inflight-snapshot.js";
-export { resolveInFlightRunSnapshot } from "./chat-inflight-snapshot.runtime.js";
-
 export type RestartRecoveryCandidate = {
   storePath: string;
   agentId: string | undefined;

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, onCleanup } from "solid-js";
+import { Show, createEffect, createMemo, onCleanup } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   linkReaderPrefetchRef as createLinkReaderPrefetchRef,
@@ -259,13 +259,16 @@ export function ChatThread(input: { props: ChatThreadProps; transcript: ChatTran
           }}
         />
         {contents()}
-        {commentPins() ? (
-          <ChatCommentPins
-            attachments={input.props.commentAttachments}
-            sessionKey={input.props.sessionKey}
-            disabled={input.props.commentsDisabled ?? false}
-          />
-        ) : undefined}
+        <Show when={commentPins() ? getTranscriptState(paneId()) : undefined} keyed>
+          {(threadState) => (
+            <ChatCommentPins
+              threadState={threadState}
+              attachments={input.props.commentAttachments}
+              sessionKey={input.props.sessionKey}
+              disabled={input.props.commentsDisabled ?? false}
+            />
+          )}
+        </Show>
       </div>
     </div>
   );

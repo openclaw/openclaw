@@ -27,7 +27,7 @@ extensions/anthropic/session-catalog-registration.ts	3
 extensions/anthropic/session-catalog-runtime.ts	1
 extensions/anthropic/stream-wrappers.ts	1
 extensions/baseten/models.ts	1
-extensions/beam/src/mirror.ts	2
+extensions/beam/src/mirror.ts	1
 extensions/browser/src/browser-node-fallback.ts	1
 extensions/browser/src/browser-node-proxy.ts	2
 extensions/browser/src/browser-proxy-upload.ts	1
@@ -152,7 +152,6 @@ extensions/codex/src/session-catalog.ts	2
 extensions/codex/src/session-cli.ts	1
 extensions/codex/src/session-upstream-activity.ts	1
 extensions/codex/src/web-search-provider.runtime.ts	1
-extensions/cohere/stream.ts	2
 extensions/comfy/workflow-runtime.ts	2
 extensions/copilot-proxy/index.ts	1
 extensions/copilot/harness.ts	8
@@ -430,7 +429,6 @@ extensions/matrix/src/matrix/monitor/context-summary.ts	2
 extensions/matrix/src/matrix/monitor/events.ts	3
 extensions/matrix/src/matrix/monitor/handler-context.ts	1
 extensions/matrix/src/matrix/monitor/handler-helpers.ts	2
-extensions/matrix/src/matrix/monitor/handler-ingress-prefix.ts	3
 extensions/matrix/src/matrix/monitor/handler-state.ts	1
 extensions/matrix/src/matrix/monitor/handler.ts	2
 extensions/matrix/src/matrix/monitor/inbound-dedupe-migration.ts	1
@@ -1089,7 +1087,7 @@ src/agents/agent-bundle-lsp-runtime.ts	3
 src/agents/agent-bundle-mcp-combined.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
-src/agents/agent-bundle-mcp-runtime.ts	2
+src/agents/agent-bundle-mcp-runtime.ts	1
 src/agents/agent-command.ts	1
 src/agents/agent-hooks/compaction-safeguard.ts	9
 src/agents/agent-project-settings-snapshot.ts	4
@@ -1355,7 +1353,7 @@ src/agents/tool-images.ts	2
 src/agents/tool-policy-shared.ts	1
 src/agents/tool-result-error.ts	3
 src/agents/tool-schema-hints.ts	1
-src/agents/tool-search-catalog.ts	3
+src/agents/tool-search-catalog.ts	2
 src/agents/tool-search-directory.ts	1
 src/agents/tool-search-runtime.ts	4
 src/agents/tool-search-transcript.ts	1
@@ -1478,7 +1476,6 @@ src/channels/direct-dm.ts	1
 src/channels/draft-stream-loop.ts	1
 src/channels/draft-streaming-chunking.ts	1
 src/channels/feedback-reflection.ts	1
-src/channels/ids.ts	1
 src/channels/inbound-event/context.ts	5
 src/channels/location.ts	1
 src/channels/message-access/admission-evidence.ts	1
@@ -1533,7 +1530,7 @@ src/claws/project.ts	2
 src/claws/reader.ts	3
 src/claws/schema.ts	2
 src/cli/acp-cli.ts	7
-src/cli/attach-cli.ts	3
+src/cli/attach-cli.ts	2
 src/cli/capability-cli/embedding.ts	2
 src/cli/capability-cli/image.ts	9
 src/cli/capability-cli/model.ts	3
@@ -1581,7 +1578,6 @@ src/cli/program/action-reparse.ts	1
 src/cli/program/command-tree.ts	1
 src/cli/program/json-mode.ts	2
 src/cli/program/message/helpers.ts	1
-src/cli/program/message/register.permissions-search.ts	2
 src/cli/program/preaction.ts	1
 src/cli/program/program-context.ts	2
 src/cli/program/register.agent-turn.ts	1
@@ -1708,7 +1704,7 @@ src/config/io.load.ts	2
 src/config/io.observe-recovery.ts	7
 src/config/io.observe.ts	1
 src/config/io.read-helpers.ts	2
-src/config/io.session-store-owner.ts	2
+src/config/io.session-store-owner.ts	1
 src/config/io.snapshot.ts	1
 src/config/io.write-prepare.ts	12
 src/config/io.write-safety.ts	3
@@ -2008,7 +2004,6 @@ src/infra/heartbeat-runner-config.ts	1
 src/infra/heartbeat-visibility.ts	1
 src/infra/install-package-dir.ts	2
 src/infra/json-utf8-bytes.ts	4
-src/infra/kysely-sync-cache-state.ts	1
 src/infra/kysely-sync.ts	7
 src/infra/net/fetch-guard.ts	2
 src/infra/net/form-data.ts	2
@@ -2251,7 +2246,7 @@ src/plugins/gateway-startup-plugin-config.ts	1
 src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
-src/plugins/hook-types.ts	2
+src/plugins/hook-types.ts	1
 src/plugins/hooks.ts	7
 src/plugins/host-hook-attachments.ts	1
 src/plugins/host-hook-runtime.ts	1
@@ -2387,7 +2382,6 @@ src/shared/deferred.ts	1
 src/shared/frontmatter.ts	1
 src/shared/global-singleton.ts	4
 src/shared/json-schema-defaults.ts	17
-src/shared/message-content-blocks.ts	2
 src/shared/node-list-parse.ts	3
 src/shared/node-presence.ts	1
 src/shared/node-resolve.ts	1
@@ -2446,7 +2440,7 @@ src/tts/tts-settings.ts	2
 src/tts/tts-telephony.ts	1
 src/tts/voice-models.ts	3
 src/tui/components/chat-log.ts	1
-src/tui/embedded-backend.ts	2
+src/tui/embedded-backend.ts	1
 src/tui/gateway-chat.ts	2
 src/tui/tui-autocomplete.ts	1
 src/tui/tui-command-handlers.ts	5
@@ -2489,7 +2483,6 @@ src/worker/worker-process.ts	1
 src/worker/workspace-rsync-receiver.ts	1
 ui/src/app-navigation.ts	1
 ui/src/app-routes.ts	1
-ui/src/app/app-host-route-state.ts	1
 ui/src/app/app-shell-chrome.ts	2
 ui/src/app/app-shell-gateway.ts	1
 ui/src/app/assistant-identity.ts	2

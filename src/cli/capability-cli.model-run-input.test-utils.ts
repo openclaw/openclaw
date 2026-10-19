@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { runCap, runCapability } from "./capability-cli.test-harness.js";
+import {
+  invalidModelRunOptionCases,
+  runCap,
+  runCapability,
+} from "./capability-cli.test-harness.js";
 
 export function registerModelRunInputTests({
   tempDirs,
@@ -9,7 +13,7 @@ export function registerModelRunInputTests({
   firstGatewayCall,
   firstJsonOutput,
   expectRuntimeErrorContains,
-  expectInvalidNoDispatch,
+  dispatchMocks,
 }: {
   tempDirs: { make(prefix: string): string };
   firstCompletionCall: () =>
@@ -21,8 +25,19 @@ export function registerModelRunInputTests({
   firstGatewayCall: () => { params?: Record<string, unknown> } | undefined;
   firstJsonOutput: () => Record<string, unknown> | undefined;
   expectRuntimeErrorContains: (message: string) => void;
-  expectInvalidNoDispatch: () => void;
+  dispatchMocks: {
+    acquireSimpleCompletionModelForAgent: unknown;
+    completeWithPreparedSimpleCompletionModel: unknown;
+    callGateway: unknown;
+    runtime: { writeJson: unknown };
+  };
 }): void {
+  const expectInvalidNoDispatch = () => {
+    expect(dispatchMocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(dispatchMocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(dispatchMocks.callGateway).not.toHaveBeenCalled();
+    expect(dispatchMocks.runtime.writeJson).not.toHaveBeenCalled();
+  };
   const runModelProbe = (...args: string[]) =>
     runCapability("model", "run", "--prompt", "hello", ...args, "--json");
   describe.runIf(process.platform !== "win32")("POSIX prompt files", () => {
@@ -202,12 +217,7 @@ export function registerModelRunInputTests({
   });
 
   it.each([
-    { args: ["--prompt", "\n\t"], error: "--prompt cannot be empty or whitespace-only." },
-    {
-      args: ["--model", "not-a-provider/"],
-      error: "Model overrides must use the form <provider/model>.",
-    },
-    { args: ["--thinking", "turbo-mode"], error: "Invalid thinking level." },
+    ...invalidModelRunOptionCases,
     { args: ["--temperature", ""], error: "--temperature must be a number from 0 to 2." },
     { args: ["--temperature", "   "], error: "--temperature must be a number from 0 to 2." },
   ])("rejects invalid model run options $args before dispatch", async ({ args, error }) => {

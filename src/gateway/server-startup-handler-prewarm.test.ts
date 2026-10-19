@@ -260,15 +260,12 @@ it("prewarms only history while foreground work is active", async () => {
 it("logs a failed prewarm and continues to later items", async () => {
   const warn = vi.fn();
   const laterPrewarm = vi.fn(async () => {});
-  const requestLoad = vi
-    .fn<() => Promise<string>>()
-    .mockRejectedValueOnce(new Error("cold read failed"))
-    .mockResolvedValue("request result");
+  const failedPrewarm = vi.fn().mockRejectedValue(new Error("cold read failed"));
 
   schedule({
     log: { warn },
     items: [
-      { name: "broken", load: requestLoad },
+      { name: "broken", load: failedPrewarm },
       { name: "later", load: laterPrewarm },
     ],
   });
@@ -278,9 +275,8 @@ it("logs a failed prewarm and continues to later items", async () => {
   expect(warn).toHaveBeenCalledWith(
     "post-ready gateway data prewarm failed for broken: Error: cold read failed",
   );
-  expect(requestLoad).toHaveBeenCalledOnce();
+  expect(failedPrewarm).toHaveBeenCalledOnce();
   expect(laterPrewarm).toHaveBeenCalledOnce();
-  await expect(requestLoad()).resolves.toBe("request result");
 });
 
 it("stops before scheduling another event-loop turn", async () => {

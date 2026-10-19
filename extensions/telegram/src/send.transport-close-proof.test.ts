@@ -1,9 +1,8 @@
-import { createServer, type Server } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
+import type { Socket } from "node:net";
 import { Bot } from "grammy";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getOrCreateAccountThrottler, runReplaceableTelegramRequest } from "./account-throttler.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
@@ -19,6 +18,14 @@ import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 
 describe("Telegram request contracts through real clients", () => {
   const fixture = useTelegramHttpFixture();
+  const limitedClient = () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { botToken, apiRoot } = fixture.cfg.channels.telegram;
+    const bot = new Bot(botToken, { client: { apiRoot } });
+    // No send-context authority hook: the send owner must recheck after the limiter.
+    bot.api.config.use(getOrCreateAccountThrottler(botToken).transformer);
+    return bot;
+  };
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -29,10 +36,7 @@ describe("Telegram request contracts through real clients", () => {
   it.each(["current", "retired"] as const)(
     "queued unfinished preview retains network authority (%s writer)",
     async (writer) => {
-      vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "Date"] });
-      const token = fixture.cfg.channels.telegram.botToken;
-      const bot = new Bot(token, { client: { apiRoot: fixture.cfg.channels.telegram.apiRoot } });
-      bot.api.config.use(getOrCreateAccountThrottler(token).transformer);
+      const bot = limitedClient();
       const entered = createDeferred<void>();
       bot.api.config.use((prev, method, payload, signal) => {
         if (method === "editMessageText") {
@@ -81,120 +85,87 @@ describe("Telegram request contracts through real clients", () => {
   );
 
   it.each([
-    { writer: "replaced", expectedSends: 1 },
-    { writer: "current", expectedSends: 2 },
-  ] as const)(
-    "rechecks send authority after a flood wait on a turn-bound client ($writer writer)",
-    async ({ writer, expectedSends }) => {
-      vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "Date"] });
-      const token = fixture.cfg.channels.telegram.botToken;
-      // A turn-bound client carries only the account limiter, not send-context's authority hook.
-      const bot = new Bot(token, { client: { apiRoot: fixture.cfg.channels.telegram.apiRoot } });
-      bot.api.config.use(getOrCreateAccountThrottler(token).transformer);
-      fixture.rejections.push({
-        error_code: 429,
-        description: "Too Many Requests: retry after 5",
-        parameters: { retry_after: 5 },
-      });
-      let writerIsCurrent = true;
-      const outcome = sendMessageTelegram("123", "Final after flood", {
-        cfg: fixture.cfg,
-        api: bot.api,
-        assertPlatformSendAuthorized: () => {
-          if (!writerIsCurrent) {
-            throw new Error("session writer replaced");
+    { queued: false, writer: "replaced", expectedSends: 1 },
+    { queued: false, writer: "current", expectedSends: 2 },
+    { queued: true, writer: "current", expectedSends: 1 },
+    { queued: true, writer: "replaced", expectedSends: 0 },
+  ])(
+    "rechecks $writer writer after flood wait (queued topic: $queued)",
+    async ({ queued, writer, expectedSends }) => {
+      const bot = limitedClient();
+      const entered = createDeferred<void>();
+      if (queued) {
+        // Installed last: observes topic 2 before it queues in the account limiter.
+        bot.api.config.use((prev, method, payload, signal) => {
+          if ((payload as { message_thread_id?: unknown }).message_thread_id === 2) {
+            entered.resolve();
           }
-        },
-      }).then(
-        (result) => ({ result }),
-        (error: unknown) => ({ error }),
-      );
-      await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
-      writerIsCurrent = writer === "current";
-      await vi.advanceTimersByTimeAsync(5_000);
-      const settled = await outcome;
-
-      expect(fixture.requests).toHaveLength(expectedSends);
-      if (writer === "replaced") {
-        expect(String((settled as { error?: unknown }).error)).toContain("session writer replaced");
-      } else {
-        expect(settled).toMatchObject({ result: { messageId: expect.any(String) } });
+          return prev(method, payload, signal);
+        });
       }
-    },
-  );
-
-  it.each([
-    { writer: "current", topicTwoSends: 1 },
-    { writer: "replaced", topicTwoSends: 0 },
-  ] as const)(
-    "admits a queued group topic send only after the flood wait and for the current writer ($writer)",
-    async ({ writer, topicTwoSends }) => {
-      vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "Date"] });
-      const token = fixture.cfg.channels.telegram.botToken;
-      const bot = new Bot(token, { client: { apiRoot: fixture.cfg.channels.telegram.apiRoot } });
-      bot.api.config.use(getOrCreateAccountThrottler(token).transformer);
-      // Installed last, so it runs first: marks topic 2 entering the account limiter.
-      const topicTwoEntered = createDeferred<void>();
-      bot.api.config.use((prev, method, payload, signal) => {
-        if ((payload as { message_thread_id?: unknown }).message_thread_id === 2) {
-          topicTwoEntered.resolve();
-        }
-        return prev(method, payload, signal);
-      });
       const startedAt = Date.now();
       const held = { arrived: createDeferred<void>(), release: createDeferred<void>() };
-      fixture.requestHold = held;
+      if (queued) {
+        fixture.requestHold = held;
+      }
       fixture.rejections.push({
         error_code: 429,
         description: "Too Many Requests: retry after 5",
         parameters: { retry_after: 5 },
       });
-      let writerIsCurrent = true;
-      const sendTopic = (topic: number, authorized: boolean) =>
-        sendMessageTelegram("-1001", `Topic ${topic} final`, {
-          cfg: fixture.cfg,
-          api: bot.api,
-          messageThreadId: topic,
-          ...(authorized
-            ? {
-                assertPlatformSendAuthorized: () => {
-                  if (!writerIsCurrent) {
-                    throw new Error("group session writer replaced");
-                  }
-                },
-              }
-            : {}),
-        }).then(
+      let current = true;
+      const errorMessage = queued ? "group session writer replaced" : "session writer replaced";
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error(errorMessage);
+        }
+      };
+      const send = (topic: number | undefined, authorized: boolean) =>
+        sendMessageTelegram(
+          queued ? "-1001" : "123",
+          queued ? `Topic ${topic} final` : "Final after flood",
+          {
+            cfg: fixture.cfg,
+            api: bot.api,
+            messageThreadId: topic,
+            assertPlatformSendAuthorized: authorized ? assertCurrent : undefined,
+          },
+        ).then(
           (result) => ({ result }),
           (error: unknown) => ({ error }),
         );
-      const topicOne = sendTopic(1, false);
-      await held.arrived.promise;
-      // Topic 2 passes the caller check and the gate, then queues behind topic 1.
-      const topicTwo = sendTopic(2, true);
-      await topicTwoEntered.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      writerIsCurrent = writer !== "replaced";
-      held.release.resolve();
-      await vi.advanceTimersByTimeAsync(4_900);
-      // Nothing reaches Telegram inside retry_after, including the queued topic.
-      expect(fixture.requests).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(10_000);
-      const [one, two] = await Promise.all([topicOne, topicTwo]);
-      const topicTwoRequests = fixture.requests.filter(
-        ({ fields }) => fields.message_thread_id === 2,
-      );
-
-      expect(one).toMatchObject({ result: { messageId: expect.any(String) } });
-      expect(topicTwoRequests).toHaveLength(topicTwoSends);
-      if (writer === "replaced") {
-        expect(String((two as { error?: unknown }).error)).toContain(
-          "group session writer replaced",
-        );
-      } else {
-        expect(two).toMatchObject({ result: { messageId: expect.any(String) } });
+      const blocker = queued ? send(1, false) : undefined;
+      if (queued) {
+        await held.arrived.promise;
       }
-      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(5_000);
+      const pending = send(queued ? 2 : undefined, true);
+      if (queued) {
+        await entered.promise;
+        await vi.advanceTimersByTimeAsync(0);
+      } else {
+        await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
+      }
+      current = writer === "current";
+      held.release.resolve();
+      if (queued) {
+        await vi.advanceTimersByTimeAsync(4_900);
+        expect(fixture.requests).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(await blocker).toMatchObject({ result: { messageId: expect.any(String) } });
+        expect(Date.now() - startedAt).toBeGreaterThanOrEqual(5_000);
+      } else {
+        await vi.advanceTimersByTimeAsync(5_000);
+      }
+      const settled = await pending;
+      const requests = queued
+        ? fixture.requests.filter(({ fields }) => fields.message_thread_id === 2)
+        : fixture.requests;
+      expect(requests).toHaveLength(expectedSends);
+      if (writer === "replaced") {
+        expect("error" in settled && String(settled.error)).toContain(errorMessage);
+      } else {
+        expect(settled).toMatchObject({ result: { messageId: expect.any(String) } });
+      }
     },
   );
 
@@ -261,92 +232,26 @@ describe("Telegram request contracts through real clients", () => {
 });
 
 describe("telegram transport cache eviction over real sockets", () => {
-  let server: Server;
-  let apiRoot: string;
-  const liveSockets = new Set<Socket>();
-  const requestSockets = new Map<string, Socket>();
-  let sendMessageCalls = 0;
-
-  beforeEach(() => {
-    // This fixture owns its loopback sockets, not the operator's proxy route.
-    for (const key of [
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "ALL_PROXY",
-      "http_proxy",
-      "https_proxy",
-      "all_proxy",
-      "NO_PROXY",
-      "no_proxy",
-      "OPENCLAW_PROXY_URL",
-      "OPENCLAW_PROXY_ACTIVE",
-      "OPENCLAW_DEBUG_PROXY_ENABLED",
-    ]) {
-      vi.stubEnv(key, undefined);
-    }
-  });
-
-  beforeAll(async () => {
-    server = createServer((req, res) => {
-      req.on("end", () => {
-        const url = req.url ?? "";
-        const respond = (result: unknown) => {
-          res.setHeader("content-type", "application/json");
-          res.end(JSON.stringify({ ok: true, result }));
-        };
-        if (url.includes("/sendMessage") || url.includes("/editMessageText")) {
-          requestSockets.set(url.slice(0, url.lastIndexOf("/")), req.socket);
-          sendMessageCalls += 1;
-          respond({ message_id: sendMessageCalls, chat: { id: 123 } });
-          return;
-        }
-        if (url.includes("/getChat")) {
-          respond({ id: 123, type: "private" });
-          return;
-        }
-        respond(true);
-      });
-      req.resume();
-    });
-    // Omit the peer idle deadline so the unchanged client 30s idle policy cannot
-    // satisfy the 3s eviction checks. Idle peer closure is injected explicitly below.
-    server.keepAliveTimeout = 0;
-    server.on("connection", (socket) => {
-      liveSockets.add(socket);
-      socket.on("close", () => liveSockets.delete(socket));
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  });
-
-  afterAll(async () => {
-    resetTelegramClientOptionsCacheForTests();
-    vi.unstubAllEnvs();
-    for (const socket of liveSockets) {
-      socket.destroy();
-    }
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  });
+  const fixture = useTelegramHttpFixture();
+  const { sockets: liveSockets, requestSockets } = fixture;
 
   it("closes evicted and reset transports", async () => {
     resetTelegramClientOptionsCacheForTests();
     const ACCOUNTS = 70;
-    const cfg = {
-      channels: {
-        telegram: {
-          accounts: Object.fromEntries(
-            Array.from({ length: ACCOUNTS }, (_, i) => [
-              `acct-${i}`,
-              { botToken: `10${i}:e2e-token-${i}`, apiRoot },
-            ]),
-          ),
-        },
-      },
+    let sendMessageCalls = 0;
+    fixture.responseFor = (method) => {
+      if (method === "sendMessage" || method === "editMessageText") {
+        return { message_id: ++sendMessageCalls, chat: { id: 123 } };
+      }
+      return method === "getChat" ? { id: 123, type: "private" } : true;
     };
+    const accounts = Object.fromEntries(
+      Array.from({ length: ACCOUNTS }, (_, i) => [
+        `acct-${i}`,
+        { botToken: `10${i}:e2e-token-${i}`, apiRoot: fixture.cfg.channels.telegram.apiRoot },
+      ]),
+    );
+    const cfg = { channels: { telegram: { accounts } } };
     const send = async (account: number) => {
       await editMessageTelegram("123", 1, "preview", { cfg, accountId: `acct-${account}` });
       const socket = requestSockets.get(`/bot10${account}:e2e-token-${account}`);

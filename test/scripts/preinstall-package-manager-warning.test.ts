@@ -77,6 +77,21 @@ describe("install runtime enforcement", () => {
     expect(reportError).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["27.0.0", true],
+    ["v27.0.0-head", true],
+    ["27.0.0-nightly20261018f88a1d25e9", true],
+    ["24.16.0-rc.1", false],
+    ["26.1.0-rc.1", false],
+    ["27.0.0-nightly..1", false],
+  ] as const)("enforces the package engine for Node %s", (version, accepted) => {
+    const reportError = vi.fn();
+    expect(
+      enforce({ version, bunVersion: null, execPath: "/opt/node/bin/node" }, reportError),
+    ).toBe(accepted);
+    expect(reportError).toHaveBeenCalledTimes(accepted ? 0 : 1);
+  });
+
   it("exits nonzero when the packed entrypoint sees an unsupported runtime", () => {
     const root = tempDirs.make("openclaw-preinstall-");
     const scriptsDir = join(root, "scripts");

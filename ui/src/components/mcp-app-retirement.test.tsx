@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { McpAppRetirement } from "./mcp-app-retirement.tsx";
+import { registerMcpAppUnmountTarget } from "./mcp-app-unmount.ts";
 
 function mountRetirement() {
   const pending = createDeferred();
@@ -31,6 +32,7 @@ function mountRetirement() {
           const target = document.createElement("mcp-app-view");
           target.setAttribute("data-identity", value);
           Object.assign(target, { teardown, restartAfterTeardown: restart });
+          onCleanup(registerMcpAppUnmountTarget(target));
           return target;
         }}
       </McpAppRetirement>

@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import type { RpcSourceAdapter, RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
-import { requestRpcSourceCancellation } from "../sessions/session-controller.rpc-sources.js";
+import {
+  initializeRpcSourceTiming,
+  markRpcSourceExecutionStarted,
+  requestRpcSourceCancellation,
+} from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
-import { resolveInFlightRunSnapshot } from "./chat-abort.js";
+import { resolveInFlightRunSnapshot } from "./chat-inflight-snapshot.runtime.js";
 import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
 import { createChatRunState, type ChatRunPlanSnapshot } from "./server-chat-state.js";
 import { boundInFlightRunSnapshotForChatHistory } from "./server-methods/chat-history-budget.js";
@@ -131,6 +135,30 @@ describe("resolveInFlightRunSnapshot", async () => {
     }
     return result;
   };
+
+  it("omits execution timing until a queued source actually starts", async () => {
+    const source = createRpcSourceForTest(
+      { projectSessionActive: true },
+      { runId: "queued-clock", sessionKey: "agent:main:queued-clock" },
+    );
+    rpcSourceTesting.reset(new Map([["queued-clock", source]]));
+    initializeRpcSourceTiming(source, { timeoutMs: 60_000 });
+    await claimRpcSourceForTest(source);
+    const params = {
+      sources: new Map([["queued-clock", source]]),
+      chatRunBuffers: new Map<string, string>(),
+      sessionKey: "agent:main:queued-clock",
+    };
+    expect(resolveSnap(params)).toEqual({ runId: "queued-clock", text: "" });
+    const now = Date.now();
+    expect(markRpcSourceExecutionStarted(source)).toBe(true);
+    expect(resolveSnap(params)).toEqual({
+      runId: "queued-clock",
+      text: "",
+      startedAt: expect.any(Number),
+    });
+    expect(resolveSnap(params)?.startedAt).toBeGreaterThanOrEqual(now);
+  });
 
   it("returns an explicit empty plan snapshot for dismissal", async () => {
     expect(

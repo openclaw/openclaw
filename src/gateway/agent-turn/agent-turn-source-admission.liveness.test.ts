@@ -105,7 +105,7 @@ it.each([
           physicalStorePath: prepared.physicalStorePath,
           sessionKey: prepared.canonicalKey,
           agentId: prepared.canonicalSessionAgentId,
-          sessionId: prepared.sessionId,
+          sessionId: expectDefined(prepared.entry, "prepared requester entry").sessionId,
           incarnation: prepared.entry?.sessionId,
         });
       }

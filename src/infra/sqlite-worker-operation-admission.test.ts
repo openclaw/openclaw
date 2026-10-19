@@ -34,6 +34,7 @@ import {
 } from "./sqlite-worker-operation-admission.js";
 import {
   captureSqliteWorkerCommitReceipt as captureReceipt,
+  observeSqliteWorkerAdmissionFinish,
   settleSqliteWorkerOperationContext as settleOperation,
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-settlement.js";
@@ -88,6 +89,31 @@ function captureInline(facts: unknown) {
   }
   return captured;
 }
+
+it("preserves nested finish order and error precedence on repeated calls", () => {
+  const admission = createAdmission((_request, grant) => grant());
+  const finish = admission.finish.bind(admission);
+  const events: string[] = [];
+  const earlierFailure = new Error("Synthetic earlier finish observer failed");
+  const failure = new Error("Synthetic later finish observer failed");
+  observeSqliteWorkerAdmissionFinish(admission, () => {
+    events.push("first");
+    throw earlierFailure;
+  });
+  observeSqliteWorkerAdmissionFinish(admission, () => {
+    events.push("second");
+    throw failure;
+  });
+
+  try {
+    expect(() => admission.finish()).toThrow(failure);
+    expect(() => admission.finish()).toThrow(failure);
+    expect(events).toEqual(["first", "second", "first", "second"]);
+    expect(() => admission.observeRequests(() => {})).toThrow("closed");
+  } finally {
+    finish();
+  }
+});
 
 it.each([
   "revoke",

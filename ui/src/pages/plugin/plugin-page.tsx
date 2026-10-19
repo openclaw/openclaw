@@ -1,4 +1,4 @@
-import { createEffect, createMemo, Match, onCleanup, Show, Switch, untrack } from "solid-js";
+import { createEffect, createMemo, Match, onCleanup, Show, Switch } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { isStaleChunkImportError } from "../../app/stale-chunk-reload.ts";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
@@ -27,10 +27,8 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
   const plugins = context.plugins && projectOwner(context.plugins, (source) => source).read;
   host.style.display = "contents";
   // Gateway receipts retire bundled views and frame-auth work before a replacement connection uses them.
-  const update = () => untrack(lifecycle.update);
-  const unsubscribeGateway = context.gateway.subscribe(update);
-  createEffect(() => [props.pluginId, props.tabId], update);
-  update();
+  const unsubscribeGateway = context.gateway.subscribe(lifecycle.update);
+  createEffect(() => [props.pluginId, props.tabId], lifecycle.update);
   onCleanup(() => {
     unsubscribeGateway();
     lifecycle.dispose();

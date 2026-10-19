@@ -20,7 +20,10 @@ const resolveOutboundAttachmentFromUrl = vi.hoisted(() => vi.fn());
 const resolveAgentScopedHostOutboundMediaAccess = vi.hoisted(() => vi.fn());
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
-vi.mock("../../agents/sandbox.js", () => ({
+vi.mock("../../agents/sandbox/context.js", async () => ({
+  ...(await vi.importActual<typeof import("../../agents/sandbox/context.js")>(
+    "../../agents/sandbox/context.js",
+  )),
   ensureSandboxWorkspaceForSession,
 }));
 

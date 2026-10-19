@@ -166,7 +166,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     prepareCatalogExecutor({
       trustedLocalMediaToolNames,
       sessionKey,
-      sandboxSessionKey: "agent:main:main",
+      attempt: { sandboxSessionKey: "agent:main:main" },
     });
     expect(mocks.subscribe).toHaveBeenCalledWith(
       expect.objectContaining({ trustedLocalMediaToolNames, sessionKey }),

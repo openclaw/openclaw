@@ -12,7 +12,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resetSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { isSessionRunActiveForKey } from "../sessions/session-controller.js";
+import { isSessionRunActiveForKey } from "../sessions/session-controller.queries.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";

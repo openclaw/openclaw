@@ -389,10 +389,12 @@ suite.define(() => {
               const bubble = page
                 .locator(".chat-group.assistant .chat-bubble")
                 .filter({ hasText: intro });
-              await bubble.getByText(closing, { exact: true }).waitFor();
+              // A durable reply can briefly overlap its live tail until the run retires.
+              await expect.poll(() => bubble.count()).toBeGreaterThan(0);
               await page
                 .getByRole("button", { name: "Stop generating", exact: true })
                 .waitFor({ state: "detached" });
+              await bubble.getByText(closing, { exact: true }).waitFor();
               const assertDecoded = async () => {
                 await expect.poll(() => bubble.count()).toBe(1);
                 await expect

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { collectRuntimeMetadata } from "../../auto-reply/reply/queue/delivery-context.js";
@@ -34,6 +34,7 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
 
 const sessionKey = "agent:main:queued-identity";
+const identity = { sessionKey, sessionId: "session", agentId: "main" };
 const target = captureSessionTarget({
   storeScope: "/synthetic/queued-identity/sessions",
   sessionKey,
@@ -42,6 +43,20 @@ const target = captureSessionTarget({
 });
 const ownedSources: RpcSourceRef[] = [];
 const ownedOperations: ReplyOperation[] = [];
+
+function replyBatch(
+  runId: string,
+  completion: QueuedFollowupReplyBatch["completion"],
+  payloads: QueuedFollowupReplyBatch["payloads"] = [],
+  originatingChannel = "webchat",
+): QueuedFollowupReplyBatch {
+  return { kind: "queued-followup", runId, originatingChannel, payloads, completion };
+}
+
+async function waitResult(context: ReturnType<typeof createDirectChatContext>, runId: string) {
+  return (await prepareAgentWaitForTurn(context, { runId, timeoutMs: 0 }).wait()).result;
+}
+
 afterEach(async () => {
   clearFollowupQueue(sessionKey);
   ownedOperations.splice(0).forEach((operation) => operation.complete());
@@ -66,9 +81,7 @@ function fixture(originatingChannel = "webchat") {
     const registration = registerChatAbortController({
       target,
       runId,
-      sessionKey,
-      sessionId: "session",
-      agentId: "main",
+      ...identity,
       timeoutMs: 10_000,
     });
     if (!registration.registered) {
@@ -131,9 +144,7 @@ function fixture(originatingChannel = "webchat") {
     const operation = createReplyOperation({
       mailboxClaim,
       target,
-      sessionKey,
-      sessionId: "session",
-      agentId: "main",
+      ...identity,
       resetTriggered: false,
     });
     ownedOperations.push(operation);
@@ -145,192 +156,152 @@ function fixture(originatingChannel = "webchat") {
   return { context, enqueue, terminals, execution };
 }
 
-describe("queued chat input identity", () => {
-  it.each([
-    { completion: { kind: "completed" }, state: "final", status: "ok" },
-    { completion: { kind: "failed", error: "Provider failed" }, state: "error", status: "error" },
-    {
-      completion: {
-        kind: "failed",
-        error: "Provider timed out",
-        errorKind: "timeout",
-        stopReason: "timeout",
-      },
-      state: "error",
-      status: "timeout",
+it.each([
+  { completion: { kind: "completed" }, state: "final", status: "ok" },
+  { completion: { kind: "failed", error: "Provider failed" }, state: "error", status: "error" },
+  {
+    completion: {
+      kind: "failed",
+      error: "Provider timed out",
+      errorKind: "timeout",
+      stopReason: "timeout",
     },
-    { completion: { kind: "aborted", stopReason: "rpc" }, state: "aborted", status: "error" },
-  ] satisfies Array<{
-    completion: QueuedFollowupReplyBatch["completion"];
-    state: string;
-    status: string;
-  }>)(
-    "settles every collected input only with the execution's $completion.kind outcome",
-    async ({ completion, state, status }) => {
-      const { context, enqueue, terminals } = fixture();
-      const ids = [`input-1-${completion.kind}-${status}`, `input-2-${completion.kind}-${status}`];
-      const inputs = ids.map((id) => enqueue(id));
-      expect(terminals()).toEqual([]);
-      for (const id of ids) {
-        expect(context.dedupe.get(`chat:${id}`)?.payload).toMatchObject({
-          runId: id,
-          status: "accepted",
-        });
-        expect(
-          (await prepareAgentWaitForTurn(context, { runId: id, timeoutMs: 0 }).wait()).result
-            .status,
-        ).toBe("pending");
-      }
-      const collected = collectRuntimeMetadata(inputs.map(({ run }) => run));
-      expect(collected.queuedFollowupReplyDisposition?.kind).toBe("deliver");
-      if (collected.queuedFollowupReplyDisposition?.kind !== "deliver") {
-        throw new Error("missing collected delivery owner");
-      }
-      const batch: QueuedFollowupReplyBatch = {
-        kind: "queued-followup",
-        runId: "execution-C",
-        originatingChannel: "webchat",
-        payloads: [],
-        completion,
-      };
-      await Promise.all([
-        collected.queuedFollowupReplyDisposition.deliver(batch),
-        collected.queuedFollowupReplyDisposition.deliver(batch),
-      ]);
-      inputs.forEach(({ run }) => completeFollowupRunLifecycle(run));
-      expect(terminals()).toEqual(ids.map((runId) => expect.objectContaining({ runId, state })));
-      expect(ids.every((id) => !isRpcSourceQueued(rpcSourceTesting.get(id)))).toBe(true);
-      for (const id of ids) {
-        expect(
-          (await prepareAgentWaitForTurn(context, { runId: id, timeoutMs: 0 }).wait()).result,
-        ).toMatchObject({ runId: id, status });
-      }
-    },
-  );
-
-  it("keeps a progress presentation failure open until the execution terminal", async () => {
+    state: "error",
+    status: "timeout",
+  },
+  { completion: { kind: "aborted", stopReason: "rpc" }, state: "aborted", status: "error" },
+] satisfies Array<{
+  completion: QueuedFollowupReplyBatch["completion"];
+  state: string;
+  status: string;
+}>)(
+  "settles every collected input only with the execution's $completion.kind outcome",
+  async ({ completion, state, status }) => {
     const { context, enqueue, terminals } = fixture();
-    const { adoption } = enqueue("progress-failure-B");
-    const getRuntimeConfig = context.getRuntimeConfig;
-    const failPreparation = () => {
-      context.getRuntimeConfig = getRuntimeConfig;
-      throw new Error("progress preparation failed");
-    };
-    context.getRuntimeConfig = failPreparation;
-    const batch: QueuedFollowupReplyBatch = {
-      kind: "queued-followup",
-      runId: "progress-C",
-      originatingChannel: "webchat",
-      payloads: [{ text: "working" }],
-      completion: { kind: "progress" },
-    };
-    await expect(adoption.onQueuedFollowupReplyBatch(batch)).rejects.toThrow(
-      "progress preparation failed",
-    );
+    const ids = [`input-1-${completion.kind}-${status}`, `input-2-${completion.kind}-${status}`];
+    const inputs = ids.map((id) => enqueue(id));
     expect(terminals()).toEqual([]);
-    expect(context.dedupe.get("chat:progress-failure-B")?.payload).toMatchObject({
-      status: "accepted",
-    });
-    context.getRuntimeConfig = failPreparation;
-    await expect(
-      adoption.onQueuedFollowupReplyBatch({
-        ...batch,
-        payloads: [],
-        completion: { kind: "failed", error: "progress preparation failed" },
-      }),
-    ).rejects.toThrow("progress preparation failed");
-    expect(terminals()).toEqual([
-      expect.objectContaining({ runId: "progress-failure-B", state: "error" }),
-    ]);
-  });
-
-  it("withdraws only the selected input before consumption", async () => {
-    const { enqueue, terminals, execution } = fixture();
-    const active = await execution();
-    const first = enqueue("cancel-B1");
-    const second = enqueue("cancel-B2");
-    expect(requestRpcSourceCancellation(first.sourceRef, createAgentRunDirectAbortError())).toBe(
-      true,
-    );
-    expect(first.controller.signal.aborted).toBe(true);
-    expect(second.controller.signal.aborted).toBe(false);
-    expect(active.abortSignal.aborted).toBe(false);
-    expect(isRpcSourceQueued(second.sourceRef)).toBe(true);
-    expect(terminals()).toEqual([
-      expect.objectContaining({ runId: "cancel-B1", state: "aborted" }),
-    ]);
-  });
-
-  it.each([1, 2])("waits for %i consumed inputs to settle after cancellation", async (count) => {
-    const { context, enqueue, terminals, execution } = fixture();
-    const source = enqueue(`running-B-${count}`);
-    const primary = count === 1 ? source : enqueue(`primary-B-${count}`);
-    await execution(primary === source ? [source] : [source, primary]);
-    await admitFollowupRunLifecycle(source.run);
-    if (primary !== source) {
-      await admitFollowupRunLifecycle(primary.run);
+    for (const id of ids) {
+      expect(context.dedupe.get(`chat:${id}`)?.payload).toMatchObject({
+        runId: id,
+        status: "accepted",
+      });
+      expect((await waitResult(context, id)).status).toBe("pending");
     }
-    primary.adoption.onRunStarted("running-C");
-    requestRpcSourceCancellation(source.sourceRef, createAgentRunDirectAbortError());
-    expect(terminals()).toEqual([]);
-    expect(context.dedupe.get(`chat:running-B-${count}`)?.payload).toMatchObject({
-      status: "accepted",
-    });
-    await source.adoption.onQueuedFollowupReplyBatch({
-      kind: "queued-followup",
-      runId: "running-C",
-      originatingChannel: "webchat",
-      payloads: [],
-      completion: { kind: "aborted", stopReason: "aborted" },
-    });
-    expect(terminals()).toEqual([
-      expect.objectContaining({ runId: `running-B-${count}`, state: "aborted" }),
+    const collected = collectRuntimeMetadata(inputs.map(({ run }) => run));
+    if (collected.queuedFollowupReplyDisposition?.kind !== "deliver") {
+      throw new Error("missing collected delivery owner");
+    }
+    const batch = replyBatch("execution-C", completion);
+    await Promise.all([
+      collected.queuedFollowupReplyDisposition.deliver(batch),
+      collected.queuedFollowupReplyDisposition.deliver(batch),
     ]);
-  });
+    inputs.forEach(({ run }) => completeFollowupRunLifecycle(run));
+    expect(terminals()).toMatchObject(ids.map((runId) => ({ runId, state })));
+    expect(ids.every((id) => !isRpcSourceQueued(rpcSourceTesting.get(id)))).toBe(true);
+    for (const id of ids) {
+      expect(await waitResult(context, id)).toMatchObject({ runId: id, status });
+    }
+  },
+);
 
-  it("keeps external-channel streaming separate from the input terminal", async () => {
-    const { context, enqueue, terminals } = fixture("discord");
-    const { adoption } = enqueue("channel-B");
-    await adoption.lifecycle.onAdopted();
-    adoption.onRunStarted("channel-C");
-    expect(context.addChatRun).not.toHaveBeenCalled();
-    await adoption.onQueuedFollowupReplyBatch({
-      kind: "queued-followup",
-      runId: "channel-C",
-      originatingChannel: "discord",
-      payloads: [{ text: "channel reply" }],
-      completion: { kind: "progress" },
-    });
-    expect(terminals()).toEqual([]);
-    await adoption.onQueuedFollowupReplyBatch({
-      kind: "queued-followup",
-      runId: "channel-C",
-      originatingChannel: "discord",
-      payloads: [{ text: "channel reply" }],
-      completion: { kind: "completed" },
-    });
-    expect(terminals()).toEqual([
-      expect.objectContaining({ runId: "channel-B", state: "final", message: undefined }),
-    ]);
-  });
-
-  it.each(["old", "new"] as const)(
-    "terminalizes the dropped input with overflow policy %s",
-    async (dropPolicy) => {
-      const { context, enqueue, terminals } = fixture();
-      enqueue(`overflow-first-${dropPolicy}`, dropPolicy, 1);
-      enqueue(`overflow-second-${dropPolicy}`, dropPolicy, 1);
-      const dropped = `overflow-${dropPolicy === "old" ? "first" : "second"}-${dropPolicy}`;
-      expect(terminals()).toEqual([
-        expect.objectContaining({
-          runId: dropped,
-          state: "error",
-          errorMessage: expect.stringContaining("dropped"),
-        }),
-      ]);
-      expect(
-        (await prepareAgentWaitForTurn(context, { runId: dropped, timeoutMs: 0 }).wait()).result,
-      ).toMatchObject({ runId: dropped, status: "error" });
-    },
+it("keeps a progress presentation failure open until the execution terminal", async () => {
+  const { context, enqueue, terminals } = fixture();
+  const { adoption } = enqueue("progress-failure-B");
+  const getRuntimeConfig = context.getRuntimeConfig;
+  const failPreparation = () => {
+    context.getRuntimeConfig = getRuntimeConfig;
+    throw new Error("progress preparation failed");
+  };
+  context.getRuntimeConfig = failPreparation;
+  const batch = replyBatch("progress-C", { kind: "progress" }, [{ text: "working" }]);
+  await expect(adoption.onQueuedFollowupReplyBatch(batch)).rejects.toThrow(
+    "progress preparation failed",
   );
+  expect(terminals()).toEqual([]);
+  expect(context.dedupe.get("chat:progress-failure-B")?.payload).toMatchObject({
+    status: "accepted",
+  });
+  context.getRuntimeConfig = failPreparation;
+  await expect(
+    adoption.onQueuedFollowupReplyBatch({
+      ...batch,
+      payloads: [],
+      completion: { kind: "failed", error: "progress preparation failed" },
+    }),
+  ).rejects.toThrow("progress preparation failed");
+  expect(terminals()).toMatchObject([{ runId: "progress-failure-B", state: "error" }]);
 });
+
+it("withdraws only the selected input before consumption", async () => {
+  const { enqueue, terminals, execution } = fixture();
+  const active = await execution();
+  const first = enqueue("cancel-B1");
+  const second = enqueue("cancel-B2");
+  expect(requestRpcSourceCancellation(first.sourceRef, createAgentRunDirectAbortError())).toBe(
+    true,
+  );
+  expect(first.controller.signal.aborted).toBe(true);
+  expect(second.controller.signal.aborted).toBe(false);
+  expect(active.abortSignal.aborted).toBe(false);
+  expect(isRpcSourceQueued(second.sourceRef)).toBe(true);
+  expect(terminals()).toMatchObject([{ runId: "cancel-B1", state: "aborted" }]);
+});
+
+it.each([1, 2])("waits for %i consumed inputs to settle after cancellation", async (count) => {
+  const { context, enqueue, terminals, execution } = fixture();
+  const source = enqueue(`running-B-${count}`);
+  const primary = count === 1 ? source : enqueue(`primary-B-${count}`);
+  await execution(primary === source ? [source] : [source, primary]);
+  await admitFollowupRunLifecycle(source.run);
+  if (primary !== source) {
+    await admitFollowupRunLifecycle(primary.run);
+  }
+  primary.adoption.onRunStarted("running-C");
+  requestRpcSourceCancellation(source.sourceRef, createAgentRunDirectAbortError());
+  expect(terminals()).toEqual([]);
+  expect(context.dedupe.get(`chat:running-B-${count}`)?.payload).toMatchObject({
+    status: "accepted",
+  });
+  await source.adoption.onQueuedFollowupReplyBatch(
+    replyBatch("running-C", { kind: "aborted", stopReason: "aborted" }),
+  );
+  expect(terminals()).toMatchObject([{ runId: `running-B-${count}`, state: "aborted" }]);
+});
+
+it("keeps external-channel streaming separate from the input terminal", async () => {
+  const { context, enqueue, terminals } = fixture("discord");
+  const { adoption } = enqueue("channel-B");
+  await adoption.lifecycle.onAdopted();
+  adoption.onRunStarted("channel-C");
+  expect(context.addChatRun).not.toHaveBeenCalled();
+  const batch = replyBatch(
+    "channel-C",
+    { kind: "progress" },
+    [{ text: "channel reply" }],
+    "discord",
+  );
+  await adoption.onQueuedFollowupReplyBatch(batch);
+  expect(terminals()).toEqual([]);
+  await adoption.onQueuedFollowupReplyBatch({ ...batch, completion: { kind: "completed" } });
+  expect(terminals()).toMatchObject([{ runId: "channel-B", state: "final", message: undefined }]);
+});
+
+it.each(["old", "new"] as const)(
+  "terminalizes the dropped input with overflow policy %s",
+  async (dropPolicy) => {
+    const { context, enqueue, terminals } = fixture();
+    enqueue(`overflow-first-${dropPolicy}`, dropPolicy, 1);
+    enqueue(`overflow-second-${dropPolicy}`, dropPolicy, 1);
+    const dropped = `overflow-${dropPolicy === "old" ? "first" : "second"}-${dropPolicy}`;
+    expect(terminals()).toMatchObject([
+      {
+        runId: dropped,
+        state: "error",
+        errorMessage: expect.stringContaining("dropped"),
+      },
+    ]);
+    expect(await waitResult(context, dropped)).toMatchObject({ runId: dropped, status: "error" });
+  },
+);

@@ -102,6 +102,7 @@ export type LobsterPetSceneProps = {
   flavor: string | null;
   bottle: { spotPct: number; opened: boolean; fortune: string } | null;
   onPointerDown: (event: PointerEvent) => void;
+  onSprite?: (element: HTMLElement) => void;
   onPointerUp: (event: PointerEvent) => void;
   onPointerCancel: () => void;
   onContextMenu: (event: MouseEvent) => void;
@@ -192,6 +193,11 @@ function Sprite(props: LobsterPetSceneProps & { twin: boolean }) {
       style={visual().travelStyle}
     >
       <div
+        ref={(element) => {
+          if (!props.twin) {
+            props.onSprite?.(element);
+          }
+        }}
         class={visual().classes}
         style={visual().style}
         aria-hidden="true"

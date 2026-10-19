@@ -4,7 +4,7 @@ import type { SessionControllerInput } from "./session-controller.contracts.js";
 import { trackSessionControllerSourceWork } from "./session-controller.mailbox-source.js";
 import { sessionTargetOwnersMatch, type SessionTarget } from "./session-controller.target.js";
 
-export type SessionControllerProducerCancellationGuard = {
+type SessionControllerProducerCancellationGuard = {
   revalidate(): Promise<void>;
   assertCurrent(): void;
 };

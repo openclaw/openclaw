@@ -702,7 +702,7 @@ agent databases nested inside an excluded checkout remain included.
 plugin-resource discovery and archives only the active config file path.
 
 OpenClaw first plans resources from configuration. It captures the root SQLite
-database online, then derives and freezes registered-agent ownership from that
+database online, then derives registered-agent ownership from that
 private snapshot for database discovery and archive traversal. Paths are resolved before comparison: config, credentials, workspaces, and agents
 already covered by another included root are not duplicated as top-level
 sources. A custom agent root becomes a distinct `agent` asset only when no

@@ -46,6 +46,8 @@ function isOwnerSelectedUiE2eTest(file: string): boolean {
 // Keep this explicit: E2E-named package and browser boundary tests stay on PRs.
 export const CI_PROOF_TEST_FILES = [
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+  "src/gateway/gateway.sessions-send-provenance.e2e.test.ts",
+  "src/gateway/gateway.sessions-send-recovery.test.ts",
   "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
   "test/e2e/qa-lab/plugins/feishu-crabline.real-gateway.candidate.e2e.test.mts",
   "test/e2e/qa-lab/plugins/slack-crabline-roundtrip.candidate.e2e.test.mts",
@@ -3784,7 +3786,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/check-openclaw-package-tarball.bundled-mcp.test.ts",
   "test/scripts/check-openclaw-package-tarball.test.ts",
   "test/scripts/check-session-accessor-boundary.test.ts",
-  "test/scripts/check-session-transcript-reader-boundary.test.ts",
   "test/scripts/check-sqlite-transaction-boundary.test.ts",
   "test/scripts/check-test-mock-exports.test.ts",
   "test/scripts/check-test-timeout-race-ratchet.test.ts",

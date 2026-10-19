@@ -11,8 +11,8 @@ import {
   resolveSessionAgentId,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { getSandboxBackendWorkdirResolver } from "../agents/sandbox/backend.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { buildSandboxFsMounts } from "../agents/sandbox/fs-paths.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";

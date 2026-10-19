@@ -13,7 +13,7 @@ import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-ru
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import { resolveModelCallUrgency } from "../../agents/run-trigger.js";
-import { resolveSandboxConfigForAgent } from "../../agents/sandbox.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import {
   resolvePersistedSessionRuntimeId,
@@ -45,10 +45,8 @@ import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routi
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { acknowledgeReplySessionTransition } from "../../sessions/session-controller.state.js";
-import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { ReplyPayload } from "../types.js";
 import {
   defersTokenCompactionToChatGPTBoundary,
   followupOwnsNativeCompaction,
@@ -60,6 +58,11 @@ import {
   estimatePromptTokensFromSessionTranscript,
   readSessionLogSnapshot,
 } from "./agent-runner-memory-transcript-context.js";
+import type {
+  MemoryFlushOutcome,
+  MemoryFlushResult,
+  MemoryFlushRunParams,
+} from "./agent-runner-memory.types.js";
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
   buildEmbeddedRunExecutionParams,
@@ -379,6 +382,11 @@ export async function runSessionCompactionIfNeeded(params: {
         messageChannel: params.followupRun.run.messageProvider,
         clientCaps: params.followupRun.run.clientCaps,
         conversationToolPolicy: params.followupRun.run.conversationToolPolicy,
+        requesterOrigin: params.followupRun.run.requesterOrigin,
+        conversationId: params.followupRun.run.conversationId,
+        messageThreadId: params.followupRun.run.messageThreadId,
+        operatorProfileId: params.followupRun.run.operatorProfileId,
+        senderIsOwner: params.followupRun.run.senderIsOwner,
         groupId: entry.groupId ?? params.followupRun.run.groupId,
         groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
         groupSpace: entry.space ?? params.followupRun.run.groupSpace,
@@ -535,34 +543,10 @@ export async function runSessionCompactionIfNeeded(params: {
   }
 }
 
-type MemoryFlushOutcome = "skipped" | "completed" | "failed" | "exhausted";
-
-type MemoryFlushResult = {
-  sessionEntry?: SessionEntry;
-  outcome: MemoryFlushOutcome;
-};
-
-type MemoryFlushRunParams = Parameters<typeof runMemoryFlushIfNeeded>[0];
-
 /** Runs pre-compaction memory flush when transcript state warrants it. */
-export async function runMemoryFlushIfNeeded(params: {
-  /** Supplied only by required preflight, while this admitted input is unprocessed. */
-  preflightAdmission?: UserTurnTranscriptAdmissionReceipt;
-  cfg: OpenClawConfig;
-  followupRun: FollowupRun;
-  promptForEstimate?: string;
-  opts?: Pick<GetReplyOptions, "promptCacheKey" | "runId">;
-  defaultModel: string;
-  resolvedVerboseLevel: VerboseLevel;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-  storePath?: string;
-  isHeartbeat: boolean;
-  replyOperation?: ReplyOperation;
-  abortSignal?: AbortSignal;
-}): Promise<MemoryFlushResult> {
+export async function runMemoryFlushIfNeeded(
+  params: MemoryFlushRunParams,
+): Promise<MemoryFlushResult> {
   const abortSignal = resolveFollowupAbortSignal({
     abortSignal: params.replyOperation?.abortSignal ?? params.abortSignal,
     operatorAuthority: params.followupRun.operatorAuthority,

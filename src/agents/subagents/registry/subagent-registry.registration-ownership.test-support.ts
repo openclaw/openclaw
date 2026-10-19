@@ -174,6 +174,7 @@ export function registerSubagentRegistrationOwnershipTests({
                   collect: true,
                   queued: phase !== "ordinary intent",
                   queuedLaunch: {
+                    requesterRecovery: {},
                     request: { sessionKey: session.sessionKey },
                     timeoutMs: 100,
                     schedulerGroupKey: "retained-group",

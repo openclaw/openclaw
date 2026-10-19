@@ -1,17 +1,12 @@
 import {
-  attachAgentCommandAdmissionFacts,
-  attachAgentCommandRecoveryAdmissionFacts,
-} from "../../agents/agent-command-admission-facts.js";
-import {
   resolveReplySourceTurnId,
   setChannelSourceTurnId,
   setChannelSourceTurnSameThreadRequired,
 } from "../../auto-reply/reply/source-turn-id.js";
-import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import type { resolveAgentRestartRecoveryContext } from "./agent-restart-recovery-context.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 
-/** Preserve source-turn routing and admission facts at the Gateway dispatch boundary. */
+/** Preserve source-turn routing at the Gateway dispatch boundary. */
 export function buildAgentRunSourceContext(
   params: StartAgentRunExecutionParams,
   restartRecoveryContext: ReturnType<typeof resolveAgentRestartRecoveryContext>,
@@ -45,11 +40,5 @@ export function buildAgentRunSourceContext(
     restartRecoveryChannelContext?.sameChannelThreadRequired,
   );
 
-  const localUserIngress = getGatewayLocalUserIngress(params.client);
-  if (params.isRestartRecoveryResumeRun) {
-    attachAgentCommandRecoveryAdmissionFacts(runContext);
-  } else if (localUserIngress) {
-    attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
-  }
   return runContext;
 }

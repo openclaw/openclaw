@@ -7,7 +7,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { listActiveReplyRunSessionKeys } from "../../sessions/session-controller.js";
+import { listActiveReplyRunSessionKeys } from "../../sessions/session-controller.queries.js";
 import * as controllerWait from "../../sessions/session-controller.wait.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";

@@ -7,7 +7,7 @@ import {
   type CodexCatalogDecodeResult,
   type CodexClientRequestAttempt,
 } from "./client-catalog-response.js";
-import type { CodexCatalogDecodeRoute } from "./client-message-frames.js";
+import type { CodexCatalogDecodeRoute } from "./client-catalog-route.js";
 import { isJsonObject } from "./protocol.js";
 import { CodexCatalogResponseTooLargeError } from "./rpc-error.js";
 

@@ -56,6 +56,7 @@ export async function mutateSubagentRunForKill(
     cancellationControl: SubagentCancellationControl;
     /** A requester-wide Stop or reset, or a cascade below a cancelled root: nothing is owed. */
     suppressTaskDelivery?: boolean;
+    exactRunSelection?: boolean;
     commands?: ReturnType<typeof captureSubagentCommands>;
     beforeSessionKill?: () => boolean | Promise<boolean>;
     requiredSessionId?: string;
@@ -64,7 +65,7 @@ export async function mutateSubagentRunForKill(
     refreshDescendants: () => Promise<number>;
   },
   captureExecution: () => ReturnType<typeof captureSubagentExecution>,
-  stopAcceptance: { accepted: boolean },
+  stopAcceptance: { accepted: boolean; queuedOnly?: boolean },
   captureCleanup: (capture: ReturnType<typeof captureSessionControllerStop>) => void,
 ): Promise<SubagentRunKillResult> {
   const { stateContext } = params;
@@ -110,6 +111,7 @@ export async function mutateSubagentRunForKill(
           withdrawQueuedReservation: params.withdrawQueuedReservation,
           reason: "killed",
           suppressTaskDelivery: params.suppressTaskDelivery,
+          suppressSessionEffects: stopAcceptance.queuedOnly,
           context: stateContext,
           assertCurrent: assertSelectedRun,
         })
@@ -160,6 +162,7 @@ export async function mutateSubagentRunForKill(
     params.requiredSessionId !== undefined && params.beforeSessionKill !== undefined;
   const resolved = params.session;
   const legacy = resolveSubagentChildAuthority(initial).status === "legacy-unverified";
+  const exactRun = legacy || params.exactRunSelection === true;
   const commands = params.commands ?? captureSubagentCommands(initial, resolved);
   const sessionId = resolved.entry?.sessionId;
   const captureSessionId = params.requiredSessionId ?? sessionId;
@@ -339,9 +342,9 @@ export async function mutateSubagentRunForKill(
       const captured = captureSubagentKillSources({
         target,
         entry: initial,
-        legacy,
+        exactRun,
         sessionId: captureSessionId,
-        captureQueued: !gatewaySourceSelection && !legacy,
+        captureQueued: !gatewaySourceSelection && !exactRun,
       });
       capturedStop = captured.stop;
       capturedQueued = captured.queued;
@@ -413,29 +416,24 @@ export async function mutateSubagentRunForKill(
         preparationResult = { killed: false, superseded: true };
         return;
       }
-      // An unbound selected claim is already a source owner. Cancel its captured
-      // inputs before joining admission cleanup; a claim signal alone cannot retire them.
+      // Withdraw exact queued inputs and unbound preparation before draining admission;
+      // active execution still follows the admission-then-abort sequence below.
       const preparationStop = cancelCapturedSessionControllerSource(capturedPreparation, {
         assertCurrent: killSettlement.assertCancellationCurrent,
         reason: createAgentRunDirectAbortError(),
         onCancelled: () => acceptance.accept(true),
       });
       acceptance.accept(preparationStop.activeCancelled > 0 && killSettlement.isCurrent());
+      stopAcceptance.queuedOnly =
+        exactRun &&
+        preparationStop.queuedCancelled > 0 &&
+        capturedStop.activeInputs.length === 0 &&
+        capturedStop.operations.length === 0;
       killSettlement.assertCancellationCurrent();
       const executionForInterruption = captureExecution()?.execution;
       commands?.observe(currentEntry());
-      // Legacy rows can cancel only their captured exact-run sources. Session-wide
-      // interruption could include a newer verified run sharing this child key.
-      if (legacy) {
-        const stopped = cancelCapturedSessionControllerSource(capturedStop, {
-          assertCurrent: killSettlement.assertCancellationCurrent,
-          reason: createAgentRunDirectAbortError(),
-          onCancelled: () => acceptance.accept(true),
-        });
-        acceptance.accept(stopped.activeCancelled + stopped.queuedCancelled > 0);
-        if (!stopAcceptance.accepted && commands) {
-          acceptance.accept(commands.cancel(killSettlement.assertCancellationCurrent));
-        }
+      // Exact cancellation must not interrupt another run's admission or queued input.
+      if (exactRun) {
         for (const owned of captured.admissions) {
           if (acceptance.callerFailure) {
             break;
@@ -447,7 +445,7 @@ export async function mutateSubagentRunForKill(
           Promise.all(captured.admissions.map((owned) => owned.released)).then(() => undefined),
           () => stopAcceptance.accepted,
         );
-        admission = drained && !capturedRuntimeRefused() ? "ready" : "busy";
+        admission = drained ? "ready" : "busy";
         return;
       }
       const interruption = startSessionControllerInterruption({
@@ -587,9 +585,6 @@ export async function mutateSubagentRunForKill(
               }
             : settled;
         }
-        if (legacy) {
-          return await killSettlement.settle(claimedKill);
-        }
         if (!runtime) {
           try {
             runtime = await subagentKillRuntimeLoader.load();
@@ -624,6 +619,14 @@ export async function mutateSubagentRunForKill(
             })
           : undefined;
         acceptance.accept((stopped?.activeCancelled ?? 0) > 0);
+        if (exactRun) {
+          stopAcceptance.queuedOnly ||=
+            (stopped?.queuedCancelled ?? 0) > 0 && stopped?.activeCancelled === 0;
+          acceptance.accept((stopped?.queuedCancelled ?? 0) > 0);
+          if (!stopAcceptance.accepted && commands) {
+            acceptance.accept(commands.cancel(killSettlement.assertCancellationCurrent));
+          }
+        }
         if (acceptance.callerFailure) {
           return await killSettlement.settle(claimedKill);
         }
@@ -656,7 +659,7 @@ export async function mutateSubagentRunForKill(
               input.mailbox === mailbox,
           )
           .map(({ input }) => input);
-        if (!gatewaySourceSelection) {
+        if (!gatewaySourceSelection && !exactRun) {
           runtime.clearSessionQueues(
             [childSessionKey, sessionId],
             target,

@@ -204,6 +204,12 @@ The same publication decision covers agent frames, chat finals, progress snapsho
 and session lifecycle notifications. Execution settlement and cleanup continue
 independently of event publication.
 
+Transport lease cleanup after connection recovery is best effort. Disposal errors
+are logged without changing the turn result, and cleanup waits use the existing
+agent cleanup budget (10 seconds by default). A discarded refresh candidate's
+cleanup failure leaves the previous transport available for the retry. A timeout
+does not certify that the underlying resources have closed.
+
 For completed `chat.send` turns, clients may request compaction, fork, or rewind
 as soon as they receive chat `final`. These requests join the published turn's
 remaining transcript and admission cleanup before mutating the session. A
