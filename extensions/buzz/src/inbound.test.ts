@@ -1,5 +1,4 @@
 import { runPreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
-// Buzz tests cover inbound room admission, mention gating, and reply delivery.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -34,11 +33,18 @@ const SENDER_PUBLIC_KEY = "b".repeat(64);
 const OTHER_PUBLIC_KEY = "c".repeat(64);
 
 function handleBuzzInbound(
-  params: Omit<Parameters<typeof handleBuzzInboundWithHistory>[0], "historyMap"> & {
-    historyMap?: Map<string, HistoryEntry[]>;
+  params: Partial<Parameters<typeof handleBuzzInboundWithHistory>[0]> & {
+    message: BuzzInboundMessage;
   },
 ) {
-  return handleBuzzInboundWithHistory({ ...params, historyMap: params.historyMap ?? new Map() });
+  return handleBuzzInboundWithHistory({
+    account: params.account ?? createAccount(),
+    cfg: params.cfg ?? {},
+    bus: params.bus ?? createBus(),
+    ...createLifecycle(),
+    ...params,
+    historyMap: params.historyMap ?? new Map(),
+  });
 }
 
 function createAccount(
@@ -109,8 +115,14 @@ function firstDispatch(
   return call[0];
 }
 
-function createPreparedInboundRuntime() {
+function createRuntime() {
   const runtime = createPluginRuntimeMock();
+  setBuzzRuntime(runtime);
+  return runtime;
+}
+
+function createPreparedInboundRuntime() {
+  const runtime = createRuntime();
   const runDispatch = vi.fn(async () => ({
     queuedFinal: false,
     counts: { tool: 0, block: 0, final: 1 },
@@ -128,23 +140,31 @@ function createPreparedInboundRuntime() {
   return { runtime, runDispatch, recordInboundSession };
 }
 
-function createHistoryParams(historyLimit = 2, roles = new Map<string, string>()) {
-  const bus = createBus();
+function setMembership(
+  bus: BuzzBus,
+  members: string[],
+  roles = new Map<string, string>(),
+  revision = { createdAt: 1_777_000_000, eventId: "membership-history" },
+) {
   bus.directory.replaceMemberships(
     new Map([
       [
         ROOM_ID,
         {
           roomId: ROOM_ID,
-          createdAt: 1_777_000_000,
-          eventId: "membership-history",
           publisherPublicKey: OTHER_PUBLIC_KEY,
-          members: new Set([BOT_PUBLIC_KEY, SENDER_PUBLIC_KEY, OTHER_PUBLIC_KEY]),
+          members: new Set(members),
           roles,
+          ...revision,
         },
       ],
     ]),
   );
+}
+
+function createHistoryParams(historyLimit = 2, roles = new Map<string, string>()) {
+  const bus = createBus();
+  setMembership(bus, [BOT_PUBLIC_KEY, SENDER_PUBLIC_KEY, OTHER_PUBLIC_KEY], roles);
   return {
     account: createAccount({ historyLimit }),
     cfg: {} satisfies OpenClawConfig,
@@ -155,15 +175,15 @@ function createHistoryParams(historyLimit = 2, roles = new Map<string, string>()
 }
 
 describe("handleBuzzInbound", () => {
+  let runtime: ReturnType<typeof createRuntime>;
   beforeEach(() => {
     vi.clearAllMocks();
+    runtime = createRuntime();
   });
 
   it.each(["denied", "revoked", "other-thread"])(
     "excludes passive context for %s",
     async (scenario) => {
-      const runtime = createPluginRuntimeMock();
-      setBuzzRuntime(runtime);
       const params = createHistoryParams();
       if (scenario === "denied") {
         params.account.config.groupPolicy = "allowlist";
@@ -172,21 +192,10 @@ describe("handleBuzzInbound", () => {
       await handleBuzzInbound({ ...params, message: createMessage({ text: "Private context" }) });
       expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
       if (scenario === "revoked") {
-        params.bus.directory.replaceMemberships(
-          new Map([
-            [
-              ROOM_ID,
-              {
-                roomId: ROOM_ID,
-                createdAt: 1_777_000_001,
-                eventId: "membership-revoked",
-                publisherPublicKey: OTHER_PUBLIC_KEY,
-                members: new Set([BOT_PUBLIC_KEY, OTHER_PUBLIC_KEY]),
-                roles: new Map(),
-              },
-            ],
-          ]),
-        );
+        setMembership(params.bus, [BOT_PUBLIC_KEY, OTHER_PUBLIC_KEY], new Map(), {
+          createdAt: 1_777_000_001,
+          eventId: "membership-revoked",
+        });
       }
       await handleBuzzInbound({
         ...params,
@@ -203,8 +212,6 @@ describe("handleBuzzInbound", () => {
   );
 
   it("bounds stored UTF-8 entries and rendered context independently", async () => {
-    const runtime = createPluginRuntimeMock();
-    setBuzzRuntime(runtime);
     const params = createHistoryParams(20);
     for (let index = 0; index < 25; index++) {
       await handleBuzzInbound({
@@ -235,8 +242,6 @@ describe("handleBuzzInbound", () => {
   });
 
   it("preserves passive arrivals while an earlier reply is in flight", async () => {
-    const runtime = createPluginRuntimeMock();
-    setBuzzRuntime(runtime);
     const params = createHistoryParams();
     const finished = createDeferred<void>();
     const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
@@ -274,8 +279,9 @@ describe("handleBuzzInbound", () => {
   });
 
   it("retains human context across a loop-suppressed bot turn until a human dispatch", async () => {
-    const { runtime, runDispatch, recordInboundSession } = createPreparedInboundRuntime();
-    setBuzzRuntime(runtime);
+    const prepared = createPreparedInboundRuntime();
+    runtime = prepared.runtime;
+    const { runDispatch, recordInboundSession } = prepared;
     const params = createHistoryParams(2, new Map([[SENDER_PUBLIC_KEY, "bot"]]));
     params.account.relayUrl = "wss://passive-bot-loop.example.test/";
     const cfg = {
@@ -336,17 +342,13 @@ describe("handleBuzzInbound", () => {
   });
 
   it("disables threaded delivery and typing without changing thread context", async () => {
-    const runtime = createPluginRuntimeMock();
-    setBuzzRuntime(runtime);
     const bus = createBus();
     const account = createAccount();
     const config = { ...account.config, replyToMode: "off" as const };
     await handleBuzzInbound({
       account: { ...account, config },
-      cfg: {},
       bus,
       message: createMessage({ threadId: "existing-thread", mentionedPubkeys: [BOT_PUBLIC_KEY] }),
-      ...createLifecycle(),
     });
     const dispatch = firstDispatch(runtime);
     expect(dispatch.ctxPayload.MessageThreadId).toBe("existing-thread");
@@ -363,26 +365,15 @@ describe("handleBuzzInbound", () => {
   });
 
   it("uses current Buzz labels without changing the stable sender identity", async () => {
-    const runtime = createPluginRuntimeMock();
-    setBuzzRuntime(runtime);
     const bus = createBus();
-    bus.directory.replaceMemberships(
+    setMembership(
+      bus,
+      [BOT_PUBLIC_KEY, SENDER_PUBLIC_KEY],
       new Map([
-        [
-          ROOM_ID,
-          {
-            roomId: ROOM_ID,
-            createdAt: 1_777_000_000,
-            eventId: "membership-1",
-            publisherPublicKey: OTHER_PUBLIC_KEY,
-            members: new Set([BOT_PUBLIC_KEY, SENDER_PUBLIC_KEY]),
-            roles: new Map([
-              [BOT_PUBLIC_KEY, "bot"],
-              [SENDER_PUBLIC_KEY, "member"],
-            ]),
-          },
-        ],
+        [BOT_PUBLIC_KEY, "bot"],
+        [SENDER_PUBLIC_KEY, "member"],
       ]),
+      { createdAt: 1_777_000_000, eventId: "membership-1" },
     );
     bus.directory.applyProfileEvent({
       id: "profile-1",
@@ -412,10 +403,8 @@ describe("handleBuzzInbound", () => {
         groupAllowFrom: [SENDER_PUBLIC_KEY],
         groups: { [ROOM_ID]: { requireMention: false } },
       }),
-      cfg: {} satisfies OpenClawConfig,
       bus,
       message: createMessage(),
-      ...createLifecycle(),
     });
 
     expect(firstDispatch(runtime).ctxPayload).toMatchObject({
@@ -429,16 +418,12 @@ describe("handleBuzzInbound", () => {
   });
 
   it("logs missing mentions once per account room with an account-scoped fix", async () => {
-    const runtime = createPluginRuntimeMock();
-    setBuzzRuntime(runtime);
     const account = { ...createAccount(), accountId: "mention-diagnostic" };
     for (const id of ["mention-drop-1", "mention-drop-2"]) {
       await handleBuzzInbound({
         account,
         cfg: { channels: { buzz: { accounts: { [account.accountId]: account.config } } } },
-        bus: createBus(),
         message: createMessage({ id }),
-        ...createLifecycle(),
       });
     }
 
@@ -460,8 +445,6 @@ describe("handleBuzzInbound", () => {
   ] as const)(
     "rechecks %s (mentioned: %s) after asynchronous %s",
     async (change, mentioned, boundary) => {
-      const runtime = createPluginRuntimeMock();
-      setBuzzRuntime(runtime);
       const resolveIngress = runtime.channel.inbound.ingress.resolveStable;
       const abort = new AbortController();
       let currentMember = true;
@@ -486,7 +469,6 @@ describe("handleBuzzInbound", () => {
         account: createAccount({
           groups: { [ROOM_ID]: { requireMentionInBotThreads: false } },
         }),
-        cfg: {} satisfies OpenClawConfig,
         bus,
         message: createMessage({
           mentionedPubkeys: mentioned ? [BOT_PUBLIC_KEY] : [],
@@ -517,18 +499,12 @@ describe("handleBuzzInbound", () => {
   );
 
   it("drops mentioned room messages from senders outside the allowlist", async () => {
-    const runtime = createPluginRuntimeMock();
-    setBuzzRuntime(runtime);
-
     await handleBuzzInbound({
       account: createAccount({
         groupPolicy: "allowlist",
         groupAllowFrom: [OTHER_PUBLIC_KEY],
       }),
-      cfg: {} satisfies OpenClawConfig,
-      bus: createBus(),
       message: createMessage({ mentionedPubkeys: [BOT_PUBLIC_KEY] }),
-      ...createLifecycle(),
     });
 
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
@@ -578,9 +554,6 @@ describe("handleBuzzInbound", () => {
       dispatches: false,
     },
   ] as const)("$name", async ({ accountPolicy, accountAllowFrom, room, dispatches }) => {
-    const runtime = createPluginRuntimeMock();
-    setBuzzRuntime(runtime);
-
     await handleBuzzInbound({
       account: createAccount({
         groupPolicy: accountPolicy,
@@ -593,20 +566,15 @@ describe("handleBuzzInbound", () => {
           },
         },
       }),
-      cfg: {} satisfies OpenClawConfig,
-      bus: createBus(),
       message: createMessage(),
-      ...createLifecycle(),
     });
 
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(dispatches ? 1 : 0);
   });
 
   it("authorizes commands from an allowlisted room sender", async () => {
-    const runtime = createPluginRuntimeMock();
     vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
     vi.mocked(runtime.channel.text.hasControlCommand).mockReturnValue(true);
-    setBuzzRuntime(runtime);
 
     await handleBuzzInbound({
       account: createAccount({
@@ -614,12 +582,9 @@ describe("handleBuzzInbound", () => {
         groupAllowFrom: [OTHER_PUBLIC_KEY],
         groups: { [ROOM_ID]: { requireMention: true, groupAllowFrom: [SENDER_PUBLIC_KEY] } },
       }),
-      cfg: {} satisfies OpenClawConfig,
-      bus: createBus(),
       message: createMessage({
         text: "/status",
       }),
-      ...createLifecycle(),
     });
 
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
@@ -630,37 +595,26 @@ describe("handleBuzzInbound", () => {
   });
 
   it("drops unauthorized room control commands instead of bypassing mentions", async () => {
-    const runtime = createPluginRuntimeMock();
     vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
     vi.mocked(runtime.channel.text.hasControlCommand).mockReturnValue(true);
-    setBuzzRuntime(runtime);
 
     await handleBuzzInbound({
-      account: createAccount(),
-      cfg: {} satisfies OpenClawConfig,
-      bus: createBus(),
       message: createMessage({ text: "/status" }),
-      ...createLifecycle(),
     });
 
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 
   it("anchors Buzz agent replies and typing to the original thread root", async () => {
-    const runtime = createPluginRuntimeMock();
-    setBuzzRuntime(runtime);
     const bus = createBus();
 
     await handleBuzzInbound({
-      account: createAccount(),
-      cfg: {} satisfies OpenClawConfig,
       bus,
       message: createMessage({
         id: "event-reply",
         threadId: "event-root",
         mentionedPubkeys: [BOT_PUBLIC_KEY],
       }),
-      ...createLifecycle(),
     });
 
     const dispatch = firstDispatch(runtime);
@@ -693,9 +647,7 @@ describe("handleBuzzInbound", () => {
   });
 
   it("provides bounded structured diff context without treating diff content as commands", async () => {
-    const runtime = createPluginRuntimeMock();
     vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
-    setBuzzRuntime(runtime);
     const diffText = `/status\n@@ -1 +1 @@\n-old\n+${"new".repeat(4_000)}`;
 
     await handleBuzzInbound({
@@ -706,8 +658,6 @@ describe("handleBuzzInbound", () => {
           },
         },
       }),
-      cfg: {} satisfies OpenClawConfig,
-      bus: createBus(),
       message: createMessage({
         kind: BUZZ_DIFF_MESSAGE_KIND,
         text: diffText,
@@ -718,7 +668,6 @@ describe("handleBuzzInbound", () => {
           truncated: true,
         },
       }),
-      ...createLifecycle(),
     });
 
     expect(runtime.channel.commands.shouldComputeCommandAuthorized).not.toHaveBeenCalled();
@@ -740,14 +689,9 @@ describe("handleBuzzInbound", () => {
   });
 
   it("does not treat mention-like text inside a structured diff as a bot mention", async () => {
-    const runtime = createPluginRuntimeMock();
     vi.mocked(runtime.channel.mentions.matchesMentionPatterns).mockReturnValue(true);
-    setBuzzRuntime(runtime);
 
     await handleBuzzInbound({
-      account: createAccount(),
-      cfg: {} satisfies OpenClawConfig,
-      bus: createBus(),
       message: createMessage({
         kind: BUZZ_DIFF_MESSAGE_KIND,
         text: "+const owner = '@OpenClaw';",
@@ -757,7 +701,6 @@ describe("handleBuzzInbound", () => {
           truncated: false,
         },
       }),
-      ...createLifecycle(),
     });
 
     expect(runtime.channel.mentions.matchesMentionPatterns).not.toHaveBeenCalled();
@@ -765,15 +708,8 @@ describe("handleBuzzInbound", () => {
   });
 
   it("propagates delivery and session-recording failures", async () => {
-    const runtime = createPluginRuntimeMock();
-    setBuzzRuntime(runtime);
-
     await handleBuzzInbound({
-      account: createAccount(),
-      cfg: {} satisfies OpenClawConfig,
-      bus: createBus(),
       message: createMessage({ mentionedPubkeys: [BOT_PUBLIC_KEY] }),
-      ...createLifecycle(),
     });
 
     const dispatch = firstDispatch(runtime);

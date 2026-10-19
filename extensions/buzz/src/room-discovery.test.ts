@@ -1,4 +1,4 @@
-import { getPublicKey, type Filter, type Relay } from "nostr-tools";
+import { getPublicKey, type Event, type Filter, type Relay } from "nostr-tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type AuthSigner = (template: {
@@ -58,6 +58,45 @@ const RELAY_PUBLIC_KEY = "f".repeat(64);
 const ROOM_A = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
 const ROOM_B = "940d0c32-4eb7-46d7-9d5b-d975aaef87f7";
 const AUTH_TAG = ["auth", "bot", "kind=9", "signature"];
+const publicKey = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex")));
+const connection = { relayUrl: "wss://buzz.example.com", privateKey: PRIVATE_KEY };
+const discoveredRoom = { id: ROOM_A, name: "Agent room" };
+
+function event(kind: number, tags: string[][], overrides: Partial<Event> = {}): Event {
+  return {
+    id: "event",
+    kind,
+    pubkey: RELAY_PUBLIC_KEY,
+    created_at: 1,
+    content: "",
+    sig: "sig",
+    tags,
+    ...overrides,
+  };
+}
+
+function membership(room = ROOM_A, role = "bot") {
+  return event(
+    39002,
+    [
+      ["d", room],
+      ["p", publicKey, "", role],
+    ],
+    { id: `member-${room}` },
+  );
+}
+
+function snapshot(...events: Event[]) {
+  return (_filters: unknown, handlers: { onevent: (event: Event) => void; oneose: () => void }) => {
+    events.forEach(handlers.onevent);
+    queueMicrotask(() => handlers.oneose());
+    return { close: vi.fn() };
+  };
+}
+
+function metadata(name: string, overrides: Partial<Event> = {}, tags: string[][] = []) {
+  return event(39000, [["d", ROOM_A], ["name", name], ...tags], overrides);
+}
 
 describe("discoverBuzzRooms", () => {
   beforeEach(() => {
@@ -78,83 +117,28 @@ describe("discoverBuzzRooms", () => {
   });
 
   it("discovers only rooms whose member event names the bot public key", async () => {
-    const publicKey = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex")));
     let signedAuthTags: string[][] | undefined;
     relayMocks.auth.mockImplementationOnce(async (signAuth: AuthSigner) => {
       signedAuthTags = (await signAuth({ kind: 22242, created_at: 1, content: "", tags: [] })).tags;
       return "ok";
     });
     relayMocks.subscribe
+      .mockImplementationOnce(snapshot(membership(), membership(ROOM_B, "member")))
       .mockImplementationOnce(
-        (
-          _filters: unknown,
-          handlers: { onevent: (event: unknown) => void; oneose: () => void },
-        ) => {
-          handlers.onevent({
-            id: "member-a",
-            kind: 39002,
-            pubkey: RELAY_PUBLIC_KEY,
-            created_at: 1,
-            content: "",
-            sig: "sig",
-            tags: [
-              ["d", ROOM_A],
-              ["p", publicKey, "", "bot"],
-            ],
-          });
-          handlers.onevent({
-            id: "member-b-wrong-role",
-            kind: 39002,
-            pubkey: RELAY_PUBLIC_KEY,
-            created_at: 1,
-            content: "",
-            sig: "sig",
-            tags: [
-              ["d", ROOM_B],
-              ["p", publicKey, "", "member"],
-            ],
-          });
-          queueMicrotask(() => handlers.oneose());
-          return { close: vi.fn() };
-        },
-      )
-      .mockImplementationOnce(
-        (
-          _filters: unknown,
-          handlers: { onevent: (event: unknown) => void; oneose: () => void },
-        ) => {
-          handlers.onevent({
-            id: "metadata-a",
-            kind: 39000,
-            pubkey: RELAY_PUBLIC_KEY,
-            created_at: 2,
-            content: "",
-            sig: "sig",
-            tags: [
-              ["d", ROOM_A],
-              ["name", "Agent room"],
-              ["about", "Humans and agents"],
-            ],
-          });
-          queueMicrotask(() => handlers.oneose());
-          return { close: vi.fn() };
-        },
+        snapshot(
+          metadata("Agent room", { id: "metadata-a", created_at: 2 }, [
+            ["about", "Humans and agents"],
+          ]),
+        ),
       );
 
     const { discoverBuzzRooms } = await import("./room-discovery.js");
     await expect(
       discoverBuzzRooms({
-        relayUrl: "wss://buzz.example.com",
-        privateKey: PRIVATE_KEY,
+        ...connection,
         authTag: JSON.stringify(AUTH_TAG),
       }),
-    ).resolves.toEqual([
-      {
-        id: ROOM_A,
-        name: "Agent room",
-        about: "Humans and agents",
-      },
-    ]);
+    ).resolves.toEqual([{ ...discoveredRoom, about: "Humans and agents" }]);
 
     expect(relayMocks.filters).toEqual([
       {
@@ -183,17 +167,9 @@ describe("discoverBuzzRooms", () => {
     async ({ notification, firstSnapshot }) => {
       vi.useFakeTimers();
       const abort = new AbortController();
-      const publicKey = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex")));
       type Handlers = Parameters<Relay["prepareSubscription"]>[1];
       const subscribed = Promise.withResolvers<Handlers>();
       let snapshots = 0;
-      const eventBase = {
-        id: "membership-a",
-        pubkey: RELAY_PUBLIC_KEY,
-        created_at: 1,
-        content: "",
-        sig: "sig",
-      };
       relayMocks.subscribe.mockImplementation((filters: Filter[], handlers: Handlers) => {
         if (filters[0]?.kinds?.includes(44_100)) {
           subscribed.resolve(handlers);
@@ -203,35 +179,19 @@ describe("discoverBuzzRooms", () => {
             queueMicrotask(() => handlers.onclose?.("membership snapshot temporarily unavailable"));
           } else {
             if (snapshots > 1) {
-              handlers.onevent?.({
-                ...eventBase,
-                kind: 39002,
-                tags: [
-                  ["d", ROOM_A],
-                  ["p", publicKey, "", "bot"],
-                ],
-              });
+              handlers.onevent?.(membership());
             }
             queueMicrotask(() => handlers.oneose?.());
           }
         } else {
-          handlers.onevent?.({
-            ...eventBase,
-            id: "metadata-a",
-            kind: 39000,
-            tags: [
-              ["d", ROOM_A],
-              ["name", "Agent room"],
-            ],
-          });
+          handlers.onevent?.(metadata("Agent room", { id: "metadata-a" }));
           queueMicrotask(() => handlers.oneose?.());
         }
         return { close: vi.fn() };
       });
       const { waitForBuzzRoomAccess } = await import("./room-access-wait.js");
       const waiting = waitForBuzzRoomAccess({
-        relayUrl: "wss://buzz.example.com",
-        privateKey: PRIVATE_KEY,
+        ...connection,
         signal: abort.signal,
       });
       let rooms: Awaited<typeof waiting> | undefined;
@@ -244,18 +204,19 @@ describe("discoverBuzzRooms", () => {
       try {
         const notifications = await subscribed.promise;
         if (notification) {
-          notifications.onevent?.({
-            ...eventBase,
-            id: "notification-a",
-            kind: 44_100,
-            tags: [
-              ["p", publicKey],
-              ["h", ROOM_A],
-            ],
-          });
+          notifications.onevent?.(
+            event(
+              44_100,
+              [
+                ["p", publicKey],
+                ["h", ROOM_A],
+              ],
+              { id: "notification-a" },
+            ),
+          );
         }
         await vi.advanceTimersByTimeAsync(4_000);
-        expect(rooms).toEqual([{ id: ROOM_A, name: "Agent room" }]);
+        expect(rooms).toEqual([discoveredRoom]);
         expect(relayMocks.close).toHaveBeenCalledOnce();
       } finally {
         abort.abort(new Error("test cleanup"));
@@ -273,8 +234,7 @@ describe("discoverBuzzRooms", () => {
     const { discoverBuzzRooms } = await import("./room-discovery.js");
     await expect(
       discoverBuzzRooms({
-        relayUrl: "wss://buzz.example.com",
-        privateKey: PRIVATE_KEY,
+        ...connection,
         timeoutMs: 10,
       }),
     ).rejects.toThrow();
@@ -284,71 +244,17 @@ describe("discoverBuzzRooms", () => {
   });
 
   it("excludes rooms whose latest relay metadata marks them archived", async () => {
-    const publicKey = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex")));
     relayMocks.subscribe
+      .mockImplementationOnce(snapshot(membership()))
       .mockImplementationOnce(
-        (
-          _filters: unknown,
-          handlers: { onevent: (event: unknown) => void; oneose: () => void },
-        ) => {
-          handlers.onevent({
-            id: "member-a",
-            kind: 39002,
-            pubkey: RELAY_PUBLIC_KEY,
-            created_at: 1,
-            content: "",
-            sig: "sig",
-            tags: [
-              ["d", ROOM_A],
-              ["p", publicKey, "", "bot"],
-            ],
-          });
-          queueMicrotask(() => handlers.oneose());
-          return { close: vi.fn() };
-        },
-      )
-      .mockImplementationOnce(
-        (
-          _filters: unknown,
-          handlers: { onevent: (event: unknown) => void; oneose: () => void },
-        ) => {
-          handlers.onevent({
-            id: "a".repeat(64),
-            kind: 39000,
-            pubkey: RELAY_PUBLIC_KEY,
-            created_at: 2,
-            content: "",
-            sig: "sig",
-            tags: [
-              ["d", ROOM_A],
-              ["name", "Old room name"],
-            ],
-          });
-          handlers.onevent({
-            id: "b".repeat(64),
-            kind: 39000,
-            pubkey: RELAY_PUBLIC_KEY,
-            created_at: 3,
-            content: "",
-            sig: "sig",
-            tags: [
-              ["d", ROOM_A],
-              ["name", "Archived room"],
-              ["archived", "true"],
-            ],
-          });
-          queueMicrotask(() => handlers.oneose());
-          return { close: vi.fn() };
-        },
+        snapshot(
+          metadata("Old room name", { id: "a".repeat(64), created_at: 2 }),
+          metadata("Archived room", { id: "b".repeat(64), created_at: 3 }, [["archived", "true"]]),
+        ),
       );
 
     const { discoverBuzzRooms } = await import("./room-discovery.js");
-    await expect(
-      discoverBuzzRooms({
-        relayUrl: "wss://buzz.example.com",
-        privateKey: PRIVATE_KEY,
-      }),
-    ).resolves.toEqual([]);
+    await expect(discoverBuzzRooms(connection)).resolves.toEqual([]);
   });
 
   it("recycles the relay when a room query never reaches EOSE", async () => {
@@ -357,8 +263,7 @@ describe("discoverBuzzRooms", () => {
 
     const { discoverBuzzRooms } = await import("./room-discovery.js");
     const discovery = discoverBuzzRooms({
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
+      ...connection,
       timeoutMs: 10_000,
     });
 

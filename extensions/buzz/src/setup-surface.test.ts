@@ -70,6 +70,9 @@ const ROOM_B = "940d0c32-4eb7-46d7-9d5b-d975aaef87f7";
 const GENERATED_KEY = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const AUTH_TAG = '["auth","bot","kind=9","signature"]';
 const secretFixtureRoots: string[] = [];
+const PRIVATE_KEY = nip19.nsecEncode(GENERATED_KEY);
+const GENERAL_ROOM = { id: ROOM_A, name: "General" };
+const AGENT_ROOM = { id: ROOM_B, name: "Agents" };
 
 function createCredentialConfig(
   accountId: "default" | "ada",
@@ -111,9 +114,8 @@ async function createStoredCredentials(source: "env" | "file"): Promise<{
   authTag: SecretInput;
   secrets?: OpenClawConfig["secrets"];
 }> {
-  const privateKey = nip19.nsecEncode(GENERATED_KEY);
   if (source === "env") {
-    vi.stubEnv("BUZZ_SETUP_PRIVATE_KEY", privateKey);
+    vi.stubEnv("BUZZ_SETUP_PRIVATE_KEY", PRIVATE_KEY);
     vi.stubEnv("BUZZ_SETUP_AUTH_TAG", AUTH_TAG);
     return {
       privateKey: { source, provider: "default", id: "BUZZ_SETUP_PRIVATE_KEY" },
@@ -123,7 +125,9 @@ async function createStoredCredentials(source: "env" | "file"): Promise<{
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "buzz-setup-ref-")));
   secretFixtureRoots.push(root);
   const filePath = path.join(root, "credentials.json");
-  await fs.writeFile(filePath, JSON.stringify({ privateKey, authTag: AUTH_TAG }), { mode: 0o600 });
+  await fs.writeFile(filePath, JSON.stringify({ privateKey: PRIVATE_KEY, authTag: AUTH_TAG }), {
+    mode: 0o600,
+  });
   return {
     privateKey: { source, provider: "buzzsetup", id: "/privateKey" },
     authTag: { source, provider: "buzzsetup", id: "/authTag" },
@@ -178,8 +182,10 @@ function configure(
 }
 
 describe("Buzz guided setup", () => {
+  let prompter: WizardPrompter;
   beforeEach(() => {
     vi.resetAllMocks();
+    prompter = createPrompter();
     vi.mocked(generateSecretKey).mockReturnValue(GENERATED_KEY);
   });
   afterEach(async () => {
@@ -190,15 +196,13 @@ describe("Buzz guided setup", () => {
   it("generates a dedicated plaintext bot key and configures discovered rooms", async () => {
     const discoverRooms = vi.fn(async () => [
       { id: ROOM_A, name: "General", about: "Team room" },
-      { id: ROOM_B, name: "Agents" },
+      AGENT_ROOM,
     ]);
     const verifyAfterWrite = vi.fn(async () => {});
     const wizard = createBuzzSetupWizard({
       discoverRooms,
-      generateSecretKey: () => GENERATED_KEY,
       verifyAfterWrite,
     });
-    const prompter = createPrompter();
     const runtime = createRuntimeSpies();
     const hooks: Array<{
       run: (ctx: { cfg: OpenClawConfig; runtime: RuntimeEnv }) => void | Promise<void>;
@@ -213,12 +217,11 @@ describe("Buzz guided setup", () => {
       },
     });
 
-    const expectedPrivateKey = nip19.nsecEncode(GENERATED_KEY);
     expect(result.accountId).toBe("default");
     expect(result.cfg.channels?.buzz).toEqual({
       enabled: true,
       relayUrl: "wss://buzz.example.com",
-      privateKey: expectedPrivateKey,
+      privateKey: PRIVATE_KEY,
       groupPolicy: "open",
       groupAllowFrom: undefined,
       groups: {
@@ -229,11 +232,11 @@ describe("Buzz guided setup", () => {
     });
     expect(discoverRooms).toHaveBeenCalledWith({
       relayUrl: "wss://buzz.example.com",
-      privateKey: expectedPrivateKey,
+      privateKey: PRIVATE_KEY,
     });
     expect(result.cfg.channels?.buzz?.authTag).toBeUndefined();
     expect(
-      vi.mocked(prompter.note).mock.calls.some(([message]) => message.includes(expectedPrivateKey)),
+      vi.mocked(prompter.note).mock.calls.some(([message]) => message.includes(PRIVATE_KEY)),
     ).toBe(false);
     expect(hooks).toHaveLength(1);
     await hooks[0]!.run({ cfg: result.cfg, runtime });
@@ -249,9 +252,8 @@ describe("Buzz guided setup", () => {
     vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth-must-not-be-used");
     const otherKey = Uint8Array.from({ length: 32 }, () => 7);
     const generate = vi.fn().mockReturnValueOnce(GENERATED_KEY).mockReturnValueOnce(otherKey);
-    const discoverRooms = vi.fn(async () => [{ id: ROOM_B, name: "Agents" }]);
+    const discoverRooms = vi.fn(async () => [AGENT_ROOM]);
     const wizard = createBuzzSetupWizard({ generateSecretKey: generate, discoverRooms });
-    const prompter = createPrompter();
     const cfg = {
       channels: {
         buzz: {
@@ -274,7 +276,7 @@ describe("Buzz guided setup", () => {
     const replay = await configureAccount("ada");
     expect(generate).toHaveBeenCalledTimes(2);
     expect(ada.accountId).toBe("ada");
-    expect(ada.cfg.channels?.buzz?.accounts?.ada?.privateKey).toBe(nip19.nsecEncode(GENERATED_KEY));
+    expect(ada.cfg.channels?.buzz?.accounts?.ada?.privateKey).toBe(PRIVATE_KEY);
     expect(grace.cfg.channels?.buzz?.accounts?.grace?.privateKey).toBe(nip19.nsecEncode(otherKey));
     expect(replay.cfg).toEqual(ada.cfg);
     const { accounts: _accounts, ...root } = ada.cfg.channels!.buzz!;
@@ -284,7 +286,7 @@ describe("Buzz guided setup", () => {
     });
     expect(discoverRooms).toHaveBeenCalledWith({
       relayUrl: "wss://buzz.example.com",
-      privateKey: nip19.nsecEncode(GENERATED_KEY),
+      privateKey: PRIVATE_KEY,
     });
   });
 
@@ -295,9 +297,8 @@ describe("Buzz guided setup", () => {
       privateKey: "11".repeat(32),
       groups: { [ROOM_A]: {} },
     };
-    const discoverRooms = vi.fn(async () => [{ id: ROOM_B, name: "Agents" }]);
+    const discoverRooms = vi.fn(async () => [AGENT_ROOM]);
     const wizard = createBuzzSetupWizard({ discoverRooms, generateSecretKey: () => GENERATED_KEY });
-    const prompter = createPrompter();
     vi.mocked(prompter.select).mockResolvedValueOnce("__new__");
     vi.mocked(prompter.text)
       .mockResolvedValueOnce("ada")
@@ -315,7 +316,7 @@ describe("Buzz guided setup", () => {
         ada: {
           enabled: true,
           relayUrl: "wss://ada.example.com",
-          privateKey: nip19.nsecEncode(GENERATED_KEY),
+          privateKey: PRIVATE_KEY,
           groupPolicy: "open",
           groupAllowFrom: undefined,
           groups: { [ROOM_B]: { enabled: true, requireMention: false } },
@@ -325,26 +326,24 @@ describe("Buzz guided setup", () => {
     });
     expect(discoverRooms).toHaveBeenCalledWith({
       relayUrl: "wss://ada.example.com",
-      privateKey: nip19.nsecEncode(GENERATED_KEY),
+      privateKey: PRIVATE_KEY,
     });
   });
 
   it("uses the standard SecretRef route when entering a bot key", async () => {
     const secretRef = { source: "env" as const, provider: "default", id: "BUZZ_BOT_KEY" };
-    const privateKey = nip19.nsecEncode(GENERATED_KEY);
     type BuzzSetupDependencies = NonNullable<Parameters<typeof createBuzzSetupWizard>[0]>;
     type RunSecretStep = NonNullable<BuzzSetupDependencies["runSecretStep"]>;
     const runSecretStep = vi.fn(async ({ cfg, applySet }: Parameters<RunSecretStep>[0]) => ({
-      cfg: await applySet!(cfg, secretRef, privateKey),
+      cfg: await applySet!(cfg, secretRef, PRIVATE_KEY),
       action: "set" as const,
-      resolvedValue: privateKey,
+      resolvedValue: PRIVATE_KEY,
     }));
     const wizard = createBuzzSetupWizard({
-      discoverRooms: vi.fn(async () => [{ id: ROOM_A, name: "General" }]),
+      discoverRooms: vi.fn(async () => [GENERAL_ROOM]),
       runSecretStep,
       verifyAfterWrite: vi.fn(async () => {}),
     });
-    const prompter = createPrompter();
     vi.mocked(prompter.multiselect).mockResolvedValue([ROOM_A]);
 
     const result = await configure(wizard, {
@@ -360,16 +359,11 @@ describe("Buzz guided setup", () => {
   });
 
   it("falls back to retry without rotating the identity when automatic discovery expires", async () => {
-    const discoverRooms = vi
-      .fn()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: ROOM_A, name: "General" }]);
+    const discoverRooms = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([GENERAL_ROOM]);
     const wizard = createBuzzSetupWizard({
       discoverRooms,
-      generateSecretKey: () => GENERATED_KEY,
       waitForRoomAccess: vi.fn(async () => []),
     });
-    const prompter = createPrompter();
 
     const result = await configure(wizard, {
       cfg: {
@@ -414,11 +408,7 @@ describe("Buzz guided setup", () => {
     async (accountId) => {
       const { cfg } = createCredentialConfig(accountId, "22".repeat(32), AUTH_TAG);
       const before = structuredClone(cfg);
-      const discoverRooms = vi.fn(async () => [
-        { id: ROOM_A, name: "General" },
-        { id: ROOM_B, name: "Agents" },
-      ]);
-      const prompter = createPrompter();
+      const discoverRooms = vi.fn(async () => [GENERAL_ROOM, AGENT_ROOM]);
       vi.mocked(prompter.multiselect).mockResolvedValueOnce([]).mockResolvedValueOnce([ROOM_A]);
       const result = await configure(createBuzzSetupWizard({ discoverRooms }), {
         cfg,
@@ -465,10 +455,8 @@ describe("Buzz guided setup", () => {
 
   it("warns before using an unencrypted remote relay", async () => {
     const wizard = createBuzzSetupWizard({
-      discoverRooms: vi.fn(async () => [{ id: ROOM_A, name: "General" }]),
-      generateSecretKey: () => GENERATED_KEY,
+      discoverRooms: vi.fn(async () => [GENERAL_ROOM]),
     });
-    const prompter = createPrompter();
     vi.mocked(prompter.text).mockResolvedValueOnce("wss://buzz.example.com");
     vi.mocked(prompter.confirm).mockImplementation(async ({ message }) => {
       if (message.includes("unencrypted")) {
@@ -500,7 +488,6 @@ describe("Buzz guided setup", () => {
       vi.stubEnv("BUZZ_PRIVATE_KEY", "33".repeat(32));
       vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth-must-not-be-used");
       const stored = await createStoredCredentials(source);
-      const privateKey = nip19.nsecEncode(GENERATED_KEY);
       const configuredKey = stored.privateKey;
       const { cfg, healthyAccount } = createCredentialConfig(
         accountId,
@@ -509,7 +496,7 @@ describe("Buzz guided setup", () => {
       );
       cfg.secrets = stored.secrets;
       const before = structuredClone(cfg);
-      const discoverRooms = vi.fn(async () => [{ id: ROOM_A, name: "General" }]);
+      const discoverRooms = vi.fn(async () => [GENERAL_ROOM]);
       const generate = vi.fn(() => GENERATED_KEY);
       const runSecretStep = vi.fn();
       const wizard = createBuzzSetupWizard({
@@ -517,7 +504,6 @@ describe("Buzz guided setup", () => {
         generateSecretKey: generate,
         runSecretStep,
       });
-      const prompter = createPrompter();
 
       const result = await configure(wizard, {
         cfg,
@@ -529,7 +515,7 @@ describe("Buzz guided setup", () => {
       expect(result.completion).toBeUndefined();
       expect(discoverRooms).toHaveBeenCalledWith({
         relayUrl: "wss://selected.example.com",
-        privateKey,
+        privateKey: PRIVATE_KEY,
         authTag: AUTH_TAG,
       });
       const { accounts, ...root } = result.cfg.channels!.buzz!;
@@ -547,7 +533,7 @@ describe("Buzz guided setup", () => {
       expect(cfg).toEqual(before);
       expect(generate).not.toHaveBeenCalled();
       expect(runSecretStep).not.toHaveBeenCalled();
-      expect(JSON.stringify(vi.mocked(prompter.note).mock.calls)).not.toContain(privateKey);
+      expect(JSON.stringify(vi.mocked(prompter.note).mock.calls)).not.toContain(PRIVATE_KEY);
       expect(JSON.stringify(vi.mocked(prompter.note).mock.calls)).not.toContain(AUTH_TAG);
     },
   );
@@ -562,14 +548,13 @@ describe("Buzz guided setup", () => {
       vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth-must-not-be-used");
       vi.stubEnv("BUZZ_SETUP_MISSING", undefined);
       const secretRef = { source: "env", provider: "default", id: "BUZZ_SETUP_MISSING" } as const;
-      const privateKey = nip19.nsecEncode(GENERATED_KEY);
       const { cfg } = createCredentialConfig(
         accountId,
-        field === "privateKey" ? secretRef : privateKey,
+        field === "privateKey" ? secretRef : PRIVATE_KEY,
         field === "authTag" ? secretRef : AUTH_TAG,
       );
       const before = structuredClone(cfg);
-      const discoverRooms = vi.fn(async () => [{ id: ROOM_A, name: "General" }]);
+      const discoverRooms = vi.fn(async () => [GENERAL_ROOM]);
       const waitForRoomAccess = vi.fn(async () => []);
       const generate = vi.fn(() => GENERATED_KEY);
       const runSecretStep = vi.fn();
@@ -602,14 +587,12 @@ describe("Buzz guided setup", () => {
 
   it("waits for authenticated room access without rotating the generated identity", async () => {
     const discoverRooms = vi.fn(async () => []);
-    const waitForRoomAccess = vi.fn(async () => [{ id: ROOM_A, name: "General" }]);
+    const waitForRoomAccess = vi.fn(async () => [GENERAL_ROOM]);
     const wizard = createBuzzSetupWizard({
       discoverRooms,
-      generateSecretKey: () => GENERATED_KEY,
       waitForRoomAccess,
       verifyAfterWrite: vi.fn(async () => {}),
     });
-    const prompter = createPrompter();
     vi.mocked(prompter.multiselect).mockResolvedValue([ROOM_A]);
 
     const result = await configure(wizard, {
@@ -618,12 +601,11 @@ describe("Buzz guided setup", () => {
     });
 
     expect(discoverRooms).toHaveBeenCalledOnce();
-    const expectedPrivateKey = nip19.nsecEncode(GENERATED_KEY);
     expect(discoverRooms).toHaveBeenCalledWith(
-      expect.objectContaining({ privateKey: expectedPrivateKey }),
+      expect.objectContaining({ privateKey: PRIVATE_KEY }),
     );
     expect(waitForRoomAccess).toHaveBeenCalledWith(
-      expect.objectContaining({ privateKey: expectedPrivateKey }),
+      expect.objectContaining({ privateKey: PRIVATE_KEY }),
     );
     expect(result.cfg.channels?.buzz?.enabled).toBe(true);
     expect(result.cfg.channels?.buzz?.defaultTo).toBe(ROOM_A);
