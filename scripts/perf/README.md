@@ -216,6 +216,43 @@ then swap halves for the next pair. Record the exact revision, fixture counts
 and physical database bytes; a 64 MiB text fixture preserves roster/run shape
 but does not reproduce multi-GB transcript page-cache pressure.
 
+## Measure branch reads across idle worker retirement
+
+`branch-rotation-measure.ts` drives compressed Control UI WebSockets against an
+owned loopback Gateway and an offline team-shape fixture:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/branch-rotation-measure.ts \
+  --state-dir /path/to/team-shape --output /path/to/new-result-directory \
+  --entry /path/to/prepared/dist/entry.js --port 41451 \
+  --clients 40 --cohorts 12 --poll-ms 10000 --revision <commit-sha>
+```
+
+Each viewer reads a distinct shared transcript through `sessions.branches.list`
+and `chat.history`, alongside `sessions.list`. Before each cohort, an alternating
+`verboseLevel` patch invalidates the database write-token shortcut without
+opening the maintenance reader. A label patch is unsuitable for that purpose:
+label-owner discovery itself retains a maintenance connection.
+
+The warm phase uses startup-prewarmed readers. The private benchmark IPC preload
+then publishes the existing memory-pressure event and waits until all transcript
+workers have exited before the cold phase. This exercises the real retirement
+owner without changing production timers or custody rules. After cold traffic,
+one label patch deliberately recreates the scoped maintenance reader; two more
+cohorts measure recovery under continued invalidating writes. The report separates
+the deliberate retirement from request-driven rotations and records lifecycle
+counters, CPU, memory, request counts, and raw latency samples. First-use warm
+cohorts are reported separately from steady cohorts.
+
+For paired comparisons, pass the same future `--start-at <epoch-ms>` to both
+drivers. Warm, cold, and recovery phases have shared absolute deadlines; a missed
+deadline fails the run. Generate matching fixtures sequentially, hold the shared
+measurement lock around each concurrent pair, and swap the two 16-core allocations
+between pairs. Metadata-only writes permit matched fixture reuse after a completed
+pair. Compare paired differences; keep outside load samples with the results.
+This isolates the worker-rotation mechanism; it does not replay model streaming
+or establish which historical operation started or ended a production episode.
+
 ## Measure history pages and checkout diffs
 
 Prepare a team-shape fixture offline, then add this workload's small synthetic
