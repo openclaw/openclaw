@@ -4,6 +4,7 @@ import {
   normalizeStringifiedEntries,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentConfig,
@@ -285,7 +286,7 @@ export async function sandboxExplainCommand(
   const rich = isRich();
   const heading = (value: string) => colorize(rich, theme.heading, value);
   const key = (value: string) => colorize(rich, theme.muted, value);
-  const value = (val: string) => colorize(rich, theme.info, val);
+  const value = (val: string) => colorize(rich, theme.info, sanitizeTerminalText(val));
   const ok = (val: string) => colorize(rich, theme.success, val);
   const warn = (val: string) => colorize(rich, theme.warn, val);
   const err = (val: string) => colorize(rich, theme.error, val);
