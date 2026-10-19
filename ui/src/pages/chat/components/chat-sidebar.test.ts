@@ -729,7 +729,7 @@ describe("file sidebar clipboard feedback", () => {
     return button;
   }
 
-  async function copyPathFromMenu(panel: FilePanel): Promise<HTMLButtonElement> {
+  async function openPathCopyAction(panel: FilePanel): Promise<HTMLButtonElement> {
     const trigger = findCopyButton(panel, "File actions");
     trigger.click();
     await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
@@ -737,11 +737,16 @@ describe("file sidebar clipboard feedback", () => {
       document.getElementById(trigger.getAttribute("aria-controls")!),
       "File actions menu",
     );
-    const action = expectDefined(
-      menu.querySelector<HTMLButtonElement>('[role="menuitem"][aria-label="Copy path"]'),
-      "Copy path",
+    return expectDefined(
+      menu.querySelector<HTMLButtonElement>('[role="menuitem"][data-value="path"]'),
+      "Copy path action",
     );
+  }
+
+  async function copyPathFromMenu(panel: FilePanel): Promise<HTMLButtonElement> {
+    const action = await openPathCopyAction(panel);
     action.click();
+    const trigger = findCopyButton(panel, "File actions");
     await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"));
     return action;
   }
@@ -795,18 +800,20 @@ describe("file sidebar clipboard feedback", () => {
       }),
     );
     const panel = await mountFilePanel();
-    const button = await copyPathFromMenu(panel);
+    await copyPathFromMenu(panel);
     await copyPathFromMenu(panel);
     await vi.waitFor(() =>
       expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed"),
     );
+    const currentAction = await openPathCopyAction(panel);
+    expect(currentAction.getAttribute("aria-label")).toBe("Copy failed");
     finishFirstCopy();
     await Promise.resolve();
     await Promise.resolve();
     await panel.updateComplete;
 
     expect(writeText).toHaveBeenCalledTimes(2);
-    expect(button.getAttribute("aria-label")).toBe("Copy path");
+    expect(currentAction.getAttribute("aria-label")).toBe("Copy failed");
     expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed");
   });
 
@@ -816,21 +823,24 @@ describe("file sidebar clipboard feedback", () => {
     const contentsButton = findCopyButton(panel, "Copy file contents");
     const timers = captureFeedbackTimers();
 
-    const pathButton = await copyPathFromMenu(panel);
+    await copyPathFromMenu(panel);
     contentsButton.click();
     await vi.waitFor(() => {
       expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed");
       expect(contentsButton.getAttribute("aria-label")).toBe("Copy failed");
     });
 
+    const pathButton = await openPathCopyAction(panel);
+    expect(pathButton.getAttribute("aria-label")).toBe("Copy failed");
     timers.run(2_000, 1);
     await panel.updateComplete;
-    expect(pathButton.getAttribute("aria-label")).toBe("Copy path");
+    expect(pathButton.getAttribute("aria-label")).toBe("Copy failed");
     expect(contentsButton.getAttribute("aria-label")).toBe("Copy file contents");
     expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed");
 
     timers.run(2_000);
     await panel.updateComplete;
+    expect(pathButton.getAttribute("aria-label")).toBe("Copy path");
     expect(contentsButton.getAttribute("aria-label")).toBe("Copy file contents");
     expect(panel.querySelector('[role="alert"]')).toBeNull();
   });

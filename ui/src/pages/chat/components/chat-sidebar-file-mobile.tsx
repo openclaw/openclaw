@@ -1,11 +1,12 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createUniqueId, onSettled, untrack } from "solid-js";
+import { Show, createUniqueId, onSettled } from "solid-js";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import type { FileCopyFeedback } from "./chat-file-copy.ts";
 import type { MobileFileFindCloseReason, FileViewControls } from "./chat-file-reader-controls.ts";
 import type { FileHtmlPreviewControls } from "./chat-html-preview.ts";
@@ -52,7 +53,7 @@ function MobileFileButton(props: {
         class={["sidebar-file-mobile__button", props.class]}
         aria-label={props.label}
         disabled={props.disabled}
-        ref={untrack(() => props.ref)}
+        ref={(element) => props.ref?.(element)}
         onClick={() => props.onClick()}
       >
         <Icon name={props.icon} />
@@ -180,8 +181,7 @@ export function SidebarFileMobileTextControls(props: SidebarFileMobileTextContro
       // Do not cancel the press: Back, a menu or the document still receives its normal action.
       props.onCloseFind("outside");
     };
-    document.addEventListener("pointerdown", outside, true);
-    return () => document.removeEventListener("pointerdown", outside, true);
+    return listen(document, "pointerdown", outside, true);
   });
   return (
     <div class="sidebar-file-mobile__floating" ref={(element) => (root = element)}>
@@ -222,7 +222,7 @@ export function SidebarFileMobileTextControls(props: SidebarFileMobileTextContro
                 <MobileFileButton
                   label={t("chat.detailPanel.searchInFile")}
                   icon="search"
-                  ref={untrack(() => props.controls.searchToggleRef)}
+                  ref={(element) => props.controls.searchToggleRef?.(element)}
                   onClick={() => props.controls.onToggleSearch()}
                   disabled={props.controls.loadingEditor}
                 />
@@ -247,7 +247,7 @@ export function SidebarFileMobileTextControls(props: SidebarFileMobileTextContro
                 type="search"
                 aria-label={t("chat.detailPanel.searchInFile")}
                 placeholder={t("common.search")}
-                ref={untrack(() => props.controls.searchInputRef)}
+                ref={(element) => props.controls.searchInputRef?.(element)}
                 value={props.controls.query}
                 onInput={(event) => props.controls.onSearchInput(event.currentTarget.value)}
                 onKeyDown={(event) => {
