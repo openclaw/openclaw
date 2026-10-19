@@ -4,6 +4,7 @@ import { generateImage, type GenerateImageParams } from "./runtime.js";
 import type { ImageGenerationProvider, ImageGenerationRequest } from "./types.js";
 
 type ImageGenerationRuntimeDeps = NonNullable<Parameters<typeof generateImage>[1]>;
+type Geometry = NonNullable<ImageGenerationProvider["capabilities"]["geometry"]>;
 
 let providers: ImageGenerationProvider[] = [];
 
@@ -31,6 +32,30 @@ const imageResult = {
 };
 let seenRequest: ImageGenerationRequest | undefined;
 
+const referenceImage = { buffer: Buffer.from("reference"), mimeType: "image/png" };
+const outputKeys = ["quality", "outputFormat", "background"] as const;
+
+function expectIgnoredOutput(
+  result: Awaited<ReturnType<typeof runGenerateImage>>,
+  values: string[],
+) {
+  expect(seenRequest).toMatchObject({
+    quality: undefined,
+    outputFormat: undefined,
+    background: undefined,
+  });
+  expect(result.ignoredOverrides).toEqual(
+    outputKeys.map((key, index) => ({ key, value: values[index] })),
+  );
+}
+
+function geometryCapabilities(
+  geometry: Geometry | undefined,
+  mode: Omit<ImageGenerationProvider["capabilities"]["edit"], "enabled">,
+): ImageGenerationProvider["capabilities"] {
+  return { generate: mode, edit: { enabled: true, ...mode }, geometry };
+}
+
 function createProvider(
   id: string,
   overrides: Partial<Omit<ImageGenerationProvider, "id">> = {},
@@ -47,13 +72,15 @@ function createProvider(
 }
 
 function createBufferedImageProvider(id: string, buffers: Buffer[]): ImageGenerationProvider {
-  return {
-    id,
-    capabilities: { generate: {}, edit: { enabled: false } },
+  return createProvider(id, {
     generateImage: async () => ({
       images: buffers.map((buffer) => ({ buffer, mimeType: "image/png" })),
     }),
-  };
+  });
+}
+
+function useProvider(id: string, overrides?: Partial<Omit<ImageGenerationProvider, "id">>) {
+  providers = [createProvider(id, overrides)];
 }
 
 describe("image-generation runtime", () => {
@@ -65,12 +92,10 @@ describe("image-generation runtime", () => {
   it.each(["grok-imagine-image-unknown", "xai/"])(
     "rejects unresolved explicit model %s instead of generating with the configured default",
     async (modelOverride) => {
-      providers = [
-        createProvider("xai", {
-          defaultModel: "grok-imagine-image",
-          models: ["grok-imagine-image"],
-        }),
-      ];
+      useProvider("xai", {
+        defaultModel: "grok-imagine-image",
+        models: ["grok-imagine-image"],
+      });
 
       await expect(
         runGenerateImage({
@@ -83,21 +108,17 @@ describe("image-generation runtime", () => {
   );
 
   it("uses configured image-generation timeout when the call omits timeoutMs", async () => {
-    providers = [createProvider("image-plugin")];
+    useProvider("image-plugin");
 
-    await runGenerateImage({
-      cfg: imageConfig("image-plugin/img-v1", [], 180_000),
-    });
+    await runGenerateImage({ cfg: imageConfig("image-plugin/img-v1", [], 180_000) });
 
     expect(seenRequest).toMatchObject({ timeoutMs: 180_000 });
   });
 
   it("uses provider default image-generation timeout when the call and config omit timeoutMs", async () => {
-    providers = [createProvider("image-plugin", { defaultTimeoutMs: 600_000 })];
+    useProvider("image-plugin", { defaultTimeoutMs: 600_000 });
 
-    await runGenerateImage({
-      cfg: imageConfig("image-plugin/img-v1"),
-    });
+    await runGenerateImage({ cfg: imageConfig("image-plugin/img-v1") });
 
     expect(seenRequest).toMatchObject({ timeoutMs: 600_000 });
   });
@@ -125,11 +146,22 @@ describe("image-generation runtime", () => {
 
   it("applies inferred resolution only to compatible fallback candidates", async () => {
     const seenResolutions: Array<string | undefined> = [];
-    let unavailableProvider = "google";
-    const inputImages = [{ buffer: Buffer.from("reference"), mimeType: "image/png" }];
-    function resolutionProvider(id: string, capabilities: ImageGenerationProvider["capabilities"]) {
+    let unavailableProvider = "";
+    const refs = {
+      google: "google/gemini-3-pro-image-preview",
+      fal: "fal/google/nano-banana-2-lite",
+      openai: "openai/gpt-image-1",
+    };
+    function resolutionProvider(
+      id: string,
+      supportsResolution: boolean,
+      resolutionsByModel?: Geometry["resolutionsByModel"],
+    ) {
       return createProvider(id, {
-        capabilities,
+        capabilities: geometryCapabilities(
+          supportsResolution ? { resolutions: ["1K", "2K", "4K"], resolutionsByModel } : undefined,
+          { supportsResolution },
+        ),
         async generateImage(req) {
           seenResolutions.push(req.resolution);
           if (unavailableProvider === id) {
@@ -140,97 +172,56 @@ describe("image-generation runtime", () => {
       });
     }
     providers = [
-      resolutionProvider("openai", {
-        generate: { supportsResolution: false },
-        edit: { enabled: true, supportsResolution: false },
-      }),
-      resolutionProvider("google", {
-        generate: { supportsResolution: true },
-        edit: { enabled: true, supportsResolution: true },
-        geometry: { resolutions: ["1K", "2K", "4K"] },
-      }),
-      resolutionProvider("fal", {
-        generate: { supportsResolution: true },
-        edit: { enabled: true, supportsResolution: true },
-        geometry: {
-          resolutions: ["1K", "2K", "4K"],
-          resolutionsByModel: { "google/nano-banana-2-lite": [] },
-        },
-      }),
+      resolutionProvider("openai", false),
+      resolutionProvider("google", true),
+      resolutionProvider("fal", true, { "google/nano-banana-2-lite": [] }),
     ];
-    const edit = (primary: string, fallbacks: string[] = []) =>
-      runGenerateImage({
-        cfg: imageConfig(primary, fallbacks),
+    for (const [primary, fallback, unavailable, winner, expected] of [
+      [refs.google, refs.fal, "google", "fal", ["2K", undefined]],
+      [refs.fal, refs.google, "fal", "google", [undefined, "2K"]],
+      [refs.openai, refs.google, "openai", "google", [undefined, "2K"]],
+      [refs.openai, undefined, "", "openai", [undefined]],
+    ] as const) {
+      unavailableProvider = unavailable;
+      seenResolutions.length = 0;
+      const result = await runGenerateImage({
+        cfg: imageConfig(primary, fallback ? [fallback] : []),
         prompt: "edit this image",
         inferredResolution: "2K",
-        inputImages,
+        inputImages: [referenceImage],
       });
-
-    const result = await edit("google/gemini-3-pro-image-preview", [
-      "fal/google/nano-banana-2-lite",
-    ]);
-
-    expect(result.provider).toBe("fal");
-    expect(seenResolutions).toEqual(["2K", undefined]);
-
-    unavailableProvider = "fal";
-    seenResolutions.length = 0;
-    const inverseResult = await edit("fal/google/nano-banana-2-lite", [
-      "google/gemini-3-pro-image-preview",
-    ]);
-
-    expect(inverseResult.provider).toBe("google");
-    expect(seenResolutions).toEqual([undefined, "2K"]);
-
-    unavailableProvider = "openai";
-    seenResolutions.length = 0;
-    const providerDisabledResult = await edit("openai/gpt-image-1", [
-      "google/gemini-3-pro-image-preview",
-    ]);
-
-    expect(providerDisabledResult.provider).toBe("google");
-    expect(seenResolutions).toEqual([undefined, "2K"]);
-
-    unavailableProvider = "";
-    seenResolutions.length = 0;
-    const providerDisabledSuccess = await edit("openai/gpt-image-1");
-
-    expect(providerDisabledSuccess.provider).toBe("openai");
-    expect(providerDisabledSuccess.ignoredOverrides).toEqual([]);
-    expect(seenResolutions).toEqual([undefined]);
+      expect(result.provider).toBe(winner);
+      expect(seenResolutions).toEqual(expected);
+      if (!fallback) {
+        expect(result.ignoredOverrides).toEqual([]);
+      }
+    }
   });
 
   it("skips candidates whose model-specific reference limit is too low", async () => {
     const attemptedModels: string[] = [];
-    providers = [
-      createProvider("fal", {
-        capabilities: {
-          generate: {},
-          edit: {
-            enabled: true,
-            maxInputImages: 1,
-            maxInputImagesByModel: {
-              "xai/grok-imagine-image": 3,
-              "google/nano-banana-2-lite": 14,
-            },
+    useProvider("fal", {
+      capabilities: {
+        generate: {},
+        edit: {
+          enabled: true,
+          maxInputImages: 1,
+          maxInputImagesByModel: {
+            "xai/grok-imagine-image": 3,
+            "google/nano-banana-2-lite": 14,
           },
         },
-        async generateImage(req) {
-          attemptedModels.push(req.model);
-          return {
-            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-          };
-        },
-      }),
-    ];
+      },
+      async generateImage(req) {
+        attemptedModels.push(req.model);
+        return { images: imageResult.images };
+      },
+    });
 
     const result = await runGenerateImage({
       cfg: imageConfig("fal/xai/grok-imagine-image", ["fal/google/nano-banana-2-lite"]),
       prompt: "combine references",
-      inputImages: Array.from({ length: 14 }, () => ({
-        buffer: Buffer.from("reference"),
-        mimeType: "image/png",
-      })),
+      inputImages: Array.from({ length: 14 }, () => referenceImage),
     });
 
     expect(result.model).toBe("google/nano-banana-2-lite");
@@ -245,7 +236,7 @@ describe("image-generation runtime", () => {
   });
 
   it("drops unsupported image output hints and reports them", async () => {
-    providers = [createProvider("vydra")];
+    useProvider("vydra");
 
     const result = await runGenerateImage({
       cfg: imageConfig("vydra/grok-imagine"),
@@ -254,37 +245,25 @@ describe("image-generation runtime", () => {
       background: "transparent",
     });
 
-    expect(seenRequest).toMatchObject({
-      quality: undefined,
-      outputFormat: undefined,
-      background: undefined,
-    });
-    expect(result.ignoredOverrides).toEqual([
-      { key: "quality", value: "low" },
-      { key: "outputFormat", value: "jpeg" },
-      { key: "background", value: "transparent" },
-    ]);
+    expectIgnoredOutput(result, ["low", "jpeg", "transparent"]);
   });
 
   it("preserves flexible-model dimensions for reference-image edits", async () => {
-    providers = [
-      createProvider("canvas", {
-        capabilities: {
-          generate: { supportsSize: true, supportsAspectRatio: false },
-          edit: { enabled: true, supportsSize: true, supportsAspectRatio: false },
-          geometry: {
-            sizes: ["1024x1024", "2048x1152", "1152x2048", "1536x1024"],
-            sizesByModel: { "flexible-image": [] },
-          },
+    useProvider("canvas", {
+      capabilities: geometryCapabilities(
+        {
+          sizes: ["1024x1024", "2048x1152", "1152x2048", "1536x1024"],
+          sizesByModel: { "flexible-image": [] },
         },
-      }),
-    ];
+        { supportsSize: true, supportsAspectRatio: false },
+      ),
+    });
 
     const result = await runGenerateImage({
       cfg: imageConfig("canvas/flexible-image"),
       prompt: "preserve the requested image geometry",
       aspectRatio: "9:16",
-      inputImages: [{ buffer: Buffer.from("reference"), mimeType: "image/png" }],
+      inputImages: [referenceImage],
     });
 
     expect(seenRequest).toMatchObject({ aspectRatio: undefined, size: "1152x2048" });
@@ -296,37 +275,25 @@ describe("image-generation runtime", () => {
   });
 
   it("uses model-specific geometry lists before provider normalization", async () => {
-    providers = [
-      createProvider("fal", {
-        capabilities: {
-          generate: {
-            supportsSize: true,
-            supportsAspectRatio: true,
-            supportsResolution: true,
+    useProvider("fal", {
+      capabilities: geometryCapabilities(
+        {
+          sizes: ["1024x1024", "1536x1024", "1024x1536"],
+          sizesByModel: {
+            "krea/v2/medium/text-to-image": [],
           },
-          edit: {
-            enabled: true,
-            supportsSize: true,
-            supportsAspectRatio: true,
-            supportsResolution: true,
+          aspectRatios: ["1:1", "4:3", "3:2", "16:9"],
+          aspectRatiosByModel: {
+            "krea/v2/medium/text-to-image": ["1:1", "2:1", "20:9"],
           },
-          geometry: {
-            sizes: ["1024x1024", "1536x1024", "1024x1536"],
-            sizesByModel: {
-              "krea/v2/medium/text-to-image": [],
-            },
-            aspectRatios: ["1:1", "4:3", "3:2", "16:9"],
-            aspectRatiosByModel: {
-              "krea/v2/medium/text-to-image": ["1:1", "2:1", "20:9"],
-            },
-            resolutions: ["1K", "2K", "4K"],
-            resolutionsByModel: {
-              "krea/v2/medium/text-to-image": ["1K", "2K"],
-            },
+          resolutions: ["1K", "2K", "4K"],
+          resolutionsByModel: {
+            "krea/v2/medium/text-to-image": ["1K", "2K"],
           },
         },
-      }),
-    ];
+        { supportsSize: true, supportsAspectRatio: true, supportsResolution: true },
+      ),
+    });
 
     await runGenerateImage({
       cfg: imageConfig("fal/krea/v2/medium/text-to-image"),
@@ -343,9 +310,7 @@ describe("image-generation runtime", () => {
   });
 
   it("filters output hints against legacy model capabilities", async () => {
-    let outputRequest: { quality?: string; outputFormat?: string; background?: string } | undefined;
-    const provider: ImageGenerationProvider = {
-      id: "test",
+    useProvider("test", {
       capabilities: {
         generate: {},
         edit: { enabled: true },
@@ -358,38 +323,14 @@ describe("image-generation runtime", () => {
           backgroundsByModel: { extended: ["transparent"] },
         },
       },
-      async generateImage(req) {
-        outputRequest = {
-          quality: req.quality,
-          outputFormat: req.outputFormat,
-          background: req.background,
-        };
-        return { images: [{ buffer: Buffer.from("image"), mimeType: "image/webp" }] };
-      },
-    };
-    const result = await generateImage(
-      {
-        cfg: {},
-        modelOverride: "test/legacy",
-        prompt: "A sticker",
-        quality: "max",
-        outputFormat: "webp",
-        background: "transparent",
-      },
-      {
-        getProvider: (id) => (id === provider.id ? provider : undefined),
-        listProviders: () => [provider],
-      },
-    );
-    expect(outputRequest).toEqual({
-      quality: undefined,
-      outputFormat: undefined,
-      background: undefined,
     });
-    expect(result.ignoredOverrides).toEqual([
-      { key: "quality", value: "max" },
-      { key: "outputFormat", value: "webp" },
-      { key: "background", value: "transparent" },
-    ]);
+    const result = await runGenerateImage({
+      modelOverride: "test/legacy",
+      prompt: "A sticker",
+      quality: "max",
+      outputFormat: "webp",
+      background: "transparent",
+    });
+    expectIgnoredOutput(result, ["max", "webp", "transparent"]);
   });
 });
