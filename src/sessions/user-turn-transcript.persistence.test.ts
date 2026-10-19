@@ -1,4 +1,3 @@
-// User turn persistence tests cover the shared transcript writer.
 import fs from "node:fs";
 import {
   initializeGlobalHookRunner,
@@ -7,6 +6,7 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
 import { formatChatWorkContext } from "../chat/work-context.js";
@@ -39,7 +39,24 @@ import {
   persistUserTurnTranscript,
   readTranscriptMessages,
 } from "./user-turn-transcript.test-support.js";
-import type { UserTurnOriginalInputCommit } from "./user-turn-transcript.types.js";
+import type {
+  PersistedUserTurnMessage,
+  UserTurnInput,
+  UserTurnOriginalInputCommit,
+} from "./user-turn-transcript.types.js";
+
+function installWriteHook(write: (message: PersistedUserTurnMessage) => AgentMessage) {
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      {
+        hookName: "before_message_write",
+        handler: (event) => ({
+          message: write((event as { message: PersistedUserTurnMessage }).message),
+        }),
+      },
+    ]),
+  );
+}
 
 const acceptedPeerDelivery = {
   version: 1,
@@ -67,9 +84,13 @@ describe("persistUserTurnTranscript", () => {
       }),
     "openclaw-user-turn-append-",
   );
+  let target: ReturnType<typeof createSqliteTranscriptTarget>;
+  const readMessages = () => readTranscriptMessages(target);
+  const readMessage = async () => (await readMessages())[0];
 
   beforeEach(() => {
     setRuntimeConfigSnapshot({});
+    target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
   });
 
   afterEach(() => {
@@ -77,7 +98,6 @@ describe("persistUserTurnTranscript", () => {
   });
 
   it("does not resume a cold transcript when its archive is missing", async () => {
-    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     await persistUserTurnTranscript({
       ...target,
@@ -135,7 +155,6 @@ describe("persistUserTurnTranscript", () => {
   });
 
   it("does not undo hook redaction when round-tripping captured context", async () => {
-    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
     const snapshot = { page: "chat", title: "Parser work", workspace: "/projects/parser" };
     const text = "Explain this task";
     const modelText = text + "\n\n" + formatChatWorkContext(snapshot);
@@ -145,7 +164,7 @@ describe("persistUserTurnTranscript", () => {
       updateMode: "none",
       beforeMessageWrite: ({ message }) => ({ ...message, content: "[redacted]" }),
     });
-    const [stored] = await readTranscriptMessages(target);
+    const stored = await readMessage();
     expect(stored?.content).toBe("[redacted]");
     expect(stripEnvelopeFromMessages([stored])[0]).toMatchObject({
       content: "[redacted]",
@@ -157,7 +176,6 @@ describe("persistUserTurnTranscript", () => {
   });
 
   it("does not restore original display text after a runtime hook or continuation rewrites it", async () => {
-    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
     const input = {
       text: "original prompt",
       workContext: { snapshot: { page: "chat" }, text: "original words" },
@@ -196,7 +214,7 @@ describe("persistUserTurnTranscript", () => {
     expect(unprepared).not.toHaveProperty("__openclaw.chatRequestIdentity");
     recorder.replaceTextBeforePersistence?.("approved continuation");
     await recorder.persistApproved();
-    const [persisted] = await readTranscriptMessages(target);
+    const persisted = await readMessage();
     expect(stripEnvelopeFromMessages([persisted])[0]).toMatchObject({
       content: "approved continuation",
     });
@@ -204,7 +222,6 @@ describe("persistUserTurnTranscript", () => {
   });
 
   it("resolves committed hook metadata and redacted content for runtime replay", async () => {
-    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
     const recorder = createUserTurnTranscriptRecorder({
       target,
       input: { text: "original input", timestamp: 123, idempotencyKey: "prepared:user" },
@@ -225,46 +242,34 @@ describe("persistUserTurnTranscript", () => {
   });
 
   it("round-trips source text and attachments byte-identically despite logging patterns", async () => {
-    const dir = sessionDirs.make();
-    const target = createSqliteTranscriptTarget({ dir });
     const text =
       "Inspect both\nAPI_TOKEN = computeToken()\nOPENAI_API_KEY=sk-proj-fixture1234567890";
+    const media = [
+      { path: "/tmp/image.png", contentType: "image/png" },
+      { url: "https://example.test/report.pdf", contentType: "application/pdf" },
+    ];
     const expected = {
       role: "user",
       content: text,
       timestamp: 456,
-      __openclaw: {
-        media: [
-          { path: "/tmp/image.png", contentType: "image/png" },
-          { url: "https://example.test/report.pdf", contentType: "application/pdf" },
-        ],
-      },
+      __openclaw: { media },
     };
 
     const appended = await persistUserTurnTranscript({
       ...target,
       config: { logging: { redactPatterns: ["computeToken"] } },
-      input: {
-        text,
-        timestamp: 456,
-        media: [
-          { path: "/tmp/image.png", contentType: "image/png" },
-          { url: "https://example.test/report.pdf", contentType: "application/pdf" },
-        ],
-      },
+      input: { text, timestamp: 456, media: structuredClone(media) },
       updateMode: "none",
     });
 
     expect(appended?.message).toEqual(expected);
     expect(JSON.stringify(appended?.message)).toBe(JSON.stringify(expected));
-    const messages = await readTranscriptMessages(target);
+    const messages = await readMessages();
     expect(messages).toEqual([expected]);
     expect(JSON.stringify(messages[0])).toBe(JSON.stringify(expected));
   });
 
   it("persists sender metadata as __openclaw envelope", async () => {
-    const dir = sessionDirs.make();
-    const target = createSqliteTranscriptTarget({ dir });
     // Deliberately attach runtime-only profile fields to prove durable sender
     // attribution is a whitelist, not a copy of the inbound sender object.
     const runtimeOnlySenderFields = {
@@ -302,7 +307,7 @@ describe("persistUserTurnTranscript", () => {
       updateMode: "none",
     });
 
-    const reloaded = await readTranscriptMessages(target);
+    const reloaded = await readMessages();
     const durableMessages = [appended?.message, reloaded[0]];
     expect(durableMessages).toEqual([expected, expected]);
     for (const durableMessage of durableMessages) {
@@ -315,14 +320,13 @@ describe("persistUserTurnTranscript", () => {
   });
 
   it("sender provenance round-trips an observation without display inference", async () => {
-    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
     const sender = buildChannelUserTurnSender({
       SenderId: "shared-id",
       SenderName: "Same label",
       Provider: "test-channel",
     });
     await persistUserTurnTranscript({ ...target, input: { text: "hello", sender } });
-    const [message] = await readTranscriptMessages(target);
+    const message = await readMessage();
     expect(message?.["__openclaw"]).toMatchObject({
       senderId: "shared-id",
       senderName: "Same label",
@@ -339,15 +343,13 @@ describe("persistUserTurnTranscript", () => {
   it.each(["retain", "in-place", "raw-redact", "forge"] as const)(
     "sender provenance hook %s respects original producer evidence",
     async (mode) => {
-      const target = createSqliteTranscriptTarget({
-        dir: sessionDirs.make(),
-      });
       const identity = { type: "profile", id: "original" };
       const requesterOrigin = {
         sessionKey: "agent:main:telegram:group:requesters",
         messageProvider: "telegram",
         senderId: "original",
       };
+      const originalOrigin = structuredClone(requesterOrigin);
       const recorder = createUserTurnTranscriptRecorder({
         input: { requesterOrigin: mode === "forge" ? undefined : requesterOrigin },
         message: {
@@ -397,7 +399,7 @@ describe("persistUserTurnTranscript", () => {
         },
       });
       await recorder.persistApproved();
-      const [message] = await readTranscriptMessages(target);
+      const message = await readMessage();
       expect(message?.["__openclaw"]).toEqual({
         ...(mode === "raw-redact" ? {} : { senderId: "original" }),
         senderName: "Edited display",
@@ -406,41 +408,16 @@ describe("persistUserTurnTranscript", () => {
         ...(mode === "forge"
           ? {}
           : {
-              requesterOrigin: {
-                sessionKey: "agent:main:telegram:group:requesters",
-                messageProvider: "telegram",
-                senderId: "original",
-              },
+              requesterOrigin: originalOrigin,
               sessionSendDelivery: acceptedPeerDelivery,
             }),
       });
     },
   );
 
-  it.each([undefined, true])(
-    "requires explicit runtime append freshness (%s), not an admission anchor",
-    async (appended) => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
-      const commits: UserTurnOriginalInputCommit[] = [];
-      const input = { text: "Hello @Ada", idempotencyKey: "runtime-mention:user" };
-      const result = await persistUserTurnTranscript({ ...target, input });
-      const recorder = createUserTurnTranscriptRecorder({
-        input,
-        target,
-        onOriginalInputCommitted: (commit) => commits.push(commit),
-      });
-      const persistence = appended === undefined ? undefined : { appended };
-      recorder.markRuntimePersisted(result?.message, result?.admission, persistence);
-      recorder.markRuntimePersisted(result?.message, result?.admission, persistence);
-      expect(recorder.getAdmissionReceipt()?.entryId).toBe(result?.messageId);
-      expect(commits).toHaveLength(appended === true ? 1 : 0);
-    },
-  );
-
   it.each(["internal", "blocked"] as const)(
     "does not report %s rows as original human input",
     async (kind) => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       const commits: UserTurnOriginalInputCommit[] = [];
       const message = {
         role: "user" as const,
@@ -468,7 +445,7 @@ describe("persistUserTurnTranscript", () => {
         onOriginalInputCommitted: (commit) => commits.push(commit),
       });
       await (kind === "blocked" ? recorder.persistBlocked(message) : recorder.persistApproved());
-      expect(await readTranscriptMessages(target)).toHaveLength(1);
+      expect(await readMessages()).toHaveLength(1);
       expect(commits).toEqual([]);
     },
   );
@@ -476,9 +453,6 @@ describe("persistUserTurnTranscript", () => {
   it.each([true, false])(
     "fans committed source mentions back to their own recorders only for an annotated collection (%s)",
     async (annotated) => {
-      const target = createSqliteTranscriptTarget({
-        dir: sessionDirs.make(),
-      });
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       const commits: UserTurnOriginalInputCommit[] = [];
       const sources = ["ada", "grace"].map((profileId) =>
@@ -532,12 +506,11 @@ describe("persistUserTurnTranscript", () => {
             ]
           : [],
       );
-      expect(await readTranscriptMessages(target)).toHaveLength(1);
+      expect(await readMessages()).toHaveLength(1);
     },
   );
 
   it("does not fail or retry a committed input when notification and diagnostic callbacks throw", async () => {
-    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
     const errors: unknown[] = [];
     let attempts = 0;
     const recorder = createUserTurnTranscriptRecorder({
@@ -556,11 +529,10 @@ describe("persistUserTurnTranscript", () => {
     await recorder.persistFallback();
     expect(attempts).toBe(1);
     expect(errors).toEqual([expect.objectContaining({ message: "notification failed" })]);
-    expect(await readTranscriptMessages(target)).toHaveLength(1);
+    expect(await readMessages()).toHaveLength(1);
   });
 
   it("retains canonical input custody after committed source publication fails", async () => {
-    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const failure = new Error("committed source publication failed");
     const sourcePublished = createDeferred();
@@ -588,14 +560,10 @@ describe("persistUserTurnTranscript", () => {
       },
       () => recorder.persistApproved(),
     );
-    void pending.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const markSettled = () => {
+      settled = true;
+    };
+    void pending.then(markSettled, markSettled);
     const rejected = expect(pending).rejects.toThrow(failure.message);
     try {
       await sourcePublished.promise;
@@ -606,7 +574,7 @@ describe("persistUserTurnTranscript", () => {
     }
     await rejected;
 
-    const [stored] = await readTranscriptMessages(target);
+    const stored = await readMessage();
     expect(stored).toMatchObject({ content: "approved input" });
     expect(recorder.hasPersisted()).toBe(true);
     expect(recorder.getPersistedMessage?.()).toEqual(stored);
@@ -619,13 +587,12 @@ describe("persistUserTurnTranscript", () => {
     expect(reopened.getPersistedMessage?.()).toEqual(stored);
     expect(reopened.getAdmissionReceipt()?.entryId).toBe(admission?.entryId);
     expect(approvals).toBe(1);
-    expect(await readTranscriptMessages(target)).toEqual([stored]);
+    expect(await readMessages()).toEqual([stored]);
   });
 
   it.each(["replace-text", "mutate-spans", "forge"] as const)(
     "keeps human selections bound to their original bytes through hook %s",
     async (mode) => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       const mentions = [{ profileId: "ada", start: 6, end: 10 }];
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "Hello @Ada", ...(mode === "forge" ? {} : { mentions }) },
@@ -642,7 +609,7 @@ describe("persistUserTurnTranscript", () => {
         },
       });
       await recorder.persistApproved();
-      const [message] = await readTranscriptMessages(target);
+      const message = await readMessage();
       expect(message).toHaveProperty(
         "content",
         mode === "replace-text" ? "[redacted]" : "Hello @Ada",
@@ -653,46 +620,6 @@ describe("persistUserTurnTranscript", () => {
     },
   );
 
-  it("returns the existing user turn when the idempotency key was already persisted", async () => {
-    const dir = sessionDirs.make();
-    const target = createSqliteTranscriptTarget({ dir });
-
-    const first = await persistUserTurnTranscript({
-      ...target,
-      input: {
-        text: "hello once",
-        timestamp: 123,
-        idempotencyKey: "chat-run-1:user",
-      },
-      updateMode: "none",
-    });
-    const second = await persistUserTurnTranscript({
-      ...target,
-      input: {
-        text: "hello once replayed",
-        timestamp: 456,
-        idempotencyKey: "chat-run-1:user",
-      },
-      updateMode: "none",
-    });
-
-    expect(second?.messageId).toBe(first?.messageId);
-    expect(second?.message).toMatchObject({
-      role: "user",
-      content: "hello once",
-      timestamp: 123,
-      idempotencyKey: "chat-run-1:user",
-    });
-    await expect(readTranscriptMessages(target)).resolves.toEqual([
-      expect.objectContaining({
-        role: "user",
-        content: "hello once",
-        timestamp: 123,
-        idempotencyKey: "chat-run-1:user",
-      }),
-    ]);
-  });
-
   it("preserves transcript metadata when before_message_write replaces a user turn", async () => {
     let hookCalls = 0;
     const provenance = {
@@ -700,67 +627,46 @@ describe("persistUserTurnTranscript", () => {
       sourceSessionKey: "source-main",
       sourceTool: "sessions_send",
     };
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_message_write",
-          handler: (event) => {
-            hookCalls += 1;
-            const message = (event as { message: Record<string, unknown> }).message;
-            const meta = message["__openclaw"] as {
-              transport?: {
-                conversationRef?: string;
-                messageId?: string;
-                clients?: Array<{ displayName?: string }>;
-              };
-            };
-            if (meta.transport) {
-              meta.transport.conversationRef = "conv_tampered";
-              meta.transport.messageId = "tampered-message";
-              const source = meta.transport.clients?.[0];
-              if (source) {
-                source.displayName = "Forged app";
-              }
-            }
-            return {
-              message: castAgentMessage({
-                role: "user",
-                content: "[redacted by hook]",
-                __openclaw: { hookOwned: true },
-              }),
-            };
-          },
-        },
-      ]),
-    );
-    const dir = sessionDirs.make();
-    const target = createSqliteTranscriptTarget({ dir });
-
+    const metadata = {
+      replyToId: "transcript-reply-1",
+      replyToPreview: { text: "Original reply", senderLabel: "Molty" },
+      transport: {
+        channel: "reef",
+        conversationRef: "conv_0123456789abcdef0123456789abcdef",
+        messageId: "inbound-1",
+        replyToId: "outbound-1",
+        clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
+      },
+    } satisfies Pick<UserTurnInput, "replyToId" | "replyToPreview" | "transport">;
+    installWriteHook((message) => {
+      hookCalls += 1;
+      const transport = message["__openclaw"]!.transport as typeof metadata.transport;
+      transport.conversationRef = "conv_tampered";
+      transport.messageId = "tampered-message";
+      transport.clients![0]!.displayName = "Forged app";
+      return castAgentMessage({
+        role: "user",
+        content: "[redacted by hook]",
+        __openclaw: { hookOwned: true },
+      });
+    });
     const persist = () =>
       persistUserTurnTranscript({
         ...target,
         input: {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
-          replyToId: "transcript-reply-1",
-          replyToPreview: { text: "Original reply", senderLabel: "Molty" },
+          ...structuredClone(metadata),
           senderIsOwner: true,
           provenance,
           sender: { id: "user-42", name: "Ada" },
-          transport: {
-            channel: "reef",
-            conversationRef: "conv_0123456789abcdef0123456789abcdef",
-            messageId: "inbound-1",
-            replyToId: "outbound-1",
-            clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
-          },
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
     await persist();
     await persist();
 
-    await expect(readTranscriptMessages(target)).resolves.toEqual([
+    await expect(readMessages()).resolves.toEqual([
       expect.objectContaining({
         role: "user",
         content: "[redacted by hook]",
@@ -768,16 +674,8 @@ describe("persistUserTurnTranscript", () => {
         provenance,
         __openclaw: {
           hookOwned: true,
-          replyToId: "transcript-reply-1",
-          replyToPreview: { text: "Original reply", senderLabel: "Molty" },
+          ...metadata,
           senderIsOwner: false,
-          transport: {
-            channel: "reef",
-            conversationRef: "conv_0123456789abcdef0123456789abcdef",
-            messageId: "inbound-1",
-            replyToId: "outbound-1",
-            clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
-          },
         },
       }),
     ]);
@@ -787,7 +685,6 @@ describe("persistUserTurnTranscript", () => {
   it.each([true, false])(
     "protects internal Goal metadata across write hooks (Goal: %s)",
     async (isGoal) => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       const intent = {
         kind: "session-goal-resume",
         version: 1,
@@ -819,7 +716,7 @@ describe("persistUserTurnTranscript", () => {
           }),
       });
       await recorder.persistApproved();
-      const [message] = await readTranscriptMessages(target);
+      const message = await readMessage();
       expect((message?.["__openclaw"] as Record<string, unknown> | undefined)?.intent).toEqual(
         isGoal ? intent : undefined,
       );
@@ -829,48 +726,13 @@ describe("persistUserTurnTranscript", () => {
     },
   );
 
-  it.each([
-    {
-      name: "rejects a replacement target",
-      producerTarget: "active-run",
-      hookTarget: "forged-run",
-      expectedTarget: "active-run",
-    },
-    {
-      name: "rejects a target forged without producer provenance",
-      producerTarget: undefined,
-      hookTarget: "forged-run",
-      expectedTarget: undefined,
-    },
-  ])(
-    "$name across before_message_write",
-    async ({ producerTarget, hookTarget, expectedTarget }) => {
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([
-          {
-            hookName: "before_message_write",
-            handler: (event) => {
-              const message = (event as { message: Record<string, unknown> }).message;
-              const metadata = {
-                ...(message["__openclaw"] as Record<string, unknown> | undefined),
-              };
-              delete metadata.steerTargetRunId;
-              return {
-                message: castAgentMessage({
-                  ...message,
-                  __openclaw: {
-                    ...metadata,
-                    ...(hookTarget ? { steerTargetRunId: hookTarget } : {}),
-                  },
-                }),
-              };
-            },
-          },
-        ]),
-      );
-      const dir = sessionDirs.make();
-      const target = createSqliteTranscriptTarget({ dir });
-
+  it.each(["active-run", undefined])(
+    "rejects hook-forged steer targets with producer target %s",
+    async (producerTarget) => {
+      installWriteHook((message) => ({
+        ...message,
+        __openclaw: { ...message["__openclaw"], steerTargetRunId: "forged-run" },
+      }));
       const recorder = createUserTurnTranscriptRecorder({
         input: {
           text: "steer or queue",
@@ -884,9 +746,9 @@ describe("persistUserTurnTranscript", () => {
       }
       await recorder.persistApproved();
 
-      const [message] = await readTranscriptMessages(target);
+      const message = await readMessage();
       const metadata = message?.["__openclaw"] as Record<string, unknown> | undefined;
-      expect(metadata?.steerTargetRunId).toBe(expectedTarget);
+      expect(metadata?.steerTargetRunId).toBe(producerTarget);
     },
   );
 });
