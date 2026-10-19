@@ -2,7 +2,6 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { DesktopClient } from "../components/desktop/desktop-client.ts";
-import { closeChatLayoutMenu, openChatLayoutMenu } from "../test-helpers/chat-layout-menu.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -343,12 +342,10 @@ suite.define(() => {
         await gateway.resolveDeferred("environments.status", sessionEnvironment);
         await expectObserve(gateway, sessionEnvironment.id);
         await remoteView(panel).waitFor();
-        const layoutMenu = await openChatLayoutMenu(page);
-        const popout = layoutMenu.getByRole("link", { name: "Open desktop in new window" });
+        const popout = panel.getByRole("link", { name: "Open desktop in new window", exact: true });
         expect(await popout.getAttribute("href")).toBe(
           `/focus/desktop/session/${encodeURIComponent(sessionKey)}`,
         );
-        await closeChatLayoutMenu(page);
 
         await page.evaluate(() => {
           window.dispatchEvent(
@@ -361,11 +358,13 @@ suite.define(() => {
         await remoteView(panel).waitFor();
         const controlResponse = observe("manual-selection", true);
         await gateway.setMethodResponse("desktop.observe", controlResponse);
-        await button(panel, "Take control").click();
+        await panel
+          .locator(".desktop-connection-rail")
+          .getByRole("button", { name: "Take control", exact: true })
+          .click();
         await expectObserve(gateway, "node:maintenance", true, 2);
         await expect.poll(() => panel.getAttribute("data-view-only")).toBe("false");
         const focusPath = "/focus/desktop/control/source/node%3Amaintenance";
-        await openChatLayoutMenu(page);
         await expect.poll(() => popout.getAttribute("href")).toBe(focusPath);
 
         const selectedDesktop = await remoteView(panel).elementHandle();
