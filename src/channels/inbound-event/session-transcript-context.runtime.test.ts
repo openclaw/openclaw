@@ -31,6 +31,11 @@ function context(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgCont
   };
 }
 
+type WindowEntry = NonNullable<FinalizedMsgContext["ChannelStructuredContext"]>[number];
+function chatWindow(payload: WindowEntry["payload"], overrides: Partial<WindowEntry> = {}) {
+  return [{ label: "Conversation context", type: "chat_window", payload, ...overrides }];
+}
+
 describe("session transcript inbound context", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -38,30 +43,43 @@ describe("session transcript inbound context", () => {
     readRecent.mockReset();
   });
 
-  it("restores Slack assistant context when the live window is empty after restart", async () => {
-    readRecent.mockResolvedValue([
-      { id: "u1", role: "user", text: "deploy at noon", timestamp: 1_000 },
-      { id: "a1", role: "assistant", text: "I will remind you at 11:50", timestamp: 2_000 },
-    ]);
-    const ctx = context();
+  function merge(ctx: FinalizedMsgContext, agentId = "main") {
+    return mergeSessionTranscriptContext({
+      agentId,
+      ctx,
+      sessionKey: ctx.SessionKey!,
+      storePath: "/tmp/sessions.json",
+    });
+  }
 
+  async function runTurn(ctx: FinalizedMsgContext, channel = "slack", render?: () => string) {
+    let prompt = "";
     await runPreparedChannelTurn({
-      channel: "slack",
+      channel,
       routeSessionKey: ctx.SessionKey!,
       storePath: path.join(tempDirs.make("openclaw-session-transcript-context-"), "sessions.json"),
       ctxPayload: ctx,
       recordInboundSession: vi.fn(async () => undefined),
-      runDispatch: vi.fn(async () => ({ queuedFinal: false })),
+      runDispatch: vi.fn(async () => {
+        prompt = render?.() ?? "";
+        return { queuedFinal: false };
+      }),
     });
+    return prompt;
+  }
+
+  it("restores Slack assistant context when the live window is empty after restart", async () => {
+    readRecent.mockResolvedValue([
+      { id: "u1", role: "user", text: "deploy at noon", timestamp: 1_000 },
+      { id: "a1", role: "assistant", text: "remind at 11:50", timestamp: 2_000 },
+    ]);
+    const ctx = context();
+
+    await runTurn(ctx);
 
     expect(ctx.InboundHistory).toEqual([
       { messageId: "session:u1", sender: "User", body: "deploy at noon", timestamp: 1_000 },
-      {
-        messageId: "session:a1",
-        sender: "Assistant",
-        body: "I will remind you at 11:50",
-        timestamp: 2_000,
-      },
+      { messageId: "session:a1", sender: "Assistant", body: "remind at 11:50", timestamp: 2_000 },
     ]);
   });
 
@@ -78,18 +96,7 @@ describe("session transcript inbound context", () => {
         timestamp: index,
       })),
     });
-    let prompt = "";
-    await runPreparedChannelTurn({
-      channel: "slack",
-      routeSessionKey: ctx.SessionKey!,
-      storePath: path.join(tempDirs.make("openclaw-native-history-context-"), "sessions.json"),
-      ctxPayload: ctx,
-      recordInboundSession: vi.fn(async () => undefined),
-      runDispatch: async () => {
-        prompt = buildInboundUserContextPrefix(ctx);
-        return { queuedFinal: false };
-      },
-    });
+    const prompt = await runTurn(ctx, "slack", () => buildInboundUserContextPrefix(ctx));
     expect(prompt.match(/native-line-\d{2}/g)).toEqual(
       Array.from({ length: 50 }, (_, index) => `native-line-${String(index + 5).padStart(2, "0")}`),
     );
@@ -106,12 +113,7 @@ describe("session transcript inbound context", () => {
       SessionTranscriptContext: { chatWindow: true, historyLimit: 3 },
     });
 
-    await mergeSessionTranscriptContext({
-      agentId: "main",
-      ctx,
-      sessionKey: ctx.SessionKey!,
-      storePath: "/tmp/sessions.json",
-    });
+    await merge(ctx);
 
     expect(ctx.ChannelStructuredContext).toEqual([
       expect.objectContaining({
@@ -136,12 +138,7 @@ describe("session transcript inbound context", () => {
       ],
     });
 
-    await mergeSessionTranscriptContext({
-      agentId: "main",
-      ctx,
-      sessionKey: ctx.SessionKey!,
-      storePath: "/tmp/sessions.json",
-    });
+    await merge(ctx);
 
     expect(ctx.InboundHistory?.map((entry) => entry.body)).toEqual([
       "cached user turn",
@@ -153,12 +150,7 @@ describe("session transcript inbound context", () => {
   it("uses channel projection ids to avoid duplicating rendered assistant replies", async () => {
     readRecent.mockResolvedValue([
       { id: "a1", role: "assistant", text: "**same answer**", timestamp: 2_000 },
-      {
-        id: "a2",
-        role: "assistant",
-        text: "[[reply_to_current]]Legacy answer",
-        timestamp: 2_500,
-      },
+      { id: "a2", role: "assistant", text: "[[reply_to_current]]Legacy", timestamp: 2_500 },
       { id: "u2", role: "user", text: "follow-up", timestamp: 3_000, sourceChannel: "gateway" },
     ]);
     const ctx = context({
@@ -166,36 +158,29 @@ describe("session transcript inbound context", () => {
         historyLimit: 3,
         senderLabels: { assistant: "OpenClaw", user: "User" },
       },
-      ChannelStructuredContext: [
+      ChannelStructuredContext: chatWindow(
         {
-          label: "Conversation context",
-          source: "telegram",
-          type: "chat_window",
-          sessionTranscriptDedupeMessageIds: ["a1"],
-          sessionTranscriptAssistantTextDedupeKeys: ["text:2500:Legacy answer"],
-          payload: {
-            order: "chronological",
-            relation: "selected_for_current_message",
-            messages: [
-              { message_id: "42", sender: "OpenClaw (you)", body: "same answer" },
-              {
-                message_id: "43",
-                sender: "OpenClaw (you)",
-                body: "Legacy answer",
-                timestamp_ms: 2_500,
-              },
-            ],
-          },
+          order: "chronological",
+          relation: "selected_for_current_message",
+          messages: [
+            { message_id: "42", sender: "OpenClaw (you)", body: "same answer" },
+            {
+              message_id: "43",
+              sender: "OpenClaw (you)",
+              body: "Legacy",
+              timestamp_ms: 2_500,
+            },
+          ],
         },
-      ],
+        {
+          source: "telegram",
+          sessionTranscriptDedupeMessageIds: ["a1"],
+          sessionTranscriptAssistantTextDedupeKeys: ["text:2500:Legacy"],
+        },
+      ),
     });
 
-    await mergeSessionTranscriptContext({
-      agentId: "main",
-      ctx,
-      sessionKey: ctx.SessionKey!,
-      storePath: "/tmp/sessions.json",
-    });
+    await merge(ctx);
 
     expect(readRecent.mock.calls[0]?.[0]).not.toHaveProperty("includeCronDirectDeliveryContext");
     expect(ctx.ChannelStructuredContext?.[0]).toMatchObject({
@@ -203,7 +188,7 @@ describe("session transcript inbound context", () => {
       payload: {
         messages: [
           { message_id: "42", body: "same answer" },
-          { message_id: "43", body: "Legacy answer" },
+          { message_id: "43", body: "Legacy" },
           { message_id: "session:u2", sender: "User (gateway)", body: "follow-up" },
         ],
       },
@@ -216,20 +201,12 @@ describe("session transcript inbound context", () => {
     ]);
     const ctx = context({
       SessionTranscriptContext: { chatWindow: true, historyLimit: 1 },
-      ChannelStructuredContext: [
-        {
-          label: "Conversation context",
-          type: "chat_window",
-          payload: { messages: [{ body: "target", is_reply_target: true }] },
-        },
-      ],
+      ChannelStructuredContext: chatWindow({
+        messages: [{ body: "target", is_reply_target: true }],
+      }),
     });
 
-    await mergeSessionTranscriptContext({
-      ctx,
-      sessionKey: ctx.SessionKey!,
-      storePath: "/tmp/sessions.json",
-    });
+    await merge(ctx, "");
 
     expect(ctx.ChannelStructuredContext?.[0]?.payload).toEqual({
       messages: [{ body: "target", is_reply_target: true }],
@@ -251,33 +228,19 @@ describe("session transcript inbound context", () => {
         { messageId: "pending", sender: "Pending", body: "pending backlog", timestamp: 3_000 },
       ],
       SessionTranscriptContext: { historyLimit: 2 },
-      ChannelStructuredContext: [
+      ChannelStructuredContext: chatWindow(
         {
-          label: "Thread history",
-          source: "msteams",
-          type: "chat_window",
-          sessionTranscriptMode: "preserve",
-          payload: {
-            order: "chronological",
-            relation: "before_current_message",
-            messages: graphMessages,
-          },
+          order: "chronological",
+          relation: "before_current_message",
+          messages: graphMessages,
         },
-      ],
+        { label: "Thread history", source: "msteams", sessionTranscriptMode: "preserve" },
+      ),
     });
 
-    let prompt = "";
-    await runPreparedChannelTurn({
-      channel: "msteams",
-      routeSessionKey: ctx.SessionKey!,
-      storePath: path.join(tempDirs.make("openclaw-teams-transcript-context-"), "sessions.json"),
-      ctxPayload: ctx,
-      recordInboundSession: vi.fn(async () => undefined),
-      runDispatch: vi.fn(async () => {
-        prompt = buildInboundUserContextPrefix(ctx, { timezone: "UTC" });
-        return { queuedFinal: false };
-      }),
-    });
+    const prompt = await runTurn(ctx, "msteams", () =>
+      buildInboundUserContextPrefix(ctx, { timezone: "UTC" }),
+    );
 
     expect(ctx.ChannelStructuredContext?.[0]?.source).toBe("msteams");
     expect(asRecord(ctx.ChannelStructuredContext?.[0]?.payload).messages).toEqual(graphMessages);
@@ -294,25 +257,16 @@ describe("session transcript inbound context", () => {
   it("fails closed for an unscoped session key without a routed agent owner", async () => {
     const ctx = context({ AgentId: undefined, SessionKey: "slack:channel:c1" });
 
-    await expect(
-      mergeSessionTranscriptContext({
-        ctx,
-        sessionKey: ctx.SessionKey!,
-        storePath: "/tmp/sessions.json",
-      }),
-    ).rejects.toThrow("Session transcript context requires an agent owner.");
+    await expect(merge(ctx, "")).rejects.toThrow(
+      "Session transcript context requires an agent owner.",
+    );
     expect(readRecent).not.toHaveBeenCalled();
   });
 
   it("skips canonical history for session-boundary commands", async () => {
     const ctx = context({ CommandBody: "/new summarize this workspace" });
 
-    await mergeSessionTranscriptContext({
-      agentId: "main",
-      ctx,
-      sessionKey: ctx.SessionKey!,
-      storePath: "/tmp/sessions.json",
-    });
+    await merge(ctx);
 
     expect(readRecent).not.toHaveBeenCalled();
     expect(ctx.InboundHistory).toBeUndefined();
