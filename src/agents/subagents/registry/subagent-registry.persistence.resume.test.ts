@@ -689,11 +689,20 @@ describe("subagent registry persistence resume", () => {
           completion: { required: false },
           delivery: { status: "not_required" },
         });
+        const finishedRun = createSubagentRunRecord({
+          runId: "run-hydrated-history",
+          childSessionKey: "agent:main:subagent:hydrated-history",
+          endedAt,
+          cleanupCompletedAt: endedAt,
+          completion: { required: true, resultText: "retained result" },
+          delivery: { status: "delivered", deliveredAt: endedAt },
+        });
         saveSubagentRegistryToSqlite(
           new Map([
             [yieldedRun.runId, yieldedRun],
             [queuedCollector.runId, queuedCollector],
             [runningRun.runId, runningRun],
+            [finishedRun.runId, finishedRun],
           ]),
         );
         await writeChildSession(stateDir, yieldedRun.childSessionKey, "sess-hydrated-yield");
@@ -751,7 +760,7 @@ describe("subagent registry persistence resume", () => {
           )?.[0];
           expect(summary).toContain("registryActivationRuns=3.0");
           expect(summary).toContain("registryActivationActiveRuns=1.0");
-          expect(summary).toContain("registryActivationPublishedRuns=3.0");
+          expect(summary).toContain("registryActivationPublishedRuns=0.0");
           expect(summary).toMatch(/registryActivationSessionReadMs=\d+\.\d/);
           expect(summary).toContain("outcome=success");
         } finally {

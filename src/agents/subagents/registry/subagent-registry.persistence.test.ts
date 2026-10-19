@@ -7,6 +7,7 @@ import "./subagent-registry.persistence.mocks.test-support.js";
 // oxfmt-ignore
 import { announceSpy, createSubagentPersistenceRuntime, useSubagentPersistenceFixture } from "./subagent-registry.persistence-fixture.test-support.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   patchSessionEntryCore,
   replaceSessionEntry,
@@ -17,7 +18,10 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
 import { sessionSharingTestContext } from "../../../gateway/server-methods/sessions-sharing.test-support.js";
 import * as agentEvents from "../../../infra/agent-events.js";
-import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -395,11 +399,25 @@ describe("subagent registry persistence", () => {
     });
   });
 
-  it("reloads waitable swarm collector completions after a gateway restart", async () => {
+  it("reloads waitable swarm collector completions after a gateway restart until retention expires", async () => {
     await fixture.allocateStateDir();
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+    });
+    const completedAt = Date.now();
     const run = makeRun("run-swarm-restart", {
       childSessionKey: "agent:worker:subagent:swarm-restart",
-      execution: { status: "terminal", endedAt: 2 },
+      childAgentId: "worker",
+      childSessionIdentity: {
+        sessionId: "session-swarm-restart",
+        lifecycleRevision: "revision-swarm-restart",
+      },
+      requesterAgentId: "main",
+      requesterTurnRunId: "parent-swarm-restart",
+      expectsCompletionMessage: false,
+      execution: { status: "terminal", endedAt: completedAt },
+      cleanupCompletedAt: completedAt,
+      archiveAtMs: completedAt + 60_000,
       collect: true,
       swarmRequesterSessionKey: "agent:worker:subagent:owner",
       swarmWaitOwnerSessionKeys: ["agent:worker:subagent:owner", "agent:main:main"],
@@ -409,7 +427,7 @@ describe("subagent registry persistence", () => {
         required: false,
         terminalReply: { disposition: "visible", text: "raw answer" },
         resultText: "raw answer",
-        capturedAt: 2,
+        capturedAt: completedAt,
       },
       collectorCompletion: {
         status: "done",
@@ -418,9 +436,13 @@ describe("subagent registry persistence", () => {
       },
     });
     saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-    await writeChildSessionEntry({
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "worker",
       sessionKey: run.childSessionKey,
       sessionId: "session-swarm-restart",
+      lifecycleRevision: "revision-swarm-restart",
+      defaultSessionId: "session-swarm-restart",
       updatedAt: run.execution.endedAt,
     });
 
@@ -442,7 +464,14 @@ describe("subagent registry persistence", () => {
       },
     });
 
-    await restartRegistry();
+    await resetSubagentRegistryForTests({ persist: false });
+    await initSubagentRegistry();
+    const gateway = {
+      localEmbedded: true,
+      recoveryRuntime: createSubagentPersistenceRuntime(callGateway),
+      resolveGatewayContext: () => gateway as never,
+    };
+    await activateSubagentRegistry(gateway.resolveGatewayContext);
     const wait = createAgentsWaitTool({
       agentSessionKey: "agent:main:main",
       agentId: "main",
@@ -463,6 +492,33 @@ describe("subagent registry persistence", () => {
       ],
       pending: [],
     });
+
+    let deletionGateway: unknown;
+    vi.mocked(callGateway).mockClear();
+    vi.mocked(callGateway).mockImplementationOnce(async () => {
+      deletionGateway = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.();
+      return { ok: true };
+    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(completedAt + 60_001);
+    try {
+      await testing.sweepOnceForTests();
+    } finally {
+      clock.mockRestore();
+    }
+    expect(deletionGateway).toBe(gateway);
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({
+          key: run.childSessionKey,
+          agentId: "worker",
+          expectedSessionId: "session-swarm-restart",
+          expectedLifecycleRevision: "revision-swarm-restart",
+        }),
+      }),
+    );
+    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([]);
+    expect(readPersistedRun(run.runId)).toBeUndefined();
   });
 
   it.each([

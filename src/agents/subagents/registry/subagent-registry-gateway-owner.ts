@@ -1,5 +1,4 @@
 import { performance } from "node:perf_hooks";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
@@ -16,7 +15,11 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
+import {
+  getCurrentSubagentRunOwner,
+  getSubagentActivationRuns,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
   assertSubagentRegistryWriteSourceCurrent,
@@ -315,7 +318,7 @@ async function recoverSubagentRunGatewayOwner(
   return committed;
 }
 
-/** Bind only the captured inventory, retaining the same Gateway across batch yields. */
+/** Activate unfinished obligations; the registry owns later retention of cold rows. */
 export async function bindSubagentRunGatewayOwners(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<object>;
@@ -329,8 +332,8 @@ export async function bindSubagentRunGatewayOwners(params: {
     return false;
   }
   const isCurrent = () => params.getGatewayContextResolver() === resolver && resolver() === gateway;
-  // New registrations during a yield belong to the next pass, not this captured owner set.
-  const capturedRuns = [...params.runs.values()];
+  bindGatewayContextResolver(params.runs, resolver);
+  const capturedRuns = [...getSubagentActivationRuns(params.runs)];
   const metrics: ActivationMetrics = {
     authorityRestoreMs: 0,
     publishMs: 0,
@@ -338,20 +341,10 @@ export async function bindSubagentRunGatewayOwners(params: {
     publishedRuns: 0,
   };
   let activeRuns = 0;
-  let yieldMs = 0;
-  let visited = 0;
   try {
     for (const snapshot of capturedRuns) {
       if (snapshot.execution.status !== "terminal") {
         activeRuns += 1;
-      }
-      if (++visited % 128 === 0) {
-        const beforeYield = performance.now();
-        await yieldToEventLoop();
-        yieldMs += performance.now() - beforeYield;
-        if (!isCurrent()) {
-          return false;
-        }
       }
       const entry = getCurrentSubagentRunOwner(params.runs, snapshot);
       if (!entry) {
@@ -384,7 +377,6 @@ export async function bindSubagentRunGatewayOwners(params: {
         continue;
       }
       bindGatewayContextResolver(entry, resolver);
-      metrics.publishedRuns += 1;
       await restoreSubagentCompletionSource(entry, resolver, isCurrent, metrics);
       if (!isCurrent()) {
         return false;
@@ -395,7 +387,6 @@ export async function bindSubagentRunGatewayOwners(params: {
     params.startupTrace?.detail("sidecars.subagent-activation", [
       ["registryActivationAuthorityRestoreMs", metrics.authorityRestoreMs],
       ["registryActivationPublishMs", metrics.publishMs],
-      ["registryActivationYieldMs", yieldMs],
       ["registryActivationRuns", capturedRuns.length],
       ["registryActivationActiveRuns", activeRuns],
       ["registryActivationRecoveredRuns", metrics.recoveredRuns],
