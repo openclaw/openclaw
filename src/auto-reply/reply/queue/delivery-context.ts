@@ -73,6 +73,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
     }),
     resolveReplyOperatorAuthorityKey(run.operatorAuthority),
     execution.senderId ?? "",
+    execution.mcpRequesterProfileId ?? "",
     JSON.stringify(execution.channelContext ?? null),
     stableStringify(execution.conversationToolPolicy ?? null),
     execution.senderE164 ?? "",
