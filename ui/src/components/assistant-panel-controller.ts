@@ -198,6 +198,7 @@ export function createAssistantPanel(
     }
     sourceStops.forEach((stop) => stop?.());
     sources = { context, store };
+    // Source receipts synchronously retire target scopes and reconcile dock reservations.
     sourceStops = [
       context?.assistantDock?.attach(owner),
       context ? subscribePluginHelp(context, refresh) : undefined,
