@@ -54,6 +54,48 @@ describe("Browser toolbar", () => {
     }
   });
 
+  it("retires replaced favicon requests without replacing the address draft or focus", async () => {
+    const panel = await mount();
+    const input = panel.querySelector<HTMLInputElement>(".bp-url")!;
+    input.focus();
+    input.value = "https://draft.example.test/uncommitted";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await panel.updateComplete;
+    input.setSelectionRange(8, 13);
+    const toolbar = panel.querySelector(".bp-toolbar");
+    const retired = createDeferred<string | null>();
+    const current = createDeferred<string | null>();
+    const firstFetcher = vi.fn(() => retired.promise);
+    const currentFetcher = vi.fn(() => current.promise);
+    panel.fetchFavicon = firstFetcher;
+    await waitForSolid(() => expect(firstFetcher).toHaveBeenCalledOnce());
+    panel.fetchFavicon = currentFetcher;
+    await waitForSolid(() => expect(currentFetcher).toHaveBeenCalledOnce());
+    expect(panel.querySelector(".bp-toolbar-favicon img")).toBeNull();
+
+    current.resolve("data:image/png;base64,Y3VycmVudA==");
+    await waitForSolid(() =>
+      expect(panel.querySelector(".bp-toolbar-favicon img")?.getAttribute("src")).toBe(
+        "data:image/png;base64,Y3VycmVudA==",
+      ),
+    );
+    retired.resolve("data:image/png;base64,cmV0aXJlZA==");
+    await retired.promise;
+    await panel.updateComplete;
+    expect(panel.querySelector(".bp-toolbar-favicon img")?.getAttribute("src")).toBe(
+      "data:image/png;base64,Y3VycmVudA==",
+    );
+    expect(panel.querySelector(".bp-toolbar")).toBe(toolbar);
+    expect(panel.querySelector(".bp-url")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("https://draft.example.test/uncommitted");
+    expect([input.selectionStart, input.selectionEnd]).toEqual([8, 13]);
+
+    panel.querySelector(".bp-toolbar-favicon img")!.dispatchEvent(new Event("error"));
+    await waitForSolid(() => expect(panel.querySelector(".bp-toolbar-favicon img")).toBeNull());
+    expect(panel.querySelector(".bp-toolbar-favicon svg")).not.toBeNull();
+  });
+
   it("openclaw-browser-panel Download renders the Gateway error message and HTTP status", async () => {
     const panel = await mount();
     vi.stubGlobal(

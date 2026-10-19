@@ -3,10 +3,10 @@ import { createEffect, createSignal, onSettled } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { readLinkFavicon, type LinkFaviconFetcher } from "../../pages/chat/link-favicon-cache.ts";
-import { observeScrollState } from "../scroll-state-observer.ts";
 import { Icon } from "../solid/icon.tsx";
 import { Menu, type MenuItem } from "../solid/menu.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
@@ -26,7 +26,6 @@ export function BrowserToolbar(
   const [editing, setEditing] = createSignal(false);
   const [favicon, setFavicon] = createSignal<string | undefined>(undefined);
   let addressText!: HTMLSpanElement;
-  let addressOverflow: ReturnType<typeof observeScrollState> | undefined;
   onSettled(() => {
     const controller = props.controller;
     return () => {
@@ -78,31 +77,28 @@ export function BrowserToolbar(
       };
     },
   );
+  const measureAddress = createLayoutMeasurement(
+    () => props.controller.urlDraft,
+    () => {
+      const overflow = addressText.scrollWidth > addressText.clientWidth + 1;
+      return () => {
+        addressText.dataset.overflow = String(overflow);
+      };
+    },
+    { targets: () => [addressText] },
+  );
   onSettled(() => {
-    addressOverflow = observeScrollState(
-      addressText,
-      ({ scrollable }) => {
-        addressText.dataset.overflow = String(scrollable);
-      },
-      true,
-      false,
-    );
     // Fonts can settle without changing the address viewport's dimensions.
     let disposed = false;
     void document.fonts.ready.then(() => {
       if (!disposed) {
-        addressOverflow?.schedule();
+        measureAddress();
       }
     });
     return () => {
       disposed = true;
-      addressOverflow?.disconnect();
     };
   });
-  createEffect(
-    () => props.controller.urlDraft,
-    () => addressOverflow?.schedule(),
-  );
   const menuItems = createMemo((): MenuItem[] => [
     ...(!props.controller.host.fixedTab
       ? [
