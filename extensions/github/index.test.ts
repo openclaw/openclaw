@@ -15,8 +15,12 @@ vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({
 }));
 
 const date = "2026-09-13T12:00:00Z";
+const closedAt = "2026-09-03T12:00:00Z";
 const pullUrl = "https://github.com/octocat/repo/pull/1";
+const issueUrl = "https://github.com/octocat/repo/issues/1";
 const imageUrl = "https://user-images.githubusercontent.com/image.png";
+const pullTarget = { kind: "pull", owner: "octocat", repo: "repo", number: 1 };
+const avatar = "data:image/png;base64,iVBORw==";
 function registered(config: Parameters<typeof createPluginRegistryFixture>[0] = {}) {
   const fixture = createPluginRegistryFixture(config);
   registerVirtualTestPlugin({
@@ -36,10 +40,8 @@ function document(url = pullUrl) {
 }
 function preview(overrides: Partial<ControlUiGitHubPreview> = {}): ControlUiGitHubPreview {
   return {
+    ...pullTarget,
     kind: "pull",
-    owner: "octocat",
-    repo: "repo",
-    number: 1,
     title: "Plugin reader",
     state: "open",
     login: "octocat",
@@ -47,6 +49,19 @@ function preview(overrides: Partial<ControlUiGitHubPreview> = {}): ControlUiGitH
     updatedAt: date,
     ...overrides,
   };
+}
+
+function hostSuccess(
+  payload: unknown,
+  meta?: Awaited<ReturnType<typeof dispatchGatewayMethod>>["meta"],
+) {
+  vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({ ok: true, payload, meta });
+}
+
+function expectReader(registry: ReturnType<typeof registered>, id: string, descriptor: unknown) {
+  expect(
+    registry.registry.controlUiDescriptors.find((entry) => entry.descriptor.id === id),
+  ).toMatchObject({ pluginId: "github", descriptor });
 }
 
 async function request(method: string, params: Record<string, unknown>) {
@@ -73,11 +88,15 @@ function expectSuccess(
   payload: unknown,
   meta?: unknown,
 ) {
-  expect(respond).toHaveBeenCalledWith(true, payload, undefined, meta);
+  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(payload), undefined, meta);
 }
 
 function expectFailure(respond: Awaited<ReturnType<typeof request>>, error: unknown) {
   expect(respond).toHaveBeenCalledWith(false, undefined, error, undefined);
+}
+
+async function expectUnavailable(method: string, url: string, error: object) {
+  expectFailure(await request(method, { url }), expect.objectContaining(error));
 }
 
 describe("GitHub plugin ownership and RPC migration", () => {
@@ -101,22 +120,15 @@ describe("GitHub plugin ownership and RPC migration", () => {
         github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
       },
     });
-    expect(fixture.registry.controlUiDescriptors).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          descriptor: expect.objectContaining({
-            id: "github-session",
-            linkReader: expect.objectContaining({
-              hosts: ["ghe.example.test"],
-              sessionScoped: true,
-              progressive: true,
-              previewMethod: "github.sessionPreview",
-              detailMethod: "github.sessionDetail",
-            }),
-          }),
-        }),
-      ]),
-    );
+    expectReader(fixture, "github-session", {
+      linkReader: {
+        hosts: ["ghe.example.test"],
+        sessionScoped: true,
+        progressive: true,
+        previewMethod: "github.sessionPreview",
+        detailMethod: "github.sessionDetail",
+      },
+    });
     expect(fixture.registry.gatewayMethodDescriptors).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "github.preview", profileAccess: "independent" }),
@@ -148,25 +160,17 @@ describe("GitHub plugin ownership and RPC migration", () => {
     );
     expect(registry.registry.gatewayHandlers).not.toHaveProperty("controlUi.githubDetail");
     expect(registry.registry.gatewayHandlers).not.toHaveProperty("controlUi.githubPreview");
-    expect(registry.registry.controlUiDescriptors).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          pluginId: "github",
-          descriptor: expect.objectContaining({
-            surface: "link-reader",
-            id: "github",
-            requiredScopes: ["operator.read"],
-            linkReader: expect.objectContaining({
-              hosts: ["github.com"],
-              detailMethod: "github.detail",
-              progressive: true,
-              imageMethod: "github.image",
-              previewMethod: "github.preview",
-            }),
-          }),
-        }),
-      ]),
-    );
+    expectReader(registry, "github", {
+      surface: "link-reader",
+      requiredScopes: ["operator.read"],
+      linkReader: {
+        hosts: ["github.com"],
+        detailMethod: "github.detail",
+        progressive: true,
+        imageMethod: "github.image",
+        previewMethod: "github.preview",
+      },
+    });
     expect(registry.registry.controlUiDescriptors).toHaveLength(2);
     expect(
       registry.registry.controlUiDescriptors[1]?.descriptor.linkReader?.previewMethod,
@@ -209,7 +213,12 @@ describe("GitHub plugin ownership and RPC migration", () => {
       )
       .mockResolvedValueOnce(new Response(png, { headers: { "content-type": "image/png" } }));
     const respond = await request("github.image", { url });
-    expectSuccess(respond, { url, dataUrl: `data:image/png;base64,${png.toString("base64")}` });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { url, dataUrl: `data:image/png;base64,${png.toString("base64")}` },
+      undefined,
+      undefined,
+    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const [, init] of fetchMock.mock.calls) {
       const headers = new Headers(init?.headers);
@@ -226,16 +235,8 @@ describe("GitHub plugin ownership and RPC migration", () => {
     "https://user:password@user-images.githubusercontent.com/image.png",
     "https://github.com/login",
   ])("blocks unsafe image redirect %s before fetching it", async (location) => {
-    fetchMock.mockResolvedValueOnce(
-      new Response(null, {
-        status: 302,
-        headers: { location },
-      }),
-    );
-    expectFailure(
-      await request("github.image", { url: imageUrl }),
-      expect.objectContaining({ message: "GitHub image is unavailable" }),
-    );
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location } }));
+    await expectUnavailable("github.image", imageUrl, { message: "GitHub image is unavailable" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -243,15 +244,8 @@ describe("GitHub plugin ownership and RPC migration", () => {
     ["<svg xmlns='http://www.w3.org/2000/svg'></svg>", "image/png"],
     ["x".repeat(2 * 1024 * 1024 + 1), "image/jpeg"],
   ])("rejects unsupported or oversized image content", async (body, contentType) => {
-    fetchMock.mockResolvedValue(
-      new Response(body, {
-        headers: { "content-type": contentType },
-      }),
-    );
-    expectFailure(
-      await request("github.image", { url: imageUrl }),
-      expect.objectContaining({ message: "GitHub image is unavailable" }),
-    );
+    fetchMock.mockResolvedValue(new Response(body, { headers: { "content-type": contentType } }));
+    await expectUnavailable("github.image", imageUrl, { message: "GitHub image is unavailable" });
   });
 
   it.each([
@@ -267,28 +261,16 @@ describe("GitHub plugin ownership and RPC migration", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each([{ number: 2 }])(
-    "rejects a well-formed host preview for another resource: %j",
-    async (different) => {
-      vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
-        ok: true,
-        payload: preview(different),
-      });
-      expectFailure(
-        await request("github.preview", { url: pullUrl }),
-        expect.objectContaining({ code: "UNAVAILABLE" }),
-      );
-    },
-  );
+  it("rejects a well-formed host preview for another resource", async () => {
+    hostSuccess(preview({ number: 2 }));
+    await expectUnavailable("github.preview", pullUrl, { code: "UNAVAILABLE" });
+  });
 
   it.each([undefined, "overview", "checks", "files", "discussion"])(
     "uses the host identity adapter for %s documents and preserves files-page expansion",
     async (section) => {
       vi.stubEnv("GH_TOKEN", "unused-ambient-token");
-      vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
-        ok: true,
-        payload: document(),
-      });
+      hostSuccess(document());
       const url = `${pullUrl}/files?view=split#diff-example`;
       const respond = await request("github.detail", {
         url,
@@ -296,20 +278,14 @@ describe("GitHub plugin ownership and RPC migration", () => {
         refresh: true,
         ...(section ? { section } : {}),
       });
-      expectSuccess(
-        respond,
-        expect.objectContaining({
-          url,
-          title: "Plugin reader",
-          body: "**Public**",
-          filesExpanded: true,
-        }),
-      );
+      expectSuccess(respond, {
+        url,
+        title: "Plugin reader",
+        body: "**Public**",
+        filesExpanded: true,
+      });
       expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith("controlUi.githubDetail", {
-        kind: "pull",
-        owner: "octocat",
-        repo: "repo",
-        number: 1,
+        ...pullTarget,
         agentId: "selected-agent",
         refresh: true,
         ...(section ? { section } : {}),
@@ -318,115 +294,83 @@ describe("GitHub plugin ownership and RPC migration", () => {
     },
   );
 
-  it.each([{ ...document(), url: "https://github.com/octocat/private/pull/1" }])(
-    "rejects an invalid host document before delivery: %#",
-    async (payload) => {
-      vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({ ok: true, payload });
-      expectFailure(
-        await request("github.detail", { url: pullUrl }),
-        expect.objectContaining({ code: "UNAVAILABLE" }),
-      );
-    },
-  );
+  it("rejects an invalid host document before delivery", async () => {
+    hostSuccess(document("https://github.com/octocat/private/pull/1"));
+    await expectUnavailable("github.detail", pullUrl, { code: "UNAVAILABLE" });
+  });
 
   it.each([
+    [
+      { state: "open", draft: false },
+      { label: "Open", tone: "positive" },
+    ],
     [
       { state: "open", draft: true },
       { label: "Draft", tone: "neutral" },
     ],
     [
-      { state: "closed", draft: true, closedAt: "2026-09-03T12:00:00Z" },
-      { label: "Closed", tone: "negative", timestamp: "2026-09-03T12:00:00Z" },
+      { state: "closed", draft: true, closedAt },
+      { label: "Closed", tone: "negative", timestamp: closedAt },
     ],
     [
-      { state: "closed", mergedAt: "2026-09-03T12:00:00Z", closedAt: date },
-      { label: "Merged", tone: "accent", timestamp: "2026-09-03T12:00:00Z" },
+      { state: "closed", mergedAt: closedAt, closedAt: date },
+      { label: "Merged", tone: "accent", timestamp: closedAt },
     ],
   ] as const)(
     "maps the host preview into generic badges and metadata %#",
     async (fields, badge) => {
       const meta = { source: "host-preview" };
-      vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
-        ok: true,
-        payload: preview({ ...fields, stale: true, additions: 3, deletions: 1, changedFiles: 2 }),
+      hostSuccess(
+        preview({
+          ...fields,
+          stale: true,
+          additions: 3,
+          deletions: 1,
+          changedFiles: 2,
+          coAuthors: [{ login: "ada", avatarDataUrl: avatar }],
+          coAuthorCount: 2,
+        }),
         meta,
-      });
+      );
       const respond = await request("github.preview", { url: pullUrl });
       expectSuccess(
         respond,
-        expect.objectContaining({
+        {
           badge,
           stale: true,
           author: "octocat",
           authorUrl: "https://github.com/octocat",
+          coAuthors: [{ name: "ada", imageUrl: avatar }],
+          coAuthorCount: 2,
           metadata: [
             { label: "", value: "+3", tone: "positive" },
             { label: "", value: "−1", tone: "negative" },
           ],
-        }),
+        },
         meta,
       );
-      expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith("controlUi.githubPreview", {
-        kind: "pull",
-        owner: "octocat",
-        repo: "repo",
-        number: 1,
-      });
+      expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith(
+        "controlUi.githubPreview",
+        pullTarget,
+      );
       expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("kind");
       expect(fetchMock).not.toHaveBeenCalled();
     },
   );
 
-  it.each([["completed", "accent"]] as const)(
-    "shows the closure date for %s issues",
-    async (stateReason, tone) => {
-      const closedAt = "2026-09-03T12:00:00Z";
-      vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
-        ok: true,
-        payload: preview({ kind: "issue", state: "closed", stateReason, closedAt }),
-      });
-      const respond = await request("github.preview", {
-        url: "https://github.com/octocat/repo/issues/1",
-      });
-      expectSuccess(
-        respond,
-        expect.objectContaining({
-          createdAt: date,
-          badge: { label: "Closed", tone, timestamp: closedAt },
-        }),
+  it.each([undefined, 0])(
+    "shows completed issue closure dates with comment count %s",
+    async (comments) => {
+      hostSuccess(
+        preview({ kind: "issue", state: "closed", stateReason: "completed", closedAt, comments }),
       );
+      expectSuccess(await request("github.preview", { url: issueUrl }), {
+        createdAt: date,
+        badge: { label: "Closed", tone: "accent", timestamp: closedAt },
+        metadata: comments === undefined ? [] : [{ label: "Comments", value: "0" }],
+      });
     },
   );
-
-  it("shows a known zero issue comment count", async () => {
-    vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
-      ok: true,
-      payload: preview({ kind: "issue", comments: 0 }),
-    });
-    expectSuccess(
-      await request("github.preview", { url: "https://github.com/octocat/repo/issues/1" }),
-      expect.objectContaining({ metadata: [{ label: "Comments", value: "0" }] }),
-    );
-  });
-
-  it("retains the host's co-author metadata without another GitHub lookup", async () => {
-    vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
-      ok: true,
-      payload: preview({
-        coAuthors: [{ login: "ada", avatarDataUrl: "data:image/png;base64,iVBORw==" }],
-        coAuthorCount: 2,
-      }),
-    });
-    const respond = await request("github.preview", { url: pullUrl });
-    expectSuccess(
-      respond,
-      expect.objectContaining({
-        coAuthors: [{ name: "ada", imageUrl: "data:image/png;base64,iVBORw==" }],
-        coAuthorCount: 2,
-      }),
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
 
   it("forwards the host error envelope unchanged without an identity fallback", async () => {
     const error = {
@@ -440,7 +384,7 @@ describe("GitHub plugin ownership and RPC migration", () => {
     const meta = { source: "host-preview" };
     vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({ ok: false, payload, error, meta });
     const respond = await request("github.detail", {
-      url: "https://github.com/octocat/repo/issues/1",
+      url: issueUrl,
       agentId: "alternate",
     });
     expect(respond).toHaveBeenCalledExactlyOnceWith(false, payload, error, meta);
@@ -449,17 +393,11 @@ describe("GitHub plugin ownership and RPC migration", () => {
     expect(dispatchGatewayMethod).toHaveBeenCalledTimes(1);
   });
 
-  it.each([{}])("rejects malformed successful host payloads %#", async (payload) => {
-    vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({ ok: true, payload });
-    const respond = await request("github.preview", {
-      url: "https://github.com/octocat/repo/issues/1",
+  it("rejects malformed successful host payloads", async () => {
+    hostSuccess({});
+    await expectUnavailable("github.preview", issueUrl, {
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("invalid response"),
     });
-    expectFailure(
-      respond,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: expect.stringContaining("invalid response"),
-      }),
-    );
   });
 });
