@@ -34,6 +34,11 @@ describe("Gateway context cache remote proof", () => {
         contextWindow: baseWindow + (index % 17),
         maxTokens: 8_192,
       }));
+    const makeProvider = (provider: string, port: number, window: number) => ({
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      api: "openai-completions" as const,
+      models: makeModels(provider, window),
+    });
     const token = "context-prewarm-proof-token";
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     const { port } = portClaim;
@@ -69,16 +74,8 @@ describe("Gateway context cache remote proof", () => {
         },
         models: {
           providers: {
-            "synthetic-a": {
-              baseUrl: "http://127.0.0.1:1/v1",
-              api: "openai-completions" as const,
-              models: makeModels("synthetic-a", 128_000),
-            },
-            "synthetic-b": {
-              baseUrl: "http://127.0.0.1:2/v1",
-              api: "openai-completions" as const,
-              models: makeModels("synthetic-b", 64_000),
-            },
+            "synthetic-a": makeProvider("synthetic-a", 1, 128_000),
+            "synthetic-b": makeProvider("synthetic-b", 2, 64_000),
           },
         },
       } satisfies OpenClawConfig;
@@ -123,14 +120,10 @@ describe("Gateway context cache remote proof", () => {
         branchesRpc: [] as number[],
       };
       const errors: string[] = [];
-      const probeRpc = async (
-        name: "healthRpc" | "metadataRpc" | "branchesRpc",
-        method: string,
-        params: Record<string, unknown>,
-      ) => {
+      const probe = async (name: keyof typeof latencies, run: () => Promise<unknown>) => {
         const startedAt = performance.now();
         try {
-          await client.request(method, params);
+          await run();
         } catch (error) {
           errors.push(`${name}:${String(error)}`);
         } finally {
@@ -150,22 +143,19 @@ describe("Gateway context cache remote proof", () => {
         while (true) {
           await Promise.all([
             ...(["healthz", "readyz"] as const).map(async (name) => {
-              const startedAt = performance.now();
-              try {
+              await probe(name, async () => {
                 const response = await fetch(`http://127.0.0.1:${port}/${name}`);
                 if (response.status !== 200) {
                   errors.push(`${name}:${response.status}`);
                 }
                 await response.arrayBuffer();
-              } catch (error) {
-                errors.push(`${name}:${String(error)}`);
-              } finally {
-                latencies[name].push(performance.now() - startedAt);
-              }
+              });
             }),
-            probeRpc("healthRpc", "health", { probe: true }),
-            probeRpc("metadataRpc", "chat.metadata", {}),
-            probeRpc("branchesRpc", "worktrees.branches", { repoRoot: workspaceDir }),
+            probe("healthRpc", () => client.request("health", { probe: true })),
+            probe("metadataRpc", () => client.request("chat.metadata", {})),
+            probe("branchesRpc", () =>
+              client.request("worktrees.branches", { repoRoot: workspaceDir }),
+            ),
           ]);
           if (!probing) {
             break;
@@ -190,6 +180,14 @@ describe("Gateway context cache remote proof", () => {
       });
       clearInterval(heartbeat);
 
+      const resolveTokens = (provider?: string) =>
+        contextModule.resolveContextTokensForModel({
+          cfg: provider ? warmConfig : {},
+          provider,
+          model: "shared-model",
+          allowAsyncLoad: false,
+        });
+      const caches = getContextWindowCaches();
       const result = {
         modelCount,
         maxHeartbeatGapMs: Math.max(...heartbeatGaps),
@@ -204,47 +202,28 @@ describe("Gateway context cache remote proof", () => {
         errors,
         contextPreparationOutcome,
         contextPreparationDurationMs,
-        cacheSizes: (() => {
-          const caches = getContextWindowCaches();
-          return {
-            configured: caches.configuredTokenCache.size,
-            discovered: caches.discoveredTokenCache.size,
-            windows: caches.contextWindowCache.size,
-          };
-        })(),
-        sharedBare: contextModule.resolveContextTokensForModel({
-          model: "shared-model",
-          allowAsyncLoad: false,
-          cfg: {},
-        }),
-        providerA: contextModule.resolveContextTokensForModel({
-          cfg: warmConfig,
-          provider: "synthetic-a",
-          model: "shared-model",
-          allowAsyncLoad: false,
-        }),
-        providerB: contextModule.resolveContextTokensForModel({
-          cfg: warmConfig,
-          provider: "synthetic-b",
-          model: "shared-model",
-          allowAsyncLoad: false,
-        }),
+        cacheSizes: {
+          configured: caches.configuredTokenCache.size,
+          discovered: caches.discoveredTokenCache.size,
+          windows: caches.contextWindowCache.size,
+        },
+        sharedBare: resolveTokens(),
+        providerA: resolveTokens("synthetic-a"),
+        providerB: resolveTokens("synthetic-b"),
       };
       console.log(`CONTEXT_PREWARM_GATEWAY_PROOF ${JSON.stringify(result)}`);
 
       expect(result.errors).toEqual([]);
       expect(result.contextPreparationOutcome).toEqual({ status: "loaded" });
-      expect(result.cacheSizes.discovered).toBeGreaterThan(modelCount * 2);
-      expect(result.cacheSizes.windows).toBeGreaterThan(modelCount * 2);
       expect(result.sharedBare).toBe(64_000);
       expect(result.providerA).toBe(128_000);
       expect(result.providerB).toBe(64_000);
+      expect(result.cacheSizes.discovered).toBeGreaterThan(modelCount * 2);
+      expect(result.cacheSizes.windows).toBeGreaterThan(modelCount * 2);
       expect(result.maxHeartbeatGapMs).toBeLessThan(500);
-      expect(result.maxHealthzMs).toBeLessThan(1_000);
-      expect(result.maxReadyzMs).toBeLessThan(1_000);
-      expect(result.maxHealthRpcMs).toBeLessThan(1_000);
-      expect(result.maxMetadataRpcMs).toBeLessThan(1_000);
-      expect(result.maxBranchesRpcMs).toBeLessThan(1_000);
+      for (const samples of Object.values(latencies)) {
+        expect(Math.max(...samples)).toBeLessThan(1_000);
+      }
     };
     await runQaGatewayFixture(
       runProof,

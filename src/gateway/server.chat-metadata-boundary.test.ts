@@ -85,6 +85,19 @@ const CHAT_METADATA_MISSING_OWNER_CONFIG = {
   },
 } as const;
 
+async function expectModels(
+  method = "chat.metadata",
+  params: Record<string, unknown> = { agentId: "main" },
+) {
+  const result = await rpcReq(requireGateway().ws, method, params);
+  expect(result.ok, JSON.stringify(result)).toBe(true);
+  expect(result.payload).toMatchObject({
+    models: expect.arrayContaining([
+      expect.objectContaining({ id: "gpt-boundary", provider: "openai" }),
+    ]),
+  });
+}
+
 async function writeGatewayConfig(
   config: Record<string, unknown>,
   options: { clearRuntimeSnapshot?: boolean } = {},
@@ -112,26 +125,11 @@ test("metadata RPCs isolate missing owners and preserve deferred admission and p
   await writeGatewayConfig(CHAT_METADATA_MISSING_OWNER_CONFIG, { clearRuntimeSnapshot: true });
   publicationEvents.notifyPreparedModelRuntimePublication({ phase: "published" });
   for (const method of ["chat.metadata", "models.list"] as const) {
-    const result = await rpcReq<{ models?: Array<{ id?: string; provider?: string }> }>(
-      ws,
-      method,
-      { agentId: "main" },
-    );
-    expect(result.ok, JSON.stringify(result)).toBe(true);
-    expect(result.payload?.models).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "gpt-boundary", provider: "openai" })]),
-    );
+    await expectModels(method);
   }
 
   await writeGatewayConfig(CHAT_METADATA_BOUNDARY_CONFIG, { clearRuntimeSnapshot: true });
-  const recovered = await rpcReq<{
-    models?: Array<{ id?: string; provider?: string }>;
-  }>(ws, "chat.metadata", { agentId: "main" });
-
-  expect(recovered.ok).toBe(true);
-  expect(recovered.payload?.models).toEqual(
-    expect.arrayContaining([expect.objectContaining({ id: "gpt-boundary", provider: "openai" })]),
-  );
+  await expectModels();
 
   // Reset the published runtime between boundary cases without restarting the Gateway.
   const { refreshPreparedModelRuntimeSnapshots } =
@@ -233,17 +231,7 @@ async function assertDeferredAdmissionMetadata() {
       ["chat.metadata", { agentId: "main" }],
       ["models.list", { agentId: "main", view: "configured", preparedOnly: true }],
     ] as const) {
-      const result = await rpcReq<{ models?: Array<{ id?: string; provider?: string }> }>(
-        ws,
-        method,
-        params,
-      );
-      expect(result.ok, JSON.stringify(result)).toBe(true);
-      expect(result.payload?.models).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: "gpt-boundary", provider: "openai" }),
-        ]),
-      );
+      await expectModels(method, params);
     }
   } finally {
     releasePublication.resolve();

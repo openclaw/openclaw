@@ -1,23 +1,9 @@
-/**
- * Tests gateway talk runtime wiring for speech provider execution.
- */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODE_HEAVY_SPOKEN_FALLBACK } from "../tts/speech-text.js";
-import {
-  invokeTalkSpeakDirect,
-  type TalkSpeakTestPayload,
-  withSpeechProviders,
-} from "./talk/test-helpers.js";
+import { invokeTalkSpeakDirect, withSpeechProviders } from "./talk/test-helpers.js";
 
 const synthesizeSpeechMock = vi.hoisted(() =>
-  vi.fn<typeof import("../tts/tts.js").synthesizeSpeech>(async () => ({
-    success: true,
-    audioBuffer: Buffer.from([7, 8, 9]),
-    provider: "acme",
-    outputFormat: "mp3",
-    fileExtension: ".mp3",
-    voiceCompatible: false,
-  })),
+  vi.fn<typeof import("../tts/tts.js").synthesizeSpeech>(),
 );
 
 vi.mock("../tts/tts.js", () => ({
@@ -27,27 +13,25 @@ vi.mock("../tts/tts.js", () => ({
 vi.mock("../tts/tts-synthesis.js", () => ({ synthesizeTalkSpeech: synthesizeSpeechMock }));
 
 const ALIAS_STUB_VOICE_ID = "VoiceAlias1234567890";
+const audioResult = (audioBuffer = Buffer.from([7, 8, 9])) => ({
+  success: true as const,
+  audioBuffer,
+  provider: "acme",
+  outputFormat: "mp3",
+  fileExtension: ".mp3",
+  voiceCompatible: false,
+});
+const synthesize = async () => {
+  throw new Error("synthesize should be mocked at the handler boundary");
+};
 
 async function setTalkConfig(talk: Record<string, unknown>) {
   const { setRuntimeConfigSnapshot } = await import("../config/config.js");
   const config = {
-    commands: {
-      ownerDisplaySecret: "openclaw-test-owner-display-secret",
-    },
+    commands: { ownerDisplaySecret: "openclaw-test-owner-display-secret" },
     talk,
   };
   setRuntimeConfigSnapshot(config, config);
-}
-
-async function setAcmeTalkConfig() {
-  await setTalkConfig({
-    provider: "acme",
-    providers: {
-      acme: {
-        voiceId: "plugin-voice",
-      },
-    },
-  });
 }
 
 async function setElevenLabsTalkConfig() {
@@ -65,11 +49,8 @@ async function setElevenLabsTalkConfig() {
   });
 }
 
-async function setEmptyTalkConfig() {
-  await setTalkConfig({});
-}
-
 async function withAcmeSpeechProvider(run: () => Promise<void>) {
+  await setTalkConfig({ provider: "acme", providers: { acme: { voiceId: "plugin-voice" } } });
   await withSpeechProviders(
     [
       {
@@ -83,14 +64,24 @@ async function withAcmeSpeechProvider(run: () => Promise<void>) {
             ...talkProviderConfig,
             resolvedBy: "acme-test-provider",
           }),
-          synthesize: async () => {
-            throw new Error("synthesize should be mocked at the handler boundary");
-          },
+          synthesize,
         },
       },
     ],
     run,
   );
+}
+
+async function expectSynthesisFailure(
+  result: Awaited<ReturnType<typeof synthesizeSpeechMock>>,
+  reason: string,
+) {
+  await withAcmeSpeechProvider(async () => {
+    synthesizeSpeechMock.mockResolvedValue(result);
+    const res = await invokeTalkSpeakDirect({ text: "Hello from talk mode." });
+    expect(res?.ok).toBe(false);
+    expect(res?.error?.details).toEqual({ reason, fallbackEligible: false });
+  });
 }
 
 function expectSingleSynthesizeSpeechCall() {
@@ -110,19 +101,10 @@ describe("gateway talk runtime", () => {
 
   beforeEach(() => {
     synthesizeSpeechMock.mockReset();
-    synthesizeSpeechMock.mockResolvedValue({
-      success: true,
-      audioBuffer: Buffer.from([7, 8, 9]),
-      provider: "acme",
-      outputFormat: "mp3",
-      fileExtension: ".mp3",
-      voiceCompatible: false,
-    });
+    synthesizeSpeechMock.mockResolvedValue(audioResult());
   });
 
   it("uses the spoken fallback for code-heavy talk.speak replies", async () => {
-    await setAcmeTalkConfig();
-
     await withAcmeSpeechProvider(async () => {
       const res = await invokeTalkSpeakDirect({
         text: "```ts\nexport function answer() {\n  return 42;\n}\n```",
@@ -165,20 +147,17 @@ describe("gateway talk runtime", () => {
                   ? { latencyTier: params.latencyTier }
                   : {}),
               }),
-              synthesize: async () => {
-                throw new Error("synthesize should be mocked at the handler boundary");
-              },
+              synthesize,
             },
           },
         ],
         async () => {
           synthesizeSpeechMock.mockResolvedValue({
-            success: true,
+            ...audioResult(),
             audioBuffer: Buffer.from([4, 5, 6]),
             provider: "elevenlabs",
             outputFormat: "pcm_44100",
             fileExtension: ".pcm",
-            voiceCompatible: false,
           });
 
           const res = await invokeTalkSpeakDirect({
@@ -189,13 +168,11 @@ describe("gateway talk runtime", () => {
           });
 
           expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
-          expect((res?.payload as TalkSpeakTestPayload | undefined)?.provider).toBe("elevenlabs");
-          expect((res?.payload as TalkSpeakTestPayload | undefined)?.outputFormat).toBe(
-            "pcm_44100",
-          );
-          expect((res?.payload as TalkSpeakTestPayload | undefined)?.audioBase64).toBe(
-            Buffer.from([4, 5, 6]).toString("base64"),
-          );
+          expect(res?.payload).toMatchObject({
+            provider: "elevenlabs",
+            outputFormat: "pcm_44100",
+            audioBase64: Buffer.from([4, 5, 6]).toString("base64"),
+          });
           const synthesizeParams = expectSingleSynthesizeSpeechCall();
           expect(synthesizeParams.text).toBe("Hello from talk mode.");
           expect(synthesizeParams.overrides).toEqual({
@@ -215,52 +192,22 @@ describe("gateway talk runtime", () => {
   );
 
   it("returns fallback-eligible details when talk provider is not configured", async () => {
-    await setEmptyTalkConfig();
+    await setTalkConfig({});
 
     const res = await invokeTalkSpeakDirect({ text: "Hello from talk mode." });
     expect(res?.ok).toBe(false);
     expect(res?.error?.message).toContain("talk provider not configured");
-    expect((res?.error as { details?: unknown } | undefined)?.details).toEqual({
+    expect(res?.error?.details).toEqual({
       reason: "talk_unconfigured",
       fallbackEligible: true,
     });
   });
 
   it("returns synthesis_failed details when the provider rejects synthesis", async () => {
-    await setAcmeTalkConfig();
-
-    await withAcmeSpeechProvider(async () => {
-      synthesizeSpeechMock.mockResolvedValue({
-        success: false,
-        error: "provider failed",
-      });
-      const res = await invokeTalkSpeakDirect({ text: "Hello from talk mode." });
-      expect(res?.ok).toBe(false);
-      expect(res?.error?.details).toEqual({
-        reason: "synthesis_failed",
-        fallbackEligible: false,
-      });
-    });
+    await expectSynthesisFailure({ success: false, error: "provider failed" }, "synthesis_failed");
   });
 
   it("rejects empty audio results as invalid_audio_result", async () => {
-    await setAcmeTalkConfig();
-
-    await withAcmeSpeechProvider(async () => {
-      synthesizeSpeechMock.mockResolvedValue({
-        success: true,
-        audioBuffer: Buffer.alloc(0),
-        provider: "acme",
-        outputFormat: "mp3",
-        fileExtension: ".mp3",
-        voiceCompatible: false,
-      });
-      const res = await invokeTalkSpeakDirect({ text: "Hello from talk mode." });
-      expect(res?.ok).toBe(false);
-      expect(res?.error?.details).toEqual({
-        reason: "invalid_audio_result",
-        fallbackEligible: false,
-      });
-    });
+    await expectSynthesisFailure(audioResult(Buffer.alloc(0)), "invalid_audio_result");
   });
 });
