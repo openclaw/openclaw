@@ -3,7 +3,7 @@ import { createRoot, createSignal, flush, For } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useScrollState } from "../../components/solid/scroll-state.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createScrollStateRef } from "./scroll-state.ts";
+import { createScrollPosition, createScrollStateRef } from "./scroll-state.ts";
 
 const observers: TestResizeObserver[] = [];
 const cleanup: Array<() => void> = [];
@@ -47,6 +47,7 @@ afterEach(() => {
     dispose();
   }
   observers.length = 0;
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -181,4 +182,95 @@ it("resamples content on reveal and releases live external targets when disposed
   expect(element.isConnected).toBe(true);
   expect(element.dataset.atEnd).toBe("false");
   expect(observers.every((observer) => observer.targets.size === 0)).toBe(true);
+});
+
+it("defers bounded reveal and cancels replaced, cleared, and disposed requests", () => {
+  const ancestor = document.body.appendChild(document.createElement("div"));
+  cleanup.push(() => ancestor.remove());
+  const region = ancestor.appendChild(document.createElement("div"));
+  const first = region.appendChild(document.createElement("button"));
+  const second = region.appendChild(document.createElement("button"));
+  const outside = ancestor.appendChild(document.createElement("button"));
+  first.id = "scroll-position-first";
+  second.id = "scroll-position-second";
+  outside.id = "scroll-position-outside";
+  vi.spyOn(region, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 100, 200, 100));
+  vi.spyOn(first, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 240, 200, 20));
+  vi.spyOn(second, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 80, 200, 20));
+  const nativeScroll = vi.spyOn(Element.prototype, "scrollIntoView");
+  const [activeId, setActiveId] = createSignal<string | null>(first.id);
+  ancestor.scrollTop = 400;
+  region.scrollTop = 100;
+  region.scrollLeft = 25;
+  const dispose = createRoot((dispose) => {
+    createScrollPosition(
+      () => {
+        const id = activeId();
+        return {
+          reveal: id ? { identity: [id], target: () => document.getElementById(id) } : undefined,
+        };
+      },
+      { region: () => region, revealTiming: "animation-frame" },
+    );
+    return dispose;
+  });
+  cleanup.push(dispose);
+  flush();
+  expect(region.scrollTop).toBe(100);
+
+  setActiveId(second.id);
+  flush();
+  expect(region.scrollTop).toBe(100);
+  vi.advanceTimersToNextFrame();
+  expect(region.scrollTop).toBe(80);
+
+  setActiveId(first.id);
+  flush();
+  vi.advanceTimersToNextFrame();
+  expect(region.scrollTop).toBe(140);
+
+  setActiveId(second.id);
+  flush();
+  setActiveId(null);
+  flush();
+  vi.advanceTimersToNextFrame();
+  expect(region.scrollTop).toBe(140);
+
+  setActiveId(outside.id);
+  flush();
+  vi.advanceTimersToNextFrame();
+  expect(region.scrollTop).toBe(140);
+
+  setActiveId(second.id);
+  flush();
+  dispose();
+  vi.advanceTimersToNextFrame();
+  expect(region.scrollTop).toBe(140);
+  expect(region.scrollLeft).toBe(25);
+  expect(ancestor.scrollTop).toBe(400);
+  expect(nativeScroll).not.toHaveBeenCalled();
+});
+
+it("keeps untracked scroll state until the next layout observation", () => {
+  const element = document.body.appendChild(document.createElement("div"));
+  cleanup.push(() => element.remove());
+  const values = geometry(element);
+  const binding = createRoot((dispose) => ({
+    dispose,
+    ref: createScrollStateRef(reflect, { trackScroll: false }),
+  }));
+  cleanup.push(binding.dispose);
+  binding.ref(element);
+  flush();
+  vi.advanceTimersToNextFrame();
+  expect(element.dataset).toMatchObject({ scrollable: "true", atEnd: "false" });
+
+  values.offset = 200;
+  element.dispatchEvent(new Event("scroll"));
+  vi.advanceTimersToNextFrame();
+  expect(element.dataset.atEnd).toBe("false");
+
+  observers.at(-1)!.deliver(element);
+  vi.advanceTimersToNextFrame();
+  expect(element.dataset.atEnd).toBe("true");
 });
