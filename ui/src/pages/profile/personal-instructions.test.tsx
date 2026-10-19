@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -16,6 +16,7 @@ import {
   modelAccountProfile,
   mountProfilePage,
 } from "./profile-page.test-support.tsx";
+import { disconnectedGitHub, mockRpc } from "./profile-rpc.test-support.ts";
 
 const file = {
   agentId: "main",
@@ -32,9 +33,7 @@ const hello = {
   policy: { hasMultipleSessionSharingIdentities: true },
   auth: { role: "operator", scopes: ["operator.read"] },
 } satisfies NonNullable<ApplicationGatewaySnapshot["hello"]>;
-beforeEach(async () => {
-  await i18n.setLocale("en");
-});
+beforeEach(() => i18n.setLocale("en"));
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -54,30 +53,24 @@ function createContext(
     ...hello,
     policy: { hasMultipleSessionSharingIdentities: multipleProfiles },
   });
-  const agents: ApplicationContext["agents"] = {
-    ...base.agents,
-    state: {
-      ...base.agents.state,
-      agentsList: {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [
-          { id: "main", name: "Main" },
-          { id: "other", name: "Other" },
-        ],
-      },
-    },
+  const agents = base.agents;
+  agents.state.agentsList = {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "per-sender",
+    agents: [
+      { id: "main", name: "Main" },
+      { id: "other", name: "Other" },
+    ],
   };
   const selection = createAgentSelectionCapability(base.gateway, agents, undefined, undefined, {
     requireConfiguredAgent: true,
   });
-  const context: ApplicationContext = {
-    ...base,
-    agents,
-    settingsAgentSelection: selection,
+  return {
+    context: { ...base, settingsAgentSelection: selection },
+    selection,
+    emit: harness.emitSnapshot,
   };
-  return { context, selection, emit: harness.emitSnapshot };
 }
 function mount(request: GatewayBrowserClient["request"], signedIn = true, multipleProfiles = true) {
   const harness = createContext(request, signedIn, multipleProfiles);
@@ -86,6 +79,28 @@ function mount(request: GatewayBrowserClient["request"], signedIn = true, multip
     wrapper: provider.wrapper,
   });
   return { ...harness, element };
+}
+type PersonalFile = Omit<typeof file, "hash"> & { hash: string | null };
+function replies(...results: (Partial<PersonalFile> | Promise<PersonalFile> | Error)[]) {
+  const request = vi.fn();
+  for (const result of results) {
+    if (result instanceof Error) {
+      request.mockRejectedValueOnce(result);
+    } else if (result instanceof Promise) {
+      request.mockReturnValueOnce(result);
+    } else {
+      request.mockResolvedValueOnce({ ...file, ...result });
+    }
+  }
+  return request;
+}
+async function loaded(request = replies({})) {
+  const harness = mount(request);
+  await idle(harness.element);
+  return { ...harness, request };
+}
+function clientFile(result: Partial<PersonalFile>) {
+  return createTestGatewayClient(vi.fn().mockResolvedValue({ ...file, ...result }));
 }
 async function save(element: HTMLElement, content: string) {
   await input(element, content);
@@ -108,12 +123,8 @@ async function input(element: HTMLElement, value: string) {
 it("creates the signed-in personal file", async () => {
   const initial = { ...file, content: "", hash: null, missing: true };
   const content = "New file";
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce(initial)
-    .mockResolvedValueOnce({ ...file, content, hash: "hash-2" });
-  const { element } = mount(request);
-  await idle(element);
+  const request = replies(initial, { content, hash: "hash-2" });
+  const { element } = await loaded(request);
   expect(request).toHaveBeenCalledWith("users.personalFile.get", { agentId: "main" });
   expect(button(element, "Save").disabled).toBe(true);
   expect(button(element, "Reload")).toBeUndefined();
@@ -157,14 +168,13 @@ it.each([
 );
 
 it("preserves a conflicting draft, confirms reload, and keeps it when reload fails", async () => {
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce(file)
-    .mockRejectedValueOnce(new Error("Personal USER.md changed since read"))
-    .mockRejectedValueOnce(new Error("Offline"))
-    .mockResolvedValueOnce({ ...file, content: "External edit", hash: "hash-new" });
-  const { element } = mount(request);
-  await idle(element);
+  const request = replies(
+    {},
+    new Error("Personal USER.md changed since read"),
+    new Error("Offline"),
+    { content: "External edit", hash: "hash-new" },
+  );
+  const { element } = await loaded(request);
   await save(element, "My draft");
   expect(element.querySelector("textarea")?.value).toBe("My draft");
   expect(element.querySelector('[role="alert"]')?.textContent).toContain("changed since read");
@@ -183,25 +193,14 @@ it("preserves a conflicting draft, confirms reload, and keeps it when reload fai
 });
 
 it("never restores a former person's cached draft after an account change", async () => {
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce(file)
-    .mockResolvedValueOnce({ ...file, agentId: "other", content: "Other agent" });
-  const { element, selection, emit } = mount(request);
-  await idle(element);
+  const request = replies({}, { agentId: "other", content: "Other agent" });
+  const { element, selection, emit } = await loaded(request);
   await input(element, "Former person's draft");
   selection.set("other");
   await idle(element);
   emit({
     selfUser: { id: "profile-2" },
-    client: createTestGatewayClient(
-      vi.fn().mockResolvedValue({
-        ...file,
-        profileId: "profile-2",
-        agentId: "other",
-        content: "New person",
-      }),
-    ),
+    client: clientFile({ profileId: "profile-2", agentId: "other", content: "New person" }),
   });
   await idle(element);
   selection.set("main");
@@ -209,10 +208,16 @@ it("never restores a former person's cached draft after an account change", asyn
   expect(element.querySelector("textarea")?.value).not.toBe("Former person's draft");
 });
 
-it.each(["agent", "profile", "connection hello"])(
-  "ignores a late read after changing %s",
-  async (change) => {
-    const old = createDeferred<typeof file>();
+it.each([
+  { change: "agent", pending: false },
+  { change: "profile", pending: false },
+  { change: "connection hello", pending: false },
+  { change: "connection hello", pending: true },
+])(
+  "retires the old read after $change (replacement pending: $pending)",
+  async ({ change, pending }) => {
+    const old = createDeferred<PersonalFile>();
+    const replacement = createDeferred<PersonalFile>();
     const current = {
       ...file,
       agentId: change === "agent" ? "other" : file.agentId,
@@ -222,7 +227,10 @@ it.each(["agent", "profile", "connection hello"])(
     const request =
       change === "profile"
         ? vi.fn().mockReturnValue(old.promise)
-        : vi.fn().mockReturnValueOnce(old.promise).mockResolvedValueOnce(current);
+        : vi
+            .fn()
+            .mockReturnValueOnce(old.promise)
+            .mockReturnValueOnce(pending ? replacement.promise : Promise.resolve(current));
     const { element, selection, emit } = mount(request);
     await waitForSolid(() => {
       expect(request).toHaveBeenCalledWith("users.personalFile.get", { agentId: "main" });
@@ -231,50 +239,37 @@ it.each(["agent", "profile", "connection hello"])(
     if (change === "agent") {
       selection.set("other");
     } else if (change === "profile") {
-      emit({
-        client: createTestGatewayClient(vi.fn().mockResolvedValue(current)),
-        selfUser: { id: "profile-2" },
-      });
+      emit({ client: clientFile(current), selfUser: { id: "profile-2" } });
     } else {
       emit({ hello: { ...hello, server: { connId: "connection-2" } } });
     }
-    await idle(element);
+    if (pending) {
+      await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    } else {
+      await idle(element);
+    }
     old.resolve(file);
     await old.promise;
+    if (pending) {
+      flush();
+      expect(element.querySelector("textarea")).toBeNull();
+      expect(button(element, "Save").disabled).toBe(true);
+      replacement.resolve(current);
+    }
     await idle(element);
     expect(element.querySelector("textarea")?.value).toBe(current.content);
+    if (pending) {
+      await input(element, "New draft");
+      expect(element.querySelector("textarea")).toMatchObject({ value: "New draft" });
+      expect(button(element, "Save").disabled).toBe(false);
+    }
   },
 );
 
-it("keeps a replacement load locked when the previous connection's read completes", async () => {
-  const old = createDeferred<typeof file>();
-  const current = createDeferred<typeof file>();
-  const request = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
-  const { element, emit } = mount(request);
-  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
-  emit({ hello: { ...hello, server: { connId: "connection-2" } } });
-  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
-
-  old.resolve(file);
-  await old.promise;
-  flush();
-  expect(element.querySelector("textarea")).toBeNull();
-  expect(button(element, "Save").disabled).toBe(true);
-
-  current.resolve({ ...file, content: "Current instructions" });
-  await waitForSolid(() =>
-    expect(element.querySelector("textarea")?.value).toBe("Current instructions"),
-  );
-  await input(element, "New draft");
-  expect(element.querySelector("textarea")?.value).toBe("New draft");
-  expect(button(element, "Save").disabled).toBe(false);
-});
-
 it("retains the unsettled draft but ignores an old save completion after reconnecting", async () => {
   const saving = createDeferred<typeof file>();
-  const request = vi.fn().mockResolvedValueOnce(file).mockReturnValueOnce(saving.promise);
-  const { element, emit } = mount(request);
-  await idle(element);
+  const request = replies({}, saving.promise);
+  const { element, emit } = await loaded(request);
   await input(element, "Old draft");
   button(element, "Save").click();
   await waitForSolid(() => {
@@ -289,9 +284,7 @@ it("retains the unsettled draft but ignores an old save completion after reconne
     element.querySelector<HTMLButtonElement>(".personal-instructions__actions button")?.disabled,
   ).toBe(true);
   emit({
-    client: createTestGatewayClient(
-      vi.fn().mockResolvedValue({ ...file, content: "Current connection" }),
-    ),
+    client: clientFile({ content: "Current connection" }),
   });
   await idle(element);
   saving.resolve({ ...file, content: "Old draft" });
@@ -303,12 +296,12 @@ it("retains the unsettled draft but ignores an old save completion after reconne
 
 it("preserves newer draft edits after returning to an agent with a pending save", async () => {
   const saving = createDeferred<typeof file>();
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce(file)
-    .mockReturnValueOnce(saving.promise)
-    .mockResolvedValueOnce({ ...file, agentId: "other", content: "Other instructions" })
-    .mockResolvedValueOnce({ ...file, hash: "hash-3" });
+  const request = replies(
+    {},
+    saving.promise,
+    { agentId: "other", content: "Other instructions" },
+    { hash: "hash-3" },
+  );
   const { element, selection } = mount(request);
   await waitForSolid(() => expect(element.querySelector("textarea")?.value).toBe(file.content));
   await input(element, "First edit");
@@ -342,8 +335,7 @@ it("preserves newer draft edits after returning to an agent with a pending save"
 
 it("rejects a response for a different profile rather than enabling a save", async () => {
   const request = vi.fn().mockResolvedValue({ ...file, profileId: "someone-else" });
-  const { element } = mount(request);
-  await idle(element);
+  const { element } = await loaded(request);
   expect(element.querySelector("textarea")).toBeNull();
   expect(button(element, "Save").disabled).toBe(true);
   expect(element.querySelector('[role="alert"]')?.textContent).toContain("does not match");
@@ -371,8 +363,7 @@ it("retires a pending read after read access is revoked", async () => {
 
 it("retains drafts privately while offline and restores them only for the same profile", async () => {
   const request = vi.fn().mockResolvedValue(file);
-  const { element, emit } = mount(request);
-  await idle(element);
+  const { element, emit } = await loaded(request);
   await input(element, "Keep my unsaved instructions");
   emit({ phase: "offline", selfUser: null });
   await idle(element);
@@ -398,42 +389,17 @@ it("retains drafts privately while offline and restores them only for the same p
 });
 
 it("keeps the actual Profile editor mounted across an offline transition", async () => {
-  const request = vi.fn().mockImplementation(async (method: string) => {
-    switch (method) {
-      case "users.self":
-        return { profile: modelAccountProfile };
-      case "users.personalFile.get":
-        return file;
-      case "users.listModelAccounts":
-        return { profileId: modelAccountProfile.id, accounts: [], links: [] };
-      case "users.github.status":
-        return {
-          personal: {
-            state: "disconnected",
-            generation: null,
-            account: null,
-            accessExpiresAtMs: null,
-            refreshState: "not_applicable",
-            pending: null,
-          },
-          system: {
-            source: "system-detected",
-            credentialKind: "native",
-            credentialState: "unavailable",
-            account: null,
-            gitAuthor: { name: null, email: null },
-            evidence: "none",
-            accessExpiresAtMs: null,
-            refreshState: "not_applicable",
-            oauthScopes: [],
-            repositoryGrants: "unknown",
-          },
-        };
-      default:
-        throw new Error(`Unexpected request: ${method}`);
-    }
+  const request = mockRpc({
+    "users.self": () => ({ profile: modelAccountProfile }),
+    "users.personalFile.get": () => file,
+    "users.listModelAccounts": () => ({
+      profileId: modelAccountProfile.id,
+      accounts: [],
+      links: [],
+    }),
+    "users.github.status": () => disconnectedGitHub,
   });
-  const { context, emit } = createContext(request);
+  const { context, emit } = createContext(createTestGatewayClient(request).request);
   const page = mountProfilePage(context);
   flush();
   const editor = page.querySelector<HTMLElement>("openclaw-personal-instructions")!;
