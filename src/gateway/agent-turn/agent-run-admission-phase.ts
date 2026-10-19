@@ -55,6 +55,7 @@ import type {
   PreparedAgentRunModelRuntime,
   PreparedAgentRunDispatch,
 } from "./agent-run-admission-types.js";
+import { isGatewayAgentAbortRejection } from "./agent-run-dispatch-outcome.js";
 import { admitAgentRestartRecovery } from "./agent-run-recovery-admission.js";
 import {
   prepareGatewaySubagentRun,
@@ -515,7 +516,10 @@ export async function prepareAgentRunDispatch(
     const failure = userTurn
       ? await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err, "interrupted")
       : err;
-    if (!(failure instanceof AgentRunUserTurnCleanupError)) {
+    if (
+      !(failure instanceof AgentRunUserTurnCleanupError) &&
+      isGatewayAgentAbortRejection(failure, activeRunAbort.controller.signal)
+    ) {
       const failedAdmission = revalidateAdmission();
       if (failedAdmission !== true) {
         return failedAdmission;

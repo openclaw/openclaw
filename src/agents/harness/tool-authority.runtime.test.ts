@@ -68,7 +68,6 @@ const own: ReplyToolAuthorityOverlay = {
   senderId: "authority-requester",
 };
 type AdmittedContext = Awaited<ReturnType<ReturnType<typeof prepareAgentRunAdmission>["admit"]>>;
-type Handle = ReturnType<typeof createEmbeddedRunHandle>;
 function withAuthority<T>(
   admittedRunContext: AdmittedContext,
   run: (prepared: typeof attempt & { toolAuthorityFingerprint?: string }) => Promise<T>,

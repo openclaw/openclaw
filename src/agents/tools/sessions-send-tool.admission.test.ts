@@ -212,6 +212,7 @@ describe("sessions_send dispatch admission", () => {
     );
     const accepted = createDeferredCore();
     const receipt = createDeferredCore();
+    const sessionFile = "/synthetic/steering-custody/session.jsonl";
     let continuationSignal: AbortSignal | undefined;
     const capture = operatorContinuation.captureOperatorToolGatewayContinuationContext;
     const observeCapture = vi
@@ -297,7 +298,7 @@ describe("sessions_send dispatch admission", () => {
             sessionId: "target-session",
             sessionKey: targetSessionKey,
             runId: "selected-steer-run",
-            sessionFile: "/synthetic/steering-custody/session.jsonl",
+            sessionFile,
             workspaceDir: "/synthetic/steering-custody",
             provider: "openai",
             modelId: "gpt-test",
@@ -310,7 +311,7 @@ describe("sessions_send dispatch admission", () => {
               "target-session",
               selected,
               targetSessionKey,
-              undefined,
+              sessionFile,
               "main",
               prepared.replyOperation,
             );

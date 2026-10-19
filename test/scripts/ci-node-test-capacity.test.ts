@@ -50,12 +50,13 @@ it("right-sizes qualified serial selections while retaining parallel capacity an
     ...qualifiedCoreSelections,
   ];
   const job = selectedCliJob();
-  job.groups = selections.map(({ family, target }) => ({
-    ...selectedCliJob().groups[0]!,
-    shard_name: family,
-    configs: [`test/vitest/vitest.${family}.config.ts`],
-    includePatterns: [target],
-  }));
+  job.groups = selections.map(({ family, target }) => {
+    const group = selectedCliJob().groups[0]!;
+    group.shard_name = family;
+    group.configs = [`test/vitest/vitest.${family}.config.ts`];
+    group.includePatterns = [target];
+    return group;
+  });
   for (const planConcurrency of [1, 2]) {
     job.planConcurrency = planConcurrency;
     const before = structuredClone(job);

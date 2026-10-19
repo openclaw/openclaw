@@ -646,10 +646,10 @@ describe("runPreparedReply media-only handling", () => {
           }
           return undefined;
         });
-        getFollowupTurnTestState().execute.mockImplementation(async (params) => {
-          executedPrompts.push(params.commandBody);
-          queuedCapability = params.opts.cronCreatorAuthorityCapability;
-          const instance = { runId: params.opts.runId, instanceId: "isolated-queued-instance" };
+        getFollowupTurnTestState().execute.mockImplementation(async (queued) => {
+          executedPrompts.push(queued.commandBody);
+          queuedCapability = queued.opts.cronCreatorAuthorityCapability;
+          const instance = { runId: queued.opts.runId, instanceId: "isolated-queued-instance" };
           const authority = claimAgentRunDelegatedAuthority(instance);
           const identity: AgentRuntimeIdentity = {
             kind: "agentRuntime",
