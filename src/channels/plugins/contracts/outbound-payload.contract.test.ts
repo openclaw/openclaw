@@ -20,12 +20,7 @@ function createDirectTextMediaHarness(params: OutboundPayloadHarnessParams) {
     buildTextOptions: (opts) => opts as never,
     buildMediaOptions: (opts) => opts as never,
   });
-  const ctx = {
-    cfg: {},
-    to: "user1",
-    text: "",
-    payload: params.payload,
-  };
+  const ctx = { cfg: {}, to: "user1", text: "", payload: params.payload };
   const sendPayload = outbound.sendPayload;
   if (!sendPayload) {
     throw new Error("Expected direct text/media outbound sendPayload");
