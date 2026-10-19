@@ -53,7 +53,7 @@ vi.mock("./approval-reaction-poller.js", () => ({
 }));
 
 vi.mock("./approval-reactions.js", () => ({
-  maybeResolveIMessageApprovalReaction: vi.fn(async () => false),
+  handleIMessageApprovalReaction: vi.fn(async () => ({ handled: false, stopPolling: false })),
 }));
 
 vi.mock("./client.js", () => ({
