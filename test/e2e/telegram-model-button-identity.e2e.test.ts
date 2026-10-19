@@ -22,6 +22,16 @@ const CHAT = { id: 2468, type: "private" };
 const USER = { id: 1357, is_bot: false, first_name: "Picker tester" };
 const BOT = { id: 424242, is_bot: true, first_name: "Picker", username: "picker_test_bot" };
 const WAIT = { timeout: 30_000, interval: 50 };
+const apiReplies: Record<string, unknown> = {
+  getMe: BOT,
+  getChat: CHAT,
+  getWebhookInfo: { url: "", pending_update_count: 0 },
+  deleteWebhook: true,
+  setMyCommands: true,
+  deleteMyCommands: true,
+  answerCallbackQuery: true,
+  sendChatAction: true,
+};
 
 type Keyboard = Array<Array<{ text: string; callback_data: string }>>;
 type Message = ReturnType<typeof makeMessage>;
@@ -115,12 +125,8 @@ test("keeps an emitted model button bound to its provider after inventory replac
           }
         });
       }
-    } else if (method === "getMe") {
-      succeed(response, BOT);
-    } else if (method === "getChat") {
-      succeed(response, CHAT);
-    } else if (method === "getWebhookInfo") {
-      succeed(response, { url: "", pending_update_count: 0 });
+    } else if (Object.hasOwn(apiReplies, method)) {
+      succeed(response, apiReplies[method]);
     } else if (["sendMessage", "editMessageText", "editMessageReplyMarkup"].includes(method)) {
       const previous = body.message_id ? messages.get(body.message_id) : undefined;
       const message = makeMessage(
@@ -131,16 +137,6 @@ test("keeps an emitted model button bound to its provider after inventory replac
       );
       messages.set(message.message_id, message);
       succeed(response, message);
-    } else if (
-      [
-        "deleteWebhook",
-        "setMyCommands",
-        "deleteMyCommands",
-        "answerCallbackQuery",
-        "sendChatAction",
-      ].includes(method)
-    ) {
-      succeed(response, true);
     } else {
       respondJson(response, { ok: false, error_code: 404, description: method }, 404);
     }
@@ -214,20 +210,18 @@ test("keeps an emitted model button bound to its provider after inventory replac
           const openPicker = async () => {
             const start = messageId;
             command();
-            const findKeyboard = () =>
-              [...messages.values()].find(
-                (message) => message.message_id > start && modelButton(message),
-              );
-            await expect.poll(findKeyboard, WAIT).toBeDefined();
-            const keyboardMessage = findKeyboard();
-            if (!keyboardMessage) {
-              throw new Error("Gateway did not emit a model keyboard");
-            }
-            const button = modelButton(keyboardMessage);
-            if (!button) {
-              throw new Error("Gateway did not emit a model button");
-            }
-            return { message: keyboardMessage, data: button.callback_data };
+            let picked: { message: Message; data: string } | undefined;
+            await expect
+              .poll(() => {
+                const message = [...messages.values()].find(
+                  (entry) => entry.message_id > start && modelButton(entry),
+                );
+                const button = message && modelButton(message);
+                return (picked =
+                  message && button ? { message, data: button.callback_data } : undefined);
+              }, WAIT)
+              .toBeDefined();
+            return picked!;
           };
           await expect
             .poll(() => calls.some((call) => call.method === "getUpdates"), WAIT)
