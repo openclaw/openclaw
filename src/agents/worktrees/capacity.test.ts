@@ -50,7 +50,7 @@ describe("worktree Git size estimates", () => {
     expect(missing).toHaveLength(2);
     // The production executor inherits this guard, so old objectsize cannot hydrate the fixture.
     await expectMissing(clone, [missing[0]!]);
-    return { clone, commit, missing };
+    return { root, source, origin, clone, commit, missing };
   }
 
   it("hydrates a partial-clone default before advancing the local branch", async () => {

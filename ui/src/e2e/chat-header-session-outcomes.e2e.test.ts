@@ -15,6 +15,12 @@ import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-men
 const suite = createChatFlowE2eSuite();
 const sessionA = "agent:main:session-a";
 const sessionB = "agent:main:session-b";
+type HeaderSession = GatewaySessionRow & {
+  key: string;
+  kind: string;
+  label: string;
+  updatedAt: number;
+};
 
 function readPane(element: Element) {
   const pane = element as HTMLElement & {
@@ -39,7 +45,7 @@ async function navigateAwayAndBack(page: Page): Promise<void> {
 
 function sessionPair(extras: Partial<GatewaySessionRow>[] = []) {
   return [sessionA, sessionB].map((key, index) => {
-    const row: GatewaySessionRow = {
+    const row: HeaderSession = {
       key,
       kind: "direct",
       label: `Session ${index ? "B" : "A"}`,
@@ -51,7 +57,7 @@ function sessionPair(extras: Partial<GatewaySessionRow>[] = []) {
 
 function installHeader(
   page: Page,
-  rows: GatewaySessionRow[],
+  rows: HeaderSession[],
   methods: string[],
   options: Parameters<typeof installMockGateway>[1] = {},
 ) {

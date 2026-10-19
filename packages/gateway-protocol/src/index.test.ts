@@ -15,6 +15,29 @@ import {
 
 type ProtocolValidator = (value: unknown) => boolean;
 
+function expectAccepted(validate: ProtocolValidator, values: unknown[]) {
+  for (const value of values) {
+    expect(validate(value)).toBe(true);
+  }
+}
+
+function expectRejected(validate: ProtocolValidator, values: unknown[]) {
+  for (const value of values) {
+    expect(validate(value)).toBe(false);
+  }
+}
+
+function makeError(overrides: Partial<ValidationError>): ValidationError {
+  return {
+    keyword: "required",
+    instancePath: "",
+    params: {},
+    schemaPath: "#/",
+    message: "validation error",
+    ...overrides,
+  };
+}
+
 describe("lazy protocol validators", () => {
   it("validates through exported lazy validators", () => {
     expect(validateCommandsListParams({})).toBe(true);

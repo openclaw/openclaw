@@ -10,12 +10,13 @@ vi.mock("../config/io.js", () => {
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: async ({ params }: { params: unknown }) => ({ blocked: false, params }),
 }));
+// mock-isolation: the heartbeat fixture supplies one controlled tool without loading the tool registry.
 vi.mock("./tool-resolution.js", () => ({
   resolveGatewayScopedTools: () => mcp.probeTools("wait_probe", execute),
 }));
 
+import * as mcp from "./mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
-import * as mcp from "./mcp-http.test-request.js";
 
 let send: (method: "GET" | "POST", message?: unknown) => Promise<Response>;
 beforeEach(async () => {

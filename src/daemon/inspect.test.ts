@@ -237,7 +237,7 @@ it("includes current, sibling, custom, and template systemd Gateways while prese
     ["install", "gateway install --runtime bun"],
     ["profile-install", "--profile rescue gateway --profile rescue install"],
     ["status", "gateway status --json"],
-  ]) {
+  ] as const) {
     await writeCommand(name, `/usr/bin/node /opt/openclaw/openclaw.mjs ${args}`);
   }
   await writeCommand(

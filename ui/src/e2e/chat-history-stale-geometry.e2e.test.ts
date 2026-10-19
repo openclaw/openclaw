@@ -16,7 +16,11 @@ import {
 
 const suite = createChatFlowE2eSuite();
 const sessionId = "durable-geometry-session";
-const sessionInfo: GatewaySessionRow = { key: "agent:main:main", kind: "direct", sessionId };
+const sessionInfo = {
+  key: "agent:main:main",
+  kind: "direct",
+  sessionId,
+} satisfies GatewaySessionRow;
 
 function historyMessage(seq: number, text: string) {
   return {
@@ -90,7 +94,9 @@ suite.define(() => {
               const read = <T>(request: IDBRequest<T>) =>
                 new Promise<T>((resolve, reject) => {
                   request.addEventListener("success", () => resolve(request.result));
-                  request.addEventListener("error", () => reject(request.error));
+                  request.addEventListener("error", () =>
+                    reject(request.error ?? new Error("Snapshot request failed")),
+                  );
                 });
               const database = await read(indexedDB.open(databaseName));
               const transaction = database.transaction(storeName, "readwrite");

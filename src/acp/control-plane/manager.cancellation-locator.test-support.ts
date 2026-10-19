@@ -43,7 +43,7 @@ export function createGate(label: string) {
   const release = createDeferred();
   return {
     open: release.resolve,
-    wait() {
+    wait: () => {
       entered.resolve();
       return release.promise;
     },

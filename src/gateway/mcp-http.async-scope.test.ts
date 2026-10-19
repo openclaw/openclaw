@@ -34,8 +34,8 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
 vi.mock("./tool-resolution.js", () => ({ resolveGatewayScopedTools: resolveTools }));
 
 import { revokeMcpLoopbackClientGrant } from "./mcp-grant-store.js";
+import * as mcp from "./mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
-import * as mcp from "./mcp-http.test-request.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import {
   readOperatorToolGatewayAuthority,

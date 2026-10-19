@@ -12,8 +12,8 @@ import * as proxyServer from "../secrets/egress-proxy/proxy-server.js";
 import * as proxyRegistry from "../secrets/egress-proxy/registry.js";
 import * as testState from "../test-utils/openclaw-test-state.js";
 import { revokeMcpLoopbackClientGrant, type McpLoopbackRequestContext } from "./mcp-grant-store.js";
+import * as mcp from "./mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
-import * as mcp from "./mcp-http.test-request.js";
 
 // mock-isolation: Keep completion admission deferred while the real process and egress owners settle.
 vi.mock("../auto-reply/dispatch.js", () => ({

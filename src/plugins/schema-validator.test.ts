@@ -1004,5 +1004,3 @@ describe("source-aware schema validation", () => {
     expect({ sourceValue, value }).toEqual(before);
   });
 });
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

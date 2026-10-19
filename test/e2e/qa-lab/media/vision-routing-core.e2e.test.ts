@@ -54,7 +54,17 @@ function configuredProvider(model: string): ModelProviderConfig {
   return {
     apiKey: "test-key", // pragma: allowlist secret
     baseUrl: "https://example.invalid/v1",
-    models: [{ id: model, name: model, input: ["text", "image"] }],
+    models: [
+      {
+        id: model,
+        name: model,
+        input: ["text", "image"],
+        reasoning: false,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 4_096,
+      },
+    ],
   };
 }
 

@@ -19,7 +19,7 @@ export function gate() {
   return {
     entered: entered.promise,
     release: release.resolve,
-    wait() {
+    wait: () => {
       entered.resolve();
       return release.promise;
     },

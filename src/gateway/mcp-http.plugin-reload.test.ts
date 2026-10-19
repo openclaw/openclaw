@@ -17,9 +17,9 @@ import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import * as mcp from "./mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import * as captures from "./mcp-http.loopback-runtime.js";
-import * as mcp from "./mcp-http.test-request.js";
 
 const fixtureLifetime = createFixtureLifetime();
 afterEach(() => fixtureLifetime.cleanup());

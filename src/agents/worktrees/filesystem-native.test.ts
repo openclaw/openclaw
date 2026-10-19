@@ -141,11 +141,14 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
       .finally(settled);
     let cleanupPromise: Promise<void> | undefined;
     const cleanup = () =>
-      (cleanupPromise ??= fs
-        .writeFile(release, "yes")
-        .then(() => pending)
-        .then(() => undefined)
-        .finally(() => receipts.close()));
+      (cleanupPromise ??= (async () => {
+        try {
+          await fs.writeFile(release, "yes");
+          await pending;
+        } finally {
+          await receipts.close();
+        }
+      })());
     cleanupWrite = cleanup;
     const waitForMarker = (marker: string) =>
       withinTest(

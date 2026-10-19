@@ -67,12 +67,13 @@ const reserve = (guard: WorktreeAllocationGuard, bytes = GiB, retained = false) 
   guard.requireDiskSpace([{ path: root, bytes }], "fixture", retained);
 
 function mockDiskSpace() {
-  vi.spyOn(fs, "statfsSync").mockReturnValue({
-    ...fs.statfsSync(root),
-    bsize: 4096,
-    bavail: (6 * GiB) / 4096,
-    bfree: (6 * GiB) / 4096,
-  });
+  vi.spyOn(fs, "statfsSync").mockReturnValue(
+    Object.assign(fs.statfsSync(root), {
+      bsize: 4096,
+      bavail: (6 * GiB) / 4096,
+      bfree: (6 * GiB) / 4096,
+    }),
+  );
 }
 
 it("joins a dependency installation that holds allocation beyond ten minutes", async () => {

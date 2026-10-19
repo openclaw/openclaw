@@ -12,7 +12,10 @@ const suite = createChatFlowE2eSuite();
 type AnchorFrames = { frame: number; positions: Array<number | null>; readerDelta: number };
 type AnchorWindow = typeof window & { prependFrames: AnchorFrames };
 
-function touchGesture(element: Element, [start, momentum]: [boolean, boolean]) {
+function touchGesture(
+  element: Element,
+  { start, momentum }: { start: boolean; momentum: boolean },
+) {
   const thread = element as HTMLElement;
   const move = (delta: number) => {
     (window as AnchorWindow).prependFrames.readerDelta += delta;
@@ -150,7 +153,7 @@ suite.define(() => {
       const scrollTop = () => thread.evaluate((element) => element.scrollTop);
       const heldOffset = await scrollTop();
       if (activeTouch) {
-        await thread.evaluate(touchGesture, [true, momentum]);
+        await thread.evaluate(touchGesture, { start: true, momentum });
       }
       await gateway.resolveDeferred("chat.history");
       await expect
@@ -168,7 +171,7 @@ suite.define(() => {
           await scrollTop(),
           "a history prepend must not write the scroll offset during an active touch",
         ).toBe(heldOffset + (momentum ? 20 : 0));
-        await thread.evaluate(touchGesture, [false, momentum]);
+        await thread.evaluate(touchGesture, { start: false, momentum });
       }
       await waitForChatScrollIdle(page);
       // Require the fetched page to reach the viewport, not just pane state.

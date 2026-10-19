@@ -119,7 +119,7 @@ module.exports = { id: "mcp-native", register(api) {
       acquireStandalonePluginToolRegistry({
         context: { workspaceDir: plugin.dir, config: { plugins } },
       }),
-    cleanup() {
+    cleanup: () => {
       if (state.database?.isOpen) {
         state.database.close();
       }

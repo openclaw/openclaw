@@ -14,12 +14,12 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayContextResolver as withGatewayResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as mcp from "./mcp-http-request.test-support.js";
 import {
   McpLoopbackToolCache as ToolCache,
   resolveMcpLoopbackPolicyTools as resolvePolicy,
   resolveMcpLoopbackScopedTools as resolveExact,
 } from "./mcp-http.runtime.js";
-import * as mcp from "./mcp-http.test-request.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";

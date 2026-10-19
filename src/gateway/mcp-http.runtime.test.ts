@@ -5,12 +5,12 @@ import {
   readAdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { createComputerTool } from "../agents/tools/computer-tool.js";
+import * as mcp from "./mcp-http-request.test-support.js";
 import {
   McpLoopbackToolCache as ToolCache,
   resolveMcpLoopbackPolicyTools as resolvePolicy,
   resolveMcpLoopbackScopedTools as resolveExact,
 } from "./mcp-http.runtime.js";
-import * as mcp from "./mcp-http.test-request.js";
 
 const resolveGatewayScopedTools = vi.hoisted(() => vi.fn());
 const listNodes = vi.hoisted(() => vi.fn());

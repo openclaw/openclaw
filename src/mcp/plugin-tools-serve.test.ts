@@ -28,6 +28,7 @@ const acquireStandalonePluginToolRegistryMock = vi.hoisted(() =>
 const releasePluginToolsMock = vi.hoisted(() => vi.fn(async () => {}));
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
 
+// mock-isolation: gateway calls are controlled by this MCP transport fixture.
 vi.mock("../agents/tools/gateway.js", () => ({ callGatewayTool }));
 
 // mock-isolation: MCP tool fixtures provide config without starting a real config owner.

@@ -269,7 +269,7 @@ it("settles exact Startup inspection when its initial file read stalls", async (
       const options = args[1];
       signal = typeof options === "object" && options !== null ? options.signal : undefined;
       entered.resolve();
-      return new Promise<Buffer>(() => {});
+      return new Promise<never>(() => {});
     }
     return readFile(...args);
   });

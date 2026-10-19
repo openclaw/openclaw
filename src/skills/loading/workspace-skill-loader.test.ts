@@ -34,6 +34,7 @@ import {
   resolveWorkspaceSkillPromptEntries,
 } from "./workspace-skill-loader.js";
 
+// mock-isolation: discovery uses synthetic workspace manifests without the installed plugin registry.
 vi.mock("../../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: (params: { workspaceDir?: string }) =>
     createWorkspacePluginRegistry(params.workspaceDir ?? ""),
