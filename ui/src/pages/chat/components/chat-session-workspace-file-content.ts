@@ -49,3 +49,7 @@ export function unsupportedFileSidebarContent(
     },
   };
 }
+
+export function hasUniformLineEndings(content: string): boolean {
+  return new Set(content.match(/\r\n?|\n/g)).size <= 1;
+}
