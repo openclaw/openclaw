@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { startMatrixQaFaultProxy } from "../substrate/fault-proxy.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as faultProxy from "../substrate/fault-proxy.js";
 import type { MatrixQaCliSession } from "./scenario-runtime-cli.js";
 import { runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario } from "./scenario-runtime-e2ee-cli-account.js";
 import { MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT } from "./scenario-runtime-e2ee-shared.js";
@@ -23,180 +23,144 @@ vi.mock("../substrate/client.js", () => ({
     loginWithPassword: async () => account("CLI", "cli-test-token"),
   }),
 }));
-vi.mock("../substrate/fault-proxy.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../substrate/fault-proxy.js")>()),
-  startMatrixQaFaultProxy: vi.fn(),
-}));
+const startRealProxy = faultProxy.startMatrixQaFaultProxy;
 
 function account(deviceId: string, accessToken: string) {
   return { deviceId, accessToken, userId: "@owner:matrix-qa.test" };
 }
 
-describe("Matrix CLI bootstrap failure evidence and ownership", () => {
-  let root: string;
-  let proxy: Awaited<ReturnType<typeof startMatrixQaFaultProxy>>;
-  let closed: boolean;
-  let stopping: Promise<void> | undefined;
-  let proxyCleanupFailure: Error | undefined;
-  let beforeProxyStop: (() => Promise<void>) | undefined;
-  const dispose = vi.fn(async () => {});
-  const run = () =>
-    runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario(createMatrixQaE2eeTestContext());
+let root: string;
+let proxy: Awaited<ReturnType<typeof startRealProxy>>;
+let closed: boolean;
+let stopping: Promise<void> | undefined;
+let proxyCleanupFailure: Error | undefined;
+let beforeProxyStop: (() => Promise<void>) | undefined;
+const dispose = vi.fn(async () => {});
+async function run() {
+  closed = false;
+  return runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario(
+    createMatrixQaE2eeTestContext(),
+  ).finally(() => expect(closed).toBe(true));
+}
 
-  beforeEach(async () => {
-    vi.resetAllMocks();
-    closed = false;
-    stopping = undefined;
-    proxyCleanupFailure = undefined;
-    beforeProxyStop = undefined;
-    root = await mkdtemp(path.join(os.tmpdir(), "matrix-cli-bootstrap-"));
-    const actual = await vi.importActual<typeof import("../substrate/fault-proxy.js")>(
-      "../substrate/fault-proxy.js",
-    );
-    vi.mocked(startMatrixQaFaultProxy).mockImplementation(async (params) => {
-      proxy = await actual.startMatrixQaFaultProxy(params);
-      return {
-        ...proxy,
-        stop: async () => {
-          await beforeProxyStop?.();
-          stopping = proxy.stop().then(() => {
-            // The real stop joins this server's close event. Its released port may
-            // already belong to another worker when the scenario settles.
-            closed = true;
-          });
-          await stopping;
-          if (proxyCleanupFailure) {
-            throw proxyCleanupFailure;
-          }
-        },
-      };
-    });
-  });
-  afterEach(async () => {
-    await stopping;
-    if (proxy && !closed) {
-      await proxy.stop();
-    }
-    await rm(root, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
-
-  function configureCli(
-    methods: string[],
-    bootstrapError = "Matrix room key backup is not usable",
-    executionFailure?: Error,
-  ) {
-    const output = () => ({
-      stdout: JSON.stringify({
-        success: false,
-        bootstrap: { success: false, error: bootstrapError },
-      }),
-      stderr: "",
-    });
-    mocks.createRuntime.mockImplementation(async () => ({
-      rootDir: root,
-      dispose,
-      start: (args: string[]): MatrixQaCliSession => ({
-        args,
-        endStdin: () => {},
-        kill: () => {},
-        writeStdin: async () => {},
-        output,
-        waitForOutput: async () => {
-          throw new Error("unexpected waitForOutput");
-        },
-        wait: async () => {
-          for (const method of methods) {
-            const response = await fetch(
-              `${proxy.baseUrl}${MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT}`,
-              {
-                method,
-                headers: { authorization: "Bearer cli-test-token" },
-              },
-            );
-            await response.arrayBuffer();
-          }
-          if (executionFailure) {
-            throw executionFailure;
-          }
-          return { args, exitCode: 7, ...output() };
-        },
-      }),
-    }));
-  }
-
-  it("rejects CLI failure without POST evidence", async () => {
-    configureCli(["GET"]);
-    await expect(run()).rejects.toThrow("did not attempt faulted room-key backup creation");
-    expect(closed).toBe(true);
-    expect(dispose).toHaveBeenCalledOnce();
-  });
-
-  it("accepts POST plus backup failure and rejects an unrelated CLI failure", async () => {
-    configureCli(["GET", "POST"]);
-    await expect(run()).resolves.toMatchObject({
-      artifacts: { bootstrapSuccess: false, faultHitCount: 2 },
-    });
-    expect(closed).toBe(true);
-    closed = false;
-    configureCli(["POST"], "unrelated failure");
-    await expect(run()).rejects.toThrow("unexpected reason");
-    expect(closed).toBe(true);
-  });
-
-  it("does not accept partial failure JSON from a timed-out CLI", async () => {
-    const failure = new Error("Matrix QA CLI command timed out after 1000ms");
-    configureCli(["POST"], "Matrix room key backup is not usable", failure);
-    await expect(run()).rejects.toBe(failure);
-    expect(closed).toBe(true);
-    expect(dispose).toHaveBeenCalledOnce();
-  });
-
-  it.each(["construction", "disposal", "undefined disposal"] as const)(
-    "preserves %s failure through proxy cleanup",
-    async (phase) => {
-      const failure = phase === "disposal" ? new Error("CLI disposal failed") : undefined;
-      proxyCleanupFailure =
-        phase === "undefined disposal" ? undefined : new Error("proxy stop failed");
-      if (phase === "construction") {
-        mocks.createRuntime.mockRejectedValueOnce(failure);
-      } else {
-        configureCli(["POST"]);
-        dispose.mockRejectedValueOnce(failure);
-      }
-      const rejected = expect(run()).rejects;
-      if (proxyCleanupFailure) {
-        await rejected.toMatchObject({ cause: failure, errors: [failure, proxyCleanupFailure] });
-      } else {
-        await rejected.toBeUndefined();
-      }
-      expect(closed).toBe(true);
-    },
-  );
-
-  it("joins proxy cleanup before returning a CLI disposal failure", async () => {
-    const disposalFailure = new Error("CLI disposal failed");
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    beforeProxyStop = async () => {
-      entered.resolve();
-      await release.promise;
+beforeEach(async () => {
+  vi.resetAllMocks();
+  stopping = undefined;
+  proxyCleanupFailure = undefined;
+  beforeProxyStop = undefined;
+  root = await mkdtemp(path.join(os.tmpdir(), "matrix-cli-bootstrap-"));
+  configureCli();
+  vi.spyOn(faultProxy, "startMatrixQaFaultProxy").mockImplementation(async (params) => {
+    proxy = await startRealProxy(params);
+    return {
+      ...proxy,
+      stop: async () => {
+        await beforeProxyStop?.();
+        stopping = proxy.stop();
+        await stopping;
+        closed = true; // The real stop joins the server's close event, not a port probe.
+        if (proxyCleanupFailure) {
+          throw proxyCleanupFailure;
+        }
+      },
     };
-    configureCli(["POST"]);
-    dispose.mockRejectedValueOnce(disposalFailure);
-    let settled = false;
-    const operation = run().catch((error: unknown) => {
-      settled = true;
-      return error;
-    });
-    try {
-      await entered.promise;
-      await setImmediate();
-      expect(settled).toBe(false);
-    } finally {
-      release.resolve();
-      expect(await operation).toBe(disposalFailure);
-    }
-    expect(closed).toBe(true);
   });
+});
+afterEach(async () => {
+  await (stopping ?? (proxy && !closed ? proxy.stop() : undefined));
+  await rm(root, { recursive: true, force: true });
+  vi.restoreAllMocks();
+});
+
+function configureCli(
+  methods: string[] = ["POST"],
+  bootstrapError = "Matrix room key backup is not usable",
+  executionFailure?: Error,
+) {
+  const stdout = JSON.stringify({ success: false, bootstrap: { error: bootstrapError } });
+  mocks.createRuntime.mockImplementation(async () => ({
+    rootDir: root,
+    dispose,
+    start: (args: string[]): Pick<MatrixQaCliSession, "kill" | "wait"> => ({
+      kill: () => {},
+      wait: async () => {
+        for (const method of methods) {
+          const response = await fetch(
+            `${proxy.baseUrl}${MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT}`,
+            { method, headers: { authorization: "Bearer cli-test-token" } },
+          );
+          await response.arrayBuffer();
+        }
+        if (executionFailure) {
+          throw executionFailure;
+        }
+        return { args, exitCode: 7, stdout, stderr: "" };
+      },
+    }),
+  }));
+}
+
+it("rejects CLI failure without POST evidence", async () => {
+  configureCli(["GET"]);
+  await expect(run()).rejects.toThrow("did not attempt faulted room-key backup creation");
+  expect(dispose).toHaveBeenCalledOnce();
+});
+
+it("accepts POST plus backup failure and rejects an unrelated CLI failure", async () => {
+  configureCli(["GET", "POST"]);
+  await expect(run()).resolves.toMatchObject({
+    artifacts: { bootstrapSuccess: false, faultHitCount: 2 },
+  });
+  configureCli(["POST"], "unrelated failure");
+  await expect(run()).rejects.toThrow("unexpected reason");
+});
+
+it("does not accept partial failure JSON from a timed-out CLI", async () => {
+  const failure = new Error("Matrix QA CLI command timed out after 1000ms");
+  configureCli(["POST"], "Matrix room key backup is not usable", failure);
+  await expect(run()).rejects.toBe(failure);
+  expect(dispose).toHaveBeenCalledOnce();
+});
+
+it.each(["construction", "disposal", "undefined disposal"] as const)(
+  "preserves %s failure through proxy cleanup",
+  async (phase) => {
+    const failure = phase === "disposal" ? new Error("CLI disposal failed") : undefined;
+    proxyCleanupFailure =
+      phase === "undefined disposal" ? undefined : new Error("proxy stop failed");
+    if (phase === "construction") {
+      mocks.createRuntime.mockRejectedValueOnce(failure);
+    } else {
+      dispose.mockRejectedValueOnce(failure);
+    }
+    await expect(run()).rejects.toEqual(
+      proxyCleanupFailure
+        ? expect.objectContaining({ cause: failure, errors: [failure, proxyCleanupFailure] })
+        : undefined,
+    );
+  },
+);
+
+it("joins proxy cleanup before returning a CLI disposal failure", async () => {
+  const disposalFailure = new Error("CLI disposal failed");
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  beforeProxyStop = async () => {
+    entered.resolve();
+    await release.promise;
+  };
+  dispose.mockRejectedValueOnce(disposalFailure);
+  let settled = false;
+  const operation = run().catch((error: unknown) => {
+    settled = true;
+    return error;
+  });
+  try {
+    await entered.promise;
+    await setImmediate();
+    expect(settled).toBe(false);
+  } finally {
+    release.resolve();
+    expect(await operation).toBe(disposalFailure);
+  }
 });

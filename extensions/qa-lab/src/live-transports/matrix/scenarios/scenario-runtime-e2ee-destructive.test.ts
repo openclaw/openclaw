@@ -5,7 +5,7 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { assertMatrixQaCliBackupRestoreFailed } from "./scenario-runtime-e2ee-destructive-recovery.js";
 import { mutateMatrixQaCliStateLoss } from "./scenario-runtime-e2ee-state.js";
 import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
@@ -90,38 +90,32 @@ import {
   runMatrixQaE2eeWrongAccountRecoveryKeyScenario,
 } from "./scenario-runtime-e2ee-destructive.js";
 
-function createDisposableOwner(params: {
-  cleanupOrder?: string[];
-  failCleanup?: boolean;
-  label: string;
-}) {
+function createDisposableOwner(label: string, cleanupOrder: string[], failCleanup = false) {
+  const recordCleanup = (action: string, error: string) => {
+    cleanupOrder.push(`${label}:${action}`);
+    if (failCleanup) {
+      throw new Error(`${label} ${error} failed`);
+    }
+  };
   return {
     bootstrapOwnDeviceVerification: vi.fn(async () => ({
       success: true,
       verification: {
-        backupVersion: `${params.label}-backup`,
+        backupVersion: `${label}-backup`,
         crossSigningVerified: true,
         verified: true,
       },
     })),
     deleteOwnDevices: vi.fn(async (deviceIds: string[]) => {
-      params.cleanupOrder?.push(`${params.label}:delete:${deviceIds.join(",")}`);
-      if (params.failCleanup) {
-        throw new Error(`${params.label} device cleanup failed`);
-      }
+      recordCleanup(`delete:${deviceIds.join(",")}`, "device cleanup");
       return {};
     }),
     getRecoveryKey: vi.fn(async () => ({
-      encodedPrivateKey: `${params.label}-recovery-key`,
-      keyId: `${params.label}-key`,
+      encodedPrivateKey: `${label}-recovery-key`,
+      keyId: `${label}-key`,
     })),
-    sendTextMessage: vi.fn(async () => `$${params.label}-seed`),
-    stop: vi.fn(async () => {
-      params.cleanupOrder?.push(`${params.label}:stop`);
-      if (params.failCleanup) {
-        throw new Error(`${params.label} stop failed`);
-      }
-    }),
+    sendTextMessage: vi.fn(async () => `$${label}-seed`),
+    stop: vi.fn(async () => recordCleanup("stop", "stop")),
   };
 }
 
@@ -175,9 +169,7 @@ it("awaits target room sync before sending", async () => {
     primeRoom: vi.fn(async () => "raw-cursor"),
   });
   mocks.createMatrixQaE2eeScenarioClient.mockResolvedValue(driver);
-  mocks.readMatrixQaGatewayMatrixAccount.mockResolvedValue({
-    enabled: true,
-  });
+  mocks.readMatrixQaGatewayMatrixAccount.mockResolvedValue({ enabled: true });
   mocks.waitForMatrixSyncStoreWithCursor.mockResolvedValue({
     cursor: "saved-cursor",
     pathname: "/tmp/unused-sync-store",
@@ -206,25 +198,14 @@ it("awaits target room sync before sending", async () => {
     expect.objectContaining({ accountId: "sut", accountConfig: { enabled: true } }),
   );
 });
-describe("Matrix destructive E2EE storage discovery", () => {
-  const tempDirs: string[] = [];
-
-  afterEach(async () => {
-    resetPluginStateStoreForTests();
-    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
-  });
-
-  it("finds account metadata stored in account-local SQLite", async () => {
-    const stateDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-storage-"));
-    tempDirs.push(stateDir);
+it("finds account metadata stored in account-local SQLite", async () => {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-storage-"));
+  try {
     const accountRoot = path.join(stateDir, "matrix", "accounts", "stored-key", "server", "token");
     createPluginStateSyncKeyedStoreForTests(
       "matrix",
       storageMetadataRuntime.openMatrixStorageMetaStoreOptions(accountRoot),
-    ).register("current", {
-      deviceId: "DEVICE",
-      userId: "@owner:matrix-qa.test",
-    });
+    ).register("current", { deviceId: "DEVICE", userId: "@owner:matrix-qa.test" });
     resetPluginStateStoreForTests();
 
     await expect(
@@ -235,7 +216,10 @@ describe("Matrix destructive E2EE storage discovery", () => {
         userId: "@owner:matrix-qa.test",
       }),
     ).resolves.toMatchObject({ accountRoot });
-  });
+  } finally {
+    resetPluginStateStoreForTests();
+    await rm(stateDir, { force: true, recursive: true });
+  }
 });
 
 it.each([
@@ -247,10 +231,7 @@ it.each([
   const cleanupOrder: string[] = [];
   const failure = new Error("runtime construction failed");
   const owner = {
-    ...createDisposableOwner({
-      cleanupOrder,
-      label: "owner",
-    }),
+    ...createDisposableOwner("owner", cleanupOrder),
     resetRoomKeyBackup: vi.fn(async () => ({ success: true, createdVersion: "fresh-backup" })),
   };
   owner.getRecoveryKey
@@ -274,16 +255,8 @@ it.each([
 
 it("uses disposable source and target owners without reading observer credentials", async () => {
   const cleanupOrder: string[] = [];
-  const sourceOwner = createDisposableOwner({
-    cleanupOrder,
-    failCleanup: true,
-    label: "source",
-  });
-  const targetOwner = createDisposableOwner({
-    cleanupOrder,
-    failCleanup: true,
-    label: "target",
-  });
+  const sourceOwner = createDisposableOwner("source", cleanupOrder, true);
+  const targetOwner = createDisposableOwner("target", cleanupOrder, true);
   const registerWithToken = vi
     .fn()
     .mockResolvedValueOnce(account("source"))
@@ -311,11 +284,7 @@ it("uses disposable source and target owners without reading observer credential
   });
   mocks.runMatrixQaCliJson.mockResolvedValue({
     payload: {
-      backup: {
-        decryptionKeyCached: false,
-        keyLoadError: "bad MAC",
-        matchesDecryptionKey: false,
-      },
+      backup: { decryptionKeyCached: false, keyLoadError: "bad MAC", matchesDecryptionKey: false },
       backupVersion: "target-backup",
       error: "bad MAC",
       success: false,
@@ -328,10 +297,7 @@ it("uses disposable source and target owners without reading observer credential
   expect(registerWithToken).toHaveBeenCalledTimes(2);
   expect(mocks.createMatrixQaE2eeScenarioClient).toHaveBeenCalledTimes(2);
   expect(mocks.loginMatrixQaRecoveryDevice).toHaveBeenCalledWith(
-    expect.objectContaining({
-      password: "target-password",
-      userId: "@target:matrix-qa.test",
-    }),
+    expect.objectContaining({ password: "target-password", userId: "@target:matrix-qa.test" }),
   );
   expect(mocks.runMatrixQaCliJson).toHaveBeenCalledWith(
     expect.objectContaining({ stdin: "source-recovery-key\n" }),
@@ -346,9 +312,6 @@ it("uses disposable source and target owners without reading observer credential
     "target:stop",
     "source:stop",
   ]);
-  expect(targetOwner.deleteOwnDevices).toHaveBeenCalledOnce();
-  expect(targetOwner.stop).toHaveBeenCalledOnce();
-  expect(sourceOwner.stop).toHaveBeenCalledOnce();
 });
 
 it.each([
