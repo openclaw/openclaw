@@ -393,7 +393,13 @@ function createSharedStateWorkerOwner() {
                 retainCleanup: (cleanup) => {
                   admitted.cleanup = cleanup;
                 },
-                onNativeLost: () => notifyListeners(nativeLostListeners, undefined),
+                // Bind only the listener set so the broker does not retain the opening caller.
+                onNativeLost: notifyListeners.bind(
+                  undefined,
+                  nativeLostListeners,
+                  undefined,
+                  undefined,
+                ),
               },
             ),
           );
