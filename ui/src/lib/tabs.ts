@@ -1,4 +1,5 @@
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { createMemo, createSignal, onCleanup } from "solid-js";
+import { createPendingFocus } from "./reactive/pending-focus.ts";
 
 type TabsActivation = "auto" | "manual";
 
@@ -102,7 +103,7 @@ export function createTabList(
     const layoutKey = createMemo(() =>
       JSON.stringify([active(), items().map((item) => item.value)]),
     );
-    createEffect(
+    createPendingFocus(
       () => {
         const key = layoutKey();
         let focused = document.activeElement;
@@ -111,18 +112,21 @@ export function createTabList(
         }
         return { key, focused };
       },
-      ({ focused }) => {
-        queueMicrotask(() => {
-          const selected = nodes.get(active() ?? "");
-          if (!root().isConnected || !selected) {
-            return;
-          }
-          selected.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-          // Keyed movement may blur a retained node; newer user focus always wins.
-          if (focused === selected && focusNeedsRecovery(selected)) {
-            selected.focus({ preventScroll: true });
-          }
-        });
+      {
+        requested: () => true,
+        focus: ({ focused }) => {
+          queueMicrotask(() => {
+            const selected = nodes.get(active() ?? "");
+            if (!root().isConnected || !selected) {
+              return;
+            }
+            selected.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+            // Keyed movement may blur a retained node; newer user focus always wins.
+            if (focused === selected && focusNeedsRecovery(selected)) {
+              selected.focus({ preventScroll: true });
+            }
+          });
+        },
       },
     );
   }
