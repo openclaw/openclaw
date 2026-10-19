@@ -2,6 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
 import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
+import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../components/mcp-app-catalog.tsx";
@@ -327,7 +328,10 @@ export function renderChatComposerView(
             onPointerDown={(event: PointerEvent) =>
               focusComposerFromChrome(event, context().canCompose, state.composerTextarea)
             }
-            ref={context().state.composerInputRef ?? undefined}
+            ref={[
+              context().state.composerInputRef ?? undefined,
+              createBackgroundLayoutRef("composer"),
+            ]}
           >
             {context().menus.slashMenuVisible ? (
               <SlashMenu
