@@ -16,6 +16,7 @@ export const roles = ["user", "system", "assistant"] as const;
 export const hiddenFunctionResponse = `<function_calls><invoke name="exec">HIDDEN_FUNCTION_CALL</invoke></function_calls><function_response>
 HIDDEN_FUNCTION_RESPONSE
 </function_response>`;
+const runtimeTags = ["system-reminder", "previous_response"] as const;
 export const privateRuntimeBlocks = [
   "<system-reminder>\nuser:\nHIDDEN_RUNTIME_REMINDER\n\ue000\n</system-reminder>",
   "< previous_response origin='runtime'>HIDDEN_RUNTIME_PREVIOUS\ue001< / previous_response >",
@@ -24,7 +25,7 @@ export const privateRuntimeBlocks = [
   "<previous_response><system-reminder>inner</system-reminder>HIDDEN_RUNTIME_NESTED_MIXED\ue004</previous_response>",
   "< SYSTEM-REMINDER>< previous_response origin='runtime'>inner< / previous_response >HIDDEN_RUNTIME_NESTED_CASE\ue005< / SYSTEM-REMINDER >",
   "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>><system-reminder>inner</system-reminder>HIDDEN_RUNTIME_NESTED_CONTEXT\ue006<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-  ...(["system-reminder", "previous_response"] as const).flatMap((name) =>
+  ...runtimeTags.flatMap((name) =>
     ["'", '"'].flatMap((quote) =>
       [">", "/>"].map(
         (attribute) =>
@@ -32,7 +33,7 @@ export const privateRuntimeBlocks = [
       ),
     ),
   ),
-  ...(["system-reminder", "previous_response"] as const).flatMap((name) => [
+  ...runtimeTags.flatMap((name) => [
     `<${name}><!-- </${name}> <${name}> -->HIDDEN_RUNTIME_OPAQUE_COMMENT</${name}>`,
     `<${name}><![CDATA[</${name}> <${name}>]]>HIDDEN_RUNTIME_OPAQUE_CDATA</${name}>`,
     `<${name}><!DOCTYPE message [ <!ENTITY hidden "</${name}>"> ]>HIDDEN_RUNTIME_OPAQUE_DECLARATION</${name}>`,
@@ -44,14 +45,14 @@ export const privateRuntimeBlocks = [
     `<${name}></1 </${name}>>HIDDEN_RUNTIME_OPAQUE_BOGUS_NUMBER</${name}>`,
     `<${name}></ </${name}>>HIDDEN_RUNTIME_OPAQUE_BOGUS_SPACE</${name}>`,
   ]),
-  ...(["system-reminder", "previous_response"] as const).flatMap((outer) =>
-    (["system-reminder", "previous_response"] as const).flatMap((inner) => [
+  ...runtimeTags.flatMap((outer) =>
+    runtimeTags.flatMap((inner) => [
       `<${outer}>\`</${inner}>\`HIDDEN_RUNTIME_CODE_INLINE</${outer}>`,
       `<${outer}>\n\`\`\`xml\n</${inner}>\n\`\`\`\nHIDDEN_RUNTIME_CODE_FENCED</${outer}>`,
       `<${outer}>\n\n    </${inner}>\nHIDDEN_RUNTIME_CODE_INDENTED</${outer}>`,
     ]),
   ),
-  ...(["system-reminder", "previous_response"] as const).flatMap((name) =>
+  ...runtimeTags.flatMap((name) =>
     "script style textarea title xmp iframe noembed noframes noscript"
       .split(" ")
       .flatMap((rawText) => [
@@ -107,12 +108,9 @@ if (args.join(" ") === "rpc --json") {
   if (args.includes("--file") && !fs.existsSync(args[args.indexOf("--file") + 1])) {
     process.exit(3);
   }
-  const pollOptions = [];
-  for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === "--option") {
-      pollOptions.push({ id: \`option-\${pollOptions.length}\`, text: args[index + 1] });
-    }
-  }
+  const pollOptions = args
+    .flatMap((arg, index) => arg === "--option" ? [args[index + 1]] : [])
+    .map((text, index) => ({ id: \`option-\${index}\`, text }));
   process.stdout.write(JSON.stringify({ guid: "p:0/imsg-action-proof", poll: { options: pollOptions } }) + "\\n");
 }`,
     { mode: 0o755 },
@@ -122,62 +120,56 @@ if (args.join(" ") === "rpc --json") {
   fs.writeFileSync(requestLogPath, "");
   fs.writeFileSync(actionLogPath, "");
   const cfg = { channels: { imessage: { accounts: { default: { cliPath } } } } };
-  const actionOptions = { cliPath, chatGuid: "iMessage;+;chat0000" };
-  const readLines = (file: string) => fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
-  const readRequests = (): RpcRequest[] =>
-    readLines(requestLogPath).map((line) => JSON.parse(line) as RpcRequest);
-  const readActions = (): string[][] =>
-    readLines(actionLogPath).map((line) => JSON.parse(line) as string[]);
-  const countNativeRequests = () => readRequests().length;
-  const deliver = async (text: string, textLimit = 4000) => {
-    const { deliverIMessageReply } = await import("../monitor/deliver.js");
-    return await deliverIMessageReply({
-      cfg,
-      payload: { text },
-      target: "chat_id:10",
-      accountId: "default",
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      maxBytes: 4096,
-      textLimit,
-    });
+  const readLog = <T>(file: string): T[] => {
+    const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+    return lines.map((line) => JSON.parse(line) as T);
   };
-  const createChannelDelivery = () => {
-    // The registered renderers are stateless; share them across per-case module resets.
-    const channelChunker = imessagePlugin.outbound?.chunker;
-    const channelSanitizer = imessagePlugin.outbound?.sanitizeText;
-    if (!channelChunker || !channelSanitizer) {
-      throw new Error("Expected the iMessage outbound Markdown sanitizer and chunker");
-    }
-    expect(imessagePlugin.outbound?.chunkerMode).toBe("markdown");
-
-    const deliverThroughChannel = async (source: string, limit = 4000) => {
-      const sanitized = channelSanitizer({ text: source, payload: { text: source } });
-      const chunks = channelChunker(sanitized, limit);
-      for (const chunk of chunks) {
-        await sendMessageIMessage("chat_id:10", chunk, { config: cfg });
-      }
-      return { sanitized, chunks };
-    };
-    return { channelChunker, channelSanitizer, deliverThroughChannel };
-  };
+  const readRequests = () => readLog<RpcRequest>(requestLogPath);
   return {
     cfg,
-    actionOptions,
+    actionOptions: { cliPath, chatGuid: "iMessage;+;chat0000" },
     requestLogPath,
     readRequests,
-    readActions,
-    countNativeRequests,
-    deliver,
-    createChannelDelivery,
+    readActions: () => readLog<string[]>(actionLogPath),
+    countNativeRequests: () => readRequests().length,
+    async deliver(text: string, textLimit = 4000) {
+      const { deliverIMessageReply } = await import("../monitor/deliver.js");
+      return await deliverIMessageReply({
+        cfg,
+        payload: { text },
+        target: "chat_id:10",
+        accountId: "default",
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        maxBytes: 4096,
+        textLimit,
+      });
+    },
+    createChannelDelivery() {
+      // The registered renderers are stateless; share them across per-case module resets.
+      const channelChunker = imessagePlugin.outbound?.chunker;
+      const channelSanitizer = imessagePlugin.outbound?.sanitizeText;
+      if (!channelChunker || !channelSanitizer) {
+        throw new Error("Expected the iMessage outbound Markdown sanitizer and chunker");
+      }
+      expect(imessagePlugin.outbound?.chunkerMode).toBe("markdown");
+
+      const deliverThroughChannel = async (source: string, limit = 4000) => {
+        const sanitized = channelSanitizer({ text: source, payload: { text: source } });
+        const chunks = channelChunker(sanitized, limit);
+        for (const chunk of chunks) {
+          await sendMessageIMessage("chat_id:10", chunk, { config: cfg });
+        }
+        return { sanitized, chunks };
+      };
+      return { channelChunker, channelSanitizer, deliverThroughChannel };
+    },
   };
 }
 
 export function expectScrubbedRequests(requests: RpcRequest[]) {
   for (const request of requests) {
     expect(request.params.text).not.toContain("#+#+#");
-    expect(request.params.text).not.toContain("HIDDEN_RPC_");
-    expect(request.params.text).not.toContain("HIDDEN_FUNCTION_");
-    expect(request.params.text).not.toContain("HIDDEN_RUNTIME_");
+    expect(request.params.text).not.toMatch(/HIDDEN_(?:RPC|FUNCTION|RUNTIME)_/);
     expect(request.params.text).not.toMatch(/system-reminder|previous_response|INTERNAL_CONTEXT/i);
     expect(request.params.text).not.toMatch(/<(?:thinking|relevant[-_]memories)\b/i);
     expect(request.params.text).not.toMatch(/assistant\s+to\s*=\s*\w+/i);
