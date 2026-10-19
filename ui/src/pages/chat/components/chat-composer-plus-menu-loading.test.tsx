@@ -48,7 +48,7 @@ function mountMenu() {
 it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as const)(
   "keeps the trigger and respects %s focus while menu content loads",
   async (mode) => {
-    const ready = createDeferred<void>();
+    const ready = createDeferred();
     onTestFinished(() => ready.resolve());
     let loads = 0;
     vi.doMock("./chat-composer-plus-menu-content.tsx", async () => {

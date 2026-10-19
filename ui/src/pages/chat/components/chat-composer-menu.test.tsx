@@ -257,10 +257,10 @@ it("retains attachment choices while the native menu closes and reopens", async 
     ".agent-chat__input-btn--attach",
   )!;
   trigger.click();
-  await waitForSolid(() => {
-    expect(view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true })).toBeTruthy();
-    expect(open()).toBe(true);
-  });
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  await waitForSolid(() =>
+    expect(view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true })).toBeTruthy(),
+  );
   const choice = view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true });
   expect(choice.querySelector("svg")).not.toBeNull();
   setOpen(false);
