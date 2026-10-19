@@ -266,7 +266,7 @@ suite.define(() => {
     await expect
       .poll(() => terminalPanel.evaluate((element) => element.getBoundingClientRect().width))
       .toBeGreaterThan(widthBeforeExpand);
-    await expectSidePanelTabs(page, ["Dashboard", "Browser", "OpenClaw"], false);
+    await expectSidePanelTabs(page, expectedTabLabels);
 
     await selectChatLayoutAction(page, "Restore split");
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
