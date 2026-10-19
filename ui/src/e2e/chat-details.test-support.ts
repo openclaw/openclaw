@@ -66,3 +66,26 @@ export async function openDetailsPullRequests(page: Page | Locator): Promise<Loc
   await expect.poll(() => pullRequests.getAttribute("open")).not.toBeNull();
   return pullRequests;
 }
+
+/** Open the saved plan through the current desktop disclosure or mobile Details page. */
+export async function openChatTaskProgress(page: Page | Locator): Promise<Locator> {
+  const details = await openChatDetails(page);
+  const root = details.locator(".chat-details-mobile-root").filter({ visible: true });
+  const mobilePage = details
+    .locator('.chat-mobile-details-page[data-details-page="task-progress"]')
+    .filter({ visible: true });
+  if (await details.locator(".chat-mobile-host__details").count()) {
+    await expect
+      .poll(async () => (await root.isVisible()) || (await mobilePage.isVisible()))
+      .toBe(true);
+  }
+  if (await root.isVisible()) {
+    await root.locator('[data-details-destination="task-progress"]').click();
+  }
+  const progress = details
+    .locator('[data-progress-card-placement="details"]')
+    .or(details.locator('.chat-mobile-details-page[data-details-page="task-progress"]'))
+    .filter({ visible: true });
+  await progress.waitFor();
+  return progress;
+}
