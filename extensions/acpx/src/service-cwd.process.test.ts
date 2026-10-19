@@ -38,7 +38,7 @@ await import(${JSON.stringify(pathToFileURL(ownerAgentScript).href)});
       const ctx: OpenClawPluginServiceContext = {
         stateDir: state.stateDir,
         workspaceDir: defaultWorkspace,
-        config: { agents: { list: [{ id: "main", workspace }] } },
+        config: { agents: { entries: { main: { workspace } } } },
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       };
       const publish =
