@@ -25,7 +25,6 @@ import {
 import type { TerminalInputs, TerminalPanelSessionTab } from "./terminal-panel-session-types.ts";
 import { terminalPanelTabIcon, terminalPanelHostedTabs } from "./terminal-panel-tabs.tsx";
 import { createTerminalPanelUpload, type TerminalPanelUpload } from "./terminal-panel-upload.ts";
-
 import { createTerminalSessionPicker } from "./terminal-session-picker.ts";
 
 // Clone the SVG itself: insertion consumes a fragment and loses its replacement boundary.
@@ -75,7 +74,6 @@ export function createTerminalPanel(
     // Ghostty measures its canvas; only the active session may occupy the viewport.
     for (const tab of terminalSessions.state.tabs) {
       tab.host.style.display = tab.id === terminalSessions.state.activeId ? "block" : "none";
-
     }
     updated(changed);
   });
@@ -468,20 +466,20 @@ export function createTerminalPanel(
         activeTab,
         draft: activeTab ? draftFor(activeTab).text : "",
         attachments: activeTab ? draftFor(activeTab).attachments : [],
-        onRemoveAttachment: (index) => {
+        onRemoveAttachment: (index: number): void => {
           if (activeTab) {
             const draft = draftFor(activeTab);
             draft.attachments = draft.attachments.filter((_, position) => position !== index);
             publish();
           }
         },
-        onDraft: (text) => {
+        onDraft: (text: string): void => {
           if (activeTab) {
             draftFor(activeTab).text = text;
             publish();
           }
         },
-        onSubmit: () => {
+        onSubmit: (): void => {
           if (
             !activeTab ||
             activeTab.status !== "live" ||
@@ -542,15 +540,14 @@ export function createTerminalPanel(
         viewportRef: (nextViewport: HTMLDivElement) => {
           viewport = nextViewport;
         },
-        onSelect: (id: string) => owner.selectHostedTab(id),
+        onSelect: (id: string): void => owner.selectHostedTab(id),
         onClose: (id: string): Promise<void> => owner.closeHostedTab(id),
-        onNew: () => {
+        onNew: (): void => {
           sessionPicker?.onDismiss(false);
           void terminalSessions.openSession();
         },
-        onDock: (dock: TerminalDock) => setDock(dock),
-
-        onOpenFullscreen: () => openFullscreen(),
+        onDock: (dock: TerminalDock): void => setDock(dock),
+        onOpenFullscreen: (): void => openFullscreen(),
         onHide: (): void => owner.closeTerminalPanel(),
       };
     },
