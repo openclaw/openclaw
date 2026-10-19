@@ -1,5 +1,5 @@
 import type { SystemChangeEntry, SystemChangesListResult } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import "../../components/openclaw-mascot.ts";
 import type { SidebarAttentionElementAttributes } from "../../components/sidebar-attention-element.ts";
 import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
@@ -18,6 +18,7 @@ import { CustodianSurface } from "./custodian-surface.tsx";
 import type { CustodianRouteData } from "./route.ts";
 
 type Props = { onboarding: boolean; newAgentIntent: boolean; store: CustodianSessionStore };
+const propertyReceipts = new WeakMap<HTMLElement, (key: keyof Props) => void>();
 type History = {
   open: boolean;
   entries: SystemChangeEntry[];
@@ -26,16 +27,11 @@ type History = {
   error: string | null;
   loaded: boolean;
 };
-function CustodianPageContent(props: Props) {
+function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const channels = projectChannels(context.channels);
-  const store = createMemo(() => projectOwner(props.store, (source) => source));
-  // The provided session owner decides when its Gateway transcript needs refreshing.
-  createEffect(
-    () => props.store,
-    (source) => void source.refreshTranscriptIfIdle(),
-  );
+  const store = projectOwner(host.store, (source) => source);
   const historyAvailable = createMemo(() => {
     const snapshot = gateway.read().snapshot;
     return (
@@ -58,22 +54,39 @@ function CustodianPageContent(props: Props) {
   onCleanup(() => {
     disposed = true;
   });
-  // Refresh the Gateway channel inventory while onboarding needs its initial snapshot.
-  createEffect(
-    () => [props.onboarding, store().read().channelOnboardingNudgeClosed, channels.read()] as const,
-    ([onboarding, closed, state]) => {
-      if (
-        onboarding &&
-        !closed &&
-        state.connected &&
-        !state.channelsSnapshot &&
-        !state.channelsLoading &&
-        !state.channelsError
-      ) {
-        void context.channels.refresh(false);
+  function refreshChannelInventory() {
+    const state = context.channels.state;
+    if (
+      host.onboarding &&
+      !host.store.channelOnboardingNudgeClosed &&
+      state.connected &&
+      !state.channelsSnapshot &&
+      !state.channelsLoading &&
+      !state.channelsError
+    ) {
+      void context.channels.refresh(false);
+    }
+  }
+  onSettled(() => {
+    propertyReceipts.set(host, (key) => {
+      if (key === "store") {
+        store.replaceSource(host.store);
+        void host.store.refreshTranscriptIfIdle();
       }
-    },
-  );
+      refreshChannelInventory();
+    });
+    store.replaceSource(host.store);
+    // Setup and channel receipts admit missing onboarding inventory before another refresh.
+    const subscriptions = [store, channels].map((source) =>
+      source.subscribe(refreshChannelInventory),
+    );
+    void host.store.refreshTranscriptIfIdle();
+    refreshChannelInventory();
+    return () => {
+      propertyReceipts.delete(host);
+      subscriptions.forEach((stop) => stop());
+    };
+  });
   useGatewayPage({
     getGateway: () => context.gateway,
     onSnapshot: ({ initial, becameConnected }) => {
@@ -126,7 +139,7 @@ function CustodianPageContent(props: Props) {
     }));
   }
   const channelStatusError = () =>
-    props.onboarding && !store().read().channelOnboardingNudgeClosed && channels.read().connected
+    props.onboarding && !store.read().channelOnboardingNudgeClosed && channels.read().connected
       ? channels.read().channelsError
       : null;
   const showChannelOnboardingNudge = () => {
@@ -134,7 +147,7 @@ function CustodianPageContent(props: Props) {
     const snapshot = state.channelsSnapshot;
     return (
       props.onboarding &&
-      !store().read().channelOnboardingNudgeClosed &&
+      !store.read().channelOnboardingNudgeClosed &&
       state.connected &&
       !state.channelsLoading &&
       channelStatusError() === null &&
@@ -147,7 +160,7 @@ function CustodianPageContent(props: Props) {
     <section
       class={[
         "custodian custodian--page",
-        { "custodian--setup-required": store().read().setupRequired },
+        { "custodian--setup-required": store.read().setupRequired },
       ]}
     >
       <header
@@ -159,7 +172,7 @@ function CustodianPageContent(props: Props) {
         <Show when={!props.onboarding}>
           <div class="custodian__identity">
             <div class="custodian__mark" aria-hidden="true">
-              <openclaw-mascot mood={store().read().sending ? "thinking" : "idle"} prop:size={38} />
+              <openclaw-mascot mood={store.read().sending ? "thinking" : "idle"} prop:size={38} />
             </div>
             <div>
               <h1>{t("custodian.title")}</h1>
@@ -229,6 +242,11 @@ export const CustodianPage = defineSolidBridge<Props>(
       onboarding: { default: false, attribute: false },
       newAgentIntent: { default: false, attribute: false },
       store: { default: custodianSessionStore, attribute: false },
+    },
+    propertyChanged: (host, key) => {
+      if (key !== "newAgentIntent") {
+        propertyReceipts.get(host)?.(key);
+      }
     },
   },
 );

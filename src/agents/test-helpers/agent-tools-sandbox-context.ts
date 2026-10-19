@@ -44,7 +44,7 @@ export function createAgentToolsSandboxContext(
     containerWorkdir: params.containerWorkdir ?? "/workspace",
     fsBridge: params.fsBridge,
     docker: {
-      image: "openclaw-sandbox:bookworm-slim",
+      image: "openclaw-sandbox:trixie-slim",
       containerPrefix: "openclaw-sbx-",
       workdir: "/workspace",
       readOnlyRoot: true,

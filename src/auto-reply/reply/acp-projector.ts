@@ -176,9 +176,6 @@ export function createAcpReplyProjector(params: {
     clearLiveIdleTimer();
     liveIdleTimer = setTimeout(() => {
       flushLiveBuffer(true);
-      if (bufferedText) {
-        scheduleLiveIdleFlush();
-      }
     }, liveIdleFlushMs);
   };
 

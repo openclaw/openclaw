@@ -1574,6 +1574,9 @@ update_candidate() {
     update_env+=(OPENCLAW_ALLOW_ROOT=1)
   fi
   local update_node_options="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
+  if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY:-}" ]; then
+    update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/plugin-registry-redirect.mjs"
+  fi
   if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
     update_node_options+=" --import=$ARTIFACT_ROOT/sibling-refusal-preload.mjs"
   fi
@@ -1875,7 +1878,8 @@ prepare_restart_inference() {
 
 prepare_restart_fixture() {
   prepare_candidate_tarball || return "$?"
-  local fixture_dir fixture_package runtime_source
+  local fixture_dir fixture_package plugin_rows package_name plugin_source plugin_id plugin_phase
+  local registry_args=()
   fixture_dir="$(mktemp -d "$RUNTIME_ROOT/restart-fixture.XXXXXX")" || return "$?"
   fixture_package="$fixture_dir/future.tgz"
   phase prepare-restart-package openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
@@ -1885,35 +1889,56 @@ prepare_restart_fixture() {
   mv "$fixture_dir/receipt.json" "$ARTIFACT_ROOT/restart-fixture.json" || return "$?"
   restart_fixture_evidence="$ARTIFACT_ROOT/restart-fixture.json"
   restart_fixture_package="$fixture_package"
-  runtime_source="$(node - "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:?managed restart requires the candidate plugin registry}" "$candidate_version" <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-const crypto = require("node:crypto");
+  plugin_rows="$(node --input-type=module - "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:?managed restart requires the candidate plugin registry}" "$candidate_version" <<'NODE'
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { readPluginInstallRecords } from "./scripts/e2e/lib/plugin-index-sqlite.mjs";
 const [root, version] = process.argv.slice(2);
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "prepublish-plugin-registry.json"), "utf8"));
-const entry = manifest.packages.find((item) => item.name === "@openclaw/codex" && item.version === version);
-if (!entry) throw new Error("Sealed candidate registry is missing its matching Codex runtime");
-const file = path.resolve(root, entry.tarball);
-if (crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") !== entry.sha256) {
-  throw new Error("Candidate runtime artifact digest differs from the sealed registry");
+const names = new Set(Object.values(readPluginInstallRecords())
+  .filter((record) => record.source === "npm")
+  .map((record) => record.resolvedName));
+names.add("@openclaw/codex");
+const entries = manifest.packages.filter((item) => names.has(item.name) && item.name.startsWith("@openclaw/") && item.version === version);
+if (!entries.some((entry) => entry.name === "@openclaw/codex")) {
+  throw new Error("Sealed candidate registry is missing its matching Codex runtime");
 }
-process.stdout.write(file);
+for (const entry of entries) {
+  const file = path.resolve(root, entry.tarball);
+  if (crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") !== entry.sha256) {
+    throw new Error("Candidate plugin artifact digest differs from the sealed registry: " + entry.name);
+  }
+  process.stdout.write(entry.name + "\t" + file + "\n");
+}
 NODE
   )" || return "$?"
-  phase prepare-restart-runtime openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
-    node scripts/e2e/lib/update-first-hop-package-fixtures.mjs future-runtime-tarball \
-    "$runtime_source" "$fixture_dir/codex.tgz" >"$fixture_dir/runtime-receipt.json" || return "$?"
-  mv "$fixture_dir/runtime-receipt.json" "$ARTIFACT_ROOT/restart-runtime-fixture.json" || return "$?"
-  restart_runtime_evidence="$ARTIFACT_ROOT/restart-runtime-fixture.json"
-  # The runtime is version-bound to its host. Serve the matching synthetic
-  # cohort without changing the sealed candidate registry or its identity.
+  while IFS=$'\t' read -r package_name plugin_source; do
+    plugin_id="${package_name#@openclaw/}"
+    plugin_phase="prepare-restart-plugin-$plugin_id"
+    [ "$plugin_id" != codex ] || plugin_phase=prepare-restart-runtime
+    phase "$plugin_phase" openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+      node scripts/e2e/lib/update-first-hop-package-fixtures.mjs future-plugin-tarball \
+      "$plugin_source" "$fixture_dir/$plugin_id.tgz" >"$ARTIFACT_ROOT/restart-$plugin_id-fixture.json" || return "$?"
+    registry_args+=("$package_name" "$restart_fixture_version" "$fixture_dir/$plugin_id.tgz")
+    if [ "$plugin_id" = codex ]; then
+      mv "$ARTIFACT_ROOT/restart-codex-fixture.json" "$ARTIFACT_ROOT/restart-runtime-fixture.json" || return "$?"
+      restart_runtime_evidence="$ARTIFACT_ROOT/restart-runtime-fixture.json"
+    fi
+  done <<<"$plugin_rows"
+  # Installed official plugins, not just the runtime, follow the synthetic host
+  # cohort. Keep the sealed candidate bytes and deliberately absent packages intact.
   OPENCLAW_NPM_REGISTRY_UPSTREAM="$NPM_CONFIG_REGISTRY" \
     openclaw_prepublish_plugin_registry_start \
       "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR" \
       "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" "$candidate_version" \
       "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:-}" \
       "$fixture_dir/registry" restart_registry_pid \
-      "@openclaw/codex" "$restart_fixture_version" "$fixture_dir/codex.tgz" || return "$?"
+      "${registry_args[@]}" || return "$?"
+  # Product diagnostics deliberately resolve official packages from public npm.
+  # Project those reads onto this survivor-only synthetic future cohort without
+  # weakening the production registry trust boundary.
+  export OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY="$NPM_CONFIG_REGISTRY"
 }
 
 repair_update_restart_auth() {
@@ -2561,6 +2586,7 @@ if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
   phase validate-baseline-config validate_baseline_config
   phase baseline-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs baseline
   phase resolve-sibling-candidate resolve_candidate_version
+  phase configure-sibling-plugin-registry configure_plugin_registry
   if [ "$baseline_version" = "2026.9.6" ]; then
     phase refuse-sibling-candidate assert_sibling_published_refusal
   fi

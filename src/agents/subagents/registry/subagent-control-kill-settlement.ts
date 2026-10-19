@@ -45,7 +45,7 @@ type SubagentKillSettlementOwnerParams = {
   session: SubagentKillSession;
   stateContext: OpenClawStateWorkerContext;
   cancellationControl: Pick<SubagentCancellationControl, "assertCurrent">;
-  stopAcceptance: { accepted: boolean };
+  stopAcceptance: { accepted: boolean; queuedOnly?: boolean };
   suppressTaskDelivery?: boolean;
   withdrawQueuedReservation: () => void;
 };
@@ -166,6 +166,7 @@ export function createSubagentKillSettlementOwner(params: SubagentKillSettlement
     try {
       marked = await markSubagentRunTerminated({
         runId: selected.runId,
+        suppressSessionEffects: params.stopAcceptance.queuedOnly,
         session: params.session,
         withdrawQueuedReservation: params.withdrawQueuedReservation,
         reason: "killed",

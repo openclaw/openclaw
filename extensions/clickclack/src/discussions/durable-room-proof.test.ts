@@ -1,9 +1,9 @@
+import "./service-http-mock.test-support.js";
 import "./session-authority.test-support.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveClickClackAccount } from "../accounts.js";
-import { createClickClackClient } from "../http-client.js";
 import { handleClickClackInbound } from "../inbound.js";
 import { createInboundMessage, createInboundRuntime } from "../inbound.test-support.js";
 import { setClickClackRuntime } from "../runtime.js";
@@ -142,12 +142,7 @@ describe("ClickClack durable room real-behavior proof", () => {
       async () => sessionEntry,
     );
     setClickClackRuntime(runtime);
-    const service = new ClickClackDiscussionService(runtime, {
-      clientFactory: (account) =>
-        createClickClackClient({ baseUrl: account.apiEndpoint, token: account.token }),
-      installationId: "11111111-2222-4333-8444-555555555555",
-      bindingGenerationFactory: () => "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
-    });
+    const service = new ClickClackDiscussionService(runtime);
     cleanups.push(async () => service.cleanup());
 
     await service.open(sessionKey);

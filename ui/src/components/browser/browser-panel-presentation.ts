@@ -1,6 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
-import { i18n } from "../../i18n/lib/translate.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createDockLayout } from "../dock-layout.ts";
 import { browserPanelLayout } from "../dock-panel-layout.ts";
@@ -49,7 +48,10 @@ export type BrowserPanelElement = HTMLElement &
   Pick<BrowserPanelPresentation, "hostedTabs" | "activeHostedTabId" | "updateComplete">;
 
 /** Keeps browser admission synchronous while Solid consumes its published presentation. */
-export function createBrowserPanelPresentation(element: HTMLElement & BrowserPanelInputs) {
+export function createBrowserPanelPresentation(
+  element: HTMLElement & BrowserPanelInputs,
+  scheduleAfterRender: (callback: () => void) => void,
+) {
   let connected = false;
   let activeSessionKey = "";
   let activeDashboardKey: string | undefined;
@@ -57,7 +59,7 @@ export function createBrowserPanelPresentation(element: HTMLElement & BrowserPan
   let consumedPreferredRevision: string | undefined;
   let completion: Promise<boolean> = Promise.resolve(true);
   let complete: ((value: boolean) => void) | undefined;
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
   let changes = new Set<keyof BrowserPanelInputs>([
     "client",
     "available",
@@ -69,13 +71,21 @@ export function createBrowserPanelPresentation(element: HTMLElement & BrowserPan
     if (!connected) {
       return;
     }
-    completion = complete
-      ? completion
-      : new Promise((resolve) => {
-          complete = resolve;
-        });
-    for (const listener of listeners) {
-      listener();
+    const needsCommit = !complete;
+    if (needsCommit) {
+      completion = new Promise((resolve) => {
+        complete = resolve;
+      });
+    }
+    const pending = complete;
+    render?.();
+    if (needsCommit) {
+      scheduleAfterRender(() => {
+        // Detach retires this receipt before a retained host starts another render.
+        if (complete === pending) {
+          rendered();
+        }
+      });
     }
   }
   const dockLayout = createDockLayout({
@@ -317,6 +327,17 @@ export function createBrowserPanelPresentation(element: HTMLElement & BrowserPan
     browser.suspendView();
     dockLayout.setOpen(false);
   }
+  function rendered(): void {
+    if (!connected) {
+      return;
+    }
+    const resolve = complete;
+    complete = undefined;
+    const changed = changes;
+    changes = new Set();
+    updatePresentation(changed);
+    resolve?.(true);
+  }
   return {
     inputs: element,
     browser,
@@ -325,9 +346,7 @@ export function createBrowserPanelPresentation(element: HTMLElement & BrowserPan
     toggle,
     handleToggleRequest,
     closePanel,
-    selectHostedTab: (id: string) => {
-      void browser.selectTab(id);
-    },
+    selectHostedTab: (id: string) => void browser.selectTab(id),
     closeHostedTab: (id: string) => browser.closeTab(id),
     get hostedTabs() {
       return browserPanelHostedTabs(browser.tabs, element.ownerDocument);
@@ -339,9 +358,9 @@ export function createBrowserPanelPresentation(element: HTMLElement & BrowserPan
       return completion;
     },
     subscribe(listener: () => void) {
-      listeners.add(listener);
+      render = listener;
       return () => {
-        listeners.delete(listener);
+        render = undefined;
       };
     },
     inputsChanged(key: keyof BrowserPanelInputs) {
@@ -359,7 +378,6 @@ export function createBrowserPanelPresentation(element: HTMLElement & BrowserPan
             handleToggleRequest(event);
           }
         }),
-        i18n.subscribe(publish),
       ];
       // A takeover already owning the viewport suppresses the restored dock first.
       dockLayout.setSuppressed(element.suppressed);
@@ -378,17 +396,6 @@ export function createBrowserPanelPresentation(element: HTMLElement & BrowserPan
         complete?.(false);
         complete = undefined;
       };
-    },
-    rendered() {
-      if (!connected) {
-        return;
-      }
-      const resolve = complete;
-      complete = undefined;
-      const changed = changes;
-      changes = new Set();
-      updatePresentation(changed);
-      resolve?.(true);
     },
   };
 }

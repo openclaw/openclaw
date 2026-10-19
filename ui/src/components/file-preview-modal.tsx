@@ -1,8 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, onCleanup, Show } from "solid-js";
+import { createMemo, For, onCleanup, Show } from "solid-js";
 import { stripFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
+import { createScrollPosition } from "../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { type FileKind, fileKindForPath } from "./file-kind.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
@@ -43,6 +45,8 @@ type FilePreviewModalProps = {
 type OpenClawFilePreviewModal = SolidBridgeElement<FilePreviewModalProps>;
 
 function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePreviewModal) {
+  let modal: HTMLElement | undefined;
+  let modalOpen = false;
   type Target = "search" | "item" | "button" | "close" | "body";
   const targets = new Map<HTMLElement, Target>();
   const capture = (target: Target) => {
@@ -107,10 +111,7 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
     host.dispatchEvent(new CustomEvent(name, { bubbles: true, composed: true, detail }));
   const close = () => emit("file-preview-close");
   const focusModal = () => {
-    if (
-      !host.isConnected ||
-      !host.querySelector<HTMLDialogElement>("openclaw-modal-dialog > dialog")?.open
-    ) {
+    if (!host.isConnected || !modal?.isConnected || !modalOpen) {
       return;
     }
     const target =
@@ -181,35 +182,28 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
       select(file.path);
     }
   };
-  createEffect(
-    () =>
-      [
+  createScrollPosition(() => ({
+    // A sibling inventory read must not move the document being read.
+    reset: {
+      identity: [
         props.layout,
         props.query,
         activeFile()?.path,
         activeFile()?.contents,
         activeFile()?.message,
-      ] as const,
-    (next, previous) => {
-      // A sibling inventory read must not move the document being read.
-      if (!previous || next.some((value, index) => value !== previous[index])) {
-        const body = ordered("body")[0];
-        if (body) {
-          body.scrollTop = 0;
-          body.scrollLeft = 0;
-        }
-      }
+      ],
+      target: () => ordered("body")[0],
     },
-  );
-  createEffect(
-    () => [props.activePath, props.query, props.files, props.layout] as const,
-    (next, previous) => {
-      activeItem()?.scrollIntoView?.({ block: "nearest" });
-      if (!previous || (next[3] === "document" && next[0] !== previous[0])) {
-        focusModal();
-      }
+    reveal: {
+      identity: [props.activePath, props.query, props.files, props.layout],
+      target: activeItem,
     },
-  );
+  }));
+  createPendingFocus(() => ({ path: props.activePath, layout: props.layout }), {
+    requested: (next, previous) =>
+      !previous || (next.layout === "document" && next.path !== previous.path),
+    focus: focusModal,
+  });
   const item = (file: FilePreviewModalFile) => (
     <button
       ref={capture("item")}
@@ -267,6 +261,15 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
     <>
       <style>{styles}</style>
       <openclaw-modal-dialog
+        prop:initialFocus={() =>
+          [...targets.keys()]
+            .filter((element) => element.isConnected && element.autofocus)
+            .toSorted((left, right) =>
+              left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+            )[0] ?? null
+        }
+        ref={(element) => (modal = element)}
+        prop:onOpenChange={(open: boolean) => (modalOpen = open)}
         label={label()}
         style={{
           "--openclaw-modal-width": "min(1100px, 92vw)",

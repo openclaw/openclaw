@@ -1,66 +1,43 @@
 import { getAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import { formatErrorMessage, readErrorName } from "openclaw/plugin-sdk/error-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import {
-  createSubsystemLogger,
-  resolveUserPath,
-} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   readMemoryFile,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemoryReadResult,
   type MemorySearchManager,
   type MemorySearchResult,
-  type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { WorkerTaskError } from "openclaw/plugin-sdk/process-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveActiveMemoryRecallSources } from "./active-memory-session-sources.js";
 import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
 import { tokenizeFtsQuery } from "./keyword-query.js";
-import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
 import {
   createMemoryEmbeddingOperationError,
   isMemoryEmbeddingOperationError,
 } from "./manager-embedding-errors.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
-import {
-  MemoryKeywordRetrieval,
-  type KeywordSearchHit,
-  type MemoryRetrievalResult,
-} from "./manager-keyword-retrieval.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import type { MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
-import { admitMemoryVectorIndex, searchMemoryVectorIndex } from "./manager-search-knn.js";
-import { searchVector } from "./manager-search-vector.js";
+import {
+  MemorySearchRetrieval,
+  type KeywordSearchHit,
+  type MemoryRetrievalResult,
+} from "./manager-search-retrieval.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
+import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 import { applyRetrievalRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
-const SNIPPET_MAX_CHARS = 700;
 const SEARCH_CANDIDATE_UNIVERSE = 200;
 const log = createSubsystemLogger("memory");
 type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
-type VectorSearchHit = MemoryRetrievalResult & { id: string };
 
-export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
-  private readonly sessionWarm = new Set<string>();
-
-  protected claimSessionWarmSync(sessionKey?: string): boolean {
-    if (!this.settings.sync.onSessionStart) {
-      return false;
-    }
-    const key = sessionKey?.trim() || "";
-    if (key && this.sessionWarm.has(key)) {
-      return false;
-    }
-    if (key) {
-      this.sessionWarm.add(key);
-    }
-    return this.dirty || this.sessionsDirty;
-  }
-
+export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
   async search(query: string, opts?: MemoryIndexSearchOptions): Promise<MemorySearchResult[]> {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) {
@@ -140,7 +117,13 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       (opts?.lexicalOnly === true || this.providerRequirement.mode === "fts-only") &&
       sourceFilterList.length === 1 &&
       sourceFilterList[0] === "sessions";
-    const keywordOptions = { boostFallbackRanking: true, signal: opts?.signal, fuseRecallMetadata };
+    const keywordOptions = {
+      boostFallbackRanking: true,
+      signal: opts?.signal,
+      fuseRecallMetadata,
+      excludedSessionPaths: new Array<string>(),
+    };
+    const excludedSources = new Map<string, MemorySourceFileStateRow>();
     const database = this.publishedDatabase;
     const assertReadOwner = () => {
       opts?.signal?.throwIfAborted();
@@ -163,6 +146,19 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       );
       assertReadOwner();
       preparedKeyword = undefined;
+      const excluded =
+        sourceFilterAllowed && sourceFilterList.includes("sessions")
+          ? await resolveActiveMemoryRecallSources({
+              rows: await database.readSourceState({ source: "sessions" }),
+              cfg: this.cfg,
+              agentId: this.agentId,
+            })
+          : [];
+      assertReadOwner();
+      keywordOptions.excludedSessionPaths = excluded.map((row) => row.path);
+      for (const row of excluded) {
+        excludedSources.set(row.path, row);
+      }
       if (
         sourceFilterAllowed &&
         this.fts.enabled &&
@@ -269,10 +265,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       if (recoveringEmbeddingProvider) {
         indexState = await readIndexState();
       }
-      const sessionStartSync = this.claimSessionWarmSync(opts?.sessionKey);
-      const searchSyncEnabled =
-        (this.settings.sync.onSearch || sessionStartSync) &&
-        (this.purpose === "default" || this.purpose === "cli");
+      const searchSyncEnabled = this.purpose === "default" || this.purpose === "cli";
       if (
         !embeddingBootstrapKeywordOnly &&
         !this.provider &&
@@ -546,6 +539,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             vectorProviderIdentity,
             indexState,
             keywordResults.map((entry) => entry.id),
+            keywordOptions.excludedSessionPaths,
             opts?.signal,
           ).catch((error: unknown) => ({
             results: this.handleRetrievalError("vector", error, opts?.signal),
@@ -616,6 +610,20 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         return results;
       } finally {
         await releaseReadGeneration();
+        if (excludedSources.size > 0 && !database.readOnly) {
+          // Serving excludes immediately. Cleanup uses the source owner's conditional
+          // deletion after releasing the read generation, independently of embeddings.
+          const cleanup = this.withManagerOperation(async () => {
+            for (const row of excludedSources.values()) {
+              await this.deleteIndexedFile(row.path, "sessions", row.hash);
+            }
+          })
+            .catch((error: unknown) => {
+              log.warn(`memory recall source cleanup failed: ${formatErrorMessage(error)}`);
+            })
+            .finally(() => this.activeBackgroundSearchSyncs.delete(cleanup));
+          this.activeBackgroundSearchSyncs.add(cleanup);
+        }
       }
     });
   }
@@ -631,112 +639,5 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     return (
       state.hasIndexedChunks || (this.fts.enabled && this.fts.available && state.hasFtsContent)
     );
-  }
-
-  private handleRetrievalError(
-    kind: "FTS keyword" | "vector",
-    error: unknown,
-    signal?: AbortSignal,
-  ): [] {
-    signal?.throwIfAborted();
-    if (error instanceof WorkerTaskError && error.code === "overloaded") {
-      throw error;
-    }
-    if (readErrorName(error) === "DatabaseSearchCapabilityUnavailableError") {
-      throw error;
-    }
-    log.warn(`memory search: ${kind} query failed: ${formatErrorMessage(error)}`);
-    return [];
-  }
-
-  private async searchVector(
-    queryVec: number[],
-    limit: number,
-    sourceFilterList: MemorySource[],
-    providerIdentity: { model: string; aliases: string[] },
-    indexState: MemoryRetrievalIndexState,
-    keywordCandidateIds: string[],
-    signal?: AbortSignal,
-  ): Promise<{ results: VectorSearchHit[]; candidates: VectorSearchHit[] }> {
-    const query = {
-      providerModel: providerIdentity.model,
-      providerModelAliases: providerIdentity.aliases,
-      queryVec,
-      limit,
-      snippetMaxChars: SNIPPET_MAX_CHARS,
-    };
-    const readVectorRows = (candidateIds?: string[]) =>
-      runMemoryVectorFallback(
-        { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
-        {
-          ...query,
-          candidateIds,
-          limit: candidateIds?.length ?? limit,
-          sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
-        },
-        signal,
-      );
-    let results: Awaited<ReturnType<typeof readVectorRows>>;
-    if (this.publishedDatabase.admission?.engine === "postgres") {
-      results = await readVectorRows();
-      this.vector.available = true;
-      this.vector.semanticAvailable = true;
-      this.vector.dims = queryVec.length;
-      this.vector.loadError = undefined;
-    } else {
-      const vectorIndex = admitMemoryVectorIndex({
-        databasePath: resolveUserPath(this.settings.store.databasePath),
-      });
-      results = await searchVector({
-        ...query,
-        signal,
-        ensureVectorReady: async () => {
-          if (!this.vector.enabled) {
-            return false;
-          }
-          if (
-            indexState.vectorState.state === "incomplete" ||
-            indexState.vectorState.state === "unverified"
-          ) {
-            this.markConfiguredSourcesForFullReindex();
-            return false;
-          }
-          return indexState.vectorState.state === "complete";
-        },
-        runFallback: readVectorRows,
-        runVectorKnn: async (request, knnSignal) => {
-          const response = await searchMemoryVectorIndex(
-            vectorIndex.capability,
-            vectorIndex.index,
-            request,
-            {
-              extensionPath: this.vector.extensionPath,
-              signal: knnSignal,
-            },
-          );
-          if (!response.fallbackScanRequired) {
-            this.vector.available = true;
-            this.vector.semanticAvailable = true;
-            this.vector.dims = queryVec.length;
-            this.vector.loadError = undefined;
-          }
-          return response;
-        },
-        sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
-      });
-    }
-    // Keyword candidates outside the vector window still need their stored
-    // similarity; treating an unqueried vector as zero loses rare-term answers.
-    const candidates = [...results];
-    const scoredIds = new Set(candidates.map((entry) => entry.id));
-    const missingIds = keywordCandidateIds.filter((id) => !scoredIds.has(id));
-    if (missingIds.length > 0) {
-      results.push(
-        ...(await readVectorRows(missingIds).catch((error: unknown) =>
-          this.handleRetrievalError("vector", error, signal),
-        )),
-      );
-    }
-    return { results: await this.attachRecallMetadata(results, signal), candidates };
   }
 }

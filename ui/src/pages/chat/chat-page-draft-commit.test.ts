@@ -11,7 +11,7 @@ vi.mock("./chat-pane.tsx", async () => {
 
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { setNavigationContext, stubMatchMedia } from "./chat-page.test-support.ts";
-import { ChatPage } from "./chat-page.ts";
+import "./chat-page.ts";
 
 let childCommit: Promise<void> | undefined;
 
@@ -63,7 +63,7 @@ it("keeps a route draft until its pane commits it", async () => {
   vi.stubGlobal("sessionStorage", createStorageMock());
   stubMatchMedia(false);
   window.history.replaceState({}, "", "/chat/main");
-  const page = new ChatPage();
+  const page = document.createElement("openclaw-chat-page");
   const { replace } = setNavigationContext(page);
   page.data = { sessionKey: "agent:main:main" };
   document.body.append(page);

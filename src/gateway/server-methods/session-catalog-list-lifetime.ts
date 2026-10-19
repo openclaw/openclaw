@@ -2,12 +2,14 @@ import type {
   SessionCatalog,
   SessionCatalogHost,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SessionCatalogListProviderParams } from "../../plugins/session-catalog.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import type { SessionCatalogInstances } from "./session-catalog-entry-snapshot.js";
 
 export const SESSION_CATALOG_LIST_LIFETIME_MS = 60_000;
+const catalogLog = createSubsystemLogger("gateway/session-catalog");
 
 export type CatalogListProgressSubscriber = (
   catalog: SessionCatalog,
@@ -218,9 +220,7 @@ export class SessionCatalogListLifetime {
         subscriber.preparing = true;
         this.pending++;
         this.work.begin();
-        void current.trackWork(() =>
-          this.deliverPreparedSubscriber(subscriber, preparation).catch(() => undefined),
-        );
+        void current.trackWork(() => this.deliverPreparedSubscriber(subscriber, preparation));
         return;
       }
       const publication = this.takeQueuedPublication(subscriber);
@@ -252,6 +252,11 @@ export class SessionCatalogListLifetime {
           return;
         }
         subscriber.current?.publish(publication.catalog, publication.instances);
+      }
+    } catch {
+      // Retirement intentionally ends delivery; an active subscriber needs a visible failure.
+      if (this.currentSubscriber(subscriber)) {
+        catalogLog.warn("Session catalog progress update failed; refresh the catalog to retry.");
       }
     } finally {
       subscriber.queued.clear();

@@ -40,8 +40,9 @@ type DirectoryState = {
 };
 
 const directories = new Map<string, DirectoryState>();
-type FileChangeListener = (change: FileChange) => void | Promise<void>;
-const listeners = new Set<FileChangeListener>();
+export const authProfileFileChanges: {
+  onChange?: (change: FileChange) => void | Promise<void>;
+} = {};
 const legacyNames = new Set(["auth-profiles.json", "auth-state.json", "auth.json", "oauth.json"]);
 
 function missingFile(error: unknown): null | undefined {
@@ -154,9 +155,7 @@ function captureFileChangePublisher(): DirectoryState["publishChange"] {
       return;
     }
     await runWithSpawnBroker(broker, () =>
-      runWithReaders(() =>
-        Promise.all(Array.from(listeners, (listener) => Promise.resolve(listener(change)))),
-      ),
+      runWithReaders(() => authProfileFileChanges.onChange?.(change)),
     );
   };
 }
@@ -259,13 +258,6 @@ export function admitAuthProfileLegacySources(sourcePaths: Iterable<string>): vo
   for (const sourcePath of new Set(sourcePaths)) {
     directoryState(path.dirname(sourcePath)).presence.set(sourcePath, fs.existsSync(sourcePath));
   }
-}
-
-export function registerAuthProfileFileChangeListener(listener: FileChangeListener) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
 }
 
 /** Explicit refresh joins observation without retiring unchanged file authority. */

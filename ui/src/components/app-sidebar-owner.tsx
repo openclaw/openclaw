@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createRoot, runWithOwner, Show } from "solid-js";
+import { createMemo, createRoot, onSettled, runWithOwner, Show } from "solid-js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
@@ -61,18 +61,17 @@ import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
-  readNarration: () => ReturnType<SidebarNarration["read"]> | undefined = () => undefined;
   private readonly emptyNarrationLines = new Map<string, string>();
   private readonly emptyNarrationTools = new Map<string, SidebarToolActivity>();
   private readonly emptyObserverDigests = new Map<string, SessionObserverDigest>();
   override get sidebarNarrationLines() {
-    return this.readNarration()?.lines ?? this.emptyNarrationLines;
+    return this.narration?.read().lines ?? this.emptyNarrationLines;
   }
   override get sidebarTools() {
-    return this.readNarration()?.tools ?? this.emptyNarrationTools;
+    return this.narration?.read().tools ?? this.emptyNarrationTools;
   }
   override get sidebarObserverDigests() {
-    return this.readNarration()?.observerDigests ?? this.emptyObserverDigests;
+    return this.narration?.read().observerDigests ?? this.emptyObserverDigests;
   }
 
   override readonly sessionOrganizer = new SessionOrganizer(this, () => this.invalidate());
@@ -397,20 +396,12 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           ? host().getRouteSessionKey()
           : "";
     });
-    createEffect(
-      () => ({
-        catalog:
-          !host().catalogRenderer &&
-          (catalogs().length > 0 || host().sessionData.sessionCatalogRefreshStatus.error !== null)
-            ? host().catalogRendererImport
-            : null,
-      }),
-      ({ catalog }) => {
-        if (catalog) {
-          void catalog.load().catch(() => undefined);
-        }
-      },
-    );
+    const LoadCatalogRenderer = () => {
+      onSettled(() => {
+        void this.catalogRendererImport.load().catch(() => undefined);
+      });
+      return null;
+    };
     const nativeList = (
       <SessionList
         host={host()}
@@ -435,18 +426,27 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       />
     );
     return (
-      <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
-        <SidebarAgentRoster
-          host={host()}
-          active={
-            host().navigationVisible &&
-            host().navigationView === "sessions" &&
-            !host().contextualSidebar
+      <>
+        <Show
+          when={
+            !host().catalogRenderer &&
+            (catalogs().length > 0 || host().sessionData.sessionCatalogRefreshStatus.error !== null)
           }
-          sections={sections()}
-          involvingMe={host().sessionInvolvingMeFilterActive}
-        />
-      </Show>
+        >
+          <LoadCatalogRenderer />
+        </Show>
+        <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
+          <SidebarAgentRoster
+            host={host()}
+            active={
+              host().navigationVisible &&
+              host().navigationView === "sessions" &&
+              !host().contextualSidebar
+            }
+            sections={sections()}
+          />
+        </Show>
+      </>
     );
   }
 

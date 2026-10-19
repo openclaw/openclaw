@@ -14,6 +14,7 @@ import {
 } from "../../app/question-prompt.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
+import { hasModalSurface } from "../../components/overlay-registry.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
@@ -51,6 +52,7 @@ import {
 } from "./chat-pane-startup-subscriptions.ts";
 import type { ChatPaneInputChanges } from "./chat-pane-state-owner.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { cancelChatModelRecovery } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
@@ -73,7 +75,8 @@ import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { connectCreatedComposerQueue } from "./creation-composer-recovery.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
-import { admitInitialTurnHandoff, subscribeInitialTurnHandoff } from "./initial-turn-handoff.ts";
+import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
+import { subscribeInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import { applyChatCacheSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 import { closeSlot } from "./sidebar-layout.ts";
 
@@ -87,7 +90,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         const state = this.state;
         return state && this.active && this.presented
           ? {
-              renderRoot: this.element,
+              sidebarRegion: this.sidebarRegionView,
               state,
               linkReaders: availableLinkReaders(this.context.gateway.snapshot),
               pluginPanels: this.context.plugins.registrations("panels").map((entry) => entry.key),
@@ -219,7 +222,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       !this.active ||
       !this.presented ||
       event.defaultPrevented ||
-      document.querySelector(".shell-nav[aria-modal='true']") ||
+      hasModalSurface(this.element.ownerDocument) ||
       this.handleArchiveSessionShortcut(event)
     ) {
       return;
@@ -251,7 +254,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       return;
     }
 
-    focusChatComposerFromPrintableKeydown(this.element, event);
+    focusChatComposerFromPrintableKeydown(
+      this.element,
+      event,
+      getChatComposerState(this.presentationId).composerTextarea,
+    );
   };
 
   override start() {
@@ -285,7 +292,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       {
         sessionKey: this.sessionKey,
         dispatchEvent: (event) => this.element.dispatchEvent(event),
-        querySelector: (selector) => this.element.querySelector(selector),
+        transcriptLoadingChanged: this.synchronizeForegroundTranscript,
       },
       this.chatMessagesBySession,
     );
@@ -306,6 +313,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     pageState.sidebarLayout = this.restorePaneSidebarLayout(pageState.sidebarLayout);
     pageState.getWorkContext = () => this.workContext;
+    pageState.isRouteSessionPending = () => this.routeResolutionPending;
     // Task tabs can precede main chat in DOM order; viewport reads and commands
     // must resolve through the same transcript owner.
     pageState.chatIsProgrammaticScroll = () => this.transcript.isProgrammaticScroll;
@@ -596,6 +604,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     this.syncSessionReactions();
     this.syncRetainedBoardSession(this.resolveBoardView());
+    if (changes.routeResolutionPending && !this.routeResolutionPending && this.state) {
+      void resumeStoredChatOutboxes(this.state);
+    }
   }
 
   override afterRender(focusComposerChanged: boolean) {
@@ -686,6 +697,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.connectionGeneration += 1;
     this.retireReplyMessages();
     this.retireHeaderSessionMutations();
+    this.retireHeaderSessionDrafts();
     this.retireDeferredSessionHydration();
     this.sessionDiscussionPanels.clear();
     this.taskSuggestionsRequestVersion += 1;

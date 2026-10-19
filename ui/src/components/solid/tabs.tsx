@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { For, createEffect, untrack } from "solid-js";
+import { For, untrack } from "solid-js";
+import { createShadowStyles } from "../../lib/reactive/shadow-styles.ts";
 import { createTabList, type TabsOptions } from "../../lib/tabs.ts";
-import { bindShadowStyles } from "./shadow-styles.ts";
 import tabsStyles from "../../styles/tabs.css?inline";
 import "../../styles/tabs.css";
 
@@ -38,12 +38,12 @@ export function Tabs(props: TabsProps) {
       })),
     () => element,
   );
-  // A hosted tablist must install its styles in the actual shadow root.
-  createEffect(
-    () => [props.shadowStyles, props.items, props.active, props.defaultActive] as const,
-    ([extra]) => {
-      const styles = bindShadowStyles(element, [tabsStyles, ...(extra ?? [])]);
-      return () => styles.dispose();
+  createShadowStyles(
+    () => element,
+    () => {
+      // Tab updates refresh the actual shadow root after a hosted tablist moves.
+      const [extra] = [props.shadowStyles, props.items, props.active] as const;
+      return [tabsStyles, ...(extra ?? [])];
     },
   );
   return (
@@ -56,12 +56,13 @@ export function Tabs(props: TabsProps) {
       class={["oc-tabs", props.class]}
       role="tablist"
       aria-label={props.ariaLabel}
-      aria-orientation={props.orientation ?? "horizontal"}
+      aria-orientation="horizontal"
     >
       <For each={props.items} keyed={(item) => item.value}>
         {(item) => {
           // The keyed value is this node's lifetime identity.
-          const ref = tabs.ref(untrack(() => item().value));
+          const initialValue = untrack(() => item().value);
+          const ref = tabs.ref(initialValue);
           return (
             <button
               {...item().attributes}

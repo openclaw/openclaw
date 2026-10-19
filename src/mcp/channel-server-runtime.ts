@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { VERSION } from "../version.js";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
 import { ClaudePermissionRequestSchema, type ClaudeChannelMode } from "./channel-shared.js";
@@ -67,15 +68,7 @@ export async function createChannelMcpRuntime(
     close: async () => {
       // Both lifecycle owners must always close; one failure cannot strand the other.
       const results = await Promise.allSettled([bridge.close(), server.close()]);
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "OpenClaw channel MCP shutdown failed");
-      }
+      throwIfSettledRejected(results, "OpenClaw channel MCP shutdown failed");
     },
   };
 }

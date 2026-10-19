@@ -152,30 +152,10 @@ describe("server-owned pending input display", () => {
     );
   });
 
-  it.each(["held", "failed", "waiting-reconnect"] as const)(
-    "describes interrupted input with a %s browser owner accurately",
-    (sendState) => {
-      const items = buildPendingInputItems([{ ...input, state: "interrupted" }], undefined, [
-        {
-          id: "retained-input",
-          text: "Retained input",
-          createdAt: 1,
-          sendRunId: input.runId,
-          sendState,
-        },
-      ]);
-      expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([
-        sendState === "waiting-reconnect"
-          ? "Interrupted by a Gateway restart. This saved message will resume when the session is ready."
-          : "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
-      ]);
-    },
-  );
-
   it("shows a durable receipt while an accepted input waits for workspace sync", () => {
     const queued = { ...input, state: "queued" as const };
 
-    const items = buildPendingInputItems([queued], undefined, [], ["run-queued"]);
+    const items = buildPendingInputItems([queued], undefined, ["run-queued"]);
 
     expect(items).toEqual(
       expect.arrayContaining([
@@ -193,12 +173,12 @@ describe("server-owned pending input display", () => {
       state: "interrupted",
       runId: "run-queued",
       notice:
-        "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
+        "Interrupted before the agent started it. If it does not resume, copy it and send again.",
     },
   ] as const)(
     "keeps $state custody out of the worker-setup notice without eligible execution",
     ({ state, runId, notice }) => {
-      const items = buildPendingInputItems([{ ...input, state, runId }], undefined, [], [], true);
+      const items = buildPendingInputItems([{ ...input, state, runId }], undefined, [], true);
 
       expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
         notice ? [notice] : [],
@@ -907,7 +887,7 @@ describe("server-owned pending input display", () => {
       expect(items).toContainEqual(
         expect.objectContaining({
           kind: "notice",
-          text: expect.stringContaining("will resume"),
+          text: "Interrupted before the agent started it. If it does not resume, copy it and send again.",
         }),
       );
       expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);

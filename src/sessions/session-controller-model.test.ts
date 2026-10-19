@@ -21,11 +21,7 @@ import {
   type PilotParentInput,
 } from "./session-controller-model.test-support.js";
 import type { ReplyMessageInjectionAttempt } from "./session-controller.contracts.js";
-import {
-  createReplyOperation,
-  getSessionControllerOperation,
-  captureCurrentReplyMessageInjectionTarget,
-} from "./session-controller.js";
+import { createReplyOperation, getSessionControllerOperation } from "./session-controller.js";
 import {
   beginSessionEffect,
   startSessionControllerInterruption,
@@ -40,7 +36,10 @@ import {
   type SessionControllerInput,
   type SessionControllerMailboxClaim,
 } from "./session-controller.mailbox.js";
-import { beginReplyMessageInjectionTarget } from "./session-controller.message-injection.js";
+import {
+  beginReplyMessageInjectionTarget,
+  captureCurrentReplyMessageInjectionTarget,
+} from "./session-controller.message-injection.js";
 
 /** Calls public owner operations, never the runtime reducer under test. */
 async function replay(events: readonly PilotEvent[], label: string) {
@@ -233,6 +232,7 @@ async function replay(events: readonly PilotEvent[], label: string) {
 const noRecoveryDispatch = () => Promise.reject(new Error("a joined resend must not dispatch"));
 const joinOnlyRecoveryRuntime: GatewayRecoveryRuntime = {
   prepareRestartRecovery: noRecoveryDispatch,
+  resumeChatInput: noRecoveryDispatch,
   dispatchSessionMethod: noRecoveryDispatch,
   dispatchAgent: noRecoveryDispatch,
   waitForAgent: noRecoveryDispatch,

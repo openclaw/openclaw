@@ -226,7 +226,7 @@ describe("streamOpenAICodexResponses transport", () => {
   });
 
   it("rotates cached websockets before the backend connection age limit", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     const startedAt = new Date("2026-07-03T00:00:00Z");
     vi.setSystemTime(startedAt);
     const sentConnectionIds: number[] = [];

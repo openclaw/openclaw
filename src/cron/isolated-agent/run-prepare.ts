@@ -8,6 +8,7 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
+import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
@@ -20,6 +21,7 @@ import {
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
+import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
@@ -145,6 +147,9 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
     { agentId: requiredAgentId },
     tryResolveAmbientOwnerAgentId(requestedRuntimeCfg),
   );
+  await waitForAgentDatabaseWriteAdmission(initialAgentId, {
+    signal: input.abortSignal ?? input.signal,
+  });
   await using runtimeResources = new AsyncDisposableStack();
   let runtimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
   const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
@@ -483,6 +488,23 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         job: input.job,
         agentId,
       });
+      // Persistent wakes share chat's binding policy; announce targeting is turn-local.
+      const cliSessionBindingFacts = {
+        extraSystemPromptStatic: deliverySystemPrompt,
+        sourceReplyDeliveryMode: usesExactRunSession
+          ? sourceDelivery.sourceReplyDeliveryMode
+          : await resolveSessionStableReplyMode({
+              cfg: admittedConfig,
+              metadataSnapshot: preparedModelRuntimeLease.snapshot.metadataSnapshot,
+              ctx: { CommandAuthorized: false },
+              sessionEntry: cronSession.sessionEntry,
+              sessionAgentId: agentId,
+              sessionKey: runSessionKey,
+            }),
+        requireExplicitMessageTarget: usesExactRunSession
+          ? sourceDelivery.messageTool.requireExplicitTarget
+          : undefined,
+      };
 
       const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
       // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
@@ -599,11 +621,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
             scheduledToolCallerOrigin: input.job.toolsAllowProvenance?.callerOrigin,
             toolsAllowExecTarget: input.job.toolsAllowExecTarget,
             toolsAllowExecTargetRequirement: input.job.toolsAllowExecTargetRequirement,
-            cliSessionBindingFacts: {
-              extraSystemPromptStatic: deliverySystemPrompt,
-              sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
-              requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
-            },
+            cliSessionBindingFacts,
           })
         : undefined;
       await runContinuationSession?.initialize();
@@ -655,6 +673,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           // Applied only after the final tool surface exposes the message tool.
           messageToolFormatPrompt,
           sourceDelivery,
+          cliSessionBindingFacts,
           suppressExecNotifyOnExit: deliveryPlan.mode === "none",
           skillsSnapshot,
           liveSelection,

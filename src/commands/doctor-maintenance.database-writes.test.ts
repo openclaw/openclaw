@@ -55,10 +55,6 @@ it("refuses rollback attribution for a foreign write during Doctor maintenance",
         };
         recordUpdateDatabaseWrites(backup, receipt, {
           name: "doctor",
-          command: "doctor --fix",
-          cwd: state.stateDir,
-          durationMs: 0,
-          exitCode: 1,
         });
         expect(backup.restoreRefusal).toContain("the writer is unknown");
         const result: UpdateRunResult = {

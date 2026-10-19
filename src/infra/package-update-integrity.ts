@@ -3,6 +3,7 @@ import { constants, lstatSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
+import { ignoreMissingPath } from "./errno.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { repairPackagePermissions } from "./package-update-activation-paths.js";
@@ -163,12 +164,12 @@ export function packageLauncherDifferences(
   options?: { checkMode?: boolean },
 ): string[] {
   const symlink = expected.type === "symlink" && actual.type === "symlink";
-  // A copied launcher must restore the same bytes or link target; npm may
-  // recreate its metadata. Exact-object mutation authority is checked separately.
+  // Symlink modes vary with umask. Exact-object mutation authority is checked separately.
   return (["type", "mode", "contents"] as const)
     .filter(
       (field) =>
-        (field !== "mode" || options?.checkMode === true) && expected[field] !== actual[field],
+        (field !== "mode" || (!symlink && options?.checkMode === true)) &&
+        expected[field] !== actual[field],
     )
     .map((field) =>
       field === "contents" && symlink
@@ -702,10 +703,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       await read(() => fs.lstat(file));
       return true;
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return false;
-      }
-      throw error;
+      return ignoreMissingPath(error) ?? false;
     }
   }
 

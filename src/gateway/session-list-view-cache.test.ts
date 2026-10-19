@@ -4,8 +4,56 @@ import {
   onTrustedInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import { registerSerializedJsonArray } from "./serialized-json.js";
 import { SessionListViewCache } from "./session-list-view-cache.js";
+import { serializeSessionRow } from "./session-row-serialization.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
+
+it("charges shared current encodings once and replaces their cost with identity vectors on retirement", async () => {
+  const cache = new SessionListViewCache();
+  const view = cache.get("encoded");
+  const emptyBytes = view.bytes;
+  const row: GatewaySessionRow = {
+    key: "one",
+    kind: "direct",
+    updatedAt: 1,
+    rowMode: "sidebar",
+    label: "é".repeat(1_024),
+  };
+  const rows = [row];
+  const encoded = serializeSessionRow(row);
+  registerSerializedJsonArray(rows, [encoded]);
+  let retainedBytes = 0;
+  const stop = onTrustedInternalDiagnosticEvent((event) => {
+    if (event.type === "sessions.list.retention") {
+      retainedBytes = event.estimatedBytes;
+    }
+  });
+  try {
+    cache.setRows(view, rows, true);
+    expect(view.bytes - emptyBytes).toBe(
+      8 + encoded.length * 2 + Buffer.byteLength(`[${encoded}]`),
+    );
+    const shared = cache.get("shared");
+    cache.setRows(shared, [row], true);
+    await setImmediate();
+    await waitForDiagnosticEventsDrained();
+    expect(retainedBytes).toBe(view.bytes + shared.bytes - encoded.length * 2);
+    cache.retireRows(view);
+    expect(view.bytes - emptyBytes).toBe(8 + 160);
+    expect(view.rows).toBeUndefined();
+    expect(view.rowHistory?.[0]?.ids).toHaveLength(1);
+    await setImmediate();
+    await waitForDiagnosticEventsDrained();
+    expect(retainedBytes).toBe(view.bytes + shared.bytes);
+  } finally {
+    cache.clear();
+    await setImmediate();
+    await waitForDiagnosticEventsDrained();
+    stop();
+  }
+  expect(retainedBytes).toBe(0);
+});
 
 it("coalesces a turn of retention updates into one report with the final counters", async () => {
   const cache = new SessionListViewCache();

@@ -13,13 +13,74 @@ import {
   updateStatusRequest,
   updateSentinel,
 } from "./overlays-update.test-support.ts";
+import * as updateHelpers from "./update-overlay-helpers.ts";
 
 afterEach(async () => {
   await disposeTestOverlays();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
 describe("application update status response ownership", () => {
+  it("keeps newer status when an older response is still formatting its failure", async () => {
+    const formatting = pendingReply<updateHelpers.UpdateFailureTriage | null>(null);
+    const formattingStarted = pendingReply<void>(undefined);
+    const older = updateRunFixture({ status: "failed" });
+    const newer = updateRunFixture({
+      runId: "newer-run",
+      createdAtMs: 3,
+      updatedAtMs: 4,
+      status: "succeeded",
+    });
+    const originalProject = updateHelpers.projectUpdateRunFailure;
+    vi.spyOn(updateHelpers, "projectUpdateRunFailure").mockImplementation((run) => {
+      if (run === older) {
+        formattingStarted.resolve();
+        return formatting.promise;
+      }
+      return originalProject(run);
+    });
+    const latest = {
+      lastRun: newer,
+      updateAvailable: null,
+      schedule: { channel: "stable", autoEnabled: false },
+    };
+    const progress = pendingReply(latest);
+    let progressReads = 0;
+    const request = updateStatusRequest((checkout) =>
+      checkout
+        ? {
+            lastRun: older,
+            updateAvailable: { currentVersion: "1.0.0", latestVersion: "2.0.0", channel: "beta" },
+            schedule: { channel: "beta", autoEnabled: false },
+          }
+        : ++progressReads === 1
+          ? {}
+          : progressReads === 2
+            ? progress.promise
+            : latest,
+    );
+    const { overlays } = gatewayTest(request);
+    await flushMicrotasks();
+    const published = vi.fn();
+    overlays.subscribe(published);
+    const refresh = overlays.refreshUpdateStatus();
+    await formattingStarted.promise;
+    progress.resolve(latest);
+    await vi.waitFor(() => expect(overlays.snapshot.updateRun).toEqual(newer));
+    published.mockClear();
+    formatting.resolve(null);
+    await expect(refresh).resolves.toBe(true);
+    expect(published).not.toHaveBeenCalledWith(
+      expect.objectContaining({ updateSchedule: expect.objectContaining({ channel: "beta" }) }),
+    );
+    expect(overlays.snapshot).toMatchObject({
+      updateRun: newer,
+      updateAvailable: null,
+      updateSchedule: latest.schedule,
+    });
+  });
+
   it("finishes a fresh target check after campaign reconciliation emits an availability event", async () => {
     const discovery = pendingReply({});
     const available = {

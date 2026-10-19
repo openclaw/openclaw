@@ -11,7 +11,7 @@ import {
   resolveCronAuthenticatedCallerOrigin,
   resolveCronAuthenticatedChannelRequester,
 } from "../tools-allow-provenance.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronStoredJob } from "../types.js";
 import { findJobOrThrow, isJobEnabled } from "./jobs-scheduling.js";
 import {
   cronJobMessageActionAuthorityInputsEqual,
@@ -23,8 +23,8 @@ import { persistCronJobMutation, type captureCronJobMutationSource } from "./sto
 
 export async function persistUpdatedJob(params: {
   state: CronServiceState;
-  previousJob: CronJob;
-  nextJob: CronJob;
+  previousJob: CronStoredJob;
+  nextJob: CronStoredJob;
   source: ReturnType<typeof captureCronJobMutationSource>;
   mutationMethod: "cron.add" | "cron.update";
   commitGuard?: () => void;
@@ -50,6 +50,7 @@ export async function persistUpdatedJob(params: {
     (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) ||
     !cronJobMessageToolAuthorityInputsEqual(previousJob, nextJob);
   const messageSourceAuthorityChanged =
+    !isDeepStrictEqual(previousJob.operatorSource, nextJob.operatorSource) ||
     !cronJobMessageActionAuthorityInputsEqual(previousJob, nextJob) ||
     (triggerStateChanged &&
       Boolean(

@@ -104,11 +104,11 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   expect(element.textContent).toContain("Checking the API response.");
   await Promise.resolve();
   element.presented = false;
-  flush();
   expect(unsubscribe).toHaveBeenCalledWith(expect.objectContaining({ key: child.key }));
+  flush();
   expect(element.textContent).not.toContain("Checking the API response.");
   element.presented = true;
-  flush();
+  await element.updateComplete;
   expect(subscribe).toHaveBeenCalledTimes(2);
   connection.publishEvent({
     type: "event",
@@ -162,6 +162,11 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   expect(element.textContent).not.toContain(digest.headline);
   await emit({ revision: 10 });
   expect(element.textContent).not.toContain(digest.headline);
+  element.rows = rows(child);
+  flush();
+  expect(element.textContent).not.toContain(digest.headline);
+  await emit({ revision: 11 });
+  expect(element.textContent).toContain(digest.headline);
   view.unmount();
   flush();
   expect(subscriptions).toHaveBeenCalledTimes(1);

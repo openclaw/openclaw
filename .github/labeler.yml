@@ -45,12 +45,24 @@
           - "extensions/typesafe/**"
           - "docs/plugins/typesafe.md"
           - "docs/plugins/reference/typesafe.md"
+"plugin: subq":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/subq/**"
+          - "docs/plugins/subq.md"
+          - "docs/plugins/reference/subq.md"
 "plugin: onnx":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/onnx/**"
           - "docs/plugins/onnx.md"
           - "docs/plugins/reference/onnx.md"
+"plugin: levanto":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/levanto/**"
+          - "docs/providers/levanto.md"
+          - "docs/plugins/reference/levanto.md"
 "channel: a2a":
   - changed-files:
       - any-glob-to-any-file:

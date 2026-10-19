@@ -65,16 +65,18 @@ import {
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { isSidebarSlotVisible, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
 
+type PaneControls = Pick<
+  ReturnType<typeof createChatPaneRails>,
+  "openPanelSlot" | "closePanelSlot"
+>;
+
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   protected readonly headerDetailsRef: { value?: ChatDetails } = {};
   private headerMenuRow?: GatewaySessionRow;
   private headerWorkspace?: ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
   private headerAgentWorkspace?: string;
   private headerWorkspaceGit = false;
-  private headerPanelControls?: {
-    openPanelSlot: (slot: SidebarSlotId) => void;
-    closePanelSlot: (slot: SidebarSlotId) => void;
-  };
+  private headerPanelControls?: PaneControls;
   private headerBoardMenu?: BoardWidgetPageMenu;
   private readonly headerPanelsMemo = new ChatPaneHeaderMemo<HeaderPanelAction[]>();
   private readonly headerSessionActions = new ChatPaneNativeSessionActions();
@@ -134,10 +136,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     panelDefinitions = sidebarPanelDefinitions(),
     subagentStop?: ChatPaneHeaderProps["runAction"],
     detailsControl?: PaneDetailsProps,
-    panelControls?: {
-      openPanelSlot: (slot: SidebarSlotId) => void;
-      closePanelSlot: (slot: SidebarSlotId) => void;
-    },
+    panelControls?: PaneControls,
   ): ChatPaneHeaderPresentation {
     const headerState = this.headerPresentation;
     this.headerPanelControls = panelControls;
@@ -220,14 +219,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           params: { key: row.key, label: null },
           sessionScope: true,
           session: row,
+          allowDeferred: true,
         })
       : null;
-    const renameDisabledReason =
-      this.state?.connected !== true || !renameAccess
-        ? t("sessionsView.actionRequiresConnection")
-        : renameAccess.allowed
-          ? undefined
-          : renameAccess.reason;
+    const renameDisabledReason = !renameAccess
+      ? t("sessionsView.actionRequiresConnection")
+      : renameAccess.allowed
+        ? undefined
+        : renameAccess.reason;
     const configuredMainKey = resolveUiConfiguredMainKey({
       agentsList: this.context.agents.state.agentsList,
       hello: this.context.gateway.snapshot.hello,
@@ -534,6 +533,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     );
     const parentSession = this.observedParentSessionRow();
     const header: ChatPaneHeaderProps = {
+      onHeaderRef: this.registerHeaderElement,
       paneId: this.paneId,
       presented: { owner: this.element, isPresented: () => this.presented },
       narrow: this.narrow,

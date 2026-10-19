@@ -1,5 +1,5 @@
-import * as ts from "typescript/unstable/ast";
-import { SymbolFlags, type Symbol } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { SymbolFlags, type Symbol } from "typescript/sync";
 import type { NativeTypeScriptProject } from "./native-typescript.mts";
 
 const accounts = "src/state/user-model-accounts.ts";

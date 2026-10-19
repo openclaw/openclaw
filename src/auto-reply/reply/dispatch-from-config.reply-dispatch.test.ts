@@ -28,6 +28,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.lifecycl
 import {
   submitSessionControllerTask,
   releaseSessionControllerClaim,
+  updateSessionControllerSourcePolicy,
 } from "../../sessions/session-controller.mailbox.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
@@ -38,14 +39,17 @@ import {
   createDispatchMemorySession,
   dispatchMemorySessionScope,
 } from "./dispatch-memory-session.test-support.js";
+import type { InternalGetReplyFromConfig } from "./get-reply.types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { requestCurrentSessionStop } from "./reply-run-stop.test-support.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
+import * as turnAdmission from "./reply-turn-admission.js";
+import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let createReplyOperation: typeof import("../../sessions/session-controller.js").createReplyOperation;
-let listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.js").listActiveReplyRunSessionKeys;
+let listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.queries.js").listActiveReplyRunSessionKeys;
 let getSessionControllerOperation: typeof import("../../sessions/session-controller.js").getSessionControllerOperation;
 let runAfterReplyOperationClear: typeof import("../../sessions/session-controller.js").runAfterReplyOperationClear;
 let resetSessionControllerForTest: typeof import("../../sessions/session-controller.test-support.js").testing.resetSessionControllerForTest;
@@ -101,7 +105,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
     const replyRunRegistryModule = await import("../../sessions/session-controller.js");
     createReplyOperation = replyRunRegistryModule.createReplyOperation;
-    listActiveReplyRunSessionKeys = replyRunRegistryModule.listActiveReplyRunSessionKeys;
+    ({ listActiveReplyRunSessionKeys } =
+      await import("../../sessions/session-controller.queries.js"));
     getSessionControllerOperation = replyRunRegistryModule.getSessionControllerOperation;
     runAfterReplyOperationClear = replyRunRegistryModule.runAfterReplyOperationClear;
     const { testing } = await import("../../sessions/session-controller.test-support.js");
@@ -183,10 +188,49 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     resetSessionControllerForTest();
     resetInboundDedupe();
     vi.useRealTimers();
     clearAgentHarnesses();
+  });
+
+  it("retries a deferred restart event without resolving its retired source", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    // Recovery can defer a queued event after it has selected its mailbox claim.
+    vi.spyOn(turnAdmission, "admitReplyTurn").mockResolvedValueOnce({
+      status: "skipped",
+      reason: "active-run",
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn<InternalGetReplyFromConfig>(async (_ctx, options) => {
+      const input = readReplySourceInput(options);
+      if (!input) {
+        throw new Error("Expected the admitted event source");
+      }
+      updateSessionControllerSourcePolicy(input, { mode: "followup" });
+      return { text: "resumed once" };
+    });
+    const request = {
+      ctx: buildTestCtx({
+        Provider: "webchat",
+        Surface: "webchat",
+        SessionKey: "agent:main:restart-event",
+        MessageSid: "restart-event",
+        InternalTurnSource: "event",
+        InputProvenance: { kind: "internal_system" as const, sourceTool: "restart" },
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { internalEventExecution: { onStarted() {}, onTerminal() {} } },
+    };
+    await expect(dispatchReplyFromConfig(request)).resolves.toMatchObject({ queuedFinal: false });
+    expect(replyResolver).not.toHaveBeenCalled();
+    await dispatchReplyFromConfig(request);
+    await dispatchReplyFromConfig(request);
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "resumed once" });
   });
 
   it.each(["agent:beta:main"])(
@@ -553,8 +597,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       });
 
       await ownerStarted.promise;
-      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
       const frozen = getSessionControllerOperation("agent:test:session");
+      vi.setSystemTime(Date.now() + REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
+      await frozen?.watchdog.tick();
       expect(frozen?.abortFrozen).toBe(true);
       expect(frozen?.watchdog.snapshot().recovery?.status).toBe("blocked");
       expect(() =>

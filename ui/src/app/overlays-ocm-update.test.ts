@@ -2,6 +2,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { renderUpdateRunReport } from "../../../src/infra/update-run-report.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { updateRunHarness } from "./update-run.test-support.ts";
@@ -90,8 +91,7 @@ it("polls an OCM job through disconnect and failure without native recovery acti
       reason: "ocm-update-failed",
     };
     harness.update({ phase: "connected", hello });
-    await flushMicrotasks();
-    expect(overlays.snapshot.updateRun).toEqual(run);
+    await waitForFast(() => expect(overlays.snapshot.updateRun).toEqual(run));
     expect(overlays.snapshot.updateRunning).toBe(false);
     expect(overlays.snapshot.diagnosableUpdateFailureId).toBeNull();
     expect(overlays.snapshot.reportableUpdateFailureId).toBeNull();

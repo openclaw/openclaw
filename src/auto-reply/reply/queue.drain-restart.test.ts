@@ -5,6 +5,7 @@ import {
   getPreparedModelRuntimePluginGeneration,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import {
   beginGatewayRestartSignalAdmission,
   GatewayDrainingError,
@@ -769,7 +770,7 @@ it("retires native inputs waiting behind a running turn without a followup callb
   const waiting = reserveSessionControllerSource(key, { policy: defaults });
   try {
     markGatewayRestartDraining();
-    expect(waiting.abortSignal.reason).toEqual(new Error("Session mailbox cleared"));
+    expect(isAgentRunRestartAbortReason(waiting.abortSignal.reason)).toBe(true);
     await waiting.settlement.promise;
     expect(running.abortSignal.aborted).toBe(false);
     expect(claim.abortController.signal.aborted).toBe(false);

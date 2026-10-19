@@ -37,6 +37,7 @@ export class LobsterPetOwner {
   private anchor: plans.LobsterPetAnchor = "top";
   private readonly geometry = new LobsterComposerGeometry(
     this.host,
+    () => this.host.composerElements?.() ?? null,
     () => this.inputs.residentEnabled && this.twinPlanned,
     () => this.refresh(),
   );
@@ -123,10 +124,10 @@ export class LobsterPetOwner {
 
   private active = false;
   private stopVisibility?: () => void;
-  private readonly listeners = new Set<() => void>();
+  private render?: () => void;
 
   constructor(
-    private readonly host: HTMLElement,
+    private readonly host: HTMLElement & Pick<contract.LobsterPetProps, "composerElements">,
     private readonly disableVisits: () => void,
     private inputs: Readonly<contract.LobsterPetProps>,
   ) {}
@@ -156,14 +157,14 @@ export class LobsterPetOwner {
   }
 
   subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.render = listener;
+    return () => {
+      this.render = undefined;
+    };
   }
 
   private publish() {
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.render?.();
   }
 
   update(props: contract.LobsterPetProps) {

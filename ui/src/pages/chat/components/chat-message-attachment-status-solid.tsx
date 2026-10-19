@@ -3,6 +3,7 @@ import { For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { omittedMediaReason } from "./chat-message-media.ts";
 
@@ -36,6 +37,7 @@ export type AssistantAttachmentStatusCardProps = {
 export function AssistantAttachmentStatusCard(
   props: AssistantAttachmentStatusCardProps,
 ): JSX.Element {
+  const copyRef = attachmentContextCopyRef(() => ({ name: props.label }));
   const unavailable = () => props.reason !== undefined;
   const action = () => props.onAllow ?? props.onRetry ?? props.onOpen;
   const statusClass = () =>
@@ -46,6 +48,7 @@ export function AssistantAttachmentStatusCard(
         : "chat-assistant-attachment-card--definitive";
   return (
     <div
+      ref={copyRef}
       class={[
         "chat-assistant-attachment-card",
         "chat-assistant-attachment-card--blocked",

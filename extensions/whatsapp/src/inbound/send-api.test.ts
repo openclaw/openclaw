@@ -8,8 +8,6 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-// Whatsapp tests cover send api plugin behavior.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareWhatsAppOutboundMedia } from "../outbound-media-contract.js";
 import { markdownToWhatsApp } from "../targets-runtime.js";
@@ -44,73 +42,68 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
-const requireRecord = createRequireRecord("object", "label-not-object");
-
-type MockCallSource = {
-  mock: {
-    calls: ArrayLike<ReadonlyArray<unknown>>;
+function createSocket() {
+  return {
+    sendMessage: vi.fn(
+      async (
+        _jid: string,
+        _content: AnyMessageContent,
+        _options?: MiscMessageGenerationOptions,
+      ): Promise<WAMessage | undefined> => ({ key: { id: "msg-1" } }) as WAMessage,
+    ),
+    sendPresenceUpdate: vi.fn(async () => {}),
   };
-};
-
-function requireMockArg(mock: MockCallSource, callIndex: number, argIndex: number, label: string) {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`missing ${label} call ${callIndex + 1}`);
-  }
-  return call[argIndex];
 }
 
 describe("createWebSendApi", () => {
-  const sendMessage = vi.fn(
-    async (
-      _jid: string,
-      _content: AnyMessageContent,
-      _options?: MiscMessageGenerationOptions,
-    ): Promise<WAMessage | undefined> => ({ key: { id: "msg-1" } }) as WAMessage,
-  );
-  const sendPresenceUpdate = vi.fn(async () => {});
+  const sock = createSocket();
+  const { sendMessage } = sock;
   let api: ReturnType<typeof createWebSendApi>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     imageOps.getImageMetadata.mockResolvedValue(null);
     imageOps.resizeToJpeg.mockRejectedValue(new Error("unexpected thumbnail generation"));
-    api = createWebSendApi({
-      sock: { sendMessage, sendPresenceUpdate },
-      defaultAccountId: "main",
-    });
+    api = createWebSendApi({ sock, defaultAccountId: "main" });
   });
 
-  function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-    for (const [key, value] of Object.entries(fields)) {
-      expect(record[key]).toEqual(value);
+  function withMentions(
+    participants: Parameters<typeof resolveWhatsAppOutboundMentions>[0]["participants"] = [
+      { id: "15551234567@s.whatsapp.net" },
+    ],
+  ) {
+    return createWebSendApi({
+      sock,
+      defaultAccountId: "main",
+      resolveOutboundMentions: ({ jid, text }) =>
+        resolveWhatsAppOutboundMentions({ chatJid: jid, text, participants }),
+    });
+  }
+
+  function expectPartial(failure: unknown, ids: string[], cause: unknown, calls: number) {
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    if (!isChannelPartialDeliveryError(failure)) {
+      throw new Error("accepted provider delivery was lost");
     }
-  }
-
-  function requireSendContent(callIndex = 0): Record<string, unknown> {
-    return requireRecord(
-      requireMockArg(sendMessage, callIndex, 1, "sent message"),
-      "sent message content",
-    );
-  }
-
-  function requireSendOptions(callIndex = 0): Record<string, unknown> {
-    return requireRecord(
-      requireMockArg(sendMessage, callIndex, 2, "sent message"),
-      "sent message options",
-    );
+    expect(failure.deliveryResult.messageIds).toEqual(ids);
+    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual(ids);
+    expect(failure).toHaveProperty("cause", cause);
+    expect(sendMessage).toHaveBeenCalledTimes(calls);
+    expectOutboundActivityOnce();
   }
 
   function expectFirstSendJid(jid: string) {
-    expect(requireMockArg(sendMessage, 0, 0, "sent message")).toBe(jid);
+    expect(sendMessage.mock.calls[0]?.[0]).toBe(jid);
   }
 
   function expectSendContentFields(callIndex: number, fields: Record<string, unknown>) {
-    expectRecordFields(requireSendContent(callIndex), fields);
+    for (const [key, value] of Object.entries(fields)) {
+      expect(sendMessage.mock.calls[callIndex]?.[1]).toHaveProperty(key, value);
+    }
   }
 
-  function expectSendResultFields(result: WhatsAppSendResult, fields: Record<string, unknown>) {
-    expectRecordFields(requireRecord(result, "send result"), fields);
+  function expectAccepted(result: WhatsAppSendResult, kind: string, messageId: string) {
+    expect(result).toMatchObject({ kind, messageId, providerAccepted: true });
   }
 
   function expectOutboundActivityOnce(accountId = "main") {
@@ -123,27 +116,19 @@ describe("createWebSendApi", () => {
   }
 
   it("sends structured contact messages through the canonical send path", async () => {
-    const res = await api.sendContact("+1555", {
+    const contact = Object.freeze({
       displayName: "QA Contact",
       vcard: "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD",
     });
+    const res = await api.sendContact("+1555", contact);
 
     expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
       contacts: {
         displayName: "QA Contact",
-        contacts: [
-          {
-            displayName: "QA Contact",
-            vcard: "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD",
-          },
-        ],
+        contacts: [contact],
       },
     });
-    expectSendResultFields(res, {
-      kind: "contact",
-      messageId: "msg-1",
-      providerAccepted: true,
-    });
+    expectAccepted(res, "contact", "msg-1");
     expect(recordChannelActivity).toHaveBeenCalledWith({
       channel: "whatsapp",
       accountId: "main",
@@ -152,25 +137,13 @@ describe("createWebSendApi", () => {
   });
 
   it("sends structured location messages through the canonical send path", async () => {
-    const res = await api.sendLocation("+1555", {
-      degreesLatitude: 37.7749,
-      degreesLongitude: -122.4194,
-      name: "QA Location",
-    });
+    const coordinates = { degreesLatitude: 37.7749, degreesLongitude: -122.4194 };
+    const res = await api.sendLocation("+1555", { ...coordinates, name: "QA Location" });
 
     expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
-      location: {
-        address: undefined,
-        degreesLatitude: 37.7749,
-        degreesLongitude: -122.4194,
-        name: "QA Location",
-      },
+      location: { address: undefined, ...coordinates, name: "QA Location" },
     });
-    expectSendResultFields(res, {
-      kind: "location",
-      messageId: "msg-1",
-      providerAccepted: true,
-    });
+    expectAccepted(res, "location", "msg-1");
   });
 
   it("sends structured sticker messages through the canonical send path", async () => {
@@ -181,51 +154,28 @@ describe("createWebSendApi", () => {
       sticker: payload,
       mimetype: "image/webp",
     });
-    expectSendResultFields(res, {
-      kind: "sticker",
-      messageId: "msg-1",
-      providerAccepted: true,
+    expectAccepted(res, "sticker", "msg-1");
+  });
+
+  it("only sends native mentions for visible phone numbers outside inline code", async () => {
+    api = withMentions();
+    const messageText = "literal \\` ping @15551234567";
+    await api.sendMessage("120363000000000000@g.us", markdownToWhatsApp(messageText));
+    expect(sendMessage).toHaveBeenCalledWith("120363000000000000@g.us", {
+      text: messageText,
+      mentions: ["15551234567@s.whatsapp.net"],
     });
   });
 
-  it.each([{ messageText: "literal \\` ping @15551234567", nativeMention: true }])(
-    "only sends native mentions for visible phone numbers outside inline code: $messageText",
-    async ({ messageText, nativeMention }) => {
-      api = createWebSendApi({
-        sock: { sendMessage, sendPresenceUpdate },
-        defaultAccountId: "main",
-        resolveOutboundMentions: ({ jid, text }) =>
-          resolveWhatsAppOutboundMentions({
-            chatJid: jid,
-            text,
-            participants: [{ id: "15551234567@s.whatsapp.net" }],
-          }),
-      });
-
-      await api.sendMessage("120363000000000000@g.us", markdownToWhatsApp(messageText));
-
-      expect(sendMessage).toHaveBeenCalledWith("120363000000000000@g.us", {
-        text: messageText,
-        ...(nativeMention ? { mentions: ["15551234567@s.whatsapp.net"] } : {}),
-      });
-    },
-  );
-
-  it.each([{ kind: "video", contentType: " Video/MP4; charset=binary ", mimetype: "video/mp4" }])(
-    "preserves the native $kind payload after canonicalizing mixed-case media MIME",
-    async ({ kind, contentType, mimetype }) => {
-      const payload = Buffer.from(kind);
-      const media = await prepareWhatsAppOutboundMedia({ buffer: payload, contentType });
-
-      await api.sendMessage("+1555", "cap", media.buffer, media.mimetype);
-
-      expectSendContentFields(0, {
-        [kind]: payload,
-        caption: "cap",
-        mimetype,
-      });
-    },
-  );
+  it("preserves native video after canonicalizing mixed-case media MIME", async () => {
+    const payload = Buffer.from("video");
+    const media = await prepareWhatsAppOutboundMedia({
+      buffer: payload,
+      contentType: " Video/MP4; charset=binary ",
+    });
+    await api.sendMessage("+1555", "cap", media.buffer, media.mimetype);
+    expectSendContentFields(0, { video: payload, caption: "cap", mimetype: "video/mp4" });
+  });
 
   it("prepopulates image thumbnails and dimensions before Baileys media upload", async () => {
     const payload = Buffer.from("img");
@@ -252,16 +202,7 @@ describe("createWebSendApi", () => {
   });
 
   it("adds native mention metadata to group media captions", async () => {
-    api = createWebSendApi({
-      sock: { sendMessage, sendPresenceUpdate },
-      defaultAccountId: "main",
-      resolveOutboundMentions: ({ jid, text }) =>
-        resolveWhatsAppOutboundMentions({
-          chatJid: jid,
-          text,
-          participants: [{ id: "15551234567@s.whatsapp.net" }],
-        }),
-    });
+    api = withMentions();
     const payload = Buffer.from("img");
 
     await api.sendMessage("120363000000000000@g.us", "cap @15551234567", payload, "image/jpeg");
@@ -276,21 +217,9 @@ describe("createWebSendApi", () => {
   });
 
   it("uses resolved mention caption text for forced-document media", async () => {
-    api = createWebSendApi({
-      sock: { sendMessage, sendPresenceUpdate },
-      defaultAccountId: "main",
-      resolveOutboundMentions: ({ jid, text }) =>
-        resolveWhatsAppOutboundMentions({
-          chatJid: jid,
-          text,
-          participants: [
-            {
-              id: "277038292303944:4@lid",
-              phoneNumber: "5511976136970@s.whatsapp.net",
-            },
-          ],
-        }),
-    });
+    api = withMentions([
+      { id: "277038292303944:4@lid", phoneNumber: "5511976136970@s.whatsapp.net" },
+    ]);
     const payload = Buffer.from("img");
 
     await api.sendMessage("120363000000000000@g.us", "cap @+5511976136970", payload, "image/jpeg", {
@@ -323,11 +252,7 @@ describe("createWebSendApi", () => {
     expect(sendMessage).toHaveBeenNthCalledWith(2, "1555@s.whatsapp.net", {
       text: "voice text",
     });
-    expectSendResultFields(res, {
-      kind: "media",
-      messageId: "voice-1",
-      providerAccepted: true,
-    });
+    expectAccepted(res, "media", "voice-1");
     expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual([
       "voice-1",
       "voice-text-1",
@@ -353,21 +278,7 @@ describe("createWebSendApi", () => {
       .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
       .catch((caught: unknown) => caught);
 
-    expect(isChannelPartialDeliveryError(failure)).toBe(true);
-    if (!isChannelPartialDeliveryError(failure)) {
-      throw new Error("nested accepted voice-caption receipt replaced its earlier voice receipt");
-    }
-    expect(failure.deliveryResult.messageIds).toEqual([
-      "nested-voice-media",
-      "nested-voice-caption",
-    ]);
-    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual([
-      "nested-voice-media",
-      "nested-voice-caption",
-    ]);
-    expect(failure).toHaveProperty("cause", bookkeepingError);
-    expect(sendMessage).toHaveBeenCalledTimes(2);
-    expectOutboundActivityOnce();
+    expectPartial(failure, ["nested-voice-media", "nested-voice-caption"], bookkeepingError, 2);
   });
 
   it("preserves the accepted voice receipt when Baileys never accepts its caption", async () => {
@@ -379,43 +290,26 @@ describe("createWebSendApi", () => {
       .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
       .catch((caught: unknown) => caught);
 
-    expect(sendMessage).toHaveBeenCalledTimes(2);
-    expect(isChannelPartialDeliveryError(failure)).toBe(true);
-    if (!isChannelPartialDeliveryError(failure)) {
-      throw new Error("accepted voice delivery was lost when Baileys rejected its caption");
-    }
-    expect(failure.deliveryResult.messageIds).toEqual(["voice-accepted-no-caption"]);
-    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual([
-      "voice-accepted-no-caption",
-    ]);
-    expect(failure).toHaveProperty("cause", expect.any(PlatformMessageNotDispatchedError));
-    expectOutboundActivityOnce();
+    expectPartial(
+      failure,
+      ["voice-accepted-no-caption"],
+      expect.any(PlatformMessageNotDispatchedError),
+      2,
+    );
   });
 
-  it.each([
-    {
-      kind: "poll",
-      send: (sendApi: ReturnType<typeof createWebSendApi>) =>
-        sendApi.sendPoll("+1555", { question: "Q?", options: ["a", "b"] }),
-    },
-  ])("retains the accepted $kind receipt when activity recording fails", async ({ kind, send }) => {
+  it("retains the accepted poll receipt when activity recording fails", async () => {
     const activityError = new Error("channel activity bookkeeping disconnected");
-    sendMessage.mockResolvedValueOnce({ key: { id: `${kind}-accepted` } });
+    sendMessage.mockResolvedValueOnce({ key: { id: "poll-accepted" } });
     recordChannelActivity.mockImplementationOnce(() => {
       throw activityError;
     });
 
-    const failure = await send(api).catch((caught: unknown) => caught);
+    const failure = await api
+      .sendPoll("+1555", { question: "Q?", options: ["a", "b"] })
+      .catch((caught: unknown) => caught);
 
-    expect(sendMessage).toHaveBeenCalledOnce();
-    expect(isChannelPartialDeliveryError(failure)).toBe(true);
-    if (!isChannelPartialDeliveryError(failure)) {
-      throw new Error("accepted provider delivery was lost during activity bookkeeping");
-    }
-    expect(failure.deliveryResult.messageIds).toEqual([`${kind}-accepted`]);
-    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual([`${kind}-accepted`]);
-    expect(failure).toHaveProperty("cause", activityError);
-    expectOutboundActivityOnce();
+    expectPartial(failure, ["poll-accepted"], activityError, 1);
   });
 
   it("retains the first accepted voice receipt when immediate activity recording fails", async () => {
@@ -429,15 +323,7 @@ describe("createWebSendApi", () => {
       .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
       .catch((caught: unknown) => caught);
 
-    expect(sendMessage).toHaveBeenCalledOnce();
-    expect(isChannelPartialDeliveryError(failure)).toBe(true);
-    if (!isChannelPartialDeliveryError(failure)) {
-      throw new Error("accepted voice delivery was lost during immediate activity bookkeeping");
-    }
-    expect(failure.deliveryResult.messageIds).toEqual(["voice-accepted-3"]);
-    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual(["voice-accepted-3"]);
-    expect(failure).toHaveProperty("cause", activityError);
-    expectOutboundActivityOnce();
+    expectPartial(failure, ["voice-accepted-3"], activityError, 1);
   });
 
   it("supports video media and gifPlayback option", async () => {
@@ -455,36 +341,23 @@ describe("createWebSendApi", () => {
   it("sends reactions with participant JID normalization", async () => {
     const res = await api.sendReaction("+1555", "msg-2", "👍", false, "+1999");
     expectFirstSendJid("1555@s.whatsapp.net");
-    const react = requireRecord(requireSendContent().react, "reaction content");
-    expect(react.text).toBe("👍");
-    expectRecordFields(requireRecord(react.key, "reaction key"), {
-      remoteJid: "1555@s.whatsapp.net",
-      id: "msg-2",
-      fromMe: false,
-      participant: "1999@s.whatsapp.net",
+    expectSendContentFields(0, {
+      "react.text": "👍",
+      "react.key.remoteJid": "1555@s.whatsapp.net",
+      "react.key.id": "msg-2",
+      "react.key.fromMe": false,
+      "react.key.participant": "1999@s.whatsapp.net",
     });
-    expectSendResultFields(res, {
-      kind: "reaction",
-      messageId: "msg-1",
-      providerAccepted: true,
-    });
+    expectAccepted(res, "reaction", "msg-1");
   });
 
-  it.each([
-    {
-      kind: "voice",
-      send: (sendApi: ReturnType<typeof createWebSendApi>) =>
-        sendApi.sendMessage("+1555", "", Buffer.from("voice"), "audio/ogg"),
-    },
-  ])(
-    "rejects an unaccepted Baileys $kind send without recording outbound activity",
-    async ({ send }) => {
-      sendMessage.mockResolvedValueOnce(undefined);
-
-      await expect(send(api)).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
-      expect(recordChannelActivity).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects an unaccepted Baileys voice send without recording outbound activity", async () => {
+    sendMessage.mockResolvedValueOnce(undefined);
+    await expect(
+      api.sendMessage("+1555", "", Buffer.from("voice"), "audio/ogg"),
+    ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(recordChannelActivity).not.toHaveBeenCalled();
+  });
 
   it("sends media as document when mediaType is undefined", async () => {
     const mediaBuffer = Buffer.from("test");
@@ -510,12 +383,14 @@ describe("createWebSendApi", () => {
     });
 
     expectFirstSendJid("1555@s.whatsapp.net");
-    expect(requireMockArg(sendMessage, 0, 1, "sent message")).toEqual({ text: "hello" });
-    const quoted = requireRecord(requireSendOptions().quoted, "quoted message");
-    expectRecordFields(requireRecord(quoted.key, "quoted key"), {
-      remoteJid: "277038292303944@lid",
-      id: "quoted-1",
-    });
+    expect(sendMessage.mock.calls[0]?.[1]).toEqual({ text: "hello" });
+    expect(sendMessage.mock.calls[0]?.[2]).toHaveProperty(
+      "quoted.key",
+      expect.objectContaining({
+        remoteJid: "277038292303944@lid",
+        id: "quoted-1",
+      }),
+    );
   });
 
   it("aligns a lookup-proven LID quote with the final PN destination", async () => {
@@ -530,34 +405,29 @@ describe("createWebSendApi", () => {
     });
 
     expectFirstSendJid("1555@s.whatsapp.net");
-    const quoted = requireRecord(requireSendOptions().quoted, "quoted message");
-    expectRecordFields(requireRecord(quoted.key, "quoted key"), {
-      remoteJid: "1555@s.whatsapp.net",
-      id: "quoted-self",
-      fromMe: true,
-    });
+    expect(sendMessage.mock.calls[0]?.[2]).toHaveProperty(
+      "quoted.key",
+      expect.objectContaining({
+        remoteJid: "1555@s.whatsapp.net",
+        id: "quoted-self",
+        fromMe: true,
+      }),
+    );
   });
 });
 
-// Integration tests for issue #67378: createWebSendApi must route outbound
-// PN-only sends through the LID forward-mapping when authDir is provided,
-// otherwise messages going to LID-addressed contacts vanish into a
-// sender-only ghost chat.
+// #67378: Missing LID resolution sends messages into a sender-only ghost chat.
 describe("createWebSendApi LID resolution (issue #67378)", () => {
-  const sendMessage = vi.fn(
-    async (
-      _jid: string,
-      _content: AnyMessageContent,
-      _options?: MiscMessageGenerationOptions,
-    ): Promise<WAMessage | undefined> => ({ key: { id: "msg-1" } }) as WAMessage,
-  );
-  const sendPresenceUpdate = vi.fn(async () => {});
+  const sock = createSocket();
+  const { sendMessage, sendPresenceUpdate } = sock;
   let authDir: string;
+  let api: ReturnType<typeof createWebSendApi>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     authDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-lid-"));
     fs.writeFileSync(path.join(authDir, "lid-mapping-15555550000.json"), JSON.stringify("987654"));
+    api = createWebSendApi({ sock, defaultAccountId: "main", authDir });
   });
 
   afterEach(() => {
@@ -565,53 +435,25 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
   });
 
   it("falls back to PN s.whatsapp.net when no LID mapping exists", async () => {
-    const api = createWebSendApi({
-      sock: { sendMessage, sendPresenceUpdate },
-      defaultAccountId: "main",
-      authDir,
-    });
     await api.sendMessage("+33123456789", "hello");
     expect(sendMessage).toHaveBeenCalledWith("33123456789@s.whatsapp.net", { text: "hello" });
   });
 
   it("resolves PN to LID for sendReaction", async () => {
-    const api = createWebSendApi({
-      sock: { sendMessage, sendPresenceUpdate },
-      defaultAccountId: "main",
-      authDir,
-    });
     await api.sendReaction("+15555550000", "msg-2", "1️⃣", true);
-    expect(requireMockArg(sendMessage, 0, 0, "send reaction")).toBe("987654@lid");
-    const payload = requireRecord(
-      requireMockArg(sendMessage, 0, 1, "send reaction"),
-      "send reaction payload",
-    );
-    const react = requireRecord(payload.react, "reaction content");
-    expect(react.text).toBe("1️⃣");
-    expect(requireRecord(react.key, "reaction key")).toMatchObject({
-      remoteJid: "987654@lid",
-      id: "msg-2",
-      fromMe: true,
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("987654@lid");
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      react: { text: "1️⃣", key: { remoteJid: "987654@lid", id: "msg-2", fromMe: true } },
     });
-    expect(requireRecord(react.key, "reaction key").participant).toBeUndefined();
+    expect(sendMessage.mock.calls[0]?.[1]).toHaveProperty("react.key.participant", undefined);
   });
 
   it("resolves PN to LID for sendComposingTo presence", async () => {
-    const api = createWebSendApi({
-      sock: { sendMessage, sendPresenceUpdate },
-      defaultAccountId: "main",
-      authDir,
-    });
     await api.sendComposingTo("+15555550000");
     expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "987654@lid");
   });
 
   it("skips newsletter composing presence when authDir is provided", async () => {
-    const api = createWebSendApi({
-      sock: { sendMessage, sendPresenceUpdate },
-      defaultAccountId: "main",
-      authDir,
-    });
     await api.sendComposingTo("120363401234567890@newsletter");
     expect(sendPresenceUpdate).not.toHaveBeenCalled();
   });

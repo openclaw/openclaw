@@ -34,7 +34,6 @@ const WORKFLOWS: WorkflowPolicy[] = [
   ...[
     ["ios-periphery", "ios-periphery-iOS Periphery Dead Code"],
     ["macos-periphery", "macos-periphery-macOS Periphery Dead Code"],
-    ["shared-openclawkit-periphery", "shared-openclawkit-periphery"],
     ["linux-app", "linux-app-Linux App"],
     ["node-runtime-conformance", "node-runtime-conformance", "-pull_request", "-workflow_dispatch"],
   ].map(([name, prefix, prSuffix = "", manualSuffix = ""]) => ({
@@ -70,6 +69,8 @@ const WORKFLOWS: WorkflowPolicy[] = [
 ];
 
 type Job = {
+  uses?: string;
+  with?: Record<string, unknown>;
   if?: string | boolean;
   concurrency?: Concurrency;
   outputs?: Record<string, string>;
@@ -363,6 +364,22 @@ function expectUseful(...results: Admission[]) {
     expect(nonScopeJobs(result).some(([, eligible]) => eligible)).toBe(true);
   }
 }
+
+it("keeps the shared manual entrypoint in the canonical graph without self-cancellation", () => {
+  const wrapper = readWorkflow(workflowPath("shared-openclawkit-periphery"));
+  const canonical = readWorkflow(workflowPath("macos-periphery"));
+  expect(wrapper.on.pull_request).toBeUndefined();
+  expect(Object.hasOwn(wrapper.on, "workflow_dispatch")).toBe(true);
+  expect(wrapper.concurrency).toBeUndefined();
+  expect(wrapper.jobs.scan).toMatchObject({
+    uses: "./.github/workflows/macos-periphery.yml",
+    with: { shared_only: true },
+  });
+  const group = workflowConcurrency(canonical).group;
+  const direct = refEvent(canonical, "workflow_dispatch", 201);
+  const shared = refEvent(wrapper, "workflow_dispatch", 202);
+  expect(evaluate(group, { github: direct })).not.toBe(evaluate(group, { github: shared }));
+});
 
 describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
   const { file, prGroup, manual, push, convertToDraft } = policy;

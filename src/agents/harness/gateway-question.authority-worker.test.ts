@@ -1,8 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import {
+  createQueueTestRun,
+  toolAuthorityOverlay,
+} from "../../auto-reply/reply/reply-tool-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   replaceSessionEntry,
@@ -197,7 +200,7 @@ it.each([
         return originalRead(inputs, consume, options);
       },
     );
-    const caller = { senderIsOwner: true, disableTools: false, traceAuthorized: false };
+    const caller = toolAuthorityOverlay(run);
     const preparation = bindWorkerToolPreparation({
       assertCurrent,
       compatAssertCurrent: () => authority.assertCaller(caller),

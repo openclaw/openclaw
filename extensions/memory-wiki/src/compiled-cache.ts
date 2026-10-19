@@ -7,7 +7,8 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { WikiFreshnessLevel } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import type { WikiPageKind, WikiPageSummary, WikiRelationship } from "./markdown.js";
+import type { WikiPageSummary, WikiRelationship } from "./markdown.js";
+import type { WikiPageKind } from "./wiki-page-kinds.js";
 
 const COMPILED_CACHE_NAMESPACE = "compiled-cache";
 const COMPILED_CACHE_MAX_ENTRIES = 256;
@@ -505,18 +506,11 @@ export async function writeMemoryWikiCompiledCache(
   snapshot: MemoryWikiCompiledCacheSnapshot,
   publicationId: string,
   parentPublicationId: string | null,
-  validatePublication: () => Promise<void>,
   commitPublication: () => Promise<void>,
   loadDurableIdentity: () => Promise<DurableVaultIdentity>,
 ): Promise<void> {
   const store = requireConfiguredStore();
   const { activeVault, serializedSnapshot } = await store.write(config, snapshot, publicationId);
-  try {
-    await validatePublication();
-  } catch (error) {
-    await store.deletePublication(config, publicationId);
-    throw error;
-  }
   if (resolveActiveVault(config) !== activeVault) {
     await store.deletePublication(config, publicationId);
     throw new Error("Memory Wiki cache owner retired before publication.");

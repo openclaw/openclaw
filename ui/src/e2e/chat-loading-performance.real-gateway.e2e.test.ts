@@ -762,7 +762,7 @@ suite.define(() => {
         );
 
         // Save measurements before asserting budgets so failures retain their evidence.
-        // Backscroll requests use the explicit 1 MiB budget from #170481;
+        // Backscroll requests use the explicit 2 MiB budget;
         // the Gateway retains its 512 KiB default for requests without a budget.
         expect(olderPages).toHaveLength(olderPageCommits);
         expect(olderPages.length).toBeGreaterThan(1);
@@ -771,7 +771,7 @@ suite.define(() => {
         for (const metric of olderPages) {
           expect(metric.receivedMs).toBeDefined();
           expect(metric.offset).toBe(nextOffset);
-          expect(metric.maxBytes).toBe(1024 * 1024);
+          expect(metric.maxBytes).toBe(3 * 1024 * 1024);
           expect(metric.historyBytes).toBeLessThanOrEqual(metric.maxBytes!);
           const messages = metric.messages ?? 0;
           expect(messages).toBeGreaterThan(0);

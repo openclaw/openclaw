@@ -1,14 +1,11 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createSignal, onSettled } from "solid-js";
-import { i18n } from "../../i18n/lib/translate.ts";
+import { onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { createDesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { FullscreenButton } from "../fullscreen-solid.tsx";
-import { DESKTOP_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
 import { createDesktopAudio } from "./desktop-audio.ts";
@@ -41,7 +38,7 @@ const owners = new WeakMap<HTMLElement, DesktopPanelOwner>();
 const ownerFor = (host: DesktopPanelElement) => {
   let owner = owners.get(host);
   if (!owner) {
-    owner = createDesktopPanel(host);
+    owner = createDesktopPanel(host, onSettled);
     owners.set(host, owner);
   }
   return owner;
@@ -51,58 +48,23 @@ defineSolidBridge<DesktopPanelInputs, Methods>(
   (inputs, host) => {
     const retained = owners.has(host);
     const panel = ownerFor(host);
-    const fullscreen = createDesktopFullscreen(host.ownerDocument);
-    const detachPanel = panel.attach({
-      audio: createDesktopAudio(host, panel.audioTarget),
-      mobileKeyboard: createDesktopMobileKeyboard(panel.keyboardTarget),
-      pictureInPicture: createDesktopPictureInPicture(host, () => {
-        const target = panel.launchTarget();
-        return host.available && target.state === "connected" && target.presented
-          ? desktopCanvas(panel.surface())
-          : null;
-      }),
-      launcher: createDesktopAppLauncher(panel.launchTarget),
-      fullscreenMode: fullscreen,
-    });
-    const state = projectOwner(panel, (owner) => owner);
-    const [mounted, setMounted] = createSignal(false);
-    // Prop changes reconcile synchronous transport authority, not copied rendering state.
-    createEffect(
-      () =>
-        mounted()
-          ? { ...inputs, revision: state.revision(), fullscreen: fullscreen.active() }
-          : undefined,
-      (next, previous) => {
-        if (next) {
-          panel.reconcile(next, previous);
-        }
+    const fullscreen = createDesktopFullscreen(host.ownerDocument, panel.notify);
+    panel.attach(
+      {
+        audio: createDesktopAudio(host, panel.audioTarget),
+        mobileKeyboard: createDesktopMobileKeyboard(panel.keyboardTarget),
+        pictureInPicture: createDesktopPictureInPicture(host, () => {
+          const target = panel.launchTarget();
+          return host.available && target.state === "connected" && target.presented
+            ? desktopCanvas(panel.surface())
+            : null;
+        }),
+        launcher: createDesktopAppLauncher(panel.launchTarget),
+        fullscreenMode: fullscreen,
       },
+      retained,
     );
-    createEffect(
-      () => (inputs.available && inputs.suppliedEnvironments === null ? inputs.client : null),
-      (client) => (client ? panel.sessionSource.subscribe(client) : undefined),
-    );
-    onSettled(() => {
-      const open = panel.dockLayout.open;
-      panel.dockLayout.connect();
-      if (retained) {
-        panel.dockLayout.setOpen(open, false);
-      }
-      setMounted(true);
-      const stopLocale = i18n.subscribe(panel.notify);
-      const stopToggle = listen(window, DESKTOP_PANEL_TOGGLE_EVENT, (event) => {
-        if (!inputs.embedded) {
-          panel.handleToggleRequest(event);
-        }
-      });
-      return () => {
-        stopToggle();
-        stopLocale();
-        state.dispose();
-        detachPanel();
-        panel.dockLayout.dispose();
-      };
-    });
+    const state = projectOwner(panel, (owner) => owner);
     return (
       <>
         <style>{`${dockStyles}\n${desktopStyles}`}</style>
@@ -133,6 +95,7 @@ defineSolidBridge<DesktopPanelInputs, Methods>(
       onFocusTargetChange: { default: null, attribute: false },
       desktopClientFactory: { default: () => new DesktopClient(), attribute: false },
     },
+    propertyChanged: (host) => owners.get(host)?.inputsChanged(),
     methods: { handleToggleRequest: (host, event) => ownerFor(host).handleToggleRequest(event) },
   },
 );

@@ -33,7 +33,7 @@ export class AgentRunApprovalLeases {
     if (!parent) {
       throw new Error("agent run approval authority is no longer active");
     }
-    const signals = Object.freeze([...new Set(inputSignals)]);
+    const signals = [...new Set(inputSignals)];
     for (const signal of signals) {
       signal.throwIfAborted();
     }

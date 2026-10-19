@@ -150,7 +150,7 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
         admission.release();
       }
     });
-    const admission = await admit(storePath, sessionKey, sessionId, onInterrupt);
+    const admission = await admit(storePath, sessionKey, sessionId, onInterrupt, runId);
     const blocker = await block(revocation === "before interruption", storePath, [
       sessionKey,
       sessionId,
@@ -213,14 +213,20 @@ it.each([
     const handle = createEmbeddedRunHandle({ runId, abort: () => controller.abort() });
     attachActiveEmbeddedRun(sessionId, handle, sessionKey);
     const interrupted = createDeferred();
-    const admission = await admit(storePath, sessionKey, sessionId, () => {
-      controller.abort();
-      interrupted.resolve();
-      if (phase === "queued") {
-        admission.release();
-      }
-      return { runId };
-    });
+    const admission = await admit(
+      storePath,
+      sessionKey,
+      sessionId,
+      () => {
+        controller.abort();
+        interrupted.resolve();
+        if (phase === "queued") {
+          admission.release();
+        }
+        return { runId };
+      },
+      runId,
+    );
     const blocker = await block(phase === "queued", storePath, [sessionKey, sessionId]);
     const mutationQueued = createDeferred();
     if (phase === "queued") {
@@ -330,6 +336,7 @@ it.for(["admin", "bulk"] as const)(
       storePath = await writeSession(id, `${id}-revision`);
       await register(id, storePath, {
         requesterSessionKey: id === "root" ? requesterKey : owner,
+        requesterTurnRunId: id === "root" ? undefined : "root",
         requesterDisplayKey: requesterKey,
         collect: true,
         queued: queued.includes(id),
@@ -362,15 +369,21 @@ it.for(["admin", "bulk"] as const)(
     for (const { runId, handle } of activeRuns) {
       attachActiveEmbeddedRun(`${runId}-session`, handle, key(runId));
       leases.push(
-        await admit(storePath, key(runId), `${runId}-session`, () => {
-          interrupted.push(runId);
-          if (interrupted.length === running.length) {
-            allInterrupted.resolve();
-          }
-          // Cancellation releases real scheduler capacity while these admissions
-          // remain held. Selected queued children must still never dispatch.
-          expect(releaseSwarmRun(runId)).toBe(true);
-        }),
+        await admit(
+          storePath,
+          key(runId),
+          `${runId}-session`,
+          () => {
+            interrupted.push(runId);
+            if (interrupted.length === running.length) {
+              allInterrupted.resolve();
+            }
+            // Cancellation releases real scheduler capacity while these admissions
+            // remain held. Selected queued children must still never dispatch.
+            expect(releaseSwarmRun(runId)).toBe(true);
+          },
+          runId,
+        ),
       );
     }
     const cfg = getRuntimeConfig();
@@ -593,7 +606,6 @@ it("full child Stop preserves later and foreign sources while joining captured q
   const pending = killSubagentRunAdmin({
     cfg: getRuntimeConfig(),
     sessionKey,
-    expectedRunId: runId,
   }).finally(() => {
     completed = true;
   });

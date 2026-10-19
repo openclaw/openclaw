@@ -92,9 +92,16 @@ import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js"
 
 async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | StageFailure> {
   const { params, cfg } = ctx;
+  if (params.kind.startsWith("saved-auth:")) {
+    const profileId = parseSavedAuthSetupProfileId(params.kind);
+    if (!profileId) {
+      return { error: "Invalid saved sign-in choice. Open Model Setup and choose again." };
+    }
+    return await stageSavedAuthCandidate(ctx, profileId);
+  }
+  const choiceId = parseProviderAutoSetupChoiceId(params.kind);
   const hasProviderTarget =
-    params.kind.startsWith("saved-auth:") ||
-    parseProviderAutoSetupChoiceId(params.kind) ||
+    choiceId ||
     params.kind === "existing-model" ||
     params.kind === "provider-auth" ||
     params.kind === "api-key";
@@ -104,14 +111,6 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
   if (roleError) {
     return roleError;
   }
-  if (params.kind.startsWith("saved-auth:")) {
-    const profileId = parseSavedAuthSetupProfileId(params.kind);
-    if (!profileId) {
-      return { error: "Invalid saved sign-in choice. Open Model Setup and choose again." };
-    }
-    return await stageSavedAuthCandidate(ctx, profileId);
-  }
-  const choiceId = parseProviderAutoSetupChoiceId(params.kind);
   if (choiceId) {
     return await stageProviderAutoCandidate(ctx, choiceId);
   }
@@ -532,7 +531,6 @@ async function verifyAndActivateCandidate(
         route: candidateRoute,
         auth: verification.auth,
         stagedOwnerPluginArtifacts: artifacts,
-        deps,
       }),
     );
   };

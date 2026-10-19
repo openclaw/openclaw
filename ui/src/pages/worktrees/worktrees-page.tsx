@@ -1,4 +1,4 @@
-import { For, Show, untrack } from "solid-js";
+import { For, Show } from "solid-js";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import {
   SettingsEmpty,
@@ -11,10 +11,10 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
@@ -27,16 +27,14 @@ const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees"
 
 export function WorktreesPage() {
   const context = useApplication();
-  return (
-    <openclaw-worktrees-page>
-      <WorktreesView model={new WorktreesModel(() => context)} />
-    </openclaw-worktrees-page>
+  const { owner, view } = projectCallbackOwner(
+    (notify) => new WorktreesModel(() => context, notify),
+    (model) => model,
   );
+  return <openclaw-worktrees-page>{renderWorktreesView(owner, view.read)}</openclaw-worktrees-page>;
 }
 
-export function WorktreesView(props: { model: WorktreesModel }) {
-  // One model owns this mounted view; its Gateway context remains live.
-  const model = untrack(() => props.model);
+export function renderWorktreesView(model: WorktreesModel, view: () => WorktreesModel) {
   model.gateway = useGatewayPage({
     getGateway: () => model.context.gateway,
     onIdentityChange: () => model.update({ records: [], error: null }),
@@ -44,7 +42,6 @@ export function WorktreesView(props: { model: WorktreesModel }) {
     ensureInitialData: () => void model.load(),
     onSnapshot: () => model.update(model.operatorAccess.canAdmin ? {} : { createOpen: false }),
   });
-  const view = projectOwner(model, (source) => source).read;
 
   const owner = (record: WorktreesModel["records"][number]) => {
     if (record.ownerKind === "session" && record.ownerId) {

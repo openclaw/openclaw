@@ -1,4 +1,7 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import type { FollowupRun } from "./queue/types.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createMockReplyOperation } from "./test-helpers.js";
 
@@ -93,6 +96,73 @@ export function createFollowupTurnTestTurn(
     preflightCompactionApplied: false,
     ...overrides,
   };
+}
+
+export async function executeQueuedFollowupTurnForTest(
+  queued: FollowupRun,
+  params: { runId: string; opts?: InternalGetReplyOptions; admit: boolean },
+) {
+  let turn = createFollowupTurnTestTurn({
+    runId: params.runId,
+    queued,
+    config: queued.run.config,
+  });
+  const defaults = {
+    typing: createFollowupTurnTestTypingController(),
+    typingMode: "never" as const,
+    defaultModel: "claude",
+    opts: params.opts,
+  };
+  let admittedOperation: AdmittedFollowupTurn["operation"] | undefined;
+  try {
+    if (params.admit) {
+      const [{ prepareReplyAgentTurn }, replyAdmission, configuredOwners] = await Promise.all([
+        import("./reply-agent-turn-preparation.js"),
+        import("./reply-turn-admission.js"),
+        import("../../state/user-channel-identity-operations.js"),
+      ]);
+      const lease = vi
+        .spyOn(replyAdmission, "admitReplyTurn")
+        .mockImplementationOnce(async ({ captureRunSelection, mailboxClaim }) => {
+          captureRunSelection?.();
+          expect(mailboxClaim, "queued admission must own its selected source").toBeDefined();
+          if (!mailboxClaim) {
+            throw new Error("Expected the queued source's mailbox claim");
+          }
+          admittedOperation = createReplyOperation({
+            sessionKey: queued.run.sessionKey ?? queued.run.sessionId,
+            sessionId: queued.run.sessionId,
+            agentId: queued.run.agentId,
+            resetTriggered: false,
+            turnKind: "queued_followup",
+            mailboxClaim,
+          });
+          return { status: "owned", operation: admittedOperation };
+        });
+      const durableOwner = vi
+        .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
+        .mockResolvedValue(undefined);
+      try {
+        const admission = await prepareReplyAgentTurn({ queued, defaults });
+        expect(admission.kind).toBe("admitted");
+        if (admission.kind !== "admitted") {
+          throw new Error("Expected queued owner admission");
+        }
+        turn = admission.turn;
+      } finally {
+        lease.mockRestore();
+        durableOwner.mockRestore();
+      }
+    }
+    return await executeFollowupTurn({
+      turn,
+      defaults,
+      onToolResult: async () => {},
+      onCompactionNoticePayload: async () => {},
+    });
+  } finally {
+    admittedOperation?.complete();
+  }
 }
 
 export function resetFollowupTurnTestState() {

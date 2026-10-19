@@ -9,7 +9,7 @@ import type { PluginDiscoveryEntry, PluginInstallRequest } from "../../lib/plugi
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
-import { PluginInstallAction } from "./install-action.tsx";
+import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginAuthor,
@@ -23,6 +23,7 @@ import type { PluginMutationAction } from "./plugins-page-model.ts";
 import { resolvePluginCatalogIconUrl } from "./presentation.ts";
 
 export type PluginCatalogResultsProps = PluginDiscoveryState & {
+  registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
   registerIcon?: (readId: () => string) => () => void;
   connected: boolean;
   onRetryCategories: () => void;
@@ -261,7 +262,7 @@ function CatalogCard(props: {
               <h3>{props.plugin.catalog.name}</h3>
               {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
             </div>
-            {renderPluginAuthor(props.plugin.catalog.author, { linked: true })}
+            {renderPluginAuthor(props.plugin.catalog.author)}
           </div>
         </div>
         <div class="plugin-catalog-card__action">
@@ -269,6 +270,7 @@ function CatalogCard(props: {
             renderPluginStateStatus(installedState()!, "plugin-catalog-card__status")
           ) : (
             <PluginInstallAction
+              registerInstallAction={props.state.registerInstallAction}
               buttonClass={"btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"}
               pluginName={props.plugin.catalog.name}
               busy={busy()}

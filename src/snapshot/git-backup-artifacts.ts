@@ -7,6 +7,7 @@ import {
   requireGitCommand as requireGit,
   requireGitCommandOutput,
 } from "../infra/git-exec.js";
+import { lstatIfExists } from "../infra/path-existence.js";
 import {
   GIT_BACKUP_MANIFEST,
   GIT_BACKUP_SCHEMA,
@@ -45,17 +46,6 @@ export function gitBackupArtifactFiles(manifest: GitBackupManifest): string[] {
   ];
 }
 
-async function lstatIfPresent(file: string) {
-  try {
-    return await fs.lstat(file);
-  } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
 export async function readGitBackupRepositoryState(
   repositoryPath: string,
   env?: NodeJS.ProcessEnv,
@@ -72,7 +62,7 @@ export async function readGitBackupRepositoryState(
     "sequencer",
   ];
   const pending = await Promise.all(
-    operations.map((operation) => lstatIfPresent(path.join(gitDirectory, operation))),
+    operations.map((operation) => lstatIfExists(path.join(gitDirectory, operation), "ENOENT")),
   );
   const index = (await requireGit(repositoryPath, ["ls-files", "--stage", "-z"], { env }))
     .split("\0")
@@ -129,7 +119,7 @@ async function assertBackupDirectory(
   state: GitBackupRepositoryState,
 ): Promise<void> {
   const directory = path.join(repositoryPath, relative);
-  const stat = await lstatIfPresent(directory);
+  const stat = await lstatIfExists(directory, "ENOENT");
   if ((stat && !stat.isDirectory()) || state.files.has(relative.split(path.sep).join("/"))) {
     refuseBackupOverwrite(directory);
   }
@@ -142,7 +132,7 @@ async function readOwnedScopeManifest(
   env?: NodeJS.ProcessEnv,
 ): Promise<GitBackupManifest | undefined> {
   const file = path.join(repositoryPath, relative, GIT_BACKUP_MANIFEST);
-  const stat = await lstatIfPresent(file);
+  const stat = await lstatIfExists(file, "ENOENT");
   let contents: string;
   if (stat) {
     if (!stat.isFile()) {
@@ -197,7 +187,7 @@ export async function prepareScopeUpdate(
   // Preflight every scope before any refresh or pruning can remove files.
   for (const file of new Set([...previousFiles, ...files])) {
     const destination = path.join(scopePath, file);
-    const stat = await lstatIfPresent(destination);
+    const stat = await lstatIfExists(destination, "ENOENT");
     const gitPath = path.join(relative, file).split(path.sep).join("/");
     if (
       (stat && (!stat.isFile() || !owned.has(file))) ||
@@ -219,7 +209,7 @@ export async function prepareStaleScopeUpdates(
   const scopes = new Set<string>();
   for (const root of ["agents", "stores"]) {
     const rootPath = path.join(repositoryPath, root);
-    const stat = await lstatIfPresent(rootPath);
+    const stat = await lstatIfExists(rootPath, "ENOENT");
     if (stat && !stat.isDirectory()) {
       continue;
     }

@@ -1,9 +1,14 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
+import { createSubscribedSessionHarness } from "../../agents/embedded-agent-subscribe.e2e-harness.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { observeReplyDelivery } from "../../agents/reply-completion.js";
+import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
 import { sessionManagerReadTranscriptStart } from "../../agents/sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
@@ -14,6 +19,7 @@ import {
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import {
+  loadTranscriptEventsSync,
   readActiveTranscriptEntryAnchor,
   resolveSessionTranscriptDatabasePath,
   replaceSessionEntry,
@@ -910,3 +916,114 @@ describe("createChatSendReplyDispatch", () => {
     },
   );
 });
+
+it.each([
+  { replyCount: 1, streaming: false, silentTail: false },
+  { replyCount: 2, streaming: true, silentTail: false },
+  { replyCount: 1, streaming: false, silentTail: true },
+])(
+  "enriches $replyCount exact document replies after input projection changes (streaming=$streaming, silentTail=$silentTail)",
+  async ({ replyCount, streaming, silentTail }) => {
+    await withOpenClawTestState({ label: "webchat-projected-input-media" }, async (state) => {
+      const { dispatch, scope, runId, userTurnRecorder } = await createReplyTranscriptFixture();
+      const filename = state.statePath("media", "contributor-checklist.md");
+      await mkdir(path.dirname(filename), { recursive: true });
+      await writeFile(filename, "# Contributor checklist\n- [ ] Run the focused check\n");
+      const originals: unknown[] = [];
+      await dispatch.runAgentMediaTranscript(
+        { run: async (operation) => operation() },
+        async () => {
+          dispatch.captureAgentTranscriptStart();
+          const capturePrompt = userTurnRecorder.captureModelPromptProjection;
+          if (!capturePrompt) {
+            throw new Error("Expected the real user-turn prompt projection owner");
+          }
+          await capturePrompt("Attached guide contents.\nInspect the synthetic fixture.", () => {});
+          const manager = guardSessionManager(await SessionManager.openAsync(scope), {
+            agentId: scope.agentId,
+            sessionKey: scope.sessionKey,
+            runId,
+          });
+          const dispatcher = createReplyDispatcher(dispatch.dispatcherOptions);
+          const { emit, subscription } = createSubscribedSessionHarness({
+            runId,
+            blockReplyBreak: "message_end",
+            onBlockReply: streaming
+              ? (payload) => {
+                  dispatcher.sendBlockReply(payload);
+                }
+              : undefined,
+          });
+          try {
+            for (let index = 1; index <= replyCount; index += 1) {
+              const text = `Checklist reply ${index}.\nMEDIA:${filename}`;
+              const message = buildAssistantMessage({
+                model: { api: "openai-responses", provider: "openai", id: "synthetic" },
+                content: [{ type: "text", text, textSignature: `signed-answer-${index}` }],
+                stopReason: "stop",
+                usage: buildUsageWithNoCost({}),
+              });
+              originals.push(structuredClone(message.content));
+              emit({ type: "message_start", message });
+              emit({ type: "message_end", message });
+              await subscription.waitForPendingEvents();
+              const completed = subscription.getCurrentAttemptAssistant();
+              expect(completed).toBeDefined();
+              await manager.appendMessageAsync(message);
+              if (streaming) {
+                continue;
+              }
+              if (silentTail) {
+                const tail = buildAssistantMessage({
+                  model: { api: "openai-responses", provider: "openai", id: "synthetic" },
+                  content: [],
+                  stopReason: "stop",
+                  usage: buildUsageWithNoCost({}),
+                });
+                originals.push(structuredClone(tail.content));
+                emit({ type: "message_start", message: tail });
+                emit({ type: "message_end", message: tail });
+                await subscription.waitForPendingEvents();
+                await manager.appendMessageAsync(tail);
+                expect(subscription.getKeptAnswer()).toBeDefined();
+              }
+              const payloads = buildEmbeddedRunPayloads({
+                assistantTexts: [text],
+                lastAssistant: message,
+                currentAssistant: silentTail
+                  ? subscription.getCurrentAttemptAssistant()
+                  : completed,
+                keptAnswer: subscription.getKeptAnswer(),
+                assistantMessageIndex: index,
+                isCronTrigger: false,
+                sessionKey: scope.sessionKey,
+                verboseLevel: "off",
+                reasoningLevel: "off",
+                toolResultFormat: "plain",
+              });
+              expect(payloads).toHaveLength(1);
+              dispatcher.sendFinalReply(payloads[0]!);
+            }
+          } finally {
+            subscription.unsubscribe();
+          }
+          dispatcher.markComplete();
+          await dispatcher.waitForIdle();
+        },
+      );
+      const events = loadTranscriptEventsSync(scope).map(asOptionalRecord);
+      const assistants = events
+        .map((event) => asOptionalRecord(event?.message))
+        .filter((message) => message?.role === "assistant");
+      expect(assistants).toHaveLength(replyCount + Number(silentTail));
+      expect(assistants.map((message) => message?.content)).toEqual(originals);
+      for (const assistant of assistants.slice(0, replyCount)) {
+        const display = projectChatDisplayMessage(assistant);
+        const displayContent = display?.content;
+        const content = Array.isArray(displayContent) ? displayContent.map(asOptionalRecord) : [];
+        expect(content.filter((block) => block?.type === "attachment")).toHaveLength(1);
+        expect(JSON.stringify(display)).not.toContain("MEDIA:");
+      }
+    });
+  },
+);

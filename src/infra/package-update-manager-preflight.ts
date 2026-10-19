@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../shared/update-outcome.js";
-import { hasErrnoCode, isErrno } from "./errno.js";
+import { hasErrnoCode, ignoreMissingPath, isErrno } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { parseNpmErrorCode } from "./npm-error.js";
 import { packageActivationIdentity } from "./package-update-activation-paths.js";
@@ -281,12 +281,9 @@ export async function checkGlobalPackageUpdateAdmission(
         ? []
         : stagedBinDir === undefined
           ? undefined
-          : await fs.readdir(stagedBinDir).catch((error: unknown) => {
-              if (hasErrnoCode(error, "ENOENT")) {
-                return [];
-              }
-              throw error;
-            });
+          : await fs
+              .readdir(stagedBinDir)
+              .catch((error: unknown) => ignoreMissingPath(error) ?? []);
       for (const name of resolvePackageUpdateLauncherNames(packageName, entries)) {
         const launcher = path.join(layout.binDir, name);
         if (fsSync.lstatSync(launcher, { throwIfNoEntry: false })) {

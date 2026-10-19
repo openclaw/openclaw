@@ -22,7 +22,8 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-controller.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { publishChatWorkContext } from "./chat-work-context.ts";
-import { hasTerminalRunStatus } from "./components/chat-composer-state.ts";
+import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
+import type { ChatDetailsElements } from "./components/chat-details.tsx";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
@@ -51,6 +52,30 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  private readonly detailsElements: ChatDetailsElements = {};
+
+  private registerDetailsElement(name: keyof ChatDetailsElements, element: HTMLElement) {
+    this.detailsElements[name] = element;
+    return () => {
+      if (this.detailsElements[name] === element) {
+        delete this.detailsElements[name];
+      }
+    };
+  }
+
+  get composerReady(): boolean {
+    return getChatComposerState(this.presentationId).composerTextarea?.isConnected === true;
+  }
+
+  focusComposerInput(): boolean {
+    const composer = getChatComposerState(this.presentationId).composerTextarea;
+    if (!this.active || !composer?.isConnected || composer.disabled) {
+      return false;
+    }
+    composer.focus({ preventScroll: true });
+    return true;
+  }
+
   private toolIcons?: PluginToolIcons;
 
   mountToolIcons(readGateway: () => unknown): void {
@@ -151,6 +176,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const ownsSubagentsPanel = !catalog && !this.compact;
     const paneChatProps: ChatProps = {
       ...chatProps,
+      onConversationFrameRef: (element) => this.registerDetailsElement("frame", element),
+      onFooterElementRef: (element) => this.registerDetailsElement("footer", element),
       error: conversationVisible ? chatProps.error : null,
       detailsEnabled: !catalog && !this.compact,
       detailsWorkspace: {
@@ -180,6 +207,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const headerDetails: PaneDetailsProps | undefined = ownsSubagentsPanel
       ? {
           chat: paneChatProps,
+          elements: this.detailsElements,
           mobile: this.mergedChrome && !this.onBackToSubagents,
           presentation: panePresentation,
           conversationVisible,
@@ -363,6 +391,25 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           };
     const avatar = resolveAssistantDisplayAvatar(chatProps);
     const region = renderSidebarRegion({
+      onRegionElementRef: (element) => {
+        this.sidebarRegionElement = element;
+        const release = this.registerDetailsElement("pane", element);
+        return () => {
+          release();
+          if (this.sidebarRegionElement === element) {
+            this.sidebarRegionElement = null;
+          }
+        };
+      },
+      onHeaderElementRef: (element) => this.registerDetailsElement("header", element),
+      onRegionViewRef: (element) => {
+        this.sidebarRegionView = element;
+        return () => {
+          if (this.sidebarRegionView === element) {
+            this.sidebarRegionView = null;
+          }
+        };
+      },
       presentationId: this.presentationId,
       conversationTab: { label: chatProps.assistantName, avatar },
       availableWidth: this.paneWidth,

@@ -27,6 +27,8 @@ async function readMessages(config: OpenClawConfig, sessionKey: string): Promise
   const { storePath, entry } = await loadGatewaySessionEntryReadOnlyInWorker({
     cfg: config,
     key: sessionKey,
+    // The child Gateway's writes cannot invalidate this process's retained exact-row facts.
+    exactRead: false,
   });
   if (!entry?.sessionId) {
     return [];
@@ -114,7 +116,7 @@ describeLive("session event wake through a live Gateway", () => {
       const nonce = randomBytes(8).toString("hex").toUpperCase();
       const startedReply = `STARTED-${nonce}`;
       const completionReply = `${exitCode === 0 ? "COMPLETION" : "WATCHER-FAILED"}-${nonce}`;
-      const followupReply = busySibling ? `${completionReply} | code ${exitCode}` : "NO_REPLY";
+      const followupReply = busySibling ? `${completionReply} | code ${exitCode}` : completionReply;
       const siblingReply = `SIBLING-FINISHED-${nonce}`;
       const monitorReply = `MAIN-MONITOR-${nonce}`;
       const workspace = instance.state.workspaceDir;
@@ -166,7 +168,7 @@ describeLive("session event wake through a live Gateway", () => {
               heartbeat: {
                 every: "24h",
                 target: busySibling ? "last" : "none",
-                prompt: `Call heartbeat_respond with outcome progress, notify false, summary ${monitorReply}. Do no other work.`,
+                prompt: `Reply exactly ${monitorReply}. Do no other work.`,
               },
             },
           },
@@ -203,7 +205,7 @@ describeLive("session event wake through a live Gateway", () => {
             `Once exec returns its running session, copy the entire following marker verbatim as your only reply, preserving every character and case, then end this turn:\n${startedReply}`,
             busySibling
               ? "When its later completion arrives, copy the entire output marker verbatim, preserving every character and its case. Append ' | code ' and the reported numeric exit code. Return only that single line; do not shorten the marker, add explanations, or call any tools for that completion."
-              : "Handle its later completion silently with NO_REPLY; this fixture disables notification delivery.",
+              : "When its later completion arrives, copy the entire output marker verbatim as your only reply, preserving every character and case. Do not call any tools for that completion.",
           ].join("\n"),
         );
         expect(response.status).toBe("ok");
@@ -264,21 +266,24 @@ describeLive("session event wake through a live Gateway", () => {
         await vi.waitFor(
           async () => {
             expect(instance.logs()).not.toContain("Async work scope is closed");
+            // Internal sessions require a result; a persisted reply alone can
+            // precede finalization or recovery and is not a settled snapshot.
+            const described = await client!.request<{ session: { hasActiveRun: boolean } }>(
+              "sessions.describe",
+              { key: sessionKey },
+            );
+            expect(described.session.hasActiveRun).toBe(false);
             const continued = (await readMessages(config, sessionKey)).slice(
               foregroundMessages.length,
             );
-            expect(continued).toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({
-                  role: "assistant",
-                  provider: "openai",
-                  stopReason: "stop",
-                  content: expect.arrayContaining([
-                    expect.objectContaining({ type: "text", text: followupReply }),
-                  ]),
-                }),
+            expect(continued.at(-1)).toMatchObject({
+              role: "assistant",
+              provider: "openai",
+              stopReason: "stop",
+              content: expect.arrayContaining([
+                expect.objectContaining({ type: "text", text: followupReply }),
               ]),
-            );
+            });
           },
           { timeout: TURN_TIMEOUT_MS, interval: 1_000 },
         );
@@ -310,7 +315,7 @@ describeLive("session event wake through a live Gateway", () => {
           ).toContain(siblingReply);
         }
 
-        // The silent-success case also exercises scheduled monitoring; target:last
+        // The success case also exercises scheduled monitoring; target:last
         // on the failure case's untouched main session has no delivery route.
         if (!busySibling) {
           const jobs = await client.request<{

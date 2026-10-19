@@ -23,7 +23,7 @@ import {
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "./heartbeat-wake.js";
-import { runMessageAction } from "./outbound/message-action-runner.js";
+import * as messageActionRunner from "./outbound/message-action-runner.js";
 import { resetSystemEventsForTest } from "./system-events.js";
 
 // Only the paid model boundary is scripted. Conversation selection, metadata,
@@ -91,6 +91,7 @@ afterEach(async () => {
   setHeartbeatWakeHandler(null);
   resetSystemEventsForTest();
   clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
@@ -276,6 +277,17 @@ it.each([
             },
           },
         });
+        const runMessageAction = messageActionRunner.runMessageAction;
+        const action = vi
+          .spyOn(messageActionRunner, "runMessageAction")
+          .mockImplementation((input) =>
+            runMessageAction({
+              ...input,
+              gateway: undefined,
+              forceCoreDelivery: true,
+              deps: { telegram: send },
+            }),
+          );
         const tool = createMessageTool({
           config: cfg,
           agentId: params.agentId,
@@ -285,13 +297,6 @@ it.each([
           currentChannelId: params.currentChannelId,
           currentMessagingTarget: params.currentMessagingTarget,
           currentThreadTs: params.currentThreadTs,
-          runMessageAction: (input) =>
-            runMessageAction({
-              ...input,
-              gateway: undefined,
-              forceCoreDelivery: true,
-              deps: { telegram: send },
-            }),
         });
         // Model chooses the conversation supplied by the production turn, not a test-fixed recipient.
         selectedTarget = explicitDm ? ownerDm : (params.currentMessagingTarget ?? params.messageTo);
@@ -304,6 +309,8 @@ it.each([
           });
         } catch (error) {
           toolReceipt = { error: error instanceof Error ? error.message : String(error) };
+        } finally {
+          action.mockRestore();
         }
         const text = `Delivery is unconfirmed: ${JSON.stringify(toolReceipt)}. No resend attempted.`;
         return { payloads: [{ text }], meta: { durationMs: 1 } };

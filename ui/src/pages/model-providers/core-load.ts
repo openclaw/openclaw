@@ -52,7 +52,6 @@ export class ModelProviderCoreLoader {
   catalogError: string | null = null;
   retryProvider: string | undefined;
   private request: AbortController | null = null;
-  private publicationPending = false;
 
   constructor(
     private readonly notify: () => void,
@@ -108,7 +107,6 @@ export class ModelProviderCoreLoader {
     } finally {
       if (this.catalogRequest === request) {
         this.catalogRequest = null;
-        this.refreshPendingPublication(client, agentId);
         this.notify();
       }
     }
@@ -121,10 +119,9 @@ export class ModelProviderCoreLoader {
     target?: { providerId?: string; data: ModelProvidersData },
   ): Promise<void> {
     if (reason === "publication" && (this.active || this.catalogLoading)) {
-      this.publicationPending = true;
+      // Catalog changes during an existing read are best effort until the next refresh.
       return;
     }
-    this.publicationPending = false;
     this.request?.abort();
     const request = new AbortController();
     this.request = request;
@@ -155,20 +152,12 @@ export class ModelProviderCoreLoader {
       if (this.request === request) {
         this.request = null;
         this.active = false;
-        this.refreshPendingPublication(client, agentId);
         this.notify();
       }
     }
   }
 
-  private refreshPendingPublication(client: GatewayBrowserClient, agentId: string): void {
-    if (this.publicationPending && !this.active && !this.catalogLoading) {
-      void this.refresh(client, agentId, "publication");
-    }
-  }
-
   invalidate(): void {
-    this.publicationPending = false;
     this.resetCatalog();
     this.retryProvider = undefined;
     this.active = false;

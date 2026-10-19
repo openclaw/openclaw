@@ -63,7 +63,6 @@ import {
 } from "./chat-abort-diagnostics.js";
 import {
   markChatAbortTerminalOutcome,
-  markChatAbortTerminalPersistenceError,
   notifyChatAbortControllerRemoved,
   waitForChatAbortTerminalPersistence,
 } from "./chat-abort-lifecycle-internal.js";
@@ -80,9 +79,6 @@ import {
 } from "./session-subscription-keys.js";
 
 export { resolveAgentRunExpiresAtMs, resolveChatRunExpiresAtMs } from "./chat-run-deadline.js";
-
-export { projectInFlightRunSnapshot, type InFlightRunSnapshot } from "./chat-inflight-snapshot.js";
-export { resolveInFlightRunSnapshot } from "./chat-inflight-snapshot.runtime.js";
 
 export type RestartRecoveryCandidate = {
   storePath: string;
@@ -279,23 +275,7 @@ export function registerChatAbortController(params: {
     }
     const persistence = adapter.projectSessionTerminalPersistence;
     if (persistence) {
-      const settlePersistence = (error?: unknown) => {
-        if (adapter.projectSessionTerminalPersistence === persistence) {
-          markChatAbortTerminalPersistenceError(entry, error);
-          adapter.projectSessionTerminalPending = false;
-          adapter.projectSessionTerminalPersistence = undefined;
-        }
-      };
-      trackSessionControllerSourceWork(
-        input,
-        persistence.then(
-          () => settlePersistence(),
-          (error: unknown) => {
-            settlePersistence(error);
-            throw error;
-          },
-        ),
-      );
+      trackSessionControllerSourceWork(input, persistence);
     }
     retireRpcSource(params.runId, entry);
   };

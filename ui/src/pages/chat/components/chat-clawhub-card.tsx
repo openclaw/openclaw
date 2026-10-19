@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { pathForPluginCatalogEntry } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -10,10 +10,7 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
 import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
-import {
-  PluginIconController,
-  pluginIconFetchContext,
-} from "../../plugins/plugin-icon-controller.ts";
+import { PluginIconOwner, pluginIconFetchContext } from "../../plugins/plugin-icon-owner.ts";
 import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
 import "../../../styles/chat/clawhub-card.css";
 
@@ -28,6 +25,7 @@ type CardPresentation = Pick<
 };
 type CardStatus = CardPresentation & { installed: boolean; canInstall: boolean };
 type Props = { recommendation?: ClawHubRecommendation; agentId?: string };
+const inputHandlers = new WeakMap<HTMLElement, () => void>();
 
 /** Catalog owners authorize status; icon controllers own their object URLs through disposal. */
 function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
@@ -63,7 +61,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
   let previousArgs: unknown[] = [];
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   const createIcons = (catalog: boolean) =>
-    new PluginIconController({
+    new PluginIconOwner({
       kind: catalog ? "catalog" : undefined,
       getFetchContext: () => pluginIconFetchContext(context),
       isConnected: () => active && context.gateway.snapshot.phase === "connected",
@@ -208,17 +206,21 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
       }
     }
   }
-  // Recommendation changes refresh catalog status through the current Gateway client.
-  createEffect(
-    () => [
-      props.recommendation?.id,
-      props.recommendation?.kind,
-      props.recommendation?.kind === "skill" ? props.recommendation.registry : undefined,
-      props.agentId,
-    ],
-    () => void load(),
-  );
   onSettled(() => {
+    let queued = false;
+    // Related recommendation and agent assignments arrive as separate native setters.
+    inputHandlers.set(host, () => {
+      if (!queued) {
+        queued = true;
+        queueMicrotask(() => {
+          queued = false;
+          if (active) {
+            void load();
+          }
+        });
+      }
+    });
+    void load();
     // Connection edges retire request generations and icon URLs before later replies arrive.
     const stop = context.gateway.subscribe(() => void load());
     const activate = () => {
@@ -232,6 +234,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
     const stopVisibility = listen(document, "visibilitychange", activate);
     const stopFocus = listen(globalThis, "focus", activate);
     return () => {
+      inputHandlers.delete(host);
       active = false;
       ++generation;
       controller?.abort();
@@ -260,9 +263,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
       context.navigate("skills", { search: `?${search}` });
     }
   }
-  const card = createMemo(
-    (): CardPresentation | undefined => read().presentation ?? props.recommendation,
-  );
+  const card = (): CardPresentation | undefined => read().presentation ?? props.recommendation;
   const icon = createMemo(() => {
     const current = card();
     return current
@@ -273,7 +274,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
         )
       : undefined;
   });
-  const iconPending = createMemo(() => {
+  const iconPending = () => {
     const currentState = read();
     const current = card();
     return icon()
@@ -284,7 +285,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
             currentState.status !== "error" &&
             !current?.pluginId &&
             !current?.iconUrl);
-  });
+  };
   return (
     <Show when={props.recommendation && !read().dismissed && card()}>
       {(current) => (
@@ -423,6 +424,7 @@ export const ChatClawHubCard = defineSolidBridge<Props>(
   "openclaw-chat-clawhub-card",
   ChatClawHubCardContent,
   {
+    propertyChanged: (host) => inputHandlers.get(host)?.(),
     properties: {
       recommendation: { default: undefined, attribute: false },
       agentId: { default: undefined, attribute: false },

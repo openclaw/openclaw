@@ -9,7 +9,6 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayDiscovery } from "./server-discovery-runtime.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 type StartGatewayMaintenanceTimers =
@@ -19,6 +18,7 @@ type GatewayMaintenanceParams = Parameters<StartGatewayMaintenanceTimers>[0];
 /** Start early Gateway side runtimes before the main server is fully ready. */
 export async function startGatewayEarlyRuntime(params: {
   scheduler: GatewayScheduler;
+  getCronStorePath: () => string;
   minimalTestGateway: boolean;
   isClosing: () => boolean;
   updateCanary?: boolean;
@@ -38,7 +38,6 @@ export async function startGatewayEarlyRuntime(params: {
   nodeRegistry: Parameters<typeof import("../skills/runtime/remote.js").setSkillsRemoteRegistry>[0];
   swapDiscovery: (next: GatewayDiscovery | null) => GatewayDiscovery | null;
   pluginRegistry?: PluginRegistry;
-  pluginRuntimeClaim: GatewayPluginRuntimeClaim;
   broadcast: GatewayMaintenanceParams["broadcast"];
   maintenance: Omit<
     GatewayMaintenanceParams,
@@ -81,7 +80,6 @@ export async function startGatewayEarlyRuntime(params: {
             discovery: params.cfgAtStart.discovery,
             tailscaleMode: params.tailscaleMode,
             gatewayDiscoveryServices: params.pluginRegistry?.gatewayDiscoveryServices,
-            pluginRuntimeClaim: params.pluginRuntimeClaim,
             logDiscovery: params.logDiscovery,
           });
         },
@@ -96,7 +94,7 @@ export async function startGatewayEarlyRuntime(params: {
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
     if (!params.isClosing()) {
-      startCronMaintenance(params.scheduler);
+      startCronMaintenance(params.scheduler, params.getCronStorePath);
     }
   }
 

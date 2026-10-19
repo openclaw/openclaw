@@ -222,8 +222,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     Boolean(fallbackReason);
   const attemptContextEngine =
     nativeModelOwned && contextEngine?.info.id === "legacy" ? undefined : contextEngine;
-  const attemptAbortController = new AbortController();
-  input.setPostCompactionAbortController(attemptAbortController);
   const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({
     prompt,
     transcriptPrompt: params.transcriptPrompt,
@@ -234,7 +232,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     modelMaxTokens: effectiveModel.maxTokens,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
   });
-  const assertActiveRun = requireActiveAssertion(attemptAbortController.signal);
+  const assertActiveRun = requireActiveAssertion(params.abortSignal);
   assertActiveRun();
   if (runtime.pluginHarnessOwnsTransport) {
     await params.awaitSessionDiffBaseline?.();
@@ -300,10 +298,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   });
   assertActiveRun();
   const { skillsSnapshot, skillReferencePaths } = await preparePluginHarnessSkills({
-    assertCurrent: () => {
-      attemptAbortController.signal.throwIfAborted();
-      assertActiveRun();
-    },
+    assertCurrent: assertActiveRun,
     attempt: {
       bootstrapWorkspaceDir,
       config: params.config,
@@ -338,7 +333,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     });
   const attemptControls = createAttemptControls({
     admittedRunContext,
-    abortSignal: attemptAbortController.signal,
     onAbort: () => {
       params.replyOperation?.abortByUser();
     },
@@ -693,7 +687,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       }
     } finally {
       releaseMemoryAudience();
-      input.clearPostCompactionAbortController(attemptAbortController);
     }
   }
 

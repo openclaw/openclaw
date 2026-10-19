@@ -71,7 +71,7 @@ type PlacementStartupRecoveryAccess = Pick<
   "readSessionPlacementRecovery" | "pauseSessionPlacementRecovery"
 >;
 
-export type ApplicationPlacementStartupRuntime = {
+export type ApplicationPlacementStartup = {
   get: (sessionKey: string) => ApplicationPlacementStartupStatus | null;
   hasPendingTurn: (sessionKey: string) => boolean;
   resumeRecovery: () => void;
@@ -82,7 +82,7 @@ export type ApplicationPlacementStartupRuntime = {
   dispose: () => void;
 };
 
-export type ApplicationPlacementStartup = ApplicationPlacementStartupRuntime;
+export type ApplicationPlacementStartupRuntime = Omit<ApplicationPlacementStartup, "subscribe">;
 
 // Submitted display survives transport loss; a changed connection owner revokes it.
 export function capturePlacementStartupConnection(
@@ -184,6 +184,7 @@ export function createApplicationPlacementStartup(
     if (disposed) {
       return;
     }
+    // Resume retained starts from connection receipts even while no page is mounted.
     stopGateway ??= gateway.subscribe(() => resumeRecovery());
     if ((pending || retry) && runtimeLoad?.error) {
       runtimeLoad = undefined;
@@ -276,8 +277,7 @@ export function createApplicationPlacementStartup(
         if (disposed) {
           return;
         }
-        runtime = createApplicationPlacementStartupRuntime(dependencies);
-        runtime.subscribe(publish);
+        runtime = createApplicationPlacementStartupRuntime(dependencies, publish);
         resumeRecovery();
       },
       (error: unknown) => {

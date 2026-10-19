@@ -72,12 +72,14 @@ Start from the narrowest primitive that expresses the data's owner and lifetime:
 | A keyed collection derived from async or owner data                              | `createProjection(fn, initial, { key: "id" })`                                                       |
 | An expected value shown before a mutation settles                                | `createOptimistic`/`createOptimisticStore` inside `action`                                           |
 | Count-only repetition                                                            | `<Repeat count={n}>`                                                                                 |
+| Browser document title                                                           | `createDocumentTitle(title)` from `lib/reactive/document-title.ts`                                   |
 | Resize notifications for owned elements                                          | `createResizeObserver(() => [element], callback)` from `lib/reactive/observers.ts`                   |
 | Visibility notifications for owned elements                                      | `createIntersectionObserver(() => [element], callback, options)` from the same module                |
 | Periodic work while a reactive cadence is enabled                                | `createInterval(callback, () => enabled() ? milliseconds : undefined)` from `lib/reactive/timers.ts` |
 | Restartable event-driven delay or feedback reset                                 | `createTimeout(callback, milliseconds)`; call `schedule()` or `cancel()`                             |
 | Browser media capability                                                         | `createMediaQuery(query, fallback)` from `lib/reactive/platform.ts`                                  |
 | Document visibility                                                              | `createDocumentVisibility()` from `lib/reactive/platform.ts`; polling policy stays with its owner    |
+| One owned pointer gesture                                                        | `createPointerDrag()` from `lib/reactive/pointer-drag.ts`; caller keeps geometry and commit policy   |
 
 `createMemo(fn, { lazy: true })` defers the first computation until something
 reads it and disposes it when nothing observes it; `createSignal(v, { unobserved })`
@@ -179,8 +181,10 @@ boundary still need the owned listener/ref pattern. Dashed events use
 `onWa-select`, not `onWaSelect`. Prefer the existing owned primitive to `wa-*`.
 
 Commit-on-change inputs need special care: unrelated props refreshes must not
-rewrite the DOM draft. Memoize the committed owner value before binding `value`
-(see the Settings input incident in [lessons](lessons.md)). Do not use a second
+rewrite the DOM draft. Memoize the committed owner value and bind it through the
+`lib/reactive/live-value.ts` ref factory (see [lessons](lessons.md)). Native JSX
+attributes can share a compiled effect: a memo alone does not prevent an equal
+`value` assignment when an ARIA or disabled binding changes. Do not use a second
 signal to synchronize that value. Controlled inputs that publish every keystroke
 have a different contract; preserve composition, caret, and undo behavior.
 

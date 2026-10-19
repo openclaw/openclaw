@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import type { SessionSystemPromptReport } from "../../../src/config/sessions/session-system-prompt-report.js";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Sidebar context breakdown" });
@@ -71,6 +72,15 @@ suite.define(() => {
     { width: 390, height: 844, mode: "light" as const },
   ])("shows a scoped, non-overlapping breakdown ($width px)", async ({ width, height, mode }) => {
     await suite.withPage({ viewport: { width, height }, colorScheme: mode }, async ({ page }) => {
+      const breakdownModule = controlUiE2eBuiltModuleRequest(
+        "ui/src/pages/chat/components/chat-context-breakdown.tsx",
+      );
+      const breakdownRequests: string[] = [];
+      page.on("request", (request) => {
+        if (breakdownModule.test(request.url())) {
+          breakdownRequests.push(request.url());
+        }
+      });
       const gateway = await installMockGateway(page, {
         sessionKey,
         sessions: [
@@ -123,6 +133,7 @@ suite.define(() => {
       }
       const panel = page.locator(".chat-details");
       const context = panel.locator(".chat-details__context");
+      expect(breakdownRequests).toHaveLength(0);
       await context.locator(":scope > summary").click();
       const initial = await takeControlUiScreenshotFrame(page, panel, [context], {
         elements: [panel],
@@ -137,6 +148,7 @@ suite.define(() => {
         initial.elements[0]!.png,
       );
       await context.getByText("Workspace files", { exact: true }).waitFor();
+      expect(breakdownRequests).toHaveLength(1);
       const request = await gateway.waitForRequest("sessions.usage");
       expect(request.params).toMatchObject({
         key: sessionKey,

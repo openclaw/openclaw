@@ -196,11 +196,7 @@ export async function backupGitLogCommand(
   options: { repository?: string; limit?: number; json?: boolean },
 ) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
-  const limit = options.limit ?? 20;
-  if (!Number.isSafeInteger(limit) || limit < 1) {
-    throw new Error("--limit must be a positive integer.");
-  }
-  const entries = await readGitBackupLog({ repositoryPath, limit });
+  const entries = await readGitBackupLog({ repositoryPath, limit: options.limit ?? 20 });
   if (options.json) {
     writeRuntimeJson(runtime, { repositoryPath, entries });
   } else if (entries.length === 0) {

@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { resolveChatSnapshotKey, type ChatSessionSnapshot } from "./session-message-cache.ts";
+import { registerChatPane } from "./chat-pane-elements.ts";
+import { resolveChatSnapshotKey } from "./session-message-cache.ts";
 import {
   createSessionPrefetchFixture,
   prefetchHistoryRequest as historyRequest,
@@ -14,6 +15,7 @@ import {
   prefetchSessionKeyFromCall as sessionKeyFromCall,
   settleSessionPrefetch as settlePromises,
 } from "./session-prefetch.test-support.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 let fixture: ReturnType<typeof createSessionPrefetchFixture>;
 let shell: HTMLElement;
@@ -36,6 +38,7 @@ function mountPane(
     sessionKey,
     transcriptLoading,
   });
+  onTestFinished(registerChatPane(pane));
   parent.append(pane);
   if (parent === shell) {
     updatePrefetch(

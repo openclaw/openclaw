@@ -29,6 +29,7 @@ export function connectControlUiFavicon(
   shell: HTMLElement,
   context: Parameters<typeof connectControlUiFaviconArtwork>[0] &
     Pick<ApplicationContext, "sessions" | "overlays">,
+  readPanes: () => readonly Pick<ChatPaneElement, "runActivity">[],
   startedAt = Date.now(),
 ): () => void {
   invalidateControlUiFaviconPalette();
@@ -71,7 +72,7 @@ export function connectControlUiFavicon(
     const snapshot = context.gateway.snapshot;
     let working = false;
     // Chat owns these live panes; the favicon adapter aggregates their reported run activity.
-    for (const pane of shell.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")) {
+    for (const pane of readPanes()) {
       const activity = pane.runActivity;
       const completion = activity?.completion;
       const unseen = completion && !seenCompletions.has(completion);
@@ -165,6 +166,7 @@ export function connectControlUiFavicon(
     synchronize();
   }
 
+  // Track completion transitions and write the document favicon outside Solid rendering.
   const stops = [
     context.gateway.subscribe(synchronizeGateway),
     context.gateway.subscribeEvents((event) => handleQuestionPromptEvent(questions, event)),

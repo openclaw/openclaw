@@ -249,6 +249,21 @@ it("admits configured ACP-only stores without native runtime publication", async
   });
 });
 
+it.for(["openclaw", "crestodian"])(
+  "prepares the deferred reserved %s store without a configured roster entry",
+  async (agentId, { signal }) => {
+    const fleet = createFleet(["main", agentId]);
+    fleet.changeAgentDatabase(agentId, "agent removal");
+    await fleet.run(async (admission) => {
+      expectAdmission(fleet, agentId, "agent-database-inspection-pending");
+      fleet.inspect(1);
+      await withinTest(admission.waitForAgentPreparation(agentId, fleet)!, signal);
+      expectAdmission(fleet, agentId);
+      expect(mocks.warn).not.toHaveBeenCalled();
+    });
+  },
+);
+
 it("admits agents before transcript repair and joins repair on shutdown", async ({ signal }) => {
   const fleet = createFleet();
   const entered = createDeferredCore();

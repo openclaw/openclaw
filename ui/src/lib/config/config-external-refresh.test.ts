@@ -198,7 +198,7 @@ describe("external mutation config refresh", () => {
         await readStarted.promise;
         if (retirement === "write acknowledgement") {
           // Config write acknowledgements invalidate older reads without issuing a replacement.
-          nextRequestVersion(runtimeConfig.state, "config");
+          nextRequestVersion(runtimeConfig.state);
         } else if (retirement === "disconnect" || retirement === "same-client reconnect") {
           publish(false);
           if (retirement === "same-client reconnect") {

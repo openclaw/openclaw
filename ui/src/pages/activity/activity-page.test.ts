@@ -1,112 +1,48 @@
 /* @vitest-environment jsdom */
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import type { RouteLocation } from "@openclaw/uirouter";
-import { createComponent, createEffect, createSignal } from "solid-js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayHelloOk,
-} from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
 } from "../../app/gateway-store.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { presentResult } from "../../e2e/activity-run-inspector.test-fixtures.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createActivityPageState } from "./activity-page-state.ts";
-import { ActivityPageView } from "./activity-page-view.tsx";
-
-type TestActivityPage = ReturnType<typeof createActivityPage>;
-
-function createActivityPage(context: ApplicationContext, initial?: RouteLocation) {
-  const [location, setLocation] = createSignal(initial);
-  const mounted = mountSolid(() => {
-    const page = createActivityPageState(context);
-    createEffect(location, (next) => page.setRouteLocation(next));
-    return createComponent(ActivityPageView, { page });
-  });
-  flush();
-  return {
-    context,
-    container: mounted.container,
-    dispose: mounted.unmount,
-    setRouteLocation(next: RouteLocation | undefined) {
-      setLocation(next);
-      flush();
-    },
-  };
-}
-
-function inspectorGateway(client: GatewayBrowserClient) {
-  const source = gateway();
-  Object.assign(source.snapshot, {
-    client,
-    phase: "connected",
-    hello: {
-      ...activityHello(),
-      features: { methods: ["audit.run.inspect"], events: [] },
-    },
-  });
-  return source;
-}
-
-function previews(page: TestActivityPage) {
-  flush();
-  return [...page.container.querySelectorAll(".activity-entry__preview")].map(
-    (entry) => entry.textContent,
-  );
-}
-
-function expandFirst(page: TestActivityPage) {
-  flush();
-  const row = page.container.querySelector<HTMLDetailsElement>(".activity-entry")!;
-  row.open = true;
-  row.dispatchEvent(new Event("toggle"));
-  flush();
-  return row;
-}
-
-function mountActivityPage(page: TestActivityPage) {
-  return page.container;
-}
-
-function gateway(): ApplicationContext["gateway"] {
-  const snapshot: ApplicationGatewaySnapshot = {
-    client: null,
-    phase: "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  return {
-    snapshot,
-    eventLog: [],
-    eventLogRevision: 0,
-    subscribe: vi.fn(() => () => undefined),
-    subscribeEventLog: vi.fn(() => () => undefined),
-    subscribeEvents: vi.fn(() => () => undefined),
-  } as unknown as ApplicationContext["gateway"];
-}
+import {
+  activityHello,
+  activityResponse,
+  activityRoster,
+  createActivityGatewayStub,
+  inspectorGateway,
+  createActivityPage,
+  expandFirst,
+  previews,
+  toolEvent,
+  type TestActivityPage,
+} from "./activity-page.test-support.ts";
 
 const activeGateways = new Set<ApplicationContext["gateway"]>();
 const activeSessions = new Map<ApplicationContext["gateway"], ApplicationContext["sessions"]>();
 const activeAgents = new Map<ApplicationContext["gateway"], ApplicationContext["agents"]>();
+const activeIdentities = new Map<
+  ApplicationContext["gateway"],
+  ApplicationContext["agentIdentity"]
+>();
 
 function activityContext(source: ApplicationContext["gateway"], basePath = ""): ApplicationContext {
   let sessions = activeSessions.get(source);
@@ -119,10 +55,16 @@ function activityContext(source: ApplicationContext["gateway"], basePath = ""): 
     agents = createAgentCapability(source);
     activeAgents.set(source, agents);
   }
+  let agentIdentity = activeIdentities.get(source);
+  if (!agentIdentity) {
+    agentIdentity = createAgentIdentityCapability(source);
+    activeIdentities.set(source, agentIdentity);
+  }
   return {
     gateway: source,
     sessions,
     agents,
+    agentIdentity,
     basePath,
     resourceBasePath: "",
     replace: vi.fn(),
@@ -138,9 +80,6 @@ function activityContext(source: ApplicationContext["gateway"], basePath = ""): 
     },
     get connectionBootstrap(): never {
       throw new Error("Activity fixture does not provide connectionBootstrap");
-    },
-    get agentIdentity(): never {
-      throw new Error("Activity fixture does not provide agentIdentity");
     },
     get agentSelection(): never {
       throw new Error("Activity fixture does not provide agentSelection");
@@ -196,14 +135,6 @@ function activityContext(source: ApplicationContext["gateway"], basePath = ""): 
   };
 }
 
-function activityHello(recoveryScope = "activity-owner-a"): GatewayHelloOk {
-  return {
-    type: "hello-ok",
-    protocol: 1,
-    auth: { role: "operator", scopes: ["operator.read"], recoveryScope },
-  };
-}
-
 function activityGateway() {
   const store = createGatewayStoreTestStore({
     settings: {
@@ -237,54 +168,12 @@ async function bindActivity(
   return page;
 }
 
-function activityRoster(
-  sessions: GatewaySessionRow[] = [
-    { key: "main", kind: "direct", hasActiveRun: true },
-    { key: "agent:other:work", kind: "direct", hasActiveRun: true },
-  ],
-): SessionsListResult {
-  return {
-    ts: 1,
-    path: "",
-    count: sessions.length,
-    sessions,
-    defaults: { model: null, modelProvider: null, contextTokens: null },
-  };
-}
-
-function activityResponse(method: string, params: unknown) {
-  switch (method) {
-    case "sessions.list":
-      return activityRoster();
-    case "sessions.subscribe":
-      return { subscribed: true };
-    case "sessions.messages.subscribe":
-      return params;
-    default:
-      return {};
-  }
-}
-
 async function syncActivityRoster(page: TestActivityPage) {
   await waitForSolid(() =>
     expect(page.container.querySelectorAll(".activity-current-work__row").length).toBeGreaterThan(
       0,
     ),
   );
-}
-
-function toolEvent(id: string, sessionKey = "main", name = "read", runId = `run-${id}`) {
-  return createGatewayEvent("session.tool", {
-    stream: "tool",
-    runId,
-    sessionKey,
-    data: {
-      toolCallId: id,
-      name,
-      phase: "result",
-      result: { text: `${id} output` },
-    },
-  });
 }
 
 afterEach(async () => {
@@ -303,12 +192,98 @@ afterEach(async () => {
   activeGateways.clear();
   activeSessions.clear();
   activeAgents.clear();
+  activeIdentities.clear();
   setAvatarGatewayOrigin(null);
   localStorage.clear();
   sessionStorage.clear();
 });
 
 describe("ActivityPage gateway lifecycle", () => {
+  it.each(["complete", "omitted"])(
+    "preserves live and History routing for a %s roster message body",
+    async (body) => {
+      const active: GatewaySessionRow = {
+        key: "agent:main:roster",
+        agentId: "main",
+        sessionId: "roster-session",
+        kind: "direct",
+        label: "Roster task",
+        updatedAt: 100,
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["roster-run"],
+      };
+      const { gateway: source, current } = activityGateway();
+      current().request.mockImplementation(async (method, params) =>
+        method === "sessions.list" ? activityRoster([active]) : activityResponse(method, params),
+      );
+      const context = activityContext(source);
+      const selection = createAgentSelectionCapability(source, context.agents);
+      Object.defineProperty(context, "agentSelection", { value: selection });
+      const page = createActivityPage(context, {
+        pathname: "/activity",
+        search: "?view=live",
+        hash: "",
+      });
+      await syncActivityRoster(page);
+      vi.useFakeTimers();
+      try {
+        const message = (session: GatewaySessionRow) =>
+          current().opts.onEvent?.(
+            createGatewayEvent("session.message", {
+              sessionKey: active.key,
+              agentId: "main",
+              messageId: "roster-message",
+              messageSeq: 2,
+              session,
+              ancestorSessions: [],
+              ...(body === "complete" ? { message: { role: "assistant", content: "Ready" } } : {}),
+            }),
+          );
+        const listReads = () =>
+          current().request.mock.calls.filter(
+            ([method, params]) =>
+              method === "sessions.list" && asOptionalRecord(params)?.source === "activity",
+          ).length;
+        const before = listReads();
+        message({ ...active, updatedAt: 200 });
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(page.container.querySelectorAll(".activity-current-work__row")).toHaveLength(1);
+        expect(listReads()).toBe(before);
+        message({
+          ...active,
+          updatedAt: 300,
+          status: "done",
+          hasActiveRun: false,
+          activeRunIds: [],
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        flush();
+        expect(page.container.querySelectorAll(".activity-current-work__row")).toHaveLength(0);
+        expect(listReads()).toBe(before);
+
+        page.setRouteLocation({ pathname: "/activity", search: "", hash: "" });
+        await vi.advanceTimersByTimeAsync(0);
+        flush();
+        const historyReads = listReads();
+        expect(page.container.querySelector(".activity-feed__session-title")?.textContent).toBe(
+          "Roster task",
+        );
+        message({ ...active, updatedAt: 400, label: "Unexpected History update" });
+        await vi.advanceTimersByTimeAsync(10_000);
+        flush();
+        expect(page.container.querySelector(".activity-feed__session-title")?.textContent).toBe(
+          "Roster task",
+        );
+        expect(listReads()).toBe(historyReads);
+      } finally {
+        page.dispose();
+        selection.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("renders localized summaries and timestamps across locale changes", async () => {
     const previousLocale = i18n.getLocale();
     const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
@@ -541,7 +516,7 @@ describe("ActivityPage gateway lifecycle", () => {
   });
 
   it.each(["sessions", "run"] as const)("skips Live Activity rendering in %s mode", (mode) => {
-    const page = createActivityPage(activityContext(gateway()), {
+    const page = createActivityPage(activityContext(createActivityGatewayStub()), {
       pathname: "/activity",
       search: mode === "run" ? "?view=run" : "",
       hash: "",
@@ -636,6 +611,364 @@ describe("ActivityPage gateway lifecycle", () => {
     expect(firstRow.open).toBe(true);
     expect(page.container.querySelector(".activity-entry")).toBe(firstRow);
   });
+
+  it("retains Current Work and local filters while the same client reconnects", async () => {
+    const { gateway: source, current } = activityGateway();
+    const page = await bindActivity(source);
+    const filter = page.container.querySelector<HTMLInputElement>("input[type=search]")!;
+    filter.value = "my draft filter";
+    filter.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    const rows = () => page.container.querySelectorAll(".activity-current-work__row");
+    expect(rows()).toHaveLength(2);
+
+    current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    flush();
+    expect(rows()).toHaveLength(2);
+    expect(filter.value).toBe("my draft filter");
+
+    const failed = createDeferred<SessionsListResult>();
+    current().request.mockImplementation(async (method, params) =>
+      method === "sessions.list" ? failed.promise : activityResponse(method, params),
+    );
+    current().opts.onHello?.(activityHello());
+    flush();
+    expect(rows()).toHaveLength(2);
+    expect(filter.value).toBe("my draft filter");
+    failed.reject(new Error("Current Work refresh unavailable"));
+    const retry = () =>
+      page.container.querySelector<HTMLButtonElement>(".activity-current-work__feedback button");
+    await waitForSolid(() => expect(retry()?.textContent?.trim()).toBe("Retry"));
+    expect(page.container.querySelector(".activity-current-work__feedback")?.textContent).toContain(
+      "Could not load active sessions",
+    );
+    expect(rows()).toHaveLength(2);
+    const refreshed = createDeferred<SessionsListResult>();
+    current().request.mockImplementation(async (method, params) =>
+      method === "sessions.list" ? refreshed.promise : activityResponse(method, params),
+    );
+    retry()!.click();
+    flush();
+    expect(rows()).toHaveLength(2);
+    refreshed.resolve(activityRoster([]));
+    await waitForSolid(() => expect(rows()).toHaveLength(0));
+    expect(retry()).toBeNull();
+    expect(filter.value).toBe("my draft filter");
+  });
+
+  it("keeps reading Current Work across a session-scoped reconnect and clears it when read access is lost", async () => {
+    const { gateway: source, current } = activityGateway();
+    const hello = activityHello();
+    hello.auth = { ...hello.auth, scopes: ["operator.sessions.read"] };
+    current().opts.onHello?.(hello);
+    const page = await bindActivity(source);
+    const rows = () => page.container.querySelectorAll(".activity-current-work__row");
+    expect(rows()).toHaveLength(2);
+
+    current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    flush();
+    expect(rows()).toHaveLength(2);
+    const refreshed = createDeferred<SessionsListResult>();
+    current().request.mockImplementation(async (method, params) =>
+      method === "sessions.list" ? refreshed.promise : activityResponse(method, params),
+    );
+    current().opts.onHello?.({
+      ...hello,
+      auth: { ...hello.auth, scopes: ["operator.sessions.write"] },
+    });
+    flush();
+    expect(rows()).toHaveLength(2);
+    refreshed.resolve(
+      activityRoster([
+        { key: "main", kind: "direct", hasActiveRun: true, label: "Refreshed work" },
+      ]),
+    );
+    await waitForSolid(() => expect(rows()).toHaveLength(1));
+    expect(rows()[0]?.textContent).toContain("Refreshed work");
+
+    current().opts.onHello?.({ ...hello, auth: { ...hello.auth, scopes: [] } });
+    flush();
+    expect(rows()).toHaveLength(0);
+  });
+
+  it.each(["live", "run"] as const)(
+    "retires %s data when the account changes without a client or event-log reset",
+    async (mode) => {
+      const { gateway: source, current } = activityGateway();
+      if (mode === "run") {
+        current().opts.onHello?.({
+          ...activityHello(),
+          features: { methods: ["audit.run.inspect"], events: [] },
+        });
+      }
+      let presenceVersion = 0;
+      const attachAccount = (id: string) => {
+        current().opts.onEvent?.(
+          createGatewayEvent("presence", {
+            reset: true,
+            version: ++presenceVersion,
+            keys: ["self"],
+            presence: [{ instanceId: current().instanceId, user: { id } }],
+          }),
+        );
+        expect(source.snapshot.selfUser?.id).toBe(id);
+      };
+      attachAccount("reader-a");
+      const result = presentResult("account-run");
+      current().request.mockImplementation(async (method, params) =>
+        method === "audit.run.inspect" ? result : activityResponse(method, params),
+      );
+      const page = createActivityPage(activityContext(source), {
+        pathname: "/activity",
+        search: mode === "run" ? "?view=run&run=account-run" : "?view=live",
+        hash: "",
+      });
+      const visibleData = () =>
+        page.container.querySelectorAll(
+          mode === "run" ? ".run-inspector__receipt-list li" : ".activity-current-work__row",
+        );
+      await waitForSolid(() => expect(visibleData()).toHaveLength(mode === "run" ? 1 : 2));
+      const stale = createDeferred<AuditRunInspectResult>();
+      if (mode === "run") {
+        current().request.mockImplementation(async () => stale.promise);
+        page.container
+          .querySelector<HTMLButtonElement>(".run-inspector__pagination button")!
+          .click();
+      } else {
+        current().opts.onEvent?.(toolEvent("previous-account"));
+        expect(previews(page)).toEqual(["previous-account output"]);
+      }
+      const replacement = createDeferred<AuditRunInspectResult | SessionsListResult>();
+      current().request.mockImplementation(async (method, params) =>
+        method === "audit.run.inspect" || method === "sessions.list"
+          ? replacement.promise
+          : activityResponse(method, params),
+      );
+      const client = source.snapshot.client;
+      const revision = source.eventLogRevision;
+
+      attachAccount("reader-b");
+      flush();
+
+      expect(source.snapshot.client).toBe(client);
+      expect(source.eventLogRevision).toBe(revision);
+      expect(visibleData()).toHaveLength(0);
+      expect(previews(page)).toEqual([]);
+      stale.resolve(result);
+      await stale.promise;
+      flush();
+      expect(visibleData()).toHaveLength(0);
+      replacement.resolve(mode === "run" ? result : activityRoster([]));
+    },
+  );
+
+  it("retains inspected pages offline, refreshes them, and retires them on account change", async () => {
+    const { gateway: source, current } = activityGateway();
+    const hello = (recoveryScope = "activity-owner-a") => ({
+      ...activityHello(recoveryScope),
+      features: { methods: ["audit.run.inspect"], events: [] },
+    });
+    current().opts.onHello?.(hello());
+    const first = presentResult("retained-run");
+    const second = {
+      ...first,
+      decisionDisplays: [{ ...first.decisionDisplays[0]!, selectorId: "older-receipt" }],
+      nextDecisionCursor: "older-cursor",
+    };
+    let inspection: Promise<AuditRunInspectResult> = Promise.resolve(first);
+    current().request.mockImplementation(async (method, params) =>
+      method === "audit.run.inspect" ? inspection : activityResponse(method, params),
+    );
+    const page = createActivityPage(activityContext(source), {
+      pathname: "/activity",
+      search: "?view=run&run=retained-run",
+      hash: "",
+    });
+    const receipts = () => page.container.querySelectorAll(".run-inspector__receipt-list li");
+    const loadMore = () =>
+      page.container.querySelector<HTMLButtonElement>(".run-inspector__pagination button")!;
+    await waitForSolid(() => expect(receipts()).toHaveLength(1));
+    inspection = Promise.resolve(second);
+    loadMore().click();
+    await waitForSolid(() => expect(receipts()).toHaveLength(2));
+
+    const stale = createDeferred<AuditRunInspectResult>();
+    inspection = stale.promise;
+    loadMore().click();
+    current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    flush();
+    expect(receipts()).toHaveLength(2);
+    expect(loadMore().disabled).toBe(true);
+    stale.resolve({
+      ...second,
+      decisionDisplays: [{ ...second.decisionDisplays[0]!, selectorId: "stale-receipt" }],
+    });
+
+    const failedRefresh = createDeferred<AuditRunInspectResult>();
+    inspection = failedRefresh.promise;
+    current().opts.onHello?.(hello());
+    flush();
+    expect(receipts()).toHaveLength(2);
+    failedRefresh.reject(new Error("Run inspection refresh unavailable"));
+    const retry = () =>
+      page.container.querySelector<HTMLButtonElement>(".run-inspector__panel button");
+    await waitForSolid(() => expect(retry()?.textContent?.trim()).toBe("Retry inspection"));
+    expect(page.container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Run inspection failed",
+    );
+    expect(receipts()).toHaveLength(2);
+    const refresh = createDeferred<AuditRunInspectResult>();
+    inspection = refresh.promise;
+    retry()!.click();
+    flush();
+    expect(receipts()).toHaveLength(2);
+    refresh.resolve({
+      ...first,
+      nextDecisionCursor: "fresh-cursor",
+      decisionDisplays: [
+        {
+          ...first.decisionDisplays[0]!,
+          action: { ...first.decisionDisplays[0]!.action, summary: "Fresh first-page evidence" },
+        },
+      ],
+    });
+    await waitForSolid(() =>
+      expect(page.container.textContent).toContain("Fresh first-page evidence"),
+    );
+    expect(retry()).toBeNull();
+    expect(receipts()).toHaveLength(2);
+    inspection = Promise.resolve(second);
+    loadMore().click();
+    expect(current().request).toHaveBeenLastCalledWith(
+      "audit.run.inspect",
+      expect.objectContaining({ decisionCursor: "fresh-cursor" }),
+      expect.anything(),
+    );
+    await waitForSolid(() => expect(loadMore().disabled).toBe(false));
+
+    const replacement = createDeferred<AuditRunInspectResult>();
+    inspection = replacement.promise;
+    current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    current().opts.onHello?.(hello("activity-owner-b"));
+    flush();
+    expect(receipts()).toHaveLength(0);
+    replacement.resolve(first);
+  });
+
+  it("makes new receipt pages reachable after reconnecting an exhausted run", async () => {
+    const { gateway: source, current } = activityGateway();
+    const hello = {
+      ...activityHello(),
+      features: { methods: ["audit.run.inspect"], events: [] },
+    };
+    current().opts.onHello?.(hello);
+    const first = presentResult("growing-run");
+    delete first.nextDecisionCursor;
+    let inspection: AuditRunInspectResult = first;
+    current().request.mockImplementation(async (method, params) =>
+      method === "audit.run.inspect" ? inspection : activityResponse(method, params),
+    );
+    const page = createActivityPage(activityContext(source), {
+      pathname: "/activity",
+      search: "?view=run&run=growing-run",
+      hash: "",
+    });
+    const receipts = () => page.container.querySelectorAll(".run-inspector__receipt-list li");
+    const loadMore = () =>
+      page.container.querySelector<HTMLButtonElement>(".run-inspector__pagination button");
+    await waitForSolid(() => expect(receipts()).toHaveLength(1));
+    expect(loadMore()).toBeNull();
+
+    current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    flush();
+    expect(receipts()).toHaveLength(1);
+    inspection = {
+      ...first,
+      decisionDisplays: [{ ...first.decisionDisplays[0]!, selectorId: "new-first-page" }],
+      nextDecisionCursor: "fresh-cursor",
+    };
+    current().opts.onHello?.(hello);
+    await waitForSolid(() => expect(receipts()).toHaveLength(2));
+    expect(loadMore()?.textContent?.trim()).toBe("Load more receipts");
+    expect(loadMore()?.disabled).toBe(false);
+
+    inspection = {
+      ...first,
+      decisionDisplays: [
+        ...first.decisionDisplays,
+        { ...first.decisionDisplays[0]!, selectorId: "next-page" },
+      ],
+    };
+    loadMore()!.click();
+    expect(current().request).toHaveBeenLastCalledWith(
+      "audit.run.inspect",
+      {
+        runId: "growing-run",
+        executionLimit: 50,
+        decisionLimit: 50,
+        decisionCursor: "fresh-cursor",
+      },
+      expect.anything(),
+    );
+    await waitForSolid(() => expect(receipts()).toHaveLength(3));
+    expect(loadMore()).toBeNull();
+  });
+
+  it.each(["connected", "offline"] as const)(
+    "clears run A evidence when selecting run B while %s, including after B fails",
+    async (phase) => {
+      const { gateway: source, current } = activityGateway();
+      const hello = {
+        ...activityHello(),
+        features: { methods: ["audit.run.inspect"], events: [] },
+      };
+      current().opts.onHello?.(hello);
+      const first = presentResult("run-a");
+      const second = createDeferred<AuditRunInspectResult>();
+      let inspection: Promise<AuditRunInspectResult> = Promise.resolve(first);
+      current().request.mockImplementation(async (method, params) =>
+        method === "audit.run.inspect" ? inspection : activityResponse(method, params),
+      );
+      const page = createActivityPage(activityContext(source), {
+        pathname: "/activity",
+        search: "?view=run&run=run-a",
+        hash: "",
+      });
+      const receipts = () => page.container.querySelectorAll(".run-inspector__receipt-list li");
+      await waitForSolid(() => expect(receipts()).toHaveLength(1));
+      inspection = second.promise;
+      if (phase === "offline") {
+        current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+        flush();
+        expect(receipts()).toHaveLength(1);
+      }
+
+      page.setRouteLocation({ pathname: "/activity", search: "?view=run&run=run-b", hash: "" });
+      expect(receipts()).toHaveLength(0);
+      if (phase === "offline") {
+        expect(current().request).not.toHaveBeenCalledWith(
+          "audit.run.inspect",
+          expect.objectContaining({ runId: "run-b" }),
+          expect.anything(),
+        );
+        current().opts.onHello?.(hello);
+        flush();
+        expect(receipts()).toHaveLength(0);
+      }
+      expect(current().request).toHaveBeenCalledWith(
+        "audit.run.inspect",
+        expect.objectContaining({ runId: "run-b" }),
+        expect.anything(),
+      );
+      second.reject(new Error("Run B inspection unavailable"));
+      await waitForSolid(() =>
+        expect(page.container.querySelector('[role="alert"] button')?.textContent).toBe(
+          "Retry inspection",
+        ),
+      );
+      expect(receipts()).toHaveLength(0);
+    },
+  );
 
   it.each(["stop", "event"] as const)(
     "retires the roster before an earlier reset observer triggers a reentrant %s",
@@ -834,7 +1167,7 @@ describe("ActivityPage gateway lifecycle", () => {
       search: "?view=live",
       hash: "",
     });
-    const container = mountActivityPage(page);
+    const container = page.container;
     await syncActivityRoster(page);
     flush();
     const sessions = activityContext(source).sessions;
@@ -874,7 +1207,7 @@ describe("ActivityPage gateway lifecycle", () => {
     current().opts.onEvent?.(toolEvent("other", "agent:other:work"));
     expect(previews(page)).toEqual(["original output", "other output"]);
 
-    const container = mountActivityPage(page);
+    const container = page.container;
     const clear = container.querySelector<HTMLButtonElement>(".activity-page button.danger");
     expect(clear?.textContent?.trim()).toBe("Clear");
     clear?.click();
@@ -1001,18 +1334,31 @@ describe("ActivityPage gateway lifecycle", () => {
       "retry",
       true,
     ],
-  ] as const)("classifies a %s failure", async (_label, error, recovery, hasCursor) => {
-    const client = createTestGatewayClient(vi.fn(() => Promise.reject(error)));
-    const activeGateway = inspectorGateway(client);
-    const page = createActivityPage(activityContext(activeGateway), {
-      pathname: "/activity",
-      search: `?view=run&run=run-1${hasCursor ? "&receipt=receipt-1&decision=cursor-1" : ""}`,
-      hash: "",
-    });
-    await waitForSolid(() =>
+  ] as const)(
+    "keeps a %s failure until explicit recovery",
+    async (_label, error, recovery, hasCursor) => {
+      const request = vi.fn(() => Promise.reject(error));
+      const client = createTestGatewayClient(request);
+      const activeGateway = inspectorGateway(client);
+      const page = createActivityPage(activityContext(activeGateway), {
+        pathname: "/activity",
+        search: `?view=run&run=run-1${hasCursor ? "&receipt=receipt-1&decision=cursor-1" : ""}`,
+        hash: "",
+      });
+      await waitForSolid(() =>
+        expect(page.container.querySelector('[role="alert"] button')?.textContent).toBe(
+          recovery === "restart" ? "Restart inspection" : "Retry inspection",
+        ),
+      );
+      page.setRouteLocation({
+        pathname: "/activity",
+        search: `?view=run&run=run-1&receipt=receipt-2${hasCursor ? "&decision=cursor-1" : ""}`,
+        hash: "",
+      });
+      expect(request).toHaveBeenCalledOnce();
       expect(page.container.querySelector('[role="alert"] button')?.textContent).toBe(
         recovery === "restart" ? "Restart inspection" : "Retry inspection",
-      ),
-    );
-  });
+      );
+    },
+  );
 });

@@ -36,12 +36,7 @@ import { resolveTextCommand } from "../auto-reply/commands-registry.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import { executeSessionGoalCommand, parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
-import {
-  DEFAULT_QUEUE_CAP,
-  DEFAULT_QUEUE_DEBOUNCE_MS,
-  DEFAULT_QUEUE_DROP,
-} from "../auto-reply/reply/queue/state.js";
-import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
+import { DEFAULT_QUEUE_DEBOUNCE_MS } from "../auto-reply/reply/queue/state.js";
 import { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import {
@@ -112,7 +107,7 @@ import { defaultRuntime } from "../runtime.js";
 import { getSessionControllerOperation } from "../sessions/session-controller.state.js";
 import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { applyQueueDropPolicy, waitForQueueDebounce } from "../utils/queue-helpers.js";
+import { waitForQueueDebounce } from "../utils/queue-helpers.js";
 import {
   assistantChatMessage,
   payloadText,
@@ -121,14 +116,15 @@ import {
   resolveTerminalChatState,
 } from "./embedded-chat-projection.js";
 import { ensureEmbeddedHistoryRuntimePluginsLoaded } from "./embedded-history-runtime.js";
+import { enqueuePendingLocalMessage, findQueuedSessionRun } from "./embedded-local-queue.js";
 import {
   buildLocalQueuedPrompt,
   createLocalRunState,
+  isSameLocalRunScope,
   timeoutSecondsFromMs,
   waitForLocalRunShutdown,
   waitForQueuedLocalRun,
   type LocalRunState,
-  type QueuedSessionRun,
 } from "./embedded-local-run.js";
 import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
 import { embeddedSessionStartupMigrationLog, silentRuntime } from "./embedded-runtime.js";
@@ -153,12 +149,6 @@ import type {
 } from "./tui-backend.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
 
-type LocalPendingMessage = {
-  run: LocalRunState;
-  messageIndex: number;
-  message: string;
-};
-
 export class EmbeddedTuiBackend implements TuiBackend {
   readonly connection = { url: "local embedded" };
 
@@ -168,18 +158,25 @@ export class EmbeddedTuiBackend implements TuiBackend {
   onGap?: (info: { expected: number; received: number }) => void;
 
   private readonly deps = createDefaultDeps();
+  private readonly localSenderId = randomUUID();
   private readonly runs = new Map<string, LocalRunState>();
   private unsubscribe?: () => void;
   private previousRuntimeLog?: typeof defaultRuntime.log;
   private previousRuntimeError?: typeof defaultRuntime.error;
   private seq = 0;
   private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly pluginApprovalBroker = new EmbeddedPluginApprovalBroker();
   private readonly scheduler = new GatewayScheduler();
-  private readonly questionBroker = new EmbeddedQuestionBroker(this.scheduler);
+  private readonly emitBrokerEvent = (event: { event: string; payload: unknown }) => {
+    if (!this.scheduler.signal.aborted) {
+      this.emit(event.event, event.payload);
+    }
+  };
+  private readonly pluginApprovalBroker = new EmbeddedPluginApprovalBroker(this.emitBrokerEvent);
+  private readonly questionBroker = new EmbeddedQuestionBroker(
+    this.scheduler,
+    this.emitBrokerEvent,
+  );
   private readonly preparedModelRuntime = new EmbeddedPreparedModelRuntimeHost();
-  private unsubscribePluginApprovals?: () => void;
-  private unsubscribeQuestions?: () => void;
   private unsubscribeConfigWrites?: () => void;
   private sessionProjection?: Promise<SessionRowProjection>;
   private unbindSessionProjection?: () => void;
@@ -205,13 +202,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     // Keep this synchronous so the shared event bus can isolate listener failures.
     this.unsubscribe = onAgentEvent((evt) => this.handleAgentEvent(evt));
     setEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
-    this.unsubscribePluginApprovals = this.pluginApprovalBroker.subscribe((event) => {
-      this.emit(event.event, event.payload);
-    });
     setEmbeddedQuestionBroker(this.questionBroker);
-    this.unsubscribeQuestions = this.questionBroker.subscribe((event) => {
-      this.emit(event.event, event.payload);
-    });
     // Local mode shares the Gateway's session-store readiness checks.
     this.sessionProjection = (async () => {
       const config = await captureRuntimeConfigAsyncReader()();
@@ -240,11 +231,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async stop() {
     this.scheduler.beginClose();
     clearEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
-    this.unsubscribePluginApprovals?.();
-    this.unsubscribePluginApprovals = undefined;
     clearEmbeddedQuestionBroker(this.questionBroker);
-    this.unsubscribeQuestions?.();
-    this.unsubscribeQuestions = undefined;
     const maintenancePromises: Promise<void>[] = [];
     for (const run of this.runs.values()) {
       run.textUpdates?.stop();
@@ -293,14 +280,23 @@ export class EmbeddedTuiBackend implements TuiBackend {
     await this.preparedModelRuntime.waitUntilReady();
   }
 
-  async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
+  async sendChat(options: ChatSendOptions): Promise<TuiChatSendResult> {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
     this.scheduler.signal.throwIfAborted();
-    const runId = opts.runId ?? randomUUID();
+    const runId = options.runId ?? randomUUID();
+    const command = resolveTextCommand(options.message);
+    const explicitFollowup = command?.command.key === "followup";
+    let opts = options;
+    if (explicitFollowup) {
+      if (!command.args) {
+        throw new Error("Usage: /followup <message>");
+      }
+      opts = { ...options, message: command.args };
+    }
     const sideCommand = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(opts.message.trim());
-    const question = sideCommand?.[1]?.trim() || undefined;
-    const isQueueCommand = resolveTextCommand(opts.message)?.command.key === "queue";
+    const question = !explicitFollowup ? sideCommand?.[1]?.trim() || undefined : undefined;
+    const isQueueCommand = !explicitFollowup && command?.command.key === "queue";
     const agentId = resolveSessionAgentId({
       sessionKey: opts.sessionKey,
       config: getRuntimeConfig(),
@@ -312,8 +308,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     };
     // Readiness awaits follow synchronous run registration, so the same owned
     // promise determines both stop admission and the next turn's queue predecessor.
-    const sessionRun = this.findQueuedSessionRunPromise(runScope);
-    const stopCommand = sessionRun !== undefined && isAbortRequestText(opts.message);
+    const sessionRun = findQueuedSessionRun(this.runs, runScope);
+    const stopCommand =
+      !explicitFollowup && sessionRun !== undefined && isAbortRequestText(opts.message);
     const queuedAfter = question || stopCommand || isQueueCommand ? undefined : sessionRun;
     if (stopCommand) {
       this.abortSessionRuns(runScope);
@@ -344,7 +341,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           incarnation: entry?.sessionId,
         }),
       );
-      if (activeOperation) {
+      if (activeOperation && !explicitFollowup) {
         const claimed = await claimPendingEmbeddedAgentQuestionAnswer(
           activeOperation,
           opts.message,
@@ -358,12 +355,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
         cfg,
         channel: INTERNAL_MESSAGE_CHANNEL,
         sessionEntry: entry,
+        ...(explicitFollowup ? { inlineMode: "followup" as const } : {}),
       });
       if (queueSettings.mode === "steer") {
         if (activeOperation) {
           const steer = await steerEmbeddedSessionInput({
             operation: activeOperation,
             text: opts.message,
+            senderId: this.localSenderId,
             sessionEntry: entry,
             debounceMs: queueSettings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
             abortSignal: this.scheduler.signal,
@@ -385,12 +384,17 @@ export class EmbeddedTuiBackend implements TuiBackend {
       if (queueSettings.mode === "interrupt") {
         this.abortSessionRuns(runScope);
       } else {
-        const queued = this.enqueuePendingLocalMessage({
+        const queued = enqueuePendingLocalMessage(this.runs, {
           runScope,
           message: opts.message,
           settings: queueSettings,
-          fallbackRunId: queuedAfter.runId,
         });
+        if (queued.kind === "rejected") {
+          if (explicitFollowup) {
+            throw new Error("Your followup was not queued because the session queue is full.");
+          }
+          return { runId: queuedAfter.runId };
+        }
         if (queued.kind === "handled") {
           return { runId: queued.runId };
         }
@@ -401,6 +405,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionKey: opts.sessionKey,
       agentId,
       question,
+      ...(explicitFollowup ? { explicitFollowup: true as const } : {}),
       ...(pendingQueue ? { pendingQueue } : {}),
       ...(queuedAfter ? { queuedAfter } : {}),
     });
@@ -414,7 +419,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       await runPromise;
     }
 
-    return { runId };
+    return { runId, ...(explicitFollowup && queuedAfter ? { status: "queued" } : {}) };
   }
 
   async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {
@@ -730,6 +735,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       messageChannel: INTERNAL_MESSAGE_CHANNEL,
       messageProvider: INTERNAL_MESSAGE_CHANNEL,
       currentChannelId: INTERNAL_MESSAGE_CHANNEL,
+      senderId: this.localSenderId,
     });
     const text = reply?.text?.trim() ?? "";
     if (!text) {
@@ -837,127 +843,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
     };
   }
 
-  private enqueuePendingLocalMessage(params: {
-    runScope: { sessionKey: string; agentId?: string };
-    message: string;
-    settings: QueueSettings;
-    fallbackRunId: string;
-  }):
-    | { kind: "handled"; runId: string }
-    | { kind: "enqueue"; queue: NonNullable<LocalRunState["pendingQueue"]> } {
-    const pendingMessages: LocalPendingMessage[] = [];
-    for (const run of this.runs.values()) {
-      if (this.isSameRunScope(run, params.runScope) && run.pendingQueue) {
-        run.pendingQueue.messages.forEach((message, messageIndex) => {
-          pendingMessages.push({ run, messageIndex, message });
-        });
-      }
-    }
-    const overflowQueue = {
-      items: [...pendingMessages],
-      cap: params.settings.cap ?? DEFAULT_QUEUE_CAP,
-      dropPolicy: params.settings.dropPolicy ?? DEFAULT_QUEUE_DROP,
-      droppedCount: 0,
-      summaryLines: [] as string[],
-    };
-    const admitted = applyQueueDropPolicy({
-      queue: overflowQueue,
-      summarize: (item) => item.message,
-    });
-    if (!admitted) {
-      return { kind: "handled", runId: params.fallbackRunId };
-    }
-
-    const retained = new Set(overflowQueue.items);
-    const droppedByRun = new Map<LocalRunState, number[]>();
-    for (const dropped of pendingMessages) {
-      if (retained.has(dropped)) {
-        continue;
-      }
-      const indices = droppedByRun.get(dropped.run) ?? [];
-      indices.push(dropped.messageIndex);
-      droppedByRun.set(dropped.run, indices);
-    }
-    const inheritedSummaryLines: string[] = [];
-    for (const [run, indices] of droppedByRun) {
-      for (const index of indices.toSorted((a, b) => b - a)) {
-        run.pendingQueue?.messages.splice(index, 1);
-      }
-      if (run.pendingQueue?.messages.length === 0) {
-        inheritedSummaryLines.push(...run.pendingQueue.summaryLines);
-        overflowQueue.droppedCount += run.pendingQueue.droppedCount;
-        run.controller.abort();
-      }
-    }
-    overflowQueue.summaryLines.unshift(...inheritedSummaryLines);
-    if (overflowQueue.summaryLines.length > overflowQueue.cap) {
-      overflowQueue.summaryLines.splice(0, overflowQueue.summaryLines.length - overflowQueue.cap);
-    }
-
-    const enqueuedAt = Date.now();
-    for (const run of this.runs.values()) {
-      if (!this.isSameRunScope(run, params.runScope) || !run.pendingQueue) {
-        continue;
-      }
-      run.pendingQueue.lastEnqueuedAt = enqueuedAt;
-      run.pendingQueue.debounceMs = params.settings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS;
-    }
-
-    if (params.settings.mode === "collect") {
-      const target = [...this.runs.entries()].findLast(
-        ([, run]) => this.isSameRunScope(run, params.runScope) && run.pendingQueue,
-      );
-      const targetQueue = target?.[1].pendingQueue;
-      if (target && targetQueue?.mode === "collect" && !target[1].controller.signal.aborted) {
-        const [targetRunId] = target;
-        targetQueue.messages.push(params.message);
-        targetQueue.dropPolicy = params.settings.dropPolicy ?? DEFAULT_QUEUE_DROP;
-        targetQueue.droppedCount += overflowQueue.droppedCount;
-        targetQueue.summaryLines.push(...overflowQueue.summaryLines);
-        return { kind: "handled", runId: targetRunId };
-      }
-    }
-
-    return {
-      kind: "enqueue",
-      queue: {
-        mode: params.settings.mode === "collect" ? "collect" : "followup",
-        messages: [params.message],
-        debounceMs: params.settings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
-        lastEnqueuedAt: enqueuedAt,
-        dropPolicy: params.settings.dropPolicy ?? DEFAULT_QUEUE_DROP,
-        droppedCount: overflowQueue.droppedCount,
-        summaryLines: overflowQueue.summaryLines,
-      },
-    };
-  }
-
-  private findQueuedSessionRunPromise(params: {
-    sessionKey: string;
-    agentId?: string;
-  }): QueuedSessionRun | undefined {
-    let queuedAfter: QueuedSessionRun | undefined;
-    for (const [runId, run] of this.runs) {
-      if (this.isSameRunScope(run, params) && !run.question && run.promise) {
-        queuedAfter = { runId, run, promise: run.promise };
-      }
-    }
-    return queuedAfter;
-  }
-
   private abortSessionRuns(params: { sessionKey: string; agentId?: string }) {
     for (const run of this.runs.values()) {
-      if (this.isSameRunScope(run, params) && !run.question && this.isAbortableRun(run)) {
+      if (isSameLocalRunScope(run, params) && !run.question && this.isAbortableRun(run)) {
         run.controller.abort();
       }
     }
-  }
-
-  private isSameRunScope(run: LocalRunState, params: { sessionKey: string; agentId?: string }) {
-    return (
-      run.sessionKey === params.sessionKey &&
-      (params.sessionKey !== "global" || run.agentId === params.agentId)
-    );
   }
 
   private isAbortableRun(run: LocalRunState): boolean {
@@ -1140,9 +1031,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
       this.ensureRunRegistered(evt.runId, run);
     }
 
+    const explicitFollowupStarted = run.explicitFollowup && lifecyclePhase === "start";
+    if (explicitFollowupStarted) {
+      delete run.explicitFollowup;
+    }
     this.emitRun("agent", evt.runId, run, {
       stream: evt.stream,
-      data: evt.data,
+      data: explicitFollowupStarted ? { ...evt.data, explicitFollowup: true } : evt.data,
     });
 
     if (evt.stream === "assistant" || (evt.stream === "tool" && evt.data?.phase === "start")) {
@@ -1321,6 +1216,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           channel: INTERNAL_MESSAGE_CHANNEL,
           runContext: {
             messageChannel: INTERNAL_MESSAGE_CHANNEL,
+            senderId: this.localSenderId,
           },
           timeout: timeoutSecondsFromMs(opts.timeoutMs),
           runId,

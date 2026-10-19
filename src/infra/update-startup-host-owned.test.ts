@@ -8,6 +8,7 @@ import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { checkTelemetryUpdate } from "./telemetry.js";
 import { createGatewayUpdateLifecycle } from "./update-check-lifecycle.js";
 import { resolveNpmChannelTag } from "./update-check.js";
+import * as autoRun from "./update-startup-auto-run.js";
 import { runGatewayUpdateCheck } from "./update-startup.js";
 import {
   getUpdateAvailable,
@@ -40,6 +41,7 @@ beforeEach(() => {
 afterEach(async () => {
   await lifecycle.stop();
   await lifecycle.scheduler.stop();
+  vi.restoreAllMocks();
   resetUpdateStatusState();
   vi.unstubAllEnvs();
 });
@@ -58,7 +60,9 @@ it.each(["stable", "beta", "dev", "extended-stable"] as const)(
       }),
     );
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
-    const runAutoUpdate = vi.fn();
+    const runAutoUpdate = vi
+      .spyOn(autoRun, "runAutoUpdateCommand")
+      .mockResolvedValue({ status: "handoff" });
 
     await runGatewayUpdateCheck(
       {
@@ -66,7 +70,6 @@ it.each(["stable", "beta", "dev", "extended-stable"] as const)(
         log: { info: vi.fn() },
         allowInTests: true,
         isNixMode: false,
-        runAutoUpdate,
       },
       lifecycle,
     );

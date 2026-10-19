@@ -1078,6 +1078,70 @@ describe("handleChatGatewayEvent", () => {
     verify?.(state);
   });
 
+  it.each([
+    [
+      "openai",
+      429,
+      "subscription_sharing_workplace_individual_usage_limit_exceeded",
+      "chatgpt_business_usage_limit",
+    ],
+    ["openai", 429, "subscription_sharing_usage_limit_exceeded", "chatgpt_consumer_usage_limit"],
+    ["openai", 429, "rate_limit_exceeded", undefined],
+    ["openai", 403, "subscription_sharing_workplace_individual_usage_limit_exceeded", undefined],
+    ["openai", 403, "subscription_sharing_usage_limit_exceeded", undefined],
+    ["other", 429, "subscription_sharing_workplace_individual_usage_limit_exceeded", undefined],
+    ["other", 429, "subscription_sharing_usage_limit_exceeded", undefined],
+  ])(
+    "classifies ChatGPT sharing limits only from provider facts (%s, %s, %s)",
+    (provider, httpStatus, providerErrorCode, kind) => {
+      const state = createState({ chatRunId: "run-1" });
+      receive(state, "error", {
+        errorMessage: "Usage limit reached",
+        errorDetail: { provider, httpStatus, providerErrorCode },
+      });
+      expect(state.chatRunError?.kind).toBe(kind);
+      expect(state.chatRunError?.runId).toBe("run-1");
+    },
+  );
+
+  it.each([
+    [
+      "subscription_sharing_workplace_individual_usage_limit_exceeded",
+      "chatgpt_business_usage_limit",
+    ],
+    ["subscription_sharing_usage_limit_exceeded", "chatgpt_consumer_usage_limit"],
+  ])(
+    "adopts %s recovery after history publishes the same terminal summary",
+    (providerErrorCode, kind) => {
+      const summary = "Usage limit reached";
+      const state = createState({
+        chatRunId: "run-1",
+        chatRunError: { runId: "run-1", summary },
+      });
+      const scope = { sessionKey: state.sessionKey };
+      publishChatSessionProjection(
+        state,
+        reduceSessionProjection(getChatSessionProjection(state, scope), {
+          type: "runTerminal",
+          runId: "run-1",
+          status: "error",
+          errorMessage: summary,
+          scope,
+        }),
+      );
+      receive(state, "error", {
+        errorMessage: summary,
+        errorDetail: {
+          provider: "openai",
+          httpStatus: 429,
+          providerErrorCode,
+        },
+      });
+      expect(state.chatRunError?.kind).toBe(kind);
+      expect(state.chatRunError?.runId).toBe("run-1");
+    },
+  );
+
   it("adds bounded OAuth facts to live errors without changing the summary", () => {
     const summary =
       "⚠️ Your refresh token has already been used to generate a new access token. Please try signing in again.";

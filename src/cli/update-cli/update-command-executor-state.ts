@@ -33,3 +33,9 @@ export const originalCancellations = new WeakMap<
   UpdateRecoveryFence,
   (runId: string, cause: Error) => void
 >();
+
+/** Terminal state/report preparation, consumed after descendants join and before release. */
+export const terminalPreparations = new WeakMap<
+  UpdateRecoveryFence,
+  (failure?: unknown) => Promise<void>
+>();

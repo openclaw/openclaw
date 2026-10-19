@@ -106,12 +106,11 @@ function commandPreview(command: string): string {
   );
 }
 
-export function syncToolDisclosureOverflow(event: Event): void {
+export function syncToolDisclosureOverflow(event: Event, content: HTMLElement | undefined): void {
   const disclosure = event.currentTarget;
   if (!(disclosure instanceof HTMLElement)) {
     return;
   }
-  const content = disclosure.querySelector<HTMLElement>(".chat-tool-disclosure__content");
   disclosure.classList.toggle(
     "chat-tool-disclosure--overflowing",
     Boolean(content && content.scrollWidth > content.clientWidth),
@@ -346,7 +345,7 @@ function progressReceiptLabel(card: ToolCard, outcome: ToolCardOutcome) {
             : t("sessionProgressCard.receipt.cleared");
 }
 
-function ToolApprovalReviews(props: { card: ToolCard }) {
+export function ToolApprovalReviews(props: { card: ToolCard }) {
   const reviews = createMemo(() => readToolApprovalReviews(props.card.details));
   return (
     <Show when={reviews().length > 0}>
@@ -412,6 +411,8 @@ type ToolCardProps = {
 };
 
 function ToolCardView(props: ToolCardProps) {
+  let disclosureContent: HTMLSpanElement | undefined;
+  const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const card = createMemo(() => resolveToolCardDisplay(props.card), { equals: false });
   const permission = () =>
     readNodePermissionRequest(asNullableRecord(card().details)?.permissionMissing);
@@ -457,7 +458,7 @@ function ToolCardView(props: ToolCardProps) {
           tool={{ toolName: display().name, pluginToolIcons: props.options.pluginToolIcons }}
         />
       </span>
-      <span class="chat-tool-disclosure__content">
+      <span ref={(element) => (disclosureContent = element)} class="chat-tool-disclosure__content">
         <Show
           when={subagent()}
           fallback={
@@ -510,9 +511,9 @@ function ToolCardView(props: ToolCardProps) {
                 ]}
                 type={linkedRow() ? undefined : "button"}
                 aria-expanded={linkedRow() ? undefined : props.options.expanded ? "true" : "false"}
-                onPointerEnter={syncToolDisclosureOverflow}
-                onFocus={linkedRow() ? undefined : syncToolDisclosureOverflow}
-                onFocusIn={linkedRow() ? syncToolDisclosureOverflow : undefined}
+                onPointerEnter={syncOverflow}
+                onFocus={linkedRow() ? undefined : syncOverflow}
+                onFocusIn={linkedRow() ? syncOverflow : undefined}
                 onClick={linkedRow() ? undefined : toggle}
               >
                 <Show when={linkedRow()}>
@@ -587,17 +588,6 @@ export function ChatToolIcon(
     <openclaw-chat-tool-icon {...attributes}>
       <ToolIcon name={props.name} tool={props.tool} />
     </openclaw-chat-tool-icon>
-  );
-}
-
-export function ChatToolApprovalReviews(
-  props: { card: ToolCard } & JSX.HTMLAttributes<HTMLElement>,
-) {
-  const attributes = omit(props, "card", "children");
-  return (
-    <openclaw-chat-tool-reviews {...attributes}>
-      <ToolApprovalReviews card={props.card} />
-    </openclaw-chat-tool-reviews>
   );
 }
 

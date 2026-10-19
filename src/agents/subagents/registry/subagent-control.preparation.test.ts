@@ -1,18 +1,21 @@
 // Preserve fixture setup before the runtime modules that consume it.
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../../test/helpers/promise.js";
-import * as replyConfig from "../../../auto-reply/reply/agent-runner-utils.js";
 import { createQueueTestRun } from "../../../auto-reply/reply/queue.test-helpers.js";
 import { prepareReplyAgentTurn } from "../../../auto-reply/reply/reply-agent-turn-preparation.js";
 import { createTypingController } from "../../../auto-reply/reply/typing.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { releaseSessionControllerClaim } from "../../../sessions/session-controller.mailbox.js";
+import {
+  claimSessionControllerInput,
+  releaseSessionControllerClaim,
+  submitSessionControllerInput,
+} from "../../../sessions/session-controller.mailbox.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
@@ -50,17 +53,27 @@ it("cancels a selected preparation source and retains its actual return before c
   const queued = createQueueTestRun({ prompt: "do not execute after Stop" });
   queued.abortSignal = upstream.signal;
   queued.run = { ...queued.run, config: cfg, agentId: "main", sessionKey, sessionId };
+  submitSessionControllerInput(
+    sessionKey,
+    queued,
+    { mode: "followup" },
+    {
+      protocolRunId: runId,
+      storePath,
+    },
+  );
   const entered = createDeferred();
   const finishPreparation = createDeferred();
-  vi.spyOn(replyConfig, "resolveQueuedReplyExecutionConfig").mockImplementation(async (config) => {
-    entered.resolve();
-    await finishPreparation.promise;
-    return config;
-  });
   const typing = createTypingController({});
   const preparation = prepareReplyAgentTurn({
     queued,
     defaults: { typing, typingMode: "never", defaultModel: "gpt-test", sessionKey, storePath },
+    claimSource: async () => {
+      const claim = await claimSessionControllerInput(queued);
+      entered.resolve();
+      await finishPreparation.promise;
+      return claim;
+    },
   });
   let stopping: ReturnType<typeof killSubagentRunAdmin> | undefined;
   try {
@@ -68,7 +81,7 @@ it("cancels a selected preparation source and retains its actual return before c
       awaitGateBeforeSettlement(
         entered.promise,
         preparation,
-        "Preparation settled before entering its retained config phase",
+        "Preparation settled before returning its selected source claim",
       ),
       signal,
     );

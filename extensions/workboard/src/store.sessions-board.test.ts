@@ -106,7 +106,7 @@ describe("Sessions board storage", () => {
     await store.upsertBoard({ id: "sessions", kind: "sessions" });
     const { sessions: expectedSpec } = await store.getSessionsBoard("sessions");
     const changes = vi.fn();
-    store.subscribeChanges(changes);
+    store.onChange = changes;
     expect(await store.writeSessionPlacement("sessions", placement(), { expectedSpec })).toBe(true);
     expect(
       await store.writeSessionPlacement(

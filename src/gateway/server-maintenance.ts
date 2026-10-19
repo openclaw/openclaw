@@ -13,6 +13,7 @@ import {
   pruneExpiredDeliveryQueueTombstones,
 } from "../infra/delivery-queue-sqlite.js";
 import { startDevicePairSetupMaintenance } from "../infra/device-bootstrap.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { formatErrorMessage as formatError } from "../infra/errors.js";
 import {
   createGatewayActiveWorkSnapshot,
@@ -55,7 +56,6 @@ import {
   type MediaCleanupStopResult,
   registerMediaCleanupDrain,
   waitForMediaCleanupDrains,
-  waitForMediaCleanupDrainsToSettle,
 } from "./server-media-cleanup-lifecycle.js";
 import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-active-runs.js";
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/types.js";
@@ -298,15 +298,13 @@ export function startGatewayMaintenanceTimers(params: {
       run,
     });
   };
-  void waitForMediaCleanupDrainsToSettle().then(() => {
-    if (!mediaScheduler.signal.aborted) {
-      scheduleMedia("delivery-queue-media", () =>
-        runDeliveryQueueMediaGc().catch((error: unknown) => {
-          params.logHealth.error(`delivery queue maintenance failed: ${formatError(error)}`);
-        }),
-      );
-    }
-  });
+  if (!mediaScheduler.signal.aborted) {
+    scheduleMedia("delivery-queue-media", () =>
+      runDeliveryQueueMediaGc().catch((error: unknown) => {
+        params.logHealth.error(`delivery queue maintenance failed: ${formatError(error)}`);
+      }),
+    );
+  }
   startDevicePairSetupMaintenance({
     scheduler,
     onError: (error) => {
@@ -442,30 +440,24 @@ export function startGatewayMaintenanceTimers(params: {
       return;
     }
     mediaCleanupStarted = true;
-    // A stuck prior generation defers only media cleanup, never Gateway readiness.
-    void waitForMediaCleanupDrainsToSettle().then(() => {
-      if (mediaScheduler.signal.aborted) {
-        return;
-      }
-      scheduleMedia("playback-cache", () =>
-        prunePlaybackTranscodeCache().catch((err: unknown) => {
-          params.logHealth.error(`playback transcode cache cleanup failed: ${formatError(err)}`);
-        }),
-      );
-      scheduleMedia("managed-outgoing", () =>
-        runManagedOutgoingMediaGc().catch((err: unknown) => {
-          params.logHealth.error(`managed outgoing media cleanup failed: ${formatError(err)}`);
-        }),
-      );
-      scheduleMedia("media", () => {
-        const ttlHours = params.getRuntimeConfig().attachments?.ttlHours;
-        const cleanup =
-          ttlHours !== undefined
-            ? cleanOldMedia(ttlHours * 60 * 60_000, { recursive: true, pruneEmptyDirs: true })
-            : pruneOutboundMedia();
-        return cleanup.catch((err: unknown) => {
-          params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
-        });
+    scheduleMedia("playback-cache", () =>
+      prunePlaybackTranscodeCache().catch((err: unknown) => {
+        params.logHealth.error(`playback transcode cache cleanup failed: ${formatError(err)}`);
+      }),
+    );
+    scheduleMedia("managed-outgoing", () =>
+      runManagedOutgoingMediaGc().catch((err: unknown) => {
+        params.logHealth.error(`managed outgoing media cleanup failed: ${formatError(err)}`);
+      }),
+    );
+    scheduleMedia("media", () => {
+      const ttlHours = params.getRuntimeConfig().attachments?.ttlHours;
+      const cleanup =
+        ttlHours !== undefined
+          ? cleanOldMedia(ttlHours * 60 * 60_000, { recursive: true, pruneEmptyDirs: true })
+          : pruneOutboundMedia();
+      return cleanup.catch((err: unknown) => {
+        params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
       });
     });
   };
@@ -500,12 +492,7 @@ export function startGatewayMaintenanceTimers(params: {
         sessionColdStorageMaintenance.stop(),
         stopMediaCleanup(),
       ]).then((results) => {
-        const failures = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length > 0) {
-          throw new AggregateError(failures, "Gateway periodic maintenance failed to stop");
-        }
+        throwSettledAggregate(results, "Gateway periodic maintenance failed to stop");
       });
       // Drain starts before shutdown joins; retain failures for its warning report.
       void periodicTasksStopPromise.catch(() => {});

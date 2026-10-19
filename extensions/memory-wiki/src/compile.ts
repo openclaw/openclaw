@@ -46,7 +46,6 @@ import {
   hashMemoryWikiVaultSources,
   loadMemoryWikiValidatedVaultIdentity,
   loadMemoryWikiVaultIdentity,
-  resolveMemoryWikiVaultSourceGeneration,
 } from "./log.js";
 import {
   decodeWikiPageUtf8,
@@ -57,10 +56,8 @@ import {
   scanWikiPageSummary,
   type WikiClaim,
   type WikiClaimEvidence,
-  type WikiPageKind,
   type WikiPageSummary,
   type WikiRelationship,
-  WIKI_PAGE_GROUPS,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
@@ -70,6 +67,7 @@ import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { readExistingWikiPageUtf8, writeManagedMarkdownFile } from "./vault-page-write.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
+import { WIKI_PAGE_GROUPS, type WikiPageKind } from "./wiki-page-kinds.js";
 
 const READ_PAGE_SUMMARIES_CONCURRENCY = 16;
 const MAX_RELATED_PAGES_PER_SECTION = 12;
@@ -852,11 +850,7 @@ function buildRootIndexBody(params: {
     `- Render mode: \`${params.config.vault.renderMode}\``,
     `- Total pages: ${params.pages.length}`,
     `- Claims: ${claimCount}`,
-    `- Sources: ${params.counts.source}`,
-    `- Entities: ${params.counts.entity}`,
-    `- Concepts: ${params.counts.concept}`,
-    `- Syntheses: ${params.counts.synthesis}`,
-    `- Reports: ${params.counts.report}`,
+    ...WIKI_PAGE_GROUPS.map(({ kind, heading }) => `- ${heading}: ${params.counts[kind]}`),
   ];
 
   for (const group of WIKI_PAGE_GROUPS) {
@@ -988,15 +982,6 @@ async function compileMemoryWikiVaultUnlocked(
       compiledCacheParentPublicationId: compiledInputIdentity.compiledCachePublicationId,
     },
   });
-  const assertCompilationCurrent = (identity: typeof compiledInputIdentity, message: string) => {
-    if (
-      identity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
-      identity.compiledCacheReservationId !== compiledCacheReservationId ||
-      identity.compiledCachePublicationId !== compiledInputIdentity.compiledCachePublicationId
-    ) {
-      throw new Error(message);
-    }
-  };
   const sourceSyncState = await readMemoryWikiSourceSyncState(rootDir);
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
@@ -1029,7 +1014,6 @@ async function compileMemoryWikiVaultUnlocked(
   const compiledSnapshot = buildCompiledCacheSnapshot(scan);
   const counts = compiledSnapshot.dashboards.overview.pageCounts;
   const compiledCachePublicationId = randomUUID();
-  let compiledCacheSourceGeneration: string | undefined;
 
   for (const group of [undefined, ...WIKI_PAGE_GROUPS]) {
     const relativePath = group ? path.join(group.dir, "index.md").replace(/\\/g, "/") : "index.md";
@@ -1067,26 +1051,6 @@ async function compileMemoryWikiVaultUnlocked(
     compiledInputIdentity.compiledCachePublicationId,
     async () => {
       options?.signal?.throwIfAborted();
-      assertCompilationCurrent(
-        await loadMemoryWikiVaultIdentity(rootDir),
-        "Memory Wiki vault changed while its compiled cache was being built.",
-      );
-      const sourceGenerationAfterScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
-      if (sourceGenerationAfterScan !== scan.sourceGeneration) {
-        throw new Error("Memory Wiki vault changed while its compiled cache was being published.");
-      }
-      compiledCacheSourceGeneration = sourceGenerationAfterScan;
-      assertCompilationCurrent(
-        await loadMemoryWikiVaultIdentity(rootDir),
-        "Memory Wiki vault changed while its compiled cache was being verified.",
-      );
-      options?.signal?.throwIfAborted();
-    },
-    async () => {
-      options?.signal?.throwIfAborted();
-      if (!compiledCacheSourceGeneration) {
-        throw new Error("Memory Wiki compiled cache source generation is missing.");
-      }
       await appendMemoryWikiLog(rootDir, {
         type: "compile",
         timestamp: new Date().toISOString(),
@@ -1094,7 +1058,7 @@ async function compileMemoryWikiVaultUnlocked(
           compiledCachePublicationId,
           compiledCacheParentPublicationId: compiledInputIdentity.compiledCachePublicationId,
           compiledCacheReservationId,
-          compiledCacheSourceGeneration,
+          compiledCacheSourceGeneration: scan.sourceGeneration,
         },
       });
       options?.signal?.throwIfAborted();

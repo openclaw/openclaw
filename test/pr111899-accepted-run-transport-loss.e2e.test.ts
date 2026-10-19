@@ -96,6 +96,8 @@ it(
     let providerServer: ReturnType<typeof createServer> | undefined;
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     let proxy: { url: string; stop: () => void } | undefined;
+    const originalExitCode = process.exitCode;
+    process.exitCode = undefined;
 
     try {
       // Hold the model response so transport loss follows acceptance, not completion.
@@ -134,16 +136,9 @@ it(
         exit: () => {},
       };
 
-      const processLike = {
-        exitCode: undefined as NodeJS.Process["exitCode"],
-        on: () => processLike,
-        off: () => processLike,
-      };
-
       const failure = await agentCliCommand(
         { message: "prove accepted-run transport-loss handling" },
         runtime,
-        { process: processLike },
       ).then(
         () => undefined,
         (err: unknown) => err,
@@ -165,8 +160,12 @@ it(
         error: { type: "cli_error", message: (failure as Error).message },
       });
     } finally {
-      proxy?.stop();
-      await fixture.close(gateway, providerServer);
+      try {
+        proxy?.stop();
+        await fixture.close(gateway, providerServer);
+      } finally {
+        process.exitCode = originalExitCode;
+      }
     }
   },
 );

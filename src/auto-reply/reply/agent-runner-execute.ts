@@ -4,6 +4,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
+import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -18,6 +19,7 @@ import { accountAgentTurnCompaction } from "./agent-runner-result-accounting.js"
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { createFollowupRunner } from "./followup-runner.js";
+import { createGoalContinuationReturn } from "./goal-continuation.js";
 import {
   buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
@@ -141,6 +143,16 @@ type ExecutePreparedReplyAgentRunInput = Omit<
 export async function executePreparedReplyAgentRun(
   context: ExecutePreparedReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const onAgentRunTerminalOutcome = context.opts?.onAgentRunTerminalOutcome;
+  let terminalOutcome: "completed" | "failed" | undefined;
+  const executionOpts = onAgentRunTerminalOutcome
+    ? {
+        ...context.opts,
+        onAgentRunTerminalOutcome: (outcome: "completed" | "failed") => {
+          terminalOutcome = outcome === "failed" ? outcome : (terminalOutcome ?? outcome);
+        },
+      }
+    : context.opts;
   const activitySummaryCompletion =
     !context.isHeartbeat && context.sessionKey && context.storePath
       ? getGatewayContextResolver(
@@ -155,17 +167,26 @@ export async function executePreparedReplyAgentRun(
         )
       : undefined;
   try {
-    return await executePreparedReplyAgentRunWithCompletion({
-      ...context,
-      activitySummaryCompletion,
-    });
+    return await executePreparedReplyAgentRunWithCompletion(
+      { ...context, activitySummaryCompletion },
+      executionOpts,
+    );
+  } catch (error) {
+    if (terminalOutcome !== undefined) {
+      terminalOutcome = "failed";
+    }
+    throw error;
   } finally {
     activitySummaryCompletion?.release();
+    if (terminalOutcome) {
+      onAgentRunTerminalOutcome?.(terminalOutcome);
+    }
   }
 }
 
 async function executePreparedReplyAgentRunWithCompletion(
   context: ExecutePreparedReplyAgentRunInput,
+  executionOpts: ExecutePreparedReplyAgentRunInput["opts"],
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     activeSessionStore,
@@ -191,6 +212,7 @@ async function executePreparedReplyAgentRunWithCompletion(
   } = context;
   let activeSessionEntry = getActiveSessionEntry();
 
+  // Queued turns outlive this invocation and must not inherit its terminal buffer.
   const runFollowupTurn = createFollowupRunner({
     resolveGatewayContext: getGatewayContextResolver(replyOperation),
     opts,
@@ -215,6 +237,26 @@ async function executePreparedReplyAgentRunWithCompletion(
   // Adoption marks run start and must never be spool-replayed (would re-run tools).
   // New input and its recovery claim share admission; otherwise lifecycle start owns the claim.
   await admitFollowupRunLifecycle(followupRun);
+  const runWithGoalReturn = createGoalContinuationReturn(
+    !context.isHeartbeat &&
+      sessionKey &&
+      storePath &&
+      activeSessionEntry?.goal?.status === "active" &&
+      (activeSessionEntry.agentHarnessId === undefined ||
+        activeSessionEntry.agentHarnessId === "openclaw")
+      ? {
+          base: followupRun,
+          initialGoalId: activeSessionEntry.goal.id,
+          expectedSession: activeSessionEntry,
+          sessionKey,
+          storePath,
+          queueKey: context.queueKey,
+          settings: context.resolvedQueue,
+          operation: replyOperation,
+          runFollowup: runFollowupTurn,
+        }
+      : undefined,
+  );
   const runOutcome = await withBeforeAgentReplyObserver(
     {
       beforeDispatch: async () => {
@@ -281,12 +323,17 @@ async function executePreparedReplyAgentRunWithCompletion(
       },
     },
     () =>
-      traceAgentPhase("reply.run_agent_turn", () =>
-        executeAgentTurn({
-          ...context,
-          resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
-          replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-        }),
+      withCurrentUserTurnInput(followupRun.userTurnTranscriptRecorder, () =>
+        traceAgentPhase("reply.run_agent_turn", () =>
+          runWithGoalReturn(() =>
+            executeAgentTurn({
+              ...context,
+              opts: executionOpts,
+              resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
+              replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
+            }),
+          ),
+        ),
       ),
   );
   const operationSuperseded = isReplyOperationSuperseded(replyOperation);
@@ -326,16 +373,20 @@ async function executePreparedReplyAgentRunWithCompletion(
     );
   }
 
-  const result = await finalizeReplyAgentRun({
-    ...context,
-    activeSessionEntry,
-    preflightCompactionApplied,
-    runFollowupTurn,
-    execution: runOutcome.outcome,
-    runId: runOutcome.runId,
-    runStartedAt,
-  });
-  const { postCompactionModelFailure } = runOutcome.outcome;
+  const execution = runOutcome.outcome;
+  const result = await runWithGoalReturn(() =>
+    finalizeReplyAgentRun({
+      ...context,
+      opts: executionOpts,
+      activeSessionEntry,
+      preflightCompactionApplied,
+      runFollowupTurn,
+      execution,
+      runId: runOutcome.runId,
+      runStartedAt,
+    }),
+  );
+  const { postCompactionModelFailure } = execution;
   if (Array.isArray(result)) {
     return result.map((payload) =>
       markPostCompactionModelFailurePayload(postCompactionModelFailure, payload),

@@ -19,7 +19,7 @@ const outer = "recovery-update-restart";
 
 it.skipIf(process.platform === "win32").each([
   { fault: "future-tarball", phase: "prepare-restart-package", code: 124 },
-  { fault: "future-runtime-tarball", phase: "prepare-restart-runtime", code: 137 },
+  { fault: "future-plugin-tarball", phase: "prepare-restart-runtime", code: 137 },
   { fault: "none", phase: "", code: 0 },
 ])("preserves restart fixture timeout diagnostics ($fault)", ({ fault, phase, code }) => {
   const root = dirs.make("survivor-restart-fixture-");
@@ -69,7 +69,7 @@ node() {
     scripts/e2e/lib/update-first-hop-package-fixtures.mjs)
       printf '{"targetVersion":"2026.10.3"}\\n' ;;
     -p) printf '2026.10.3' ;;
-    -) cat >/dev/null; printf 'runtime.tgz' ;;
+    --input-type=module) cat >/dev/null; printf '@openclaw/codex\t%s\n' runtime.tgz ;;
     scripts/e2e/lib/upgrade-survivor/diagnostics.mjs)
       printf 'capture\\t%s\\t%s\\n' "$4" "$5" >&3 ;;
     *) return 91 ;;
@@ -91,7 +91,7 @@ run_completed=1
   const lines = result.stdout.split("\n");
   expect(lines.filter((line) => line.startsWith("budget\t"))).toEqual([
     "budget\t1500s\tfuture-tarball",
-    ...(fault === "future-tarball" ? [] : ["budget\t1500s\tfuture-runtime-tarball"]),
+    ...(fault === "future-tarball" ? [] : ["budget\t1500s\tfuture-plugin-tarball"]),
   ]);
   if (code !== 0) {
     expect(lines).toContain(`capture\t${phase}\t${code}`);

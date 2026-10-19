@@ -1,4 +1,4 @@
-import { createEffect, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -24,7 +24,7 @@ function ownerFor(host: Host) {
   if (retained) {
     return retained;
   }
-  const owner = createTerminalPanel(host);
+  const owner = createTerminalPanel(host, onSettled);
   owners.set(host, owner);
   for (const key of [
     "hostedTabs",
@@ -96,8 +96,6 @@ function terminalPanel(owner: TerminalPanelOwner) {
   const application = useOptionalApplication();
   owner.bindPresentation();
   const state = projectOwner(owner, (current) => current.viewState);
-  // Ghostty and hosted tab consumers need committed DOM before measuring.
-  createEffect(state.read, () => owner.rendered());
   onSettled(() => {
     let disposed = false;
     let detach: (() => void) | undefined;

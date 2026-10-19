@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -31,6 +32,7 @@ type SessionsListAttribution = Extract<RpcEvent, { phase: "received" }>["session
 type CronListAttribution = Extract<RpcEvent, { phase: "received" }>["cronList"];
 type ChatHistoryAttribution = NonNullable<Extract<RpcEvent, { phase: "response" }>["chatHistory"]>;
 const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
+const rpcDiagnostics = channel("openclaw.gateway.rpc");
 let activeHandlers = 0;
 let exclusiveHandler: GatewayRpcDiagnostics | undefined;
 const sharedResponseFields = new WeakMap<
@@ -70,7 +72,8 @@ export class GatewayRpcDiagnostics {
 
   constructor(
     private readonly method: string,
-    private readonly startedAt = performance.now(),
+    clientKind: Extract<RpcEvent, { phase: "received" }>["clientKind"],
+    readonly startedAt = performance.now(),
     queueWaitMs?: number,
     modelsList?: ModelsListAttribution,
     private readonly sessionsList?: SessionsListAttribution,
@@ -82,6 +85,7 @@ export class GatewayRpcDiagnostics {
       type: "gateway.rpc",
       method,
       phase: "received",
+      clientKind,
       ...(modelsList && { modelsList }),
       ...(sessionsList && { sessionsList }),
       ...(cronList && { cronList }),
@@ -89,6 +93,9 @@ export class GatewayRpcDiagnostics {
   }
 
   private emit(event: RpcEvent): void {
+    if (rpcDiagnostics.hasSubscribers) {
+      rpcDiagnostics.publish({ ...event, operation: `${event.method}.${event.phase}` });
+    }
     // A retained response can run under another request; preserve captured absence too.
     runWithDiagnosticTraceContext(this.trace, () => emitTrustedDiagnosticEvent(event));
   }
@@ -159,13 +166,13 @@ export class GatewayRpcDiagnostics {
       };
     }
     const rowsOutcome =
-      this.sessionsList?.rowMode !== "sidebar"
+      this.sessionsList?.rowMode !== "sidebar" && params?.ifRowsRevision === undefined
         ? "not-sidebar"
         : result?.rowsUnchanged === true
           ? "unchanged"
           : result?.rowsDelta !== undefined
             ? "delta"
-            : params?.ifRowsRevision === undefined
+            : params?.ifRowsRevision === undefined || params.ifRowsRevision === ""
               ? "full-no-base"
               : "full-with-base";
     this.emit({
@@ -249,8 +256,8 @@ export class GatewayRpcDiagnostics {
 
 /** Capture receipt before a socket FIFO, without work when diagnostics are unused. */
 export function captureGatewayRpcReceivedAt(): number | undefined {
-  return areDiagnosticsEnabledForProcess() &&
-    hasInternalDiagnosticEventInterest("gateway.rpc", true)
+  return rpcDiagnostics.hasSubscribers ||
+    (areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventInterest("gateway.rpc", true))
     ? performance.now()
     : undefined;
 }
@@ -266,6 +273,7 @@ export function createWorkerRpcDiagnostics(
   // unknown method become an unbounded metric dimension.
   return new GatewayRpcDiagnostics(
     workerMethods.has(method) ? method : "unknown",
+    "node",
     timing.receivedAt,
     timing.dequeuedAt - timing.receivedAt,
   );
@@ -282,8 +290,8 @@ export function createGatewayRpcDiagnostics(
   },
 ): GatewayRpcDiagnostics | undefined {
   if (
-    !areDiagnosticsEnabledForProcess() ||
-    !hasInternalDiagnosticEventInterest("gateway.rpc", true)
+    !rpcDiagnostics.hasSubscribers &&
+    (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("gateway.rpc", true))
   ) {
     return undefined;
   }
@@ -369,6 +377,7 @@ export function createGatewayRpcDiagnostics(
   }
   return new GatewayRpcDiagnostics(
     label,
+    rpcClientKind(listRequest?.clientKind),
     undefined,
     undefined,
     modelsList,
@@ -378,4 +387,32 @@ export function createGatewayRpcDiagnostics(
       ? { clientKind: listRequest.clientKind, source: listRequest.source }
       : undefined,
   );
+}
+
+function rpcClientKind(
+  id: NonNullable<ModelsListAttribution>["clientKind"] | undefined,
+): NonNullable<Extract<RpcEvent, { phase: "received" }>["clientKind"]> {
+  switch (id) {
+    case "openclaw-control-ui":
+    case "webchat-ui":
+    case "webchat":
+    case "openclaw-browser-copilot":
+      return "control-ui";
+    case "openclaw-macos":
+      return "macos";
+    case "openclaw-ios":
+    case "openclaw-watchos":
+      return "ios";
+    case "openclaw-android":
+      return "android";
+    case "cli":
+    case "openclaw-tui":
+      return "cli";
+    case "node-host":
+    case "openclaw-worker":
+      return "node";
+    default:
+      // Generic gateway clients and scoped plugin calls do not identify a plugin.
+      return "other";
+  }
 }

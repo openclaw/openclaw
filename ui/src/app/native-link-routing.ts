@@ -11,13 +11,14 @@ import {
 import { listen } from "../lib/reactive/listener.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 import { webKitHostWindow, type WebKitHostMessages } from "./native-webkit-bridge.ts";
+import type { ApplicationOverlays } from "./overlays-types.ts";
 
 type NativeLinkPoster = (message: WebKitHostMessages["openclawLink"]) => void;
 
 const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 export const NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT =
   "openclaw:native-update-availability-changed";
-const NATIVE_UPDATE_POSTED_EVENT = "openclaw:native-update-posted";
+let nativeUpdatePosted: (() => void) | undefined;
 
 type NativeLinkRouting = {
   dispose(): void;
@@ -30,6 +31,25 @@ type NativeLinkRoutingOptions = {
   shouldOpenExternally?: () => boolean;
   canPresentBrowserPanel?: () => boolean;
 };
+
+export function prepareNativeUpdateFallback(
+  overlays: Pick<ApplicationOverlays, "snapshot" | "captureUpdateTarget" | "runUpdate">,
+) {
+  return {
+    isCurrent: overlays.captureUpdateTarget(),
+    run: () => {
+      const snapshot = overlays.snapshot;
+      const campaign = snapshot.updateSchedule?.campaign;
+      const busy =
+        snapshot.updateRunning ||
+        snapshot.updateReconciliationPending ||
+        campaign?.state === "applying";
+      if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
+        void overlays.runUpdate();
+      }
+    },
+  };
+}
 
 function getNativeLinkPoster(): NativeLinkPoster | undefined {
   // Native hosts install this handler before navigation; its absence preserves browser behavior.
@@ -54,7 +74,7 @@ export function postNativeUpdate(): boolean {
   // binding also keeps oxlint's targetOrigin rule out of the wrong context.
   const poster = handler.postMessage.bind(handler);
   poster({ type: "start-update" });
-  window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_POSTED_EVENT));
+  nativeUpdatePosted?.();
   return true;
 }
 
@@ -128,7 +148,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
   let nativeUpdatePending:
     | ReturnType<NonNullable<NativeLinkRoutingOptions["prepareNativeUpdateFallback"]>>
     | undefined;
-  const handleNativeUpdatePosted = () => {
+  nativeUpdatePosted = () => {
     nativeUpdatePending = options.prepareNativeUpdateFallback?.();
   };
   const handleNativeUpdateDeclined = () => {
@@ -235,7 +255,6 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
   const stops = [
     listen(window, "click", handleClick),
     listen(window, "auxclick", handleClick),
-    listen(window, NATIVE_UPDATE_POSTED_EVENT, handleNativeUpdatePosted),
     listen(window, NATIVE_UPDATE_DECLINED_EVENT, handleNativeUpdateDeclined),
   ];
   // Capture keeps message-level context menus from replacing native link actions.
@@ -245,6 +264,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
 
   const dispose = () => {
     disposed = true;
+    nativeUpdatePosted = undefined;
     nativeUpdatePending = undefined;
     stops.forEach((stop) => stop());
     closeMenu();

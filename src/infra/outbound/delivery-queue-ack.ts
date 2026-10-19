@@ -93,7 +93,7 @@ export async function failPendingDelivery(
       expectedPlatformSendAttemptId: params.expectedPlatformSendAttemptId,
       retainSpoolArtifacts: params.retainSpoolArtifacts,
       stateDir,
-      prepared: prepared ? structuredClone(prepared) : undefined,
+      prepared,
     },
   });
   if (result.status === "failed") {

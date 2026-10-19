@@ -83,7 +83,7 @@ cached only when OpenCode Zen or Go is configured or explicitly selected with
 OpenCode credentials; it is never fetched at startup or while using unrelated
 providers.
 
-Example refs include `opencode-go/deepseek-v4-flash`, `opencode-go/kimi-k3`, and
+Example refs include `opencode-go/deepseek-v4.1-flash`, `opencode-go/kimi-k3`, and
 `opencode-go/qwen3.8-max`. Use the CLI for the current lineup rather than treating
 these examples as an inventory. OpenClaw excludes deprecated rows from active
 discovery and applies refreshed lifecycle status to its offline fallback.

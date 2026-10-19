@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { ContentBlockSchema, type ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import type { ContentBlock } from "@modelcontextprotocol/client";
+import { ContentBlockSchema } from "@modelcontextprotocol/core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ImageContent } from "../llm/types.js";
 import { notifyListeners } from "../shared/listeners.js";

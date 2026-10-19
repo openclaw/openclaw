@@ -6,12 +6,10 @@ import type {
   SettingsSidebarFallbackProps,
   SettingsSidebarLoader,
 } from "../components/settings-sidebar-lazy.tsx";
-import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { DevicePairSetupLoader } from "./app-shell-device-pair-setup.tsx";
@@ -45,6 +43,7 @@ import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
 
 export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElements {
   mobileGatewayStatus: GatewayStatusProps | null;
+  readonly connectionRecovery: boolean;
   routeOutlet?: ControlUiReadinessOutlet;
   terminalPanel?: HTMLElement & { readonly available?: boolean };
   readonly devicePairSetup: DevicePairSetupLoader;
@@ -71,7 +70,6 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   exitSettings(): void;
   readonly handleNativeNewSession: () => void;
   handleSettingsSearchQueryChange(query: string): Promise<void>;
-  handleThemeChange(event: CustomEvent<ThemeModeChangeDetail>): void;
   nativeNavCollapsed(): boolean;
   readonly openPalette: () => void;
   readonly navigate: (routeId: string, options?: ApplicationNavigationOptions) => void;
@@ -97,9 +95,9 @@ export function readShellView(host: ShellViewHost) {
   const overlaySnapshot = context.overlays.snapshot;
   const controlUiRefreshRequired = overlaySnapshot.controlUiRefreshRequired;
   // Chat owns the live panes beneath its retained route island.
-  const historyRecovering = [
-    ...(host.routeOutlet?.querySelectorAll<ChatPaneElement>("openclaw-chat-pane") ?? []),
-  ].some((pane) => pane.conversationPresented && pane.historyRecovering);
+  const historyRecovering = (host.routeOutlet?.renderedElements?.("openclaw-chat-pane") ?? []).some(
+    (pane) => pane.conversationPresented && pane.historyRecovering,
+  );
   const connectionStatus = resolveGatewayStatus(
     gatewaySnapshot,
     controlUiRefreshRequired,
@@ -218,6 +216,7 @@ export function readShellView(host: ShellViewHost) {
     sessionKey: host.activeSessionKey,
     connected: gatewayConnected,
     connectionStatus,
+    footerControlsOverlap: host.shellLayout.footerControlsOverlap,
     storedOutboxes: host.storedOutboxes,
     terminalAvailable,
     catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
@@ -246,6 +245,16 @@ export function readShellView(host: ShellViewHost) {
   const collapsedControls =
     !nativeEmbed && navCollapsed && !onboarding && !settingsTakeover && !mobileNavLayout;
   const shellConnectionStatus = !nativeEmbed && !initialConnection ? connectionStatus : null;
+  const gatewayStatus: GatewayStatusProps = {
+    kind: shellConnectionStatus ?? (!nativeEmbed && gatewayConnected ? "connected" : null),
+    lastError: shellConnectionStatus ? gatewaySnapshot.lastError : null,
+    queuedCount: shellConnectionStatus
+      ? (host.storedOutboxes?.total ?? 0) + (gatewaySnapshot.deferredIntentCount ?? 0)
+      : 0,
+    onRetry: callbacks.retryGateway,
+  };
+  const mobileGatewayStatus =
+    mobileNavLayout && !navDrawerOpen && !nativeEmbed ? gatewayStatus : null;
   const floatingUpdateCard = {
     navigationSurfaceHidden,
     mobileNavLayout,
@@ -324,6 +333,9 @@ export function readShellView(host: ShellViewHost) {
     embedNavigation,
     collapsedControls,
     shellConnectionStatus,
+    gatewayStatus,
+    mobileGatewayStatus,
+    connectionRecovery: host.connectionRecovery,
     floatingUpdateCard,
     settingsSidebarProps,
     navigationSnapshot,

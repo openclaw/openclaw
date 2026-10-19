@@ -3,6 +3,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
+import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { configMocks } from "../../e2e/plugins-settings-admin.test-support.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -252,6 +253,21 @@ it("closes setting menus before Escape dismisses settings and commits a focused 
   input.value = "30";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   expect(runtimeConfig.runtimeConfig.patchForm).not.toHaveBeenCalled();
+  const drawer = document.createElement("div");
+  drawer.className = "shell-nav";
+  drawer.setAttribute("aria-modal", "true");
+  document.body.append(drawer);
+  const releaseDrawer = registerModalSurface(drawer);
+  try {
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(page.querySelector(".plugin-editor")).not.toBeNull();
+    expect(document.activeElement).toBe(input);
+    expect(runtimeConfig.runtimeConfig.patchForm).not.toHaveBeenCalled();
+    expect(context.replace).not.toHaveBeenCalled();
+  } finally {
+    releaseDrawer();
+    drawer.remove();
+  }
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await page.updateComplete;
   expect(page.querySelector(".plugin-editor")).toBeNull();

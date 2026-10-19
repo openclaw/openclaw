@@ -277,7 +277,7 @@ describe("session event wake disposition and preemption", () => {
     expect(await result).toBe(params.retired ? skipped : terminalFailure);
   });
 
-  it("does not carry a tentative poll disposition across a thrown attempt", async () => {
+  it("does not carry a failed occurrence's poll disposition into a fresh wake", async () => {
     const handler = install(async (): ReturnType<WakeHandler> => {
       checkPoll([isDeferred()], [false]);
       if (handler.mock.calls.length === 1) {
@@ -289,10 +289,16 @@ describe("session event wake disposition and preemption", () => {
         : terminalFailure;
     });
     const observed = observe();
-    await advance(handler, 1_000, 2);
-    expect(observed.settled).not.toHaveBeenCalled();
+    await advance(handler, 1, 1);
+    await expect(observed.result).resolves.toEqual({
+      status: "failed",
+      reason: "test-attempt-interrupted",
+    });
+    const fresh = observe();
+    await advance(handler, 1, 2);
+    expect(fresh.settled).not.toHaveBeenCalled();
     await advance(handler, 1_000, 3);
-    await expectTerminal(observed);
+    await expectTerminal(fresh);
   });
 
   it("cancels only the exact waiter without aborting its coalesced native poll", async () => {

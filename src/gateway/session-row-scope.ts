@@ -106,7 +106,7 @@ export function visitSessionRowPublicationTargets(
   ) {
     return;
   }
-  const matches = createSessionRowScopeMatcher(change, owner.scope);
+  const paths = resolveSessionRowScopePaths(change, owner.scope);
   for (const source of owner.stores.values()) {
     const agentId = parseAgentSessionKey(change.sessionKey)?.agentId ?? source.agentId;
     const row = records.create({
@@ -114,7 +114,10 @@ export function visitSessionRowPublicationTargets(
       agentId,
       storeTarget: source.target,
     });
-    if (matches(row) && (change.storePath || agentId === source.agentId)) {
+    if (
+      matchesSessionRowScope(row, change, paths) &&
+      (change.storePath || agentId === source.agentId)
+    ) {
       owner.publish(row);
     }
   }
@@ -185,19 +188,24 @@ export function createSessionRowRegistryRead(owner: {
 }
 
 /** Early publications retain literal paths until topology has prepared their aliases. */
-function createSessionRowScopeMatcher(
-  query: SessionRowScopeQuery,
-  scope: SessionRowScope,
-  logicalOwnerOnly = false,
-) {
-  const paths = query.storePath
+function resolveSessionRowScopePaths(query: SessionRowScopeQuery, scope: SessionRowScope) {
+  return query.storePath
     ? (scope?.physicalPaths(query.storePath, query.agentId) ?? [query.storePath])
     : undefined;
-  return (row: SessionRowScopeTarget) =>
+}
+
+function matchesSessionRowScope(
+  row: SessionRowScopeTarget,
+  query: SessionRowScopeQuery,
+  paths: readonly string[] | undefined,
+  logicalOwnerOnly = false,
+) {
+  return (
     (!query.agentId ||
       row.agentId === query.agentId ||
       (!logicalOwnerOnly && row.storeTarget.agentId === query.agentId)) &&
-    (!paths || paths.includes(row.storeTarget.storePath));
+    (!paths || paths.includes(row.storeTarget.storePath))
+  );
 }
 
 export function selectMatchingSessionRows<T extends SessionRowScopeTarget>(
@@ -218,10 +226,7 @@ export function selectMatchingSessionRows<T extends SessionRowScopeTarget>(
     indexes: { byKey, byStore, byAgent },
     scope,
   } = params;
-  const storePaths =
-    !query.key && query.storePath
-      ? (scope?.physicalPaths(query.storePath, query.agentId) ?? [query.storePath])
-      : undefined;
+  const storePaths = resolveSessionRowScopePaths(query, scope);
   const candidates = query.key
     ? byKey.get(`${kind}:${query.key}`)
     : storePaths
@@ -230,15 +235,14 @@ export function selectMatchingSessionRows<T extends SessionRowScopeTarget>(
         : new Set(storePaths.flatMap((storePath) => Array.from(byStore.get(storePath) ?? [])))
       : query.agentId
         ? byAgent.get(query.agentId)
-        : rows.keys();
+        : rows;
   if (!candidates) {
     return [];
   }
-  const matches = createSessionRowScopeMatcher(query, scope);
   const selected: T[] = [];
-  for (const id of candidates) {
+  for (const id of candidates.keys()) {
     const row = rows.get(id);
-    if (row !== undefined && matches(row)) {
+    if (row !== undefined && matchesSessionRowScope(row, query, storePaths)) {
       selected.push(row);
     }
   }
@@ -323,6 +327,23 @@ export function prepareSessionRowScopes(
   const agents = new Map(
     [...new Set([...ownerAgentIds, ...agentIds])].map((agentId) => [agentId, capture({ agentId })]),
   );
+  // These lists belong to this topology, not to individual row publications or readers.
+  const preparedPaths = new Map(
+    [...new Set([...filenames.keys(), ...aliases.keys()])].map((locator) => {
+      const owners = aliases.get(locator);
+      const fallback: readonly string[] = [locator];
+      return [
+        locator,
+        {
+          fallback,
+          all: owners ? [...new Set(owners.values())] : fallback,
+          byAgent: new Map<string, readonly string[]>(
+            [...(owners ?? [])].map(([agentId, target]) => [agentId, [target]]),
+          ),
+        },
+      ] as const;
+    }),
+  );
   const select = (options: { agentId?: string; configuredAgentsOnly?: boolean }) => {
     const requestedAgentId = options.agentId?.trim()
       ? normalizeAgentId(options.agentId)
@@ -347,17 +368,17 @@ export function prepareSessionRowScopes(
     select,
     physicalPaths(this: void, locator: string, agentId?: string) {
       // Resident physical locators were normalized when the topology was prepared.
-      let normalized = filenames.has(locator) ? locator : residentPath(path.resolve(locator));
-      if (!filenames.has(normalized) && !aliases.has(normalized)) {
+      let normalized = preparedPaths.has(locator) ? locator : residentPath(path.resolve(locator));
+      if (!preparedPaths.has(normalized)) {
         const identity = admittedIdentity(normalized);
         normalized = (identity && admittedPaths.get(identity)) || normalized;
       }
-      const owners = aliases.get(normalized);
+      const paths = preparedPaths.get(normalized);
       return agentId
-        ? [owners?.get(normalizeAgentId(agentId)) ?? normalized]
-        : owners
-          ? [...new Set(owners.values())]
-          : [normalized];
+        ? (paths?.byAgent.get(agentId) ??
+            paths?.byAgent.get(normalizeAgentId(agentId)) ??
+            paths?.fallback ?? [normalized])
+        : (paths?.all ?? [normalized]);
     },
   };
 }
@@ -393,21 +414,26 @@ export function createSessionRowEntrySelector(owner: {
       }
       const state = owner.state();
       return withAgentRosterFactsBatch(state.cfg, () =>
-        selectSessionRowEntries(metadataPrepared ? { ...state, dirty: noDirtyRows } : state, query),
+        selectSessionRowEntries(state, query, metadataPrepared ? noDirtyRows : state.dirty),
       );
     });
   };
 }
 
 /** Select metadata before federation, visibility, and reader-only materialization. */
-function selectSessionRowEntries(params: SessionRowEntrySelection, query: records.Query) {
-  const { cfg, scope, byAgent, byParent, rows, dirty, matching, acquire } = params;
-  const matches = createSessionRowScopeMatcher(query, scope, true);
+function selectSessionRowEntries(
+  params: SessionRowEntrySelection,
+  query: records.Query,
+  dirty: ReadonlySet<string>,
+) {
+  const { cfg, scope, byAgent, byParent, rows, matching, acquire } = params;
+  const paths = resolveSessionRowScopePaths(query, scope);
   const parent = query.parentSessionKey;
-  const owner = parent && parseAgentSessionKey(parent)?.agentId;
-  const agents = owner ? [owner] : query.agentId ? [query.agentId] : byAgent.keys();
-  const childKeys = new Set<string>();
+  let keys: Set<string> | undefined;
   if (parent) {
+    const owner = parseAgentSessionKey(parent)?.agentId;
+    const agents = owner ? [owner] : query.agentId ? [query.agentId] : byAgent.keys();
+    keys = new Set<string>();
     const sentinel = parent === "global" || parent === "unknown";
     const references = sentinel
       ? byParent.keys()
@@ -427,20 +453,23 @@ function selectSessionRowEntries(params: SessionRowEntrySelection, query: record
       for (const id of byParent.get(ref) ?? []) {
         const row = rows.get(id);
         if (row) {
-          childKeys.add(row.key);
+          keys.add(row.key);
         }
       }
     }
   }
   const sessionIdOrKey = query.sessionIdOrKey;
-  let keys: Set<string> | undefined = parent ? childKeys : undefined;
   if (sessionIdOrKey) {
     // Broad publications can change IDs before the resident index has caught up.
     for (const id of dirty) {
       const row = rows.get(id);
       // Category cannot change an ID; unrelated uncertain categories do not
       // participate in the structural refresh needed to resolve this lookup.
-      if (row && row.unresolvedDatabaseFacts !== "category" && matches(row)) {
+      if (
+        row &&
+        row.unresolvedDatabaseFacts !== "category" &&
+        matchesSessionRowScope(row, query, paths, true)
+      ) {
         acquire(row);
       }
     }
@@ -455,7 +484,10 @@ function selectSessionRowEntries(params: SessionRowEntrySelection, query: record
   if (params.hasUnresolvedCategories) {
     const pending: records.Lookup[] = [];
     for (const row of candidates) {
-      if (row.unresolvedDatabaseFacts === "category" && matches(row)) {
+      if (
+        row.unresolvedDatabaseFacts === "category" &&
+        matchesSessionRowScope(row, query, paths, true)
+      ) {
         pending.push({ agentId: row.agentId, key: row.key, storePath: row.storeTarget.storePath });
         if (pending.length === MAX_SESSION_ROW_FACTS_KEYS) {
           break;
@@ -473,11 +505,11 @@ function selectSessionRowEntries(params: SessionRowEntrySelection, query: record
   // Each candidate path returns an owned array. Finish all acquisitions before
   // compacting it, since acquiring one dirty row can update another row's facts.
   let selectedCount = 0;
-  acquired.forEach((row) => {
-    if (records.hasEntry(row) && matches(row)) {
+  for (const row of acquired) {
+    if (records.hasEntry(row) && matchesSessionRowScope(row, query, paths, true)) {
       acquired[selectedCount++] = row;
     }
-  });
+  }
   acquired.length = selectedCount;
   // SAFETY: The compacted prefix contains only rows accepted by records.hasEntry.
   return records.sort(acquired as records.EntryRow[], query.sortBy);

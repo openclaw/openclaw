@@ -353,12 +353,10 @@ jobs:
     # dispatch input. Without a per-PR check, a macOS-gated Tauri API can break
     # the macOS target for weeks unnoticed - `WebviewWindowBuilder::transparent`
     # did exactly that.
-    #
-    # macos-15, not macos-14: tauri-plugin-notifications' Swift sources use
-    # typed throws (`throws(FFIResult)`), which needs Swift 6. The macos-14
-    # image still ships Swift 5.x and fails to parse them.
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 30
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -374,8 +372,10 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          # Rust tests run inline Node scripts without workspace packages.
+          cache-mode: off
           install-bun: "false"
+          install-deps: "false"
 
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -395,10 +395,6 @@ jobs:
         # Swift runtime rpath, say) shows up at all. `--all-targets` keeps the
         # compile coverage `check --all-targets` used to give.
         run: cargo +stable test --locked --all-targets
-
-      - name: Verify native macOS power lifecycle
-        working-directory: apps/linux/src-tauri
-        run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
 
   test-windows-power:
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}

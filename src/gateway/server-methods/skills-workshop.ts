@@ -24,9 +24,9 @@ import {
   type ResolvedSkillsWorkspace,
 } from "./skills-workspace-handler.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams, type Validator } from "./validation.js";
+import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
-function defineWorkshopHandler<TParams>(
+function defineWorkshopHandler<TParams extends { agentId?: string } & Record<string, unknown>>(
   method: string,
   validate: Validator<TParams>,
   run: (
@@ -35,11 +35,8 @@ function defineWorkshopHandler<TParams>(
     invocation: GatewayRequestHandlerOptions,
   ) => Promise<unknown>,
 ): GatewayRequestHandler {
-  return async (invocation) => {
+  return defineValidatedGatewayHandler(method, validate, async (invocation) => {
     const { params, respond, context } = invocation;
-    if (!assertValidParams(params, validate, method, respond)) {
-      return;
-    }
     const resolved = resolveSkillsAgentWorkspace(params, context);
     if (!resolved.ok) {
       respond(false, undefined, resolved.error);
@@ -53,7 +50,7 @@ function defineWorkshopHandler<TParams>(
       }
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
     }
-  };
+  });
 }
 
 function workshopWriteContext(

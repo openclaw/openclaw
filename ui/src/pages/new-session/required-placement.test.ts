@@ -1,7 +1,7 @@
 import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { NewSessionPlaceControls } from "./target-controls-view.tsx";
@@ -91,7 +91,7 @@ function fixture(
 async function ready(f: ReturnType<typeof fixture>) {
   await Promise.all([
     f.gateway.retryRequiredPlacement(),
-    settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" }),
+    loadModelCatalog(f.context.gateway.snapshot.client!, { agentId: "main" }),
   ]);
   f.place.restorePreferenceSelections();
   f.flow.setMessage("Inspect the workspace");
@@ -226,8 +226,7 @@ it("uses worker configured defaults instead of a cached external runtime without
     agent: f.place.selectedAgent(),
     preference,
   });
-  await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
-  expect(f.place.modelControl.agentRuntime).toBe("external-runtime");
+  await vi.waitFor(() => expect(f.place.modelControl.agentRuntime).toBe("external-runtime"));
   await ready(f);
   expect(f.place.modelControl.modelForSubmission()).toBe("");
   expect(f.place.modelControl.agentRuntime).toBeUndefined();
@@ -318,7 +317,7 @@ it("keeps a server startup failure with the created session for Retry rather tha
       }),
     }),
   );
-  expect(f.request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+  expect(f.request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
 });
 
 it("keeps a cold required-worker draft on configured defaults across asynchronous catalogs", async () => {
@@ -332,7 +331,7 @@ it("keeps a cold required-worker draft on configured defaults across asynchronou
   await read;
   f.place.restorePreferenceSelections();
   modelsReady.resolve();
-  await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
+  await loadModelCatalog(f.context.gateway.snapshot.client!, { agentId: "main" });
   f.place.restorePreferenceSelections();
   expect(f.place.modelControl.modelForSubmission()).toBe("");
   expect(f.place.modelControl.agentRuntime).toBeUndefined();

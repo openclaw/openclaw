@@ -56,13 +56,16 @@ export type OpenClawTerminalPanel = HTMLElement &
   >;
 
 /** Owns synchronous PTY/dock authority; Solid reads its publication projection. */
-export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
+export function createTerminalPanel(
+  element: HTMLElement & TerminalInputs,
+  scheduleAfterRender: (callback: () => void) => void,
+) {
   let context: ApplicationContext | undefined;
   let connected = false;
   let completion: Promise<boolean> = Promise.resolve(true);
   let complete: ((value: boolean) => void) | undefined;
   let changes = new Set<keyof TerminalInputs>();
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
   let fileInput: HTMLInputElement | undefined;
   let viewport: HTMLDivElement | undefined;
   let sessionPicker: ReturnType<typeof createTerminalSessionPicker> | undefined;
@@ -71,13 +74,21 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
     if (!connected) {
       return;
     }
-    if (!complete) {
+    const needsCommit = !complete;
+    if (needsCommit) {
       completion = new Promise((resolve) => {
         complete = resolve;
       });
     }
-    for (const listener of listeners) {
-      listener();
+    const pending = complete;
+    render?.();
+    if (needsCommit) {
+      scheduleAfterRender(() => {
+        // Detach retires this receipt before a retained host starts another render.
+        if (complete === pending) {
+          rendered();
+        }
+      });
     }
   }
   let hostedActionsContent: HTMLElement | undefined;
@@ -239,6 +250,22 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
         ?.controller.fit(),
   });
 
+  function rendered(): void {
+    if (!connected) {
+      return;
+    }
+    const resolve = complete;
+    complete = undefined;
+    const changed = changes;
+    changes = new Set();
+    // Ghostty measures its canvas; only the active session may occupy the viewport.
+    for (const tab of terminalSessions.state.tabs) {
+      tab.host.style.display = tab.id === terminalSessions.state.activeId ? "block" : "none";
+    }
+    updated(changed);
+    resolve?.(true);
+  }
+
   const owner = {
     inputs: element,
     get isConnected() {
@@ -250,9 +277,9 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
     publish,
     bindPresentation,
     subscribe(listener: () => void) {
-      listeners.add(listener);
+      render = listener;
       return () => {
-        listeners.delete(listener);
+        render = undefined;
       };
     },
     inputsChanged(name: keyof TerminalInputs) {
@@ -284,11 +311,14 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
             handleToggleRequest(event);
           }
         }),
+        // Hosted tab labels are published to the external header after the panel commits.
         i18n.subscribe(publish),
+        // Configuration receipts retire disallowed uploads before their next operation.
         context?.config.subscribe(() => {
           terminalPanelUploadController.syncPolicy();
           publish();
         }),
+        // The commit applies font changes to imperative Ghostty controllers.
         context?.theme.subscribe(publish),
       ];
       if (element.embedded || dockLayout.open) {
@@ -304,21 +334,6 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
         complete?.(false);
         complete = undefined;
       };
-    },
-    rendered() {
-      if (!connected) {
-        return;
-      }
-      const resolve = complete;
-      complete = undefined;
-      const changed = changes;
-      changes = new Set();
-      // Ghostty measures its canvas; only the active session may occupy the viewport.
-      for (const tab of terminalSessions.state.tabs) {
-        tab.host.style.display = tab.id === terminalSessions.state.activeId ? "block" : "none";
-      }
-      updated(changed);
-      resolve?.(true);
     },
     get terminalPanelUploadController() {
       return terminalPanelUploadController;

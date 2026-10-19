@@ -49,7 +49,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
   handler: WorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
-    closeResource?: (key?: string) => void | Promise<void>;
+    closeResource: (key?: string) => void | Promise<void>;
     encodeResourceError?: (error: unknown) => unknown;
     /** Unknown native state cannot publish a reusable task failure before isolate exit. */
     retireOnError?: boolean;
@@ -107,9 +107,6 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
           .then(async () => {
             if (retiring) {
               throw new Error("Worker is retiring after a terminal task failure");
-            }
-            if (!options.closeResource) {
-              throw new Error("Worker does not own retained resources");
             }
             await options.closeResource(message.key);
             receipt.postMessage({ ok: true }, []);

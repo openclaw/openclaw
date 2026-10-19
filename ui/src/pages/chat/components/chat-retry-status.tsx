@@ -1,6 +1,7 @@
-import { createEffect, createMemo, createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { useVisiblePoll } from "../../../lib/reactive/visible-poll.ts";
+import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
+import { createInterval } from "../../../lib/reactive/timers.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 
 type ChatRetryStatusProps = { retryAt: number | null };
@@ -10,20 +11,16 @@ defineSolidBridge<ChatRetryStatusProps>(
   "openclaw-chat-retry-status",
   (props) => {
     const [tick, setTick] = createSignal(0);
-    const polling = useVisiblePoll(1_000, () => setTick((value) => value + 1));
+    const visible = createDocumentVisibility();
     const remaining = createMemo(() => {
+      // Returning to the document resamples wall time before restarting the countdown.
+      visible();
       tick();
       return Math.max(0, Math.ceil(((props.retryAt ?? 0) - Date.now()) / 1_000));
     });
-    createEffect(
-      () => remaining() > 0,
-      (waiting) => {
-        if (waiting) {
-          polling.start();
-        } else {
-          polling.stop();
-        }
-      },
+    createInterval(
+      () => setTick((value) => value + 1),
+      () => (visible() && remaining() > 0 ? 1_000 : undefined),
     );
     return (
       <>

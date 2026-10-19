@@ -557,9 +557,8 @@ function CommandOption(props: {
 
 export function SlashMenu(props: { menu: SlashMenu; host: SlashMenuHost; draft: string }) {
   const state = () => props.menu.state;
-  const mode = createMemo(() =>
-    isSlashMenuVisible(state()) ? (state().slashMenuMode === "args" ? "args" : "command") : null,
-  );
+  const mode = () =>
+    isSlashMenuVisible(state()) ? (state().slashMenuMode === "args" ? "args" : "command") : null;
   const grouped = createMemo(() => {
     const commands = state().slashMenuItems.filter((command) => command.source !== "skill");
     const skills = state().slashMenuItems.filter((command) => command.source === "skill");
@@ -581,6 +580,7 @@ export function SlashMenu(props: { menu: SlashMenu; host: SlashMenuHost; draft: 
     <Show when={mode()} keyed>
       {(activeMode) => (
         <ComposerMenu
+          getTextarea={() => props.host.getTextarea()}
           id={paneDomId(props.host.paneId, "slash-menu-listbox")}
           label={t(activeMode === "args" ? "chat.commands.arguments" : "chat.commands.menu")}
           activeId={getActiveSlashMenuOptionId(state(), props.host.paneId)}

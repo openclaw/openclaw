@@ -13,6 +13,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
+import type { DiffReadTiming } from "../../infra/diff-read-timing.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type {
   PluginApprovalRequest,
@@ -67,6 +68,7 @@ import type {
   PreparedGatewayModelCatalog,
   PreparedGatewayModelCatalogReadResult,
 } from "../server-model-catalog.types.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { ConnectionSessionRows } from "../session-ancestor-references.js";
@@ -201,7 +203,7 @@ type GatewayKernelContext = {
     readonly hasPendingAgents: boolean;
     waitForAgentPreparation: (
       agentId: string,
-      options?: { signal?: AbortSignal },
+      options?: { signal?: AbortSignal; forWrite?: boolean },
     ) => Promise<void> | undefined;
   };
   channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;
@@ -436,6 +438,7 @@ type GatewayResidentBridgeContext = {
   getRuntimeSnapshot: (options?: ChannelRuntimeSnapshotOptions) => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
+  getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
   getDeferredChannelReloads?: () => readonly GatewayDeferredChannelReload[];
   startChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
@@ -586,6 +589,7 @@ export type GatewayRequestHandlerOptions = Omit<
     target: { sessionKey: string; agentId?: string; sessionId: string },
     consume: (entry: import("../../config/sessions/types.js").InternalSessionEntry) => T,
   ) => Promise<T>;
+  diffTiming?: DiffReadTiming;
   markSessionSubscribePhase?: (
     phase: import("../slow-request-diagnostics.js").SessionSubscribePhase,
   ) => void;

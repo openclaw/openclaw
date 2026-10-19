@@ -5,7 +5,7 @@ import { withPromiseModalHost } from "../components/promise-modal-host.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { notifyBrowserAuthRestored, subscribeBrowserHttpFailures } from "./browser-http.ts";
+import { notifyBrowserAuthRestored, bindBrowserHttpFailures } from "./browser-http.ts";
 import {
   fetchWithControlUiAuth,
   resolveControlUiAuthCandidates,
@@ -221,7 +221,7 @@ export function startBrowserAuthRecovery(
     return pending;
   }
 
-  const stopFailures = subscribeBrowserHttpFailures((url) => {
+  const stopFailures = bindBrowserHttpFailures((url) => {
     const request = URL.parse(url, window.location.href);
     if (request?.origin === root.origin && request.pathname.startsWith(root.pathname)) {
       void check();

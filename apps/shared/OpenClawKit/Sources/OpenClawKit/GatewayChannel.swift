@@ -49,6 +49,7 @@ public actor GatewayChannelActor {
     private nonisolated let socketAdmission = Mutex(true)
     private var lastSeq: Int?
     private var liveTextProjection = GatewayLiveTextProjection()
+    private var presenceProjection = GatewayPresenceProjection()
     private var lastTick: Date?
     private var tickIntervalMs: Double = 30000
     private var lastAuthSource: GatewayAuthSource = .none
@@ -191,6 +192,7 @@ public actor GatewayChannelActor {
         self.shouldReconnect = false
         self.connected = false
         self.liveTextProjection.reset()
+        self.presenceProjection.reset()
         self.acceptedHTTPBearer = nil
         self.connectAttemptTask?.cancel()
         self.connectAttemptTask = nil
@@ -480,6 +482,7 @@ public actor GatewayChannelActor {
         self.connectFailureBackoff.reset()
         self.lastSeq = nil
         self.liveTextProjection.reset()
+        self.presenceProjection.reset()
         self.listen(connectionGeneration: connectionGeneration)
         self.startTickWatchdog(connectionGeneration: connectionGeneration)
         self.startKeepalive(connectionGeneration: connectionGeneration)
@@ -566,7 +569,8 @@ public actor GatewayChannelActor {
             "minProtocol": ProtoAnyCodable(protocols.lowerBound),
             "maxProtocol": ProtoAnyCodable(protocols.upperBound),
             "client": ProtoAnyCodable(client),
-            "caps": ProtoAnyCodable(options.caps),
+            // The channel reconstructs rosters before delivery to macOS/iOS subscribers.
+            "caps": ProtoAnyCodable(options.caps + (role == "operator" ? ["presence-deltas"] : [])),
             "locale": ProtoAnyCodable(primaryLocale),
             "userAgent": ProtoAnyCodable(ProcessInfo.processInfo.operatingSystemVersionString),
             "role": ProtoAnyCodable(role),
@@ -1062,6 +1066,7 @@ extension GatewayChannelActor {
         self.disconnectedConnectionGeneration = connectionGeneration
         self.connected = false
         self.liveTextProjection.reset()
+        self.presenceProjection.reset()
         self.acceptedHTTPBearer = nil
         let disconnectedTask = self.task
         self.task = nil
@@ -1130,8 +1135,10 @@ extension GatewayChannelActor {
                 self.lastSeq = seq
             }
             if evt.event == "tick" { self.lastTick = Date() }
-            guard let projected = self.liveTextProjection.project(evt) else {
-                let error = Self.failure(8, "gateway live text baseline missing")
+            guard let text = self.liveTextProjection.project(evt),
+                  let projected = self.presenceProjection.project(text)
+            else {
+                let error = Self.failure(8, "gateway event baseline missing")
                 await self.transitionToDisconnected(
                     reason: error.localizedDescription,
                     error: error,
@@ -1161,7 +1168,7 @@ extension GatewayChannelActor {
                     guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else { continue }
                     if case let .event(evt) = frame, evt.event == "connect.challenge" {
                         guard let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                              let challenge = GatewayConnectChallengeSupport.challenge(from: payload)
+                              let challenge = GatewayConnectChallenge(payload: payload)
                         else {
                             throw ConnectChallengeError.invalid
                         }

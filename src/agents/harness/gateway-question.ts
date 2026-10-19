@@ -1,11 +1,13 @@
 import { randomBytes } from "node:crypto";
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/schema/questions.js";
-import { withQuestionInputAssertion } from "../../auto-reply/reply/message-injection-authority.js";
+import {
+  MessageInjectionRequesterMismatchError,
+  withQuestionInputAssertion,
+} from "../../auto-reply/reply/message-injection-authority.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
-import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { reserveMcpFormQuestion } from "../mcp-form-resource-context.js";
 import {
   getGatewayToolCallerIdentity,
@@ -31,7 +33,6 @@ import {
   type AgentHarnessQuestionGatewayCall,
   type AgentQuestionDispatcher,
 } from "./gateway-question-dispatch.js";
-import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import {
   captureAgentQuestionAnswerAuthority,
   prepareQuestionCallerAuthority,
@@ -45,7 +46,7 @@ import {
   buildAgentHarnessUserInputAnswers,
   deliverAgentHarnessQuestionPrompt,
   deliverAgentHarnessUserInputPrompt,
-  type AgentHarnessUserInputPromptOptions,
+  type RunAgentHarnessGatewayQuestionParams,
 } from "./user-input-bridge.js";
 import type { AgentHarnessUserInputQuestion } from "./user-input-types.js";
 
@@ -217,7 +218,7 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
   caller: ReplyToolAuthorityOverlay;
   assertSourceCurrent: () => void;
   onAnswerProcessed?: () => void;
-}): Promise<boolean> {
+}): Promise<boolean | "requester-mismatch"> {
   const state = params.sessionKey ? pendingAgentQuestions.get(params.sessionKey.trim()) : undefined;
   if (!state || state.resolving) {
     return false;
@@ -232,11 +233,24 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
       throw new QuestionDispatchRefusedError("pending question is no longer current");
     }
   };
-  const authority = await prepareQuestionCallerAuthority(
-    state.answerAuthority!,
-    params.caller,
-    assertActive,
-  ).catch(refuseQuestionDispatch);
+  let authority: QuestionInputAuthority;
+  try {
+    authority = await prepareQuestionCallerAuthority(
+      state.answerAuthority!,
+      params.caller,
+      assertActive,
+    );
+  } catch (error) {
+    if (error instanceof MessageInjectionRequesterMismatchError) {
+      try {
+        assertActive();
+      } catch (stale) {
+        return refuseQuestionDispatch(stale);
+      }
+      return "requester-mismatch";
+    }
+    return refuseQuestionDispatch(error);
+  }
   return claimQuestionAnswer(
     {
       sessionKey: params.sessionKey,
@@ -509,21 +523,6 @@ function runAgentHarnessSecretInput(
   });
 }
 
-type RunAgentHarnessGatewayQuestionParams = {
-  questions: readonly AgentHarnessUserInputQuestion[];
-  sessionKey: string;
-  agentId?: string;
-  runId?: string;
-  timeoutMs: number;
-  gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
-  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply"> & {
-    hostCapabilities?: AgentHarnessHostCapabilities;
-  };
-  promptOptions?: AgentHarnessUserInputPromptOptions;
-  signal?: AbortSignal;
-  questionId?: string;
-};
-
 /** Registers, presents, and waits for one harness-owned gateway question record. */
 export async function runAgentHarnessGatewayQuestion(
   params: RunAgentHarnessGatewayQuestionParams,
@@ -551,7 +550,6 @@ async function runScopedAgentHarnessQuestion(
   const gatewayCall = resolveAgentQuestionGatewayCall(params.gatewayCall);
   const questionId = params.questionId ?? `ask_${randomBytes(16).toString("hex")}`;
   const questions = buildAgentQuestionRequestQuestions(params.questions);
-  let aborted = false;
   const watchdogAttempt = getGatewayToolCallerIdentity()?.watchdogAttempt;
   const assertCurrent = captureGatewayToolCallerAssertion();
   let watchdogWait: ReturnType<NonNullable<typeof watchdogAttempt>["beginWait"]> | undefined;
@@ -607,7 +605,6 @@ async function runScopedAgentHarnessQuestion(
     }
   };
   const onAbort = () => {
-    aborted = true;
     prompt.close();
     // Release the session slot synchronously so a replacement request can register
     // while the best-effort gateway cancellation finishes.
@@ -627,10 +624,8 @@ async function runScopedAgentHarnessQuestion(
     }
     // Cancellation can race registration. Retry against the committed ID and
     // never present a stale prompt after the inbound message took another route.
-    if (aborted || claim.isCancellationRequested() || params.signal?.aborted) {
-      const terminal = await cancel(
-        aborted || params.signal?.aborted ? "run-abort" : "superseded-input",
-      );
+    if (claim.isCancellationRequested() || params.signal?.aborted) {
+      const terminal = await cancel(params.signal?.aborted ? "run-abort" : "superseded-input");
       if (terminal?.status === "answered") {
         return terminal;
       }
@@ -642,7 +637,7 @@ async function runScopedAgentHarnessQuestion(
       isCurrent: () => {
         params.signal?.throwIfAborted();
         assertCurrent?.();
-        return !aborted && !claim.isCancellationRequested();
+        return !claim.isCancellationRequested();
       },
     });
     const answer = gatewayCall(

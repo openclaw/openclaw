@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   fileCreate: vi.fn(),
   imageCreate: vi.fn(),
   messageCreate: vi.fn(),
-  runFfmpeg: vi.fn(),
+  transcodeAudio: vi.fn(),
   runFfprobe: vi.fn(),
 }));
 
@@ -27,7 +27,7 @@ vi.mock("./runtime.js", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
-  runFfmpeg: mocks.runFfmpeg,
+  transcodeAudioBufferToOpus: mocks.transcodeAudio,
   runFfprobe: mocks.runFfprobe,
 }));
 
@@ -146,7 +146,7 @@ describe("Feishu upload contracts", () => {
       }),
     ).rejects.toThrow("Feishu file exceeds its 1-byte upload limit");
 
-    expect(mocks.runFfmpeg).not.toHaveBeenCalled();
+    expect(mocks.transcodeAudio).not.toHaveBeenCalled();
     expect(mocks.fileCreate).not.toHaveBeenCalled();
   });
 

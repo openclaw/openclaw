@@ -55,6 +55,7 @@ import {
   withStoredAgentCommandRecoverySession,
 } from "./agent-command.restart-recovery.test-harness.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import type { AgentAttemptParams } from "./command/attempt-execution.types.js";
 import { FailoverError } from "./failover/error.js";
 import type { FailoverReason } from "./failover/signal.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
@@ -260,43 +261,6 @@ vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
     params.sessionEntry,
   runMemoryFlushIfNeeded: (params: { sessionEntry?: SessionEntry }) =>
     state.runMemoryFlushIfNeededMock(params),
-}));
-
-vi.mock("./command/run-context.js", () => ({
-  resolveAgentRunContext: (opts: {
-    accountId?: string;
-    channel?: string;
-    groupChannel?: string | null;
-    groupId?: string | null;
-    groupSpace?: string | null;
-    messageChannel?: string;
-    replyChannel?: string;
-    runContext?: {
-      accountId?: string;
-      currentChannelId?: string;
-      currentThreadTs?: string;
-      groupChannel?: string | null;
-      groupId?: string | null;
-      groupSpace?: string | null;
-      messageChannel?: string;
-      replyToMode?: "off" | "first" | "all" | "batched";
-    };
-    threadId?: string | number;
-    to?: string;
-  }) => ({
-    messageChannel:
-      opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.replyChannel ?? opts.channel,
-    accountId: opts.runContext?.accountId ?? opts.accountId ?? "acct",
-    groupId: opts.runContext?.groupId ?? opts.groupId,
-    groupChannel: opts.runContext?.groupChannel ?? opts.groupChannel,
-    groupSpace: opts.runContext?.groupSpace ?? opts.groupSpace,
-    currentChannelId: undefined,
-    currentThreadTs:
-      opts.runContext?.currentThreadTs ??
-      (opts.threadId == null ? undefined : String(opts.threadId)),
-    replyToMode: opts.runContext?.replyToMode,
-    hasRepliedRef: { current: false },
-  }),
 }));
 
 // mock-isolation: Model-switch fixtures own session reads and run-end writes without opening storage.
@@ -1669,15 +1633,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   it.each(["live-switch", "flushed", "blocked", "internal"] as const)(
     "preserves %s user-turn persistence across retries",
     async (mode) => {
-      type AttemptCall = {
-        onUserMessagePersisted?: () => void;
-        suppressPromptPersistenceOnRetry?: boolean;
-        userTurnTranscriptRecorder?: {
-          markBlocked: () => void;
-          markRuntimePersisted: (message: { role: "user"; content: string }) => void;
-        };
-      };
+      type AttemptCall = Pick<
+        AgentAttemptParams,
+        "suppressPromptPersistenceOnRetry" | "userTurnTranscriptRecorder"
+      >;
       const attempts: AttemptCall[] = [];
+      const persistedUserMessage = { role: "user", content: "hello", timestamp: 0 } as const;
       if (mode === "live-switch") {
         setupModelSwitchRetry({ provider: "openai", model: "gpt-5.4" }, true);
       } else {
@@ -1686,15 +1647,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       state.runAgentAttemptMock.mockImplementation(async (attempt: AttemptCall) => {
         attempts.push(attempt);
         if (mode === "flushed") {
-          expectDefined(attempt.onUserMessagePersisted, "retry persistence callback")();
+          expectDefined(
+            attempt.userTurnTranscriptRecorder,
+            "retry transcript recorder",
+          ).markRuntimePersisted(persistedUserMessage);
         } else if (attempts.length === 1) {
           if (mode === "blocked") {
             attempt.userTurnTranscriptRecorder?.markBlocked();
           } else if (mode === "live-switch") {
-            attempt.userTurnTranscriptRecorder?.markRuntimePersisted({
-              role: "user",
-              content: "hello",
-            });
+            attempt.userTurnTranscriptRecorder?.markRuntimePersisted(persistedUserMessage);
           }
         }
         return mode === "internal"
@@ -1709,7 +1670,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expect(attempts).toHaveLength(2);
       expect(attempts[0]?.suppressPromptPersistenceOnRetry).toBe(mode === "internal");
       expect(attempts[1]?.suppressPromptPersistenceOnRetry).toBe(true);
-      if (mode === "live-switch" || mode === "blocked") {
+      if (mode !== "internal") {
         expect(attempts[1]?.userTurnTranscriptRecorder).toBe(
           attempts[0]?.userTurnTranscriptRecorder,
         );

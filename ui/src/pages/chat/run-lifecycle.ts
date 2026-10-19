@@ -29,6 +29,7 @@ import {
   type ChatAbortTargetState,
   type PendingChatAbort,
 } from "./chat-abort-request.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { mutateChatRunState, publishChatRunState } from "./chat-state-render.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -50,7 +51,12 @@ export type ChatHistoryRunObservation = {
 };
 
 export type ChatRunError = {
-  kind?: "auth_refresh" | "state_contention" | "stop";
+  kind?:
+    | "auth_refresh"
+    | "state_contention"
+    | "stop"
+    | "chatgpt_business_usage_limit"
+    | "chatgpt_consumer_usage_limit";
   summary: string;
   /** Display ownership only; the session reducer retains each run's diagnostic. */
   runId?: string;
@@ -366,6 +372,10 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
 }
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions): Promise<void> {
+  chatOutboxOwner(host).admissions.cancelRequests(
+    host,
+    resolveUiConversationIdentity(host, host.sessionKey),
+  );
   const disconnectedIntent =
     !host.connected && host.client ? currentChatAbortIntent(host, host.client) : null;
   const pendingAbort =

@@ -2,7 +2,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isTypeAliasDeclaration } from "typescript/unstable/ast";
+import { isTypeAliasDeclaration } from "typescript/ast";
+import { serverFS } from "typescript/fs";
 import {
   collectNativeTypeScriptDiagnostics,
   formatNativeTypeScriptDiagnostics,
@@ -53,9 +54,15 @@ for (const exactOptionalPropertyTypes of [true, false]) {
     cwd: packageRoot,
     configFileName,
     fs: {
+      directoryExists: serverFS.useOS,
+      getAccessibleEntries: serverFS.useOS,
+      realpath: serverFS.useOS,
+      stat: serverFS.useOS,
+      writeFile: serverFS.useOS,
+      removeFile: serverFS.useOS,
       fileExists(fileName) {
         const resolved = path.resolve(fileName);
-        return resolved === fixturePath || resolved === configFileName ? true : undefined;
+        return resolved === fixturePath || resolved === configFileName ? true : serverFS.useOS;
       },
       readFile(fileName) {
         const resolved = path.resolve(fileName);
@@ -63,7 +70,7 @@ for (const exactOptionalPropertyTypes of [true, false]) {
           ? fixture
           : resolved === configFileName
             ? config
-            : undefined;
+            : serverFS.useOS;
       },
     },
   });

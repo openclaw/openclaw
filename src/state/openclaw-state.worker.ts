@@ -385,7 +385,7 @@ function createSharedStateWorkerBackend(
         if (!clawAddState) {
           throw new Error("Claw Add state runtime is not prepared");
         }
-        return clawAddState.executeClawAddStateCommand(command, open());
+        return clawAddState.executeClawAddStateCommand(command, operationContext);
       }
       if (command.type === "githubPublication.sourceFacts") {
         if (!publicationSourceReader) {

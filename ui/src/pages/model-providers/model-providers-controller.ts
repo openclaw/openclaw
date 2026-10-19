@@ -52,8 +52,8 @@ export function createModelProviders(
   const gatewayState = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.settingsAgentSelection);
   const overlays = projectOverlays(context.overlays);
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
   const mutationBlockedReason = (): string | null =>
     modelProviderConfigMutationBlockedReason(context) ??
     (state.selectedAgentId ? null : t("agents.noAgents"));
@@ -67,6 +67,7 @@ export function createModelProviders(
   let pendingCredentialInvalidation = false;
   let profilesVisible = false;
   let readAccess = false;
+  let stopCatalog: (() => void) | undefined;
 
   function setState<Key extends keyof ModelProvidersState>(
     key: Key,
@@ -130,6 +131,14 @@ export function createModelProviders(
     invalidateRequests,
     ensureInitialData,
     onSnapshot: (change) => {
+      if (change.clientChanged) {
+        stopCatalog?.();
+        stopCatalog = change.snapshot.client
+          ? modelCatalog.subscribeModelCatalogCache(change.snapshot.client, notify, () => ({
+              agentId: state.selectedAgentId || undefined,
+            }))
+          : undefined;
+      }
       if (change.initial) {
         resetConnectionState();
       } else if (change.connectionChanged && !change.identityChanged) {
@@ -183,8 +192,8 @@ export function createModelProviders(
   const discovery = createModelProviderDiscovery({
     canOpen: canMutate,
     getOwner: () => ({
-      client: gatewayState.read().snapshot.client,
-      agentId: selection.read().state.selectedId,
+      client: context.gateway.snapshot.client,
+      agentId: context.settingsAgentSelection.state.selectedId,
     }),
     onClose: () => void refresh("replacement"),
     onError: (error) =>
@@ -220,8 +229,10 @@ export function createModelProviders(
   const projection = projectSource(state, {
     read: (value) => value,
     subscribe: (_, listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      publish = listener;
+      return () => {
+        publish = undefined;
+      };
     },
     equality: "revision",
   });
@@ -296,11 +307,6 @@ export function createModelProviders(
       }
     },
   );
-  // The catalog cache subscription belongs to the current Gateway client.
-  createEffect(
-    () => gatewayState.read().snapshot.client,
-    (client) => (client ? modelCatalog.subscribeModelCatalogCache(client, notify) : undefined),
-  );
   function syncConfig() {
     if (!context.runtimeConfig.state.configSnapshot && !context.runtimeConfig.state.configLoading) {
       void context.runtimeConfig.ensureLoaded().catch(() => undefined);
@@ -311,6 +317,7 @@ export function createModelProviders(
     connected = true;
     gateway.connect();
     const syncAgent = () => {
+      discovery.synchronize();
       syncSelectedAgent();
       installedAgents.synchronize();
     };
@@ -331,13 +338,14 @@ export function createModelProviders(
     syncAgent();
     synchronizeRoute(inputs.routeData, inputs.loaderPending ?? false);
     return () => {
-      listeners.clear();
+      publish = undefined;
       connected = false;
       for (const cleanup of cleanups) {
         cleanup();
       }
       profileActions.resetOrders();
       refreshPolicy.dispose();
+      stopCatalog?.();
       gateway.dispose();
     };
   });

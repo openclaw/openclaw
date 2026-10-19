@@ -3,7 +3,7 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { DOMParser } from "linkedom";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
@@ -413,10 +413,18 @@ export async function installScheduledTask(
       });
     }
     if (!args.definitionTransaction) {
-      restoreTask = await backupScheduledTaskDefinition(
-        activationEnv,
-        resolveTaskScriptPath(resolveScheduledTaskRenderEnv(args.env, args.environment)),
+      const scriptPath = resolveTaskScriptPath(
+        resolveScheduledTaskRenderEnv(args.env, args.environment),
       );
+      restoreTask = await backupScheduledTaskDefinition(activationEnv, scriptPath);
+      if (restoreTask.registered) {
+        writeFormattedLines(args.stdout, [
+          {
+            label: "Recovery backups",
+            value: `${scriptPath}.task.xml.bak and launcher .bak files beside it are retained for recovery`,
+          },
+        ]);
+      }
     }
     staged = await writeScheduledTaskScript(args, async (files) => {
       recovery = files;
@@ -594,11 +602,7 @@ export async function uninstallScheduledTask({
     `${scriptPath}.task.xml.bak`,
     `${launcherPath}.bak`,
   ])) {
-    await fs.unlink(backupPath).catch((error: unknown) => {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
-    });
+    await fs.unlink(backupPath).catch(ignoreMissingPath);
   }
   try {
     await fs.unlink(scriptPath);

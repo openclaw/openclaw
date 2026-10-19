@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { waitForSessionRunEnd as waitForEmbeddedAgentRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { getAttachedBackend } from "../../sessions/session-controller.state.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { testing as replyRunTesting } from "../../sessions/session-controller.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -102,7 +103,7 @@ describe("embedded-agent active-run question answers and waits", () => {
     expect(claimed).toEqual(["right"]);
   });
 
-  it.each(["availability", "claim"] as const)(
+  it.each(["availability", "claim", "reattach"] as const)(
     "rejects backend replacement during question %s",
     async (stage) => {
       const entered = createDeferredCore(),
@@ -138,7 +139,11 @@ describe("embedded-agent active-run question answers and waits", () => {
           unused(claim);
         } else {
           await entered.promise;
-          setActiveEmbeddedRun(sessionId, replacement);
+          if (stage === "reattach") {
+            operation.attachBackend(getAttachedBackend(operation)!);
+          } else {
+            setActiveEmbeddedRun(sessionId, replacement);
+          }
           released.resolve();
           await expect(result).rejects.toThrow("Message injection authority is no longer current");
         }

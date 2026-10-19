@@ -133,6 +133,30 @@ export function recordOperationTimingEvent(
       if (!metadata.trusted) {
         return;
       }
+      if (evt.name === "sessions.diff" || evt.name === "checkout.diff") {
+        const outcome = evt.details?.outcome;
+        if (outcome !== "cache-hit" && outcome !== "cache-miss") {
+          return;
+        }
+        for (const stage of [
+          "admission",
+          "checkout-resolve",
+          "cache-validate",
+          "worker-queue",
+          "git-wall",
+          "encode",
+        ]) {
+          const elapsed = evt.details?.[stage];
+          store.histogram(
+            "openclaw_diff_stage_seconds",
+            "Elapsed local diff stages; cache validation includes its worker queue and Git wall time.",
+            { method: evt.name, stage, outcome },
+            typeof elapsed === "number" ? seconds(elapsed) : undefined,
+            RPC_DURATION_BUCKETS_SECONDS,
+          );
+        }
+        return;
+      }
       if (evt.name === "worktree.preparation") {
         recordWorktreePreparation(store, evt);
         return;
@@ -183,6 +207,12 @@ export function recordOperationTimingEvent(
           "openclaw_gateway_rpc_requests_total",
           "Authenticated Gateway WebSocket requests received.",
           labels,
+        );
+        // One extra sample per observed kind/method, without multiplying histogram buckets.
+        store.counter(
+          "openclaw_gateway_rpc_client_requests_total",
+          "Gateway RPC requests by bounded handshake client kind.",
+          { method: evt.method, client_kind: evt.clientKind ?? "other" },
         );
         if (evt.method === "models.list" && evt.modelsList) {
           const catalog = evt.modelsList;

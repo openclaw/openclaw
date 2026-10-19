@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type * as ts from "typescript/unstable/ast";
+import type * as ts from "typescript/ast";
 import {
   addEnvVarNames,
   isCountedSourcePath,

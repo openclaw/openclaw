@@ -247,10 +247,7 @@ function shouldBlockWorkspaceStaticDotEnvKey(key: string): boolean {
   );
 }
 
-export function loadWorkspaceDotEnvFile(
-  filePath: string,
-  opts?: { quiet?: boolean; env?: NodeJS.ProcessEnv },
-) {
+export function loadWorkspaceDotEnvFile(filePath: string, opts?: { env?: NodeJS.ProcessEnv }) {
   const env = opts?.env ?? process.env;
   let providerAuthBlockedKeys: ReadonlySet<string> | undefined;
   const getProviderAuthBlockedKeys = () => {
@@ -264,7 +261,7 @@ export function loadWorkspaceDotEnvFile(
     entryFilter: (key) =>
       !shouldBlockWorkspaceStaticDotEnvKey(key) &&
       !getProviderAuthBlockedKeys().has(key.toUpperCase()),
-    quiet: opts?.quiet ?? true,
+    quiet: true,
   });
   if (!parsed) {
     return;
@@ -281,12 +278,12 @@ export function loadWorkspaceDotEnvFile(
 
 async function loadWorkspaceDotEnvFileAsync(
   filePath: string,
-  opts: { env: NodeJS.ProcessEnv; quiet?: boolean },
+  opts: { env: NodeJS.ProcessEnv },
 ): Promise<void> {
   const parsed = await readDotEnvFileAsync({
     filePath,
     entryFilter: (key) => !shouldBlockWorkspaceStaticDotEnvKey(key),
-    quiet: opts.quiet ?? true,
+    quiet: true,
   });
   if (!parsed?.entries.length) {
     return;
@@ -308,28 +305,25 @@ async function loadWorkspaceDotEnvFileAsync(
 
 export async function loadDotEnvAsync(opts: {
   env: NodeJS.ProcessEnv;
-  quiet?: boolean;
   cwd?: string;
 }): Promise<void> {
-  const quiet = opts.quiet ?? true;
   const cwd = Object.hasOwn(opts, "cwd") ? opts.cwd : tryProcessCwd();
   if (cwd) {
-    await loadWorkspaceDotEnvFileAsync(path.join(cwd, ".env"), { env: opts.env, quiet });
+    await loadWorkspaceDotEnvFileAsync(path.join(cwd, ".env"), { env: opts.env });
   }
-  await loadGlobalRuntimeDotEnvFilesAsync({ env: opts.env, quiet });
+  await loadGlobalRuntimeDotEnvFilesAsync({ env: opts.env });
 }
 
 export { loadGlobalRuntimeDotEnvFiles };
 
-export function loadDotEnv(opts?: { quiet?: boolean; env?: NodeJS.ProcessEnv }) {
-  const quiet = opts?.quiet ?? true;
+export function loadDotEnv(opts?: { env?: NodeJS.ProcessEnv }) {
   const env = opts?.env ?? process.env;
   const cwd = tryProcessCwd();
   if (cwd) {
-    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet, env });
+    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { env });
   }
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.
-  loadGlobalRuntimeDotEnvFiles({ quiet, env });
+  loadGlobalRuntimeDotEnvFiles({ env });
 }

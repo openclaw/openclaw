@@ -1,4 +1,3 @@
-// Implements MCP server command parsing and persisted enablement settings.
 import { parseSlashCommandWithSetUnset } from "./commands-setunset.js";
 
 type McpCommand =

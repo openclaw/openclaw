@@ -181,11 +181,11 @@ describe("testFoundryConnection", () => {
 describe("promptTenantId", () => {
   it("validates tenant domains and UUIDs through the prompt boundary", async () => {
     const text = vi.fn(async (options: { validate?: (value: string) => string | undefined }) => {
-      expect(options.validate?.("contoso.onmicrosoft.com")).toBeUndefined();
+      expect(options.validate?.(" contoso.onmicrosoft.com ")).toBeUndefined();
       expect(options.validate?.("00000000-0000-0000-0000-000000000000")).toBeUndefined();
       expect(options.validate?.("not a tenant")).toBe("Enter a valid tenant ID or tenant domain");
       expect(options.validate?.("")).toBe("Tenant ID is required");
-      return "contoso.onmicrosoft.com";
+      return " contoso.onmicrosoft.com ";
     });
 
     await expect(promptTenantId({ prompter: { text } } as never, { required: true })).resolves.toBe(

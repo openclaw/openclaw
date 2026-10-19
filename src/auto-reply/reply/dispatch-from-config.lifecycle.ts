@@ -21,6 +21,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { observeAgentRunStart } from "../agent-run-start.js";
 import {
   isNativeCommandTurn,
+  isExplicitFollowupCommandTurn,
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
 } from "../command-turn-context.js";
@@ -296,20 +297,21 @@ export function createDispatchReplyOperationCoordinator(
               })
             : undefined,
         );
-    // An explicit /steer becomes queue input for the active turn, so it must reach
-    // queue policy like an ordinary message rather than wait for that turn to end.
-    const explicitSteerCommandTurn = isExplicitSteerCommandTurn(params.ctx);
+    // Queue commands must reach admission while the incumbent is active so their
+    // steering or followup outcome can be reported before that turn ends.
+    const explicitQueueCommandTurn =
+      isExplicitSteerCommandTurn(params.ctx) || isExplicitFollowupCommandTurn(params.ctx);
     const commandRequiresTurn =
       (isExplicitCommandTurnContext(params.ctx, params.cfg) ||
         isUnauthorizedTextSlashCommand(params.ctx)) &&
       !activeRunSafe &&
-      !explicitSteerCommandTurn;
+      !explicitQueueCommandTurn;
     const queueEligible =
       replyTurnKind === "visible" || params.replyOptions?.internalEventExecution !== undefined;
     const allowQueuePreparation =
       queueEligible &&
       !commandRequiresTurn &&
-      (explicitSteerCommandTurn ||
+      (explicitQueueCommandTurn ||
         params.replyOptions?.turnAdoptionLifecycle !== undefined ||
         params.allowActiveQueueResolution === true);
     const allowActiveResolution =
@@ -507,6 +509,9 @@ export function createDispatchReplyOperationCoordinator(
       }
       if (
         admission.reason === "active-run" &&
+        // Releasing a refused claim retires its source. Its producer must retry
+        // admission instead of resolving queue policy on that consumed input.
+        !mailboxClaim &&
         (allowActiveResolution ||
           shouldLetSlackRoutedThreadBypassBusyReplyOperation({
             activeOperation: admission.activeOperation,

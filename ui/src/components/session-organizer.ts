@@ -4,7 +4,6 @@ import {
   type PersistedSidebarRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { t } from "../i18n/index.ts";
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import {
   readSessionDragData,
@@ -19,6 +18,7 @@ import {
   categoryClearReturnsToGroups,
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
+import { isSessionDisplayMetadataPatch } from "../lib/sessions/patch.ts";
 import {
   loadStoredCollapsedSessionSections,
   storeSidebarSessionStatusFilter,
@@ -42,6 +42,7 @@ export type { SessionOrganizerDependencies } from "./session-organizer-types.ts"
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
 export class SessionOrganizer {
+  readonly sectionHeaders = new Map<string, HTMLElement>();
   collapsedSessionSections = loadStoredCollapsedSessionSections();
   draggingSessionKey: string | null = null;
   draggingSidebarSection: string | null = null;
@@ -76,8 +77,9 @@ export class SessionOrganizer {
       operations: SessionOrganizerOperations,
       scope: SidebarSessionMutationScope,
     ) => Promise<unknown>,
+    allowDeferred = false,
   ): Promise<void> {
-    const scope = this.deps.sessionData.beginSessionMutation();
+    const scope = this.deps.sessionData.beginSessionMutation(allowDeferred);
     if (scope) {
       const operations = await this.loadOperations(scope);
       if (operations) {
@@ -91,7 +93,7 @@ export class SessionOrganizer {
     patch: SidebarSessionPatch,
     options: { sessionScope?: boolean } = {},
   ): Promise<SidebarSessionMutationResult> => {
-    const scope = this.deps.sessionData.beginSessionMutation();
+    const scope = this.deps.sessionData.beginSessionMutation(isSessionDisplayMetadataPatch(patch));
     if (!scope) {
       return "stale";
     }
@@ -442,50 +444,20 @@ export class SessionOrganizer {
   }
 
   renameSession(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.renameSession(this.deps, session, scope),
+    return this.runOperation(
+      (operations, scope) => operations.renameSession(this.deps, session, scope),
+      true,
     );
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
-    const dialog = await this.loadDialog(import("./input-dialog.ts"));
-    await dialog?.showInputDialog({
-      title: t("sessionsView.newGroupTitle"),
-      label: t("sessionsView.newGroupPrompt"),
-      submitLabel: t("sessionsView.newGroupCreate"),
-      requireValue: true,
-      submit: (name) => this.writeSessionGroup(name, sessions),
-    });
-  }
-
-  /**
-   * Replays the failure the mutation already recorded so the dialog can keep the
-   * typed name for a retry. A replaced connection confirmed neither the group nor
-   * the move, so it reports a retryable message too rather than closing on an
-   * outcome that never landed; resubmitting runs against the new connection.
-   */
-  private async writeSessionGroup(
-    name: string,
-    sessions: readonly SidebarRecentSession[],
-  ): Promise<string | null> {
     const scope = this.deps.sessionData.beginSessionMutation();
     if (!scope) {
-      return t("sessionsView.newGroupFailed");
+      return;
     }
-    const operations = await this.loadOperations(scope);
-    if (!operations) {
-      return this.deps.sessionData.isSessionMutationScopeCurrent(scope)
-        ? (this.deps.sessionData.sessionMutationError ?? t("sessionsView.newGroupFailed"))
-        : t("sessionsView.newGroupStale");
-    }
-    const result = await operations.createSessionGroup(this.deps, name, sessions, scope);
-    if (result === "completed" && sessions.length === 0) {
-      this.notify();
-    }
-    if (result === "failed") {
-      return this.deps.sessionData.sessionMutationError ?? t("sessionsView.newGroupFailed");
-    }
-    return result === "stale" ? t("sessionsView.newGroupStale") : null;
+    const signal = this.deps.sessionData.sessionDraftSignal;
+    const dialogs = await this.loadDialog(import("./session-organizer-group-dialogs.runtime.ts"));
+    await dialogs?.createSessionGroupDialog(this.deps, scope, signal, sessions, this.notify);
   }
 
   async renameSessionGroupFromMenu(group: string): Promise<void> {
@@ -493,30 +465,9 @@ export class SessionOrganizer {
     if (!scope) {
       return;
     }
-    const dialog = await this.loadDialog(import("./input-dialog.ts"));
-    if (!this.deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return;
-    }
-    // requireChange holds the submit closed on the name the group already has,
-    // so the only rename that reaches the Gateway is one that changes something.
-    const next = await dialog?.showInputDialog({
-      signal: scope.signal,
-      title: t("sessionsView.renameGroupTitle", { group }),
-      label: t("sessionsView.groupNameLabel"),
-      defaultValue: group,
-      requireValue: true,
-      requireChange: true,
-    });
-    if (!next) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    if (operations) {
-      if (!(await operations.renameSessionGroup(this.deps, group, next, scope))) {
-        return;
-      }
-      // Collapse keys follow only a confirmed Gateway rename. A stale completion
-      // must not rewrite storage owned by the replacement connection.
+    const signal = this.deps.sessionData.sessionDraftSignal;
+    const dialogs = await this.loadDialog(import("./session-organizer-group-dialogs.runtime.ts"));
+    await dialogs?.renameSessionGroupDialog(this.deps, scope, signal, group, (next) => {
       const from = `category:${group}`;
       if (this.collapsedSessionSections.has(from)) {
         const collapsed = new Set(this.collapsedSessionSections);
@@ -524,7 +475,8 @@ export class SessionOrganizer {
         collapsed.add(`category:${next}`);
         this.saveCollapsedSessionSections(collapsed);
       }
-    }
+      this.notify();
+    });
   }
 
   deleteSessionGroupFromMenu(group: string): Promise<void> {
@@ -543,51 +495,8 @@ export class SessionOrganizer {
     if (!scope) {
       return;
     }
-    const dialog = await this.loadDialog(import("./session-group-defaults-dialog.tsx"));
-    if (!dialog || !this.deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return;
-    }
-    const defaults = this.deps.sessionGroupDefaults(group);
-    if (defaults) {
-      await dialog.showSessionGroupDefaultsDialog({
-        group,
-        defaults,
-        signal: scope.signal,
-        listDirectory: (path) => {
-          if (!this.deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-            return Promise.reject(new Error(t("sessionsView.groupDefaultsStale")));
-          }
-          return this.deps.listSessionGroupFolders(path);
-        },
-        inspectRepository: (path) => {
-          if (!this.deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-            return Promise.reject(new Error(t("sessionsView.groupDefaultsStale")));
-          }
-          return this.deps.inspectSessionGroupRepository(path);
-        },
-        submit: async (nextDefaults) => {
-          if (
-            !this.deps.sessionData.isSessionMutationScopeCurrent(scope) ||
-            !this.deps.sessionGroupDefaults(group)
-          ) {
-            return t("sessionsView.groupDefaultsStale");
-          }
-          const operations = await this.loadOperations(scope);
-          const result = await operations?.updateSessionGroupDefaults(
-            this.deps,
-            group,
-            { cwd: nextDefaults.cwd || null, worktree: nextDefaults.worktree },
-            scope,
-          );
-          return result === "completed"
-            ? null
-            : result === "stale"
-              ? t("sessionsView.groupDefaultsStale")
-              : (this.deps.sessionData.sessionMutationError ??
-                t("sessionsView.groupDefaultsFailed"));
-        },
-      });
-    }
+    const dialogs = await this.loadDialog(import("./session-organizer-group-dialogs.runtime.ts"));
+    await dialogs?.editSessionGroupDefaultsDialog(this.deps, scope, group);
   }
 
   saveCollapsedSessionSections(sections: ReadonlySet<string>) {
@@ -626,8 +535,10 @@ export class SessionOrganizer {
     category: string | null,
     patch: { pinned?: boolean } = {},
   ): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.assignSessionCategory(this.deps, session, category, scope, patch),
+    return this.runOperation(
+      (operations, scope) =>
+        operations.assignSessionCategory(this.deps, session, category, scope, patch),
+      true,
     );
   }
 
@@ -659,8 +570,7 @@ export class SessionOrganizer {
         dataTransfer.dropEffect = "move";
       }
       const target = event.currentTarget as HTMLElement;
-      const header = target.querySelector<HTMLElement>(":scope > .sidebar-recent-sessions__head");
-      const bounds = (header ?? target).getBoundingClientRect();
+      const bounds = (this.sectionHeaders.get(sectionId) ?? target).getBoundingClientRect();
       const position = event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
       this.sidebarSectionDropTarget = { sectionId, position };
       this.sessionDropTarget = null;

@@ -122,7 +122,7 @@ export function bindHarnessSettledTurnCallback(
   };
 }
 
-/** Native delegation cannot select a person, so its live turn must remain unambiguous. */
+/** Native delegation keeps the incumbent requester and its live turn authority. */
 export function bindHarnessNativeSpawnAuthority(
   participants: ReplyTurnParticipants | undefined,
   assertActive: () => void,
@@ -130,7 +130,7 @@ export function bindHarnessNativeSpawnAuthority(
   return participants
     ? () => {
         assertActive();
-        participants.resolve()?.assertCurrent();
+        participants.resolve(undefined, { allowTurnOwner: () => true });
       }
     : undefined;
 }
@@ -218,9 +218,7 @@ export function retainHarnessSource(
     },
     get sourceIdentity() {
       assertCurrent();
-      const identity = source.source;
-      assertCurrent();
-      return identity;
+      return source.source;
     },
     bindModelExecution: (model: ModelRef | undefined) => {
       assertCurrent();

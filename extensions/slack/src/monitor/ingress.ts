@@ -432,9 +432,7 @@ export function createSlackDurableIngress(
         record.payload.kind === "relay"
           ? resolveSlackIngressLane({ event: record.payload.message }, record.id)
           : resolveSlackIngressLane(record.payload.body, record.id),
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs,
       ...(options.onLog ? { onLog: options.onLog } : {}),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),

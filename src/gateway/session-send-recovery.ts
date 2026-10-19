@@ -1,11 +1,9 @@
 import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import { discoverRestartRecoveryStoreTargets } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
-import type { AgentToolGatewayRequestCaller } from "../agents/tools/in-process-gateway.js";
-import {
-  prepareSessionsSendCommunication,
-  SessionCommunicationDeniedError,
-} from "../agents/tools/sessions-send-communication.js";
+import { decodeRequesterOrigin } from "../agents/requester-origin.js";
+import { SessionCommunicationDeniedError } from "../agents/tools/sessions-send-communication.js";
+import { isMainRestartRecoveryCandidate } from "../config/sessions/restart-recovery-state.js";
 import { appendSessionTranscriptReport } from "../config/sessions/session-accessor.js";
 import { readPendingInputRecoveryEntriesInWorker } from "../config/sessions/session-entry-read-maintenance.js";
 import { readSessionSendRecoveryPage } from "../config/sessions/session-pending-input-history.js";
@@ -22,7 +20,6 @@ import { getRetryAttemptErrors } from "../infra/retry-attempt-errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import type { CommunicationEndpoint } from "../sessions/communication-admission.js";
 import {
   AgentDatabaseAdmissionError,
   listAgentDatabaseAdmissionRefusals,
@@ -30,48 +27,19 @@ import {
 } from "../state/agent-database-admission.js";
 import { waitForAgentDatabasePreparation } from "../state/agent-database-preparation-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import { CHAT_INPUT_RECOVERY_MAX_AGE_MS } from "./chat-input-recovery-source.js";
+import type { RestoredGatewayOperatorAuthority } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
+import { readSessionSendDelivery, withSessionSendDelivery } from "./session-send-delivery.js";
 import {
-  readSessionSendDelivery,
-  withSessionSendDelivery,
-  type SessionSendDeliveryEndpoint,
-} from "./session-send-delivery.js";
+  prepareSessionSendRecoveryCommunication,
+  SessionSendEndpointChangedError,
+} from "./session-send-recovery-source.js";
 import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+class SessionSendRequesterUnavailableError extends Error {}
 
-class SessionSendEndpointChangedError extends Error {
-  constructor(
-    endpoint: "source" | "target",
-    expected: SessionSendDeliveryEndpoint,
-    current: CommunicationEndpoint,
-    message = "Session delivery endpoint was replaced",
-  ) {
-    super(
-      `${message}: ${JSON.stringify({
-        endpoint,
-        reason: "endpoint-replaced",
-        sessionKeyHash: sha256HexPrefixCore(expected.sessionKey, 16),
-        previousSessionId: expected.sessionId,
-        currentSessionId: current.entry?.sessionId ?? null,
-        previousGeneration: expected.lifecycleRevision ?? null,
-        currentGeneration: current.entry?.lifecycleRevision ?? null,
-        archived: Boolean(current.entry?.archivedAt),
-      })}`,
-    );
-  }
-}
-
-function matches(endpoint: CommunicationEndpoint, expected: SessionSendDeliveryEndpoint): boolean {
-  return (
-    endpoint.agentId === expected.agentId &&
-    endpoint.sessionKey === expected.sessionKey &&
-    endpoint.entry?.sessionId === expected.sessionId &&
-    endpoint.entry.lifecycleRevision === expected.lifecycleRevision
-  );
-}
-
-/** Re-admit accepted peer inputs, not predecessor executions or sender tool calls. */
+/** Discover saved inputs; existing turn owners retain execution and sender custody. */
 export async function recoverSessionSendDeliveries(
   context: GatewayRequestContext,
   signal: AbortSignal,
@@ -189,12 +157,35 @@ async function recoverSessionSendDeliveriesForAgents(
         pending.unshift(...page.items);
         before = page.nextBefore;
       } while (before !== undefined);
+      // Peer replay enters agent admission directly, which would claim the
+      // interrupted turn. Start that predecessor through its owner first.
+      if (
+        entry.abortedLastRun &&
+        isMainRestartRecoveryCandidate(entry, sessionKey) &&
+        pending.some(
+          (input) => input.state === "interrupted" && readSessionSendDelivery(input.message),
+        )
+      ) {
+        const { retryRestartAbortedMainSessionRecovery } =
+          await import("../agents/main-session-recovery/main-session-restart-recovery.js");
+        const recovery = await retryRestartAbortedMainSessionRecovery({
+          ...scope,
+          cfg: config,
+          expectedSessionId: entry.sessionId,
+          gatewayRuntime: runtime,
+        });
+        assertCurrent();
+        if (recovery.started === 0 && recovery.settled === 0) {
+          continue;
+        }
+      }
       const undeliverableRunIds: string[] = [];
       const blocked: {
         inputId: string;
         sourceSessionKey: string;
         reason:
           | "endpoint-replaced"
+          | "requester-unavailable"
           | "permission-denied"
           | "transient-admission"
           | "store-unavailable"
@@ -204,7 +195,14 @@ async function recoverSessionSendDeliveriesForAgents(
       for (const input of pending) {
         assertCurrent();
         const delivery = readSessionSendDelivery(input.message);
-        if (!delivery || input.state !== "interrupted") {
+        if (input.state !== "interrupted") {
+          continue;
+        }
+        if (
+          !delivery &&
+          (!input.message["__openclaw"]?.chatInputRecovery ||
+            Date.now() - input.acceptedAt > CHAT_INPUT_RECOVERY_MAX_AGE_MS)
+        ) {
           continue;
         }
         let attempts = 0;
@@ -212,7 +210,10 @@ async function recoverSessionSendDeliveriesForAgents(
           await retry(async () => {
             attempts++;
             let communication:
-              | Awaited<ReturnType<typeof prepareSessionsSendCommunication>>
+              | Awaited<ReturnType<typeof prepareSessionSendRecoveryCommunication>>
+              | undefined;
+            let operator:
+              | Pick<RestoredGatewayOperatorAuthority, "authority" | "controlUiAdmin" | "release">
               | undefined;
             try {
               const retained = await readPendingInputSource(
@@ -225,80 +226,88 @@ async function recoverSessionSendDeliveriesForAgents(
                 !retained?.snapshot.current ||
                 !row ||
                 row.input_id !== input.id ||
+                row.run_id !== input.runId ||
                 row.state !== "interrupted" ||
                 row.consumed_event_id != null ||
                 row.message_json !== JSON.stringify(input.message)
               ) {
                 return;
               }
-              const load = async (
-                side: "source" | "target",
-                endpoint: SessionSendDeliveryEndpoint,
-              ): Promise<CommunicationEndpoint> => {
-                const loaded = await resolveGatewaySessionStoreTargetInWorker({
-                  cfg: config,
-                  key: endpoint.sessionKey,
-                  agentId: endpoint.agentId,
-                  assertActive: assertCurrent,
-                  projection: "full",
-                });
-                const result = {
-                  agentId: loaded.agentId,
-                  sessionKey: loaded.canonicalKey,
-                  storePath: loaded.readSource?.path ?? loaded.storePath,
-                  entry: loaded.store[loaded.canonicalKey],
-                };
-                if (!matches(result, endpoint)) {
-                  throw new SessionSendEndpointChangedError(side, endpoint, result);
-                }
-                return result;
+              const assertInputCurrent = () => {
+                assertCurrent();
+                retained.assertCurrent();
               };
-              const [source, destination] = await Promise.all([
-                load("source", delivery.source),
-                load("target", delivery.target),
-              ]);
-              if (
-                destination.sessionKey !== sessionKey ||
-                destination.entry?.sessionId !== entry.sessionId ||
-                destination.agentId !== scope.agentId
-              ) {
-                throw new SessionSendEndpointChangedError(
-                  "target",
-                  delivery.target,
-                  destination,
-                  "Session delivery target does not own this input",
+              if (!delivery) {
+                await runtime.resumeChatInput(
+                  {
+                    ...scope,
+                    runId: input.runId,
+                    message: input.message,
+                    requestHash: row.request_hash,
+                  },
+                  { signal, assertCurrent: assertInputCurrent },
                 );
+                return;
               }
-              if (source.entry?.archivedAt || destination.entry?.archivedAt) {
+              communication = await prepareSessionSendRecoveryCommunication({
+                config,
+                delivery,
+                inputProvenance: input.message.provenance,
+                target: scope,
+                assertCurrent: assertInputCurrent,
+                signal,
+              });
+              if (!communication) {
                 // Archive stops work without replacing the transcript. Retain the
                 // cancelled receipt, but do not create a misleading failure notice.
                 await discardSessionPendingInput(scope, input.runId, assertCurrent);
                 return;
               }
-              const callGateway: AgentToolGatewayRequestCaller = async () => {
-                // Exact endpoint lineage is already loaded above. Recovery cannot
-                // widen access through a fresh lookup or prompt for old consent.
-                throw new Error("Session delivery recovery requires current direct access");
-              };
-              communication = await prepareSessionsSendCommunication({
-                config,
-                source,
-                target: destination,
-                message: delivery.message,
-                dispatchMessage: delivery.message,
-                inputProvenance: input.message.provenance,
-                access: { sandboxed: delivery.sandboxed },
-                allowApproval: false,
-                assertSourceCurrent: assertCurrent,
-                callGateway,
-                signal,
-              });
               await communication.refresh();
               const guard = () => {
-                assertCurrent();
-                retained.assertCurrent();
+                assertInputCurrent();
                 communication!.assertCurrent();
               };
+              guard();
+              const savedOrigin = input.message["__openclaw"]?.requesterOrigin;
+              const requesterOrigin = decodeRequesterOrigin(savedOrigin);
+              if (
+                (savedOrigin !== undefined && !requesterOrigin) ||
+                delivery.operatorSource === undefined
+              ) {
+                throw new SessionSendRequesterUnavailableError();
+              }
+              let accepted = false;
+              const assertRequesterCurrent = () => {
+                signal.throwIfAborted();
+                // Admission transfers custody to the turn. Pending consumption and
+                // closing this communication lease must not revoke accepted work.
+                if (!accepted) {
+                  guard();
+                }
+              };
+              try {
+                if (delivery.operatorSource !== null) {
+                  const { restoreGatewayQueuedOperatorRecovery } =
+                    await import("./operator-run-recovery.js");
+                  operator = await restoreGatewayQueuedOperatorRecovery({
+                    source: delivery.operatorSource,
+                    context,
+                    assertCurrent: assertRequesterCurrent,
+                  });
+                }
+                if (
+                  requesterOrigin?.operatorProfileId &&
+                  requesterOrigin.operatorProfileId !== operator?.authority.profileId
+                ) {
+                  throw new SessionSendRequesterUnavailableError();
+                }
+              } catch (error) {
+                if (isTransient(error)) {
+                  throw error;
+                }
+                throw new SessionSendRequesterUnavailableError(undefined, { cause: error });
+              }
               guard();
               await withSessionSendDelivery({ delivery, acceptedMessage: input.message }, () =>
                 runtime.dispatchAgent(
@@ -310,6 +319,9 @@ async function recoverSessionSendDeliveriesForAgents(
                       delivery.target.lifecycleRevision ?? null,
                     idempotencyKey: delivery.runId,
                     message: delivery.message,
+                    ...(delivery.returnedResult
+                      ? { extraSystemPrompt: delivery.returnedResult.extraSystemPrompt }
+                      : {}),
                     inputProvenance: input.message.provenance,
                     deliver: false,
                     sourceReplyDeliveryMode: "message_tool_only",
@@ -317,16 +329,40 @@ async function recoverSessionSendDeliveriesForAgents(
                     lane: resolveNestedAgentLaneForSession(delivery.target.sessionKey),
                   },
                   undefined,
-                  { signal, assertAdmissionCurrent: guard },
+                  {
+                    signal,
+                    assertAdmissionCurrent: assertRequesterCurrent,
+                    ...(delivery.returnedResult ? { replyExpectation: "optional" as const } : {}),
+                    operatorRunAuthority: operator?.authority,
+                    agentToolCaller: requesterOrigin
+                      ? {
+                          agentId: delivery.source.agentId,
+                          sessionKey: delivery.source.sessionKey,
+                          requesterOrigin,
+                        }
+                      : undefined,
+                  },
                 ),
               );
+              accepted = true;
             } finally {
+              operator?.release();
               communication?.close();
             }
           }, "sidecars.delivery-replay");
         } catch (error) {
           if (signal.aborted) {
             return;
+          }
+          if (!delivery) {
+            // Retain the existing interrupted notice when current policy blocks replay.
+            context.logGateway.warn(
+              `Chat input recovery blocked: ${formatErrorMessageForDisplay(error, formatErrorMessageWithCode(error))} ${JSON.stringify({ sessionKeyHash: sha256HexPrefixCore(sessionKey, 16), inputId: input.id, ageMs: Math.max(0, Date.now() - input.acceptedAt) })}`,
+            );
+            if (isTransient(error)) {
+              break;
+            }
+            continue;
           }
           blockedCount++;
           if (error instanceof SessionSendEndpointChangedError) {
@@ -338,14 +374,16 @@ async function recoverSessionSendDeliveriesForAgents(
             reason:
               error instanceof SessionSendEndpointChangedError
                 ? "endpoint-replaced"
-                : error instanceof SessionCommunicationDeniedError
-                  ? "permission-denied"
-                  : isTransient(error)
-                    ? "transient-admission"
-                    : error instanceof SessionStoreUnavailableError ||
-                        error instanceof AgentDatabaseAdmissionError
-                      ? "store-unavailable"
-                      : "unknown",
+                : error instanceof SessionSendRequesterUnavailableError
+                  ? "requester-unavailable"
+                  : error instanceof SessionCommunicationDeniedError
+                    ? "permission-denied"
+                    : isTransient(error)
+                      ? "transient-admission"
+                      : error instanceof SessionStoreUnavailableError ||
+                          error instanceof AgentDatabaseAdmissionError
+                        ? "store-unavailable"
+                        : "unknown",
             attempts,
           });
           const causes = [
@@ -354,6 +392,9 @@ async function recoverSessionSendDeliveriesForAgents(
           context.logGateway.warn(
             `Session delivery recovery blocked after ${attempts} attempts: ${formatErrorMessageForDisplay(error, causes.join("; "))} ${JSON.stringify({ sessionKeyHash: sha256HexPrefixCore(sessionKey, 16), inputId: input.id, ageMs: Math.max(0, Date.now() - input.acceptedAt) })}`,
           );
+          if (isTransient(error)) {
+            break;
+          }
         }
       }
       if (blocked.length > 0) {
@@ -366,6 +407,8 @@ async function recoverSessionSendDeliveriesForAgents(
             .map(({ sourceSessionKey, reason, attempts }) => {
               const description = {
                 "endpoint-replaced": "the source or destination session was reset or replaced",
+                "requester-unavailable":
+                  "original requester authority is unavailable; submit a new request",
                 "permission-denied": "current session permissions do not allow automatic delivery",
                 "transient-admission": `the Gateway was still unavailable after ${attempts} automatic attempts`,
                 "store-unavailable": "session storage was unavailable",

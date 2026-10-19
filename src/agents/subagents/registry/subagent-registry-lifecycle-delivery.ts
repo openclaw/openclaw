@@ -144,6 +144,7 @@ export const hasPriorRequesterDeliveryMirror = async (
           method: "chat.history",
           params: {
             sessionKey: entry.requesterSessionKey,
+            agentId: entry.requesterAgentId,
             limit: 25,
             maxChars: DELIVERY_MIRROR_HISTORY_MAX_CHARS,
           },

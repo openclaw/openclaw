@@ -122,7 +122,13 @@ function mount(
     const contextRequest = event as ApplicationContextRequest;
     if (contextRequest.context === applicationContext) {
       event.stopPropagation();
-      contextRequest.callback({ gateway } as unknown as ApplicationContext);
+      contextRequest.callback({
+        gateway,
+        sessions: {
+          subscribeMessages: async (key: string) => ({ key }),
+          unsubscribeMessages: async () => {},
+        },
+      } as unknown as ApplicationContext);
     }
   });
   view.docId = docId;

@@ -34,6 +34,7 @@ import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 import type { SidebarMenusOwner, SidebarRouteView } from "./sidebar-menus-types.ts";
 import { Icon } from "./solid/icon.tsx";
+import type { MenuHandle } from "./solid/menu.tsx";
 
 const AGENT_MENU_HOVER_OPEN_DELAY_MS = 300;
 const AGENT_MENU_HOVER_CLOSE_DELAY_MS = 200;
@@ -91,7 +92,10 @@ export function createSidebarMenus(deps: {
   commit: () => Promise<boolean>;
 }) {
   const { host, element, commit } = deps;
-  const catalogMenu = createSidebarCatalogMenu(host, () => menus.dismissTransientMenus());
+  const catalogMenu = createSidebarCatalogMenu(host, () => {
+    menus.dismissTransientMenus();
+    loadMenuRenderer();
+  });
   const [state, setState] = createStore<SidebarMenusState>({
     railPinMenuPosition: null,
     pluginNavigationMenuPosition: null,
@@ -108,6 +112,8 @@ export function createSidebarMenus(deps: {
     menuRenderer: null,
   });
   const triggers = new Map<MenuTrigger, HTMLElement | null>();
+  const menuHandles = new Map<"catalogView" | "agent", MenuHandle>();
+  let focusAgentRoster: (() => void) | undefined;
   const agentMenuAvatars = createIdentityAvatars();
   const routePreloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
   const sessionMenuWorkOwner = {};
@@ -170,6 +176,7 @@ export function createSidebarMenus(deps: {
     if (!session.worktreeId || !context) {
       return;
     }
+    // A replacement connection retires pending menu work before starting its successor.
     stopSessionMenuGateway = context.gateway.subscribe((next) => {
       if (next.phase === "connected" && next.client !== client) {
         releaseSessionMenuWork();
@@ -294,6 +301,25 @@ export function createSidebarMenus(deps: {
     },
     element,
     triggers,
+    railPins: new Map<string, HTMLElement>(),
+    get focusAgentRoster() {
+      return focusAgentRoster;
+    },
+    set focusAgentRoster(focus: (() => void) | undefined) {
+      focusAgentRoster = focus;
+    },
+    menuRef(menu: "catalogView" | "agent") {
+      let bound: MenuHandle | undefined;
+      onCleanup(() => {
+        if (menuHandles.get(menu) === bound) {
+          menuHandles.delete(menu);
+        }
+      });
+      return (handle: MenuHandle) => {
+        bound = handle;
+        menuHandles.set(menu, handle);
+      };
+    },
     commit,
     get pluginActionLifetime() {
       return pluginActionLifetime;
@@ -486,14 +512,12 @@ export function createSidebarMenus(deps: {
         if (!committed) {
           return;
         }
-        const dropdown =
-          triggers.get("catalogView") &&
-          element.querySelector<HTMLElement>(".sidebar-catalog-view-menu");
-        if (!dropdown) {
+        const handle = triggers.get("catalogView") && menuHandles.get("catalogView");
+        if (!handle) {
           return;
         }
-        dropdown.scrollTop = 0;
-        dropdown.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')?.focus();
+        handle.overlay.surface.scrollTop = 0;
+        handle.focusFirst();
       });
     },
 
@@ -518,12 +542,7 @@ export function createSidebarMenus(deps: {
           ) {
             return;
           }
-          element
-            .querySelector<HTMLElement>(".sidebar-agent-menu")
-            ?.querySelector<HTMLElement>(
-              '.sidebar-agent-menu__agent-switch--active, [role^="menuitem"]:not([disabled])',
-            )
-            ?.focus();
+          menuHandles.get("agent")?.focusFirst();
         });
         return;
       }
@@ -563,9 +582,12 @@ export function createSidebarMenus(deps: {
     handleAgentMenuPointerLeave: scheduleAgentMenuHoverClose,
 
     restoreFocusAfterAgentMenuHoverOpen() {
-      element
-        .querySelector<HTMLElement>(".sidebar-agent-menu__agent-switch--active")
-        ?.scrollIntoView?.({ block: "nearest" });
+      const chip = host.activeChipAgent();
+      const activeItem =
+        host.sidebarAgentsMode === "roster" && chip.agents.length > 1
+          ? "scope:all"
+          : `agent:${encodeURIComponent(chip.activeId)}`;
+      menuHandles.get("agent")?.itemElement(activeItem)?.scrollIntoView?.({ block: "nearest" });
       if (!state.agentMenuPosition || state.agentMenuMode !== "hover") {
         return;
       }
@@ -630,7 +652,9 @@ export function createSidebarMenus(deps: {
         <Show when={state.menuRenderer && state.sessionMenu} keyed>
           {(menu) => state.menuRenderer!.renderSidebarSessionMenuForMenus(menus, view, menu)}
         </Show>,
-        menus.catalogMenuView.render(),
+        <Show when={state.menuRenderer} keyed>
+          {(renderer) => <>{menus.catalogMenuView.render(renderer.CatalogSessionMenu)}</>}
+        </Show>,
         <Show when={state.menuRenderer && state.sessionGroupMenu} keyed>
           {(menu) => state.menuRenderer!.renderSidebarSessionGroupMenuForMenus(menus, view, menu)}
         </Show>,
@@ -646,7 +670,11 @@ export function createSidebarMenus(deps: {
       ];
     },
 
-    renderRoute(routeId: NavigationRouteId, view: SidebarRouteView): JSX.Element {
+    renderRoute(
+      routeId: NavigationRouteId,
+      view: SidebarRouteView,
+      triggerRef?: (element: HTMLAnchorElement) => void,
+    ): JSX.Element {
       const sessionTarget = createMemo(() => {
         const routeSessionKey = isSessionRouteId(routeId) ? view.getRouteSessionKey() : "";
         const context = view.sessionDataContext;
@@ -657,6 +685,7 @@ export function createSidebarMenus(deps: {
       // Menus retain this anchor as their return-focus target across sidebar updates.
       const link = (
         <SidebarNavLink
+          ref={triggerRef}
           icon={<Icon name={navigationIconForRoute(routeId)} />}
           label={titleForRoute(routeId)}
           href={sessionTarget()?.href ?? pathForRoute(routeId, view.basePath)}

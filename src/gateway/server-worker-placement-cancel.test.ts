@@ -10,6 +10,7 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import {
   claimSessionControllerTask,
   releaseSessionControllerClaim,
@@ -34,6 +35,76 @@ import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-
 import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
+
+it("preserves admitted work when cancellation authority is revoked before the effect", async () => {
+  const state = await createOpenClawTestState({ scenario: "minimal" });
+  const cfg = {};
+  setRuntimeConfigSnapshot(cfg);
+  const sessionKey = "agent:main:revoked-worker-stop";
+  const { storePath } = await resolveGatewaySessionStoreTargetInWorker({ cfg, key: sessionKey });
+  const target = { storePath, sessionKey };
+  const sessionId = "revoked-worker-stop-session";
+  const runId = "revoked-worker-stop-run";
+  const entry = { sessionId, updatedAt: Date.now() };
+  const context = Object.assign(createWorkerStopChatContext(), { getRuntimeConfig: () => cfg });
+  let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
+  let releaseClaim: (() => void) | undefined;
+  try {
+    await replaceSessionEntry(target, entry);
+    admitted = await (
+      await admitWorkerStopChat({
+        context,
+        storePath,
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        entry,
+        runId,
+      })
+    ).promise;
+    expect(admitted.ok).toBe(true);
+    if (!admitted.ok) {
+      throw new Error("worker Stop admission missing");
+    }
+    const owned = admitted.value;
+    if (!owned.activeRunAbort.entry) {
+      throw new Error("worker Stop source missing");
+    }
+    releaseClaim = await claimRpcSourceForTest(owned.activeRunAbort.entry);
+    expect(owned.activeRunAbort.markExecutionStarted()).toBe(true);
+    owned.activeRunAbort.controller.signal.addEventListener(
+      "abort",
+      () => {
+        releaseClaim?.();
+        owned.cleanupAdmittedRun();
+      },
+      { once: true },
+    );
+    const revoked = new Error("worker Stop authority revoked");
+    let current = true;
+    const failure = await cancelGatewayWorkerSessionWork(context, {
+      sessionId,
+      sessionKeys: [sessionKey],
+      agentId: "main",
+      assertCurrent: () => {
+        if (!current) {
+          throw revoked;
+        }
+        queueMicrotask(() => {
+          current = false;
+        });
+      },
+    }).catch((error: unknown) => error);
+    expect(owned.activeRunAbort.controller.signal.aborted).toBe(false);
+    expect(failure).toBe(revoked);
+  } finally {
+    releaseClaim?.();
+    cleanupAdmission(runId, admitted);
+    await closeSessionSqliteDatabasesForTest();
+    clearRuntimeConfigSnapshot();
+    await state.cleanup();
+  }
+});
 
 it.each(["success", "failed-write", "setup-failed-write"] as const)(
   "Stop preserves canonical terminal ownership through %s",
@@ -265,7 +336,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       await Promise.allSettled([failedClaim?.settlement.promise]);
       unsubscribe();
       await subscriptions?.agentUnsub();
-      subscriptions?.heartbeatUnsub();
+      heartbeatNotifications.onEvent = () => {};
       subscriptions?.transcriptUnsub();
       subscriptions?.lifecycleUnsub();
       await closeSessionSqliteDatabasesForTest();

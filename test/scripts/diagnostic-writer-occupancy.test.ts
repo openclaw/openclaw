@@ -101,10 +101,16 @@ describe("writer occupancy log report", () => {
 
   it("keeps native transaction phases separate and allowlists nested numeric fields", async () => {
     const append = "session.actor.appendTranscriptEvent";
-    const phases = (hostAdmissionWaitMs: number, prepareMs: number, sqlMs: number) => ({
+    const phases = (
+      hostAdmissionWaitMs: number,
+      databaseAdmissionWaitMs: number,
+      prepareMs: number,
+      sqlMs: number,
+    ) => ({
       beginMs: 0,
       commitMs: 0,
       hostAdmissionWaitMs,
+      databaseAdmissionWaitMs,
       prepareMs,
       sqlMs,
     });
@@ -120,22 +126,31 @@ describe("writer occupancy log report", () => {
         time: "2026-10-13T14:55:38.478Z",
       });
     const native = [
-      nativeWarning({ ...phases(2_715, 3, 700), privateData: "private-value" }),
-      nativeWarning(phases(4, 1, 1_036), 1_040),
+      nativeWarning({ ...phases(2_015, 700, 3, 700), privateData: "private-value" }),
+      nativeWarning(phases(4, 6, 1, 1_030), 1_040),
       nativeWarning({ sqlMs: 5 }, 5, "private-operation"),
+      nativeWarning({ databaseAdmissionWaitMs: 0 }, 0, "session.actor.patch"),
       nativeWarning({ sqlMs: "private-value" }, undefined, "session.actor.patch"),
+      nativeWarning({ databaseAdmissionWaitMs: "private-value" }),
     ];
     const report = await attributeWriterOccupancy(native);
-    expect(report).toMatchObject({ observedReservations: 0, operations: [], ignoredLines: 1 });
+    expect(report).toMatchObject({ observedReservations: 0, operations: [], ignoredLines: 2 });
     expect(report.nativeTransactions).toEqual([
       {
         operation: append,
         count: 2,
         elapsedMs: 4_455,
         maxElapsedMs: 3_415,
-        phases: phases(2_719, 4, 1_736),
+        phases: phases(2_019, 706, 4, 1_730),
       },
       { operation: "other", count: 1, elapsedMs: 5, maxElapsedMs: 5, phases: { sqlMs: 5 } },
+      {
+        operation: "session.actor.patch",
+        count: 1,
+        elapsedMs: 0,
+        maxElapsedMs: 0,
+        phases: { databaseAdmissionWaitMs: 0 },
+      },
     ]);
     expect(JSON.stringify(report)).not.toContain("private");
     const combined = await attributeWriterOccupancy([warning(), ...native]);

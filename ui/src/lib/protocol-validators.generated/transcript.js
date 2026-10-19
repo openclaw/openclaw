@@ -95,14 +95,14 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
             !Array.isArray(value.owner) &&
             "actor" in value.owner &&
             Object.getOwnPropertyNames(value.owner).every(
-              (var_170, var_171) => External[0].test(var_170) || !1,
+              (var_90, var_91) => External[0].test(var_90) || !1,
             ) &&
             typeof value.owner.actor == "object" &&
             value.owner.actor !== null &&
             !Array.isArray(value.owner.actor) &&
             "type" in value.owner.actor &&
             Object.getOwnPropertyNames(value.owner.actor).every(
-              (var_172, var_173) => External[1].test(var_172) || !1,
+              (var_92, var_93) => External[1].test(var_92) || !1,
             ) &&
             ((typeof value.owner.actor.type == "string" && value.owner.actor.type === "human") ||
               (typeof value.owner.actor.type == "string" && value.owner.actor.type === "agent") ||
@@ -230,7 +230,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                 !Array.isArray(value.owner.assignedBy) &&
                 "type" in value.owner.assignedBy &&
                 Object.getOwnPropertyNames(value.owner.assignedBy).every(
-                  (var_174, var_175) => External[2].test(var_174) || !1,
+                  (var_94, var_95) => External[2].test(var_94) || !1,
                 ) &&
                 ((typeof value.owner.assignedBy.type == "string" &&
                   value.owner.assignedBy.type === "human") ||
@@ -367,7 +367,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                 !Array.isArray(element) &&
                 "identity" in element &&
                 Object.getOwnPropertyNames(element).every(
-                  (var_176, var_177) => External[3].test(var_176) || !1,
+                  (var_96, var_97) => External[3].test(var_96) || !1,
                 ) &&
                 ((typeof element.identity == "object" &&
                   element.identity !== null &&
@@ -487,7 +487,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
                 !Array.isArray(element) &&
                 "identity" in element &&
                 Object.getOwnPropertyNames(element).every(
-                  (var_178, var_179) => External[4].test(var_178) || !1,
+                  (var_98, var_99) => External[4].test(var_98) || !1,
                 ) &&
                 ((typeof element.identity == "object" &&
                   element.identity !== null &&
@@ -609,7 +609,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
         "revision" in value &&
         "updatedAt" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_180, var_181) => External[0].test(var_180) || !1,
+          (var_100, var_101) => External[0].test(var_100) || !1,
         ) &&
         typeof value.sessionKey == "string" &&
         (value.sessionKey.length >= 2 ||

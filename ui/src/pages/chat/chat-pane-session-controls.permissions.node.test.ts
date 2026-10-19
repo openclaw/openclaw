@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
-import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { Model } from "../../../../src/llm/types.js";
@@ -11,6 +10,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import {
@@ -107,7 +107,7 @@ function renderControls(
   });
 }
 
-function createControlsFixture(
+async function createControlsFixture(
   scope: string,
   sharingRole: GatewaySessionRow["sharingRole"] = "owner",
   globalTarget?: { sessionKey: string; rowAgentId: string },
@@ -193,6 +193,9 @@ function createControlsFixture(
   const container = document.createElement("div");
   document.body.append(container);
   renderPaneModelControl(controls.composerControls, container, true);
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+  );
   const effort = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
   effort.open = true;
   effort.dispatchEvent(new Event("toggle"));
@@ -205,7 +208,7 @@ describe("chat pane model-setting permissions", () => {
     "persists Standard over inherited %s through the SDK request",
     async (tier) => {
       const { state, selectedSession, container } =
-        createControlsFixture("operator.sessions.write");
+        await createControlsFixture("operator.sessions.write");
       delete selectedSession.fastMode;
       selectedSession.effectiveFastMode = false;
       const cfg: OpenClawConfig = {
@@ -263,7 +266,7 @@ describe("chat pane model-setting permissions", () => {
     "saves $value during a response without interrupting it",
     async ({ value, saved }) => {
       const { state, selectedSession, container } =
-        createControlsFixture("operator.sessions.write");
+        await createControlsFixture("operator.sessions.write");
       selectedSession.fastMode = value !== "on";
       state.chatRunId = "running-response";
       state.chatStream = "Existing response";
@@ -301,7 +304,7 @@ describe("chat pane model-setting permissions", () => {
   ] as const)(
     "dispatches settings only for the owned global target ($sessionKey, $rowAgentId, $sharingRole)",
     async ({ sessionKey, rowAgentId, sharingRole, allowed }) => {
-      const { state, selectedSession, access } = createControlsFixture(
+      const { state, selectedSession, access } = await createControlsFixture(
         "operator.sessions.write",
         sharingRole,
         { sessionKey, rowAgentId },
@@ -341,7 +344,7 @@ describe("chat pane model-setting permissions", () => {
   ] as const)(
     "uses exact field permissions with $scope on a $sharingRole session",
     async ({ scope, sharingRole, allowed }) => {
-      const { state, selectedSession, access, controls, container } = createControlsFixture(
+      const { state, selectedSession, access, controls, container } = await createControlsFixture(
         scope,
         sharingRole,
       );
@@ -430,7 +433,7 @@ describe("chat pane model-setting permissions", () => {
   ] as const)(
     "rechecks picker authority after changing $change (queued: $queued)",
     async ({ change, queued }) => {
-      const { state, selectedSession, controls, container } = createControlsFixture(
+      const { state, selectedSession, controls, container } = await createControlsFixture(
         queued ? "operator.sessions.write" : "operator.write",
       );
       const held = createDeferred<Awaited<ReturnType<typeof patchChatSessionSettings>>>();

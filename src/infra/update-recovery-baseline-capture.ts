@@ -29,7 +29,7 @@ import {
   sha256File,
   syncDirectory,
 } from "./directory-durability.js";
-import { hasErrnoCode } from "./errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import {
   copyFileHandle,
   hashFileMutationSnapshotSync,
@@ -84,14 +84,7 @@ function within(candidate: string, root: string): boolean {
 }
 
 async function statOrMissing(value: string): Promise<BigIntStats | undefined> {
-  try {
-    return await fs.lstat(value, { bigint: true });
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
+  return fs.lstat(value, { bigint: true }).catch(ignoreMissingPath);
 }
 
 async function markPrivateCapture(directory: string): Promise<void> {
@@ -276,9 +269,7 @@ export function captureUpdateRecoveryBaseline(params: {
         entries.set(pathname, entry);
         if (kind) {
           const contentPath = await fs.realpath(pathname).catch((error: unknown) => {
-            if (!hasErrnoCode(error, "ENOENT")) {
-              throw error;
-            }
+            ignoreMissingPath(error);
             return canonicalEntryPath(path.resolve(path.dirname(pathname), target));
           });
           if (contentPath === pathname) {

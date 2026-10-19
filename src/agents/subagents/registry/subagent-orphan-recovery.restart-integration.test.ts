@@ -348,7 +348,6 @@ describe("subagent orphan recovery — faithful restart path", () => {
               startedAt,
               lifecycleGeneration: getAgentEventLifecycleGeneration,
               state: {
-                currentTurnUserMessagePersisted: true,
                 lifecycleEnded: false,
                 lifecycleFinishing: false,
               },

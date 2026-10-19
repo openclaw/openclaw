@@ -225,6 +225,12 @@ export type ControlUiHost = {
    * The Gateway enforces connection scopes, not a per-plugin RPC allowlist.
    */
   request: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
+  /**
+   * `session.message` listeners receive complete message bodies. Registration is
+   * synchronous, but delivery starts after the Gateway acknowledges full-body
+   * interest. In-flight roster events without bodies are skipped during admission;
+   * the host never delivers a bodyless `session.message` to a plugin listener.
+   */
   onEvent: (event: string, listener: (payload: unknown) => void) => ControlUiDisposer;
   subscribe: (listener: () => void) => ControlUiDisposer;
   sessions: {

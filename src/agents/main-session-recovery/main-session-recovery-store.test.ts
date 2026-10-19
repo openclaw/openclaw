@@ -682,6 +682,7 @@ describe("main session recovery store", () => {
         },
         gatewayRuntime: {
           prepareRestartRecovery: () => undefined,
+          resumeChatInput: dispatch,
           dispatchSessionMethod: dispatch,
           dispatchAgent: dispatch,
           waitForAgent: dispatch,

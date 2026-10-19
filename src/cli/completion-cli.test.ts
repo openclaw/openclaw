@@ -216,7 +216,8 @@ _openclaw_root_completion
     if (probe.error && "code" in probe.error && probe.error.code === "ENOENT") {
       ctx.skip();
     }
-    expect(probe).toMatchObject({ error: undefined, status: 0 });
+    expect(probe.error).toBeUndefined();
+    expect(probe.status).toBe(0);
     const program = new Command().name("openclaw");
     registerCompletionCli(program);
     registerAcpCli(program);
@@ -266,7 +267,8 @@ ${cases
         env: { ...process.env, HOME: tempDir, ZDOTDIR: tempDir, TERM: "xterm" },
       },
     );
-    expect(result).toMatchObject({ error: undefined, stderr: "", status: 0 });
+    expect(result.error).toBeUndefined();
+    expect(result).toMatchObject({ stderr: "", status: 0 });
     const completed = [...result.stdout.matchAll(/OPENCLAW_RESULT:([^\r\n]*)/g)].map((match) =>
       match[1]?.trimEnd(),
     );

@@ -52,21 +52,12 @@ function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   return !resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
-type DiscordMessageProcessObserver = {
-  onFinalReplyStart?: () => void;
-  onFinalReplyDelivered?: () => void;
-  onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
-};
-
 type DiscordProviderDeliveryInfo = ReplyDispatchRuntimeInfo & {
   onPlatformSendDispatch: () => Promise<void>;
   assertPlatformSendAuthorized: () => void;
 };
 
-export async function processDiscordMessage(
-  ctx: DiscordMessagePreflightContext,
-  observer?: DiscordMessageProcessObserver,
-) {
+export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
   const dispatchStartedAt = Date.now();
   const {
     cfg,
@@ -159,11 +150,6 @@ export async function processDiscordMessage(
     log: logVerbose,
   });
   const replyReference = activeThreadRoute.replyReference;
-  observer?.onReplyPlanResolved?.({
-    createdThreadId: replyPlan.createdThreadId,
-    sessionKey: persistedSessionKey,
-  });
-
   const {
     replyPipeline,
     onModelSelected,
@@ -185,8 +171,6 @@ export async function processDiscordMessage(
     dispatchStartedAt,
     feedbackRest: reactions.feedbackRest,
     deliveryRest: reactions.deliveryRest,
-    onFinalReplyStart: observer?.onFinalReplyStart,
-    onFinalReplyDelivered: observer?.onFinalReplyDelivered,
   });
   activeThreadRoute.bindThreadAdoption(async (threadId) => {
     deliverTarget = `channel:${threadId}`;

@@ -284,10 +284,10 @@ export async function executeCliProcess(params: {
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
         activeToolCount: params.events.activeParsedToolCount,
         compactionActive: params.events.hasActiveCompaction,
-        onCompactionActiveChange: params.events.onCompactionActiveChange,
+        setOnCompactionActiveChange: params.events.setOnCompactionActiveChange,
         getActiveLoopbackAskUserDeadline: params.toolTracking.getActiveLoopbackAskUserDeadline,
-        onActiveLoopbackAskUserDeadlineChange:
-          params.toolTracking.onActiveLoopbackAskUserDeadlineChange,
+        setOnActiveLoopbackAskUserDeadlineChange:
+          params.toolTracking.setOnActiveLoopbackAskUserDeadlineChange,
         onNoOutputTimeout: (error) => {
           pluginTimeout.error = error;
         },
@@ -312,6 +312,8 @@ export async function executeCliProcess(params: {
         mcpCapture: {
           captureKey: params.initialGatewayCaptureKey,
           beginCapture: params.toolTracking.beginGatewayCapture,
+          registerTurnInterrupt: params.toolTracking.registerTurnInterrupt,
+          waitForTurnInterrupt: params.toolTracking.waitForTurnInterrupt,
         },
         ...(params.useManagedClaudeLiveSession
           ? {

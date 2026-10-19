@@ -1,9 +1,10 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
 import type { JSX } from "@solidjs/web";
 import { createComponent, createRoot, Show } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import type { SolidRouteProps } from "../app-route-types.ts";
+import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
@@ -57,10 +58,12 @@ function fixture() {
 it("publishes the new generation only after the retiring MCP route releases its replacement", async () => {
   const { owner, runtime, root } = fixture();
   const teardown = createDeferredCore();
-  const previousView = Object.assign(document.createElement("mcp-app-view"), {
+  // Retirement uses registration, not the real custom element's rendering lifecycle.
+  const previousView = Object.assign(document.createElement("div"), {
     teardown: () => teardown.promise,
     restartAfterTeardown: () => {},
   });
+  onTestFinished(registerMcpAppUnmountTarget(previousView));
   const destination = document.createElement("div");
   destination.dataset.destination = "";
   destination.textContent = "Debug";
@@ -102,7 +105,7 @@ it("publishes the new generation only after the retiring MCP route releases its 
     owner.commitRoot();
     await router.navigate("debug", {});
     await settleRouterOutlet(outlet);
-    expect(outlet.querySelector("mcp-app-view")).not.toBeNull();
+    expect(outlet.contains(previousView)).toBe(true);
     expect(outlet.querySelector("[data-destination]")).toBeNull();
     expect(outlet.presentationSettled).toBe(false);
     expect(owner.hook.snapshot().routeReady).toBe(false);
@@ -119,7 +122,7 @@ it("publishes the new generation only after the retiring MCP route releases its 
     });
     teardown.resolve();
     expect(await published).toBe(String(owner.hook.snapshot().generation));
-    expect(outlet.querySelector("mcp-app-view")).toBeNull();
+    expect(outlet.contains(previousView)).toBe(false);
     expect(outlet.querySelector("[data-destination]")?.textContent).toBe("Debug");
     expect(outlet.presentationSettled).toBe(true);
     expect(owner.hook.snapshot().routeReady).toBe(true);

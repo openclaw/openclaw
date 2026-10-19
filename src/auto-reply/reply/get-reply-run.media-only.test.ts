@@ -1,7 +1,5 @@
 import {
-  executeFollowupTurnForTest,
-  createFollowupTurnTestTurn,
-  createFollowupTurnTestTypingController,
+  executeQueuedFollowupTurnForTest,
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
@@ -33,6 +31,7 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -53,10 +52,7 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
-import {
-  createReplyOperation,
-  listActiveReplyRunSessionKeys,
-} from "../../sessions/session-controller.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
@@ -66,6 +62,7 @@ import {
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import * as sessionNativeRuntime from "../../sessions/session-controller.native-runtime.js";
+import { listActiveReplyRunSessionKeys } from "../../sessions/session-controller.queries.js";
 import * as sessionQueries from "../../sessions/session-controller.queries.js";
 import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
@@ -73,7 +70,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { hasControlCommand } from "../command-detection.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
-import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
+import { routeReplyDirectivesForTest } from "./get-reply-directives-routing.test-support.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
   loadAgentRunnerRuntime,
@@ -94,7 +91,6 @@ import {
   createTelegramGroupSession,
   ownerParams,
 } from "./get-reply-run.test-support.js";
-import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { buildGroupIntro, buildSourceConversationContext } from "./groups.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
@@ -224,7 +220,8 @@ vi.mock("../../agents/harness/selection-decision.js", () => ({
   resolveAgentHarnessDeliveryDefaults: resolveAgentHarnessDeliveryDefaultsMock,
 }));
 
-vi.mock("../../agents/model-selection.js", () => ({
+vi.mock("../../agents/model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-selection.js")>()),
   buildModelAliasIndex: vi.fn(
     (params: { cfg: { agents?: { defaults?: { models?: unknown } } } }) => {
       if (params.cfg.agents?.defaults?.models) {
@@ -384,10 +381,12 @@ vi.mock("./groups.js", async (importOriginal) => ({
   buildGroupIntro: vi.fn().mockReturnValue(""),
 }));
 
-vi.mock("./inbound-meta.js", () => ({
+vi.mock("./inbound-meta.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./inbound-meta.js")>()),
   buildInboundMetaSystemPrompt: vi.fn().mockReturnValue(""),
   buildInboundUserContextPrefix: vi.fn().mockReturnValue(""),
   formatActiveGoalContext: vi.fn().mockReturnValue(undefined),
+  refreshActiveGoalContext: (context: unknown) => context,
   resolveInboundUserContextPromptJoiner: vi.fn().mockReturnValue(undefined),
 }));
 
@@ -571,6 +570,8 @@ describe("runPreparedReply media-only handling", () => {
       "configured-owner",
       "configured-owner-revoked",
       "discord-owner-alias",
+      "discord-promoted-before-drain",
+      "owner-source-replaced",
       "without-source-factory",
       "maintenance-copy",
       "heartbeat",
@@ -584,15 +585,20 @@ describe("runPreparedReply media-only handling", () => {
       "retains the actual channel owner ingress through queued execution: %s",
       async (kind) => {
         resetFollowupTurnTestState();
-        const key = `isolated-real-ingress-cron-${mode}-${kind}`;
-        const channel = kind === "discord-owner-alias" ? "discord" : "telegram";
-        const cfg = { commands: { ownerAllowFrom: [`${channel}:owner-1`] } };
+        const params = ownerParams();
+        const key = expectDefined(params.sessionKey, "queued execution session key");
+        const promoted = kind === "discord-promoted-before-drain";
+        const refreshOwner = promoted || kind === "owner-source-replaced";
+        const channel = kind === "discord-owner-alias" || promoted ? "discord" : "telegram";
+        const cfg = {
+          commands: { ownerAllowFrom: [`${channel}:${promoted ? "other" : "owner-1"}`] },
+        };
         setRuntimeConfigSnapshot(cfg);
-        let current = true;
-        let capturedOpts: InternalGetReplyOptions | undefined;
+        let current = !promoted;
+        let capturedOpts: ReplyRunParams["opts"];
         let scope: unknown;
         const scopes: unknown[] = [];
-        let queuedCapability: InternalGetReplyOptions["cronCreatorAuthorityCapability"];
+        let queuedCapability: NonNullable<ReplyRunParams["opts"]>["cronCreatorAuthorityCapability"];
         let executionError: unknown;
         const queuedSources: FollowupRun[] = [];
         const executedPrompts: string[] = [];
@@ -643,10 +649,10 @@ describe("runPreparedReply media-only handling", () => {
           }
           return undefined;
         });
-        getFollowupTurnTestState().execute.mockImplementation(async (params) => {
-          executedPrompts.push(params.commandBody);
-          queuedCapability = params.opts.cronCreatorAuthorityCapability;
-          const instance = { runId: params.opts.runId, instanceId: "isolated-queued-instance" };
+        getFollowupTurnTestState().execute.mockImplementation(async (queued) => {
+          executedPrompts.push(queued.commandBody);
+          queuedCapability = queued.opts.cronCreatorAuthorityCapability;
+          const instance = { runId: queued.opts.runId, instanceId: "isolated-queued-instance" };
           const authority = claimAgentRunDelegatedAuthority(instance);
           const identity: AgentRuntimeIdentity = {
             kind: "agentRuntime",
@@ -659,31 +665,30 @@ describe("runPreparedReply media-only handling", () => {
             await withGatewayToolCallerIdentity(
               { ...identity, approvalAuthority: authority },
               async () => {
-                const tool = createCronTool(
-                  { runId: instance.runId, agentSessionKey: "session-key" },
-                  {
-                    callGatewayTool: async <T>(method: string) => {
-                      const grant = getGatewayToolCallerIdentity()?.cronManagementGrant;
-                      return grant
-                        ? withCronManagementGrant(grant, identity, method, async () => {
-                            getCronManagementAuthority(identity)!();
-                            expect(queuedCapability?.requesterOwner?.senderId).toBe("owner-1");
-                            expect(getCronManagementChannelRequester(identity)).toEqual(
-                              channel === "discord"
-                                ? {
-                                    version: 1,
-                                    channel,
-                                    accountId: "default",
-                                    senderId: "transport-alias",
-                                  }
-                                : undefined,
-                            );
-                            return { jobs: [], total: 0, hasMore: false } as T;
-                          })
-                        : ({ jobs: [], total: 0, hasMore: false } as T);
-                    },
-                  },
-                );
+                using _ = vi
+                  .spyOn(gatewayModule, "callGatewayTool")
+                  .mockImplementation(async <T>(method: string) => {
+                    const grant = getGatewayToolCallerIdentity()?.cronManagementGrant;
+                    return grant
+                      ? withCronManagementGrant(grant, identity, method, async () => {
+                          getCronManagementAuthority(identity)!();
+                          expect(queuedCapability?.requesterOwner?.senderId).toBe("owner-1");
+                          expect(getCronManagementChannelRequester(identity)).toEqual(
+                            channel === "discord"
+                              ? {
+                                  version: 1,
+                                  channel,
+                                  accountId: "default",
+                                  senderId: promoted ? "owner-1" : "transport-alias",
+                                }
+                              : undefined,
+                          );
+                          return { jobs: [], total: 0, hasMore: false } as T;
+                        })
+                      : ({ jobs: [], total: 0, hasMore: false } as T);
+                  });
+                const options = { runId: instance.runId, agentSessionKey: "session-key" };
+                const tool = createCronTool(options);
                 if (kind === "revoked-after-bind") {
                   current = false;
                   await expect(tool.execute("list", { action: "list" })).rejects.toThrow(
@@ -706,9 +711,8 @@ describe("runPreparedReply media-only handling", () => {
             releaseAgentRunDelegatedAuthority(authority);
           }
         });
-        const params = ownerParams();
         params.command.senderId = "owner-1";
-        params.command.senderIsOwner = kind !== "non-owner";
+        params.command.senderIsOwner = kind !== "non-owner" && !promoted;
         const input = turn("list all automations", {
           ...createProviderSurface(channel),
           ChatType: "group",
@@ -756,26 +760,23 @@ describe("runPreparedReply media-only handling", () => {
           if (kind === "configured-owner-revoked") {
             setRuntimeConfigSnapshot({});
           }
+          if (refreshOwner) {
+            current = false;
+            setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [`${channel}:owner-1`] } });
+          }
           scheduleFollowupDrain(key, async (queued) => {
             try {
-              await executeFollowupTurnForTest({
-                turn: createFollowupTurnTestTurn({
-                  runId: `new-queued-execution-${mode}-${kind}-${completedRuns}`,
-                  queued,
-                  config: cfg,
-                }),
-                defaults: {
-                  typing: createFollowupTurnTestTypingController(),
-                  typingMode: "never",
-                  defaultModel: "claude",
-                  opts:
-                    kind === "foreign-defaults"
-                      ? { ...capturedOpts, runId: "unrelated-run" }
-                      : capturedOpts,
-                },
-                onToolResult: async () => {},
-                onCompactionNoticePayload: async () => {},
+              await executeQueuedFollowupTurnForTest(queued, {
+                runId: `new-queued-execution-${mode}-${kind}-${completedRuns}`,
+                admit: refreshOwner,
+                opts:
+                  kind === "foreign-defaults"
+                    ? { ...capturedOpts, runId: "unrelated-run" }
+                    : capturedOpts,
               });
+              if (refreshOwner) {
+                expect(queued.run.senderIsOwner).toBe(!promoted);
+              }
             } catch (error) {
               executionError = error;
             } finally {
@@ -813,7 +814,8 @@ describe("runPreparedReply media-only handling", () => {
               kind === "owner-batch" ||
               kind === "foreign-defaults" ||
               kind === "configured-owner" ||
-              kind === "discord-owner-alias"
+              kind === "discord-owner-alias" ||
+              refreshOwner
               ? "gateway"
               : kind === "revoked-after-bind"
                 ? "revoked"
@@ -827,7 +829,12 @@ describe("runPreparedReply media-only handling", () => {
     );
   });
 
-  registerPendingRequesterAuthorityCases({ runPrepared, loadSessionEntryMock });
+  registerPendingRequesterAuthorityCases({
+    runPrepared,
+    loadSessionEntryMock,
+    requireRunReplyAgentCall,
+    turn,
+  });
   registerReplyPromptContextCases({ runPrepared, requireRunReplyAgentCall });
   it.each([
     "owner-alias",
@@ -863,31 +870,30 @@ describe("runPreparedReply media-only handling", () => {
             if (kind === "revoked-before-bind") {
               setRuntimeConfigSnapshot({});
             }
-            const tool = createCronTool(
-              { runId: opts?.runId, agentSessionKey: identity.sessionKey },
-              {
-                callGatewayTool: async <T>(method: string) => {
-                  const grant = getGatewayToolCallerIdentity()?.cronManagementGrant;
-                  if (!admitted) {
-                    expect(grant).toBeUndefined();
-                    calls.push("restricted");
-                    return { jobs: [], total: 0, hasMore: false } as T;
+            using _ = vi
+              .spyOn(gatewayModule, "callGatewayTool")
+              .mockImplementation(async <T>(method: string) => {
+                const grant = getGatewayToolCallerIdentity()?.cronManagementGrant;
+                if (!admitted) {
+                  expect(grant).toBeUndefined();
+                  calls.push("restricted");
+                  return { jobs: [], total: 0, hasMore: false } as T;
+                }
+                expect(grant, "configured owner must receive a management grant").toBeDefined();
+                return await withCronManagementGrant(grant!, identity, method, async () => {
+                  const assertActive = getCronManagementAuthority(identity)!;
+                  assertActive();
+                  await Promise.resolve();
+                  if (kind === "revoked") {
+                    setRuntimeConfigSnapshot({});
                   }
-                  expect(grant, "configured owner must receive a management grant").toBeDefined();
-                  return await withCronManagementGrant(grant!, identity, method, async () => {
-                    const assertActive = getCronManagementAuthority(identity)!;
-                    assertActive();
-                    await Promise.resolve();
-                    if (kind === "revoked") {
-                      setRuntimeConfigSnapshot({});
-                    }
-                    assertActive();
-                    calls.push(method);
-                    return { jobs: [], total: 0, hasMore: false } as T;
-                  });
-                },
-              },
-            );
+                  assertActive();
+                  calls.push(method);
+                  return { jobs: [], total: 0, hasMore: false } as T;
+                });
+              });
+            const options = { runId: opts?.runId, agentSessionKey: identity.sessionKey };
+            const tool = createCronTool(options);
             if (kind === "revoked") {
               await expect(tool.execute("list", { action: "list" })).rejects.toThrow(
                 "Automation admin grant",
@@ -980,7 +986,6 @@ describe("runPreparedReply media-only handling", () => {
   beforeEach(async () => {
     preparedReplyMockState.unexpectedCalls.length = 0;
     loadSessionEntryMock.mockReset();
-    updateAmbientTranscriptWatermarkMock.mockClear();
     vi.clearAllMocks();
     vi.mocked(buildSourceConversationContext).mockReturnValue("");
     vi.mocked(buildGroupIntro).mockReturnValue("");
@@ -1291,19 +1296,11 @@ describe("runPreparedReply media-only handling", () => {
       allowTextCommands: true,
     });
     params.command = { ...params.command, isAuthorizedSender: true };
-    const inbound = finalizeInboundContext(params.ctx);
-    const routed = resolveReplyDirectiveRouting({
-      commandText: inbound.commandText,
-      agentText: inbound.agentText,
-      modelAliases: [],
-      canInterpretTextDirectives: true,
-      isAuthorizedSender: true,
-      isGroup: false,
-      wasMentioned: false,
-      ctx: inbound,
+    const inbound = finalizeInboundContext({ ...params.ctx, CommandAuthorized: true });
+    const routed = await routeReplyDirectivesForTest(inbound, {
       cfg: params.cfg,
       agentId: params.agentId,
-      resetTriggered: false,
+      sessionKey: params.sessionKey,
     });
     params.directives = routed.directives;
     params.sessionCtx.agentText = routed.cleanedBody;
@@ -1367,23 +1364,6 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireRunReplyAgentCall();
     expect(call?.followupRun.currentInboundContext?.text).toContain("webchat:local");
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
-  });
-
-  it("persists admitted external-contact sender attribution on direct turns", async () => {
-    await runPrepared({
-      ...turn(
-        "hello",
-        { OriginatingChannel: "telegram", OriginatingTo: "chat-1", ChatType: "direct" },
-        { Provider: "telegram", SenderId: "user-42", SenderName: "Ada", SenderUsername: "ada" },
-        { InboundAccessAuthorized: true },
-      ),
-      sessionEntry: { sessionId: "session-1", updatedAt: 1, chatType: "direct" },
-    });
-
-    const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
-    expect(message).toMatchObject({
-      __openclaw: { senderId: "user-42", senderName: "Ada", senderUsername: "ada" },
-    });
   });
 
   it("normalizes second-based inbound timestamps before preparing user turns", async () => {
@@ -2280,6 +2260,14 @@ describe("runPreparedReply media-only handling", () => {
       }),
       timestamp: expect.any(Number),
       __openclaw: {
+        requesterOrigin: {
+          sessionKey: "session-key",
+          messageProvider: "telegram",
+          chatType: "group",
+          senderName: "Keśava",
+          senderId: undefined,
+          operatorProfileId: undefined,
+        },
         senderIsOwner: false,
         senderName: "Keśava",
         transport: {

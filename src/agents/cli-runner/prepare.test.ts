@@ -144,6 +144,7 @@ import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import {
+  createJsonlStdinBackendConfig,
   registerCliMcpPreparationTests,
   setRawCliBackendForPrepareTest,
 } from "./prepare-mcp.test-support.js";
@@ -316,16 +317,6 @@ function createArgBackendConfig(
   output: "text" | "json" = "text",
 ): CliBackendPlugin["config"] {
   return { command, args, output, input: "arg", sessionMode: "existing" };
-}
-
-function createJsonlStdinBackendConfig(command: string): CliBackendPlugin["config"] {
-  return {
-    command,
-    args: ["--print"],
-    output: "jsonl",
-    input: "stdin",
-    sessionMode: "existing",
-  };
 }
 
 type CliContextBudgetTestCase = {
@@ -2449,9 +2440,8 @@ describe("prepareCliRunContext", () => {
     );
     expect(second.promptToolNamesHash).not.toBe(first.promptToolNamesHash);
     expect(second.reusableCliSession).toEqual({
-      mode: "reuse-with-drift",
-      sessionId: "cli-session",
-      drift: { reasons: ["prompt-tools"] },
+      mode: "invalidate",
+      invalidatedReason: "prompt-tools",
     });
   });
 
@@ -2676,9 +2666,8 @@ describe("prepareCliRunContext", () => {
       hashCliSessionText(JSON.stringify(["fake_web_tool", "memory_search"])),
     );
     expect(context.reusableCliSession).toEqual({
-      mode: "reuse-with-drift",
-      sessionId: "cli-session",
-      drift: { reasons: ["prompt-tools"] },
+      mode: "invalidate",
+      invalidatedReason: "prompt-tools",
     });
   });
 
@@ -2881,6 +2870,8 @@ describe("prepareCliRunContext", () => {
       sessionKey: "agent:main:main",
       modelProvider: "policy-provider",
       model: "policy-model",
+      messageProvider: "telegram",
+      senderId: "tools-owner",
       senderIsOwner: false,
       clientCaps: ["original-client"],
       toolsAllow: originalToolsAllow,
@@ -2892,6 +2883,8 @@ describe("prepareCliRunContext", () => {
     const questionAuthority = bindQuestionAuthority(() => {});
     originalToolsAllow.push("exec");
     const caller = {
+      messageProvider: "telegram",
+      senderId: "tools-owner",
       senderIsOwner: false,
       disableTools: false,
       clientCaps: ["original-client"],
@@ -2996,7 +2989,8 @@ describe("prepareCliRunContext", () => {
       modelProvider: "question-policy",
       model: "creator-model",
       config,
-      messageProvider: "webchat",
+      messageProvider: "telegram",
+      senderId: "question-owner",
       senderIsOwner: false,
       clientCaps: ["creator-client"],
       approvalReviewerDeviceId: "creator-reviewer",
@@ -3006,7 +3000,8 @@ describe("prepareCliRunContext", () => {
     const caller = {
       senderIsOwner: false,
       disableTools: false,
-      messageProvider: "webchat",
+      messageProvider: "telegram",
+      senderId: "question-owner",
       clientCaps: ["creator-client"],
       approvalReviewerDeviceId: "creator-reviewer",
       traceAuthorized: mode === "reply-owned",

@@ -29,6 +29,18 @@ export type WorkerWriteOperationContext = WorkerOperationContext & {
   ) => T;
 };
 
+export function createCommittedWorkerMutation<Input, Result extends boolean | number>(
+  type: string,
+  apply: (db: OpenClawStateDatabase["db"], input: Input) => Result,
+) {
+  return (input: Input, { writeAdmitted }: WorkerWriteOperationContext) =>
+    writeAdmitted(({ db }) => ({ type, result: apply(db, input) }), {
+      operationLabel: type,
+      receipt: "result",
+      transactionEnvironment: "process",
+    }).result;
+}
+
 export type WorkerOperationHandlers<Context = WorkerOperationContext> = Record<
   string,
   (input: never, context: Context) => unknown
