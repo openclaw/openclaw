@@ -73,6 +73,40 @@ function selectValue(root: HTMLElement, selector: string, value: string) {
 setupAppBrowserTests();
 
 describe("QA Lab runner browser interactions", () => {
+  it("keeps capture actions from releasing another pending action's busy state", async () => {
+    const root = await mountRunner(createRunnerSelection());
+    const reset = Promise.withResolvers<void>();
+    httpMock.postJson.mockImplementationOnce(() => reset.promise);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      root.querySelector<HTMLButtonElement>('[data-action="reset"]')!.click();
+      root.querySelector<HTMLButtonElement>('[data-tab="capture"]')!.click();
+      root.querySelector<HTMLButtonElement>("#capture-controls-toggle")!.click();
+      root.querySelector<HTMLButtonElement>("[data-copy-text]")!.click();
+      root.querySelector<HTMLButtonElement>("#capture-purge-all")!.click();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(root.querySelector<HTMLButtonElement>('[data-action="refresh"]')?.disabled).toBe(true);
+      expect(writeText).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(httpMock.postJson).toHaveBeenCalledExactlyOnceWith("/api/reset", {});
+
+      reset.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(root.querySelector<HTMLButtonElement>('[data-action="refresh"]')?.disabled).toBe(
+        false,
+      );
+      root.querySelector<HTMLButtonElement>("[data-copy-text]")!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writeText).toHaveBeenCalledOnce();
+    } finally {
+      reset.resolve();
+      confirm.mockRestore();
+    }
+  });
+
   it("shows clipboard failures from capture startup commands", async () => {
     const root = await mountRunner(createRunnerSelection());
     const writeText = vi.fn().mockRejectedValue(new Error("Clipboard permission denied"));
