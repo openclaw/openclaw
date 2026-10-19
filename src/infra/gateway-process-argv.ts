@@ -59,12 +59,13 @@ export function readProcessPackageIdentity(directory: string, searchParents = fa
       manifest = JSON.parse(fs.readFileSync(path.join(current, "package.json"), "utf8"));
     } catch (error) {
       const parent = path.dirname(current);
-      if (
-        searchParents &&
-        extractErrorCode(error) === "ENOENT" &&
-        parent !== current &&
-        path.basename(current) !== "node_modules"
-      ) {
+      if (searchParents && extractErrorCode(error) === "ENOENT") {
+        if (parent === current) {
+          return undefined;
+        }
+        if (path.basename(current) === "node_modules") {
+          throw new Error("could not read package identity", { cause: error });
+        }
         current = parent;
         continue;
       }
@@ -185,9 +186,9 @@ function classifyEntrypoint(
     !path.extname(script)
   ) {
     const pkg = readProcessPackageIdentity(opts.cwd, true);
-    const task = pkg.scripts[script];
+    const task = pkg?.scripts[script];
     if (typeof task === "string" && task.trim()) {
-      return pkg.name === "openclaw" ? { kind: "openclaw" } : { kind: "other" };
+      return pkg?.name === "openclaw" ? { kind: "openclaw" } : { kind: "other" };
     }
   }
   const identity = classifyOpenClawEntrypointPath(script, opts);
@@ -257,7 +258,7 @@ export function classifyOpenClawEntrypointPath(
       : path.dirname(resolved);
   try {
     const identity = readProcessPackageIdentity(root, !entry && !directory);
-    return identity.name === "openclaw"
+    return identity?.name === "openclaw"
       ? {
           kind: "openclaw",
           ...(opts.requirePackageIdentity
@@ -303,7 +304,16 @@ export function classifyOpenClawArgv(
       ? { kind: "openclaw" }
       : { kind: "other" };
   }
-  const identity = classifyEntrypoint(args, opts);
+  let identity: OpenClawArgvClassification;
+  try {
+    identity = classifyEntrypoint(args, opts);
+  } catch (error) {
+    identity = {
+      kind: "unclassified",
+      cause: "package-identity",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
   if (command) {
     return identity.kind === "openclaw" &&
       normalizeProcArg(

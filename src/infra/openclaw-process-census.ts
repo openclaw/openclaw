@@ -68,97 +68,71 @@ function processHoldsOpenClawArtifacts(
   command: ProcessCommand | undefined,
   pid: number,
   cwd: string | undefined,
-  parentCommand: ProcessCommand | undefined,
 ): boolean {
-  try {
-    const argv = command && "argv" in command ? command.argv : [];
-    if ([...argv, cwd ?? ""].some(referencesRetainedArtifact)) {
-      return true;
-    }
-    if (!command) {
-      throw new Error("process command is unavailable");
-    }
-    // The command reader admits these only for observed foreign UIDs or kernel/dead processes.
-    if ("argvUnavailable" in command || command.argv.length === 0) {
-      return false;
-    }
-    const { serviceMarker } = command;
-    const options = {
-      pid,
-      cwd: cwd ?? "",
-      serviceMarker,
-      additionalEntrypoints: workerEntrypoints,
-      inspectPackage: true,
-    };
-    const identity = classifyOpenClawArgv(argv, options);
-    if (identity.kind === "openclaw") {
-      return true;
-    }
-    if (identity.kind === "unclassified" && identity.cause !== "runtime-syntax") {
-      throw new Error(identity.reason);
-    }
-    const { position, operands } = resolveRuntimeScriptPosition(argv);
-    if (!cwd || !path.isAbsolute(cwd)) {
-      const inspectorUid = process.getuid?.();
-      if (
-        cwd === undefined &&
-        identity.kind === "other" &&
-        typeof position !== "number" &&
-        position.kind === "not-runtime" &&
-        (command.owner === "different" ||
-          (command.uid !== undefined &&
-            inspectorUid !== undefined &&
-            command.uid !== inspectorUid) ||
-          isStandardSystemdLoginProcess(command, parentCommand, inspectorUid))
-      ) {
-        return false;
-      }
-      throw new Error("working directory is unavailable");
-    }
-    if (typeof position !== "number" && position.kind === "not-runtime") {
-      return false;
-    }
-    let scripts: Record<string, unknown> = {};
-    if (typeof position !== "number") {
+  const argv = command && "argv" in command ? command.argv : [];
+  const executable = command && "executable" in command ? command.executable : undefined;
+  if ([...argv, cwd ?? "", executable ?? ""].some(referencesRetainedArtifact)) {
+    return true;
+  }
+  if (!command || "argvUnavailable" in command || argv.length === 0) {
+    return false;
+  }
+  const options = {
+    pid,
+    cwd: cwd ?? "",
+    serviceMarker: command.serviceMarker,
+    additionalEntrypoints: workerEntrypoints,
+    inspectPackage: true,
+  };
+  if (classifyOpenClawArgv(argv, options).kind === "openclaw") {
+    return true;
+  }
+  const { position, operands } = resolveRuntimeScriptPosition(argv);
+  let scripts: Record<string, unknown> = {};
+  if (
+    typeof position !== "number" &&
+    position.kind !== "not-runtime" &&
+    cwd &&
+    path.isAbsolute(cwd)
+  ) {
+    try {
       const pkg = readProcessPackageIdentity(cwd, true);
-      if (pkg.name === "openclaw") {
+      if (pkg?.name === "openclaw") {
         return true;
       }
-      scripts = pkg.scripts;
+      scripts = pkg?.scripts ?? {};
+    } catch {
+      // Unknown package evidence is local to this PID, not a census failure.
     }
-    for (const { value, module } of operands) {
-      let candidate = value;
-      if (module) {
-        if (value.startsWith("file:")) {
+  }
+  for (const { value, module } of operands) {
+    let candidate = value;
+    if (module) {
+      if (value.startsWith("file:")) {
+        try {
           candidate = fileURLToPath(value);
-        } else if (!path.isAbsolute(value) && !value.startsWith("./") && !value.startsWith("../")) {
-          throw new Error("runtime module package identity is unavailable");
+        } catch {
+          continue;
         }
-      } else if (
-        isBunRuntime(argv[0] ?? "") &&
-        !/[\\/]/u.test(value) &&
-        !path.extname(value) &&
-        typeof scripts[value] === "string" &&
-        scripts[value].trim()
-      ) {
-        // Bun package tasks take precedence over a same-named file.
+      } else if (!path.isAbsolute(value) && !value.startsWith("./") && !value.startsWith("../")) {
         continue;
       }
-      const evidence = classifyOpenClawEntrypointPath(candidate, options);
-      if (evidence.kind === "unclassified") {
-        throw new Error(evidence.reason);
-      }
-      if (evidence.kind === "openclaw") {
-        return true;
-      }
+    } else if (
+      isBunRuntime(argv[0] ?? "") &&
+      !/[\\/]/u.test(value) &&
+      !path.extname(value) &&
+      typeof scripts[value] === "string" &&
+      scripts[value].trim()
+    ) {
+      // Bun package tasks take precedence over a same-named file.
+      continue;
     }
-    return false;
-  } catch (error) {
-    throw new Error(
-      `Could not classify PID ${pid}: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
+    if (classifyOpenClawEntrypointPath(candidate, options).kind === "openclaw") {
+      return true;
+    }
   }
+  // Unknown processes retain artifacts only with the path evidence checked above.
+  return false;
 }
 
 type HandoffReferences = {
@@ -382,12 +356,7 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
         }
         continue;
       }
-      const holdsArtifacts = processHoldsOpenClawArtifacts(
-        command,
-        pid,
-        directories.get(pid),
-        byPid.get(command?.ppid ?? 0)?.command,
-      );
+      const holdsArtifacts = processHoldsOpenClawArtifacts(command, pid, directories.get(pid));
       if (holdsArtifacts) {
         result.matchingPids.push(pid);
       }
