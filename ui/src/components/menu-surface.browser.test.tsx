@@ -1,9 +1,9 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
 import { createChatAttachmentInputHandle } from "../pages/chat/components/chat-attachment-inputs.ts";
 import { composerLibraryMenuItems } from "../pages/chat/components/chat-composer-library-menu.tsx";
-import "../pages/chat/components/browser-tab-card.tsx";
 import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import { ChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
@@ -94,8 +94,8 @@ function hitTestOnDivider(menu: HTMLElement, divider: HTMLElement): Element | nu
   return document.elementFromPoint(x, y);
 }
 
-async function browserCardMenu(card: HTMLElementTagNameMap["openclaw-browser-tab-card"]) {
-  await card.updateComplete;
+async function browserCardMenu(card: HTMLElement) {
+  flush();
   const menu = card.querySelector<HTMLElement>(".oc-menu");
   if (!menu) {
     throw new Error("expected browser card menu");
@@ -445,16 +445,20 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
     async (theme) => {
       await useDesktopViewport();
       const highlight = useTheme(theme);
-      const card = document.createElement("openclaw-browser-tab-card");
-      card.preview = {
-        kind: "browser-tab",
-        target: "host",
-        profile: "managed",
-        targetId: "tab-1",
-        url: "https://example.test/page",
-        title: "Example page",
-      };
-      document.body.append(card);
+      const view = mountSolid(() => (
+        <BrowserTabCardHost
+          preview={{
+            kind: "browser-tab",
+            target: "host",
+            profile: "managed",
+            targetId: "tab-1",
+            url: "https://example.test/page",
+            title: "Example page",
+          }}
+        />
+      ));
+      flush();
+      const card = view.container.querySelector<HTMLElement>("openclaw-browser-tab-card")!;
       const menu = await browserCardMenu(card);
       const { page } = await import("vitest/browser");
       await page.elementLocator(card.querySelector<HTMLElement>(".more")!).click();

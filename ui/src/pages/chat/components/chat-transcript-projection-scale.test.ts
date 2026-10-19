@@ -185,12 +185,12 @@ it("renders browser previews in their own row outside the work summary", () => {
   const view = drawThread(props);
   try {
     view.draw();
-    const card = view.container.querySelector("openclaw-browser-tab-card");
+    const card = view.container.querySelector<HTMLElement>("openclaw-browser-tab-card");
     const previews = card?.closest(".chat-group--turn-block");
     expect(card).not.toBeNull();
     expect(previews).not.toBeNull();
-    expect(card?.preview?.url).toBe("https://example.com");
-    expect(card?.preview?.title).toBe("Example page");
+    expect(card?.querySelector(".url")?.textContent).toBe("https://example.com");
+    expect(card?.querySelector(".title")?.textContent).toBe("Example page");
     expect(previews?.closest(".chat-work-group")).toBeNull();
     expect(view.container.querySelector(".chat-work-group")).not.toBeNull();
     expect(view.container.textContent).toContain("I will inspect the example page.");

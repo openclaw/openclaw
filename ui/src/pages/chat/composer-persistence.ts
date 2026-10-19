@@ -248,9 +248,8 @@ export function admitStoredChatComposerQueueItem(
   state: ChatComposerScope,
   captured: ReturnType<typeof captureChatOutboxAdmission>,
   item: ChatQueueItem,
-  replaces?: StoredChatQueueReplacement,
 ): boolean {
-  return admitStoredChatComposerQueueItemResult(state, captured, item, replaces) === "admitted";
+  return admitStoredChatComposerQueueItemResult(state, captured, item) === "admitted";
 }
 
 export function admitStoredChatComposerQueueItemResult(

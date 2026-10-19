@@ -23,25 +23,6 @@ function sourceLabel(source: string): string {
   );
 }
 
-function sharedUnavailableMessage(
-  reason: NonNullable<GitHubPublicationView["options"]>["sharedUnavailableReason"],
-): string {
-  switch (reason) {
-    case "unavailable":
-      return t("githubPublication.sharedUnavailable.unavailable");
-    case "changed":
-      return t("githubPublication.sharedUnavailable.changed");
-    case "rate_limited":
-      return t("githubPublication.sharedUnavailable.rate_limited");
-    case "unverified":
-      return t("githubPublication.sharedUnavailable.unverified");
-    case "unsupported_workspace":
-      return t("githubPublication.sharedUnavailable.unsupported_workspace");
-    default:
-      return t("githubPublication.sharedUnavailable.unknown");
-  }
-}
-
 function publicationButtonSelection(publication: GitHubPublicationView) {
   return (
     publication.selection ??
@@ -357,7 +338,9 @@ export function GitHubPublicationDetails(props: {
         </Show>
         <Show when={noAccount()}>
           <span class="chat-pr__publication-note">
-            {sharedUnavailableMessage(props.publication.options?.sharedUnavailableReason)}
+            {t(
+              `githubPublication.sharedUnavailable.${props.publication.options?.sharedUnavailableReason ?? "unknown"}`,
+            )}
             {props.publication.options?.personal === null
               ? t("githubPublication.unidentified")
               : null}

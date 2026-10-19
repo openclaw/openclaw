@@ -30,8 +30,8 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../../lib/widget-theme.ts";
+import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { CanvasWidgetMount } from "./canvas-widget-mount.tsx";
-import "./browser-tab-card.tsx";
 import {
   WidgetCardMenu,
   type WidgetAction,
@@ -380,7 +380,6 @@ function PreviewFrame(props: {
 const loadMcpAppView = () => import("../../../components/mcp-app-view-registration.ts");
 
 const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.tsx");
-const loadYouTubeVideo = () => import("./youtube-video-card.tsx");
 
 function WidgetContent(props: {
   preview: CanvasToolPreview;
@@ -672,26 +671,39 @@ export function ToolPreview(props: ToolPreviewProps) {
                 }
               >
                 {(item) => {
-                  void ensureCustomElementDefined("openclaw-youtube-video", loadYouTubeVideo).catch(
+                  const [player, setPlayer] =
+                    createSignal<typeof import("./youtube-video-card.tsx").YouTubeVideoCard>();
+                  void import("./youtube-video-card.tsx").then(
+                    ({ YouTubeVideoCard }) => setPlayer(() => YouTubeVideoCard),
                     (error: unknown) =>
                       console.error("[openclaw] failed to load YouTube player", error),
                   );
                   return (
                     <Show when={`${props.options?.sessionKey ?? ""}\0${item().watchUrl}`} keyed>
                       {(_key) => (
-                        <openclaw-youtube-video
-                          prop:video={item()}
-                          prop:videoTitle={preview().title ?? ""}
-                          prop:enabled={
-                            props.options?.embedSandboxMode !== "strict" &&
-                            preview().sandbox !== "strict"
+                        <Show
+                          when={player()}
+                          keyed
+                          fallback={
+                            <openclaw-youtube-video>
+                              <a href={item().watchUrl} target="_blank" rel="noopener noreferrer">
+                                {preview().title?.trim() || t("chat.youtube.video")}
+                                <Icon name="externalLink" />
+                              </a>
+                            </openclaw-youtube-video>
                           }
                         >
-                          <a href={item().watchUrl} target="_blank" rel="noopener noreferrer">
-                            {preview().title?.trim() || t("chat.youtube.video")}
-                            <Icon name="externalLink" />
-                          </a>
-                        </openclaw-youtube-video>
+                          {(Player) => (
+                            <Player
+                              video={item()}
+                              videoTitle={preview().title ?? ""}
+                              enabled={
+                                props.options?.embedSandboxMode !== "strict" &&
+                                preview().sandbox !== "strict"
+                              }
+                            />
+                          )}
+                        </Show>
                       )}
                     </Show>
                   );
@@ -702,7 +714,7 @@ export function ToolPreview(props: ToolPreviewProps) {
         </Show>
       }
     >
-      {(preview) => <openclaw-browser-tab-card prop:preview={preview()} prop:latest={false} />}
+      {(preview) => <BrowserTabCardHost preview={preview()} latest={false} />}
     </Show>
   );
 }
@@ -710,16 +722,7 @@ export function ToolPreview(props: ToolPreviewProps) {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-browser-tab-card": HTMLAttributes<HTMLElement> & {
-        "prop:preview": Extract<ToolPreviewModel, { kind: "browser-tab" }>;
-        "prop:revision"?: string;
-        "prop:latest": boolean;
-      };
-      "openclaw-youtube-video": HTMLAttributes<HTMLElement> & {
-        "prop:video": import("../../../lib/chat/youtube-video.ts").YouTubeVideo;
-        "prop:videoTitle": string;
-        "prop:enabled": boolean;
-      };
+      "openclaw-youtube-video": HTMLAttributes<HTMLElement>;
     }
   }
 }

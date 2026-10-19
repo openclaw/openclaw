@@ -8,7 +8,6 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { CreationComposer } from "../new-session/creation-composer-render.tsx";
 import { NewSessionBody } from "../new-session/draft-body.solid.tsx";
@@ -206,25 +205,19 @@ function PendingSessionCreateContent(
     <>
       <div class="sidebar-region">
         <div class="sidebar-region__header">
-          <Show when={view()?.header}>{(header) => <ChatPaneHeader {...header()} />}</Show>
+          <ChatPaneHeader {...view().header} />
         </div>
-        <section class="chat" data-region="main" aria-busy={view()?.submitting ? "true" : "false"}>
+        <section class="chat" data-region="main" aria-busy={view().submitting ? "true" : "false"}>
           <div class="chat-main__conversation-frame">
             <div class="chat-main__conversation">
-              <Show when={view()?.body}>{(body) => <NewSessionBody {...body()} />}</Show>
+              <NewSessionBody {...view().body} />
               <div class="chat-footer">
-                <Show when={view()}>
-                  {(current) => (
-                    <Show
-                      when={current().creationComposer}
-                      keyed
-                      fallback={<ChatComposer {...current().composer} />}
-                    >
-                      {(composer) => (
-                        <CreationComposer composer={composer} onOpenImage={openImage} />
-                      )}
-                    </Show>
-                  )}
+                <Show
+                  when={view().creationComposer}
+                  keyed
+                  fallback={<ChatComposer {...view().composer} />}
+                >
+                  {(composer) => <CreationComposer composer={composer} onOpenImage={openImage} />}
                 </Show>
               </div>
             </div>
@@ -241,21 +234,10 @@ function PendingSessionCreateContent(
     </>
   );
 }
-export const PendingSessionCreate = defineSolidBridge<PendingSessionCreateProps>(
-  "openclaw-pending-session-create",
-  (props) => (
+export function PendingSessionCreate(props: PendingSessionCreateProps) {
+  return (
     <Show when={props.context} keyed>
       {(context) => PendingSessionCreateContent(props, context)}
     </Show>
-  ),
-  {
-    properties: {
-      context: { default: undefined, attribute: false },
-      sessionKey: { default: "" },
-      narrow: { default: false },
-      mergedChrome: { default: false },
-      navDrawerOpen: { default: false },
-      gatewayStatus: { default: null },
-    },
-  },
-);
+  );
+}

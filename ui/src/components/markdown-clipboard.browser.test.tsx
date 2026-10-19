@@ -1,6 +1,7 @@
 import { createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
 import { MessageImages } from "../pages/chat/components/chat-message-images-solid.tsx";
 import {
   MessageMarkdown,
@@ -9,7 +10,6 @@ import {
 import { exportWidget } from "../pages/chat/components/widget-export.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import "../pages/chat/components/browser-tab-card.tsx";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import "./markdown-mermaid.tsx";
 import { handleMarkdownTableInteraction, releaseMarkdownTables } from "./markdown-tables.ts";
@@ -110,19 +110,24 @@ function delayFirstWrite() {
 }
 
 async function mountBrowserCard() {
-  const card = document.createElement("openclaw-browser-tab-card");
-  card.preview = {
-    kind: "browser-tab",
-    target: "host",
-    profile: "managed",
-    targetId: "clipboard-tab",
-    url: "https://example.com/document",
-  };
-  document.body.append(card);
+  const [url, setUrl] = createSignal("https://example.com/document");
+  const view = mountSolid(() => (
+    <BrowserTabCardHost
+      preview={{
+        kind: "browser-tab",
+        target: "host",
+        profile: "managed",
+        targetId: "clipboard-tab",
+        url: url(),
+      }}
+    />
+  ));
+  flush();
+  const card = view.container.querySelector<HTMLElement>("openclaw-browser-tab-card")!;
   owners.push(card);
-  await card.updateComplete;
   return {
-    card,
+    unmount: view.unmount,
+    setUrl,
     copy: async () => {
       card.querySelector<HTMLButtonElement>(".more")!.click();
       const menu = card.querySelector<HTMLElement>(".oc-menu")!;
@@ -265,10 +270,10 @@ describe("Markdown clipboard operation lifetime", () => {
       const browser = await mountBrowserCard();
       await browser.copy();
       if (change === "removed") {
-        browser.card.remove();
+        browser.unmount();
       } else {
-        browser.card.preview = { ...browser.card.preview!, url: "https://example.com/new" };
-        await browser.card.updateComplete;
+        browser.setUrl("https://example.com/new");
+        flush();
       }
       pending.reject(new Error("Synthetic clipboard rejection"));
       await flushCopy();
