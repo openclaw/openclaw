@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   openOpenClawStateDatabase,
@@ -37,12 +37,9 @@ function rejectSchedulerWrite(jobId: string) {
   return () => db.exec("DROP TRIGGER IF EXISTS reject_identity_scheduler_write");
 }
 
-describe("cron recovery run identity", () => {
-  it.each([
-    { name: "retired predecessor", edit: "predecessor" },
-    { name: "retired pending run", edit: "pending" },
-    { name: "edit after completion", edit: "late" },
-  ] as const)("recovers the pending legacy result with $name", async ({ edit }) => {
+it.each(["predecessor", "pending", "late"] as const)(
+  "recovers the pending legacy result after a %s edit",
+  async (edit) => {
     const { storePath } = await makeStorePath();
     const storeKey = cronStoreKey(storePath);
     const firstStartedAt = Date.now();
@@ -161,12 +158,8 @@ describe("cron recovery run identity", () => {
         const rank = db.prepare(
           "UPDATE task_runs SET task_id = ? WHERE runtime = 'cron' AND source_id = ? AND terminal_summary = ?",
         );
-        expect(rank.run(`z-predecessor-history:${job.id}`, job.id, "first completed").changes).toBe(
-          1,
-        );
-        expect(rank.run(`a-pending-history:${job.id}`, job.id, "pending completed").changes).toBe(
-          1,
-        );
+        expect(rank.run(`z:${job.id}`, job.id, "first completed").changes).toBe(1);
+        expect(rank.run(`a:${job.id}`, job.id, "pending completed").changes).toBe(1);
       });
       const history = readHistory();
       expect(history).toHaveLength(2);
@@ -191,16 +184,13 @@ describe("cron recovery run identity", () => {
       await restarted.start();
       restarted.pauseScheduling();
 
-      const recovered = await readJob();
+      const { enabled, agentId, state } = await readJob();
       const pendingRetired = edit === "pending" || edit === "late";
-      expect(recovered.enabled).toBe(pendingRetired);
-      expect(recovered.state.triggerState).toEqual({
+      expect([enabled, agentId, state.lastRunStatus]).toEqual([pendingRetired, "beta", "ok"]);
+      expect(state.triggerState).toEqual({
         owner: pendingRetired ? "replacement" : "evaluation-2",
       });
-      expect(recovered.agentId).toBe("beta");
-      expect(recovered.state.lastRunStatus).toBe("ok");
-      expect(recovered.state.runningAtMs).toBeUndefined();
-      expect(recovered.state.runningReceiptId).toBeUndefined();
+      expect([state.runningAtMs, state.runningReceiptId]).toEqual([undefined, undefined]);
       expect(readHistory()).toEqual(history);
       expect(evaluateCronTrigger).toHaveBeenCalledTimes(2);
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
@@ -211,5 +201,5 @@ describe("cron recovery run identity", () => {
       cron.stop();
       restarted?.stop();
     }
-  });
-});
+  },
+);

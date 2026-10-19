@@ -12,17 +12,13 @@ import {
 import { CronService } from "./service.js";
 import {
   createStartedCronServiceWithFinishedBarrier,
-  createCronStoreHarness,
-  createNoopLogger,
-  installCronTestHooks,
+  setupCronServiceSuite,
   writeCronStoreSnapshot,
 } from "./service.test-harness.js";
 import { waitForCronRunQueue } from "./service/run-queue.js";
 import { captureCronSchedulerWakeForTest } from "./service/scheduler-actor.test-support.js";
 
-const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness();
-installCronTestHooks({ logger: noopLogger });
+const { logger: noopLogger, makeStorePath } = setupCronServiceSuite();
 
 async function startEveryJob(text: string) {
   const store = await makeStorePath();
@@ -45,67 +41,47 @@ async function startEveryJob(text: string) {
 }
 
 describe("CronService interval/cron jobs fire on time", () => {
-  const expectMainSystemEvent = (
-    enqueueSystemEvent: ReturnType<typeof vi.fn>,
-    expectedText: string,
-  ) => {
-    const matchingCall = enqueueSystemEvent.mock.calls.find(([text]) => text === expectedText);
-    if (!matchingCall) {
-      throw new Error(`missing system event ${expectedText}`);
-    }
-    const options = matchingCall[1] as Record<string, unknown>;
-    expect(options).toMatchObject({ agentId: "main", contextKey: expect.stringMatching(/^cron:/) });
-    expect(options.sessionKey).toBeUndefined();
-  };
-
-  it("resumes due cron work after a busy suspension attempt", async () => {
-    const { cron, state, enqueueSystemEvent, finished, store, clock, job, wake } =
-      await startEveryJob("recovered-tick");
-    resetGatewayWorkAdmission();
-
-    try {
-      expect(
-        prepareGatewaySuspend({
-          requestId: "cron-resume-retry",
-          pauseScheduling: () => cron.pauseScheduling(),
-          resumeScheduling: () => cron.resumeScheduling(),
-          inspect: { getQueueSize: () => 1 },
-        }),
-      ).toMatchObject({ status: "busy" });
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-
-      const finishedRun = finished.waitForOk(job.id);
-      clock.setTime(job.state.nextRunAtMs! + 5);
-      await wake(state);
-      await finishedRun;
-      await waitForCronRunQueue(state);
-      expectMainSystemEvent(enqueueSystemEvent, "recovered-tick");
-    } finally {
-      cron.stop();
-      resetGatewayWorkAdmission();
-      await store.cleanup();
-    }
-  });
-
-  it("keeps a due timer pending when restart signal admission rolls back", async () => {
-    const fixture = await startEveryJob("rollback-tick");
+  it.each([
+    ["busy suspension attempt", "recovered-tick"],
+    ["restart signal admission rollback", "rollback-tick"],
+  ])("resumes due cron work after %s", async (variant, text) => {
+    const fixture = await startEveryJob(text);
     const { cron, state, enqueueSystemEvent, finished, store, clock, job } = fixture;
     resetGatewayWorkAdmission();
     let wake: Promise<void> | undefined;
 
     try {
-      const pendingSignal = beginGatewayRestartSignalAdmission();
-      expect(pendingSignal).not.toBeNull();
+      let pendingSignal: ReturnType<typeof beginGatewayRestartSignalAdmission> | undefined;
+      if (variant === "restart signal admission rollback") {
+        pendingSignal = beginGatewayRestartSignalAdmission();
+        expect(pendingSignal).not.toBeNull();
+      } else {
+        expect(
+          prepareGatewaySuspend({
+            requestId: "cron-resume-retry",
+            pauseScheduling: () => cron.pauseScheduling(),
+            resumeScheduling: () => cron.resumeScheduling(),
+            inspect: { getQueueSize: () => 1 },
+          }),
+        ).toMatchObject({ status: "busy" });
+        expect(isGatewayWorkAdmissionClosed()).toBe(false);
+      }
       const finishedRun = finished.waitForOk(job.id);
       clock.setTime(job.state.nextRunAtMs! + 5);
       wake = fixture.wake(state);
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-
-      expect(pendingSignal?.rollback()).toBe(true);
+      if (variant === "restart signal admission rollback") {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(pendingSignal?.rollback()).toBe(true);
+      }
       await wake;
       await finishedRun;
       await waitForCronRunQueue(state);
-      expectMainSystemEvent(enqueueSystemEvent, "rollback-tick");
+      const options = enqueueSystemEvent.mock.calls.find(([actual]) => actual === text)?.[1];
+      expect(options).toMatchObject({
+        agentId: "main",
+        contextKey: expect.stringMatching(/^cron:/),
+      });
+      expect(options?.sessionKey).toBeUndefined();
     } finally {
       cron.stop();
       resetGatewayWorkAdmission();
@@ -122,20 +98,12 @@ describe("CronService interval/cron jobs fire on time", () => {
 
     await writeCronStoreSnapshot({
       storePath: store.storePath,
-      jobs: [
-        {
-          id: "loaded-every",
-          text: "sf-tick",
-          schedule: { kind: "every" as const, everyMs: 120_000 },
-          dueInMs: 120_000,
-        },
-        {
-          id: "minute-cron",
-          text: "minute-tick",
-          schedule: { kind: "cron" as const, expr: "* * * * *", tz: "UTC" },
-          dueInMs: 60_000,
-        },
-      ].map(({ id, text, schedule, dueInMs }) => ({
+      jobs: (
+        [
+          ["loaded-every", "sf-tick", { kind: "every", everyMs: 120_000 }, 120_000],
+          ["minute-cron", "minute-tick", { kind: "cron", expr: "* * * * *", tz: "UTC" }, 60_000],
+        ] as const
+      ).map(([id, text, schedule, dueInMs]) => ({
         id,
         name: id,
         enabled: true,

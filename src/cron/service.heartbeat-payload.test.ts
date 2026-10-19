@@ -9,16 +9,12 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
 import type { CronEvent } from "./service.js";
 import {
-  createCronStoreHarness,
-  createNoopLogger,
   createStartedCronServiceWithFinishedBarrier,
-  installCronTestHooks,
+  setupCronServiceSuite,
 } from "./service.test-harness.js";
 import type { CronJobCreate } from "./types.js";
 
-const logger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness();
-installCronTestHooks({ logger });
+const { logger, makeStorePath } = setupCronServiceSuite();
 type HeartbeatHarness = ReturnType<typeof createStartedCronServiceWithFinishedBarrier>;
 type HeartbeatOptions = Omit<
   Parameters<typeof createStartedCronServiceWithFinishedBarrier>[0],
@@ -44,7 +40,6 @@ async function startHeartbeatCron(options: HeartbeatOptions = {}) {
 const monitor = (overrides: Partial<CronJobCreate> = {}): CronJobCreate => ({
   declarationKey: "heartbeat:main",
   name: "heartbeat-main",
-  agentId: "main",
   enabled: true,
   schedule: { kind: "every", everyMs: 60_000 },
   payload: { kind: "heartbeat" },
@@ -54,11 +49,20 @@ const monitor = (overrides: Partial<CronJobCreate> = {}): CronJobCreate => ({
 });
 
 async function addMonitor(cron: HeartbeatHarness["cron"], everyMs = 60_000) {
-  const added = await cron.add(monitor({ schedule: { kind: "every", everyMs } }), {
+  const added = await cron.add(monitor({ agentId: "main", schedule: { kind: "every", everyMs } }), {
     enabledExplicit: true,
     systemOwned: true,
   });
   return "job" in added ? added.job : added;
+}
+
+function expectWake(context: HeartbeatHarness, payload: unknown) {
+  expect(context.requestHeartbeatAndWait).toHaveBeenCalledWith(
+    payload,
+    expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+  );
+  expect(context.requestHeartbeat).not.toHaveBeenCalled();
+  expect(context.enqueueSystemEvent).not.toHaveBeenCalled();
 }
 
 describe("heartbeat payload execution", () => {
@@ -72,34 +76,24 @@ describe("heartbeat payload execution", () => {
   });
 
   it("fires a system-owned monitor as an interval wake without a system event", async () => {
-    const { cron, enqueueSystemEvent, requestHeartbeat, requestHeartbeatAndWait } =
-      await startHeartbeatCron();
+    const context = await startHeartbeatCron();
+    const { cron } = context;
     const job = await addMonitor(cron);
     await expect(cron.update(job.id, { enabled: false })).rejects.toThrow(/system-owned/);
     await expect(cron.remove(job.id)).rejects.toThrow(/system-owned/);
     await expect(
-      cron.add({
-        declarationKey: "heartbeat:main",
-        name: "rogue-upsert",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        payload: { kind: "systemEvent", text: "hijack" },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-      }),
+      cron.add(monitor({ name: "rogue-upsert", payload: { kind: "systemEvent", text: "hijack" } })),
     ).rejects.toThrow(/system-owned/);
     await expect(cron.run(job.id, "force")).resolves.toMatchObject({ ok: true });
-    expect(requestHeartbeatAndWait).toHaveBeenCalledWith(
+    expectWake(
+      context,
       expect.objectContaining({
         source: "interval",
         intent: "scheduled",
         agentId: "main",
         scheduledEveryMs: 60_000,
       }),
-      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
     );
-    expect(requestHeartbeat).not.toHaveBeenCalled();
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(cron.getJob(job.id)?.state).toMatchObject({
       lastRunStatus: "ok",
       lastStatus: "ok",
@@ -146,9 +140,7 @@ describe("heartbeat payload execution", () => {
   });
 
   it("settles an enqueued manual heartbeat run without occupying the command lane", async () => {
-    const { cron, finished } = await startHeartbeatCron({
-      requestHeartbeatAndWait: async () => ({ status: "ran", durationMs: 1 }),
-    });
+    const { cron, finished } = await startHeartbeatCron();
     const job = await addMonitor(cron);
     const terminal = finished.waitForOk(job.id);
     await expect(cron.enqueueRun(job.id, "force")).resolves.toMatchObject({
@@ -187,11 +179,11 @@ describe("heartbeat payload execution", () => {
   });
 
   it("routes migrated task jobs through the guarded task wake path", async () => {
-    const { cron, enqueueSystemEvent, requestHeartbeat, requestHeartbeatAndWait } =
-      await startHeartbeatCron();
-    const declarationKey = heartbeatTaskDeclarationKey("main", "inbox");
+    const context = await startHeartbeatCron();
+    const { cron } = context;
     const input = monitor({
-      declarationKey,
+      declarationKey: heartbeatTaskDeclarationKey("main", "inbox"),
+      agentId: "main",
       name: "inbox",
       payload: { kind: "systemEvent", text: "Check urgent inbox items" },
     });
@@ -199,18 +191,13 @@ describe("heartbeat payload execution", () => {
     const added = await cron.add(input, { systemOwned: true });
     const job = "job" in added ? added.job : added;
     await expect(cron.run(job.id, "force")).resolves.toMatchObject({ ok: true });
-    expect(requestHeartbeatAndWait).toHaveBeenCalledWith(
-      {
-        source: "interval",
-        intent: "task",
-        reason: `heartbeat-task:${job.id}`,
-        agentId: "main",
-        tasks: [{ jobId: job.id, name: "inbox", prompt: "Check urgent inbox items" }],
-      },
-      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
-    );
-    expect(requestHeartbeat).not.toHaveBeenCalled();
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expectWake(context, {
+      source: "interval",
+      intent: "task",
+      reason: `heartbeat-task:${job.id}`,
+      agentId: "main",
+      tasks: [{ jobId: job.id, name: "inbox", prompt: "Check urgent inbox items" }],
+    });
     await expect(
       cron.update(job.id, { payload: { kind: "systemEvent", text: "Check priority inbox" } }),
     ).resolves.toMatchObject({ id: job.id });

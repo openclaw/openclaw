@@ -79,7 +79,8 @@ describe("scheduled cron session retirement through the Gateway", () => {
       database.close();
     }
   };
-  const history = (id: string) => call<{ entries: CronRunLogEntry[] }>("cron.runs", { id });
+  const history = async (id: string) =>
+    (await call<{ entries: CronRunLogEntry[] }>("cron.runs", { id })).entries;
   const marker = (id: string, event: string) => path.join(control, `${id}.${event}`);
   const release = (id: string) => fs.writeFile(marker(id, "release"), "");
 
@@ -178,18 +179,12 @@ describe("scheduled cron session retirement through the Gateway", () => {
       closeOpenClawStateDatabaseForTest();
       resetGatewayTestState();
       if (setup) {
-        try {
-          await removeGatewayTempHome(setup.tempHome);
-        } finally {
-          setup.envSnapshot.restore();
-        }
+        await removeGatewayTempHome(setup.tempHome).finally(setup.envSnapshot.restore);
       }
     }
   }, 120_000);
 
-  it("retires a removed scheduled job and preserves one-shot cleanup on the same Gateway", async ({
-    signal,
-  }) => {
+  it("retires removed and one-shot scheduled jobs through the same Gateway", async ({ signal }) => {
     // Runtime test setup resets plugin registrations after each test, so both flows share this test.
     const retainedRuns = new Map<string, CronRunLogEntry[]>();
     const startedRuns = [];
@@ -226,7 +221,7 @@ describe("scheduled cron session retirement through the Gateway", () => {
       const oneShot = id === "one-shot";
       try {
         expect(entry(baseKey)).toMatchObject({ sessionId });
-        expect((await history(job.id)).entries).toEqual([]);
+        expect(await history(job.id)).toEqual([]);
         expect(existsSync(marker(id, "cancelled"))).toBe(false);
         expect(placement(sessionId)).toMatchObject({
           session_key: runKey,
@@ -251,7 +246,7 @@ describe("scheduled cron session retirement through the Gateway", () => {
           })
           .toEqual({ base: undefined, placement: undefined });
         await expect
-          .poll(async () => (await history(job.id)).entries, { timeout: 30_000 })
+          .poll(() => history(job.id), { timeout: 30_000 })
           .toEqual([
             expect.objectContaining({
               jobId: job.id,
@@ -274,13 +269,13 @@ describe("scheduled cron session retirement through the Gateway", () => {
         expect(sessions.sessions.map((session) => session.key)).not.toContain(runKey);
         const jobs = await call<{ jobs: CronJob[] }>("cron.list", { includeDisabled: true });
         expect(jobs.jobs.map((listed) => listed.id)).not.toContain(job.id);
-        retainedRuns.set(job.id, (await history(job.id)).entries);
+        retainedRuns.set(job.id, await history(job.id));
       } finally {
         await release(id);
       }
     }
     for (const [jobId, entries] of retainedRuns) {
-      expect((await history(jobId)).entries).toEqual(entries);
+      expect(await history(jobId)).toEqual(entries);
     }
   }, 240_000);
 });
