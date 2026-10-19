@@ -160,6 +160,7 @@ export function* nativeAttemptAttachments(): IterableIterator<ActiveEmbeddedRunA
   yield* detachedAttempts;
 }
 
+/** @internal Exposed for unit tests only. */
 export function* activeNativeAttempts(): IterableIterator<[string, EmbeddedAgentQueueHandle]> {
   for (const attachment of nativeAttemptAttachments()) {
     if (attachment.operation || !hasSessionControllerIdentity(attachment.sessionId)) {

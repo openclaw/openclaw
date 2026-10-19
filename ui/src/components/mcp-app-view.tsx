@@ -8,6 +8,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { McpAppConfirmation } from "./mcp-app-confirm-solid.tsx";
+import { registerMcpAppUnmountTarget } from "./mcp-app-unmount.ts";
 import {
   createMcpAppView,
   type McpAppViewOwner,
@@ -27,6 +28,7 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
     const owner = createMcpAppView(host, context);
     const read = projectOwner(owner, (current) => current.read()).read;
     owners.set(host, owner);
+    const unregister = registerMcpAppUnmountTarget(host);
     let { client, phase, hello } = context.gateway.snapshot;
     const stopConnection = context.gateway.subscribe((snapshot) => {
       if (snapshot.client !== client || snapshot.phase !== phase || snapshot.hello !== hello) {
@@ -71,6 +73,7 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
     );
     onCleanup(() => {
       stopConnection();
+      unregister();
       owners.delete(host);
       void owner.teardown();
     });

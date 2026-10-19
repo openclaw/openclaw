@@ -15,7 +15,6 @@ import {
 } from "../scripts/lib/managed-child-process.mts";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "./helpers/fixture-lifetime.js";
-import { createLauncherCommandBoundaryPlugin } from "./helpers/launcher-esbuild.js";
 import { NODE_RELEASE_VERSION_CASES } from "./helpers/node-version-cases.js";
 
 // Node version fixtures must enter Node admission even when Vitest runs under Bun.
@@ -1881,7 +1880,6 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           sourcefile: "compile-cache-owner-fixture.ts",
           loader: "ts",
         },
-        plugins: [createLauncherCommandBoundaryPlugin()],
         format: "esm",
         outfile: path.join(fixtureRoot, "dist", name),
         platform: "node",

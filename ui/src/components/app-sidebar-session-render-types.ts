@@ -40,6 +40,7 @@ import type { ChannelAvatarProps } from "./solid/channel-avatar.tsx";
 import "./tooltip.ts";
 
 export interface SessionListHost {
+  readonly presencePeople?: Map<string, HTMLElement>;
   readonly sidebarSnapshot?: import("./sidebar-snapshot-model.ts").SidebarSnapshotModel | null;
   readonly sidebarAgentsMode?: "chip" | "roster";
   readonly basePath: string;
@@ -95,6 +96,7 @@ export interface SessionListHost {
     | "patchSession"
     | "isPersonalSessionPin"
     | "reorderSidebarSection"
+    | "sectionHeaders"
   >;
   readonly sidebarMenus: Pick<
     SidebarMenus,
@@ -153,6 +155,7 @@ export interface SessionListHost {
 }
 
 export type SessionCatalogGroupsParams = {
+  sectionHeaders: Map<string, HTMLElement>;
   catalogs: readonly SidebarSessionCatalog[];
   basePath: string;
   routeSessionKey: string;

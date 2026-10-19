@@ -2170,8 +2170,9 @@ resets, cold archives, and incompatible writes invalidate its retained facts.
 SQLite and PostgreSQL turn preparation in the serialized execution worker reuse the actor's
 committed exact entry, window, pending-input rows, and transcript version. Existing
 write receipts keep these facts current; missing residency, moved keys, cold
-archives, and turn mutations retain canonical readers. Idempotency still reads
-the canonical identity because a bounded transcript window cannot prove absence.
+archives, and turn mutations retain canonical readers. A complete resident identity
+index proves a fresh idempotency key is absent without reading SQL. Truncated
+indexes, matching keys, and assistant-body scans retain canonical lookups.
 Source validation, pending-input custody, and final write authority remain with
 their existing owners.
 Bounded context reads inside the actor transaction also derive logical parents
@@ -6338,6 +6339,11 @@ use; reads also prepare authority before accepting their results. Transcript
 writes retain their interval through the existing writer's commit and settlement.
 Synchronous guards perform no receipt SQL or worker submission. Agent database
 admission refusals remain with their in-memory admission owner.
+
+Cron mutation preparation uses the service's complete resident store and existing
+write-receipt invalidation. The shared planner runs locally without a worker request
+or preparation transaction. The committing worker rereads authoritative rows,
+replans, and retains definition, precondition, and final authority checks.
 
 Cron mutations share host-owned receipt-authority custody for the physical shared
 database, across store partitions and approval writers. Runtime mutations, raw

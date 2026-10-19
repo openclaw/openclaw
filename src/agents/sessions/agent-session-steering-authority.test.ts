@@ -21,10 +21,8 @@ import type {
   ReplyBackendMessageInjectionV2,
   ReplyToolAuthorityOverlay,
 } from "../../sessions/session-controller.contracts.js";
-import {
-  beginReplyMessageInjectionTarget,
-  captureCurrentReplyMessageInjectionTarget,
-} from "../../sessions/session-controller.js";
+import { beginReplyMessageInjectionTarget } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";

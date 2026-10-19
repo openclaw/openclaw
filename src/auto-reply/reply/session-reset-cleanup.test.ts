@@ -25,7 +25,6 @@ import { withSessionControllerOwner } from "../../sessions/session-controller.co
 import {
   createReplyOperation,
   getSessionControllerOperation,
-  isSessionRunActiveForKey,
 } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
@@ -33,6 +32,7 @@ import {
   reserveSessionControllerSource,
   tryClaimSessionControllerTask,
 } from "../../sessions/session-controller.mailbox.js";
+import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
 import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
