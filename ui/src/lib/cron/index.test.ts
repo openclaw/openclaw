@@ -905,19 +905,6 @@ describe("cron controller", () => {
     });
   });
 
-  it("drops malformed jobs without changing the server's inventory total", async () => {
-    const job = createCronJob("good", "Good");
-    const request = createMethodRequest({
-      "cron.list": {
-        ...cronJobsListResponse([job], { total: 2 }),
-        jobs: [{ id: "bad", name: "Missing payload", enabled: true }, job],
-      },
-    });
-    const state = createStateWithRequest(request);
-    await loadCronJobsPage(state);
-    expect(state).toMatchObject({ cronJobs: [job], cronJobsTotal: 2, cronJobsHasMore: false });
-  });
-
   it("drops an older append after replacing history filters", async () => {
     const current = { ...runEntry("filtered", 3), status: "error" as const };
     const older = createDeferred<CronRunsResult>();

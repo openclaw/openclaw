@@ -7,7 +7,7 @@ import type { AgentsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import { getCronJobPayload, resolveConfiguredCronModelSuggestions } from "../../lib/cron/index.ts";
+import { resolveConfiguredCronModelSuggestions } from "../../lib/cron/index.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
 
@@ -65,8 +65,8 @@ export function buildCronSuggestions(params: {
     ...params.modelSuggestions,
     ...resolveConfiguredCronModelSuggestions(configValue),
     ...params.cron.cronJobs.map((job) => {
-      const payload = getCronJobPayload(job);
-      return payload?.kind === "agentTurn" && typeof payload.model === "string"
+      const payload = job.payload;
+      return payload.kind === "agentTurn" && typeof payload.model === "string"
         ? payload.model.trim()
         : "";
     }),
