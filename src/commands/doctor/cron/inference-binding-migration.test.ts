@@ -111,8 +111,12 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
         code: "ENOENT",
       });
 
-      const database = () => openOpenClawStateDatabase();
-      database()
+      const query = (sql: string) => openOpenClawStateDatabase().db.prepare(sql).get();
+      const backupsOnDisk = async () =>
+        (await fs.readdir(state.statePath("state"))).filter(
+          (name) => name.includes(".doctor-cron-") && name.endsWith(".bak"),
+        );
+      openOpenClawStateDatabase()
         .db.prepare(
           `INSERT INTO operator_approvals (cursor_id, approval_id, resolution_ref, kind, status, presentation_json, reviewer_device_ids_json, audience_session_keys_json, runtime_epoch, created_at_ms, expires_at_ms, updated_at_ms, decision, terminal_reason, resolved_at_ms, resolver_kind) VALUES (1, 'legacy-approval', ?, 'exec', 'allowed', '{}', '[]', '[]', 'synthetic-epoch', 1, 3, 2, 'allow-always', 'user', 2, 'device')`,
         )
@@ -128,12 +132,12 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
           expiresAtMs: null,
         }),
       );
-      const grantBefore = database()
-        .db.prepare("SELECT * FROM operator_approval_standing_grants WHERE cron_job_id = 'pinned'")
-        .get()!;
-      const generationBefore = database()
-        .db.prepare("SELECT grant_definition_generation FROM cron_jobs WHERE job_id = 'pinned'")
-        .get();
+      const grantSql =
+        "SELECT * FROM operator_approval_standing_grants WHERE cron_job_id = 'pinned'";
+      const generationSql =
+        "SELECT grant_definition_generation FROM cron_jobs WHERE job_id = 'pinned'";
+      const grantBefore = query(grantSql)!;
+      const generationBefore = query(generationSql);
 
       // The ordinary cron contribution also runs in repairing update Doctor.
       await repair(state.configPath);
@@ -154,28 +158,16 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
         ...inactive,
         inferenceBinding: { profileId: "openai:default" },
       });
-      const backups = (await fs.readdir(state.statePath("state"))).filter(
-        (name) => name.includes(".doctor-cron-") && name.endsWith(".bak"),
-      );
+      const backups = await backupsOnDisk();
       expect(backups).toHaveLength(1);
       await repair(state.configPath);
       expect((await loadCronJobsStore(storePath)).jobs).toEqual(repaired);
-      expect(
-        (await fs.readdir(state.statePath("state"))).filter(
-          (name) => name.includes(".doctor-cron-") && name.endsWith(".bak"),
-        ),
-      ).toEqual(backups);
+      expect(await backupsOnDisk()).toEqual(backups);
       const migratedJob = repaired[0]!;
       const revision = resolveCronJobConfigRevision(migratedJob);
-      const grantAfter = database()
-        .db.prepare("SELECT * FROM operator_approval_standing_grants WHERE cron_job_id = 'pinned'")
-        .get()!;
+      const grantAfter = query(grantSql)!;
       expect(grantAfter).toEqual({ ...grantBefore, job_config_revision: revision });
-      expect(
-        database()
-          .db.prepare("SELECT grant_definition_generation FROM cron_jobs WHERE job_id = 'pinned'")
-          .get(),
-      ).toEqual(generationBefore);
+      expect(query(generationSql)).toEqual(generationBefore);
       const prepared = prepareCronRunReceiptClaim({
         storePath,
         job: migratedJob,

@@ -67,6 +67,21 @@ function job(id: string): CronJob {
   };
 }
 
+async function createStore(label: string, jobs?: CronJob[], isolate = true) {
+  tempRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`)));
+  if (isolate) {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot);
+  }
+  const storePath = path.join(tempRoot, "cron", "jobs.json");
+  if (jobs) {
+    await saveCronStore(storePath, { version: 1, jobs });
+  }
+  return storePath;
+}
+
+const expectMissing = async (file: string) =>
+  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+
 async function loadRepairStateForStore(storePath: string) {
   const cfg = { cron: { store: storePath } } as OpenClawConfig;
   const state = expectDefined(
@@ -98,10 +113,7 @@ it("leaves canonical one-shot jobs untouched without a SQLite repair backup", as
     await saveCronStore(storePath, { version: 1, jobs: [canonical] });
     const { cfg, state } = await loadRepairStateForStore(storePath);
 
-    expect(await applyLegacyCronStoreRepair({ cfg, state })).toEqual({
-      changes: [],
-      warnings: [],
-    });
+    expect(await applyLegacyCronStoreRepair({ cfg, state })).toEqual({ changes: [], warnings: [] });
     expect((await loadCronStore(storePath)).jobs).toEqual([canonical]);
     expect(
       (await fs.readdir(fixture.statePath("state"))).filter((name) =>
@@ -133,9 +145,7 @@ it("rehearses quarantine import without consuming the live source before activat
         try {
           const repaired = await repairLegacyCronStoreWithoutPrompt({ cfg });
           expect(await fs.readFile(quarantinePath, "utf8")).toBe(source);
-          await expect(fs.stat(`${quarantinePath}.migrated`)).rejects.toMatchObject({
-            code: "ENOENT",
-          });
+          await expectMissing(`${quarantinePath}.migrated`);
           expect(repaired.warnings).toEqual([expect.stringContaining("Update rehearsal retained")]);
           expect(await loadCronQuarantinedJobs(storePath)).toEqual([entry]);
         } finally {
@@ -146,7 +156,7 @@ it("rehearses quarantine import without consuming the live source before activat
     await withEnvAsync(updateDoctorEnv, async () => {
       expect((await repairLegacyCronStoreWithoutPrompt({ cfg })).warnings).toEqual([]);
       expect(await loadCronQuarantinedJobs(storePath)).toEqual([entry]);
-      await expect(fs.stat(quarantinePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectMissing(quarantinePath);
       expect(await fs.readFile(`${quarantinePath}.migrated`, "utf8")).toBe(source);
     });
   });
@@ -171,19 +181,14 @@ it("retains an uncopied quarantine reached through a rehearsal symlink", async (
         });
         expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);
         expect(await fs.readFile(linked, "utf8")).toBe("retained operator bytes\n");
-        await expect(fs.stat(`${linked}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.stat(`${source}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectMissing(`${linked}.migrated`);
+        await expectMissing(`${source}.migrated`);
       },
     );
   });
 });
 
 it("preserves current-session delivery through SQLite repair and reload", async () => {
-  tempRoot = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-current-repair-")),
-  );
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot);
-  const storePath = path.join(tempRoot, "cron", "jobs.json");
   const current: CronJob = {
     ...job("current-source"),
     agentId: "main",
@@ -193,12 +198,12 @@ it("preserves current-session delivery through SQLite repair and reload", async 
     delivery: { mode: "announce" },
     state: { consecutiveErrors: 2 },
   };
+  const storePath = await createStore("cron-current-repair");
   replaceSessionEntrySync(
     { agentId: "main", sessionKey: current.sessionKey! },
     { sessionId: "current-source", updatedAt: 1 },
   );
-  const store = { version: 1 as const, jobs: [current] };
-  await saveCronStore(storePath, store);
+  await saveCronStore(storePath, { version: 1, jobs: [current] });
   const { cfg, state } = await loadRepairStateForStore(storePath);
 
   const repaired = await applyLegacyCronStoreRepair({ cfg, state });
@@ -218,12 +223,11 @@ it("preserves current-session delivery through SQLite repair and reload", async 
 });
 
 it("refuses to rewrite a row a writer outside this branch's code committed after the snapshot", async () => {
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-repair-mixed-version-"));
-  const storePath = path.join(tempRoot, "cron", "jobs.json");
-  await saveCronStore(storePath, {
-    version: 1,
-    jobs: [{ ...job("job-a"), notify: true } as CronJob],
-  });
+  const storePath = await createStore(
+    "cron-repair-mixed-version",
+    [{ ...job("job-a"), notify: true } as CronJob],
+    false,
+  );
   const { cfg, state } = await loadRepairStateForStore(storePath);
   openOpenClawStateDatabase()
     .db.prepare(
@@ -242,11 +246,8 @@ it("refuses to rewrite a row a writer outside this branch's code committed after
 });
 
 it("retains the legacy quarantine file when a native batch is rejected", async () => {
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-quarantine-refusal-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot);
-  const storePath = path.join(tempRoot, "cron", "jobs.json");
+  const storePath = await createStore("cron-quarantine-refusal", []);
   const quarantinePath = storePath.replace(/\.json$/, "-quarantine.json");
-  await saveCronStore(storePath, { version: 1, jobs: [] });
   const entries = [
     { quarantinedAtMs: 123, sourceIndex: 0, reason: "invalid-schedule", job: { id: "first-row" } },
     {
@@ -270,7 +271,7 @@ it("retains the legacy quarantine file when a native batch is rejected", async (
     expect(result.warnings).toEqual([expect.stringContaining("quarantine registration rejected")]);
     expect(await loadCronQuarantinedJobs(storePath)).toEqual([]);
     expect(await fs.readFile(quarantinePath, "utf8")).toBe(source);
-    await expect(fs.stat(`${quarantinePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(`${quarantinePath}.migrated`);
   } finally {
     database.exec("DROP TRIGGER reject_cron_quarantine");
   }
@@ -278,15 +279,12 @@ it("retains the legacy quarantine file when a native batch is rejected", async (
   const repaired = await applyLegacyCronStoreRepair(await loadRepairStateForStore(storePath));
   expect(repaired.warnings).toEqual([]);
   expect(await loadCronQuarantinedJobs(storePath)).toEqual(entries);
-  await expect(fs.stat(quarantinePath)).rejects.toMatchObject({ code: "ENOENT" });
+  await expectMissing(quarantinePath);
   await expect(fs.stat(`${quarantinePath}.migrated`)).resolves.toBeDefined();
 });
 
 it("does not reactivate quarantined automations during startup repair", async () => {
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-startup-quarantine-"));
-  const storePath = path.join(tempRoot, "cron", "jobs.json");
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot);
-  await saveCronStore(storePath, { version: 1, jobs: [] });
+  const storePath = await createStore("cron-startup-quarantine", []);
   await saveCronQuarantinedJobs({
     storePath,
     nowMs: 123,
@@ -295,16 +293,11 @@ it("does not reactivate quarantined automations during startup repair", async ()
         sourceIndex: 0,
         reason: "invalid-schedule",
         job: {
-          id: "variant-cron",
+          ...job("variant-cron"),
           name: "Variant cron",
-          enabled: true,
-          createdAtMs: 1,
-          updatedAtMs: 1,
           schedule: { kind: " CRON ", expr: "0 9 * * *" },
           sessionTarget: "main",
-          wakeMode: "now",
           payload: { kind: "systemEvent", text: "tick" },
-          state: {},
         },
       },
     ],
@@ -412,7 +405,7 @@ it("leaves a newly appeared JSON source for the next Doctor migration", async ()
     });
     expect(await fs.readFile(storePath, "utf8")).toBe("new retired source");
     expect(await loadCronQuarantinedJobs(storePath)).toHaveLength(1);
-    await expect(fs.stat(quarantinePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(quarantinePath);
   });
 });
 
@@ -429,6 +422,6 @@ it("preserves a broken retired cron source link and refuses repair", async () =>
 
     expect((await fs.lstat(storePath)).isSymbolicLink()).toBe(true);
     expect(await fs.readlink(storePath)).toBe(missingTarget);
-    await expect(fs.stat(`${storePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(`${storePath}.migrated`);
   });
 });

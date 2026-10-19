@@ -30,6 +30,11 @@ type FutureSchemaFixture = {
 
 let tempRoot: string | undefined;
 let fixtureDatabase: DatabaseSync | undefined;
+const futureSchemaSql = `
+  CREATE TABLE preserved_sentinel (value TEXT NOT NULL) STRICT;
+  INSERT INTO preserved_sentinel (value) VALUES ('keep-me');
+  PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};
+`;
 
 afterEach(async () => {
   fixtureDatabase?.close();
@@ -47,17 +52,13 @@ async function writeFutureSchema(databasePath: string): Promise<void> {
   await fs.mkdir(path.dirname(databasePath), { recursive: true });
   const database = new DatabaseSync(databasePath);
   try {
-    database.exec(`
-      CREATE TABLE preserved_sentinel (value TEXT NOT NULL) STRICT;
-      INSERT INTO preserved_sentinel (value) VALUES ('keep-me');
-      PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};
-    `);
+    database.exec(futureSchemaSql);
   } finally {
     database.close();
   }
 }
 
-async function createFixture(options: { futureSchema: boolean }): Promise<FutureSchemaFixture> {
+async function createFixture(futureSchema = true): Promise<FutureSchemaFixture> {
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-cron-schema-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot);
   const storePath = path.join(tempRoot, "cron", "jobs.json");
@@ -66,7 +67,7 @@ async function createFixture(options: { futureSchema: boolean }): Promise<Future
   await fs.writeFile(quarantinePath, JSON.stringify({ version: 1, jobs: [] }), "utf8");
 
   const databasePath = resolveOpenClawStateSqlitePath();
-  if (options.futureSchema) {
+  if (futureSchema) {
     await writeFutureSchema(databasePath);
   }
 
@@ -95,17 +96,9 @@ async function snapshotDirectory(directory: string) {
 async function snapshotFixture({ databasePath, storePath }: FutureSchemaFixture) {
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    const versionRow = database.prepare("PRAGMA user_version").get() as {
-      user_version: number;
-    };
-    const sentinelRow = database.prepare("SELECT value FROM preserved_sentinel").get() as {
-      value: string;
-    };
-    const bytes = await fs.readFile(databasePath);
     return {
-      sha256: createHash("sha256").update(bytes).digest("hex"),
-      schemaVersion: versionRow.user_version,
-      sentinel: sentinelRow.value,
+      schemaVersion: database.prepare("PRAGMA user_version").get(),
+      sentinel: database.prepare("SELECT value FROM preserved_sentinel").get(),
       artifacts: await snapshotDirectory(path.dirname(databasePath)),
       sources: await snapshotDirectory(path.dirname(storePath)),
     };
@@ -119,100 +112,83 @@ async function expectSchemaRefusalWithoutMutation(
   operation: () => Promise<unknown>,
 ): Promise<void> {
   const before = await snapshotFixture(fixture);
-  let error: unknown;
-  try {
-    await operation();
-  } catch (caught) {
-    error = caught;
-  }
-  expect(isSqliteSchemaVersionError(error)).toBe(true);
+  await expect(operation()).rejects.toSatisfy(isSqliteSchemaVersionError);
   await expect(snapshotFixture(fixture)).resolves.toEqual(before);
 }
 
 describe("future shared-state schema safety", () => {
   const entrypoints: Array<[string, (fixture: FutureSchemaFixture) => Promise<unknown>]> = [
-    [
-      "legacy cron health collection",
-      async ({ cfg }) => await collectLegacyCronStoreHealthFindings({ cfg }),
-    ],
+    ["legacy cron health collection", ({ cfg }) => collectLegacyCronStoreHealthFindings({ cfg })],
     [
       "interactive legacy cron repair",
-      async ({ cfg }) =>
-        await maybeRepairLegacyCronStore({
-          cfg,
-          options: {},
-          prompter: { confirm: vi.fn() },
-        }),
+      ({ cfg }) => maybeRepairLegacyCronStore({ cfg, options: {}, prompter: { confirm: vi.fn() } }),
     ],
     [
       "non-interactive legacy cron repair",
-      async ({ cfg }) => await repairLegacyCronStoreWithoutPrompt({ cfg }),
+      ({ cfg }) => repairLegacyCronStoreWithoutPrompt({ cfg }),
     ],
     [
       "Codex cron migration planning",
-      async ({ cfg }) => await collectCronCodexRuntimePolicyTargetsReadOnly({ cfg }),
+      ({ cfg }) => collectCronCodexRuntimePolicyTargetsReadOnly({ cfg }),
     ],
     [
       "Codex cron migration commit",
-      async ({ cfg }) =>
-        await repairCronCodexModelRefsAfterConfigWrite({ migrateCodexModelRefs: true, cfg }),
+      ({ cfg }) => repairCronCodexModelRefsAfterConfigWrite({ migrateCodexModelRefs: true, cfg }),
     ],
   ];
 
   it.each(entrypoints)("fails closed without mutation during %s", async (_name, operation) => {
-    const fixture = await createFixture({ futureSchema: true });
+    const fixture = await createFixture();
     await expectSchemaRefusalWithoutMutation(fixture, () => operation(fixture));
   });
 
   it("fails closed in non-interactive repair when no legacy files remain", async () => {
-    const fixture = await createFixture({ futureSchema: true });
+    const fixture = await createFixture();
     await fs.rm(fixture.quarantinePath);
 
-    await expectSchemaRefusalWithoutMutation(fixture, async () => {
-      await repairLegacyCronStoreWithoutPrompt({ cfg: fixture.cfg });
-    });
+    await expectSchemaRefusalWithoutMutation(fixture, () =>
+      repairLegacyCronStoreWithoutPrompt({ cfg: fixture.cfg }),
+    );
   });
 
   it("reports a future schema before recommending a bridge for retired cron files", async () => {
-    const fixture = await createFixture({ futureSchema: true });
+    const fixture = await createFixture();
     await fs.writeFile(fixture.storePath, JSON.stringify({ version: 1, jobs: [] }), "utf8");
 
-    await expectSchemaRefusalWithoutMutation(fixture, async () => {
-      await repairLegacyCronStoreWithoutPrompt({ cfg: fixture.cfg });
-    });
+    await expectSchemaRefusalWithoutMutation(fixture, () =>
+      repairLegacyCronStoreWithoutPrompt({ cfg: fixture.cfg }),
+    );
   });
 
   it("preserves active WAL artifacts while rejecting the future schema", async () => {
-    const fixture = await createFixture({ futureSchema: false });
+    const fixture = await createFixture(false);
     await fs.mkdir(path.dirname(fixture.databasePath), { recursive: true });
     fixtureDatabase = new DatabaseSync(fixture.databasePath);
     fixtureDatabase.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA wal_autocheckpoint = 0;
-      CREATE TABLE preserved_sentinel (value TEXT NOT NULL) STRICT;
-      INSERT INTO preserved_sentinel (value) VALUES ('keep-me');
-      PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};
+      ${futureSchemaSql}
     `);
 
-    await expectSchemaRefusalWithoutMutation(fixture, async () => {
-      await maybeRepairLegacyCronStore({
+    await expectSchemaRefusalWithoutMutation(fixture, () =>
+      maybeRepairLegacyCronStore({
         cfg: fixture.cfg,
         options: {},
         prompter: { confirm: vi.fn() },
-      });
-    });
+      }),
+    );
   });
 
   it("fails closed if the schema advances between inspection and repair", async () => {
-    const fixture = await createFixture({ futureSchema: false });
+    const fixture = await createFixture(false);
     const state = await loadLegacyCronRepairState({ cfg: fixture.cfg });
     expect(state).not.toBeNull();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await writeFutureSchema(fixture.databasePath);
 
-    await expectSchemaRefusalWithoutMutation(fixture, async () => {
-      await applyLegacyCronStoreRepair({ cfg: fixture.cfg, state: state! });
-    });
+    await expectSchemaRefusalWithoutMutation(fixture, () =>
+      applyLegacyCronStoreRepair({ cfg: fixture.cfg, state: state! }),
+    );
   });
 });

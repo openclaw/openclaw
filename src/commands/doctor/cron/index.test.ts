@@ -27,6 +27,11 @@ import { inspectCronJobsForDoctor } from "./store-repair.js";
 
 type StoredJob = Record<string, unknown>;
 const WEBHOOK = "https://example.invalid/cron-finished";
+const agentTurn = (message: string, fields: StoredJob = {}) => ({
+  kind: "agentTurn",
+  message,
+  ...fields,
+});
 
 const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
 
@@ -144,7 +149,7 @@ describe("collectLegacyCronStoreHealthFindings", () => {
         id: "legacy-gateway-exec",
         name: "Legacy gateway shell",
         scheduledToolPolicy: { version: 1, mode: "trusted" },
-        payload: { kind: "agentTurn", message: "run", toolsAllow: ["gateway_exec"] },
+        payload: agentTurn("run", { toolsAllow: ["gateway_exec"] }),
       }),
     ]);
 
@@ -169,7 +174,7 @@ describe("collectLegacyCronStoreHealthFindings", () => {
           id: `authority-${enabled}`,
           enabled,
           owner: { agentId: "main", sessionKey: "agent:main:discord:group:ops" },
-          payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
+          payload: agentTurn("run", { toolsAllow: ["write"] }),
         }),
       ),
     );
@@ -229,11 +234,7 @@ describe("maybeRepairLegacyCronStore", () => {
         id: "runtime-job",
         notify: true,
         owner: { agentId: "main", sessionKey: "agent:main:discord:group:ops", accountId: "work" },
-        payload: {
-          kind: "agentTurn",
-          message: "scheduled continuation",
-          toolsAllow: ["read", "cron"],
-        },
+        payload: agentTurn("scheduled continuation", { toolsAllow: ["read", "cron"] }),
         scheduledToolPolicy: {
           version: 1,
           mode: "account",
@@ -339,6 +340,8 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("leaves unsupported legacy trigger scripts untouched and reports redacted per-job remediation", async () => {
+    const call = "await tools.call('exec', { command: 'x' })";
+    const res = `const res = ${call}`;
     const scripts: Array<[string, string]> = [
       ["dynamic-name", "await tools.call(toolName, { command: 'secret-token' })"],
       ["dynamic-args", "await tools.call('exec', args)"],
@@ -346,20 +349,11 @@ describe("maybeRepairLegacyCronStore", () => {
         "mixed-legacy",
         "const res = await tools.call('exec', { command: 'secret-token' }); tools.search('x')",
       ],
-      [
-        "envelope-result",
-        "const res = await tools.call('exec', { command: 'x' }); json(res.result)",
-      ],
-      ["envelope-tool", "const res = await tools.call('exec', { command: 'x' }); json(res.tool)"],
-      [
-        "destructured",
-        "const { result } = await tools.call('exec', { command: 'x' }); json(result)",
-      ],
-      [
-        "reassigned",
-        "let res = await tools.call('exec', { command: 'x' }); res = other; json(res.result.details)",
-      ],
-      ["shadowed", "const tools = localTools; await tools.call('exec', { command: 'x' })"],
+      ["envelope-result", `${res}; json(res.result)`],
+      ["envelope-tool", `${res}; json(res.tool)`],
+      ["destructured", `const { result } = ${call}; json(result)`],
+      ["reassigned", `let res = ${call}; res = other; json(res.result.details)`],
+      ["shadowed", `const tools = localTools; ${call}`],
       ["catalog", "json(ALL_TOOLS)"],
       ["global-tools", "await globalThis.tools.call('exec', { command: 'x' })"],
       ["global-catalog", "json(globalThis.ALL_TOOLS)"],
@@ -371,19 +365,10 @@ describe("maybeRepairLegacyCronStore", () => {
       ["spread-args", "await tools.call('exec', { ...args })"],
       ["computed-args", "await tools.call('exec', { [key]: 'x' })"],
       ["commented-call", "await tools.call('exec', /* preserve this */ { command: 'x' })"],
-      [
-        "commented-envelope",
-        "const res = await tools.call('exec', { command: 'x' }); json(res.result /* preserve this */ .details)",
-      ],
-      [
-        "aliased-result",
-        "const res = await tools.call('exec', { command: 'x' }); const alias = res",
-      ],
-      ["shadowed-exec", "const exec = localExec; await tools.call('exec', { command: 'x' })"],
-      [
-        "ambiguous-scope",
-        "const res = await tools.call('exec', { command: 'x' }); function inspect() { return res.result.details }",
-      ],
+      ["commented-envelope", `${res}; json(res.result /* preserve this */ .details)`],
+      ["aliased-result", `${res}; const alias = res`],
+      ["shadowed-exec", `const exec = localExec; ${call}`],
+      ["ambiguous-scope", `${res}; function inspect() { return res.result.details }`],
     ];
     const unsupportedScripts = scripts.map(([id, script]) => ({ id, script }));
     await writeCurrentCronStore(
@@ -524,20 +509,20 @@ describe("maybeRepairLegacyCronStore", () => {
     await writeCurrentCronStore([
       createCurrentCronJob({
         id: "api-pinned",
-        payload: { kind: "agentTurn", message: "Brief", model: "openai/gpt-5.4", thinking: "high" },
+        payload: agentTurn("Brief", { model: "openai/gpt-5.4", thinking: "high" }),
       }),
       createCurrentCronJob({
         id: "alias-pinned",
-        payload: { kind: "agentTurn", message: "Brief", model: "gpt" },
+        payload: agentTurn("Brief", { model: "gpt" }),
       }),
       createCurrentCronJob({
         id: "inherits-default",
-        payload: { kind: "agentTurn", message: "Brief" },
+        payload: agentTurn("Brief"),
       }),
       createCurrentCronJob({
         id: "disabled-pinned",
         enabled: false,
-        payload: { kind: "agentTurn", message: "Dormant job", model: "ollama/qwen3" },
+        payload: agentTurn("Dormant job", { model: "ollama/qwen3" }),
       }),
     ]);
     const prompter = makePrompter(true);
@@ -585,25 +570,20 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("pluralizes and only counts enabled jobs at or above the threshold", async () => {
-    await writeCurrentCronStore([
-      createCurrentCronJob({
-        id: "failing-a",
-        state: { lastRunStatus: "error", consecutiveErrors: 3 },
-      }),
-      createCurrentCronJob({
-        id: "failing-b",
-        state: { lastRunStatus: "error", consecutiveErrors: 12 },
-      }),
-      createCurrentCronJob({
-        id: "recovering",
-        state: { lastRunStatus: "error", consecutiveErrors: 2 },
-      }),
-      createCurrentCronJob({
-        id: "disabled-exhausted",
-        enabled: false,
-        state: { lastRunStatus: "error", consecutiveErrors: 9 },
-      }),
-    ]);
+    await writeCurrentCronStore(
+      [
+        ["failing-a", 3],
+        ["failing-b", 12],
+        ["recovering", 2],
+        ["disabled-exhausted", 9, false],
+      ].map(([id, consecutiveErrors, enabled]) =>
+        createCurrentCronJob({
+          id,
+          enabled: enabled ?? true,
+          state: { lastRunStatus: "error", consecutiveErrors },
+        }),
+      ),
+    );
     const prompter = makePrompter(true);
     await repairCronStore(prompter);
     expectNoteContaining("2 automations have failed 3+ runs in a row");
@@ -656,12 +636,10 @@ describe("maybeRepairLegacyCronStore", () => {
         id: `shell-prompt-job-${index + 1}`,
         name: `Shell prompt job ${index + 1}`,
         schedule: { kind: "cron", expr: "*/30 * * * *", tz: "UTC" },
-        payload: {
-          kind: "agentTurn",
-          message:
-            "Run python3 scripts/check_mail.py and send a compact summary if anything changed.",
-          toolsAllow: [tool],
-        },
+        payload: agentTurn(
+          "Run python3 scripts/check_mail.py and send a compact summary if anything changed.",
+          { toolsAllow: [tool] },
+        ),
         delivery: { mode: "announce" },
       }),
     );
@@ -683,12 +661,10 @@ describe("maybeRepairLegacyCronStore", () => {
 
   it("keeps restricted command prompts actionable without a --fix repair note", async () => {
     const job = createCurrentCronJob({
-      payload: {
-        kind: "agentTurn",
-        message:
-          "Command to run:\n- command: python3 scripts/check_mail.py\n- workdir: /tmp/workspace",
-        toolsAllow: ["read", "message"],
-      },
+      payload: agentTurn(
+        "Command to run:\n- command: python3 scripts/check_mail.py\n- workdir: /tmp/workspace",
+        { toolsAllow: ["read", "message"] },
+      ),
       delivery: { mode: "announce" },
     });
     await writeCurrentCronStore([job]);
@@ -733,7 +709,7 @@ describe("maybeRepairLegacyCronStore", () => {
       createCurrentCronJob({
         id: "notify-and-announce",
         notify: true,
-        payload: { kind: "agentTurn", message: "Status" },
+        payload: agentTurn("Status"),
         delivery: { to: "telegram:123" },
       }),
       ...["none", "webhook"].map((mode) =>
@@ -839,7 +815,7 @@ describe("maybeRepairLegacyCronStore", () => {
   it("repairs legacy root delivery threadId hints into delivery", async () => {
     await writeCronStore([
       createCurrentCronJob({
-        payload: { kind: "agentTurn", message: "Morning brief" },
+        payload: agentTurn("Morning brief"),
         channel: " telegram ",
         to: "-1001234567890",
         threadId: " 99 ",
