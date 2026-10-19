@@ -39,9 +39,9 @@ export async function startWebRtcTransport(
   callbacks: RealtimeTalkCallbacks = {},
   session: Partial<RealtimeTalkWebRtcSdpSessionResult> = {},
 ) {
-  const onStatus = vi.fn();
-  const onTalkEvent = vi.fn();
-  const onTranscript = vi.fn();
+  const onStatus = vi.fn<NonNullable<RealtimeTalkCallbacks["onStatus"]>>();
+  const onTalkEvent = vi.fn<NonNullable<RealtimeTalkCallbacks["onTalkEvent"]>>();
+  const onTranscript = vi.fn<NonNullable<RealtimeTalkCallbacks["onTranscript"]>>();
   const { transport } = await createWebRtcTransport({
     client,
     callbacks: { onStatus, onTalkEvent, onTranscript, ...callbacks },
@@ -52,7 +52,17 @@ export async function startWebRtcTransport(
   if (!peer || result !== "ready") {
     throw new Error("expected ready WebRTC transport");
   }
-  return { transport, peer, onStatus, onTalkEvent, onTranscript };
+  return {
+    transport,
+    peer,
+    onStatus,
+    onTalkEvent,
+    onTranscript,
+    dispatch: (event: unknown) => dispatchRealtimeEvent(peer, event),
+    sent: (type?: string) =>
+      sentRealtimeEvents(peer).filter((event) => !type || event.type === type),
+    events: () => onTalkEvent.mock.calls.map(([event]) => event),
+  };
 }
 
 export function toolOutput(callId: string, result: unknown) {
@@ -60,6 +70,10 @@ export function toolOutput(callId: string, result: unknown) {
     type: "conversation.item.create",
     item: { type: "function_call_output", call_id: callId, output: JSON.stringify(result) },
   };
+}
+
+export function userMessage(content: unknown[]) {
+  return { type: "conversation.item.create", item: { type: "message", role: "user", content } };
 }
 
 export function audioFixture() {

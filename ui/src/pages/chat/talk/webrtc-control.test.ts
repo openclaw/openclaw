@@ -188,39 +188,18 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
   });
 
   it.each([
-    { label: "cancelled response", responseStatus: "cancelled", itemStatus: "completed" },
-    { label: "incomplete item", responseStatus: "completed", itemStatus: "incomplete" },
-  ])("ignores function calls from a $label", async ({ responseStatus, itemStatus }) => {
+    { label: "cancelled response", responseStatus: "cancelled" },
+    { label: "incomplete item", itemStatus: "incomplete" },
+    { label: "missing call", callId: null },
+    { label: "missing name", name: null },
+    { label: "missing arguments", arguments: null },
+  ])("ignores a function call with $label", async ({ label: _label, ...overrides }) => {
     const request = vi.fn();
     const { transport, peer } = await startWebRtcTransport({ request });
-
-    dispatchCompletedToolCall(peer, {
-      responseStatus,
-      itemStatus,
-    });
+    dispatchCompletedToolCall(peer, overrides);
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
     });
-
-    expect(request).not.toHaveBeenCalled();
-    transport.stop();
-  });
-
-  it("requires call, name, and arguments before executing tools", async () => {
-    const request = vi.fn();
-    const { transport, peer } = await startWebRtcTransport({ request });
-
-    for (const overrides of [
-      { callId: null, itemId: "missing-call" },
-      { name: null, callId: "missing-name", itemId: "missing-name" },
-      { arguments: null, callId: "missing-args", itemId: "missing-args" },
-    ]) {
-      dispatchCompletedToolCall(peer, overrides);
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-
     expect(request).not.toHaveBeenCalled();
     transport.stop();
   });
@@ -256,13 +235,10 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
     expect(new TextEncoder().encode(oversizedArguments).byteLength).toBeGreaterThan(256_000);
     const outputs = sentRealtimeEvents(peer).filter(
       (event) =>
-        event.type === "conversation.item.create" &&
-        (event.item as { type?: string } | undefined)?.type === "function_call_output",
+        event.type === "conversation.item.create" && event.item?.type === "function_call_output",
     );
     expect(outputs).toHaveLength(2);
-    expect(
-      JSON.parse(String((outputs[1]?.item as { output?: string } | undefined)?.output)),
-    ).toEqual({
+    expect(JSON.parse(String(outputs[1]?.item?.output))).toEqual({
       error: "Realtime tool arguments exceed the 256000-byte UTF-8 limit",
     });
     expect(onTalkEvent).toHaveBeenCalledWith(
@@ -358,14 +334,10 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
       dispatch({
         type: "session.input_transcript.delta",
         delta: "Check the weather",
-        start_ms: 0,
-        end_ms: 900,
       });
       dispatch({
         type: "session.output_transcript.delta",
         delta: "I'll check",
-        start_ms: 700,
-        end_ms: 1100,
       });
 
       expect(onTranscript.mock.calls.map(([entry]) => entry)).toEqual([
@@ -376,23 +348,14 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
         "transcript.delta",
         "output.text.delta",
       ]);
-      expect(peer?.connectionState).not.toBe("closed");
+      expect(peer.connectionState).not.toBe("closed");
 
-      dispatch({
-        type: "session.delegation.created",
-        delegation: { id: "item_weather", type: "delegation", target: "client" },
-        offset_ms: 900,
-      });
-      dispatch({
-        type: "session.closed",
-        reason,
-        session: { id: "live_test", status: "active" },
-        usage: { seconds: 2 },
-      });
+      dispatch({ type: "session.delegation.created" });
+      dispatch({ type: "session.closed", reason });
       dispatch({ type: "session.input_transcript.delta", delta: "stale" });
 
       expect(peer?.connectionState).toBe("closed");
-      expect(peer?.channel.close).toHaveBeenCalledOnce();
+      expect(peer.channel.close).toHaveBeenCalledOnce();
       expect(stopInputTrack).toHaveBeenCalledOnce();
       if (outcome === "error") {
         expect(onStatus).toHaveBeenLastCalledWith("error", "Realtime connection closed");
