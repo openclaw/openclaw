@@ -45,6 +45,8 @@ describe("worker bundle archive", () => {
   const directoryManifest = (
     options: Partial<Parameters<typeof readWorkerBundleDirectoryManifest>[0]> = {},
   ) => readWorkerBundleDirectoryManifest({ root: source, limits, ...options });
+  const directoryHash = async (directory = source) =>
+    hashWorkerBundleManifest(await directoryManifest({ root: directory }));
   const extract = (expectedBundleHash: string) =>
     extractWorkerBundleArchive({ tarballPath: archive, destination, expectedBundleHash, limits });
   const entry = (entryPath: string, contents: string) => ({
@@ -58,15 +60,12 @@ describe("worker bundle archive", () => {
     await artifact("openclaw.mjs", "#!/usr/bin/env node\n", 0o700);
     await artifact("dist/worker.js", "export const worker = true;\n", 0o600);
     await artifact("dist/Upper.js", "export const upper = true;\n", 0o600);
-    const sourceManifest = await directoryManifest();
-    const bundleHash = hashWorkerBundleManifest(sourceManifest);
+    const bundleHash = await directoryHash();
     await pack(["openclaw.mjs", "dist/worker.js", "dist/Upper.js"]);
 
     await extract(bundleHash);
 
-    expect(hashWorkerBundleManifest(await directoryManifest({ root: destination }))).toBe(
-      bundleHash,
-    );
+    expect(await directoryHash(destination)).toBe(bundleHash);
   });
 
   it("rejects archive links before extraction", async () => {
@@ -80,40 +79,29 @@ describe("worker bundle archive", () => {
   });
 
   it.each([
-    { name: "duplicate paths", paths: ["worker.mjs", "worker.mjs"], error: "Duplicate" },
-    { name: "unsafe paths", paths: ["../worker.mjs"], error: "Invalid worker bundle archive path" },
-    {
-      name: "entry limit",
-      paths: ["worker.mjs", "other.mjs"],
-      maxEntries: 1,
-      error: "entry limit",
-    },
-    {
-      name: "byte limit",
-      paths: ["worker.mjs"],
-      maxExpandedBytes: 1,
-      error: "expanded byte limit",
-    },
-  ])("rejects $name without crashing or reading the remaining archive", async (scenario) => {
-    const chunks: Buffer[] = [];
-    for (const entryPath of scenario.paths) {
-      const header = Buffer.alloc(512);
-      new tar.Header({ path: entryPath, type: "File", mode: 0o600, size: 2 }).encode(header);
-      chunks.push(header, Buffer.from("ok"), Buffer.alloc(510));
-    }
-    const tail = randomBytes(1024 * 1024);
-    const tailHeader = Buffer.alloc(512);
-    new tar.Header({ path: "tail", type: "File", mode: 0o600, size: tail.length }).encode(
-      tailHeader,
-    );
-    const bytes = Buffer.concat([...chunks, tailHeader, tail, Buffer.alloc(1024)]);
-    const scenarioLimits = {
-      maxEntries: scenario.maxEntries ?? 10,
-      maxExpandedBytes: scenario.maxExpandedBytes ?? bytes.length,
-    };
-    // Callback exceptions used to escape the promise and terminate the process.
-    const archiveUrl = resolveRuntimeWorkerUrl(workerBundleArchiveEntrypoint);
-    const probe = `
+    ["duplicate paths", ["worker.mjs", "worker.mjs"], {}, "Duplicate"],
+    ["unsafe paths", ["../worker.mjs"], {}, "Invalid worker bundle archive path"],
+    ["entry limit", ["worker.mjs", "other.mjs"], { maxEntries: 1 }, "entry limit"],
+    ["byte limit", ["worker.mjs"], { maxExpandedBytes: 1 }, "expanded byte limit"],
+  ] as const)(
+    "rejects %s and cancels the remaining input",
+    async (_name, paths, overrides, error) => {
+      const chunks: Buffer[] = [];
+      for (const entryPath of paths) {
+        const header = Buffer.alloc(512);
+        new tar.Header({ path: entryPath, type: "File", mode: 0o600, size: 2 }).encode(header);
+        chunks.push(header, Buffer.from("ok"), Buffer.alloc(510));
+      }
+      const tail = randomBytes(1024 * 1024);
+      const tailHeader = Buffer.alloc(512);
+      new tar.Header({ path: "tail", type: "File", mode: 0o600, size: tail.length }).encode(
+        tailHeader,
+      );
+      const bytes = Buffer.concat([...chunks, tailHeader, tail, Buffer.alloc(1024)]);
+      const scenarioLimits = { maxEntries: 10, maxExpandedBytes: bytes.length, ...overrides };
+      // Callback exceptions used to escape the promise and terminate the process.
+      const archiveUrl = resolveRuntimeWorkerUrl(workerBundleArchiveEntrypoint);
+      const probe = `
       import assert from "node:assert/strict";
       import fs from "node:fs";
       import { syncBuiltinESMExports } from "node:module";
@@ -126,28 +114,29 @@ describe("worker bundle archive", () => {
       const { readWorkerBundleArchiveManifest } = await import(${JSON.stringify(archiveUrl.href)});
       await assert.rejects(
         readWorkerBundleArchiveManifest(process.argv[1], ${JSON.stringify(scenarioLimits)}),
-        { message: new RegExp(${JSON.stringify(scenario.error)}) },
+        { message: new RegExp(${JSON.stringify(error)}) },
       );
       assert.equal(input.closed, true);
       assert.ok(input.bytesRead < fs.statSync(process.argv[1]).size);
     `;
-    for (const compressed of [false, true]) {
-      const invalidArchive = path.join(root, compressed ? "invalid.tgz" : "invalid.tar");
-      await fs.writeFile(invalidArchive, compressed ? gzipSync(bytes) : bytes);
-      const result = await promisify(execFile)(
-        process.execPath,
-        [
-          ...resolveRuntimeWorkerArgv(archiveUrl).slice(0, -1),
-          "--input-type=module",
-          "--eval",
-          probe,
-          invalidArchive,
-        ],
-        { timeout: 10_000 },
-      );
-      expect(result.stderr).toBe("");
-    }
-  });
+      for (const compressed of [false, true]) {
+        const invalidArchive = path.join(root, compressed ? "invalid.tgz" : "invalid.tar");
+        await fs.writeFile(invalidArchive, compressed ? gzipSync(bytes) : bytes);
+        const result = await promisify(execFile)(
+          process.execPath,
+          [
+            ...resolveRuntimeWorkerArgv(archiveUrl).slice(0, -1),
+            "--input-type=module",
+            "--eval",
+            probe,
+            invalidArchive,
+          ],
+          { timeout: 10_000 },
+        );
+        expect(result.stderr).toBe("");
+      }
+    },
+  );
 
   it("preserves archive ratio admission with a highly compressible prefix", async () => {
     await artifact("zeros", Buffer.alloc(5 * 1024 * 1024));
@@ -243,8 +232,6 @@ describe("worker bundle archive", () => {
     for (const name of artifacts) {
       await fs.chmod(path.join(destination, name), 0o666);
     }
-    expect(hashWorkerBundleManifest(await directoryManifest({ root: destination }))).toBe(
-      bundleHash,
-    );
+    expect(await directoryHash(destination)).toBe(bundleHash);
   });
 });
