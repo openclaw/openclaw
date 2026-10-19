@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import nativePresenceStream from "../../../apps/shared/OpenClawKit/Tests/OpenClawKitTests/Fixtures/presence-deltas.json";
+import nativePresenceStream from "../../../apps/shared/OpenClawKit/Tests/OpenClawKitTests/Fixtures/presence-deltas.json" with { type: "json" };
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createGatewayEvent,
