@@ -64,12 +64,21 @@ function buildRestrictedFinalizationAttempt(
     requestedModelId: attempt.requestedModelId,
     agentHarnessId: attempt.agentHarnessId,
     runtimePlan: attempt.runtimePlan,
-    model: attempt.model,
+    model:
+      attempt.provider === "qwen-local" && attempt.model?.api === "openai-completions"
+        ? {
+            ...attempt.model,
+            compat: { ...attempt.model.compat, thinkingFormat: "qwen-chat-template" },
+          }
+        : attempt.model,
     authStorage: attempt.authStorage,
     authProfileStore: attempt.authProfileStore,
     toolAuthProfileStore: attempt.toolAuthProfileStore,
     modelRegistry: attempt.modelRegistry,
-    thinkLevel: attempt.thinkLevel,
+    // This local relief model spent its entire answer budget on reasoning in
+    // settled-turn summaries. Reserve this isolated, tool-free pass for text;
+    // ordinary turns, provider selection and other lanes remain unchanged.
+    thinkLevel: attempt.provider === "qwen-local" ? "off" : attempt.thinkLevel,
     fastMode: attempt.fastMode,
     fastModeAuto: attempt.fastModeAuto,
     operation: "settled-tool-finalization",

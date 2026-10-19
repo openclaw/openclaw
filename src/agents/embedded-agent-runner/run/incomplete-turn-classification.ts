@@ -4,6 +4,7 @@ import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
+import { sanitizeAssistantFinalAnswerText } from "../../../shared/text/assistant-visible-text.js";
 import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
 import { extractEmbeddedAssistantText } from "../../embedded-agent-utils.js";
 import {
@@ -225,7 +226,8 @@ export function classifyAssistantTurn(params: {
       ? resolveRawAssistantAnswerText(assistant)
       : joinAssistantTexts(params.attempt.assistantTexts),
   );
-  const visibleText = output.text.trim();
+  const visibleText = sanitizeAssistantFinalAnswerText(output.text).trim();
+
   const reasoningOnly = Boolean(
     assistant && assessLastAssistantMessage(assistant) === "incomplete-text",
   );

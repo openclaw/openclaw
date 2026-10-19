@@ -153,6 +153,26 @@ describe("createOpenClawAgentHarness", () => {
       expect.objectContaining({ sessionManager, sessionPersistence: "detached" }),
     );
   });
+  it.each(["qwen-local", "openai"])(
+    "reserves answer output only in the local Qwen finalizer (%s)",
+    async (provider) => {
+      const model = { provider, id: "model", api: "openai-completions", compat: { supportsReasoningEffort: true } };
+      const attempt = { provider, model, thinkLevel: "max", prompt: "Summarize settled evidence" } as never;
+      await createOpenClawAgentHarness().finalizeSettledTurn?.({ attempt, settledAttempt: {} as never });
+      expect(runEmbeddedAttempt).toHaveBeenCalledWith(expect.objectContaining({
+        provider,
+        thinkLevel: provider === "qwen-local" ? "off" : "max",
+        disableTools: true,
+        model: provider === "qwen-local"
+          ? { ...model, compat: { ...model.compat, thinkingFormat: "qwen-chat-template" } }
+          : model,
+      }));
+      expect(model.compat).toEqual({ supportsReasoningEffort: true });
+      runEmbeddedAttempt.mockClear();
+      await createOpenClawAgentHarness().runAttempt(attempt);
+      expect(runEmbeddedAttempt).toHaveBeenCalledWith(expect.objectContaining({ model, thinkLevel: "max" }));
+    },
+  );
 
   it("runs isolated completion through the prepared zero-tool transport", async () => {
     const params = {
