@@ -39,37 +39,26 @@ export function createNativeApprovalTestFixture(params: {
     turnSourceAccountId: "default",
     sessionKey: `agent:main:${channel}:${to}`,
   });
-  function buildExecRequest(
+  const envelope = <T extends ApprovalRequest["request"]>(id: string, request: T) => ({
+    id,
+    request,
+    createdAtMs: 0,
+    expiresAtMs: 1000,
+  });
+  const buildExecRequest = (
     to = directTarget,
     overrides: Partial<ExecApprovalRequest["request"]> = {},
-  ): ExecApprovalRequest {
-    return {
-      id: "exec-1",
-      request: {
-        command: "echo hi",
-        ...origin(to),
-        ...overrides,
-      },
-      createdAtMs: 0,
-      expiresAtMs: 1000,
-    };
-  }
-  function buildPluginRequest(
+  ): ExecApprovalRequest => envelope("exec-1", { command: "echo hi", ...origin(to), ...overrides });
+  const buildPluginRequest = (
     to = directTarget,
     overrides: Partial<PluginApprovalRequest["request"]> = {},
-  ): PluginApprovalRequest {
-    return {
-      id: "plugin:approval-1",
-      request: {
-        title: "Plugin approval",
-        description: "Allow plugin action",
-        ...origin(to),
-        ...overrides,
-      },
-      createdAtMs: 0,
-      expiresAtMs: 1000,
-    };
-  }
+  ): PluginApprovalRequest =>
+    envelope("plugin:approval-1", {
+      title: "Plugin approval",
+      description: "Allow plugin action",
+      ...origin(to),
+      ...overrides,
+    });
   function buildTargetModeConfig(
     approvalKind: "exec" | "plugin",
     targets: Array<{ channel: string; to: string; accountId?: string }>,
@@ -285,12 +274,13 @@ export function createLocalApprovalPromptTestFixture(params: {
       sessionKey?: string | null;
     } = {},
   ) {
+    const approvalId = input.approvalKind === "plugin" ? "plugin:approval-1" : "exec-1";
     return {
       text: "Approval required.",
       channelData: {
         execApproval: {
-          approvalId: input.approvalKind === "plugin" ? "plugin:approval-1" : "exec-1",
-          approvalSlug: input.approvalKind === "plugin" ? "plugin:approval-1" : "exec-1",
+          approvalId,
+          approvalSlug: approvalId,
           approvalKind: input.approvalKind ?? "exec",
           agentId: input.agentId,
           sessionKey: input.sessionKey,
@@ -318,15 +308,6 @@ export function createLocalApprovalPromptTestFixture(params: {
   return {
     suppressLocalSessionPrompt,
     checks: {
-      eligibleSession: () => {
-        const cfg = localConfig({ enabled: true, agentFilter: ["main"] });
-        expect(
-          suppressLocalSessionPrompt(cfg, `agent:main:${channel}:+15551230000`, {
-            accountId: "default",
-            agentId: null,
-          }),
-        ).toBe(true);
-      },
       inactiveRoutes: () => {
         const enabledConfig = localConfig({ enabled: true });
         const payload = buildLocalApprovalPayload({

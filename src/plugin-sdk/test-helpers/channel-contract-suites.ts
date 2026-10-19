@@ -35,12 +35,15 @@ export function expectChannelPluginContract(
   });
 }
 
-type ChannelActionsContractCase = {
+type ChannelContractCase = {
   name: string;
   cfg: OpenClawConfig;
+  beforeTest?: () => void;
+};
+
+type ChannelActionsContractCase = ChannelContractCase & {
   expectedActions: readonly ChannelMessageActionName[];
   expectedCapabilities?: readonly ChannelMessageCapability[];
-  beforeTest?: () => void;
 };
 
 export function installChannelActionsContractSuite(params: {
@@ -49,7 +52,6 @@ export function installChannelActionsContractSuite(params: {
   unsupportedAction?: ChannelMessageActionName;
 }) {
   it("exposes the base message actions contract", () => {
-    expect(params.plugin.actions).toBeDefined();
     expect(typeof params.plugin.actions?.describeMessageTool).toBe("function");
   });
 
@@ -79,14 +81,14 @@ export function installChannelActionsContractSuite(params: {
   }
 }
 
-type ChannelSetupContractCase<ResolvedAccount, SetupInput extends ChannelSetupInput> = {
-  name: string;
-  cfg: OpenClawConfig;
+type ChannelSetupContractCase<
+  ResolvedAccount,
+  SetupInput extends ChannelSetupInput,
+> = ChannelContractCase & {
   accountId?: string;
   input: SetupInput;
   expectedAccountId?: string;
   expectedValidation?: string | null;
-  beforeTest?: () => void;
   assertPatchedConfig?: (cfg: OpenClawConfig) => void;
   assertResolvedAccount?: (account: ResolvedAccount, cfg: OpenClawConfig) => void;
 };
@@ -184,7 +186,6 @@ function resolveDmPolicyConfig(
   const channels = cfg.channels as Record<string, ChannelDmPolicyConfig | undefined> | undefined;
   const channelConfig = channels?.[channel];
   const accountConfig = channelConfig?.accounts?.[accountId];
-  expect(channelConfig).toBeDefined();
   expect(accountConfig).toBeDefined();
   return { channel: channelConfig!, account: accountConfig! };
 }
@@ -246,13 +247,10 @@ export function installChannelDmPolicyContractSuite(params: {
   }
 }
 
-type ChannelStatusContractCase<Probe> = {
-  name: string;
-  cfg: OpenClawConfig;
+type ChannelStatusContractCase<Probe> = ChannelContractCase & {
   accountId?: string;
   runtime?: ChannelAccountSnapshot;
   probe?: Probe;
-  beforeTest?: () => void;
   expectedState?: ChannelAccountState;
   resolveStateInput?: {
     configured: boolean;
@@ -267,7 +265,6 @@ export function installChannelStatusContractSuite<ResolvedAccount, Probe = unkno
   cases: readonly ChannelStatusContractCase<Probe>[];
 }) {
   it("exposes the base status contract", () => {
-    expect(params.plugin.status).toBeDefined();
     expect(typeof params.plugin.status?.buildAccountSnapshot).toBe("function");
   });
 

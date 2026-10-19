@@ -15,14 +15,6 @@ type BuildContextResult = ReturnType<Inbound["buildContext"]>;
 type ChannelStructuredContextEntries = NonNullable<
   Awaited<BuildContextResult>["ChannelStructuredContext"]
 >;
-function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeInboundTextNewlines(value);
-  return normalized.trim().length > 0 ? normalized : undefined;
-}
-
 function resolveMockChannelStructuredContext(
   params: Pick<BuildContextParams, "extra" | "supplemental">,
 ): ChannelStructuredContextEntries | undefined {
@@ -38,9 +30,9 @@ function resolveMockChannelStructuredContext(
     entries.push(...supplementalEntries);
   }
 
-  const groupPrompt = normalizeUntrustedGroupPrompt(
-    params.supplemental?.untrustedGroupSystemPrompt,
-  );
+  const prompt = params.supplemental?.untrustedGroupSystemPrompt;
+  const normalized = typeof prompt === "string" ? normalizeInboundTextNewlines(prompt) : undefined;
+  const groupPrompt = normalized?.trim() ? normalized : undefined;
   if (groupPrompt) {
     entries.push({
       label: "Group prompt context",
@@ -264,27 +256,19 @@ export function createPluginInboundRuntimeMock(
                 };
               })()
             : resolved;
-        const preparedReply: Parameters<Inbound["runPreparedReply"]>[0] = {
-          ...prepared,
-          admission,
-        };
-        dispatchResult = await runPreparedChannelTurnMock(preparedReply);
-      } else if ("route" in resolved) {
-        dispatchResult = await dispatchChannelTurnPlanMock({
-          ...resolved,
-          admission,
-          ...(params.turnAdoptionLifecycle
-            ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
-            : {}),
-        });
+        dispatchResult = await runPreparedChannelTurnMock({ ...prepared, admission });
       } else {
-        dispatchResult = await dispatchAssembledChannelTurnMock({
+        const turn = {
           ...resolved,
           admission,
           ...(params.turnAdoptionLifecycle
             ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
             : {}),
-        });
+        };
+        dispatchResult =
+          "route" in turn
+            ? await dispatchChannelTurnPlanMock(turn)
+            : await dispatchAssembledChannelTurnMock(turn);
       }
       const result = {
         ...dispatchResult,

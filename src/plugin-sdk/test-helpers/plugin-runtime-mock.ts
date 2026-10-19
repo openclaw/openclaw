@@ -190,25 +190,21 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         createSessionEntry: vi.fn(
           async (params: Parameters<AgentSession["createSessionEntry"]>[0]) => {
             const sessionId = "plugin-runtime-mock-session";
-            const key = params.key;
+            const { key, initialEntry: input } = params;
             const sessionInitialEntry =
-              "acpSessionBinding" in params.initialEntry
+              "acpSessionBinding" in input
                 ? {
                     acpSessionBinding: {
-                      acpBackendId: params.initialEntry.acpBackendId,
-                      ...params.initialEntry.acpSessionBinding,
+                      acpBackendId: input.acpBackendId,
+                      ...input.acpSessionBinding,
                     },
-                    ...(params.initialEntry.modelSelectionLocked
-                      ? { modelSelectionLocked: true as const }
+                    ...(input.modelSelectionLocked ? { modelSelectionLocked: true as const } : {}),
+                    ...(input.pluginExtensions
+                      ? { pluginExtensions: structuredClone(input.pluginExtensions) }
                       : {}),
-                    ...(params.initialEntry.pluginExtensions
-                      ? { pluginExtensions: structuredClone(params.initialEntry.pluginExtensions) }
-                      : {}),
-                    ...(params.initialEntry.pluginOwnerId
-                      ? { pluginOwnerId: params.initialEntry.pluginOwnerId }
-                      : {}),
+                    ...(input.pluginOwnerId ? { pluginOwnerId: input.pluginOwnerId } : {}),
                   }
-                : structuredClone(params.initialEntry);
+                : structuredClone(input);
             const initialEntry = {
               sessionId,
               updatedAt: Date.now(),
