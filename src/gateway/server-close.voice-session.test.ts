@@ -53,6 +53,9 @@ it("settles accepted voice work with diagnostics disabled even when provider cle
   signal,
 }) => {
   const fixture = await createGatewayMetadataCloseFixture("gateway-voice-session-close");
+  const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
+  const waitForGate = (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
+    wait(awaitGateBeforeSettlement(gate, work, message));
   const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
   fixture.config.diagnostics = { enabled: false };
   const entered = createDeferred();
@@ -82,14 +85,10 @@ it("settles accepted voice work with diagnostics disabled even when provider cle
       const drain = owner.drain.bind(owner);
       owner.drain = () => {
         const pending = drain();
-        void pending.then(
-          () => {
-            drainSettled = true;
-          },
-          () => {
-            drainSettled = true;
-          },
-        );
+        const settled = () => {
+          drainSettled = true;
+        };
+        void pending.then(settled, settled);
         drainEntered.resolve();
         return pending.catch((error: unknown) => {
           if (!finishingFixture || !collectNestedErrorCandidates(error).includes(providerFailure)) {
@@ -230,13 +229,10 @@ it("settles accepted voice work with diagnostics disabled even when provider cle
     });
     await vi.advanceTimersByTimeAsync(0);
     vi.useRealTimers();
-    await withinTest(
-      awaitGateBeforeSettlement(
-        entered.promise,
-        expectDefined(writing, "Accepted transcript"),
-        "Voice transcript settled before its persistence boundary",
-      ),
-      signal,
+    await waitForGate(
+      entered.promise,
+      expectDefined(writing, "Accepted transcript"),
+      "Voice transcript settled before its persistence boundary",
     );
     expect(acceptedSignal?.aborted).toBe(false);
     // The first relay append is behind the held writer; the second is still in its outer FIFO.
@@ -248,52 +244,41 @@ it("settles accepted voice work with diagnostics disabled even when provider cle
       () => undefined,
       (error: unknown) => error,
     );
-    await withinTest(
-      awaitGateBeforeSettlement(
-        parentClosed.promise,
-        closing,
-        "Gateway closed before scheduler cancellation",
-      ),
-      signal,
+    await waitForGate(
+      parentClosed.promise,
+      closing,
+      "Gateway closed before scheduler cancellation",
     );
     expect(acceptedSignal?.aborted).toBe(false);
-    await withinTest(
-      awaitGateBeforeSettlement(providerClosing.promise, closing, "Provider close was not joined"),
-      signal,
-    );
+    await waitForGate(providerClosing.promise, closing, "Provider close was not joined");
     await expect(
       createOrResumeClientVoiceSession({ ...target, origin: "client", voiceSessionId: "too-late" }),
     ).rejects.toThrow("Voice session persistence admission is closed");
     // Provider event dispatch need not inherit the asynchronous close caller's context.
     providerCallbacks?.onTranscript?.("assistant", "Final words during provider close", true);
     releaseProvider.resolve();
-    await withinTest(expect(relayOwner.closing?.completion).rejects.toBe(providerFailure), signal);
-    await withinTest(drainEntered.promise, signal);
+    await wait(expect(relayOwner.closing?.completion).rejects.toBe(providerFailure));
+    await wait(drainEntered.promise);
     await nextEventLoopTurn();
     expect(
       drainSettled,
       "Talk close must join accepted writes before reporting cleanup failure",
     ).toBe(false);
     release.resolve();
-    await withinTest(writing!, signal);
-    await withinTest(expectDefined(relayOwner.voiceSessionClose, "Closed voice record"), signal);
+    await wait(writing!);
+    await wait(expectDefined(relayOwner.voiceSessionClose, "Closed voice record"));
     expect(sendDigest).not.toHaveBeenCalled();
     releaseTool.resolve();
-    await withinTest(toolRun, signal);
-    await withinTest(
-      awaitGateBeforeSettlement(
-        digestStarted.promise,
-        closeOutcome,
-        "Gateway close lost the final tool digest",
-      ),
-      signal,
+    await wait(toolRun);
+    await waitForGate(
+      digestStarted.promise,
+      closeOutcome,
+      "Gateway close lost the final tool digest",
     );
     await nextEventLoopTurn();
     expect(drainSettled, "provider-close digest delivery must retain shutdown custody").toBe(false);
     releaseDigest.resolve();
-    expect(collectNestedErrorCandidates(await withinTest(closeOutcome, signal))).toContain(
-      providerFailure,
-    );
+    expect(collectNestedErrorCandidates(await wait(closeOutcome))).toContain(providerFailure);
     expect(providerClose).toHaveBeenCalledOnce();
     expect(sendDigest).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({

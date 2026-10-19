@@ -138,6 +138,8 @@ it("joins accepted worktree removals across scheduler cancellation before closin
   signal,
 }) => {
   const fixture = await createGatewayMetadataCloseFixture("gateway-worktree-run-end-close");
+  const waitForGate = (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
+    withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
   const entered = createDeferred();
   const release = createDeferred();
   const parentClosed = createDeferred();
@@ -202,13 +204,10 @@ it("joins accepted worktree removals across scheduler cancellation before closin
     });
     await vi.advanceTimersByTimeAsync(0);
     vi.useRealTimers();
-    await withinTest(
-      awaitGateBeforeSettlement(
-        entered.promise,
-        expectDefined(removing, "Accepted removals"),
-        "Worktree removal settled before its worker command",
-      ),
-      signal,
+    await waitForGate(
+      entered.promise,
+      expectDefined(removing, "Accepted removals"),
+      "Worktree removal settled before its worker command",
     );
     expect(acceptedSignal?.aborted).toBe(false);
     kernel.scheduler.signal.addEventListener("abort", () => parentClosed.resolve(), { once: true });
@@ -219,13 +218,10 @@ it("joins accepted worktree removals across scheduler cancellation before closin
     });
     void acceptedChild.catch(() => {});
     closing = server.close({ reason: "worktree settlement close regression" });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        parentClosed.promise,
-        closing,
-        "Gateway closed before scheduler cancellation",
-      ),
-      signal,
+    await waitForGate(
+      parentClosed.promise,
+      closing,
+      "Gateway closed before scheduler cancellation",
     );
     expect(acceptedSignal?.aborted).toBe(false);
     expect(shared.isOpen).toBe(true);
@@ -239,13 +235,10 @@ it("joins accepted worktree removals across scheduler cancellation before closin
     await withinTest(acceptedChild, signal);
     holdRunLeaseRelease = true;
     releasing = runLease.release();
-    await withinTest(
-      awaitGateBeforeSettlement(
-        releaseEntered.promise,
-        releasing,
-        "Accepted run lease cleanup did not reach its writer",
-      ),
-      signal,
+    await waitForGate(
+      releaseEntered.promise,
+      releasing,
+      "Accepted run lease cleanup did not reach its writer",
     );
     release.resolve();
     await withinTest(expectDefined(removing, "Accepted removals"), signal);

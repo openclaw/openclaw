@@ -43,35 +43,28 @@ export async function createGatewayMetadataCloseFixture(label: string) {
   const pluginId = "metadata-fixture";
   const rootDir = state.path(pluginId);
   await fs.mkdir(rootDir);
-  await fs.writeFile(
-    path.join(rootDir, "package.json"),
-    JSON.stringify({
-      name: pluginId,
-      version: "1.0.0",
-      type: "commonjs",
-      openclaw: { extensions: ["./index.cjs"] },
-    }),
-  );
-  await fs.writeFile(
-    path.join(rootDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: pluginId,
-      activation: { onStartup: true },
-      configSchema: { type: "object", properties: {} },
-    }),
-  );
-  await fs.writeFile(
-    path.join(rootDir, "index.cjs"),
-    `module.exports = { id: ${JSON.stringify(pluginId)}, register() {} };`,
-  );
+  const write = (name: string, source: string) => fs.writeFile(path.join(rootDir, name), source);
+  const writeJson = (name: string, value: unknown) => write(name, JSON.stringify(value));
+  await writeJson("package.json", {
+    name: pluginId,
+    version: "1.0.0",
+    type: "commonjs",
+    openclaw: { extensions: ["./index.cjs"] },
+  });
+  await writeJson("openclaw.plugin.json", {
+    id: pluginId,
+    activation: { onStartup: true },
+    configSchema: { type: "object", properties: {} },
+  });
+  await write("index.cjs", `module.exports = { id: ${JSON.stringify(pluginId)}, register() {} };`);
   const source = path.join(rootDir, "callback.cjs");
   const dependency = path.join(rootDir, "lazy.mjs");
   const event = `${label}-setup`;
   const listeners = process.listenerCount(event);
   const writeCallback = async (value: string) => {
-    await fs.writeFile(dependency, `export const value = ${JSON.stringify(value)};`);
-    await fs.writeFile(
-      source,
+    await write("lazy.mjs", `export const value = ${JSON.stringify(value)};`);
+    await write(
+      "callback.cjs",
       `module.exports = (lifecycle) => {
         const listener = () => {};
         process.on(${JSON.stringify(event)}, listener);

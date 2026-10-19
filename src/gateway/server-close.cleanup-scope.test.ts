@@ -15,7 +15,7 @@ import {
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { registerActiveDebugProxyCapture } from "../proxy-capture/runtime-cleanup.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
@@ -35,6 +35,22 @@ const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
   drainRetainedEmbeddingProviders: async () => {},
 });
 
+function closeGateway(params = createGatewayCloseTestDeps()) {
+  return prepareGatewayClose(params, { reason: "test" }).then((preparation) =>
+    completeGatewayClose(params, preparation),
+  );
+}
+
+async function observeMediaDrain(entered: Deferred) {
+  const media = await import("./server-media-cleanup-lifecycle.js");
+  const wait = media.waitForMediaCleanupDrainsToSettle;
+  const spy = vi.spyOn(media, "waitForMediaCleanupDrainsToSettle").mockImplementation(() => {
+    entered.resolve();
+    return wait();
+  });
+  return { wait, spy };
+}
+
 beforeEach(() => {
   sharedStateLifecycle.set("open", true);
 });
@@ -48,13 +64,7 @@ it("finalizes capture after media drains even when stopping media cleanup fails"
   const releaseMedia = createDeferredCore();
   const drainEntered = createDeferredCore();
   mediaCleanup.registerMediaCleanupDrain(releaseMedia.promise);
-  const waitForDrains = mediaCleanup.waitForMediaCleanupDrainsToSettle;
-  const drainSpy = vi
-    .spyOn(mediaCleanup, "waitForMediaCleanupDrainsToSettle")
-    .mockImplementation(() => {
-      drainEntered.resolve();
-      return waitForDrains();
-    });
+  const { spy: drainSpy } = await observeMediaDrain(drainEntered);
   const captureEntered = createDeferredCore();
   const releaseCapture = createDeferredCore();
   const finalizeCapture = vi.fn(async () => {
@@ -73,12 +83,10 @@ it("finalizes capture after media drains even when stopping media cleanup fails"
     },
   });
   let closed = false;
-  const closing = prepareGatewayClose(params, { reason: "test" })
-    .then((preparation) => completeGatewayClose(params, preparation))
-    .then((result) => {
-      closed = true;
-      return result;
-    });
+  const closing = closeGateway(params).then((result) => {
+    closed = true;
+    return result;
+  });
   try {
     await Promise.race([drainEntered.promise, captureEntered.promise, closing]);
     expect(finalizeCapture).not.toHaveBeenCalled();
@@ -160,7 +168,6 @@ it("joins detached request attachment cleanup before shared state closes", async
   const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
   const attachments = await import("./chat-attachments.js");
   const mediaStore = await import("../media/store.js");
-  const mediaCleanup = await import("./server-media-cleanup-lifecycle.js");
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const parsed = await attachments.parseMessageWithAttachments(
       "read this",
@@ -189,19 +196,10 @@ it("joins detached request attachment cleanup before shared state closes", async
         await deleteMediaBuffer(id, subdir);
       });
     const drainEntered = createDeferredCore();
-    const waitForDrains = mediaCleanup.waitForMediaCleanupDrainsToSettle;
-    const drainSpy = vi
-      .spyOn(mediaCleanup, "waitForMediaCleanupDrainsToSettle")
-      .mockImplementation(() => {
-        drainEntered.resolve();
-        return waitForDrains();
-      });
+    const { wait: waitForDrains, spy: drainSpy } = await observeMediaDrain(drainEntered);
     const discarded = attachments.discardPreparedInboundMedia(parsed.offloadedRefs);
     await deletionEntered.promise;
-    const deps = createGatewayCloseTestDeps();
-    const closing = prepareGatewayClose(deps, { reason: "test" }).then((preparation) =>
-      completeGatewayClose(deps, preparation),
-    );
+    const closing = closeGateway();
     let observedDrain: Promise<void> | undefined;
     try {
       await drainEntered.promise;

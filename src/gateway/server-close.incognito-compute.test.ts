@@ -56,51 +56,45 @@ it("settles accepted memory usage and trajectory work across the real close prel
       { assertCurrent() {}, assertReadable() {} },
     );
     const selected = actor;
-    expect(
-      (
-        await selected.storage!.mutate(
-          {
-            type: "session.entry.create",
-            input: { entry: { sessionId: target.sessionId, updatedAt: 1, incognito: true } },
-          },
-          authority,
-        )
-      ).kind,
-    ).toBe("committed");
+    const created = await selected.storage!.mutate(
+      {
+        type: "session.entry.create",
+        input: { entry: { sessionId: target.sessionId, updatedAt: 1, incognito: true } },
+      },
+      authority,
+    );
+    expect(created).toMatchObject({ kind: "committed" });
     for (const [index, content] of ["old branch", "accepted current branch"].entries()) {
-      expect(
-        (
-          await selected.appendToolResult(
-            {
-              commandId: `compute-message-${index}`,
-              phaseId: "compute-close",
-              turn: {
-                agentId: "main",
-                sessionKey: target.sessionKey,
-                options: {
-                  expectedSessionId: target.sessionId,
-                  sessionFile: formatSqliteSessionFileMarker(target),
-                  messages: [
-                    {
-                      eventId: `message-${index}`,
-                      parentId: null,
-                      message: {
-                        role: "assistant",
-                        content: [{ type: "text", text: content }],
-                        timestamp: 10_000,
-                        provider: "test",
-                        model: "test",
-                        usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
-                      },
-                    },
-                  ],
+      const appended = await selected.appendToolResult(
+        {
+          commandId: `compute-message-${index}`,
+          phaseId: "compute-close",
+          turn: {
+            agentId: "main",
+            sessionKey: target.sessionKey,
+            options: {
+              expectedSessionId: target.sessionId,
+              sessionFile: formatSqliteSessionFileMarker(target),
+              messages: [
+                {
+                  eventId: `message-${index}`,
+                  parentId: null,
+                  message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: content }],
+                    timestamp: 10_000,
+                    provider: "test",
+                    model: "test",
+                    usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
+                  },
                 },
-              },
+              ],
             },
-            authority,
-          )
-        ).kind,
-      ).toBe("committed");
+          },
+        },
+        authority,
+      );
+      expect(appended).toMatchObject({ kind: "committed" });
     }
     const database = { agentId: "main", path: owner.path, env: fixture.state.env };
     const sessionFile = formatSqliteSessionFileMarker(target);
