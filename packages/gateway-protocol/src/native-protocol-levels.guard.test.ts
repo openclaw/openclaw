@@ -1,4 +1,3 @@
-// Gateway Protocol tests cover native protocol levels.guard behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -14,33 +13,19 @@ import {
   PROTOCOL_VERSION,
 } from "./version.js";
 
-/**
- * Cross-language guard for Gateway protocol version constants.
- *
- * Native Swift/Kotlin clients and dev smoke scripts cannot derive these values
- * from TypeScript at runtime, so this test keeps generated constants
- * and connect payloads aligned with the package source of truth.
- */
-
 const swiftGeneratedPath = `${nativeProtocolOutputDirectories.swift}/GatewayModels.swift`;
 beforeAll(() => prepareNativeProtocol());
 
-/** Reads a repo-relative source file used by a native protocol guard. */
 async function readRepoFile(relativePath: string): Promise<string> {
   return fs.readFile(path.join(process.cwd(), relativePath), "utf8");
 }
 
-/** Asserts a compatibility pattern exists in generated/native source text. */
-function assertPattern(
-  content: string,
-  relativePath: string,
-  pattern: RegExp,
-  message: string,
-): void {
-  if (pattern.test(content)) {
-    return;
+// Native clients cannot derive these compatibility contracts from TypeScript at runtime.
+async function assertPatterns(relativePath: string, patterns: readonly RegExp[]): Promise<void> {
+  const content = await readRepoFile(relativePath);
+  for (const pattern of patterns) {
+    expect(content, relativePath).toMatch(pattern);
   }
-  throw new Error(`${relativePath}: ${message}`);
 }
 
 function stringLiteralUnionValues(schema: unknown): string[] | undefined {
@@ -75,137 +60,52 @@ describe("native Gateway protocol levels", () => {
   });
 
   it("emits the session approval event as a discriminated Swift union", async () => {
-    const swiftGenerated = await readRepoFile(swiftGeneratedPath);
-
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
+    await assertPatterns(swiftGeneratedPath, [
       /public enum SessionApprovalEvent: Codable, Sendable \{/,
-      "missing the generated SessionApprovalEvent union.",
-    );
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
       /case pending\(PendingSessionApprovalEvent\)/,
-      "SessionApprovalEvent must decode pending transitions.",
-    );
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
       /case terminal\(TerminalSessionApprovalEvent\)/,
-      "SessionApprovalEvent must decode terminal transitions.",
-    );
+    ]);
   });
 
   it("emits the scope upgrade result as a discriminated Swift union", async () => {
-    const swiftGenerated = await readRepoFile(swiftGeneratedPath);
-
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
+    await assertPatterns(swiftGeneratedPath, [
       /public enum ScopeUpgradeResult: Codable, Sendable \{/,
-      "missing the generated ScopeUpgradeResult union.",
-    );
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
       /case approved\(ScopeUpgradeApproved\)/,
-      "ScopeUpgradeResult must decode approved outcomes.",
-    );
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
       /case rejected\(ScopeUpgradeRejected\)/,
-      "ScopeUpgradeResult must decode rejected outcomes.",
-    );
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
       /case expired\(ScopeUpgradeExpired\)/,
-      "ScopeUpgradeResult must decode expired outcomes.",
-    );
+    ]);
   });
 
   it("uses the min constant for native connect compatibility ranges", async () => {
-    const swiftChannelPath = "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift";
-    const swiftChannel = await readRepoFile(swiftChannelPath);
-    const swiftRangePath =
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectFailureBackoff.swift";
-    const swiftRange = await readRepoFile(swiftRangePath);
-    assertPattern(
-      swiftRange,
-      swiftRangePath,
-      /if role == "node", clientMode == "node" \{\s+return GATEWAY_MIN_NODE_PROTOCOL_VERSION\s+\}\s+return GATEWAY_MIN_PROTOCOL_VERSION/,
-      "node connections must use the node compatibility floor without changing operator clients.",
+    await assertPatterns(
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectFailureBackoff.swift",
+      [
+        /if role == "node", clientMode == "node" \{\s+return GATEWAY_MIN_NODE_PROTOCOL_VERSION\s+\}\s+return GATEWAY_MIN_PROTOCOL_VERSION/,
+      ],
     );
-    assertPattern(
-      swiftChannel,
-      swiftChannelPath,
+    await assertPatterns("apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift", [
       /var supportedProtocols: ClosedRange<Int> \{\s+Self\.minimumProtocolVersion\(\s+role: self\.connectOptions\?\.role \?\? "operator",\s+clientMode: self\.connectOptions\?\.clientMode \?\? "ui"\)\.\.\.GATEWAY_PROTOCOL_VERSION\s+\}/,
-      "the shared range must use the configured role and mode through GATEWAY_PROTOCOL_VERSION.",
-    );
-    assertPattern(
-      swiftChannel,
-      swiftChannelPath,
       /let protocols = self\.supportedProtocols/,
-      "connect params must use the shared supported protocol range.",
-    );
-    assertPattern(
-      swiftChannel,
-      swiftChannelPath,
       /"minProtocol": ProtoAnyCodable\(protocols\.lowerBound\)/,
-      "connect params must advertise the role-specific minimum as minProtocol.",
-    );
-    assertPattern(
-      swiftChannel,
-      swiftChannelPath,
       /"maxProtocol": ProtoAnyCodable\(protocols\.upperBound\)/,
-      "connect params must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
-    );
+    ]);
 
-    const watchPath = "apps/ios/WatchApp/Sources/WatchDirectNode.swift";
-    const watch = await readRepoFile(watchPath);
-    assertPattern(
-      watch,
-      watchPath,
+    await assertPatterns("apps/ios/WatchApp/Sources/WatchDirectNode.swift", [
       /minprotocol: GATEWAY_MIN_PROTOCOL_VERSION/,
-      "Direct Watch HTTP connects must keep the current client protocol floor.",
-    );
-    assertPattern(
-      watch,
-      watchPath,
       /maxprotocol: GATEWAY_PROTOCOL_VERSION/,
-      "Watch node connects must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
-    );
+    ]);
 
-    const swiftWizardPath = "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift";
-    const swiftWizard = await readRepoFile(swiftWizardPath);
-    assertPattern(
-      swiftWizard,
-      swiftWizardPath,
+    await assertPatterns("apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift", [
       /"minProtocol": ProtoAnyCodable\(GATEWAY_MIN_PROTOCOL_VERSION\)/,
-      "operator connects must advertise GATEWAY_MIN_PROTOCOL_VERSION as minProtocol.",
-    );
-    assertPattern(
-      swiftWizard,
-      swiftWizardPath,
       /"maxProtocol": ProtoAnyCodable\(GATEWAY_PROTOCOL_VERSION\)/,
-      "operator connects must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
-    );
+    ]);
 
-    const androidPath = "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt";
-    const android = await readRepoFile(androidPath);
-    assertPattern(
-      android,
-      androidPath,
-      /put\("minProtocol", JsonPrimitive\(GATEWAY_MIN_PROTOCOL_VERSION\)\)/,
-      "connect params must advertise GATEWAY_MIN_PROTOCOL_VERSION as minProtocol.",
-    );
-    assertPattern(
-      android,
-      androidPath,
-      /put\("maxProtocol", JsonPrimitive\(GATEWAY_PROTOCOL_VERSION\)\)/,
-      "connect params must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
+    await assertPatterns(
+      "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
+      [
+        /put\("minProtocol", JsonPrimitive\(GATEWAY_MIN_PROTOCOL_VERSION\)\)/,
+        /put\("maxProtocol", JsonPrimitive\(GATEWAY_PROTOCOL_VERSION\)\)/,
+      ],
     );
   });
 
@@ -226,12 +126,10 @@ describe("native Gateway protocol levels", () => {
       const end = swiftGenerated.indexOf("\n}\n", start);
       const enumSource = swiftGenerated.slice(start, end);
       for (const value of values) {
-        assertPattern(
+        expect(
           enumSource,
-          swiftGeneratedPath,
-          new RegExp(`= ${JSON.stringify(value)}$`, "m"),
-          `${name} must include the ${JSON.stringify(value)} literal.`,
-        );
+          `${swiftGeneratedPath}: ${name} must include the ${JSON.stringify(value)} literal.`,
+        ).toMatch(new RegExp(`= ${JSON.stringify(value)}$`, "m"));
       }
     }
   });
