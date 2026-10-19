@@ -1,5 +1,3 @@
-import type { WebClient } from "@slack/web-api";
-import { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import {
   runDeliveryTraceScenario,
   type DeliveryTraceInStep,
@@ -7,7 +5,6 @@ import {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect } from "vitest";
 import { collectSlackWireTexts, createSlackTsNormalizer } from "./delivery-trace.test-support.js";
-import { markSlackStreamsStopped } from "./streaming.js";
 
 export async function assertSlackExpiredProgressTrace(
   params: SlackProgressRecoveryTraceParams,
@@ -231,68 +228,11 @@ export async function assertSlackOrdinaryFallbackCleanupTrace(
   params.assertRuntimeErrorCount(cleanup === "internal_error" || postResponseLost ? 1 : 0);
 }
 
-export async function assertSlackStoppedProgressTrace(
-  params: SlackProgressRecoveryTraceParams,
-): Promise<void> {
-  let streamTs: string | undefined;
-  const events = await runDeliveryTraceScenario({
-    scenario: {
-      name: "slack-stopped-native-stream",
-      steps: [
-        { kind: "reply-start" },
-        { kind: "partial", text: params.narration },
-        { kind: "tool-progress", name: "write", phase: "start" },
-        // The progress compositor emits its initial card at 1500ms.
-        { kind: "advance", ms: 2000 },
-        { kind: "cancel" },
-        { kind: "final", text: "Late answer that must not be posted" },
-        { kind: "idle" },
-      ],
-    },
-    setup: async (recorder) => {
-      const handleStep = await params.setup(
-        {
-          recordWireCall: (call) => {
-            if (call.method === "chat.startStream") {
-              streamTs = (call.result as { ts?: string })?.ts;
-            }
-            recorder.recordWireCall(call);
-          },
-        },
-        "progress-native-unified",
-      );
-      return async (step) => {
-        if (step.kind === "cancel") {
-          expect(streamTs).toBeDefined();
-          markSlackStreamsStopped(params.state.client as unknown as WebClient, params.channelId, [
-            streamTs!,
-          ]);
-        }
-        await handleStep(step);
-      };
-    },
-    normalize: createSlackTsNormalizer(),
-  });
-  const outMethods = events.filter((event) => event.dir === "out").map((event) => event.kind);
-  expect(outMethods).toContain("chat.startStream");
-  expect(outMethods).not.toContain("chat.stopStream");
-  expect(outMethods).not.toContain("chat.postMessage");
-  expect(collectSlackWireTexts(events).join("\n")).not.toContain("Late answer");
-  params.assertRuntimeErrorCount(0);
-}
-
 type RecordedWireCall = {
   method: string;
   target?: string;
   payload?: unknown;
   result?: unknown;
-};
-
-type SlackRecordingTraceState = {
-  recordWireCall: (call: RecordedWireCall) => void;
-  tsCounter: number;
-  rejectStartStreamCode: string | undefined;
-  rejectAppendStreamCode: string | undefined;
 };
 
 type SlackProgressRecoveryTraceParams = {
@@ -319,146 +259,4 @@ function asWireString(value: unknown): string {
 function stripToken(args: Record<string, unknown>): Record<string, unknown> {
   const { token: _token, ...rest } = args;
   return rest;
-}
-
-export function createRecordingSlackClient(
-  state: SlackRecordingTraceState,
-  teamId: string,
-): Record<string, unknown> {
-  const nextSlackTs = () => {
-    state.tsCounter += 1;
-    return `1767225601.${String(state.tsCounter).padStart(6, "0")}`;
-  };
-  const record = (call: RecordedWireCall) => {
-    state.recordWireCall(call);
-  };
-  const unexpected = (method: string) => async () => {
-    throw new Error(`unexpected Slack wire call: ${method}`);
-  };
-  const client: Record<string, unknown> = {
-    chat: {
-      postMessage: async (args: Record<string, unknown>) => {
-        const ts = nextSlackTs();
-        record({
-          method: "chat.postMessage",
-          target: asWireString(args.channel),
-          payload: stripToken(args),
-          result: { ts },
-        });
-        return {
-          ok: true,
-          channel: args.channel,
-          ts,
-          message: { ts, ...(args.thread_ts ? { thread_ts: args.thread_ts } : {}) },
-        };
-      },
-      update: async (args: Record<string, unknown>) => {
-        record({
-          method: "chat.update",
-          target: asWireString(args.ts),
-          payload: stripToken(args),
-          result: { ok: true },
-        });
-        return { ok: true, channel: args.channel, ts: args.ts };
-      },
-      delete: async (args: Record<string, unknown>) => {
-        record({
-          method: "chat.delete",
-          target: asWireString(args.ts),
-          payload: stripToken(args),
-          result: { ok: true },
-        });
-        return { ok: true };
-      },
-      startStream: async (args: Record<string, unknown>) => {
-        const rejectCode = state.rejectStartStreamCode;
-        if (rejectCode) {
-          state.rejectStartStreamCode = undefined;
-          record({
-            method: "chat.startStream",
-            target: asWireString(args.channel),
-            payload: stripToken(args),
-            result: { ok: false, error: rejectCode },
-          });
-          const err = new Error(`An API error occurred: ${rejectCode}`);
-          (err as Error & { data?: unknown }).data = { ok: false, error: rejectCode };
-          throw err;
-        }
-        const ts = nextSlackTs();
-        record({
-          method: "chat.startStream",
-          target: asWireString(args.channel),
-          payload: stripToken(args),
-          result: { ts },
-        });
-        return { ok: true, ts };
-      },
-      appendStream: async (args: Record<string, unknown>) => {
-        const rejectCode = state.rejectAppendStreamCode;
-        if (rejectCode) {
-          state.rejectAppendStreamCode = undefined;
-          record({
-            method: "chat.appendStream",
-            target: asWireString(args.ts),
-            payload: stripToken(args),
-            result: { ok: false, error: rejectCode },
-          });
-          const error = new Error(`An API error occurred: ${rejectCode}`);
-          Object.assign(error, { data: { ok: false, error: rejectCode } });
-          throw error;
-        }
-        record({
-          method: "chat.appendStream",
-          target: asWireString(args.ts),
-          payload: stripToken(args),
-          result: { ok: true },
-        });
-        return { ok: true, ts: args.ts };
-      },
-      stopStream: async (args: Record<string, unknown>) => {
-        record({
-          method: "chat.stopStream",
-          target: asWireString(args.ts),
-          payload: stripToken(args),
-          result: { ok: true },
-        });
-        return { ok: true, ts: args.ts };
-      },
-    },
-    users: {
-      info: async (args: Record<string, unknown>) => {
-        record({
-          method: "users.info",
-          target: asWireString(args.user),
-          payload: stripToken(args),
-          result: { team_id: teamId },
-        });
-        return { ok: true, user: { team_id: teamId } };
-      },
-    },
-    apiCall: async (method: string, args: Record<string, unknown>) => {
-      record({
-        method,
-        target: `${asWireString(args.channel_id)}/${asWireString(args.thread_ts)}`,
-        payload: stripToken(args),
-        result: { ok: true },
-      });
-      return { ok: true };
-    },
-    conversations: { open: unexpected("conversations.open") },
-    reactions: Object.fromEntries(
-      ["add", "remove"].map((action) => [
-        action,
-        async (args: Record<string, unknown>) => {
-          record({ method: `reactions.${action}`, payload: stripToken(args) });
-          return { ok: true };
-        },
-      ]),
-    ),
-  };
-  // Mirror WebClient.chatStream: the REAL SDK ChatStreamer runs against this
-  // recording client, so its local buffering decides when wire calls happen.
-  client.chatStream = (args: unknown) =>
-    new ChatStreamer(client as never, { debug: () => {} } as never, args as never, {});
-  return client;
 }
