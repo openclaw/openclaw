@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, onSettled, Show, untrack } from "solid-js";
+import { createEffect, createMemo, onSettled, Show, useContext } from "solid-js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
@@ -59,6 +59,7 @@ import {
   NewSessionSelectionStatus,
 } from "./composer-capability-controls.tsx";
 import { createComposerPlaceholder } from "./composer-placeholder.ts";
+import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import type { NewSessionComposerTextarea } from "./composer-textarea.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
@@ -91,7 +92,6 @@ export type NewSessionComposerOptions = {
   nativeTerminal?: boolean;
   onUnsupportedAttachment?: () => void;
   submitting: boolean;
-  composerTextarea: NewSessionComposerTextarea;
   voiceControl?: JSX.Element;
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
@@ -106,49 +106,48 @@ export type NewSessionComposerOptions = {
   onBackgroundSubmit?: () => void;
 };
 
-function submitNewSession(options: NewSessionComposerOptions) {
-  options.composerTextarea.emojiMenu.close();
-  options.composerTextarea.mentionMenu.close();
-  options.composerTextarea.skillMenu.reset();
-  options.composerTextarea.slashMenu.reset();
+function submitNewSession(
+  options: NewSessionComposerOptions,
+  textarea: NewSessionComposerTextarea,
+) {
+  textarea.emojiMenu.close();
+  textarea.mentionMenu.close();
+  textarea.skillMenu.reset();
+  textarea.slashMenu.reset();
   options.onSubmit();
 }
 
 /** Draft message box styled as the chat composer shell so both pickers match. */
-function prepareNewSessionComposer(options: NewSessionComposerOptions) {
-  const { attachmentDraft, context, composerTextarea } = options;
+function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessionComposerTextarea) {
+  const { attachmentDraft, context } = options;
   const readSignal = attachmentDraft.reads.readSignal;
   const gateway = context?.gateway;
   const commandClient = options.nativeTerminal ? null : (gateway?.snapshot.client ?? null);
   const mentionDirectory = resolveNewSessionMentionDirectory(options);
-  const { skillMenu, slashMenu, mentionMenu, emojiMenu } = composerTextarea;
+  const { skillMenu, slashMenu, mentionMenu, emojiMenu } = textarea;
   const skillMenuState = skillMenu.state;
   const slashMenuState = slashMenu.state;
   const composerLocked =
     options.submitting || options.messageLocked === true || options.dictationActive === true;
   const skillMenuHost: SkillMenuHost = {
     paneId: "new-session",
-    getDraft: () => options.composerTextarea.getTextarea()?.value ?? options.message,
+    getDraft: () => textarea.getTextarea()?.value ?? options.message,
     commitDraft: options.onInput,
-    getTextarea: options.composerTextarea.getTextarea,
+    getTextarea: textarea.getTextarea,
     refreshCommands: commandClient
       ? () =>
           refreshSlashCommands({
             client: commandClient,
             agentId: options.agentId,
             shouldApply: () =>
-              composerTextarea.ownsSkillCommands(
-                commandClient,
-                options.agentId,
-                options.draftOwnerKey,
-              ),
+              textarea.ownsSkillCommands(commandClient, options.agentId, options.draftOwnerKey),
           })
       : undefined,
   };
   const slashMenuHost: SlashMenuHost = {
     ...skillMenuHost,
     resolveArgOptions: (command) => command.argOptions ?? [],
-    runCommand: () => submitNewSession(options),
+    runCommand: () => submitNewSession(options, textarea),
     canRun: (inline) => !inline,
     commandFilter: (command) => command.executeLocal !== true,
   };
@@ -164,14 +163,14 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
       options.dictationActive ||
       options.submitting ||
       options.messageLocked ||
-      options.composerTextarea.composing ||
+      textarea.composing ||
       isComposingKeyboardEvent(event)
     ) {
       return;
     }
     if (
-      options.composerTextarea.emojiMenu.handleKeydown(event, "new-session") ||
-      options.composerTextarea.mentionMenu.handleKeydown(event, mentionMenuHost) ||
+      textarea.emojiMenu.handleKeydown(event, "new-session") ||
+      textarea.mentionMenu.handleKeydown(event, mentionMenuHost) ||
       skillMenu.handleKeydown(event, skillMenuHost) ||
       slashMenu.handleKeydown(event, slashMenuHost)
     ) {
@@ -196,12 +195,12 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
     if (options.canSubmit || options.submitDisabledReason !== undefined) {
       event.preventDefault();
       if (background) {
-        options.composerTextarea.skillMenu.reset();
-        options.composerTextarea.slashMenu.reset();
-        options.composerTextarea.mentionMenu.close();
+        textarea.skillMenu.reset();
+        textarea.slashMenu.reset();
+        textarea.mentionMenu.close();
         options.onBackgroundSubmit?.();
       } else {
-        submitNewSession(options);
+        submitNewSession(options, textarea);
       }
     }
   };
@@ -213,13 +212,13 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
       target,
       !composerLocked &&
         !options.nativeTerminal &&
-        !options.composerTextarea.composing &&
+        !textarea.composing &&
         !commandsOpen &&
         !mentionMenu.open,
     );
   };
   const updateMenus = (target: HTMLTextAreaElement, event?: InputEvent) => {
-    if (options.nativeTerminal || options.composerTextarea.composing || event?.isComposing) {
+    if (options.nativeTerminal || textarea.composing || event?.isComposing) {
       emojiMenu.close();
       return;
     }
@@ -279,7 +278,7 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
     canCompose: !composerLocked && !options.nativeTerminal,
   });
   const visibleMessage = options.dictationPreview ?? options.message;
-  options.composerTextarea.syncDraft(visibleMessage);
+  textarea.syncDraft(visibleMessage);
   const messagePlaceholder = t(
     options.nativeTerminal ? "newSession.nativeTerminalPrompt" : "newSession.messagePlaceholder",
   );
@@ -331,6 +330,7 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
 }
 
 function StartControl(props: { options: NewSessionComposerOptions }) {
+  const textarea = useContext(NewSessionComposerTextareaContext);
   const label = () =>
     props.options.submitting
       ? t("newSession.starting")
@@ -354,7 +354,7 @@ function StartControl(props: { options: NewSessionComposerOptions }) {
         aria-disabled={props.options.canSubmit ? "false" : "true"}
         aria-busy={busy() ? "true" : "false"}
         aria-label={label()}
-        onClick={() => submitNewSession(props.options)}
+        onClick={() => submitNewSession(props.options, textarea)}
       >
         <Icon
           name={busy() ? "loader" : props.options.nativeTerminal ? "squareTerminal" : "arrowUp"}
@@ -368,6 +368,7 @@ export function NewSessionComposer(props: {
   options: NewSessionComposerOptions;
   surroundings?: () => Pick<LobsterComposerElements, "root" | "obstacles"> | undefined;
 }) {
+  const textarea = useContext(NewSessionComposerTextareaContext);
   const footerControl = createFooterControlRef();
   const inputHandle = createChatAttachmentInputHandle();
   const backgroundLayoutRef = createBackgroundLayoutRef("composer");
@@ -381,10 +382,8 @@ export function NewSessionComposer(props: {
       ? { ...props.options, message: current.draft, mentions: current.mentions }
       : props.options;
   });
-  const frame = createMemo(() => prepareNewSessionComposer(options()));
-  const placeholder = createComposerPlaceholder(options);
-  // The input and its synchronous owner share one mounted lifetime.
-  const textarea = untrack(() => options().composerTextarea);
+  const frame = createMemo(() => prepareComposer(options(), textarea));
+  const placeholder = createComposerPlaceholder(options, textarea);
   // The textarea owner retires stale command requests and closes menus when its scope changes.
   createEffect(
     () =>
