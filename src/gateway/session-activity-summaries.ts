@@ -332,10 +332,9 @@ export function createSessionActivitySummaries(deps: {
         return;
       }
       assertCurrentOwner(state, ref);
-      const entry = state.entry;
       const source = await readActivitySummarySource({
         scope: { ...scope(state), sessionId: state.sessionId },
-        previous: readSessionActivitySummary(entry),
+        previous: readSessionActivitySummary(state.entry),
         assertCurrent: () => assertCurrentOwner(state, ref),
       });
       if (!source) {
@@ -597,13 +596,15 @@ export function createSessionActivitySummaries(deps: {
     if (state) {
       schedule(state, true);
     }
-    return prepareSessionActivitySummaryView({
+    const view = await prepareSessionActivitySummaryView({
       ...target,
       cfg: deps.getConfig(),
       entry: state?.entry ?? entry,
       storePath: scope(target).storePath,
       admitted: state !== undefined,
     });
+    // A stale recap is admitted work even before the queued source read starts.
+    return state && view.state === "stale" ? { ...view, state: "updating" as const } : view;
   };
   const trackAdmission = <T>(work: Promise<T>): Promise<T> => {
     admissions.add(work);

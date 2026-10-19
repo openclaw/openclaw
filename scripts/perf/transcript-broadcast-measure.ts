@@ -1047,6 +1047,7 @@ async function runRecapBurst(
       };
     }),
   );
+  const lastRepeat = repeats.at(-1);
   return {
     latestValueDelivery,
     finalRecapsMatch: true,
@@ -1060,13 +1061,11 @@ async function runRecapBurst(
       ...(profilePath ? { cpuProfile: summarizeCpuProfile(profilePath) } : {}),
       modelRequests: recapRequests - initialModelRequests,
       sessionEventSizes: noopSizes,
-      finalReceiptAfterLastEnsureMs: repeats.length
+      finalReceiptAfterLastEnsureMs: lastRepeat
         ? Math.max(
             0,
             ...perClientRecaps.flatMap((rows) =>
-              keys.map(
-                (key) => rows.get(key)!.receivedAtEpochMs - repeats.at(-1)!.completedAtEpochMs,
-              ),
+              keys.map((key) => rows.get(key)!.receivedAtEpochMs - lastRepeat.completedAtEpochMs),
             ),
           )
         : null,
