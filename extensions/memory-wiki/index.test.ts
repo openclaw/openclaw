@@ -23,7 +23,8 @@ import {
 } from "./src/log.js";
 import { renderWikiMarkdown } from "./src/markdown.js";
 import { withMemoryWikiVaultMutation } from "./src/mutation-coordinator.js";
-import * as queryReader from "./src/query-reader.js";
+import { closeMemoryWikiQueryReader } from "./src/query-reader.js";
+import { getMemoryWikiPage } from "./src/query.js";
 import { waitForMemoryWikiImportedSourceSyncs } from "./src/source-sync.js";
 import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
 
@@ -176,7 +177,7 @@ describe("memory-wiki plugin", () => {
     }
   });
 
-  it("terminates the query reader worker when the plugin service stops", async () => {
+  it("terminates the query reader workers on service stop and starts fresh ones for later reads", async () => {
     const rootDir = await createTempDir("memory-wiki-index-stop-reader-");
     const { api, registerService } = createPluginApi();
     api.pluginConfig = { vault: { path: rootDir } };
@@ -184,42 +185,42 @@ describe("memory-wiki plugin", () => {
     const service = registerService.mock.calls[0]?.[0];
     await service?.start?.();
     await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "sources", "alpha.md"),
-      renderWikiMarkdown({
-        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
-        body: "# Alpha\n",
-      }),
-    );
-    // Start from a closed reader so the lookup below creates the pool's workers.
-    await queryReader.closeMemoryWikiQueryReader();
-    let workersCreated = 0;
-    let workersExited = 0;
+    for (const name of ["alpha", "beta"]) {
+      await fs.writeFile(
+        path.join(rootDir, "sources", `${name}.md`),
+        renderWikiMarkdown({
+          frontmatter: { pageType: "source", id: `source.${name}`, title: name },
+          body: `# ${name}\n`,
+        }),
+      );
+    }
+    const config = resolveMemoryWikiConfig(api.pluginConfig);
+    // An id lookup reads the whole vault, which runs on the reader's workers.
+    const lookup = () => getMemoryWikiPage({ config, lookup: "source.alpha" });
+    // Start without reader workers, so every worker counted below belongs to this test.
+    await closeMemoryWikiQueryReader();
+    const workers: Worker[] = [];
+    const exited = new Set<Worker>();
     const onWorker = (worker: Worker) => {
-      workersCreated += 1;
-      worker.once("exit", () => {
-        workersExited += 1;
-      });
+      workers.push(worker);
+      worker.once("exit", () => exited.add(worker));
     };
     process.on("worker", onWorker);
     try {
-      // A whole-vault lookup runs on the reader's worker.
-      const read = await queryReader.readMemoryWikiPages({
-        rootDir,
-        visibility: null,
-        select: "lookup",
-        lookup: "alpha",
-      });
-      expect(read.page?.relativePath).toBe("sources/alpha.md");
-      expect(workersCreated).toBeGreaterThan(0);
-      // The idle worker stays alive until it is retired or the pool closes.
-      expect(workersExited).toBe(0);
+      await expect(lookup()).resolves.toMatchObject({ path: "sources/alpha.md" });
+      const beforeStop = workers.length;
+      expect(beforeStop).toBeGreaterThan(0);
+      // Idle workers stay alive until they are retired or the reader closes.
+      expect(exited.size).toBe(0);
 
       await service?.stop?.();
 
-      expect(workersExited).toBe(workersCreated);
+      expect(exited.size).toBe(beforeStop);
+      await expect(lookup()).resolves.toMatchObject({ path: "sources/alpha.md" });
+      expect(workers.length).toBeGreaterThan(beforeStop);
     } finally {
       process.off("worker", onWorker);
+      await service?.stop?.();
     }
   });
 
