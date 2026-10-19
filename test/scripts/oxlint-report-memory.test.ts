@@ -19,6 +19,7 @@ const env = {
   ...process.env,
   CI: "false",
   GITHUB_ACTIONS: "false",
+  OPENCLAW_LINT_TOOL: "oxlint",
   OPENCLAW_CI_STATIC_EVIDENCE: "0",
   OPENCLAW_OXLINT_SKIP_PREPARE: "1",
 };

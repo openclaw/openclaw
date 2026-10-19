@@ -164,6 +164,8 @@ process.stderr.write = (chunk, ...args) => {
   );
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    CI: "false",
+    OPENCLAW_LINT_TOOL: "oxlint",
     FIXTURE_CONTROLLER_GUARD_EXIT: phase === "controllers" && mode === "nonzero" ? "7" : "0",
     OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
   };
@@ -355,7 +357,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
         const result = await fixture.track(
           runNodeScript(
             [path.join(root, "scripts/run-oxlint.mjs"), ...args, "--threads=1"],
-            { ...env, CI: "true", GITHUB_ACTIONS: "true" },
+            { ...env, GITHUB_ACTIONS: "true" },
             10_000,
             { cwd: root, signal, requireProcessTreeExit: true },
           ),
