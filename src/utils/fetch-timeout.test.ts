@@ -87,14 +87,15 @@ describe("fetch timeouts", () => {
       aborted: true,
       reason: { name: "TimeoutError", message: "request timed out" },
     });
-    expect(warn).toHaveBeenCalledExactlyOnceWith("fetch timeout reached; aborting operation", {
+    const record = {
       timeoutMs: 25,
       elapsedMs: 25,
       consoleMessage:
         timeoutMessage +
         (context ? " operation=unit-test url=https://example.com/v1/responses" : ""),
       ...(context ? { operation: "unit-test", url: "https://example.com/v1/responses" } : {}),
-    });
+    };
+    expect(warn.mock.calls).toStrictEqual([["fetch timeout reached; aborting operation", record]]);
   });
 
   it("keeps timeout aborts visible to OpenAI SSE streams instead of cleanly ending", async () => {
