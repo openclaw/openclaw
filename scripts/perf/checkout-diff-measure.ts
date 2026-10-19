@@ -14,6 +14,7 @@ import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
+    "poll-state-dir": { type: "string", multiple: true },
     seed: { type: "boolean" },
     untracked: { type: "string", default: "100" },
     tracked: { type: "string", default: "0" },
@@ -52,6 +53,8 @@ Use --boundary rpc for real sessions.diff WebSocket requests with --tabs 3,
 checkout. The RPC boundary starts an isolated loopback Gateway on --port >=40000.
 Use --tracked 267000 at seed time for an unchanged large tracked inventory. Files
 are empty and written sequentially; Linux Dirty memory is checked every 1,000 files.
+Add --poll-state-dir <other seeded fixture> to poll multiple checkouts concurrently
+through separate sessions. Extra fixtures are read-only and prohibit --mutate.
 Use --observe-git-queues to collect queue timings through benchmark-only loader
 instrumentation applied identically to both revisions. No production state or model
 is involved.`);
@@ -65,6 +68,10 @@ if (!values["state-dir"]) {
 if (values.boundary !== "worker" && values.boundary !== "read" && values.boundary !== "rpc") {
   throw new Error("--boundary must be worker, read, or rpc");
 }
+assert(
+  !values["poll-state-dir"]?.length || values.boundary === "rpc",
+  "--poll-state-dir requires --boundary rpc",
+);
 const root = path.resolve(values["state-dir"]);
 const repo = path.join(root, "repository");
 const marker = path.join(root, "checkout-diff-fixture.json");
@@ -209,8 +216,10 @@ function summarize(numbers: number[]) {
   };
 }
 
-async function measure() {
-  const fixture: unknown = JSON.parse(await fs.readFile(marker, "utf8"));
+async function readFixture(directory: string) {
+  const fixture: unknown = JSON.parse(
+    await fs.readFile(path.join(directory, "checkout-diff-fixture.json"), "utf8"),
+  );
   if (
     !fixture ||
     typeof fixture !== "object" ||
@@ -223,6 +232,11 @@ async function measure() {
   ) {
     throw new Error("Expected an offline fixture created with --seed");
   }
+  return { ...fixture, untracked: fixture.untracked };
+}
+
+async function measure() {
+  const fixture = await readFixture(root);
   if (values.boundary === "rpc") {
     await measureRpc(fixture);
     return;
@@ -361,6 +375,13 @@ function observeGitQueues() {
 
 async function measureRpc(fixture: object) {
   const { BASE_GATEWAY_BENCH_CONFIG } = await import("../lib/gateway-bench-runtime.ts");
+  const extraRoots = (values["poll-state-dir"] ?? []).map((directory) => path.resolve(directory));
+  assert(!extraRoots.length || !values.mutate, "--poll-state-dir prohibits --mutate");
+  const extraFixtures = await Promise.all(extraRoots.map(readFixture));
+  const checkoutRoots = [
+    repo,
+    ...extraRoots.map((directory) => path.join(directory, "repository")),
+  ];
   if (values["observe-git-queues"]) {
     observeGitQueues();
   }
@@ -464,15 +485,23 @@ async function measureRpc(fixture: object) {
       peer.start();
       await ready.promise;
     }
-    const sessionKey = "agent:main:synthetic-diff-contention";
-    await peers[0]!.request("sessions.create", {
-      key: sessionKey,
-      cwd: repo,
-      visibility: "shared",
-    });
-    const params = { sessionKey, scope: "all", summaryOnly: true };
+    const targets = checkoutRoots.map((cwd, checkout) => ({
+      cwd,
+      params: {
+        sessionKey: `agent:main:synthetic-diff-contention${checkout ? `-${checkout}` : ""}`,
+        scope: "all",
+        summaryOnly: true,
+      },
+    }));
+    for (const target of targets) {
+      await peers[0]!.request("sessions.create", {
+        key: target.params.sessionKey,
+        cwd: target.cwd,
+        visibility: "shared",
+      });
+    }
     const warmupStarted = performance.now();
-    await peers[0]!.request("sessions.diff", params);
+    await Promise.all(targets.map((target) => peers[0]!.request("sessions.diff", target.params)));
     const warmupRpcMs = performance.now() - warmupStarted;
     await Promise.all(
       Array.from({ length: Math.max(1, background) }, () =>
@@ -490,6 +519,7 @@ async function measureRpc(fixture: object) {
     const rpcSamples: {
       round: number;
       tab: number;
+      checkout: number;
       elapsedMs: number;
       files: number;
       responseSha256: string;
@@ -558,31 +588,36 @@ async function measureRpc(fixture: object) {
             break;
           }
           await Promise.all(
-            peers.map(async (peer, tab) => {
-              const pollStarted = performance.now();
-              const result = await peer.request<
-                import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult
-              >("sessions.diff", params);
-              assert.equal(result.unavailableReason, undefined);
-              if (values.mutate) {
-                const modified = result.files.find((file) => file.path === "modified.txt");
-                assert(modified, "mutated file must reach RPC response");
-                assert.equal(
-                  modified.additions,
-                  expectedAdditions,
-                  "each round must return its current added-line count",
-                );
-                assert.equal(modified.deletions, 0);
-              }
-              const { root: _root, ...portable } = result;
-              rpcSamples.push({
-                round,
-                tab,
-                elapsedMs: performance.now() - pollStarted,
-                files: result.files.length,
-                responseSha256: createHash("sha256").update(JSON.stringify(portable)).digest("hex"),
-              });
-            }),
+            peers.flatMap((peer, tab) =>
+              targets.map(async (target, checkout) => {
+                const pollStarted = performance.now();
+                const result = await peer.request<
+                  import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult
+                >("sessions.diff", target.params);
+                assert.equal(result.unavailableReason, undefined);
+                if (values.mutate) {
+                  const modified = result.files.find((file) => file.path === "modified.txt");
+                  assert(modified, "mutated file must reach RPC response");
+                  assert.equal(
+                    modified.additions,
+                    expectedAdditions,
+                    "each round must return its current added-line count",
+                  );
+                  assert.equal(modified.deletions, 0);
+                }
+                const { root: _root, ...portable } = result;
+                rpcSamples.push({
+                  round,
+                  tab,
+                  checkout,
+                  elapsedMs: performance.now() - pollStarted,
+                  files: result.files.length,
+                  responseSha256: createHash("sha256")
+                    .update(JSON.stringify(portable))
+                    .digest("hex"),
+                });
+              }),
+            ),
           );
         }
       })(),
@@ -627,6 +662,8 @@ async function measureRpc(fixture: object) {
       revision: values.revision ?? null,
       boundary: "rpc",
       fixture,
+      extraFixtures,
+      checkoutCount: checkoutRoots.length,
       tabs,
       background,
       agents,

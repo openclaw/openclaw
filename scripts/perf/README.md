@@ -980,6 +980,16 @@ differences and outside CPU load; do not compare unrelated absolute runs. Two
 large synthetic worktrees model file/index size and concurrent polling, not the
 production fleet's full filesystem working set or cold disk behavior.
 
+For a second scenario with independent revision checks, add
+`--poll-state-dir <other seeded fixture>` on each side. Both isolated Gateways
+then poll both existing synthetic worktrees concurrently, using a separate
+session per checkout and `--tabs` peers per session. This option is repeatable,
+requires RPC mode, and rejects `--mutate`: shared checkout contents stay read-only
+while Gateway state and temporary diff indexes remain owned by each side's
+`--state-dir`. The report includes the extra fixture inventories, checkout count,
+and each sample's checkout index. This adds multiple-root contention without
+generating another large filesystem tree; it still does not model a whole fleet.
+
 ## Sandbox measurements
 
 Follow the current host policy. On Team, use only a task-owned
