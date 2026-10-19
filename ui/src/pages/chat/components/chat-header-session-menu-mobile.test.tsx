@@ -81,6 +81,18 @@ it("opens a controlled group picker without autofocus and dispatches the selecte
     .click();
   expect(onAction).toHaveBeenCalledExactlyOnceWith({ kind: "move-to-group", category: "Alpha" });
   expect(close).toHaveBeenCalledOnce();
+
+  const retiredPage = mounted.container.querySelector(".session-actions-page")!;
+  mounted.unmount();
+  expect(menu.openMenu()).toBe(true);
+  flush();
+  menu.querySelector<HTMLButtonElement>('[value="compact:open-group"]')!.click();
+  close();
+  flush();
+  menu.groups = ["Alpine"];
+  await menu.updateComplete;
+  expect(retiredPage.textContent).toContain("Alpha");
+  expect(retiredPage.textContent).not.toContain("Alpine");
 });
 
 it.each([false, undefined])(
@@ -271,8 +283,10 @@ it.each(["keyboard", "pointer", "close", "suspend", "newer focus", "dispose"] as
       newer.focus();
       setCurrentPage(advancedPage);
       flush();
+      expect(mounted.container.contains(appearance)).toBe(true);
       setCurrentPage(appearancePage);
       flush();
+      expect(mounted.container.querySelector('[aria-label="No color"]')).toBe(firstColor);
       expect(document.activeElement).toBe(newer);
     } else {
       expect(document.activeElement).not.toBe(firstColor);

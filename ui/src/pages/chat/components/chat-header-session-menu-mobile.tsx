@@ -1,14 +1,13 @@
 import type { JSX } from "@solidjs/web";
 import {
   For,
+  Show,
   createProjection,
-  createRoot,
   createSignal,
-  getOwner,
+  mapArray,
   merge,
   onCleanup,
   onSettled,
-  runWithOwner,
 } from "solid-js";
 import type { useSessionMenuEntries } from "../../../components/session-menu-view.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -132,14 +131,15 @@ export function createMobileHeaderSessionMenu(options: {
   closeMenu: () => void;
   select: (item: MenuItem) => void;
 }) {
-  const renderOwner = getOwner();
-  const pageDisposers = new Map<HeaderSessionMenuPage, () => void>();
-  onCleanup(() => {
-    for (const dispose of pageDisposers.values()) {
-      dispose();
-    }
-    pageDisposers.clear();
-  });
+  type PageKind = "assign-owner" | "group" | "advanced" | "icon";
+  type PageRequest = {
+    kind: PageKind;
+    page: HeaderSessionMenuPage;
+    host: HeaderSessionMenuMobileHost;
+    source: HTMLElement;
+    keyboardSource?: HTMLElement;
+  };
+  const [pageRequests, setPageRequests] = createSignal<PageRequest[]>([]);
   const body = (name: "assign-owner" | "group" | "advanced" | "icon" | "open-in") =>
     options.view
       .compact(name)
@@ -159,11 +159,219 @@ export function createMobileHeaderSessionMenu(options: {
       options.host()?.close();
     }
   };
+  // Keep Back pages alive under the menu owner until their navigation chain is replaced.
+  const pageViews = mapArray(pageRequests, (request) => {
+    const { kind, page, host, source, keyboardSource } = request;
+    const [focusArmed, setFocusArmed] = createSignal(false);
+    const [focusReady, setFocusReady] = createSignal(false);
+    let contentRoot: HTMLDivElement | undefined;
+    let focusCancelled = false;
+    const [query, setQuery] = createSignal("");
+    const [searchOpen, setSearchOpen] = createSignal(false);
+    const entries = () => {
+      const rows = body(kind);
+      if (kind === "assign-owner") {
+        return [
+          ...rows.filter((entry) => entry.id === "owners-search"),
+          {
+            id: "unassigned",
+            label: t("sessionsView.unassigned"),
+            disabled: true,
+            checked: !options.currentOwner(),
+            type: "radio" as const,
+            attributes: { title: t("sessionsView.actionUnavailable") },
+          },
+          ...rows.filter((entry) => entry.id !== "owners-search"),
+        ];
+      }
+      if (kind !== "group") {
+        return rows;
+      }
+      const groups = rows.filter(
+        (entry) => entry.id.startsWith("move-to-group:") && entry.id !== "move-to-group:",
+      );
+      groups.sort((a, b) => (isItem(a) ? a.label : "").localeCompare(isItem(b) ? b.label : ""));
+      return [
+        ...groups.filter(
+          (entry) =>
+            isItem(entry) &&
+            entry.label.toLocaleLowerCase().includes(query().trim().toLocaleLowerCase()),
+        ),
+        ...rows.filter((entry) => !groups.includes(entry)),
+      ];
+    };
+    const view = {
+      page,
+      headerActions:
+        kind === "group" ? (
+          <button
+            type="button"
+            class="chat-mobile-host__circle"
+            aria-label={t("sessionsView.searchGroups")}
+            aria-expanded={searchOpen() ? "true" : "false"}
+            onClick={() => {
+              setSearchOpen((value) => !value);
+              setQuery("");
+            }}
+          >
+            <Icon name="search" />
+          </button>
+        ) : undefined,
+      content: (
+        <div
+          ref={(element) => (contentRoot = element)}
+          class={[
+            "session-actions-page",
+            {
+              "session-actions-page--appearance": kind === "icon",
+              "session-actions-page--group-picker": kind === "group",
+              "session-actions-page--advanced": kind === "advanced",
+            },
+          ]}
+        >
+          {kind === "group" && searchOpen() ? (
+            <label class="session-actions-page__search">
+              <Icon name="search" />
+              <input
+                type="search"
+                autocomplete="off"
+                aria-label={t("sessionsView.searchGroups")}
+                placeholder={t("sessionsView.searchGroups")}
+                value={query()}
+                onInput={(event) => setQuery(event.currentTarget.value)}
+              />
+            </label>
+          ) : undefined}
+          {kind === "advanced" ? (
+            <>
+              <section>
+                <h3>{t("sessionsView.mobileConversation")}</h3>
+                <div class="session-actions-page__group">
+                  <PageEntries
+                    entries={options
+                      .viewOptions()
+                      .filter((entry) =>
+                        [
+                          "view:reasoning",
+                          "view:tool-calls",
+                          "view:commentary",
+                          "view:speech-bubbles",
+                        ].includes(entry.id),
+                      )}
+                    select={select}
+                  />
+                </div>
+              </section>
+              <section>
+                <h3>{t("sessionsView.session")}</h3>
+                <div class="session-actions-page__group">
+                  <PageEntries
+                    entries={body("advanced")
+                      .filter(
+                        (entry) =>
+                          !entry.id.includes("copy") &&
+                          !entry.id.includes("open-in") &&
+                          !entry.id.startsWith("communication") &&
+                          entry.id !== "delete-divider",
+                      )
+                      .flatMap((entry) =>
+                        entry.id === "delete"
+                          ? options
+                              .viewOptions()
+                              .filter((action) => action.id === "layout:close-pane")
+                              .concat(entry)
+                          : [entry],
+                      )}
+                    select={(item, event) =>
+                      item.id === "compact:open-icon"
+                        ? openPage(
+                            "icon",
+                            page,
+                            event?.detail === 0 && event.currentTarget instanceof HTMLElement
+                              ? event.currentTarget
+                              : undefined,
+                          )
+                        : select(item)
+                    }
+                  />
+                </div>
+              </section>
+              <section>
+                <h3>{t("sessionsView.communication.title")}</h3>
+                <div class="session-actions-page__group session-actions-page__communication">
+                  <PageEntries
+                    entries={body("advanced").filter(
+                      (entry) =>
+                        entry.id === "communication-controls" || entry.id === "communication:reset",
+                    )}
+                    select={select}
+                  />
+                </div>
+              </section>
+              <section>
+                <h3>{t("sessionsView.openInEditorMenu")}</h3>
+                <div class="session-actions-page__group">
+                  <PageEntries entries={body("open-in")} select={select} />
+                </div>
+              </section>
+            </>
+          ) : kind === "icon" ? (
+            options.view.appearance.render(true, () => setFocusReady(true))
+          ) : (
+            <div class="session-actions-page__group">
+              <PageEntries entries={entries()} select={select} />
+            </div>
+          )}
+        </div>
+      ),
+    };
+    if (keyboardSource) {
+      const canFocus = () => {
+        const active = source.ownerDocument.activeElement;
+        return (
+          !focusCancelled &&
+          source.isConnected &&
+          host.isCurrent(page) &&
+          contentRoot?.isConnected === true &&
+          (active === source.ownerDocument.body || active === source || active === keyboardSource)
+        );
+      };
+      createPendingFocus(
+        () => ({
+          armed: focusArmed(),
+          ready: focusReady(),
+          current: host.isCurrent(page),
+        }),
+        {
+          requested: (next, previous) => {
+            if (!next.armed) {
+              return false;
+            }
+            if (!next.current) {
+              focusCancelled = true;
+              return false;
+            }
+            return previous?.armed ? undefined : true;
+          },
+          ready: (next) => next.ready && contentRoot?.isConnected === true,
+          focus: () => options.view.appearance.focusFirst(canFocus),
+        },
+      );
+      // Navigation and the picker ref settle before this one entry request is armed.
+      onSettled(() => {
+        setFocusArmed(true);
+      });
+      onCleanup(() => {
+        focusCancelled = true;
+      });
+    }
+    return view;
+  });
   const openPage = (
-    kind: "assign-owner" | "group" | "advanced" | "icon",
+    kind: PageKind,
     backTo?: HeaderSessionMenuPage,
     keyboardSource?: HTMLElement,
-  ) => {
+  ): void => {
     const host = options.host();
     const source = options.source();
     if (!host || !source) {
@@ -172,254 +380,56 @@ export function createMobileHeaderSessionMenu(options: {
     if (kind === "icon") {
       options.view.appearance.prepare();
     }
-    const page = runWithOwner(renderOwner, () =>
-      createRoot((dispose) => {
-        const [focusArmed, setFocusArmed] = createSignal(false);
-        const [focusReady, setFocusReady] = createSignal(false);
-        let contentRoot: HTMLDivElement | undefined;
-        let focusCancelled = false;
-        const [query, setQuery] = createSignal("");
-        const [searchOpen, setSearchOpen] = createSignal(false);
-        const entries = () => {
-          const rows = body(kind);
-          if (kind === "assign-owner") {
-            return [
-              ...rows.filter((entry) => entry.id === "owners-search"),
-              {
-                id: "unassigned",
-                label: t("sessionsView.unassigned"),
-                disabled: true,
-                checked: !options.currentOwner(),
-                type: "radio" as const,
-                attributes: { title: t("sessionsView.actionUnavailable") },
-              },
-              ...rows.filter((entry) => entry.id !== "owners-search"),
-            ];
-          }
-          if (kind !== "group") {
-            return rows;
-          }
-          const groups = rows.filter(
-            (entry) => entry.id.startsWith("move-to-group:") && entry.id !== "move-to-group:",
-          );
-          groups.sort((a, b) => (isItem(a) ? a.label : "").localeCompare(isItem(b) ? b.label : ""));
-          return [
-            ...groups.filter(
-              (entry) =>
-                isItem(entry) &&
-                entry.label.toLocaleLowerCase().includes(query().trim().toLocaleLowerCase()),
-            ),
-            ...rows.filter((entry) => !groups.includes(entry)),
-          ];
-        };
-        const descriptor: HeaderSessionMenuPage = {
-          key:
-            kind === "assign-owner"
-              ? "session-assign"
-              : kind === "group"
-                ? "session-group"
-                : kind === "icon"
-                  ? "session-appearance"
-                  : "session-advanced",
-          title: plainLabel(
-            t(
-              kind === "assign-owner"
-                ? "sessionsView.assignTo"
-                : kind === "group"
-                  ? "sessionsView.moveToGroupMenu"
-                  : kind === "icon"
-                    ? "sessionsView.setIconColorMenu"
-                    : "sessionsView.advanced",
-            ),
-          ),
-          expandable: kind === "advanced" || kind === "icon",
-          presentation: kind === "group" ? "sheet" : undefined,
-          resizable: kind === "group",
-          headerActions:
-            kind === "group" ? (
-              <button
-                type="button"
-                class="chat-mobile-host__circle"
-                aria-label={t("sessionsView.searchGroups")}
-                aria-expanded={searchOpen() ? "true" : "false"}
-                onClick={() => {
-                  setSearchOpen((value) => !value);
-                  setQuery("");
-                }}
-              >
-                <Icon name="search" />
-              </button>
-            ) : undefined,
-          backTo,
-          content: (
-            <div
-              ref={(element) => (contentRoot = element)}
-              class={[
-                "session-actions-page",
-                {
-                  "session-actions-page--appearance": kind === "icon",
-                  "session-actions-page--group-picker": kind === "group",
-                  "session-actions-page--advanced": kind === "advanced",
-                },
-              ]}
-            >
-              {kind === "group" && searchOpen() ? (
-                <label class="session-actions-page__search">
-                  <Icon name="search" />
-                  <input
-                    type="search"
-                    autocomplete="off"
-                    aria-label={t("sessionsView.searchGroups")}
-                    placeholder={t("sessionsView.searchGroups")}
-                    value={query()}
-                    onInput={(event) => setQuery(event.currentTarget.value)}
-                  />
-                </label>
-              ) : undefined}
-              {kind === "advanced" ? (
-                <>
-                  <section>
-                    <h3>{t("sessionsView.mobileConversation")}</h3>
-                    <div class="session-actions-page__group">
-                      <PageEntries
-                        entries={options
-                          .viewOptions()
-                          .filter((entry) =>
-                            [
-                              "view:reasoning",
-                              "view:tool-calls",
-                              "view:commentary",
-                              "view:speech-bubbles",
-                            ].includes(entry.id),
-                          )}
-                        select={select}
-                      />
-                    </div>
-                  </section>
-                  <section>
-                    <h3>{t("sessionsView.session")}</h3>
-                    <div class="session-actions-page__group">
-                      <PageEntries
-                        entries={body("advanced")
-                          .filter(
-                            (entry) =>
-                              !entry.id.includes("copy") &&
-                              !entry.id.includes("open-in") &&
-                              !entry.id.startsWith("communication") &&
-                              entry.id !== "delete-divider",
-                          )
-                          .flatMap((entry) =>
-                            entry.id === "delete"
-                              ? options
-                                  .viewOptions()
-                                  .filter((action) => action.id === "layout:close-pane")
-                                  .concat(entry)
-                              : [entry],
-                          )}
-                        select={(item, event) =>
-                          item.id === "compact:open-icon"
-                            ? openPage(
-                                "icon",
-                                page,
-                                event?.detail === 0 && event.currentTarget instanceof HTMLElement
-                                  ? event.currentTarget
-                                  : undefined,
-                              )
-                            : select(item)
-                        }
-                      />
-                    </div>
-                  </section>
-                  <section>
-                    <h3>{t("sessionsView.communication.title")}</h3>
-                    <div class="session-actions-page__group session-actions-page__communication">
-                      <PageEntries
-                        entries={body("advanced").filter(
-                          (entry) =>
-                            entry.id === "communication-controls" ||
-                            entry.id === "communication:reset",
-                        )}
-                        select={select}
-                      />
-                    </div>
-                  </section>
-                  <section>
-                    <h3>{t("sessionsView.openInEditorMenu")}</h3>
-                    <div class="session-actions-page__group">
-                      <PageEntries entries={body("open-in")} select={select} />
-                    </div>
-                  </section>
-                </>
-              ) : kind === "icon" ? (
-                options.view.appearance.render(true, () => setFocusReady(true))
-              ) : (
-                <div class="session-actions-page__group">
-                  <PageEntries entries={entries()} select={select} />
-                </div>
-              )}
-            </div>
-          ),
-        };
-        if (keyboardSource) {
-          const canFocus = () => {
-            const active = source.ownerDocument.activeElement;
-            return (
-              !focusCancelled &&
-              source.isConnected &&
-              host.isCurrent(descriptor) &&
-              contentRoot?.isConnected === true &&
-              (active === source.ownerDocument.body ||
-                active === source ||
-                active === keyboardSource)
-            );
-          };
-          createPendingFocus(
-            () => ({
-              armed: focusArmed(),
-              ready: focusReady(),
-              current: host.isCurrent(descriptor),
-            }),
-            {
-              requested: (next, previous) => {
-                if (!next.armed) {
-                  return false;
-                }
-                if (!next.current) {
-                  focusCancelled = true;
-                  return false;
-                }
-                return previous?.armed ? undefined : true;
-              },
-              ready: (next) => next.ready && contentRoot?.isConnected === true,
-              focus: () => options.view.appearance.focusFirst(canFocus),
-            },
-          );
-          // Navigation and the picker ref settle before this one entry request is armed.
-          onSettled(() => {
-            setFocusArmed(true);
-          });
-          onCleanup(() => {
-            focusCancelled = true;
-          });
-        }
-        pageDisposers.set(descriptor, dispose);
-        return descriptor;
-      }),
-    );
+    const page: HeaderSessionMenuPage = {
+      key:
+        kind === "assign-owner"
+          ? "session-assign"
+          : kind === "group"
+            ? "session-group"
+            : kind === "icon"
+              ? "session-appearance"
+              : "session-advanced",
+      title: plainLabel(
+        t(
+          kind === "assign-owner"
+            ? "sessionsView.assignTo"
+            : kind === "group"
+              ? "sessionsView.moveToGroupMenu"
+              : kind === "icon"
+                ? "sessionsView.setIconColorMenu"
+                : "sessionsView.advanced",
+        ),
+      ),
+      expandable: kind === "advanced" || kind === "icon",
+      presentation: kind === "group" ? "sheet" : undefined,
+      resizable: kind === "group",
+      backTo,
+      get headerActions() {
+        return (
+          <Show when={pageViews().find((view) => view.page === page)} keyed>
+            {(view) => view.headerActions}
+          </Show>
+        );
+      },
+      get content() {
+        return (
+          <Show when={pageViews().find((view) => view.page === page)} keyed>
+            {(view) => view.content}
+          </Show>
+        );
+      },
+    };
     options.closeMenu();
     host.open(page, source);
-    // The host retains the current page and Back chain after the menu closes.
-    // Release replaced bodies only after the host has received their replacement.
+    // The host receives navigation synchronously; its getters render under keyed page owners.
     const retained = new Set<HeaderSessionMenuPage>();
     for (let current: HeaderSessionMenuPage | undefined = page; current; current = current.backTo) {
       retained.add(current);
     }
-    for (const [previous, dispose] of pageDisposers) {
-      if (!retained.has(previous)) {
-        dispose();
-        pageDisposers.delete(previous);
-      }
-    }
+    setPageRequests((previous) => [
+      ...previous.filter((request) => retained.has(request.page)),
+      { kind, page, host, source, keyboardSource },
+    ]);
   };
   function root(entries: readonly MenuEntry[]): MenuEntry[] {
     const native = entries.filter(isItem);
