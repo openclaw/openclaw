@@ -3670,8 +3670,6 @@
 ["src/cli/gateway-cli/startup-triage.test.ts","../../commands/triage-failure.js","af0f435cb7ca4d939bf0a4da44f186764f87eb4b16fac8075fb0e06d17b2eb27",1]
 ["src/cli/gateway-cli/startup-triage.test.ts","../../commands/triage-failure.js","b778f7829bedfd998d981685c34233061396d76d02992204116331ac84cc4403",1]
 ["src/cli/gateway-cli/task-supervisor.test.ts","../../logging/logger.js","f0f9e788c8acfc63850518a2bce23803c697952436c788749e86af63503c0b0a",1]
-["src/cli/gateway-cli/task-supervisor.test.ts","../../logging/subsystem.js","f32dc4ddb6d2d18238f9ed741e4ddfec21066f100d0486e685cdca6a46e31ab2",1]
-["src/cli/gateway-cli/task-supervisor.test.ts","../../process/supervisor/index.js","7559e5588b68f4a62eb37fb81f82d8daa2c3c582b9506273bb00a06a327e70c0",1]
 ["src/cli/gateway-cli/task-supervisor.test.ts","../../process/supervisor/service-child-windows-task-launcher.js","ed950362b2563e010ce5f894d9cfe4774ccf9ce64c5c9b916668261a6c58be33",1]
 ["src/cli/gateway-rpc.runtime.test.ts","../gateway/call.js","79ac9ce8d9c9fff792b8fdb0d6ef2bcaff2b69f7ed4dbb660ebe6d2e2c41ec62",1]
 ["src/cli/gateway-rpc.runtime.test.ts","./progress.js","cbaa392e3dfe9d284566a57c405acc2a44c7858ed97c9d12548c0e3fd7c99198",1]
