@@ -12,7 +12,6 @@ import type { OpenClawPluginCommandDefinition } from "../../plugin-sdk/channel-e
 import { createPluginCommandRuntime } from "../../plugin-sdk/plugin-command-runtime.js";
 import {
   createPluginRecord,
-  createPluginRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
   initializeGlobalHookRunner,
@@ -20,6 +19,7 @@ import {
   setActivePluginRegistry,
 } from "../../plugin-sdk/plugin-test-runtime.js";
 import type { PluginHookHandlerMap } from "../../plugins/hook-types.js";
+import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createOpenClawTestState,
@@ -37,7 +37,6 @@ export const conversation = {
   conversationId: "room",
 };
 
-type BeforeDispatchHandler = PluginHookHandlerMap["before_dispatch"];
 const commandNames = () =>
   createPluginCommandRuntime()
     .listNativeCandidates("webchat")
@@ -82,7 +81,9 @@ export async function createHookHarness(params: {
   pluginId?: string;
   agentIds?: string[];
   authorizeCommands?: boolean;
-  beforeDispatch?: BeforeDispatchHandler | readonly BeforeDispatchHandler[];
+  beforeDispatch?:
+    | PluginHookHandlerMap["before_dispatch"]
+    | readonly PluginHookHandlerMap["before_dispatch"][];
   label: string;
   messageId: string;
   replyDispatch?: PluginHookHandlerMap["reply_dispatch"];
@@ -141,11 +142,7 @@ export async function createHookHarness(params: {
   });
   await testState.writeConfig(cfg);
 
-  const registryBuilder = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: createPluginRuntimeMock(),
-    activateGlobalSideEffects: false,
-  });
+  const registryBuilder = createTestPluginRegistry(createPluginRuntimeMock());
   cleanupRegistry = async () => {
     await disposePluginRegistryInstances(registryBuilder.registry);
   };
@@ -163,11 +160,7 @@ export async function createHookHarness(params: {
   if (params.inboundClaim) {
     pluginApi.on("inbound_claim", params.inboundClaim);
   }
-  const beforeDispatchHandlers =
-    typeof params.beforeDispatch === "function"
-      ? [params.beforeDispatch]
-      : (params.beforeDispatch ?? []);
-  for (const [index, handler] of beforeDispatchHandlers.entries()) {
+  for (const [index, handler] of [params.beforeDispatch ?? []].flat().entries()) {
     pluginApi.on("before_dispatch", handler, { priority: -index });
   }
   if (params.replyDispatch) {
@@ -175,9 +168,6 @@ export async function createHookHarness(params: {
   }
   setActivePluginRegistry(registryBuilder.registry);
   initializeGlobalHookRunner(registryBuilder.registry);
-  if (params.registeredCommand) {
-    expect(commandNames()).toContain(params.registeredCommand.name);
-  }
 
   const preparedCatalogs: string[][] = [];
   if (params.registeredCommand) {
@@ -226,7 +216,7 @@ export async function createHookHarness(params: {
     });
   };
   const invoke = (ctx: Awaited<ReturnType<typeof buildContext>>) => {
-    const run = async () => {
+    return (pendingDispatch = (async () => {
       const dispatcher = createReplyDispatcher({
         deliver: async () => {
           throw new Error("The handled hook must not send a provider message");
@@ -247,10 +237,7 @@ export async function createHookHarness(params: {
         dispatcher.markComplete();
         await dispatcher.waitForIdle();
       }
-    };
-    const work = run();
-    pendingDispatch = work;
-    return work;
+    })());
   };
 
   return { buildContext, invoke, pluginRoot, preparedCatalogs };

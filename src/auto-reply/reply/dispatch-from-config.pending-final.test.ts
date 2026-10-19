@@ -10,8 +10,8 @@ import {
   readSessionEntryInWorker,
   readSessionEntryReadOnlyInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
+import { spyAgentExecutions } from "../../config/sessions/session-native-binding.execution.test-support.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -71,17 +71,18 @@ describe("pending final delivery restart proof", () => {
   }
 
   function pendingFinalPayload(deliveryId = "delivery-1"): ReplyPayload {
-    const payload: ReplyPayload = { text: "hook reply" };
-    setReplyPayloadMetadata(payload, {
-      pendingFinalDeliveryCompletion: {
-        deliveryId,
-        intentId: "intent-1",
-        sessionId: "session",
-        sessionKey,
-        storePath,
+    return setReplyPayloadMetadata(
+      { text: "hook reply" },
+      {
+        pendingFinalDeliveryCompletion: {
+          deliveryId,
+          intentId: "intent-1",
+          sessionId: "session",
+          sessionKey,
+          storePath,
+        },
       },
-    });
-    return payload;
+    );
   }
 
   it("settles hook delivery and clears its provenance without changing user activity", async () => {
@@ -165,41 +166,17 @@ describe("pending final delivery restart proof", () => {
     const identity = getReplyPayloadMetadata(pendingFinalPayload())?.pendingFinalDeliveryCompletion;
     const commands: string[] = [];
     let beforeCommit: (() => void) | undefined;
-    const wrapExecution = (
-      owner: OpenClawAgentDatabaseExecution,
-    ): OpenClawAgentDatabaseExecution => {
-      return {
-        ...owner,
-        get fileIdentity() {
-          return owner.fileIdentity;
-        },
-        runExisting: (source, run, options) =>
-          owner.runExisting(
-            source,
-            (worker) =>
-              run({
-                execute: (command, commandOptions) => {
-                  commands.push(command.type);
-                  if (command.type === "session.entry.patch.commit") {
-                    const change = beforeCommit;
-                    beforeCommit = undefined;
-                    change?.();
-                  }
-                  return worker.execute(command, commandOptions);
-                },
-              }),
-            options,
-          ),
-      };
-    };
-    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
-    const observer = vi
-      .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
-      .mockImplementation((...args) => wrapExecution(capture(...args)));
-    const capturePreparation = agentExecution.captureOpenClawAgentDatabasePreparationExecution;
-    const preparationObserver = vi
-      .spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution")
-      .mockImplementation((...args) => wrapExecution(capturePreparation(...args)));
+    spyAgentExecutions(agentExecution, (worker) => ({
+      execute: (command, options) => {
+        commands.push(command.type);
+        if (command.type === "session.entry.patch.commit") {
+          const change = beforeCommit;
+          beforeCommit = undefined;
+          change?.();
+        }
+        return worker.execute(command, options);
+      },
+    }));
     try {
       for (const change of [
         { label: "foreign metadata" },
@@ -234,8 +211,7 @@ describe("pending final delivery restart proof", () => {
         expect(persisted.updatedAt).toBe(1);
       }
     } finally {
-      observer.mockRestore();
-      preparationObserver.mockRestore();
+      vi.restoreAllMocks();
     }
   });
 

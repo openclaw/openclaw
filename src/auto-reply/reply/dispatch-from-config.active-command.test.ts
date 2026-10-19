@@ -1,4 +1,3 @@
-// Exercises control-command reachability without relaxing ordinary reply admission.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -70,6 +69,7 @@ function commandContext(
 function startOperation(sessionKey: string, sessionId = "active-session") {
   const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
   operation.setPhase("running");
+  onTestFinished(() => operation.complete());
   return operation;
 }
 
@@ -90,12 +90,14 @@ function dispatchCommand(
 
 describe("dispatch active command admission", () => {
   it.each([
-    { source: "text", target: false },
-    { source: "native", target: false },
-    { source: "native", target: true },
+    ["text", "/status", "status", true, false],
+    ["native", "/status", "status", true, false],
+    ["native", "/status", "status", true, true],
+    ["native", "/compact", "compact", true, false],
+    ["native", "/help", "help", false, false],
   ] as const)(
-    "delivers authorized $source /status beside an active operation (separate target: $target)",
-    async ({ source, target }) => {
+    "delivers %s %s beside an active operation (command=%s, authorized=%s, target=%s)",
+    async (source, body, commandName, authorized, target) => {
       const sessionKey = target
         ? "agent:main:telegram:group:status-target"
         : "agent:main:command-reply-active";
@@ -104,7 +106,6 @@ describe("dispatch active command admission", () => {
         sessionKey,
         target ? "status-target-active-session" : undefined,
       );
-      onTestFinished(() => activeOperation.complete());
       const waitingForActive = createDeferred<{ status: "waiting_for_active" }>();
       const waitForIdle = controllerWait.waitForSessionRunIdle;
       vi.spyOn(controllerWait, "waitForSessionRunIdle").mockImplementation((key, ...args) => {
@@ -125,13 +126,18 @@ describe("dispatch active command admission", () => {
             expect(sourceBinding?.claim).toBeUndefined();
             expect(options?.replyOperation).toBeUndefined();
           }
+          if (commandName !== "status") {
+            expect(options?.replyOperation).toBeUndefined();
+            expect(readReplySourceInput(options)?.claim).toBeUndefined();
+          }
           return target ? acknowledgement : markCommandReplyForDelivery(acknowledgement);
         },
       );
       const dispatcher = createDispatcher();
       const dispatchPromise = dispatchCommand(
-        commandContext(source, "/status", "status", {
+        commandContext(source, body, commandName, {
           SessionKey: sourceSessionKey,
+          CommandAuthorized: authorized,
           ...(target
             ? { Provider: "telegram", Surface: "telegram", CommandTargetSessionKey: sessionKey }
             : {}),
@@ -201,36 +207,6 @@ describe("dispatch active command admission", () => {
       await dispatchPromise;
       expect(replyResolver).not.toHaveBeenCalled();
       expect(listActiveReplyRunSessionKeys()).toEqual([]);
-    },
-  );
-
-  it.each([
-    { body: "/compact", commandName: "compact", authorized: true },
-    { body: "/help", commandName: "help", authorized: false },
-  ])(
-    "reaches the native $commandName owner without borrowing an active turn",
-    async ({ body, commandName, authorized }) => {
-      const sessionKey = "agent:main:native-handler-boundary";
-      const active = startOperation(sessionKey);
-      onTestFinished(() => active.complete());
-      const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
-        async (_ctx, options) => {
-          expect(options?.replyOperation).toBeUndefined();
-          expect(readReplySourceInput(options)?.claim).toBeUndefined();
-          // Authorization and a command-specific mutation claim belong to the
-          // native handler, not the mailbox slot of the turn it controls.
-          return markCommandReplyForDelivery({ text: "handled" });
-        },
-      );
-      await dispatchCommand(
-        commandContext("native", body, commandName, {
-          CommandAuthorized: authorized,
-          SessionKey: sessionKey,
-        }),
-        replyResolver,
-      );
-      expect(replyResolver).toHaveBeenCalledOnce();
-      expect(active.result).toBeNull();
     },
   );
 
@@ -312,7 +288,6 @@ describe("dispatch active command admission", () => {
   }) => {
     const sessionKey = "agent:main:steer-active";
     const activeOperation = startOperation(sessionKey);
-    onTestFinished(() => activeOperation.complete());
     const reachedWhileActive = createDeferred<boolean>();
     const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
       async () => {

@@ -28,7 +28,7 @@ function createAgentBinding(agentId: string, boundAt = 1): SessionBindingRecord 
 }
 
 it.each(["runtime-loader", "before-dispatch"] as const)(
-  "revalidates route ownership after %s and before the next claiming hook",
+  "revalidates ownership after %s before a claiming hook",
   async (checkpoint) => {
     const early = checkpoint === "runtime-loader";
     let phase = "first";
@@ -122,7 +122,7 @@ it.each(["runtime-loader", "before-dispatch"] as const)(
 );
 
 it.each(["ordinary", "registered-command", "stable-plugin-command"] as const)(
-  "revalidates between registered before_dispatch handlers before a later handler claims: %s",
+  "revalidates between before_dispatch handlers (%s)",
   async (input) => {
     let phase = "first";
     const registeredCommand = input !== "ordinary";

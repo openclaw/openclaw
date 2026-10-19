@@ -167,7 +167,7 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     }
   });
 
-  it.each<ReplyPreRunRejectionCode>(["model-selection-rejected"])(
+  it.each<ReplyPreRunRejectionCode>(["model-selection-rejected", "session-directive-rejected"])(
     "emits one safe skipped event for %s without changing the reply",
     async (reason) => {
       const reply = { text: `Model "${REJECTED_MODEL}" is not allowed.`, isError: true };
@@ -196,37 +196,34 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
         diagnosticMocks.logMessageProcessed,
         diagnosticMocks.logMessageDispatchCompleted,
       ]) {
-        expect(diagnostic).toHaveBeenCalledOnce();
-        expect(diagnostic).toHaveBeenCalledWith(
+        expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ outcome: "skipped", reason }),
         );
         expect(diagnostic.mock.calls[0]?.[0].error).toBeUndefined();
       }
+      if (reason !== "session-directive-rejected") {
+        return;
+      }
+      const nextReply = { text: "Agent reply." };
+      const nextDispatcher = await dispatchReplyFixture({
+        body: "hello again",
+        messageId: "2",
+        reply: nextReply,
+      });
+
+      expect(nextDispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(nextReply);
+      expect(
+        processedEvents.map(({ messageId, outcome, reason: eventReason }) => ({
+          messageId,
+          outcome,
+          reason: eventReason,
+        })),
+      ).toEqual([
+        { messageId: "1", outcome: "skipped", reason: "session-directive-rejected" },
+        { messageId: "2", outcome: "completed", reason: undefined },
+      ]);
     },
   );
-
-  it("completes an ordinary turn after a rejection in the same session", async () => {
-    await dispatchReplyFixture({
-      body: `/model ${REJECTED_MODEL} -s`,
-      messageId: "1",
-      reply: { text: `Model "${REJECTED_MODEL}" is not allowed.`, isError: true },
-      rejection: "session-directive-rejected",
-    });
-    const reply = { text: "Agent reply." };
-    const dispatcher = await dispatchReplyFixture({
-      body: "hello again",
-      messageId: "2",
-      reply,
-    });
-
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(reply);
-    expect(
-      processedEvents.map(({ messageId, outcome, reason }) => ({ messageId, outcome, reason })),
-    ).toEqual([
-      { messageId: "1", outcome: "skipped", reason: "session-directive-rejected" },
-      { messageId: "2", outcome: "completed", reason: undefined },
-    ]);
-  });
 
   it.each<{ label: string; reply: ReplyPayload[] | undefined }>([
     {
@@ -267,35 +264,32 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     );
   });
 
-  it.each<{
-    label: string;
-    state: ReplyOperationRunState;
-    failed?: true;
-    outcome: string;
-    reason?: string;
-  }>([
-    { label: "agent failure", state: {}, failed: true, outcome: "error" },
-    {
-      label: "queue cap",
-      state: { admission: { status: "skipped", reason: "queue-cap" } },
-      outcome: "skipped",
-      reason: "queue-cap",
-    },
-    {
-      label: "injection abort",
-      state: { messageInjectionAborted: true },
-      outcome: "skipped",
-      reason: "reply_operation_aborted",
-    },
-    {
-      label: "question refusal",
-      state: { admission: { status: "skipped", reason: "question-response-refused" } },
-      outcome: "error",
-      reason: "question-response-refused",
-    },
+  it.each<[string, ReplyOperationRunState, boolean, string, string?]>([
+    ["agent failure", {}, true, "error"],
+    [
+      "queue cap",
+      { admission: { status: "skipped", reason: "queue-cap" } },
+      false,
+      "skipped",
+      "queue-cap",
+    ],
+    [
+      "injection abort",
+      { messageInjectionAborted: true },
+      false,
+      "skipped",
+      "reply_operation_aborted",
+    ],
+    [
+      "question refusal",
+      { admission: { status: "skipped", reason: "question-response-refused" } },
+      false,
+      "error",
+      "question-response-refused",
+    ],
   ])(
-    "preserves the terminal $label over a rejection fact",
-    async ({ state, failed, outcome, reason }) => {
+    "preserves the terminal %s over a rejection fact",
+    async (_label, state, failed, outcome, reason) => {
       const runState: ReplyOperationRunState = {
         ...state,
         preRunRejection: "session-directive-rejected",
