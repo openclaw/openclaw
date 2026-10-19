@@ -476,16 +476,10 @@ export async function prepareToolExecutionEnd(
   }
   terminal.executedArguments ??= startArgs;
   let presentation: Promise<void> | undefined;
-  const publishPresentation = (accepted = true) => (presentation ??= publish(accepted));
+  const publishPresentation = () => (presentation ??= publish());
   return Object.assign(terminal, { isError: observerIsError, publishPresentation });
 
-  async function publish(accepted: boolean): Promise<void> {
-    if (!accepted) {
-      // Stale presentation is discarded, but the completed item is no longer active.
-      ctx.state.itemActiveIds.delete(itemData.itemId);
-      ctx.state.itemCompletedCount += 1;
-      return;
-    }
+  async function publish(): Promise<void> {
     if (planUpdate) {
       const planEvent = {
         stream: "plan" as const,

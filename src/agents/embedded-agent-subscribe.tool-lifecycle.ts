@@ -60,18 +60,15 @@ export function createEmbeddedToolLifecycleRunner(
       const readSanitizedResult = prepareToolResult(result);
       recordEmbeddedToolTrajectoryEvent(ctx, endEvent, readSanitizedResult);
       const terminal = await prepareToolExecutionEnd(ctx, endEvent, readSanitizedResult);
-      let accepted = false;
-      try {
-        accepted =
-          (await toolParams.onTerminal?.({
-            result,
-            readSanitizedResult,
-            isError: terminal.isError,
-            executedArguments: terminal.executedArguments ?? toolParams.args,
-            effectReceipt: terminal.effectReceipt,
-          })) !== false;
-      } finally {
-        await terminal.publishPresentation(accepted);
+      const accepted = await toolParams.onTerminal?.({
+        result,
+        readSanitizedResult,
+        isError: terminal.isError,
+        executedArguments: terminal.executedArguments ?? toolParams.args,
+        effectReceipt: terminal.effectReceipt,
+      });
+      if (accepted !== false) {
+        await terminal.publishPresentation();
       }
     };
     let completedResult: T;

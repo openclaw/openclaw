@@ -83,11 +83,6 @@ describe("nested tool terminal acceptance", () => {
         );
         await reachedAppend.promise;
         expect(execute).toHaveBeenCalledTimes(1);
-        expect(subscription.getItemLifecycle()).toEqual({
-          startedCount: 1,
-          completedCount: 0,
-          activeCount: 1,
-        });
         expect(subscription.getReplayState()).toMatchObject({
           replayInvalid: true,
           hadPotentialSideEffects: true,
@@ -122,11 +117,6 @@ describe("nested tool terminal acceptance", () => {
           activeCount: 0,
         });
         expect(execute).toHaveBeenCalledTimes(1);
-        expect(subscription.getItemLifecycle()).toEqual({
-          startedCount: 1,
-          completedCount: 1,
-          activeCount: 0,
-        });
       } finally {
         releaseAppend.resolve();
         subscription.unsubscribe();
