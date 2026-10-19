@@ -70,7 +70,11 @@ async function loadModelProvidersRouteData(
   };
 }
 
-export const page = defineSolidPage<"model-providers", ApplicationContext, ModelProvidersRouteData>(
+export const page = defineSolidPage<
+  "model-providers",
+  Parameters<typeof loadModelProvidersRouteData>[0],
+  ModelProvidersRouteData
+>(
   "model-providers",
   () => import("./model-providers-page.tsx").then((module) => module.ModelProvidersPage),
   {
