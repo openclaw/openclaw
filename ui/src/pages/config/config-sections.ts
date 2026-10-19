@@ -29,7 +29,7 @@ const CONFIG_PAGE_BY_SECTION = new Map<string, ConfigPageId | "plugin-settings">
   ["plugins", "plugin-settings"],
 ]);
 
-export const SCOPED_CONFIG_SECTION_KEYS = new Set(CONFIG_PAGE_BY_SECTION.keys());
+const SCOPED_CONFIG_SECTION_KEYS = new Set(CONFIG_PAGE_BY_SECTION.keys());
 export const ADVANCED_EXCLUDED_SECTIONS: readonly string[] = [...SCOPED_CONFIG_SECTION_KEYS];
 
 export function configSectionKeysForPage(pageId: ConfigPageId): readonly string[] | undefined {
