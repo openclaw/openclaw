@@ -277,6 +277,80 @@ it("keeps untracked scroll state until the next layout observation", () => {
   expect(element.dataset.atEnd).toBe("true");
 });
 
+it("resamples loaded font metrics only for the current presented element", async () => {
+  let fontsReady!: () => void;
+  const fonts = new EventTarget();
+  Object.defineProperty(fonts, "ready", {
+    value: new Promise<void>((resolve) => {
+      fontsReady = resolve;
+    }),
+  });
+  const originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+  Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
+  cleanup.push(() => {
+    if (originalFonts) {
+      Object.defineProperty(document, "fonts", originalFonts);
+    }
+  });
+  const first = document.body.appendChild(document.createElement("div"));
+  const second = document.body.appendChild(document.createElement("div"));
+  cleanup.push(
+    () => first.remove(),
+    () => second.remove(),
+  );
+  const firstGeometry = geometry(first, true);
+  const secondGeometry = geometry(second, true);
+  const [presented, setPresented] = createSignal(true);
+  const publish = vi.fn(reflect);
+  const binding = createRoot((dispose) => ({
+    dispose,
+    ref: createScrollStateRef(publish, { horizontal: true, trackScroll: false, presented }),
+  }));
+  cleanup.push(binding.dispose);
+  binding.ref(first);
+  flush();
+  vi.advanceTimersToNextFrame();
+  expect(first.dataset.scrollable).toBe("true");
+
+  binding.ref(second);
+  flush();
+  vi.advanceTimersToNextFrame();
+  firstGeometry.extent = 50;
+  secondGeometry.extent = 50;
+  fontsReady();
+  await Promise.resolve();
+  vi.advanceTimersToNextFrame();
+  expect(first.dataset.scrollable).toBe("true");
+  expect(second.dataset.scrollable).toBe("false");
+
+  setPresented(false);
+  flush();
+  secondGeometry.extent = 300;
+  fonts.dispatchEvent(new Event("loadingdone"));
+  vi.advanceTimersToNextFrame();
+  expect(second.dataset.scrollable).toBe("false");
+
+  setPresented(true);
+  flush();
+  await Promise.resolve();
+  vi.advanceTimersToNextFrame();
+  expect(second.dataset.scrollable).toBe("true");
+  secondGeometry.extent = 50;
+  fonts.dispatchEvent(new Event("loadingdone"));
+  fonts.dispatchEvent(new Event("loadingdone"));
+  publish.mockClear();
+  vi.advanceTimersToNextFrame();
+  expect(second.dataset.scrollable).toBe("false");
+  expect(publish).toHaveBeenCalledTimes(1);
+
+  binding.dispose();
+  publish.mockClear();
+  secondGeometry.extent = 300;
+  fonts.dispatchEvent(new Event("loadingdone"));
+  vi.advanceTimersToNextFrame();
+  expect(publish).not.toHaveBeenCalled();
+});
+
 it("restores a destination after readiness without overwriting subsequent reader scroll", () => {
   const outer = document.body.appendChild(document.createElement("div"));
   const element = outer.appendChild(document.createElement("div"));
