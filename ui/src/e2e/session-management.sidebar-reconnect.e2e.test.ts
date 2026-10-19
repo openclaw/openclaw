@@ -50,6 +50,12 @@ suite.define(() => {
       await connectionStatus
         .getByRole("button", { name: "Reconnecting… · 1 queued — Retry now", exact: true })
         .waitFor();
+      await connectionStatus.getByRole("button").click();
+      await waitForControlUiGatewayReconnecting(page);
+      await expect.poll(() => row.textContent()).toContain("Renamed offline");
+      await connectionStatus
+        .getByRole("button", { name: "Reconnecting… · 1 queued — Retry now", exact: true })
+        .waitFor();
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       const queued = await takeControlUiScreenshotFrame(page, footer, [row, connectionStatus], {
         elements: [footer, connectionStatus],

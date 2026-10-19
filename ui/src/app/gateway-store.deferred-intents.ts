@@ -1,18 +1,22 @@
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { showToast } from "../lib/toast.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import type { ApplicationGatewayDeferredIntent, ApplicationGatewaySnapshot } from "./gateway.ts";
 
+type IntentIdentity = { revision: number; scope: string };
+
 export function createGatewayDeferredIntents(host: {
   snapshot: () => ApplicationGatewaySnapshot;
+  connectionRevision: () => number;
   isStopped: () => boolean;
-  publish: (count: number) => void;
+  publish: (
+    patch: Pick<ApplicationGatewaySnapshot, "deferredIntentCount" | "deferredIntentDraining">,
+  ) => void;
 }) {
   const intents = new Map<string, ApplicationGatewayDeferredIntent>();
-  let identity: { client: GatewayBrowserClient; scope: string } | undefined;
-  let draining = false;
+  let identity: IntentIdentity | undefined;
+  let draining: IntentIdentity | undefined;
   let releaseGuard: (() => void) | undefined;
   let releaseBeforeUnload: (() => void) | undefined;
 
@@ -34,7 +38,10 @@ export function createGatewayDeferredIntents(host: {
       releaseBeforeUnload?.();
       releaseBeforeUnload = undefined;
     }
-    host.publish(intents.size);
+    host.publish({
+      deferredIntentCount: intents.size,
+      deferredIntentDraining: Boolean(draining && draining === identity),
+    });
   };
 
   const discardIntent = (intent: ApplicationGatewayDeferredIntent) => {
@@ -48,13 +55,13 @@ export function createGatewayDeferredIntents(host: {
     const discarded = [...intents.values()];
     intents.clear();
     identity = undefined;
-    if (!discarded.length) {
-      return;
-    }
     for (const intent of discarded) {
       discardIntent(intent);
     }
     publish();
+    if (!discarded.length) {
+      return;
+    }
     showToast({
       message: t("connection.offlineChangesDiscarded", { count: String(discarded.length) }),
     });
@@ -65,25 +72,26 @@ export function createGatewayDeferredIntents(host: {
       return;
     }
     const owner = identity;
-    draining = true;
+    draining = owner;
     try {
       while (intents.size) {
         if (identity !== owner) {
           break;
         }
         const snapshot = host.snapshot();
+        const client = snapshot.client;
         if (
           host.isStopped() ||
-          snapshot.client !== owner.client ||
-          owner.client.offlineRecoveryRetired
+          host.connectionRevision() !== owner.revision ||
+          client?.offlineRecoveryRetired
         ) {
           discard();
           break;
         }
-        if (snapshot.phase !== "connected" || !owner.client.recoveryScopeReady) {
+        if (snapshot.phase !== "connected" || !client?.recoveryScopeReady) {
           break;
         }
-        if (owner.client.recoveryScope !== owner.scope) {
+        if (client.recoveryScope !== owner.scope) {
           discard();
           break;
         }
@@ -92,7 +100,7 @@ export function createGatewayDeferredIntents(host: {
         // uncertain-outcome handling, never to this unsent-intent queue.
         intents.delete(intent.key);
         try {
-          const result = intent.run(owner.client);
+          const result = intent.run(client);
           publish();
           await result;
         } catch (error) {
@@ -101,10 +109,13 @@ export function createGatewayDeferredIntents(host: {
         }
       }
     } finally {
-      draining = false;
+      draining = undefined;
       if (!intents.size) {
         identity = undefined;
-      } else if (
+      }
+      publish();
+      if (
+        intents.size &&
         host.snapshot().phase === "connected" &&
         host.snapshot().client?.recoveryScopeReady
       ) {
@@ -119,7 +130,9 @@ export function createGatewayDeferredIntents(host: {
       const client = snapshot.client;
       if (
         host.isStopped() ||
-        snapshot.phase === "connected" ||
+        (snapshot.phase === "connected" &&
+          intents.size === 0 &&
+          (!draining || draining !== identity)) ||
         !snapshot.hello ||
         !client ||
         client.offlineRecoveryRetired
@@ -127,7 +140,7 @@ export function createGatewayDeferredIntents(host: {
         return false;
       }
       identity ??= {
-        client,
+        revision: host.connectionRevision(),
         scope: client.recoveryScopeReady
           ? client.recoveryScope
           : (snapshot.hello.auth?.recoveryScope ??
@@ -141,6 +154,9 @@ export function createGatewayDeferredIntents(host: {
       }
       intents.set(intent.key, intent);
       publish();
+      if (snapshot.phase === "connected") {
+        void flush();
+      }
       return true;
     },
     discard,

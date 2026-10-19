@@ -29,8 +29,12 @@ changes together with queued chat messages. Repeated changes to the same fields
 or reaction replace the earlier queued change and move to the end of the queue,
 so overlapping edits finish with the latest choice.
 
-These changes send in order after the same client reconnects with the same
-account recovery scope. The Gateway still checks current permissions and the
+These changes send in order after reconnecting with unchanged credentials and the
+same account recovery scope, including Retry and automatic socket replacement.
+New metadata and reaction edits join the queue until its final request settles,
+so older queued values cannot overwrite newer choices. The queued count includes
+unsent changes, not the request already in flight.
+The Gateway still checks current permissions and the
 session identity. Rejected changes roll back and show an error. A change already
 sent when the connection drops is not automatically replayed by this queue;
 its existing uncertain-outcome handling still applies.

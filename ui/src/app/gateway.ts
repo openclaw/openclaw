@@ -31,6 +31,7 @@ export type ApplicationGatewaySnapshot = {
   offlineStable: boolean;
   /** Memory-only desired-state changes waiting for the same admitted identity. */
   deferredIntentCount?: number;
+  deferredIntentDraining?: boolean;
   restartPending?: boolean;
   suspensionPhase?: GatewaySuspension["phase"];
   /**

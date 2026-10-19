@@ -151,14 +151,14 @@ export function createSessionMutations(host: SessionMutationsHost) {
   const create = async (params: SessionCreateParams = {}, options?: SessionCreateRequestOptions) =>
     (await createResult(params, options))?.key ?? null;
 
-  const patch = async (
+  const patchNow = async (
     key: string,
     patchParams: SessionPatch,
     options: SessionPatchOptions = {},
   ): Promise<SessionPatchOutcome | null> => {
     const scope = host.connection.capture();
     if (!scope) {
-      return deferSessionMetadataPatch(host, metadataFields, patch, key, patchParams, options);
+      return null;
     }
     const managesModelOverride = Object.hasOwn(patchParams, "model");
     const canDispatchSettings = () =>
@@ -473,6 +473,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
       unsubscribeReceipt?.();
     }
   };
+
+  const patch: SessionCapability["patch"] = async (key, patchParams, options = {}) =>
+    deferSessionMetadataPatch(host, metadataFields, patchNow, key, patchParams, options) ??
+    patchNow(key, patchParams, options);
 
   const patchMany: SessionCapability["patchMany"] = async (targets, patchParams) => {
     const scope = host.connection.capture();

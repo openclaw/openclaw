@@ -54,7 +54,11 @@ function fixture(
   const deferred = new Map<string, Parameters<ApplicationGateway["defer"]>[0]>();
   const coalescedReactions: (MessageReactionSummary[] | undefined)[] = [];
   gateway.defer = (intent) => {
-    if (gateway.snapshot.phase === "connected") {
+    if (
+      gateway.snapshot.phase === "connected" &&
+      deferred.size === 0 &&
+      !gateway.snapshot.deferredIntentDraining
+    ) {
       return false;
     }
     const superseded = deferred.get(intent.key);
@@ -64,6 +68,7 @@ function fixture(
       coalescedReactions.push(pane.collaboration.reactions.get("message-1"));
     }
     deferred.set(intent.key, intent);
+    gateway.snapshot.deferredIntentCount = deferred.size;
     return true;
   };
   const connect = (connected: boolean) => {
@@ -160,7 +165,7 @@ describe("pane reaction ownership", () => {
     expect(pane.collaboration.reactions.size).toBe(0);
   });
 
-  it("keeps optimistic offline reactions through reconnect and coalesces the desired value", async () => {
+  it.each([false, true])("retains offline reactions on replacement=%s", async (replace) => {
     const { pane, event, connect, deferred, writes, coalescedReactions, client } = fixture(
       Promise.resolve({ sessionId: "session-1", reactions: {} }),
       Promise.resolve({
@@ -185,8 +190,24 @@ describe("pane reaction ownership", () => {
     ]);
     expect(deferred.size).toBe(1);
     expect(writes).toEqual([]);
+    const hello = pane.context.gateway.snapshot.hello;
+    const replayClient = replace ? createTestGatewayClient(client.request.bind(client)) : client;
+    if (replace) {
+      pane.context.gateway.snapshot.client = replayClient;
+      pane.context.gateway.snapshot.hello = null;
+      connect(false);
+      pane.syncSessionReactions();
+      expect(pane.collaboration.reactions.get("message-1")).toEqual([
+        ...peerReaction,
+        { emoji: "🎉", count: 1, identities: [{ id: "alex", label: "Alex" }] },
+      ]);
+    }
+    pane.context.gateway.snapshot.hello = hello;
     connect(true);
-    await [...deferred.values()][0].run(client);
+    await pane.setMessageReaction("message-1", "🎉", true);
+    await pane.setMessageReaction("message-1", "🎉", false);
+    expect(writes).toEqual([]);
+    await [...deferred.values()][0].run(replayClient);
     expect(writes).toEqual([
       {
         sessionKey: "agent:main:current",
@@ -200,6 +221,20 @@ describe("pane reaction ownership", () => {
     ]);
     pane.handleSessionReactionEvent(event());
     expect(pane.collaboration.reactions.get("message-1")).toEqual(peerReaction);
+  });
+
+  it("queues a reaction while the owner reports its final deferred request in flight", async () => {
+    const { pane, connect, deferred, writes, client } = fixture(
+      Promise.resolve({ sessionId: "session-1", reactions: {} }),
+      Promise.resolve({ messageId: "message-1", reactions: [] }),
+    );
+    connect(true);
+    pane.context.gateway.snapshot.deferredIntentDraining = true;
+    await pane.setMessageReaction("message-1", "🎉", false);
+    expect(writes).toEqual([]);
+    expect(deferred.size).toBe(1);
+    await [...deferred.values()][0].run(client);
+    expect(writes).toHaveLength(1);
   });
 
   it.each(["discard", "reject", "decline"] as const)(

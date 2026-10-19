@@ -24,7 +24,7 @@ type PendingReaction = {
 
 export abstract class ChatPaneReactions extends ChatPaneSharingActions {
   private reactionTarget = "";
-  private reactionClient: typeof this.connectedClient = null;
+  private reactionOwner: ReturnType<typeof gatewayPresentationScope> | undefined;
   private reactionReadGeneration = -1;
   private reactionGeneration = 0;
   private reactionReadUpdates: Map<string, MessageReactionSummary[]> | undefined;
@@ -36,7 +36,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
   protected resetSessionReactions(): void {
     this.reactionGeneration += 1;
     this.reactionTarget = "";
-    this.reactionClient = null;
+    this.reactionOwner = undefined;
     this.reactionReadGeneration = -1;
     this.collaboration.reactions = new Map();
     this.reactionServer = new Map();
@@ -66,14 +66,16 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       state &&
       sessionId &&
       !parseCatalogSessionKey(state.sessionKey) &&
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.reactions.list");
+      (!scope ||
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.reactions.list"));
     const target = available
       ? JSON.stringify([state.assistantAgentId, state.sessionKey, sessionId])
       : "";
-    if (this.reactionTarget !== target || this.reactionClient !== state?.client) {
+    const owner = gatewayPresentationScope(this.context.gateway);
+    if (this.reactionTarget !== target || this.reactionOwner !== owner) {
       this.resetSessionReactions();
       this.reactionTarget = target;
-      this.reactionClient = state?.client ?? null;
+      this.reactionOwner = owner;
     }
     if (!available || !scope || this.reactionReadGeneration === scope.generation) {
       return;
@@ -190,7 +192,10 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
     const context = this.context;
     const gateway = context.gateway;
     const client = gateway.snapshot.client;
-    const deferredOwner = scope ? undefined : gatewayPresentationScope(gateway);
+    const deferredOwner =
+      !scope || gateway.snapshot.deferredIntentCount || gateway.snapshot.deferredIntentDraining
+        ? gatewayPresentationScope(gateway)
+        : undefined;
     const sessionKey = state.sessionKey;
     const sessionId = selectedChatSessionRow(state)?.sessionId ?? state.currentSessionId;
     const params = {
@@ -204,13 +209,15 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       generation === this.reactionGeneration &&
       this.context === context &&
       this.state === state &&
-      context.gateway.snapshot.client === client &&
+      (deferredOwner
+        ? gatewayPresentationScope(gateway) === deferredOwner
+        : context.gateway.snapshot.client === client) &&
       state.sessionKey === sessionKey &&
       (selectedChatSessionRow(state)?.sessionId ?? state.currentSessionId) === sessionId;
     const key = `reaction:${sessionKey}:${messageId}:${emoji}`;
     let pending: PendingReaction | undefined;
     const run = async (requestClient: NonNullable<typeof client>) => {
-      const publicationScope = scope ?? this.captureConnectionScope();
+      const publicationScope = deferredOwner ? this.captureConnectionScope() : scope;
       const revision = this.reactionRevisions.get(messageId) ?? 0;
       const operation = Symbol("reaction");
       this.reactionWrites.set(messageId, operation);
@@ -237,8 +244,8 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
           !ownsTarget() &&
           this.context === context &&
           context.gateway === gateway &&
-          gateway.snapshot.client === client &&
-          !client?.offlineRecoveryRetired &&
+          gateway.snapshot.client === requestClient &&
+          !requestClient.offlineRecoveryRetired &&
           gatewayPresentationScope(gateway) === deferredOwner
         ) {
           showToast({ message: formatUiError(error) });
@@ -255,7 +262,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
         }
       }
     };
-    if (!scope) {
+    if (!scope || deferredOwner) {
       const self = deferredOwner?.displayUser;
       if (self?.identity?.type !== "profile") {
         return;

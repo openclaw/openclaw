@@ -198,8 +198,9 @@ export function createApplicationGateway(
     });
   const deferredIntents = createGatewayDeferredIntents({
     snapshot: () => snapshot,
+    connectionRevision: () => connectionRevision,
     isStopped: () => stopped,
-    publish: (deferredIntentCount) => setSnapshot({ deferredIntentCount }),
+    publish: setSnapshot,
   });
   const refreshSelfProfile = () => {
     const requestClient = client;
@@ -339,6 +340,11 @@ export function createApplicationGateway(
     if (credentialsChanged) {
       connectionRevision += 1;
       credentials.retire(true);
+      deferredIntents.discard();
+      // Publishing the cleared count can synchronously stop the store.
+      if (stopped) {
+        return;
+      }
     }
     // Only a gateway URL that differs from the current connection counts as an
     // explicit selection. The login gate always resubmits its prefilled URL, so
@@ -390,10 +396,6 @@ export function createApplicationGateway(
       persistConnectionSettings || gatewayUrlChanged,
     );
     canvasSurface.stop();
-    deferredIntents.discard();
-    if (stopped) {
-      return;
-    }
     client?.stop();
 
     const scheduleReload = (buildId: string) => {
@@ -559,6 +561,7 @@ export function createApplicationGateway(
         const retainPresentation = transient && !nextClient.offlineRecoveryRetired;
         if (!retainPresentation) {
           deferredIntents.discard();
+          // A queue-count observer may stop or replace this client during discard.
           if (!isCurrentClient(nextClient)) {
             return;
           }

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   createGatewayStoreTestStore,
   stubGatewayStoreTestGlobals,
@@ -20,6 +21,7 @@ function setup() {
   const store = createGatewayStoreTestStore();
   store.gateway.start();
   const client = store.current();
+  client.opts.offlineRecoveryScope = "metadata-owner";
   Object.defineProperties(client, {
     recoveryScope: { value: "metadata-owner" },
     recoveryScopeReady: { value: true },
@@ -40,6 +42,7 @@ function setup() {
   };
   let reject = false;
   let rejectList = false;
+  let nextPatchWait: Promise<void> | undefined;
   const confirmed = vi.fn();
   client.request.mockImplementation(async (method, params) => {
     if (method === "sessions.subscribe") {
@@ -52,6 +55,9 @@ function setup() {
       return sessionsResult([{ ...row }]);
     }
     if (method === "sessions.patch") {
+      const wait = nextPatchWait;
+      nextPatchWait = undefined;
+      await wait;
       if (reject) {
         throw new Error("label already in use: Taken");
       }
@@ -64,18 +70,30 @@ function setup() {
   const sessions = createTestSessionCapability(store.gateway);
   const errors: Array<string | null> = [];
   sessions.subscribe((state) => errors.push(state.error));
-  const patches = () => client.request.mock.calls.filter(([method]) => method === "sessions.patch");
+  const patches = () =>
+    store.current().request.mock.calls.filter(([method]) => method === "sessions.patch");
   return {
     ...store,
     sessions,
     patches,
     confirmed,
     errors,
+    holdNextPatch: (wait: Promise<void>) => {
+      nextPatchWait = wait;
+    },
     setServerRow: (patch: Partial<typeof row>) => {
       row = { ...row, ...patch };
     },
     offline: () => client.opts.onClose?.({ code: 1006, reason: "network lost", willRetry: true }),
-    reconnect: () => client.opts.onHello?.(hello),
+    reconnect: () => store.current().opts.onHello?.(hello),
+    replaceClient: () => {
+      store.gateway.connect();
+      Object.assign(store.current(), {
+        recoveryScope: "metadata-owner",
+        recoveryScopeReady: true,
+      });
+      store.current().request.mockImplementation(client.request.getMockImplementation()!);
+    },
     reject: () => {
       reject = true;
     },
@@ -93,7 +111,7 @@ function setup() {
   };
 }
 
-it("projects and coalesces metadata offline, then confirms the exact session on reconnect", async () => {
+it.each([false, true])("retains offline metadata on replacement=%s", async (replace) => {
   const h = setup();
   try {
     await h.sessions.refresh({ agentId: "main" });
@@ -111,6 +129,11 @@ it("projects and coalesces metadata offline, then confirms the exact session on 
     expect(h.patches()).toHaveLength(0);
     // A consequential field cannot hitch a ride with an otherwise safe label.
     await expect(h.patch({ label: "Unsafe", pinned: true })).resolves.toBeNull();
+    if (replace) {
+      h.replaceClient();
+      expect(h.row()?.label).toBe("Final");
+      expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
+    }
     h.reconnect();
     await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentCount).toBe(0));
     expect(h.patches()).toHaveLength(2);
@@ -130,6 +153,39 @@ it("projects and coalesces metadata offline, then confirms the exact session on 
       }),
     );
   } finally {
+    h.sessions.dispose();
+    h.gateway.stop();
+  }
+});
+
+it.each([false, true])("orders new edits while the last request is in flight=%s", async (last) => {
+  const h = setup();
+  const first = createDeferred();
+  try {
+    await h.sessions.refresh({ agentId: "main" });
+    h.offline();
+    if (!last) {
+      await h.patch({ icon: "heart" });
+    }
+    await h.patch({ label: "Old" });
+    h.holdNextPatch(first.promise);
+    h.reconnect();
+    expect(h.gateway.snapshot.deferredIntentDraining).toBe(true);
+    expect(h.gateway.snapshot.deferredIntentCount).toBe(last ? 0 : 1);
+    await expect(h.patch({ label: "New" })).resolves.toEqual({ queued: true });
+    expect(h.row()?.label).toBe("New");
+    expect(h.patches()).toHaveLength(1);
+    first.resolve();
+    await vi.waitFor(() => expect(h.confirmed).toHaveBeenCalledTimes(2));
+    expect(h.patches().map(([, params]) => params)).toMatchObject([
+      last ? { label: "Old" } : { icon: "heart" },
+      { label: "New" },
+    ]);
+    expect(h.row()?.label).toBe("New");
+    expect(h.gateway.snapshot.deferredIntentCount).toBe(0);
+    await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentDraining).toBe(false));
+  } finally {
+    first.resolve();
     h.sessions.dispose();
     h.gateway.stop();
   }

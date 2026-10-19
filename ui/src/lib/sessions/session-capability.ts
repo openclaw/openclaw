@@ -211,6 +211,8 @@ export type SessionGateway = {
   readonly snapshot: {
     client: GatewayBrowserClient | null;
     phase: ApplicationGatewayPhase;
+    deferredIntentCount?: number;
+    deferredIntentDraining?: boolean;
     restartPending?: boolean;
     suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
     hello: GatewayHelloOk | null;

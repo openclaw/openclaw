@@ -107,7 +107,44 @@ describe("Gateway deferred intents", () => {
     expect(showToast).toHaveBeenCalledWith({ message: "Offline changes discarded: 1" });
   });
 
-  it.each(["stop", "client replacement", "auth rejection", "retired recovery"] as const)(
+  it.each(["account-a", "account-b"])(
+    "retains queued work through Retry and admits only the captured scope (%s)",
+    async (scope) => {
+      disconnect();
+      const run = vi.fn(async () => {});
+      const discard = vi.fn();
+      store.gateway.defer({ key: "label", run, discard });
+      const previous = store.current();
+      const revision = store.gateway.connectionRevision;
+
+      store.gateway.connect();
+      const replacement = store.current();
+      expect(replacement).not.toBe(previous);
+      expect(store.gateway.connectionRevision).toBe(revision);
+      expect(store.gateway.snapshot.deferredIntentCount).toBe(1);
+      expect(discard).not.toHaveBeenCalled();
+      expect(showToast).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalled();
+
+      setScope(scope);
+      hello();
+      await settle();
+      if (scope === "account-a") {
+        expect(run).toHaveBeenCalledExactlyOnceWith(replacement);
+        expect(discard).not.toHaveBeenCalled();
+        expect(showToast).not.toHaveBeenCalled();
+      } else {
+        expect(run).not.toHaveBeenCalled();
+        expect(discard).toHaveBeenCalledOnce();
+        expect(showToast).toHaveBeenCalledExactlyOnceWith({
+          message: "Offline changes discarded: 1",
+        });
+      }
+      expect(store.gateway.snapshot.deferredIntentCount).toBe(0);
+    },
+  );
+
+  it.each(["stop", "credential change", "auth rejection", "retired recovery"] as const)(
     "discards once on %s and never dispatches the retired queue",
     async (retirement) => {
       disconnect();
@@ -116,8 +153,8 @@ describe("Gateway deferred intents", () => {
       store.gateway.defer({ key: "label", run, discard });
       if (retirement === "stop") {
         store.gateway.stop();
-      } else if (retirement === "client replacement") {
-        store.gateway.connect({ token: "synthetic-replacement" });
+      } else if (retirement === "credential change") {
+        store.gateway.connect({ token: "other" });
         setScope();
       } else {
         if (retirement === "retired recovery") {
@@ -142,13 +179,15 @@ describe("Gateway deferred intents", () => {
       await settle();
       expect(run).not.toHaveBeenCalled();
       expect(discard).toHaveBeenCalledOnce();
-      expect(showToast).toHaveBeenCalledTimes(1);
+      expect(showToast).toHaveBeenCalledExactlyOnceWith({
+        message: "Offline changes discarded: 1",
+      });
       expect(store.gateway.snapshot.deferredIntentCount).toBe(0);
       expect(canReloadControlUiDocument()).toBe(true);
     },
   );
 
-  it("does not enqueue connected, stopped, or unadmitted work", () => {
+  it("does not enqueue idle connected, stopped, or unadmitted work", () => {
     const run = vi.fn(async () => {});
     expect(store.gateway.defer({ key: "connected", run })).toBe(false);
     store.gateway.stop();
@@ -172,7 +211,7 @@ describe("Gateway deferred intents", () => {
         }
       });
       if (transition === "connect") {
-        store.gateway.connect();
+        store.gateway.connect({ token: "other" });
       } else {
         store.current().opts.onClose?.({
           code: 1008,

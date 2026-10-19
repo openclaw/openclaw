@@ -26,8 +26,12 @@ export function deferSessionMetadataPatch(
   patchParams: SessionPatch,
   options: SessionPatchOptions,
 ): SessionPatchOutcome | null {
+  const snapshot = host.snapshot();
   if (
     !isSessionDisplayMetadataPatch(patchParams) ||
+    (snapshot.phase === "connected" &&
+      !snapshot.deferredIntentCount &&
+      !snapshot.deferredIntentDraining) ||
     options.waitFor ||
     options.canDispatch?.() === false
   ) {
@@ -35,8 +39,8 @@ export function deferSessionMetadataPatch(
   }
   const target = resolvePendingRowTarget(
     host,
-    host.snapshot(),
-    resolvePendingConversation(host.snapshot(), key, options.agentId),
+    snapshot,
+    resolvePendingConversation(snapshot, key, options.agentId),
     options.expectedSessionId,
   );
   if (!target) {
