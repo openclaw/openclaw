@@ -105,7 +105,8 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
         ...presentation,
         onOpen: () => void this.loadSessionSharing(row),
         onVisibilityChange: (visibility) => this.mutateSessionSharing(row, { visibility }),
-        onMemberChange: (identityId, member) => this.mutateSessionSharing(row, { identityId, member }),
+        onMemberChange: (identityId, member) =>
+          this.mutateSessionSharing(row, { identityId, member }),
         onPublicShareChange: (enabled) => this.setSessionPublicShare(row, enabled),
         onCopyPublicLink: () => this.copySessionPublicLink(row),
       }),
@@ -414,7 +415,6 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
   }
 
   protected async mutateSessionSharing(
-
     row: GatewaySessionRow,
     change: { visibility: SessionVisibility } | { identityId: string; member: boolean },
   ): Promise<ChatSessionSharingOutcome> {

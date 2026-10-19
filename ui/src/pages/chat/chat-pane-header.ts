@@ -513,7 +513,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
                 this.mutateSessionSharing(row, { visibility }),
               onMemberChange: (identityId: string, member: boolean) =>
                 this.mutateSessionSharing(row, { identityId, member }),
-
             }
           : null,
     );
