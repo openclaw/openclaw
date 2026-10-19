@@ -1,4 +1,4 @@
-import { deepStrictEqual } from "node:assert/strict";
+import { deepStrictEqual, ok } from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -19,6 +19,7 @@ import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
+const nodeArgv = (source: string, ...args: string[]) => [process.execPath, "-e", source, ...args];
 
 describe.skipIf(skipBrokerTests)("broker execa parity", () => {
   let host: SpawnBrokerHost;
@@ -26,60 +27,49 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
     host = createSpawnBrokerHost();
     await host.ready();
   });
-  afterAll(async () => {
-    await host.close();
-  });
+  afterAll(() => host.close());
 
-  function start(source: string, options: CommandSpawnOptions, broker = true) {
-    const argv = [process.execPath, "-e", source];
+  function launch(argv: string[], options: CommandSpawnOptions, broker = true) {
     if (!broker) {
       return execa(argv[0]!, argv.slice(1), options);
     }
     const prepared = brokerExecaOptions(options);
-    if (!prepared) {
-      throw new Error("Fixture unexpectedly selected an in-process transport");
-    }
+    ok(prepared, "Fixture unexpectedly selected an in-process transport");
     return spawnBrokerCommand(host, argv, options, prepared);
   }
+  const start = (source: string, options: CommandSpawnOptions, broker = true) =>
+    launch(nodeArgv(source), options, broker);
 
-  async function ready(command: ReturnType<typeof start>) {
+  async function ready(command: ReturnType<typeof start>, required = true) {
     const child = command.nodeChildProcess;
-    if (!(child instanceof BrokerChild)) {
-      throw new Error("Fixture did not use the broker");
+    if (!required && !(child instanceof BrokerChild)) {
+      return;
     }
+    ok(child instanceof BrokerChild, "Fixture did not use the broker");
     await child.ready();
   }
 
-  const cases = [
-    { name: "success", source: "process.stdout.write('out\\n');process.stderr.write('err\\n')" },
-    {
-      name: "binary diagnostics",
-      source:
-        "process.stdout.write(Buffer.from([239,187,191,0,8,9,13,27,91,51,49,109,65,27,91,48,109,255,10]));process.stderr.write('failure\\r\\n');process.exitCode=3",
-    },
-    {
-      name: "Unicode diagnostics",
-      source:
-        "process.stdout.write('漢字\\u2028\\u007f\\u0001\\n');process.stderr.write('failure\\n');process.exitCode=4",
-      options: { encoding: "utf8" as const },
-    },
-    { name: "signal", source: "process.kill(process.pid,'SIGTERM')" },
-    { name: "timeout", source: "setInterval(()=>{},1000)", options: { timeout: 100 } },
-    {
-      name: "maxBuffer",
-      source: "process.stdout.write('x'.repeat(8192))",
-      options: { maxBuffer: 128 },
-    },
-    {
-      name: "cancel",
-      source: "process.stdout.write('ready');setInterval(()=>{},1000)",
-      cancel: true,
-    },
-    {
-      name: "forced cancel",
-      source: "process.on('SIGTERM',()=>{});process.stdout.write('ready');setInterval(()=>{},1000)",
-      cancel: true,
-    },
+  const cases: Array<[string, string, CommandSpawnOptions?, boolean?]> = [
+    ["success", "process.stdout.write('out\\n');process.stderr.write('err\\n')"],
+    [
+      "binary diagnostics",
+      "process.stdout.write(Buffer.from([239,187,191,0,8,9,13,27,91,51,49,109,65,27,91,48,109,255,10]));process.stderr.write('failure\\r\\n');process.exitCode=3",
+    ],
+    [
+      "Unicode diagnostics",
+      "process.stdout.write('漢字\\u2028\\u007f\\u0001\\n');process.stderr.write('failure\\n');process.exitCode=4",
+      { encoding: "utf8" },
+    ],
+    ["signal", "process.kill(process.pid,'SIGTERM')"],
+    ["timeout", "setInterval(()=>{},1000)", { timeout: 100 }],
+    ["maxBuffer", "process.stdout.write('x'.repeat(8192))", { maxBuffer: 128 }],
+    ["cancel", "process.stdout.write('ready');setInterval(()=>{},1000)", undefined, true],
+    [
+      "forced cancel",
+      "process.on('SIGTERM',()=>{});process.stdout.write('ready');setInterval(()=>{},1000)",
+      undefined,
+      true,
+    ],
   ];
 
   it.each([
@@ -103,32 +93,26 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
       });
       const session = createRemoteShellSandboxSession({
         buildCommand: () => ({
-          argv: [
-            process.execPath,
-            "-e",
-            "require('node:fs').writeFileSync(process.argv[1], 'dispatched')",
-            marker,
-          ],
+          argv: nodeArgv("require('node:fs').writeFileSync(process.argv[1], 'dispatched')", marker),
           env: { ...process.env },
         }),
         assertCurrent: guarded ? assertCurrent : undefined,
       });
-      const command = ownerContext.run("sandbox-owner", () =>
-        runWithSpawnBroker(host, () =>
-          withCommandProcessScope(
-            () => session.runCommand({ remoteCommand: "synthetic" }),
-            undefined,
-            {
-              reserve: () => ({
-                spawned: ({ pid }) => {
-                  launches.push({ current, pid, context: ownerContext.getStore() });
-                },
-                settled,
-              }),
-            },
-          ),
-        ),
-      );
+      const scope = {
+        reserve: () => ({
+          spawned: ({ pid }) => {
+            launches.push({ current, pid, context: ownerContext.getStore() });
+          },
+          settled,
+        }),
+      } satisfies NonNullable<Parameters<typeof withCommandProcessScope>[2]>;
+      const run = () =>
+        withCommandProcessScope(
+          () => session.runCommand({ remoteCommand: "synthetic" }),
+          undefined,
+          scope,
+        );
+      const command = ownerContext.run("sandbox-owner", () => runWithSpawnBroker(host, run));
       const spawnedSynchronously = launches.length > 0;
       current = false;
       if (revoked) {
@@ -156,11 +140,9 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
       const beforeInput = vi.fn();
       const result = await runWithSpawnBroker(host, () =>
         runCommandWithTimeout(
-          [
-            process.execPath,
-            "-e",
+          nodeArgv(
             `require('node:fs').closeSync(0);process.stderr.write('stdin closed\\n');process.exitCode=${exitCode};`,
-          ],
+          ),
           { input: "x".repeat(8 * 1024 * 1024), beforeInput, timeoutMs: 3_000 },
         ),
       );
@@ -184,9 +166,7 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
           broker,
         );
         try {
-          if (command.nodeChildProcess instanceof BrokerChild) {
-            await command.nodeChildProcess.ready();
-          }
+          await ready(command, broker);
           await new Promise<void>((resolve) => {
             command.stdout!.once("data", () => resolve());
           });
@@ -215,52 +195,50 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
     },
   );
 
-  it.each(cases)("preserves buffered $name results and errors", async (fixture) => {
-    const outcomes: unknown[] = [];
-    for (const broker of [false, true]) {
-      const controller = new AbortController();
-      const command = start(
-        fixture.source,
-        {
-          encoding: "buffer",
-          stdin: "ignore",
-          stripFinalNewline: false,
-          forceKillAfterDelay: 50,
-          cancelSignal: controller.signal,
-          ...fixture.options,
-        },
-        broker,
-      );
-      if (command.nodeChildProcess instanceof BrokerChild) {
-        await command.nodeChildProcess.ready();
+  it.each(cases)(
+    "preserves buffered %s results and errors",
+    async (_name, source, options, cancel) => {
+      const outcomes: unknown[] = [];
+      for (const broker of [false, true]) {
+        const controller = new AbortController();
+        const command = start(
+          source,
+          {
+            encoding: "buffer",
+            stdin: "ignore",
+            stripFinalNewline: false,
+            forceKillAfterDelay: 50,
+            cancelSignal: controller.signal,
+            ...options,
+          },
+          broker,
+        );
+        await ready(command, broker);
+        if (cancel) {
+          command.stdout?.once("data", () => controller.abort());
+        }
+        const result = await command.catch((error: unknown) => error);
+        expect(result).toBeTypeOf("object");
+        const value = result as Awaited<typeof command>;
+        outcomes.push({
+          error: result instanceof Error,
+          message: result instanceof Error ? result.message : undefined,
+          stdout: value.stdout,
+          stderr: value.stderr,
+          exitCode: value.exitCode,
+          signal: value.signal,
+          failed: value.failed,
+          timedOut: value.timedOut,
+          isCanceled: value.isCanceled,
+          isMaxBuffer: value.isMaxBuffer,
+          isTerminated: value.isTerminated,
+          isForcefullyTerminated: value.isForcefullyTerminated,
+          shortMessage: value.shortMessage,
+        });
       }
-      if (fixture.cancel) {
-        command.stdout?.once("data", () => controller.abort());
-      }
-      const result = await command.then(
-        (value) => value,
-        (error: unknown) => error,
-      );
-      expect(result).toBeTypeOf("object");
-      const value = result as Awaited<typeof command>;
-      outcomes.push({
-        error: result instanceof Error,
-        message: result instanceof Error ? result.message : undefined,
-        stdout: value.stdout,
-        stderr: value.stderr,
-        exitCode: value.exitCode,
-        signal: value.signal,
-        failed: value.failed,
-        timedOut: value.timedOut,
-        isCanceled: value.isCanceled,
-        isMaxBuffer: value.isMaxBuffer,
-        isTerminated: value.isTerminated,
-        isForcefullyTerminated: value.isForcefullyTerminated,
-        shortMessage: value.shortMessage,
-      });
-    }
-    expect(outcomes[1]).toEqual(outcomes[0]);
-  });
+      expect(outcomes[1]).toEqual(outcomes[0]);
+    },
+  );
 
   it.each([false, true])(
     "preserves both output streams and stdin beyond 1 MiB with buffer:%s",
@@ -312,11 +290,9 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
     async (encoding) => {
       const size = 1024 * 1024;
       const remote = host.spawnExeca(
-        [
-          process.execPath,
-          "-e",
+        nodeArgv(
           `process.stdout.write('x'.repeat(${size}));process.stderr.write('y'.repeat(${size}));process.exitCode=7`,
-        ],
+        ),
         { stdin: "ignore", encoding, reject: false, maxBuffer: size },
       );
       await remote.child.ready();
@@ -345,20 +321,13 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
     );
     expect(await readFile(file, "utf8")).toBe("file bytes");
     expect(result).toBeInstanceOf(Error);
-    expect(result.exitCode).toBe(9);
-    expect(result.stderr).toBe("failure");
+    expect(result).toMatchObject({ exitCode: 9, stderr: "failure" });
   });
 
   it("preserves launch errors and cancellation during broker admission", async () => {
     for (const buffer of [false, true]) {
       const options = { buffer, stdin: "ignore", reject: false } as const;
-      const prepared = brokerExecaOptions(options)!;
-      const missing = await spawnBrokerCommand(
-        host,
-        ["openclaw-broker-nonexistent-command"],
-        options,
-        prepared,
-      );
+      const missing = await launch(["openclaw-broker-nonexistent-command"], options);
       expect(missing).toBeInstanceOf(Error);
       expect(missing).toMatchObject({ failed: true, code: "ENOENT" });
     }
