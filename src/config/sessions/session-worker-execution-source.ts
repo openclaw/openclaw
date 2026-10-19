@@ -12,6 +12,7 @@ export function createSessionWorkerExecutionSource(
         nativeLocations: binding.nativeLocations,
         admission: createSqliteWorkerOperationAdmission((request, grant) => {
           binding.authorize(request);
+          assertCurrent();
           if (!grant()) {
             throw new Error(expiredMessage);
           }
