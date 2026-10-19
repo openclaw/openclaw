@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { requestExecHostViaSocket } from "./exec-host.js";
+import { requestJsonlSocket } from "./jsonl-socket.js";
 
 async function withSocketServer(
   server: net.Server,
@@ -159,7 +160,7 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
         socketPath,
         requestLine: "{}",
         timeoutMs: 500,
-        accept: acceptDoneValue,
+        accept: () => undefined,
         beforeSend() {
           if (!current) {
             throw new Error("authority revoked");
