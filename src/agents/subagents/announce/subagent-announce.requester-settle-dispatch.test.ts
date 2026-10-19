@@ -172,7 +172,9 @@ describe("requester settle dispatch deadline", () => {
     loadRequester.mockResolvedValue(requester);
     registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
     subagentRuns.set(child.runId, child);
-    onTestFinished(() => subagentRuns.delete(child.runId));
+    onTestFinished(() => {
+      subagentRuns.delete(child.runId);
+    });
     const completeBatch = vi.fn(() => {
       child.requesterSettleWake = undefined;
     });
