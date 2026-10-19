@@ -1,3 +1,4 @@
+import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import type { GatewayStoredSessionTarget } from "../../config/sessions/combined-store-gateway.js";
 import type { SessionRowDatabaseFacts } from "../../config/sessions/session-row-facts.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -31,6 +32,7 @@ export function readSessionRowFacts(params: {
   cfg: OpenClawConfig;
   target: Pick<GatewayStoredSessionTarget, "agentId" | "storeTarget"> & { key: string };
   entry: SessionEntry;
+  preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
   context?: PlacementReadContext;
   placementFactsReader?: SessionRowPlacementFactsReader;
   activitySummaryEnabled?: boolean;
@@ -77,7 +79,11 @@ export function readSessionRowFacts(params: {
       workspaceResultReconciling,
       environment,
       identity,
-      sessionModelRevision: sessionModelRevision(entry, identity?.inference),
+      sessionModelRevision: sessionModelRevision(
+        entry,
+        identity?.inference,
+        params.preparedRuntimeOwnership,
+      ),
       failedRecoveryAction,
       retryOnSend,
     };
