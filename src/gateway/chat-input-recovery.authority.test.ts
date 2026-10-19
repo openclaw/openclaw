@@ -19,6 +19,7 @@ import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-ss
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
+  appendTranscriptMessage,
   listSessionParticipantsReadOnly,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -26,6 +27,7 @@ import { stageSessionPendingInput } from "../config/sessions/session-accessor.pe
 import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
 import { waitForSessionParticipantRecording } from "../sessions/session-participant-recording.js";
@@ -49,10 +51,11 @@ import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
-it(
-  "rechecks captured chat operators before startup replay reaches a model or tool",
+it.for(["steer", "followup"] as const)(
+  "rechecks captured chat operators and resumes their predecessor before %s replay",
   { timeout: 90_000 },
-  async () => {
+  async (queueMode) => {
+    const runPrefix = `replay-${queueMode}`;
     const state = await createOpenClawTestState({
       label: "chat-replay-authority",
       env: {
@@ -63,6 +66,13 @@ it(
     });
     const effectsPath = path.join(state.workspaceDir, "replayed.txt");
     const requests: string[] = [];
+    const replayOrder: string[] = [];
+    const startedRuns: string[] = [];
+    const stopObserving = onAgentEvent((event) => {
+      if (event.stream === "lifecycle" && event.data.phase === "start") {
+        startedRuns.push(event.runId);
+      }
+    });
     const providerErrors: unknown[] = [];
     const providerServer = createServer((request, response) => {
       void (async () => {
@@ -71,6 +81,16 @@ it(
           return;
         }
         const body = await readProviderBody(request);
+        if (body.includes("PREDECESSOR_INPUT") && !body.includes("REPLAY_UNCHANGED")) {
+          replayOrder.push("predecessor");
+          writeOpenAiResponsesText(response, {
+            text: "Predecessor completed.",
+            messageId: randomUUID(),
+            responseId: randomUUID(),
+          });
+          return;
+        }
+        replayOrder.push("chat");
         requests.push(body);
         const payload = JSON.parse(body) as { input: Array<{ type?: string }> };
         if (payload.input.some((item) => item.type === "function_call_output")) {
@@ -151,8 +171,8 @@ it(
           await fs.mkdir(personalDir, { recursive: true });
           await fs.writeFile(path.join(personalDir, "USER.md"), "RECOVERED_PERSONAL_PREFERENCES");
         }
-        const sessionKey = `agent:main:replay-${change}`;
-        const sessionId = `replay-${change}`;
+        const sessionKey = `agent:main:${runPrefix}-${change}`;
+        const sessionId = `${runPrefix}-${change}`;
         if (change === "membership") {
           // Creator attribution is immutable; seed the other owner before capture.
           await replaceSessionEntry(
@@ -173,7 +193,7 @@ it(
           sourceIngress: "control-ui",
           sessionKey,
           sessionId,
-          sourceRunId: `replay-${change}`,
+          sourceRunId: `${runPrefix}-${change}`,
           ...(change === "device"
             ? {
                 device: {
@@ -201,8 +221,7 @@ it(
             sessionKey: fixture.target.sessionKey,
             idempotencyKey: fixture.target.sourceRunId,
             message: `REPLAY_${change.toUpperCase()}`,
-            // A saved explicit steer must also run before an active turn exists.
-            ...(change === "unchanged" ? { queueMode: "steer" } : {}),
+            ...(change === "unchanged" ? { queueMode } : {}),
             deliver: false,
           },
         });
@@ -216,14 +235,30 @@ it(
           }),
           "captured chat authority",
         );
-        // This proof resumes pending input, not the helper's separate main-turn claim.
-        await replaceSessionEntry(fixture.target, {
-          sessionId: fixture.entry.sessionId,
-          updatedAt: fixture.entry.updatedAt,
-          lifecycleRevision: fixture.entry.lifecycleRevision,
-          createdActor: fixture.entry.createdActor,
-          ...(change === "membership" ? { visibility: "read-only" } : {}),
-        });
+        if (change === "unchanged") {
+          await appendTranscriptMessage(fixture.target, {
+            message: { role: "user", content: "PREDECESSOR_INPUT", timestamp: Date.now() },
+          });
+          await replaceSessionEntry(fixture.target, {
+            ...fixture.entry,
+            status: "interrupted",
+            abortedLastRun: true,
+            restartRecoveryDeliveryRunId: `${runPrefix}-recovery-predecessor`,
+            restartRecoveryDeliverySourceRunId: `${runPrefix}-predecessor`,
+            restartRecoveryOperatorSource: {
+              ...expectDefined(fixture.entry.restartRecoveryOperatorSource, "predecessor operator"),
+              sourceRunId: `${runPrefix}-predecessor`,
+            },
+          });
+        } else {
+          await replaceSessionEntry(fixture.target, {
+            sessionId: fixture.entry.sessionId,
+            updatedAt: fixture.entry.updatedAt,
+            lifecycleRevision: fixture.entry.lifecycleRevision,
+            createdActor: fixture.entry.createdActor,
+            ...(change === "membership" ? { visibility: "read-only" } : {}),
+          });
+        }
         if (change === "membership") {
           await addSessionMember(fixture.target, {
             identityId: profile.id,
@@ -273,9 +308,9 @@ it(
       await gateway.server.startupSettled;
       await recoveryStarted.promise;
       const successor = {
-        sessionKey: "agent:main:replay-unchanged",
+        sessionKey: `agent:main:${runPrefix}-unchanged`,
         message: "SUCCESSOR_MUST_WAIT",
-        idempotencyKey: "replay-successor",
+        idempotencyKey: `${runPrefix}-successor`,
         deliver: false,
       };
       try {
@@ -329,9 +364,17 @@ it(
         releaseRecovery.resolve();
       }
       await expect(
-        gateway.client.request("agent.wait", { runId: "replay-unchanged", timeoutMs: 30_000 }),
+        gateway.client.request("agent.wait", {
+          runId: `${runPrefix}-unchanged`,
+          timeoutMs: 30_000,
+        }),
       ).resolves.toMatchObject({ status: "ok" });
       expect(providerErrors).toEqual([]);
+      expect(startedRuns.slice(0, 2)).toEqual([
+        `${runPrefix}-recovery-predecessor`,
+        `${runPrefix}-unchanged`,
+      ]);
+      expect(replayOrder).toEqual(["predecessor", "chat", "chat"]);
       expect(requests).toHaveLength(2);
       expect(requests.every((body) => body.includes("REPLAY_UNCHANGED"))).toBe(true);
       expect(requests.join("\n")).not.toMatch(/REPLAY_ROLE|REPLAY_DEVICE|REPLAY_MEMBERSHIP/);
@@ -390,17 +433,18 @@ it(
       const client = gateway.client;
       await vi.waitFor(async () => {
         await expect(client.request("chat.send", successor)).resolves.toMatchObject({
-          runId: "replay-successor",
+          runId: `${runPrefix}-successor`,
           status: "started",
         });
       });
       await expect(
-        client.request("agent.wait", { runId: "replay-successor", timeoutMs: 30_000 }),
+        client.request("agent.wait", { runId: `${runPrefix}-successor`, timeoutMs: 30_000 }),
       ).resolves.toMatchObject({ status: "ok" });
       expect(requests).toHaveLength(3);
       expect(requests.slice(0, 2).join("\n")).not.toContain(successor.message);
       expect(requests.slice(2).every((body) => body.includes(successor.message))).toBe(true);
     } finally {
+      stopObserving();
       releaseRecovery.resolve();
       recoverySpy.mockRestore();
       try {
