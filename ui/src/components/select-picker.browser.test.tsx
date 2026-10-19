@@ -568,7 +568,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
               disabled={false}
               onChange={onChange}
             />
-            <button id="after-picker">Next field</button>
+            <input id="after-picker" aria-label="Next field" />
           </>
         ),
         { container: host },
@@ -614,7 +614,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       expect(onChange).not.toHaveBeenCalled();
       await userEvent.keyboard("{Tab}{Tab}");
       await expect
-        .element(page.getByRole("button", { name: "Next field", exact: true }))
+        .element(page.getByRole("textbox", { name: "Next field", exact: true }))
         .toHaveFocus();
       await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
       expect(onChange).not.toHaveBeenCalled();
