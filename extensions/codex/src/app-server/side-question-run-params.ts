@@ -2,7 +2,23 @@ import type {
   AgentHarnessSideQuestionParamsV2,
   EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { requireCodexSupervisionModelSelection } from "./binding-connection.js";
+import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import type { CodexEffectiveSessionPermissionPolicy } from "./session-permission-policy.js";
+
+export function resolveSideQuestionNativeModelSelection(
+  binding: Pick<
+    CodexAppServerThreadBinding,
+    "connectionScope" | "preserveNativeModel" | "model" | "modelProvider"
+  >,
+) {
+  const { model, modelProvider } = binding;
+  return binding.connectionScope === "supervision"
+    ? requireCodexSupervisionModelSelection(binding)
+    : binding.preserveNativeModel && model && modelProvider
+      ? { model, modelProvider }
+      : undefined;
+}
 
 /** Keep prepared metadata only when it belongs to the native binding's model. */
 export function applySideQuestionModelSelection(

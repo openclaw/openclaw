@@ -75,11 +75,16 @@ it.each([
   "core-btw-host-unchanged",
   "core-btw-host-changed",
   "core-btw-native-only",
+  "core-btw-native-unchanged",
+  "core-btw-native-to-host",
+  "core-btw-host-to-native",
 ] as const)(
   "binds prepared hosted search to current native authority for transition %s",
   async (scenario) => {
     const coreDispatch = scenario.startsWith("core-btw-");
     const nativeOnly = scenario === "core-btw-native-only";
+    const nativeAuth = nativeOnly || scenario.startsWith("core-btw-native-");
+    const ownershipChanged = scenario.endsWith("-to-host") || scenario.endsWith("-to-native");
     const nativeModel = nativeOnly ? "native-only" : "search-allowed";
     const nativeProvider = nativeOnly ? "ollama" : "openai";
     const sideQuestion = coreDispatch || scenario.startsWith("btw-");
@@ -165,7 +170,7 @@ it.each([
         threadId: "thread-native-search",
         cwd: fixture.tempDir,
         historyCoveredThrough: "2026-01-01T00:00:00.000Z",
-        ...(coreDispatch && !nativeOnly
+        ...(coreDispatch && !nativeAuth
           ? {}
           : {
               connectionScope: "supervision" as const,
@@ -556,6 +561,26 @@ it.each([
                 { kind: "set", binding: { ...binding, model: "search-changed" } },
               );
             }
+            if (ownershipChanged) {
+              expect(
+                await fixture.testCodexAppServerBindingStore.mutate(
+                  {
+                    kind: "session",
+                    agentId: "main",
+                    sessionId: params.sessionId,
+                    sessionKey: params.sessionKey,
+                  },
+                  {
+                    kind: "patch",
+                    threadId: binding.threadId,
+                    patch: {
+                      connectionScope: nativeAuth ? undefined : "supervision",
+                      supervisionSourceThreadId: nativeAuth ? undefined : binding.threadId,
+                    },
+                  },
+                ),
+              ).toBe(true);
+            }
             return await harness.runSideQuestion!(input);
           },
         );
@@ -632,7 +657,13 @@ it.each([
       if (coreDispatch && "error" in outcome) {
         console.log(`[native-search] core-error=${String(outcome.error)}`);
       }
-      if (modelLess) {
+      if (ownershipChanged) {
+        expect(outcome).toHaveProperty("error");
+        expect("error" in outcome && outcome.error).toMatchObject({
+          message: expect.stringContaining("Codex native session ownership is missing or changed"),
+        });
+        expect(nativeWrites).toEqual([]);
+      } else if (modelLess) {
         // A supervised cached-search thread may refuse a disabled policy replacement.
         expect(nativeSearch.every((mode) => mode === "disabled")).toBe(true);
         if ("error" in outcome) {
@@ -647,14 +678,17 @@ it.each([
       } else if (
         transition !== "unchanged" &&
         scenario !== "core-btw-host-unchanged" &&
+        scenario !== "core-btw-native-unchanged" &&
         !nativeOnly
       ) {
         expect(outcome).toHaveProperty("error");
         expect("error" in outcome && outcome.error).toMatchObject({
           message: expect.stringMatching(
-            transition === "changed" || scenario === "core-btw-host-changed"
-              ? /Native model changed after web search policy preparation/
-              : /policy changed|superseded|no longer active/,
+            scenario === "core-btw-host-changed"
+              ? /Codex native session ownership is missing or changed/
+              : transition === "changed"
+                ? /Native model changed after web search policy preparation/
+                : /policy changed|superseded|no longer active/,
           ),
         });
         expect(nativeWrites).toEqual([]);
@@ -693,7 +727,7 @@ it.each([
         expect(coreInput?.preparedRuntimeAuth.plan).toMatchObject({
           providerForAuth: nativeProvider,
           modelId: nativeModel,
-          ...(nativeOnly
+          ...(nativeAuth
             ? { harnessAuthProvider: "openai" }
             : {
                 modelRoute: {
@@ -703,7 +737,7 @@ it.each([
                 },
               }),
         });
-        if (nativeOnly) {
+        if (nativeAuth) {
           expect(coreInput?.preparedRuntimeAuth.resolvedApiKey).toBeUndefined();
           expect(coreInput?.preparedRuntimeAuth.authProfileStore.profiles).toEqual({});
           expect(coreInput?.preparedRuntimeAuth.plan.modelRoute).toBeUndefined();

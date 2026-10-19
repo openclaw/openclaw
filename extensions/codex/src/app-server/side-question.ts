@@ -22,7 +22,7 @@ import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { retireUnsafeCodexTurnClientBestEffort } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import {
-  requireCodexSupervisionModelSelection,
+  assertCodexSessionRuntimeOwnership,
   resolveCodexBindingAppServerConnection,
 } from "./binding-connection.js";
 import {
@@ -118,6 +118,7 @@ import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-question-instructions.js";
 import {
   applySideQuestionModelSelection,
   buildSideRunAttemptParams,
+  resolveSideQuestionNativeModelSelection,
 } from "./side-question-run-params.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
@@ -165,6 +166,10 @@ export async function runCodexAppServerSideQuestion(
     storePath: params.storePath,
     assertCurrent: params.hostCapabilities.assertActive,
     signal: params.opts?.abortSignal,
+    assertBinding: params.expectedSessionRuntimeOwnership
+      ? (currentBinding) =>
+          assertCodexSessionRuntimeOwnership(currentBinding, params.expectedSessionRuntimeOwnership)
+      : undefined,
   });
   using _ = { [Symbol.dispose]: release };
   const assertCurrent = authority.assertCurrent;
@@ -199,12 +204,7 @@ export async function runCodexAppServerSideQuestion(
     agentId: sessionAgentId,
   });
   const usesSupervisionConnection = binding.connectionScope === "supervision";
-  const { model, modelProvider } = binding;
-  const nativeModelSelection = usesSupervisionConnection
-    ? requireCodexSupervisionModelSelection(binding)
-    : binding.preserveNativeModel && model && modelProvider
-      ? { model, modelProvider }
-      : undefined;
+  const nativeModelSelection = resolveSideQuestionNativeModelSelection(binding);
   const preparedRuntimeAuth = params.preparedRuntimeAuth;
   const authHandoff = usesSupervisionConnection
     ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }

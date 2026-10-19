@@ -352,9 +352,13 @@ route, using the reply's original caller-policy snapshot for both its fingerprin
 and incoming-message projection. Native ownership or model-selection hooks do not
 replace that snapshot or authorize a different caller.
 
-Core carries optional `expectedSessionRuntimeOwnership` into the attempt, including
-`modelRef` for host-auth bindings. This is a nonauthorizing comparison, not a binding,
-credential, or retained capability. Revalidate during preflight, under the binding
+Core carries optional `expectedSessionRuntimeOwnership` into attempts and V2 side
+questions, including the captured `auth` owner and `modelRef` for host-auth bindings.
+The side-question field reuses the attempt shape; existing callers may omit it.
+This is a nonauthorizing comparison, not a binding, credential, or retained capability.
+Side hooks must check it when acquiring the binding, before selecting a connection
+or using prepared credentials. An auth-owner change rejects the side question even
+when its provider and model are unchanged. Revalidate during preflight, under the binding
 lease, and against the ready thread after resume before inference. A changed host-auth
 tuple rejects stale prepared credentials while retaining the newly observed binding.
 Native-auth connections may follow their native owner's model changes. Missing or

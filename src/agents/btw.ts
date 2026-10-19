@@ -410,6 +410,7 @@ export async function runBtwSideQuestion(
           model: runtimeModel.id,
           runtimeModel,
           preparedModelRuntime,
+          expectedSessionRuntimeOwnership: runtime.nativeOwnership,
           preparedWebSearchPolicy: webSearchPolicy,
           preparedRuntimeAuth: {
             plan: runtimeAuthPlan,
