@@ -36,7 +36,6 @@ import type { StoredChatQueueReplacement } from "./composer-persistence-state.ts
 import {
   admitStoredChatComposerQueueItemResult,
   listStoredChatOutboxes,
-  removeStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItems,
   storedChatOutboxScopeKey,
   type ChatComposerScope as Composer,
@@ -556,11 +555,10 @@ class ChatOutboxGatewayOwner {
         live.owner !== host &&
         !(local && durable && LIVE_VERSION_KEYS.every((key) => local[key] === durable[key]))) ||
       (located?.durable &&
-        !removeStoredChatComposerQueueItem(
+        !updateStoredChatComposerQueueItems(
           host,
           located.scope.sessionKey,
-          id,
-          located.item,
+          [{ expected: located.item, next: null }],
           located.scope.agentId,
         ))
     ) {

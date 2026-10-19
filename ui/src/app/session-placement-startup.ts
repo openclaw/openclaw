@@ -184,6 +184,7 @@ export function createApplicationPlacementStartup(
     if (disposed) {
       return;
     }
+    // Resume retained starts from connection receipts even while no page is mounted.
     stopGateway ??= gateway.subscribe(() => resumeRecovery());
     if ((pending || retry) && runtimeLoad?.error) {
       runtimeLoad = undefined;
@@ -277,6 +278,7 @@ export function createApplicationPlacementStartup(
           return;
         }
         runtime = createApplicationPlacementStartupRuntime(dependencies);
+        // Relay every status receipt; the lazy owner's disposal releases its listeners.
         runtime.subscribe(publish);
         resumeRecovery();
       },

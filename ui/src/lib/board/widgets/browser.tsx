@@ -14,9 +14,9 @@ import {
 import { BrowserPanelHost } from "../../../components/browser/browser-panel.ts";
 import { registerBrowserEnglish } from "../../../i18n/locales/en-browser.ts";
 import { formatUiError } from "../../format-error.ts";
+import { projectGateway } from "../../reactive/application.ts";
 import { useOptionalApplication } from "../../reactive/context.ts";
 import { t } from "../../reactive/i18n.ts";
-import { projectSource } from "../../reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
 import type { BoardWidget } from "../types.ts";
 import "./browser.css";
@@ -28,22 +28,18 @@ function BrowserDashboardWidgetContent(
   host: SolidBridgeElement<BrowserWidgetProps>,
 ) {
   const context = useOptionalApplication();
-  const gateway = projectSource(context?.gateway, {
-    read: (owner) => owner?.snapshot,
-    subscribe: (owner, notify) => owner?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
-  });
-  const available = () => Boolean(context && isBrowserDashboardAvailable(gateway.read()!));
-  const sessionScoped = () => Boolean(context && !isBrowserPanelAvailable(gateway.read()!));
+  const gateway = context ? projectGateway(context.gateway) : undefined;
+  const available = () => Boolean(gateway && isBrowserDashboardAvailable(gateway.read().snapshot));
+  const sessionScoped = () => Boolean(gateway && !isBrowserPanelAvailable(gateway.read().snapshot));
   const scope = createMemo(
     () => ({
-      client: gateway.read()?.client,
+      client: gateway?.read().snapshot.client,
       key: JSON.stringify([
         props.session,
         props.widget?.instanceId,
         props.widget?.name,
         props.widget?.props,
-        gateway.read()?.hello?.auth,
+        gateway?.read().snapshot.hello?.auth,
       ]),
     }),
     { equals: (previous, next) => previous.client === next.client && previous.key === next.key },
@@ -190,7 +186,7 @@ function BrowserDashboardWidgetContent(
                     >
                       <BrowserPanelHost
                         embedded
-                        client={gateway.read()?.client ?? null}
+                        client={gateway?.read().snapshot.client ?? null}
                         available={available()}
                         remoteAvailable={available()}
                         presented={props.active}
@@ -204,7 +200,7 @@ function BrowserDashboardWidgetContent(
                         }}
                         resourceBasePath={context?.resourceBasePath ?? ""}
                         authToken={resolveControlUiAuthToken({
-                          hello: gateway.read()?.hello ?? null,
+                          hello: gateway?.read().snapshot.hello ?? null,
                           password: context?.gateway.connection.password ?? "",
                           settings: { token: context?.gateway.connection.token ?? "" },
                         })}
