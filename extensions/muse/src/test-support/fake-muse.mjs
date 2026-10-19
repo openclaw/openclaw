@@ -34,46 +34,31 @@ const accept = (id, params, extra = {}) =>
 const event = (method, params) =>
   send({ method, params: { ...active, ...params, viewCursor: String(++cursor) } });
 const sourceRange = { start: 0, end: 1 };
-function item(kind, text, status = "completed", extra = {}) {
-  return {
-    itemId: `${active.turnId}-${kind}`,
-    turnId: active.turnId,
-    kind,
-    text,
-    revision: status === "inProgress" ? 1 : 2,
-    status,
-    ...extra,
-  };
+function item(kind, status, extra = {}) {
+  const itemId = `${active.turnId}-${kind}`;
+  const starting = status === "inProgress";
+  event(starting ? "item/started" : "item/completed", {
+    item: { itemId, turnId: active.turnId, kind, revision: starting ? 1 : 2, status, ...extra },
+    ...(starting ? {} : { sourceRange }),
+  });
+  return itemId;
 }
 function complete(terminal, error) {
   log({ event: "terminal", terminal });
   event("turn/completed", { terminal, sourceRange, ...(error ? { error } : {}) });
 }
-function completeItem(value, extra = {}) {
-  event("item/completed", {
-    item: { ...value, status: "completed", revision: 2, ...extra },
-    sourceRange,
-  });
-}
+const fail = (kind, message) => complete("failed", { kind, message, retryable: false });
 function answer() {
-  const reasoning = item("reasoning", "", "inProgress");
-  event("item/started", { item: reasoning });
-  event("item/delta", {
-    itemId: reasoning.itemId,
-    field: "summary.0",
-    delta: "Considering",
-  });
-  completeItem(reasoning, { summary: ["Considering"] });
+  const itemId = item("reasoning", "inProgress", { text: "" });
+  event("item/delta", { itemId, field: "summary.0", delta: "Considering" });
+  item("reasoning", "completed", { text: "", summary: ["Considering"] });
   if (active.prompt === "tool" || active.prompt === "tool-failure") {
-    completeItem(
-      item("toolCall", undefined, "completed", {
-        tool: "read_file",
-        callId: "call-1",
-        args: '{"path":"a.txt"}',
-        visibleOutput: "file content",
-      }),
-      { status: active.prompt === "tool-failure" ? "failed" : "completed" },
-    );
+    item("toolCall", active.prompt === "tool-failure" ? "failed" : "completed", {
+      tool: "read_file",
+      callId: "call-1",
+      args: '{"path":"a.txt"}',
+      visibleOutput: "file content",
+    });
   }
   const text =
     active.prompt === "credential"
@@ -81,11 +66,10 @@ function answer() {
       : active.prompt === "effort"
         ? `effort:${active.reasoningEffort}`
         : `${active.resumed ? "resumed" : "started"}: hello`;
-  const message = item("agentMessage", "", "inProgress");
-  event("item/started", { item: message });
-  event("item/delta", { itemId: message.itemId, delta: text.slice(0, 8) });
-  event("item/delta", { itemId: message.itemId, delta: text.slice(8) });
-  completeItem(message, { text });
+  const messageId = item("agentMessage", "inProgress", { text: "" });
+  event("item/delta", { itemId: messageId, delta: text.slice(0, 8) });
+  event("item/delta", { itemId: messageId, delta: text.slice(8) });
+  item("agentMessage", "completed", { text });
   if (active.prompt !== "settle") {
     complete("completed");
   }
@@ -93,9 +77,6 @@ function answer() {
 createInterface({ input: process.stdin }).on("line", (line) => {
   log(line);
   const { id, method, params = {} } = JSON.parse(line);
-  if (method === "initialized") {
-    return;
-  }
   if (method === "initialize") {
     const result = {
       serverInfo: { name: "fake_muse", version: "1" },
@@ -125,25 +106,26 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           ? []
           : [{ providerId: "meta", modelId: "muse-spark-1.3" }],
     });
-  } else if (method === "session/start") {
-    const sessionId = process.env.MUSE_REQUEST_LOG ? randomUUID() : `session-${++sessionCount}`;
-    sessions.set(sessionId, false);
-    reply(id, { session: { sessionId }, viewCursor: String(cursor) });
-  } else if (method === "session/resume") {
-    if (params.sessionId === "missing-session") {
-      return reject(id, -32020, "session not found", "sessionNotFound");
+  } else if (method === "session/start" || method === "session/resume") {
+    const resumed = method === "session/resume";
+    // Muse 1.3 uses `internal` for retained sessions it can no longer compose.
+    const refusal = new Map([
+      ["missing-session", [-32020, "session not found", "sessionNotFound"]],
+      ["refused-session", [-32603, "retained session refused (class c)", "internal"]],
+      ["busy-session", [-32021, "session in use", "sessionInUse"]],
+    ]).get(params.sessionId);
+    if (resumed && refusal) {
+      return reject(id, ...refusal);
     }
-    if (params.sessionId === "refused-session") {
-      // Muse 1.3 refuses a retained session it can no longer compose as `internal`.
-      return reject(id, -32603, "retained session refused (class c)", "internal");
-    }
-    if (params.sessionId === "busy-session") {
-      return reject(id, -32021, "session in use", "sessionInUse");
-    }
-    sessions.set(params.sessionId, true);
+    const sessionId = resumed
+      ? params.sessionId
+      : process.env.MUSE_REQUEST_LOG
+        ? randomUUID()
+        : `session-${++sessionCount}`;
+    sessions.set(sessionId, resumed);
     reply(id, {
-      session: { sessionId: params.sessionId },
-      history: { mode: "none" },
+      session: { sessionId },
+      ...(resumed ? { history: { mode: "none" } } : {}),
       viewCursor: String(cursor),
     });
   } else if (method === "turn/start") {
@@ -167,16 +149,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       if (active.prompt === "crash") {
         process.stderr.write("fixture: provider process crashed\n");
         process.exit(7);
-      } else if (active.prompt === "fail" || active.prompt === "loggedout") {
+      } else if (active.prompt === "fail") {
+        fail("providerError", "fixture provider rejected authentication");
+      } else if (active.prompt === "loggedout") {
         // Muse 1.3 reports a missing credential this way.
-        const loggedOut = active.prompt === "loggedout";
-        complete("failed", {
-          kind: loggedOut ? "authRequired" : "providerError",
-          message: loggedOut
-            ? "not logged in: run /login to add an API key"
-            : "fixture provider rejected authentication",
-          retryable: false,
-        });
+        fail("authRequired", "not logged in: run /login to add an API key");
       } else if (active.prompt === "approval" || active.prompt === "approval-settle") {
         event("approval/requested", {
           // Real Muse mints one approval id per request; the SDK ignores repeats.
@@ -203,7 +180,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   } else if (method === "approval/decide") {
     accept(id, params, { approvalId: params.approvalId });
     if (params.choiceId !== "server-allow-id") {
-      complete("failed", { kind: "approvalDenied", message: "denied", retryable: false });
+      fail("approvalDenied", "denied");
     } else {
       setImmediate(answer);
     }
@@ -215,7 +192,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     } else {
       complete("cancelled");
     }
-  } else {
+  } else if (method !== "initialized") {
     send({ id, error: { code: -32601, message: `Unsupported fixture method ${method}` } });
   }
 });
