@@ -152,6 +152,10 @@ describe("browser extension pairing Gateway URL", () => {
   it("prints blocked profile warnings above the human-readable status summary", async () => {
     installMocks.browserExtensionStatus.mockResolvedValue({
       ...createExtensionStatus(),
+      // The non-JSON status summary reads these; the shared slim fixture omits them.
+      installedCopy: { path: "/stable/openclaw-extension", present: true, owned: true },
+      bundledPath: "/bundled/openclaw-extension",
+      registrations: [],
       discoveryBlocked: ["Google Chrome"],
       issues: ["Google Chrome: could not list profiles (Error: EPERM: operation not permitted)"],
     });
