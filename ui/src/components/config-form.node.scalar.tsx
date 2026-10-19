@@ -1,9 +1,10 @@
 import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, createEffect, createMemo } from "solid-js";
+import { For, createMemo } from "solid-js";
 import { i18n } from "../i18n/index.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
+import { createNativeDraft } from "../lib/reactive/native-draft.ts";
 import {
   configValuesEqual,
   isSupportedConfigValueValid,
@@ -29,12 +30,10 @@ import {
 } from "./config-form.numeric.ts";
 import {
   beginScalarEdit,
-  bindControlError,
   finishScalarEdit,
   scalarEditHintForInput,
   scalarValueBranch,
-  syncScalarInputIdentity,
-  setControlValidity,
+  syncScalarEditIdentity,
   type ScalarEditHint,
 } from "./config-form.scalar-edit.ts";
 import { configFieldId, hintForPath, schemaType } from "./config-form.shared.ts";
@@ -140,9 +139,6 @@ function ScalarInput(props: {
   inputType: "text" | "number";
   stepped: boolean;
 }): JSX.Element {
-  let input!: HTMLInputElement | HTMLTextAreaElement;
-  let error: HTMLSpanElement | undefined;
-  let initialized = false;
   const state = createMemo(() => {
     const params = props.params;
     const { schema, value, path, hints, isRequired } = params;
@@ -195,7 +191,7 @@ function ScalarInput(props: {
         : undefined;
     const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
     const sourceIdentity = params.sourceIdentity ?? value;
-    const controlPathKey = configFieldId(
+    const pathKey = configFieldId(
       path.filter((segment) => typeof segment === "string"),
       "scalar-identity",
     );
@@ -238,14 +234,14 @@ function ScalarInput(props: {
       phonePresentation,
       controlIdentity,
       sourceIdentity,
-      controlPathKey,
+      pathKey,
       renderedValue,
       presentationIdentity,
       constraints,
       numericStep,
       textInputState,
-      revalidate(this: void, target: HTMLInputElement | HTMLTextAreaElement) {
-        setControlValidity(
+      revalidate(this: void, target: HTMLInputElement | HTMLTextAreaElement): void {
+        draft.setValidity(
           target,
           effectiveRedacted
             ? ""
@@ -256,22 +252,10 @@ function ScalarInput(props: {
       },
     };
   });
-  createEffect(state, (current) => {
-    // The first value is set only once; subsequent updates are owned by the
-    // existing draft-preserving scalar identity contract.
-    if (!initialized) {
-      input.value = current.renderedValue;
-      initialized = true;
-    }
-    syncScalarInputIdentity(
-      input,
-      current.controlIdentity,
-      current.sourceIdentity,
-      current.controlPathKey,
-      current.presentationIdentity,
-      current.renderedValue,
-      current.revalidate,
-    );
+  const draft = createNativeDraft(state, {
+    preserveFocusedDraft: true,
+    onReconciled: (target, current) =>
+      syncScalarEditIdentity(target, current.pathKey, current.presentationIdentity),
   });
   let patchSource: unknown;
   let patchedValue: unknown;
@@ -307,7 +291,7 @@ function ScalarInput(props: {
         next.message = numericConstraintMessage(next.parsed, props.params.schema);
         target.value = formatConfigValueText(next.parsed);
       }
-      if (setControlValidity(target, next.message) && (allowClear || next.parsed !== undefined)) {
+      if (draft.setValidity(target, next.message) && (allowClear || next.parsed !== undefined)) {
         commit(next.parsed);
       }
       return;
@@ -323,7 +307,7 @@ function ScalarInput(props: {
         target.value = normalized;
       }
     }
-    setControlValidity(target, nextState.message ? rawState.message : "");
+    draft.setValidity(target, nextState.message ? rawState.message : "");
     if (!nextState.message) {
       commit(nextState.candidate);
     }
@@ -359,12 +343,7 @@ function ScalarInput(props: {
     </>
   );
   const controlProps = {
-    ref: (element: HTMLInputElement | HTMLTextAreaElement) => {
-      input = element;
-      if (error) {
-        bindControlError(element, error);
-      }
-    },
+    ref: draft.ref,
     get class() {
       return ["settings-input", { "cfg-redacted": state().effectiveRedacted }];
     },
@@ -415,14 +394,14 @@ function ScalarInput(props: {
       }
       if (props.inputType === "number" && target instanceof HTMLInputElement) {
         const next = resolveNumericInputState(target, props.params);
-        if (setControlValidity(target, next.message)) {
+        if (draft.setValidity(target, next.message)) {
           commitScalarValue(target, next.parsed);
         }
         return;
       }
       const { textInputState, initialBranch } = state();
       const next = textInputState(target.value, beginScalarEdit(target, initialBranch));
-      if (setControlValidity(target, next.message)) {
+      if (draft.setValidity(target, next.message)) {
         commitScalarValue(target, next.candidate);
       }
     },
@@ -494,12 +473,7 @@ function ScalarInput(props: {
     <FieldRow
       {...state().field}
       errorId={state().errorId}
-      errorRef={(element) => {
-        error = element;
-        if (input) {
-          bindControlError(input, element);
-        }
-      }}
+      errorRef={draft.errorRef}
       defaultDescription={
         state().effectiveRedacted || state().masked
           ? undefined

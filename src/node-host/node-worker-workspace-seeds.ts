@@ -5,6 +5,7 @@ import {
   MAX_WORKSPACE_GIT_CANDIDATES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
 } from "../gateway/worker-environments/workspace-inventory-limits.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import { tightenPrivateDirChain } from "../infra/private-dir-mode.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
@@ -23,12 +24,7 @@ export async function copyNodeWorkerProjectSeedObjects(params: {
   workspaceDir: string;
   signal?: AbortSignal;
 }): Promise<boolean> {
-  const root = await fsp.realpath(params.seedsRoot).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const root = await fsp.realpath(params.seedsRoot).catch(ignoreMissingPath);
   if (!root) {
     return false;
   }

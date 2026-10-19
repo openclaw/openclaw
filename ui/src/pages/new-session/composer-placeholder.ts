@@ -8,8 +8,8 @@ export function createComposerPlaceholder(
     nativeTerminal?: boolean;
     message: string;
     dictationActive?: boolean;
-    composerTextarea: Pick<NewSessionComposerTextarea, "getTextarea">;
   },
+  textarea: Pick<NewSessionComposerTextarea, "getTextarea">,
 ) {
   const target = createMemo(() =>
     t(
@@ -36,7 +36,7 @@ export function createComposerPlaceholder(
       let pending: number;
       let length = 0;
       const step = (timestamp: number) => {
-        if (!options().composerTextarea.getTextarea()?.isConnected) {
+        if (!textarea.getTextarea()?.isConnected) {
           return;
         }
         startedAt ??= timestamp;

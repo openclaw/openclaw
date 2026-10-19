@@ -194,6 +194,64 @@ describe("memory actor transcript", () => {
     expect(replay.receipt.transcript.after).toEqual(first.receipt.transcript.after);
   });
 
+  it("commits initial metadata after a sibling write and rolls back an incomplete pair", async () => {
+    const { actor, metadata, write } = await fixture();
+    const beforeSibling = actor.snapshot(authority)!.transcript.version;
+    await write([{ message: { role: "assistant", content: "Sibling" }, eventId: "sibling" }]);
+    const beforePair = actor.snapshot(authority)!.transcript.version;
+    const scope = { agentId: "main", storePath: path, sessionKey, sessionId };
+    const initialModel = {
+      type: "model_change" as const,
+      id: "model",
+      parentId: "user-1",
+      timestamp: "1970-01-01T00:00:00.003Z",
+      provider: "synthetic",
+      modelId: "synthetic-model",
+    };
+    const thinking = {
+      type: "thinking_level_change" as const,
+      id: "thinking",
+      parentId: initialModel.id,
+      timestamp: initialModel.timestamp,
+      thinkingLevel: "high",
+    };
+    const outcome = committed(
+      await metadata("initial-metadata", {
+        scope,
+        initialModel,
+        event: JSON.stringify(thinking),
+        options: { appendIntent: "active-branch", expectedMutationAt: beforePair.updatedAt },
+        view: { loadedVersion: beforeSibling },
+      }),
+    );
+    const appended = outcome.receipt.transcript.append;
+    if (
+      appended?.kind !== "metadata" ||
+      !appended.value.reload?.ok ||
+      appended.value.reload.value.kind !== "full"
+    ) {
+      throw new Error("Expected the complete rebased metadata view");
+    }
+    expect(appended.value.snapshot).toMatchObject({ ok: true, value: { before: beforePair } });
+    expect(appended.value.initialModelParentId).toBe("sibling");
+    expect(appended.value.reload.value.snapshot.events.slice(-3)).toMatchObject([
+      { id: "sibling" },
+      { id: "model", parentId: "sibling" },
+      { id: "thinking", parentId: "model", thinkingLevel: "high" },
+    ]);
+
+    const beforeRefusal = actor.snapshot(authority);
+    expect(
+      await metadata("incomplete-pair", {
+        scope,
+        initialModel: { ...initialModel, id: "rolled-back-model", parentId: "thinking" },
+        event: JSON.stringify({ ...thinking, parentId: "rolled-back-model" }),
+        options: {},
+      }),
+    ).toMatchObject({ kind: "rolled-back" });
+    expect(actor.snapshot(authority)).toEqual(beforeRefusal);
+  });
+
   it("resolves prepared retries before replacement and skips a fresh suppressed message", async () => {
     const { actor, write } = await fixture();
     const original = { role: "assistant", content: "Original", idempotencyKey: "prepared" };

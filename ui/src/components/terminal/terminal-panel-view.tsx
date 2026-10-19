@@ -1,6 +1,7 @@
 import { For, Show, createMemo } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
+import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import type { DockLayout } from "../dock-layout.ts";
@@ -393,6 +394,7 @@ function UploadLayer(props: { state: TerminalPanelViewState }) {
 }
 
 export function TerminalPanelView(props: { view: () => TerminalPanelViewState }) {
+  const tabFocus = createTabFocus();
   const idPrefix = `terminal-${generateUUID()}`;
   const viewportId = `${idPrefix}-panel`;
   const dialogId = `${idPrefix}-session-picker-dialog`;
@@ -425,6 +427,7 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
         >
           <header class="rail-header tp-header">
             <PanelTabStrip
+              focusOwner={tabFocus}
               tabs={tabs()}
               activeId={props.view().activeId}
               ariaControls={viewportId}

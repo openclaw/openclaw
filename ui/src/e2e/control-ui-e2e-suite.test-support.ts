@@ -111,6 +111,17 @@ type HeldModuleContext = {
   closing: boolean;
   pages: Map<Page, Array<{ close: () => Promise<void>; installed: ReturnType<Page["route"]> }>>;
 };
+
+const waitForGatewayWorkToSettle = () =>
+  vi.waitFor(
+    () =>
+      expect(
+        getActiveGatewayRootWorkCount(),
+        `Unsettled Gateway roots: ${getActiveGatewayRootWorkHolders().join(", ")}`,
+      ).toBe(0),
+    { interval: 100, timeout: 15_000 },
+  );
+
 const heldModuleContexts = new WeakMap<BrowserContext, HeldModuleContext>();
 
 function getHeldModuleContext(context: BrowserContext): HeldModuleContext {
@@ -361,16 +372,6 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           () => context.close(),
         );
         held.pages.clear();
-        // Requests outlive sockets; pending handlers must release their admission
-        // roots before fixture cleanup. waitFor also works in afterAll.
-        await vi.waitFor(
-          () =>
-            expect(
-              getActiveGatewayRootWorkCount(),
-              `Unsettled Gateway roots: ${getActiveGatewayRootWorkHolders().join(", ")}`,
-            ).toBe(0),
-          { interval: 100, timeout: 15_000 },
-        );
         openBrowserContexts.delete(context);
       });
       contextClosures.set(context, closing);
@@ -493,6 +494,10 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
               closeOpenBrowserContexts(owner),
               Promise.resolve().then(scenario.close),
             ]);
+            // Requests can outlive sockets and settle only when their Gateway closes.
+            if (scenario.close) {
+              await waitForGatewayWorkToSettle();
+            }
             // A close can settle after the cleanup deadline retired this fork.
             assertControlUiForkActive();
             await scenario.release?.();
@@ -617,6 +622,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
               () => browser?.close(),
               () => resources?.close?.(),
               () => server?.close(),
+              waitForGatewayWorkToSettle,
             ]) {
               try {
                 await close();

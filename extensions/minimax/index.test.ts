@@ -12,7 +12,7 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerMinimaxProviders } from "./provider-registration.js";
+import minimaxPlugin from "./index.js";
 
 const m31Model: Model<"anthropic-messages"> = {
   id: "MiniMax-M3.1-Flash-Preview",
@@ -70,7 +70,7 @@ async function registeredProviders(baseUrl?: string) {
                 ...api.runtime.config,
                 current: () => modelConfig(baseUrl),
               };
-        registerMinimaxProviders({ ...api, runtime: { ...api.runtime, config } });
+        minimaxPlugin.register({ ...api, runtime: { ...api.runtime, config } });
       },
     },
     id: "minimax",

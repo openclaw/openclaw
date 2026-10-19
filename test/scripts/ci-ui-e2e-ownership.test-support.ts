@@ -65,6 +65,7 @@ export function assertControlUiE2eOwnership(
           inSuiteServer &&
           (callName === "createOpenClawTestInstance" ||
             callName === "createBackgroundWorkInstance" ||
+            callName === "createDesktopResizeProxy" ||
             callName === "createWaitClockInstance" ||
             callName === "startBuiltControlUiE2eServer" ||
             callName === "startProductionControlUiE2eServer" ||
