@@ -65,23 +65,28 @@ async function createNativeFixture(
       const body = (await buffer(request)).toString("utf8");
       if (request.url === "/v1/responses" && request.method === "GET") {
         // Codex selects HTTP immediately on 426 instead of retrying this SSE-only fixture.
-        return response.writeHead(426).end();
+        response.writeHead(426).end();
+        return;
       }
       if (request.url !== "/v1/responses" || request.method !== "POST") {
-        return response.writeHead(404).end();
+        response.writeHead(404).end();
+        return;
       }
       const parsed: unknown = JSON.parse(body);
       if (!isJsonObject(parsed)) {
-        return response.writeHead(400).end();
+        response.writeHead(400).end();
+        return;
       }
       const account = request.headers.authorization;
       requests.push({ body: parsed, account });
       requestReceived.resolve();
       if (account !== `Bearer ${NATIVE_KEY}` && account !== `Bearer ${HOST_KEY}`) {
-        return response.writeHead(401).end();
+        response.writeHead(401).end();
+        return;
       }
       if (parsed.model !== NATIVE_MODEL && parsed.model !== HOST_MODEL) {
-        return response.writeHead(400).end();
+        response.writeHead(400).end();
+        return;
       }
       if (phase === "hold") {
         response.writeHead(200, sseHeaders);

@@ -139,7 +139,11 @@ describe("live transport QA contributions", () => {
         credentialRole: "ci",
       },
     });
-    expect(qa.commands[0].helpInformation()).toContain("Usage: qa discord [options]");
+    const command = qa.commands[0];
+    if (!command) {
+      throw new Error("missing discord Commander command");
+    }
+    expect(command.helpInformation()).toContain("Usage: qa discord [options]");
   });
 
   it("preserves standard command defaults, duplicate scenarios, and dispatch errors", async () => {

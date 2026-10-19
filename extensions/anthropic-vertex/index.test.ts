@@ -126,16 +126,35 @@ describe("anthropic-vertex provider plugin", () => {
       }
     });
 
-    it("repairs missing or retired pricing and leaves current pricing unchanged", () => {
-      const model = staleModel("claude-sonnet-5", {
+    it("repairs missing or retired pricing and leaves current pricing unchanged", async () => {
+      const model = {
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        api: "anthropic-messages",
+        provider: "anthropic-vertex",
         baseUrl,
-        ...currentMetadata,
-        thinkingLevelMap: opusThinking,
-      });
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        contextTokens: 1_000_000,
+        maxTokens: 128_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      };
       for (const staleCost of [undefined, retiredCost]) {
-        expect(normalize({ ...model, cost: staleCost })?.cost).toEqual(cost);
+        const normalized = provider.normalizeResolvedModel?.({
+          provider: "anthropic-vertex",
+          modelId: model.id,
+          model: { ...model, cost: staleCost },
+        } as never);
+        expect(normalized?.cost).toEqual(cost);
       }
-      expect(normalize({ ...model, cost })).toBeUndefined();
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "anthropic-vertex",
+          modelId: model.id,
+          model: { ...model, cost },
+        } as never),
+      ).toBeUndefined();
     });
   });
 

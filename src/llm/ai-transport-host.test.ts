@@ -162,6 +162,9 @@ it("carries original tool results into Anthropic and OpenAI-compatible payloads"
     parameters: Type.Object({ path: Type.String() }),
     execute: async (_toolCallId, args: { path: string }) => {
       const text = files[args.path];
+      if (text === undefined) {
+        throw new Error(`Unexpected fixture path: ${args.path}`);
+      }
       return {
         content: [textBlock(text)],
         details: { kind: "text", content: text },

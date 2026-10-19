@@ -52,7 +52,8 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = 
         ? { environments: [environment] }
         : { transport: "rfb", wsPath: "/desktop/observe?token=fixture", control: false },
   );
-  const connection = panels.createConnectionHandle();
+  const disconnect = vi.fn();
+  const connection = panels.createConnectionHandle({ disconnect });
   const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
     options.target.append(document.createElement("canvas"));
     options.onConnect?.();
@@ -87,7 +88,7 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = 
     button,
     canvas,
     alert: () => panel.querySelector('[role="alert"]'),
-    disconnect: connection.disconnect,
+    disconnect,
     callbacks: connect.mock.calls[0]![0],
     state: () => ({
       busy: button().getAttribute("aria-busy"),
