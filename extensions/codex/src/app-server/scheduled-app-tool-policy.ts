@@ -23,6 +23,10 @@ export function readCurrentToolPolicy(
   toolName: string,
   metadata: CodexScheduledAppTool | undefined,
   fallbackApprovalMode: CodexAppToolApprovalMode = "auto",
+  admittedAppPolicy?: Pick<
+    CodexAppPolicyContextEntry,
+    "allowDestructiveActions" | "allowOpenWorld"
+  >,
 ): { enabled: boolean; approvalMode: CodexAppToolApprovalMode } {
   const apps = asOptionalRecord(config.apps);
   const app = asOptionalRecord(apps?.[appId]);
@@ -60,17 +64,27 @@ export function readCurrentToolPolicy(
     }
   }
   const defaultToolsEnabled = app?.default_tools_enabled;
+  // Admission replaces native deny defaults for this app only. Explicit native
+  // app/tool settings and approvals remain authoritative over those defaults.
+  const enablementDefaults = admittedAppPolicy
+    ? {
+        enabled: true,
+        destructive_enabled: admittedAppPolicy.allowDestructiveActions,
+        open_world_enabled: admittedAppPolicy.allowOpenWorld !== false,
+      }
+    : defaults;
   return {
     enabled:
-      (app ? app.enabled !== false : defaults?.enabled !== false) &&
+      (app ? app.enabled !== false : enablementDefaults?.enabled !== false) &&
       (typeof tool?.enabled === "boolean"
         ? tool.enabled
         : typeof defaultToolsEnabled === "boolean"
           ? defaultToolsEnabled
           : appToolHintsAllowed(metadata, {
               allowDestructiveActions:
-                (app?.destructive_enabled ?? defaults?.destructive_enabled) !== false,
-              allowOpenWorld: (app?.open_world_enabled ?? defaults?.open_world_enabled) !== false,
+                (app?.destructive_enabled ?? enablementDefaults?.destructive_enabled) !== false,
+              allowOpenWorld:
+                (app?.open_world_enabled ?? enablementDefaults?.open_world_enabled) !== false,
             })),
     approvalMode,
   };

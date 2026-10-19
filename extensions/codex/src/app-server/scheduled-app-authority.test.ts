@@ -488,6 +488,11 @@ describe("scheduled Codex app authority", () => {
 
   it.each([
     {
+      name: "explicit app disablement",
+      appConfig: { enabled: false, tools: { edit: { enabled: true } } },
+      expectedEnabled: false,
+    },
+    {
       name: "explicit tool disablement",
       appConfig: {
         default_tools_enabled: true,
@@ -566,7 +571,16 @@ describe("scheduled Codex app authority", () => {
       config,
       authority(),
       {
-        config: { apps: { calendar: appConfig } },
+        config: {
+          apps: {
+            _default: {
+              enabled: false,
+              destructive_enabled: false,
+              open_world_enabled: false,
+            },
+            calendar: appConfig,
+          },
+        },
         toolsByApp: new Map([["calendar", new Map([["edit", { title: "Edit event" }]])]]),
       },
     );
@@ -602,6 +616,11 @@ describe("scheduled Codex app authority", () => {
             ? {
                 config: {
                   apps: {
+                    _default: {
+                      enabled: false,
+                      destructive_enabled: false,
+                      open_world_enabled: false,
+                    },
                     calendar: {
                       default_tools_enabled: true,
                       tools: { destructive: { enabled: true } },
