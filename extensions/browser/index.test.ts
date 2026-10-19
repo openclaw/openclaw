@@ -16,7 +16,6 @@ import type { OpenClawPluginApi } from "./runtime-api.js";
 import setupPlugin from "./setup-api.js";
 import { BrowserToolOutputSchema } from "./src/browser-tool.schema.js";
 
-type BrowserAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
 const sessionKey = "agent:main:webchat:direct:123";
 const tabBinding = {
   kind: "tab",
@@ -89,10 +88,7 @@ function createApi() {
   }));
   const api = createTestPluginApi({
     id: "browser",
-    name: "Browser",
-    source: "test",
     rootDir: "/plugins/browser",
-    config: {},
     runtime: {
       state: { openKeyedStore },
     } as unknown as OpenClawPluginApi["runtime"],
@@ -130,12 +126,6 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex
   const call = mock.mock.calls.at(index);
   assert(call, `expected mock call ${index}`);
   return call[argIndex];
-}
-
-function registerBrowserAutoEnableProbe(): BrowserAutoEnableProbe {
-  const registerAutoEnableProbe = vi.fn<OpenClawPluginApi["registerAutoEnableProbe"]>();
-  setupPlugin.register(createTestPluginApi({ registerAutoEnableProbe }));
-  return mockCallArg(registerAutoEnableProbe) as BrowserAutoEnableProbe;
 }
 
 it("initializes the durable tab registry without loading browser control or Gateway runtime", () => {
@@ -388,7 +378,10 @@ it("eager-loads the browser control service when explicitly requested", async ()
 });
 
 it("declares setup auto-enable reasons for browser config surfaces", () => {
-  const probe = registerBrowserAutoEnableProbe();
+  const registerAutoEnableProbe = vi.fn<OpenClawPluginApi["registerAutoEnableProbe"]>();
+  setupPlugin.register(createTestPluginApi({ registerAutoEnableProbe }));
+  const probe = registerAutoEnableProbe.mock.calls[0]?.[0];
+  assert(probe, "expected browser auto-enable probe");
   const result = (config: OpenClawPluginApi["config"]) => probe({ config, env: {} });
   expect(result({ browser: { defaultProfile: "openclaw" } })).toBe("browser configured");
   expect(result({ tools: { alsoAllow: ["browser"] } })).toBe("browser tool referenced");
