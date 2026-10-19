@@ -1,64 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
+import { describe, expect, it } from "vitest";
 import type { WizardStep } from "../../api/types.ts";
-import { i18n } from "../../i18n/index.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
-import { renderChannelView, disposeChannelViews } from "./view.test-support.ts";
-import { ChannelWizard } from "./wizard-view.tsx";
+import { renderWizard, setupWizardTests, wizardStep } from "./wizard-view.test-support.ts";
 
-type WizardProps = Parameters<typeof ChannelWizard>[0];
+setupWizardTests();
 const choices = [
   { label: "Alpha", value: "alpha" },
   { label: "Beta", value: "beta" },
 ];
-
-function renderWizard(wizard: WizardProps["wizard"], overrides: Partial<WizardProps> = {}) {
-  const container = document.createElement("div");
-  const onAnswer = vi.fn();
-  const onClose = vi.fn();
-  const onToggleMultiselect = vi.fn();
-  document.body.append(container);
-  renderChannelView(
-    ChannelWizard,
-    {
-      wizard,
-      channelLabel: (channelId) => channelId,
-      multiselectValues: ["alpha"],
-      onToggleMultiselect,
-      textValue: "",
-      secretVisible: false,
-      onTextInput: vi.fn(),
-      onToggleSecretVisibility: vi.fn(),
-      onAnswer,
-      onClose,
-      whatsappQrDataUrl: null,
-      whatsappMessage: null,
-      whatsappConnected: null,
-      whatsappBusy: false,
-      onWhatsAppStart: vi.fn(),
-      onWhatsAppWait: vi.fn(),
-      ...overrides,
-    },
-    container,
-  );
-  return { container, onAnswer, onClose, onToggleMultiselect };
-}
-
 function renderStep(
   step: WizardStep,
   busy = true,
   textValue = typeof step.initialValue === "string" ? step.initialValue : "",
 ) {
-  return renderWizard(
-    {
-      phase: "step",
-      channel: null,
-      step,
-      busy,
-      validationError: null,
-    },
-    { textValue },
-  );
+  return renderWizard(wizardStep(step, { busy }), { textValue, multiselectValues: ["alpha"] });
 }
 
 function expectBusyButton(container: HTMLElement, status: string) {
@@ -74,15 +30,6 @@ function expectBusyButton(container: HTMLElement, status: string) {
 }
 
 describe("ChannelWizard busy controls", () => {
-  beforeEach(async () => {
-    await i18n.setLocale("en");
-  });
-
-  afterEach(() => {
-    disposeChannelViews();
-    document.body.replaceChildren();
-  });
-
   it.each([
     { name: "note", step: { id: "note", type: "note", message: "Do this" } },
     { name: "confirm", step: { id: "confirm", type: "confirm", message: "Continue?" } },
@@ -194,8 +141,7 @@ describe("ChannelWizard busy controls", () => {
     const submit = text.container.querySelector<HTMLButtonElement>('button[aria-busy="true"]');
     const toggle = text.container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
     expect(input).toMatchObject({ disabled: true, type: "password", value: "replacement" });
-    expect(toggle?.disabled).toBe(true);
-    expect(submit?.disabled).toBe(true);
+    expect([toggle?.disabled, submit?.disabled]).toEqual([true, true]);
     submit?.click();
     expect(text.onAnswer).not.toHaveBeenCalled();
   });

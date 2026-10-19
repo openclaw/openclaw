@@ -13,10 +13,12 @@ import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-c
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import type { ControlUiPluginDistribution } from "../../plugins/control-ui-distribution.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ChannelsPage } from "./channels-page.tsx";
+import { pairingSnapshot } from "./pairing.test-support.ts";
 
 const packaged = vi.hoisted(() => [] as ControlUiPluginDistribution[]);
 vi.mock("../../plugins/control-ui-distribution.ts", async (importOriginal) => ({
@@ -38,6 +40,15 @@ const channelSnapshot = (
   channelDefaultAccountId: {},
   ...overrides,
 });
+
+function channelStatus(id: string, label: string, configured = false, description?: string) {
+  return channelSnapshot({
+    channelOrder: [id],
+    channelLabels: { [id]: label },
+    channels: { [id]: { configured } },
+    ...(description ? { channelDetailLabels: { [id]: description } } : {}),
+  });
+}
 
 const plugin = (id: string, name: string, overrides: Partial<PluginCatalogItem> = {}) => ({
   id,
@@ -158,22 +169,13 @@ function createGateway(
     lastError: null,
     lastErrorCode: null,
   };
-  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
-  const gateway = {
-    snapshot,
-    connection: { gatewayUrl: "", token: "", password: "" },
-    subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeEvents: () => () => undefined,
+  const fixture = createApplicationGateway(snapshot);
+  const gateway = Object.assign(fixture.gateway, {
     emit(patch: Partial<ApplicationGatewaySnapshot>) {
-      Object.assign(snapshot, patch);
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      fixture.publish(Object.assign(snapshot, patch));
     },
-  } as unknown as TestGateway;
+  });
+  gateway.connection.gatewayUrl = "";
   if (scopes) {
     setGatewayScopes(gateway, scopes);
   }
@@ -307,92 +309,72 @@ describe("ChannelsPage lifecycle", () => {
     disposePage(page);
   });
 
-  it("prefers the exact plugin icon over an earlier owning plugin", async () => {
-    const { source, request } = catalogFixture(
-      [
-        plugin("slack-suite", "Suite", { channelIds: ["slack"] }),
-        plugin("slack", "Slack", {
-          description: "OpenClaw Slack channel plugin.",
-          origin: "bundled",
-          enabled: false,
-          state: "disabled",
-        }),
-        {
-          id: "firecrawl",
-          name: "FireCrawl",
-          description: "Crawl websites.",
-          origin: "global",
-          installed: false,
-          enabled: false,
-          state: "available",
-          hasIcon: true,
-        },
-      ],
-      channelSnapshot({
-        channelOrder: ["slack"],
-        channelLabels: { slack: "slack" },
-        channelDetailLabels: { slack: "Legacy channel subtitle" },
-        channels: { slack: { configured: false } },
-      }),
+  it.each([
+    { name: "exact icon over an earlier owning plugin", late: false },
+    { name: "icon after late channel status", late: true },
+  ])("loads $name", async ({ late }) => {
+    const id = late ? "mattermost" : "slack";
+    const label = late ? "Mattermost" : "Slack";
+    const plugins: object[] = [
+      {
+        ...plugin(id, label),
+        origin: "bundled",
+        enabled: late,
+        state: late ? "loaded" : "disabled",
+        description: `OpenClaw ${label} channel plugin.`,
+      },
+    ];
+    if (!late) {
+      plugins.unshift(plugin("slack-suite", "Suite", { channelIds: ["slack"] }));
+      plugins.push({
+        id: "firecrawl",
+        name: "FireCrawl",
+        origin: "global",
+        description: "Crawl websites.",
+        installed: false,
+        enabled: false,
+        state: "available",
+        hasIcon: true,
+      });
+    }
+    const snapshot = {
+      ...channelStatus(
+        id,
+        late ? label : "slack",
+        late,
+        late ? undefined : "Legacy channel subtitle",
+      ),
+      ts: late ? 1 : 0,
+    };
+    const { source, request, refresh } = catalogFixture(
+      plugins,
+      late ? channelSnapshot() : snapshot,
       ["operator.admin", "operator.read"],
     );
-    const fetchMock = mockIcon("blob:slack-plugin-icon");
+    const icon = `blob:${id}-plugin-icon`;
+    const fetchMock = mockIcon(icon);
     const page = mountPage(source.context);
-
+    if (late) {
+      await waitForSolid(() =>
+        expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object)),
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      await refresh(snapshot);
+    }
     await waitForSolid(() => {
-      expect(page.querySelector(".settings-row__title")?.textContent).toBe("Slack");
-      expect(page.querySelector(".settings-row__desc")?.textContent).toBe(
-        "OpenClaw Slack channel plugin.",
-      );
-      expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
-        "blob:slack-plugin-icon",
-      );
+      expect(page.querySelector(".settings-row__title")?.textContent).toBe(label);
+      expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(icon);
+      if (!late) {
+        expect(page.querySelector(".settings-row__desc")?.textContent).toBe(
+          "OpenClaw Slack channel plugin.",
+        );
+      }
     });
     expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object));
-    expect(iconRequests(fetchMock)).toEqual(["/__openclaw__/plugin-icon/slack"]);
-  });
-
-  it("loads an icon when channel status arrives after plugin metadata", async () => {
-    const { source, request, refresh } = catalogFixture(
-      [
-        {
-          id: "mattermost",
-          name: "Mattermost",
-          description: "OpenClaw Mattermost channel plugin.",
-          origin: "bundled",
-          installed: true,
-          enabled: true,
-          state: "loaded",
-          hasIcon: true,
-        },
-      ],
-      channelSnapshot(),
-      ["operator.admin", "operator.read"],
-    );
-    const fetchMock = mockIcon("blob:mattermost-plugin-icon");
-    const page = mountPage(source.context);
-
-    await waitForSolid(() =>
-      expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object)),
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
-
-    await refresh(
-      channelSnapshot({
-        ts: 1,
-        channelOrder: ["mattermost"],
-        channelLabels: { mattermost: "Mattermost" },
-        channels: { mattermost: { configured: true } },
-      }),
-    );
-
-    await waitForSolid(() => {
-      expect(page.querySelector(".settings-row__title")?.textContent).toBe("Mattermost");
-      expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
-        "blob:mattermost-plugin-icon",
-      );
-    });
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(iconRequests(fetchMock)).toEqual([`/__openclaw__/plugin-icon/${id}`]);
+    if (late) {
+      expect(fetchMock).toHaveBeenCalledOnce();
+    }
   });
 
   it("loads a channel icon through its distinct owning plugin id", async () => {
@@ -404,12 +386,12 @@ describe("ChannelsPage lifecycle", () => {
           channelIds: ["agent-system-github", "agent-system-chat"],
         }),
       ],
-      channelSnapshot({
-        channelOrder: ["agent-system-github"],
-        channelLabels: { "agent-system-github": "GitHub Notifications" },
-        channelDetailLabels: { "agent-system-github": "GitHub notification channel" },
-        channels: { "agent-system-github": { configured: false } },
-      }),
+      channelStatus(
+        "agent-system-github",
+        "GitHub Notifications",
+        false,
+        "GitHub notification channel",
+      ),
       ["operator.admin", "operator.read"],
     );
     const fetchMock = mockIcon("blob:duplicate-plugin-icon");
@@ -466,11 +448,7 @@ describe("ChannelsPage lifecycle", () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const { gateway, source } = catalogFixture(
         [plugin("agent-system", "Agent System", { channelIds: ["agent-system-github"] })],
-        channelSnapshot({
-          channelOrder: ["agent-system-github"],
-          channelLabels: { "agent-system-github": "GitHub Notifications" },
-          channels: { "agent-system-github": { configured: false } },
-        }),
+        channelStatus("agent-system-github", "GitHub Notifications"),
       );
       const aborted = createDeferred<unknown>();
       const fetchMock = vi.fn<typeof fetch>(
@@ -541,34 +519,7 @@ describe("ChannelsPage lifecycle", () => {
   it("refreshes pairing data when the authorized scope set changes", async () => {
     const gateway = createGateway(["operator.pairing"]);
     const source = createContext(gateway);
-    source.channels.state.pairingSnapshot = {
-      accounts: [
-        {
-          channel: "whatsapp",
-          channelLabel: "WhatsApp",
-          accountId: "personal",
-          accountLabel: "Personal",
-          notifySupported: true,
-        },
-      ],
-      requests: [
-        {
-          channel: "whatsapp",
-          channelLabel: "WhatsApp",
-          accountId: "personal",
-          accountLabel: "Personal",
-          requestId: "pending-1",
-          senderId: "sender-1",
-          senderLabel: "Sender",
-          createdAt: "2026-01-01T00:00:00Z",
-          lastSeenAt: "2026-01-01T00:00:00Z",
-          expiresAt: "2026-01-02T00:00:00Z",
-          notifySupported: true,
-        },
-      ],
-      commandOwnerConfigured: true,
-      limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-    };
+    source.channels.state.pairingSnapshot = pairingSnapshot({ commandOwnerConfigured: true });
     const refreshPairing = vi.spyOn(source.channels, "refreshPairing");
     const page = mountPage(source.context);
     await settle();
@@ -628,12 +579,11 @@ describe("ChannelsPage lifecycle", () => {
       channelLabels: { whatsapp: "WhatsApp" },
       channels: { whatsapp: channel },
     });
-    source.channels.state.pairingSnapshot = {
+    source.channels.state.pairingSnapshot = pairingSnapshot({
       accounts: [],
       requests: [],
       commandOwnerConfigured: true,
-      limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-    };
+    });
     Object.assign(source.runtimeConfig.state, {
       configSnapshot: { config, hash: "test", raw: JSON.stringify(config) },
       configForm: structuredClone(config),
