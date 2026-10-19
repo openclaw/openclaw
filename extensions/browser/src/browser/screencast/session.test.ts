@@ -11,24 +11,41 @@ vi.mock("../pw-ai-module.js", () => ({
   getPwAiModule: async () => ({ getPageForTargetId: mocks.getPage }),
 }));
 
+const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+const metadata = {
+  deviceWidth: 800,
+  deviceHeight: 600,
+  scrollOffsetX: 12,
+  scrollOffsetY: 34,
+  timestamp: 123,
+};
+const expectedFrame = (url = "https://example.test/") => ({
+  header: { url, cssWidth: 800, cssHeight: 600, scrollX: 12, scrollY: 34, ts: 123 },
+  jpeg,
+});
+const requesterState = () => ({ invalidated: false, signal: new AbortController().signal });
+const requesterParams = (requester: ReturnType<typeof requesterState>) =>
+  screencastParams({
+    requesterSignal: requester.signal,
+    isRequesterCurrent: () => !requester.invalidated,
+  });
+
 class FakeCdp extends EventEmitter {
   send = vi.fn(async (_method: string, _params?: unknown) => ({}));
   detach = vi.fn(async () => {
     this.emit("close", this);
   });
 
-  paint(sessionId = 1, jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9])): void {
+  paint(sessionId = 1, data = jpeg): void {
     this.emit("Page.screencastFrame", {
       sessionId,
-      data: jpeg.toString("base64"),
-      metadata: {
-        deviceWidth: 800,
-        deviceHeight: 600,
-        scrollOffsetX: 12,
-        scrollOffsetY: 34,
-        timestamp: 123,
-      },
+      data: data.toString("base64"),
+      metadata,
     });
+  }
+
+  acks() {
+    return this.send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck");
   }
 }
 
@@ -116,19 +133,9 @@ describe("browser screencast sessions", () => {
   });
 
   it("fences frames immediately on requester invalidation before its close handshake finishes, preserving live viewers", async () => {
-    const requester = { invalidated: false, signal: new AbortController().signal };
-    const first = await attach(
-      screencastParams({
-        requesterSignal: requester.signal,
-        isRequesterCurrent: () => !requester.invalidated,
-      }),
-    );
-    const second = await attach(
-      screencastParams({
-        requesterSignal: new AbortController().signal,
-        isRequesterCurrent: () => true,
-      }),
-    );
+    const requester = requesterState();
+    const first = await attach(requesterParams(requester));
+    const second = await attach(requesterParams(requesterState()));
     page.paint(1);
     expect(first.frames()).toHaveLength(1);
     expect(second.frames()[0]).toBe(first.frames()[0]);
@@ -147,11 +154,8 @@ describe("browser screencast sessions", () => {
   it.each(["ready", "meta"])(
     "fences %s after requester invalidation during the awaited title read without a socket close",
     async (message) => {
-      const requester = { invalidated: false, signal: new AbortController().signal };
-      const params = screencastParams({
-        requesterSignal: requester.signal,
-        isRequesterCurrent: () => !requester.invalidated,
-      });
+      const requester = requesterState();
+      const params = requesterParams(requester);
       const viewer = new ScreencastViewer();
       if (message === "meta") {
         attachBrowserScreencastViewer(params, viewer as unknown as WebSocket);
@@ -200,21 +204,9 @@ describe("browser screencast sessions", () => {
     expect(first.frames()[0]).toBe(second.frames()[0]);
     expect(
       parseScreencastFrame(expectDefined(first.frames()[0], "first screencast frame")),
-    ).toEqual({
-      header: {
-        url: "https://example.test/",
-        cssWidth: 800,
-        cssHeight: 600,
-        scrollX: 12,
-        scrollY: 34,
-        ts: 123,
-      },
-      jpeg: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
-    });
+    ).toEqual(expectedFrame());
     await vi.advanceTimersByTimeAsync(49);
-    expect(
-      page.cdp.send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck"),
-    ).toHaveLength(0);
+    expect(page.cdp.acks()).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
     second.bufferedAmount = 2 * 1024 * 1024;
     page.paint(2);
@@ -224,9 +216,7 @@ describe("browser screencast sessions", () => {
     await vi.advanceTimersByTimeAsync(50);
     expect(first.frames()).toHaveLength(2);
     expect(second.frames()).toHaveLength(1);
-    expect(
-      page.cdp.send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck"),
-    ).toEqual([
+    expect(page.cdp.acks()).toEqual([
       ["Page.screencastFrameAck", { sessionId: 1 }],
       ["Page.screencastFrameAck", { sessionId: 2 }],
       ["Page.screencastFrameAck", { sessionId: 3 }],
@@ -234,18 +224,13 @@ describe("browser screencast sessions", () => {
   });
 
   it("detaches without capturing or acking while policy is pending, and closes on rejection", async () => {
-    let reject!: (error: Error) => void;
+    const policy = Promise.withResolvers<void>();
     const check = vi.fn(async (_url: string) => {});
     const viewer = await attach(screencastParams({ checkNavigationAllowed: check }));
     const retired = page.cdp;
     page.paint(9);
     viewer.send.mockClear();
-    check.mockImplementationOnce(
-      () =>
-        new Promise<void>((_resolve, fail) => {
-          reject = fail;
-        }),
-    );
+    check.mockReturnValueOnce(policy.promise);
     page.navigate("https://blocked.test/");
     expect(retired.detach).toHaveBeenCalledOnce();
     expect(page.newCDPSession).toHaveBeenCalledTimes(1);
@@ -253,7 +238,7 @@ describe("browser screencast sessions", () => {
     await vi.advanceTimersByTimeAsync(50);
     expect(viewer.frames()).toHaveLength(0);
     expect(retired.send.mock.calls.map(([method]) => method)).toEqual(["Page.startScreencast"]);
-    reject(new Error("blocked"));
+    policy.reject(new Error("blocked"));
     await flush();
     page.paint(11);
     expect(viewer.frames()).toHaveLength(0);
@@ -262,8 +247,8 @@ describe("browser screencast sessions", () => {
   });
 
   it("never forwards delayed blocked-document pixels after a later allowed navigation", async () => {
-    let rejectBlocked!: (error: Error) => void;
-    let allowNext!: () => void;
+    const blocked = Promise.withResolvers<void>();
+    const next = Promise.withResolvers<void>();
     const check = vi.fn(async (_url: string) => {});
     const viewer = await attach(screencastParams({ checkNavigationAllowed: check }));
     const retired = page.cdp;
@@ -271,12 +256,7 @@ describe("browser screencast sessions", () => {
     await vi.advanceTimersByTimeAsync(50);
     viewer.send.mockClear();
     retired.send.mockClear();
-    check.mockImplementationOnce(
-      () =>
-        new Promise<void>((_resolve, reject) => {
-          rejectBlocked = reject;
-        }),
-    );
+    check.mockReturnValueOnce(blocked.promise);
     page.navigate("https://blocked.test/");
     expect.soft(retired.detach).toHaveBeenCalledOnce();
     expect(page.newCDPSession).toHaveBeenCalledTimes(1);
@@ -285,18 +265,13 @@ describe("browser screencast sessions", () => {
     expect(viewer.frames()).toEqual([]);
     expect.soft(retired.send).not.toHaveBeenCalled();
 
-    check.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          allowNext = resolve;
-        }),
-    );
+    check.mockReturnValueOnce(next.promise);
     page.navigate("https://example.test/next");
-    rejectBlocked(new Error("blocked"));
+    blocked.reject(new Error("blocked"));
     await flush();
     expect(viewer.close).not.toHaveBeenCalled();
     expect(page.newCDPSession).toHaveBeenCalledTimes(1);
-    allowNext();
+    next.resolve();
     await flush();
     expect.soft(page.newCDPSession).toHaveBeenCalledTimes(2);
 
@@ -305,34 +280,17 @@ describe("browser screencast sessions", () => {
     page.paint(100);
     await vi.advanceTimersByTimeAsync(50);
     expect(viewer.frames().map(parseScreencastFrame)).toEqual([
-      {
-        header: {
-          url: "https://example.test/next",
-          cssWidth: 800,
-          cssHeight: 600,
-          scrollX: 12,
-          scrollY: 34,
-          ts: 123,
-        },
-        jpeg: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
-      },
+      expectedFrame("https://example.test/next"),
     ]);
-    expect(
-      page.cdp.send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck"),
-    ).toEqual([["Page.screencastFrameAck", { sessionId: 100 }]]);
+    expect(page.cdp.acks()).toEqual([["Page.screencastFrameAck", { sessionId: 100 }]]);
     expect(viewer.close).not.toHaveBeenCalled();
   });
 
   it("checks the initial URL before ready or frames, and ignores stale navigation completions", async () => {
-    let initial!: () => void;
+    const initial = Promise.withResolvers<void>();
     const check = vi
       .fn<() => Promise<void>>()
-      .mockImplementationOnce(
-        () =>
-          new Promise<void>((resolve) => {
-            initial = resolve;
-          }),
-      )
+      .mockReturnValueOnce(initial.promise)
       .mockResolvedValue(undefined);
     const viewer = await attach(screencastParams({ checkNavigationAllowed: check }));
     expect(page.newCDPSession).not.toHaveBeenCalled();
@@ -341,7 +299,7 @@ describe("browser screencast sessions", () => {
     page.currentTitle = "Next";
     page.navigate("https://example.test/next");
     await flush();
-    initial();
+    initial.resolve();
     await flush();
     page.paint(2);
     expect(viewer.messages()).toEqual([
@@ -361,22 +319,17 @@ describe("browser screencast sessions", () => {
   });
 
   it("does not leak a changed URL before Playwright's navigation event", async () => {
-    let allowed!: () => void;
+    const allowed = Promise.withResolvers<void>();
     const check = vi.fn(async (_url: string) => {});
     const viewer = await attach(screencastParams({ checkNavigationAllowed: check }));
     const retired = page.cdp;
-    check.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          allowed = resolve;
-        }),
-    );
+    check.mockReturnValueOnce(allowed.promise);
     page.currentUrl = "https://example.test/next";
     page.paint();
     expect(viewer.frames()).toHaveLength(0);
     expect(retired.detach).toHaveBeenCalledOnce();
     expect(page.newCDPSession).toHaveBeenCalledTimes(1);
-    allowed();
+    allowed.resolve();
     await flush();
     page.paint(2);
     expect(viewer.frames()).toHaveLength(1);
@@ -392,18 +345,13 @@ describe("browser screencast sessions", () => {
   });
 
   it("revalidates lifecycle after page acquisition and never attaches a stale token to a successor", async () => {
-    let resolvePage!: (page: Page) => void;
-    mocks.getPage.mockImplementationOnce(
-      () =>
-        new Promise<Page>((resolve) => {
-          resolvePage = resolve;
-        }),
-    );
+    const acquired = Promise.withResolvers<Page>();
+    mocks.getPage.mockReturnValueOnce(acquired.promise);
     const lifecycle = new AbortController();
     const params = screencastParams({ lifecycleSignal: lifecycle.signal });
     const pending = await attach(params);
     lifecycle.abort();
-    resolvePage(page as unknown as Page);
+    acquired.resolve(page as unknown as Page);
     await flush();
     expect(pending.close).toHaveBeenCalledWith(4004, "target_closed");
     expect(page.newCDPSession).not.toHaveBeenCalled();
@@ -417,18 +365,14 @@ describe("browser screencast sessions", () => {
 
   it("waits for predecessor teardown before starting a replacement on the same target", async () => {
     const first = await attach();
-    let finishDetach!: () => void;
-    page.cdp.detach.mockImplementation(async () => {
-      await new Promise<void>((resolve) => {
-        finishDetach = resolve;
-      });
-    });
+    const detached = Promise.withResolvers<void>();
+    page.cdp.detach.mockReturnValue(detached.promise);
     first.close();
     await flush();
     const successor = await attach();
     expect(mocks.getPage).toHaveBeenCalledTimes(1);
     expect(successor.send).not.toHaveBeenCalled();
-    finishDetach();
+    detached.resolve();
     await flush();
     expect(mocks.getPage).toHaveBeenCalledTimes(2);
     expect(successor.messages()).toHaveLength(1);
@@ -447,13 +391,8 @@ describe("browser screencast sessions", () => {
       },
     };
     const viewer = await attach(screencastParams(), ingress);
-    let finishDetach!: () => void;
-    page.cdp.detach.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          finishDetach = resolve;
-        }),
-    );
+    const detached = Promise.withResolvers<void>();
+    page.cdp.detach.mockReturnValueOnce(detached.promise);
     grant.abort();
     expect(viewer.close).toHaveBeenCalledWith(4006, "authority_revoked");
     let settled = false;
@@ -464,23 +403,18 @@ describe("browser screencast sessions", () => {
     try {
       expect(settled).toBe(false);
     } finally {
-      finishDetach();
+      detached.resolve();
     }
     await drain;
     expect(settled).toBe(true);
 
-    let resolvePage!: (value: Page) => void;
-    mocks.getPage.mockImplementationOnce(
-      () =>
-        new Promise<Page>((resolve) => {
-          resolvePage = resolve;
-        }),
-    );
+    const acquired = Promise.withResolvers<Page>();
+    mocks.getPage.mockReturnValueOnce(acquired.promise);
     const nextIngress = { ...ingress, signal: new AbortController().signal };
     const next = await attach(screencastParams(), nextIngress);
     current = false;
     const captures = page.newCDPSession.mock.calls.length;
-    resolvePage(page as unknown as Page);
+    acquired.resolve(page as unknown as Page);
     await flush();
     await Promise.all(work);
     expect(page.newCDPSession).toHaveBeenCalledTimes(captures);
@@ -489,18 +423,13 @@ describe("browser screencast sessions", () => {
 
   it("does not send stale metadata after a title read crosses a navigation", async () => {
     const viewer = await attach();
-    let finishTitle!: (title: string) => void;
-    page.title.mockImplementationOnce(
-      () =>
-        new Promise<string>((resolve) => {
-          finishTitle = resolve;
-        }),
-    );
+    const title = Promise.withResolvers<string>();
+    page.title.mockReturnValueOnce(title.promise);
     page.emit("load");
     page.currentTitle = "Next";
     page.navigate("https://example.test/next");
     await flush();
-    finishTitle("Old title");
+    title.resolve("Old title");
     await flush();
     expect(viewer.messages()).toEqual([
       { type: "ready", targetId: "target-1", url: "https://example.test/", title: "Example" },
