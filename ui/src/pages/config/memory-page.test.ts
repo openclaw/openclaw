@@ -18,6 +18,7 @@ import {
   selectEngine,
   toggleAddon,
 } from "./memory-page.test-support.tsx";
+import type { ConfigRouteData } from "./route-data.ts";
 
 type PageOptions = Parameters<typeof buildPage>[0];
 function createPage(
@@ -365,6 +366,44 @@ it("handles Space directly so the browser cannot synthesize a second navigation"
   });
 });
 
+it.each([
+  ["/settings/memory?tab=dreaming", "/settings/memory/dreams"],
+  ["/settings/memory?tab=search", "/settings/memory/settings"],
+  ["/settings/memory?section=memory", "/settings/memory/settings"],
+  ["/settings/memory#config-section-memory", "/settings/memory/settings#config-section-memory"],
+] as const)(
+  "performs at most one replace for %s and never oscillates back to a query tab",
+  async (sourceUrl, expectedUrl) => {
+    const replace = vi.fn();
+    const navigate = vi.fn();
+    const { element } = createPage({
+      catalog: [],
+      replace,
+      navigate,
+      routeData: memoryRoute(sourceUrl),
+    });
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      element.routeData = { ...element.routeData } as ConfigRouteData;
+      flush();
+    }
+    pressTab(element, "overview", "ArrowRight");
+    pressTab(element, "dreams", "ArrowRight");
+
+    expect(navigate).not.toHaveBeenCalled();
+    const canonical = memoryRoute(expectedUrl);
+    const { pathname, search, hash } = canonical;
+    expect(replace).toHaveBeenCalledExactlyOnceWith("memory", { pathname, search, hash });
+
+    element.routeData = canonical;
+    flush();
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      element.routeData = { ...element.routeData } as ConfigRouteData;
+      flush();
+    }
+    expect(replace).toHaveBeenCalledOnce();
+  },
+);
+
 it("mounts the presentation for the Settings agent and keeps it through a same-client reconnect", async () => {
   const page = createPage({
     agents: [{ id: "main" }, { id: "research" }],
@@ -384,52 +423,16 @@ it("mounts the presentation for the Settings agent and keeps it through a same-c
   expect(settingsViews.at(-1)).toBe(current);
   const epoch = current.snapshot.connectionEpoch;
   setPhase("disconnected");
+  flush();
   expect(current.snapshot.connected).toBe(false);
   setPhase("connected");
-  expect(current.snapshot.connected).toBe(true);
+  await waitForSolid(() => expect(current.snapshot.connected).toBe(true));
   expect(current.snapshot.connectionEpoch).toBeGreaterThan(epoch);
   expect(current.context.signal.aborted).toBe(false);
   expect(settingsViews.at(-1)).toBe(current);
   page.replaceClient();
   expect(current.context.signal.aborted).toBe(true);
   await waitForSolid(() => expect(settingsViews.at(-1)).not.toBe(current));
-});
-
-it("updates a mounted Settings view when its delayed catalog arrives without another owner event", async () => {
-  const catalog = deferred<{ plugins: readonly PluginCatalogItem[] }>();
-  const { settingsViews } = createPage({
-    routeData: memoryTabRoute("overview"),
-    listCatalog: () => catalog.promise,
-  });
-  await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
-  const view = settingsViews.at(-1)!;
-  expect(view.snapshot.engine.availability).toBe("loading");
-  catalog.resolve({ plugins: [] });
-  await waitForSolid(() => expect(view.snapshot.engine.availability).toBe("missing"));
-  expect(settingsViews.at(-1)).toBe(view);
-  expect(view.context.signal.aborted).toBe(false);
-});
-
-it("retires Settings callbacks when Config admits a route-only change", async () => {
-  const reply = deferred<unknown>();
-  const { element, settingsViews } = createPage({
-    routeData: memoryTabRoute("overview"),
-    settingsRequest: () => reply.promise,
-  });
-  await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
-  const old = settingsViews.at(-1)!.context;
-  const pending = old.request("settings.test");
-  element.routeData = memoryRoute("/settings/memory?view=details");
-  // Raw route input is not admitted until Config's existing route effect applies it.
-  expect(old.signal.aborted).toBe(false);
-  flush();
-  expect(old.signal.aborted).toBe(true);
-  expect(() => old.navigate("settings")).toThrow();
-  reply.resolve("obsolete");
-  await expect(pending).rejects.toThrow();
-  await waitForSolid(() =>
-    expect(settingsViews.at(-1)?.snapshot.routeIntent).toContain("?view=details"),
-  );
 });
 
 it("passes a replaced pinned engine to a new presentation", async () => {
@@ -443,6 +446,48 @@ it("passes a replaced pinned engine to a new presentation", async () => {
   element.configObject = { plugins: { slots: { memory: "engine-b" } } };
   await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.engine.id).toBe("engine-b"));
   expect(first.context.signal.aborted).toBe(true);
+});
+
+it("publishes a completed catalog to the mounted Settings presentation", async () => {
+  const catalog = deferred<{ plugins: PluginCatalogItem[] }>();
+  const { settingsViews } = createPage({
+    configObject: { plugins: { slots: { memory: "synthetic-memory" } } },
+    routeData: memoryTabRoute("overview"),
+    listCatalog: () => catalog.promise,
+  });
+  try {
+    await waitForSolid(() =>
+      expect(settingsViews.at(-1)?.snapshot.engine.availability).toBe("loading"),
+    );
+    const view = settingsViews.at(-1)!;
+    catalog.resolve({ plugins: [] });
+    await waitForSolid(() => expect(view.snapshot.engine.availability).toBe("missing"));
+    expect(settingsViews.at(-1)).toBe(view);
+  } finally {
+    catalog.resolve({ plugins: [] });
+  }
+});
+
+it("retires callbacks and pending RPCs when Config admits a same-agent Memory route", async () => {
+  const reply = deferred<unknown>();
+  const { element, settingsViews } = createPage({
+    routeData: memoryRoute("/settings/memory?agent=main&filter=first"),
+    settingsRequest: () => reply.promise,
+  });
+  await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
+  const first = settingsViews.at(-1)!;
+  const pending = first.context.request("settings.test");
+  element.routeData = memoryRoute("/settings/memory?agent=main&filter=second");
+  // Raw route input is not admitted until Config's existing route effect applies it.
+  expect(first.context.signal.aborted).toBe(false);
+  flush();
+  expect(first.context.signal.aborted).toBe(true);
+  expect(() => first.context.navigate("settings")).toThrow();
+  reply.resolve("obsolete");
+  await expect(pending).rejects.toThrow();
+  await waitForSolid(() => expect(settingsViews.at(-1)?.context).not.toBe(first.context));
+  expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main");
+  expect(settingsViews.at(-1)?.snapshot.routeIntent).toContain("filter=second");
 });
 
 it.each([
