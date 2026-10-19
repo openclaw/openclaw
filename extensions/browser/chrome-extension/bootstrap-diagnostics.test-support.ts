@@ -61,23 +61,14 @@ const envelope = z.object({
 });
 type Method = (typeof METHODS)[number];
 type Phase =
-  | "injection.used"
-  | "injection.calls"
+  | `injection.${"used" | "calls"}`
   | "adapter.fresh"
   | "navigate.status"
-  | "owner.selected"
-  | "owner.unrelated"
-  | "direct.url"
+  | `owner.${"selected" | "unrelated"}`
+  | `direct.${"url" | "commit" | "domcontentloaded" | "load" | "closed"}`
   | "unrelated.url"
-  | "direct.commit"
-  | "direct.domcontentloaded"
-  | "direct.load"
-  | "direct.closed"
-  | "http.request"
-  | "http.finish"
-  | "http.closed"
-  | "relay.clients"
-  | "relay.closed"
+  | `http.${"request" | "finish" | "closed"}`
+  | `relay.${"clients" | "closed"}`
   | "mcp.closed";
 type RecordEntry = { phase: string; [key: string]: string | number | boolean };
 
