@@ -162,7 +162,7 @@ export class GatewaySessionRowEvents {
           if (
             !reference ||
             !retained ||
-            typeof reference.sessionId !== "string" ||
+            (reference.sessionId !== undefined && typeof reference.sessionId !== "string") ||
             reference.sessionId !== retained.sessionId ||
             typeof reference.revision !== "string" ||
             reference.revision !== retained.ancestorRevision ||

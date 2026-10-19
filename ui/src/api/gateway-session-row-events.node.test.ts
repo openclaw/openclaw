@@ -111,55 +111,58 @@ describe("session row event ingress", () => {
     );
   });
 
-  it("expands certified ancestor references without changing the raw delta baseline", () => {
-    const h = harness();
-    const parent = {
-      key: "parent",
-      agentId: "work",
-      sessionId: "parent-session",
-      ancestorRevision: "parent-revision",
-      snapshotAt: 100,
-      label: "Original",
-    };
-    h.send({ ancestorSessions: [full(parent)] });
-    expect(
-      h.send({
-        session: full({ key: "child", label: "Child" }),
-        sessionFieldRefs: [1],
-        ancestorSessions: [],
-        ancestorSessionRefs: [
-          {
-            key: parent.key,
-            agentId: parent.agentId,
-            sessionId: parent.sessionId,
-            revision: parent.ancestorRevision,
-            snapshotAt: 200,
-          },
-        ],
-      }),
-    ).toEqual(
-      event({
-        session: { key: "child", label: "Child" },
-        label: "Child",
-        ancestorSessions: [{ ...parent, snapshotAt: 200 }],
-      }),
-    );
-    expect(
-      h.send({
-        ancestorSessions: [
-          {
-            key: parent.key,
-            agentId: parent.agentId,
-            base: 1,
-            version: 2,
-            set: { label: "Updated" },
-            remove: [],
-          },
-        ],
-      }),
-    ).toEqual(event({ ancestorSessions: [{ ...parent, label: "Updated" }] }));
-    expect(h.reconnect).not.toHaveBeenCalled();
-  });
+  it.each(["parent-session", undefined])(
+    "expands certified ancestor references with session ID %s without changing the raw delta baseline",
+    (sessionId) => {
+      const h = harness();
+      const parent = {
+        key: "parent",
+        agentId: "work",
+        ...(sessionId === undefined ? {} : { sessionId }),
+        ancestorRevision: "parent-revision",
+        snapshotAt: 100,
+        label: "Original",
+      };
+      h.send({ ancestorSessions: [full(parent)] });
+      expect(
+        h.send({
+          session: full({ key: "child", label: "Child" }),
+          sessionFieldRefs: [1],
+          ancestorSessions: [],
+          ancestorSessionRefs: [
+            {
+              key: parent.key,
+              agentId: parent.agentId,
+              ...(sessionId === undefined ? {} : { sessionId }),
+              revision: parent.ancestorRevision,
+              snapshotAt: 200,
+            },
+          ],
+        }),
+      ).toEqual(
+        event({
+          session: { key: "child", label: "Child" },
+          label: "Child",
+          ancestorSessions: [{ ...parent, snapshotAt: 200 }],
+        }),
+      );
+      expect(
+        h.send({
+          ancestorSessions: [
+            {
+              key: parent.key,
+              agentId: parent.agentId,
+              base: 1,
+              version: 2,
+              set: { label: "Updated" },
+              remove: [],
+            },
+          ],
+        }),
+      ).toEqual(event({ ancestorSessions: [{ ...parent, label: "Updated" }] }));
+      expect(h.reconnect).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves unresolved ancestor references without touching the wire row LRU", () => {
     const h = harness();
@@ -181,6 +184,7 @@ describe("session row event ingress", () => {
       { ...reference, key: "other-parent" },
       { ...reference, agentId: "other-agent" },
       { ...reference, sessionId: "other-generation" },
+      { ...reference, sessionId: undefined },
       { ...reference, revision: "other-revision" },
     ];
     h.send({
