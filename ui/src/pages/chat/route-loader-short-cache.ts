@@ -103,6 +103,7 @@ export function findLocalSessionReference(
 type CachedShortSession = {
   sessionKey: string;
   row?: GatewaySessionRow;
+  fromNavigation: boolean;
 };
 
 export function findCachedShortSession(
@@ -126,7 +127,7 @@ export function findCachedShortSession(
     const carried = findUiSessionRow(context, carriedKey, target.agentId);
     if (carried && findLocalSessionReference([carried], target)) {
       preserveHandoffForCanonicalReload();
-      return { sessionKey: carried.key, row: carried };
+      return { sessionKey: carried.key, row: carried, fromNavigation: carriedByCurrentNavigation };
     }
     const carriedUuid = sessionKeyUuid(carriedKey);
     const carriedAgentId = parseAgentSessionKey(carriedKey)?.agentId;
@@ -137,7 +138,7 @@ export function findCachedShortSession(
       normalizeAgentId(carriedAgentId) === normalizeAgentId(target.agentId)
     ) {
       preserveHandoffForCanonicalReload();
-      return { sessionKey: carriedKey };
+      return { sessionKey: carriedKey, fromNavigation: true };
     }
   }
   return undefined;

@@ -482,12 +482,23 @@ export async function loadChatRoute(
         : {}),
     };
   }
-  let localRow: SessionRoutePresentation | undefined = cached?.row;
   if (!cached && !preferenceDerived && !revalidation) {
-    localRow = await findSnapshotSessionReference(context, target);
+    const snapshot = await findSnapshotSessionReference(context, target);
     signal.throwIfAborted();
+    if (snapshot) {
+      // Only authority canonicalizes; shortening a dashed UUID here can restart discovery.
+      return {
+        kind: "session",
+        sessionKey: snapshot.key,
+        agentId: snapshot.agentId,
+        ...sessionRouteHints(routeLocation),
+        face,
+        sessionResolutionFromCache: true,
+      };
+    }
   }
-  if (!localRow && !cached && !preferenceDerived && !revalidation) {
+  let localRow = cached?.row;
+  if (!cached && !preferenceDerived && !revalidation) {
     await context.sessions.whenCachedRosterSettled();
     signal.throwIfAborted();
     // Only the pre-hello cached roster resolves a short id locally; a connected
@@ -581,9 +592,10 @@ export async function loadChatRoute(
   return resolved
     ? {
         ...resolved,
-        ...(localRow
+        ...(localRow && !cached?.fromNavigation
           ? { sessionResolutionFromCache: true as const }
-          : { routeLoadingSkeleton: true as const }),
+          : {}),
+        ...(!localRow ? { routeLoadingSkeleton: true as const } : {}),
       }
     : notFound({ routeId: face });
 }

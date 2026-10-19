@@ -42,9 +42,8 @@ suite.define(() => {
             const pane = document.querySelector(".chat-pane-cache__pane--active");
             await Reflect.get(pane!, "sessionSnapshotStore").flush();
           });
-          await page.goto(
-            new URL(`/chat/main/${id.replaceAll("-", "")}`, suite.server.baseUrl).href,
-          );
+          const reference = outcome === "same" ? id : id.replaceAll("-", "");
+          await page.goto(new URL(`/chat/main/${reference}`, suite.server.baseUrl).href);
           await page.getByText(transcript, { exact: true }).waitFor();
           await gateway.waitForRequest("sessions.resolve");
           await gateway.waitForRequest("chat.startup");
@@ -77,6 +76,10 @@ suite.define(() => {
           } else {
             await gateway.resolveDeferred("chat.startup");
             await page.getByText(transcript, { exact: true }).waitFor();
+            await page.waitForFunction(
+              () => window.openclawControlUi?.snapshot().routeReady === true,
+            );
+            expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
           }
         },
       );
