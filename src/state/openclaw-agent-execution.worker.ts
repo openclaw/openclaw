@@ -266,7 +266,9 @@ function openAgentDatabaseBackend(
         };
         lease.validation = preparation.validation;
         lease.integrityRevoked = preparation.integrityRevoked;
-        lease.startupRepair = startupJournalRequested;
+        lease.startupRepair = startupJournalRequested
+          ? maintenance.repairStartupIntegrity.bind(undefined, lease.receipt)
+          : undefined;
       } catch (error) {
         throw new SqliteWorkerOpenRefusedError(error);
       } finally {

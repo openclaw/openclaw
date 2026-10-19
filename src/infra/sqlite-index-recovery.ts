@@ -3,10 +3,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { hashFileDescriptorSync } from "./file-descriptor.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { captureSqliteNativeRuntimeAdmission, openNodeSqliteDatabase } from "./node-sqlite.js";
 import { repairSqliteIndexCorruption } from "./sqlite-index-schema.js";
 import { createPrivateSqliteTempDirectorySync } from "./sqlite-private-directory.js";
-import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
 
 function syncAndHash(pathname: string) {
@@ -89,11 +89,25 @@ export function repairDoctorSqliteIndexCorruption(
       { cause },
     );
   }
+  const db =
+    getNodeSqliteKysely<Record<string, Record<string, never>>>(database).withSchema("main");
   return indexes.length > 0
     ? [
         `Saved pre-repair SQLite backup: ${backupPath}`,
         options.ftsOnly
-          ? `Rebuilt stale SQLite FTS indexes (${options.label}): ${indexes.map((name) => `${name}=${String(database.prepare(`SELECT count(*) AS n FROM main.${quoteSqliteIdentifier(name)}`).get()?.n)}`).join(", ")}; SQLite ${String(database.prepare("SELECT sqlite_version() AS version").get()?.version)}. No table rows were removed.`
+          ? `Rebuilt stale SQLite FTS indexes (${options.label}): ${indexes
+              .map(
+                (name) =>
+                  `${name}=${String(
+                    executeSqliteQueryTakeFirstSync(
+                      database,
+                      db.selectFrom(name).select((eb) => eb.fn.countAll<number | bigint>().as("n")),
+                    )?.n,
+                  )}`,
+              )
+              .join(
+                ", ",
+              )}; SQLite ${captureSqliteNativeRuntimeAdmission()?.version}. No table rows were removed.`
           : `Warning: Rebuilt corrupt ${options.label} SQLite indexes: ${indexes.join(", ")}. No table rows were removed.`,
       ]
     : [];

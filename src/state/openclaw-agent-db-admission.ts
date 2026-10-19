@@ -5,10 +5,8 @@ import { resolveStateDir } from "../config/state-dir.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
-import { repairDoctorSqliteIndexCorruption } from "../infra/sqlite-index-recovery.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
 import {
-  SqliteIntegrityError,
   runSqliteIntegrityCheckSync,
   runSqliteIntegrityOperationSync,
   type SqliteIntegrityCheck,
@@ -41,11 +39,7 @@ import type {
   OpenClawAgentDatabaseRepairAdmission,
 } from "./openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
-import { mayShareAgentDatabaseFile } from "./openclaw-agent-db-lease-provenance.js";
-import {
-  readActiveOpenClawAgentDatabaseLeasesReadOnly,
-  type prepareOpenClawAgentDatabaseWorkerLease,
-} from "./openclaw-agent-db-lease.js";
+import type { prepareOpenClawAgentDatabaseWorkerLease } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
   retainAgentDatabase,
@@ -63,13 +57,11 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
 import type { OpenClawAgentDatabaseAdmissionExecution } from "./openclaw-agent-execution-admission-contract.js";
-import { OPENCLAW_AGENT_FTS_SCHEMAS } from "./openclaw-agent-fts-schema.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
 } from "./openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
-import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 
 /** Denial still invokes run under admission, with a throwing authority check, to permit cleanup. */
 export type OpenClawAgentDatabaseWriteAdmission = <T>(
@@ -175,52 +167,11 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
           });
         }
       };
+      const repair = preparedLease?.startupRepair;
       return runSqliteIntegrityOperationSync(
         steps,
         () => assertAgentDatabaseOpenAuthority(steps, assertCurrent),
-        preparedLease?.startupRepair && !isMainThread
-          ? (check, error) => {
-              if (
-                !(error instanceof SqliteIntegrityError) ||
-                !error.findings ||
-                check.databaseLabel !== preparedLease.receipt.path
-              ) {
-                return false;
-              }
-              requestSqliteWorkerOperationAdmission({
-                stage: "prepare",
-                facts: { kind: "agent-startup-fts" },
-              });
-              const state = { env: options.env, path: preparedLease.receipt.sharedStatePath };
-              // The shared write fence excludes new leases through Doctor's backed-up repair.
-              const changes = runOpenClawStateWriteTransaction(() => {
-                assertCurrent();
-                const own = preparedLease.receipt;
-                const owners = readActiveOpenClawAgentDatabaseLeasesReadOnly(state).filter(
-                  (owner) => mayShareAgentDatabaseFile(owner.path, own.path),
-                );
-                if (owners.length !== 1 || owners[0]?.lease_id !== own.leaseId) {
-                  throw new Error(
-                    "Startup FTS repair requires an exclusive live agent database lease",
-                  );
-                }
-                return repairDoctorSqliteIndexCorruption(check.database, check.databaseLabel, {
-                  label: `agent ${options.agentId}`,
-                  ftsSchemas: OPENCLAW_AGENT_FTS_SCHEMAS,
-                  ftsOnly: true,
-                  assertCurrent,
-                });
-              }, state);
-              requestSqliteWorkerOperationAdmission({
-                stage: "prepare",
-                facts: {
-                  kind: "agent-startup-fts",
-                  message: changes.join(" "),
-                },
-              });
-              return true;
-            }
-          : undefined,
+        repair && !isMainThread ? (check, error) => repair(check, error, assertCurrent) : undefined,
       );
     };
     const scope = getOpenClawDatabaseMaintenanceScope();

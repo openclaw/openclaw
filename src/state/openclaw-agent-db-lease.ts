@@ -11,6 +11,7 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import type { SqliteIntegrityCheck } from "../infra/sqlite-integrity.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js";
@@ -410,7 +411,11 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   provenance: string | null;
   validation?: OpenClawAgentDatabaseValidation;
   integrityRevoked?: boolean;
-  startupRepair?: boolean;
+  startupRepair?: (
+    check: SqliteIntegrityCheck,
+    error: unknown,
+    assertCurrent: () => void,
+  ) => boolean;
   claim(onVerification?: OpenClawAgentIntegrityVerificationReceiver): string;
 } {
   const database = { ...sharedDatabase };
