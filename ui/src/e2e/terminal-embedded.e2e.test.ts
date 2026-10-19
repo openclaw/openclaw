@@ -32,6 +32,18 @@ suite.define(() => {
             ],
           },
           "terminal.open": terminalSession("keyboard-terminal", { shell: "/bin/sh" }),
+          "terminal.attach": {
+            cases: [
+              {
+                match: { sessionId: "keyboard-terminal" },
+                response: {
+                  ...terminalSession("keyboard-terminal", { shell: "/bin/sh" }),
+                  buffer: "",
+                  seq: 0,
+                },
+              },
+            ],
+          },
         },
       });
       await page.goto(`${suite.server.baseUrl}${route}`);
@@ -60,6 +72,7 @@ suite.define(() => {
         await tabLabel.waitFor({ state: "hidden" });
         expect(await gateway.getRequests("terminal.input")).toEqual(before);
         await page.keyboard.press("Control+Backquote");
+        await panel.locator(".tp-session.is-current").click();
         await tabLabel.waitFor();
       } else {
         await expect
