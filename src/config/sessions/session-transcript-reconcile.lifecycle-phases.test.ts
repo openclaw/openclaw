@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -38,16 +38,14 @@ function createPool(failNativeCloseAt?: string): Pool {
     workerUrl: failNativeCloseAt
       ? new URL("./session-transcript-reconcile.close-failure.test-support.mjs", import.meta.url)
       : resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptReconcile),
-    ...(failNativeCloseAt
+    workerOptions: failNativeCloseAt
       ? {
-          workerOptions: {
-            workerData: {
-              sourceLoaderUrl: import.meta.resolve("tsx/esm/api"),
-              databasePath: failNativeCloseAt,
-            },
+          workerData: {
+            sourceLoaderUrl: import.meta.resolve("tsx/esm/api"),
+            databasePath: failNativeCloseAt,
           },
         }
-      : {}),
+      : undefined,
     maxWorkers: 1,
     maxPendingTasks: 4,
   });
@@ -281,12 +279,11 @@ it.each([false, true])(
         void task.catch(() => {});
         let releasePort: MessagePort | undefined;
         try {
-          releasePort = await Promise.race([
+          releasePort = await awaitGateBeforeSettlement(
             ready.promise,
-            task.then(() => {
-              throw new Error("Reconciliation settled before the interphase drainage witness");
-            }),
-          ]);
+            task,
+            "Reconciliation settled before the interphase drainage witness",
+          );
           await closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
           expect(readDatabasePathIdentitySync(context.admission.databasePath).key).toBe(identity);
           expect(() => context.admission.assertCurrent()).toThrow();

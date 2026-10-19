@@ -1,8 +1,7 @@
 import { setImmediate as checkpoint } from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -22,6 +21,7 @@ import {
   projectionSnapshot,
   rows,
   seedTranscript,
+  useReconcileTestRuntime,
 } from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -30,15 +30,13 @@ import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcilesInStateDir,
 } from "./session-transcript-reconcile.js";
-import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerInput } from "./session-transcript-reconcile.worker.js";
 
 vi.mock("node:worker_threads", async () =>
   (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
 );
 
-const observer = useReconcileWorkerObserver();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { observer, tempDirs } = useReconcileTestRuntime();
 const databaseOptions = { agentId: "main" };
 const scope = {
   ...databaseOptions,
@@ -165,8 +163,8 @@ it.each(cases)(
         expect(snapshot()).toEqual(atSettlement);
         expect(sourceRows()).toEqual(originalSource);
         await reconcileSessionTranscriptIndexes(databaseOptions);
-        expect(readSessionTranscriptMessageEvents(scope).map((entry) => entry.event)).toEqual([
-          expect.objectContaining({ id: "seed" }),
+        expect(readSessionTranscriptMessageEvents(scope)).toMatchObject([
+          { event: { id: "seed" } },
         ]);
         await fence.cleanup();
         await closeOpenClawAgentDatabasesAsync();

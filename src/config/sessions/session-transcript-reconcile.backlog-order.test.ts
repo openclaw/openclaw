@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -13,21 +12,20 @@ import {
   expectRows,
   markRebuild,
   seedTranscript,
+  useReconcileTestRuntime,
 } from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
   type SessionTranscriptReconcileResult,
 } from "./session-transcript-reconcile.js";
-import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcript-reconcile.worker.js";
 
 vi.mock("node:worker_threads", async () =>
   (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
 );
 
-const observer = useReconcileWorkerObserver();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { observer, tempDirs } = useReconcileTestRuntime();
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
@@ -163,11 +161,9 @@ it("gives another agent a turn at a session boundary without a priority queue", 
     await withinTest(queued.promise, signal);
     releaseAcknowledgement?.();
     releaseAcknowledgement = undefined;
-    await expect(Promise.all(operations)).resolves.toEqual([
-      { reconciledSessions: 4 },
-      { reconciledSessions: 1 },
-      { reconciledSessions: 3 },
-    ]);
+    await expect(Promise.all(operations)).resolves.toEqual(
+      [4, 1, 3].map((reconciledSessions) => ({ reconciledSessions })),
+    );
     expect(planStarts[0]).toBe("a:s0");
     expect(planStarts.indexOf("small:s0")).toBeLessThan(planStarts.indexOf("a:s3"));
     expect(planStarts.indexOf("small:s0")).toBeLessThan(planStarts.indexOf("b:s2"));

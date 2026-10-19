@@ -1,7 +1,6 @@
 import type { WorkerOptions } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -16,7 +15,6 @@ import {
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
-import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 
 vi.mock("node:worker_threads", async () => {
   const observed = await (
@@ -52,8 +50,7 @@ vi.mock("node:worker_threads", async () => {
     },
   };
 });
-const observer = useReconcileWorkerObserver();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { observer, tempDirs } = fixtures.useReconcileTestRuntime();
 
 afterEach(async () => {
   observer.onTask = undefined;
@@ -215,7 +212,7 @@ it.each([
       } else if (closesPool) {
         await expect(reconciliation).resolves.toBeUndefined();
       } else {
-        await expect(reconciliation).resolves.toEqual({ reconciledSessions: 1 });
+        await fixtures.expectReconciled(reconciliation);
       }
       if (retires || closesPool) {
         expect(closing).toBeDefined();

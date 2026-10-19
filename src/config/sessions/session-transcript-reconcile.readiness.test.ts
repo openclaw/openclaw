@@ -1,7 +1,6 @@
 import * as timers from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -17,7 +16,6 @@ import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
-import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 
 vi.mock("node:worker_threads", async () =>
   (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
@@ -26,8 +24,7 @@ vi.mock("node:timers/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:timers/promises")>()),
 }));
 
-const observer = useReconcileWorkerObserver();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { observer, tempDirs } = fixtures.useReconcileTestRuntime();
 
 it("observes foreground traversal completion while foreign writes continue", async () => {
   const stateDir = tempDirs.make("openclaw-projection-backlog-admission-");
@@ -108,9 +105,7 @@ it("observes foreground traversal completion while foreign writes continue", asy
         worklists.push([...input.sessionIds]);
       }
     };
-    await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
-      reconciledSessions: 1,
-    });
+    await fixtures.expectReconciled(reconcileSessionTranscriptIndexes(options));
     expect(worklists).toEqual([[scope.sessionId]]);
     expect(fixtures.rows(db, "SELECT needs_rebuild FROM session_transcript_index_state")).toEqual([
       { needs_rebuild: 0 },
@@ -182,7 +177,7 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
         const capacity = historyPages.getSnapshot().maxWorkers;
         let submissions = 0;
         let enteredCount = 0;
-        const admission = vi.spyOn(historyPages, "run").mockImplementation((input, taskOptions) => {
+        using _ = vi.spyOn(historyPages, "run").mockImplementation((input, taskOptions) => {
           if (submissions++ >= capacity) {
             const pending = run(input, taskOptions);
             queued.resolve();
@@ -205,12 +200,11 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
         const reason = new Error("cancel queued projection status");
         let ready: Promise<{ kind: "resolved" } | { kind: "rejected"; error: unknown }> | undefined;
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             preparing.promise,
-            Promise.all(blockers).then(() => {
-              throw new Error("Projection reads settled before filling the worker pool");
-            }),
-          ]);
+            Promise.all(blockers),
+            "Projection reads settled before filling the worker pool",
+          );
           ready = waitForSessionTranscriptProjection(scope, controller.signal).then(
             () => ({ kind: "resolved" as const }),
             (error: unknown) => ({ kind: "rejected" as const, error }),
@@ -231,24 +225,16 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
           });
         } finally {
           releasePreparation.resolve();
-          try {
-            const outcomes = await Promise.allSettled([...blockers, ready]);
-            for (const outcome of outcomes.slice(0, capacity)) {
-              expect(outcome).toMatchObject({ status: "fulfilled", value: true });
-            }
-          } finally {
-            admission.mockRestore();
+          const outcomes = await Promise.allSettled([...blockers, ready]);
+          for (const outcome of outcomes.slice(0, capacity)) {
+            expect(outcome).toMatchObject({ status: "fulfilled", value: true });
           }
         }
       } else {
         // The real status read completed; retire its owner while the waiter yields.
-        const polling = vi.spyOn(timers, "setTimeout").mockImplementationOnce(retire);
-        try {
-          await expect(waitForSessionTranscriptProjection(scope)).resolves.toBeUndefined();
-          expect(polling).toHaveBeenCalled();
-        } finally {
-          polling.mockRestore();
-        }
+        using polling = vi.spyOn(timers, "setTimeout").mockImplementationOnce(retire);
+        await expect(waitForSessionTranscriptProjection(scope)).resolves.toBeUndefined();
+        expect(polling).toHaveBeenCalled();
       }
     } finally {
       resume?.();

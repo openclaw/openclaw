@@ -1,9 +1,8 @@
 import { renameSync, statSync } from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { isAgentDatabaseClosing } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -22,13 +21,11 @@ import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcilesInStateDir,
 } from "./session-transcript-reconcile.js";
-import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 
 vi.mock("node:worker_threads", async () =>
   (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
 );
-const observer = useReconcileWorkerObserver();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { observer, tempDirs } = fixtures.useReconcileTestRuntime();
 
 async function fixture() {
   const stateDir = tempDirs.make("transcript-publication-");
@@ -112,12 +109,8 @@ it("publishes a cold compressed multi-chunk branch without host data SQL", async
   await fixtures.closeReconcileDatabases();
   const observed = observeHostDataSql();
   try {
-    await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
-      reconciledSessions: 1,
-    });
-    await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
-      reconciledSessions: 0,
-    });
+    await fixtures.expectReconciled(reconcileSessionTranscriptIndexes(options));
+    await fixtures.expectReconciled(reconcileSessionTranscriptIndexes(options), 0);
     await fixtures.closeReconcileDatabases();
     expect(observed.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
   } finally {
@@ -192,9 +185,7 @@ it("publishes the session change only after finalization commits", async () => {
     expect(changes).toEqual([]);
     expect(fixtures.rebuildState(database.db)).toEqual({ needs_rebuild: 1 });
     database.db.exec("DROP TRIGGER refuse_projection");
-    await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
-      reconciledSessions: 1,
-    });
+    await fixtures.expectReconciled(reconcileSessionTranscriptIndexes(options));
     expect(changes).toEqual([{ needs_rebuild: 0 }]);
   } finally {
     stop();
@@ -247,12 +238,11 @@ it("delivers a committed finalization before close permits a physical successor"
   let replacing: Promise<typeof database> | undefined;
   try {
     reconciliation = reconcileSessionTranscriptIndexes(options);
-    await Promise.race([
+    await awaitGateBeforeSettlement(
       committed.promise,
-      reconciliation.then(() => {
-        throw new Error("Reconciliation finished without holding its native finalizer reply");
-      }),
-    ]);
+      reconciliation,
+      "Reconciliation finished without holding its native finalizer reply",
+    );
     expect(fixtures.rebuildState(database.db)).toEqual({ needs_rebuild: 0 });
     expect(fixtures.projectionMessages(database.db)).toEqual([
       { message_id: "message-0", text: "projection message 0" },
@@ -280,7 +270,7 @@ it("delivers a committed finalization before close permits a physical successor"
     expect(database.db.isOpen).toBe(true);
     expect(events).toEqual(["committed"]);
     deliver.resolve();
-    await expect(reconciliation).resolves.toEqual({ reconciledSessions: 1 });
+    await fixtures.expectReconciled(reconciliation);
     const successor = await replacing;
     expect(events).toEqual(["committed", "notification", "closed", "replaced"]);
     expect(notifications).toEqual([
@@ -306,9 +296,7 @@ it("refuses a retired scheduled owner and permits an explicit fresh repair", asy
   await waitForSessionTranscriptIndexReconcile(options);
   const { db } = openOpenClawAgentDatabase(options);
   expect(fixtures.rebuildState(db)).toEqual({ needs_rebuild: 1 });
-  await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
-    reconciledSessions: 1,
-  });
+  await fixtures.expectReconciled(reconcileSessionTranscriptIndexes(options));
   expect(fixtures.rebuildState(db)).toEqual({ needs_rebuild: 0 });
 }, 30_000);
 
@@ -370,7 +358,7 @@ it.each(["transcript", "caller", "cancellation"] as const)(
         },
       });
       if (race === "transcript") {
-        await expect(repair).resolves.toEqual({ reconciledSessions: 0 });
+        await fixtures.expectReconciled(repair, 0);
       } else {
         await expect(repair).rejects.toThrow("startup maintenance owner retired");
       }

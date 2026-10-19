@@ -1,6 +1,7 @@
 import type { SQLInputValue } from "node:sqlite";
-import { expect, vi } from "vitest";
+import { afterEach, expect, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SqlConnection } from "../../infra/sql-connection.js";
 import type {
   SqliteWorkerOperations,
@@ -10,7 +11,13 @@ import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
-import type { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
+import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
+
+export function useReconcileTestRuntime() {
+  const observer = useReconcileWorkerObserver();
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  return { observer, tempDirs };
+}
 
 export function rows(db: SqlConnection, sql: string, ...bindings: SQLInputValue[]) {
   return db.prepare(sql).all(...bindings);
@@ -31,6 +38,10 @@ export function expectRows(
 
 export function rebuildState(db: SqlConnection) {
   return row(db, "SELECT needs_rebuild FROM session_transcript_index_state");
+}
+
+export function expectReconciled(result: Promise<unknown>, reconciledSessions = 1) {
+  return expect(result).resolves.toEqual({ reconciledSessions });
 }
 
 export function projectionMessages(db: SqlConnection) {
@@ -95,24 +106,13 @@ export function interceptWorkerExecution(
   ) => SqliteWorkerStore<Operations>["execute"],
 ) {
   const run = workerStore.runSqliteWorkerStoreOperation;
-  return vi
-    .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-    .mockImplementation(
-      <Operations extends SqliteWorkerOperations, T>(
-        target: SqliteWorkerStore<Operations>,
-        operation: (worker: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-        ...context: [
-          Parameters<typeof run>[2]?,
-          Parameters<typeof run>[3]?,
-          Parameters<typeof run>[4]?,
-        ]
-      ) =>
-        run(
-          target,
-          (worker) => operation({ execute: intercept(worker.execute.bind(worker)) }),
-          ...context,
-        ),
+  const wrapped: typeof run = (target, operation, ...context) =>
+    run(
+      target,
+      (worker) => operation({ execute: intercept(worker.execute.bind(worker)) }),
+      ...context,
     );
+  return vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(wrapped);
 }
 
 export function holdReconcileAck(
