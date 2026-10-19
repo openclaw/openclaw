@@ -638,7 +638,6 @@ describe("SQLite trajectory runtime store", () => {
       loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
     ).resolves.toEqual([]);
   });
-
 });
 
 describe("SQLite trajectory runtime reader byte and count budgets", () => {
