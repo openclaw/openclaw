@@ -32,6 +32,7 @@ import {
   hasLiveAgentRunContext,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../process/command-queue.js";
 import {
@@ -796,7 +797,7 @@ it.each(
       releaseWrite.resolve();
       await drain();
       heldWrite?.mockRestore();
-      unsubs.heartbeatUnsub();
+      heartbeatNotifications.onEvent = () => {};
       unsubs.transcriptUnsub();
       unsubs.lifecycleUnsub();
       releaseClaim();
@@ -892,9 +893,8 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
       removeChatRun: () => undefined,
       broadcast: harness.broadcast,
       nodeSendToSession: harness.nodeSendToSession,
-      markMainSessionsAbortedForRestart: async (params) => {
-        await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
-      },
+      markMainSessionsAbortedForRestart: (params) =>
+        markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir }).then(() => {}),
     });
     await joinPersistence();
     expect(read(mainKey).mainRestartRecovery?.cycleId).toEqual(expect.any(String));

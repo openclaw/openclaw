@@ -5,7 +5,7 @@ import type {
   WorkerOperatingSystem,
   WorkerProfile,
 } from "../../plugins/types.js";
-import { notifyListeners, registerListener } from "../../shared/listeners.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import {
   normalizeWorkerMachineOptions,
@@ -28,12 +28,12 @@ export function createWorkerMachineCatalog(
     warmup?: Promise<void>;
   } & Partial<CatalogValues>;
   const machineCatalogs = new Map<string, MachineCatalog>();
-  const machineShapeListeners = new Set<(profileId: string) => void>();
+  const machineShapeNotifications = { onChanged: (_profileId: string) => {} };
   let machineShapeVersion = 0;
 
   const machineCatalogChanged = (profileId: string) => {
     machineShapeVersion += 1;
-    notifyListeners(machineShapeListeners, profileId, () => {
+    notifyListeners([machineShapeNotifications.onChanged], profileId, () => {
       options.warn("Worker machine metadata change reporting failed");
     });
   };
@@ -175,9 +175,7 @@ export function createWorkerMachineCatalog(
         options.warn(`Worker machine catalog warmup failed for profile ${profileId}`),
       );
     },
-    subscribeMachineShapeChanged: (listener: (profileId: string) => void) =>
-      registerListener(machineShapeListeners, listener),
-    clearMachineShapeListeners: () => machineShapeListeners.clear(),
+    machineShapeNotifications,
     machineShapeVersion: () => machineShapeVersion,
   };
 }

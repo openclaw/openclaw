@@ -27,7 +27,7 @@ function requesterSession(call: CallRecord, config: VoiceCallConfig): string | u
   return typeof session === "string" && session.trim()
     ? session.trim()
     : call.direction === "inbound"
-      ? config.reports.inboundSessionKey?.trim() || undefined
+      ? config.reports.inboundSessionKey
       : undefined;
 }
 

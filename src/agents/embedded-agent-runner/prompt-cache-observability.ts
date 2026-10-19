@@ -612,11 +612,7 @@ export function completePromptCacheObservation(
   tracker.pendingChanges = null;
 
   const cacheRead = params.usage?.cacheRead;
-  if (
-    params.usage?.cacheTelemetry?.state === "unavailable" ||
-    typeof cacheRead !== "number" ||
-    !Number.isFinite(cacheRead)
-  ) {
+  if (params.usage?.cacheTelemetry?.state === "unavailable" || cacheRead === undefined) {
     // Keep cause evidence paired with the last measured cache hit, not a usage-less request.
     tracker.unmeasuredChanges = changes;
     return null;

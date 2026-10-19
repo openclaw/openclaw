@@ -24,14 +24,13 @@ export function isReleaseUpdateAvailable(
 export function isUpdateRunAttentionVisible(
   run: UpdateRunRecord | null,
   acknowledged: boolean,
-  nowMs = Date.now(),
 ): boolean {
   return Boolean(
     run &&
     (run.status === "running" ||
       (!acknowledged &&
         run.finishedAtMs !== null &&
-        nowMs - run.finishedAtMs < 24 * 60 * 60 * 1000)),
+        Date.now() - run.finishedAtMs < 24 * 60 * 60 * 1000)),
   );
 }
 

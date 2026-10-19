@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { on, once } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import type { Profiler } from "node:inspector";
+import type { HeapProfiler, Profiler } from "node:inspector";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -319,7 +319,7 @@ it.each([
   30_000,
 );
 
-it("measures discarded allocation churn and GC per completed operation, and cleans up failures", async () => {
+it("separates discarded allocation churn from retained objects and cleans up failed captures", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-allocation-"));
   const { child } = spawnFixture(
     [
@@ -329,6 +329,10 @@ it("measures discarded allocation churn and GC per completed operation, and clea
       `
     await import(${JSON.stringify(preloadUrl)});
     process.channel.ref();
+    let retainedRows;
+    function retainedAllocation() {
+      return Array.from({ length: 100000 }, (_, i) => ({ i, values: [i, i + 1] }));
+    }
     function discardedAllocation() {
       let checksum = 0;
       for (let batch = 0; batch < 10; batch++) {
@@ -340,10 +344,11 @@ it("measures discarded allocation churn and GC per completed operation, and clea
     process.on('message', async message => {
       if (!message.run) return;
       for (let operation = 0; operation < 4; operation++) discardedAllocation();
+      if (message.retain) retainedRows = retainedAllocation();
       globalThis.gc();
       await new Promise(setImmediate);
       await new Promise(setImmediate);
-      process.send({ completed: 4 });
+      process.send({ completed: 4, ...(message.retain ? { retained: retainedRows.length } : {}) });
     });
     process.send({ ready: true });
   `,
@@ -378,4 +383,32 @@ it("measures discarded allocation churn and GC per completed operation, and clea
       site.stack.some((frame) => frame.startsWith("discardedAllocation (")),
     ),
   ).toBe(true);
+
+  const retainedPath = path.join(directory, "retained");
+  await controlGatewayProfile(child, "heap", "start", retainedPath, {
+    includeCollectedObjects: false,
+  });
+  expect(await sendMessage(child, { run: true, retain: true })).toEqual({
+    completed: 4,
+    retained: 100000,
+  });
+  await readGatewayResources(child, { collectGarbage: true });
+  await controlGatewayProfile(child, "heap", "stop", retainedPath);
+  const retained = await readJson<HeapProfiler.SamplingHeapProfile>(retainedPath);
+  const bytesUnder = (
+    node: HeapProfiler.SamplingHeapProfileNode,
+    functionName: string,
+    inside = false,
+  ): number => {
+    const matches = inside || node.callFrame.functionName === functionName;
+    return (
+      (matches ? node.selfSize : 0) +
+      node.children.reduce(
+        (total, childNode) => total + bytesUnder(childNode, functionName, matches),
+        0,
+      )
+    );
+  };
+  expect(bytesUnder(retained.head, "retainedAllocation")).toBeGreaterThan(1_000_000);
+  expect(bytesUnder(retained.head, "discardedAllocation")).toBe(0);
 });

@@ -275,9 +275,11 @@ The Control UI opts into [presence deltas](/gateway/protocol/presence#opt-in-pre
 to send changed fields, including heartbeat timestamps, without retransmitting
 each connection's metadata. Its Gateway
 store reconstructs the same ordered presence list and requests a fresh snapshot
-if an update does not match its current version. Native clients keep full
-presence events. Recipient visibility and the best-effort freshness policy are
-the same for both formats.
+if an update does not match its current version. Current macOS and iOS clients
+also reconstruct full rosters from deltas, reconnecting on a missing baseline.
+Android opts in without consuming roster events. Older native versions retain
+full presence events. Recipient visibility and the best-effort freshness policy
+are the same for both formats.
 
 ### Control UI Devices page
 

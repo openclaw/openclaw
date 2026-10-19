@@ -132,6 +132,42 @@ it.each([
   },
 );
 
+it("keeps pending cleanup when an earlier resource failure arrives through parent IPC", async () => {
+  const { claims, capture, transmit, callbacks } = fixture();
+  const lease = capture(1);
+  lease.receive({ type: "resource-ready", id: 1, pid: 42, generation: 1 });
+  const closing = lease.close();
+  const settled = vi.fn();
+  void closing.then(settled, settled);
+  try {
+    await Promise.resolve();
+    const close = transmit.mock.calls
+      .map(([request]) => request)
+      .find((request) => request.type === "resource-close");
+    expect(close).toBeDefined();
+    if (!close || close.type !== "resource-close") {
+      throw new Error("Expected the actual resource close request");
+    }
+    const failure = new Error("original resource import failure");
+    // The socket already observed this failure; parent IPC can arrive after close starts.
+    lease.receive({ type: "resource-failed", id: 1, error: encodeNativeWorkerFailure(failure) });
+    await Promise.resolve();
+    expect(callbacks.failed).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: failure.message }),
+    );
+    expect(settled).not.toHaveBeenCalled();
+    expect(claims.hasOpenClaims).toBe(true);
+    expect(() => lease.release()).toThrow(/must close before release/);
+    lease.receive({ type: "resource-closed", id: 1, requestId: close.requestId });
+    await expect(closing).resolves.toBeUndefined();
+  } finally {
+    lease.receive({ type: "resource-closed", id: 1, requestId: 0 });
+    await closing.catch(() => {});
+    lease.release();
+  }
+  expect(claims.size).toBe(0);
+});
+
 it("settles owner receipts independently and preserves rejection through cleanup and close", async () => {
   const { claims, capture, transmit, callbacks } = fixture();
   const lease = capture(1);

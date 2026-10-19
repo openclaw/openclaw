@@ -111,6 +111,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     }
   };
   onSettled(() => {
+    // Retire connection-bound cards while their transcript trigger remains mounted.
     const stopGateway = gateway?.subscribe(syncConnection);
     syncConnection();
     activityExpiry.connect();
@@ -140,6 +141,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       listen(document, "focusin", outside, true),
       listen(document, "keydown", escape, true),
     ];
+    // Navigation ends the portaled card before its retained transcript can render again.
     stopRoute = context?.router.subscribe(close);
     if (context) {
       activity = observePersonActivityData(context, () => renderCard());

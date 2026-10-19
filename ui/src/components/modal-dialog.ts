@@ -455,6 +455,7 @@ function createModalPolicy(host: OpenClawModalDialog): ModalPolicy {
     ];
     overlay.bindSurface(dialog);
     overlay.setParent(findOverlayParent(host));
+    // Modal layering and return focus settle with the accepted transition, before completion events.
     overlay.subscribe((open) => {
       setModalLayer(host, open && host.isConnected);
       if (!open) {
