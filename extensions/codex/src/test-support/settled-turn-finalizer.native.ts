@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
+import { promisify } from "node:util";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, vi } from "vitest";
@@ -175,9 +176,7 @@ async function createNativeFixture(
   cleanups.push(async () => {
     upstreamAbort.abort();
     server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await promisify(server.close).call(server);
   });
   await once(server.listen(0, "127.0.0.1"), "listening");
   const address = server.address();
@@ -185,7 +184,6 @@ async function createNativeFixture(
     throw new Error("Loopback provider has no TCP address");
   }
   const baseUrl = `http://127.0.0.1:${address.port}/v1`;
-  const agentDir = path.join(root, "agent");
   const authProfileStore: AuthProfileStore = {
     version: 1,
     profiles: {
@@ -193,20 +191,19 @@ async function createNativeFixture(
       [OTHER_PROFILE]: { type: "api_key", provider: "openai", key: NATIVE_KEY },
     },
   };
-  const pluginConfig = {
-    supervision: { enabled: true },
-    appServer: {
-      command: native.command,
-      args: ["app-server", "-c", `openai_base_url=${JSON.stringify(baseUrl)}`],
-      homeScope: "user" as const,
-    },
-  };
   return {
     native,
     root,
-    agentDir,
+    agentDir: path.join(root, "agent"),
     baseUrl,
-    pluginConfig,
+    pluginConfig: {
+      supervision: { enabled: true },
+      appServer: {
+        command: native.command,
+        args: ["app-server", "-c", `openai_base_url=${JSON.stringify(baseUrl)}`],
+        homeScope: "user" as const,
+      },
+    },
     authProfileStore,
     requests,
     livePhases,
@@ -227,20 +224,16 @@ export async function withNativeFixture(
   run: (fixture: NativeFixture, cleanups: Cleanup[]) => Promise<void>,
   live = false,
 ): Promise<void> {
-  const cleanups: Cleanup[] = [];
   const failures: unknown[] = [];
-  try {
-    await run(await createNativeFixture(root, cleanups, failures, live), cleanups);
-  } catch (error) {
-    failures.push(error);
-  } finally {
-    // Join children before the shared harness afterEach removes their homes.
-    for (const cleanup of cleanups.toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        failures.push(error);
-      }
+  const cleanups: Cleanup[] = [
+    async () => run(await createNativeFixture(root, cleanups, failures, live), cleanups),
+  ];
+  // Run the fixture first, then join its children in LIFO order before their homes are removed.
+  for (let action = cleanups.pop(); action; action = cleanups.pop()) {
+    try {
+      await action();
+    } catch (error) {
+      failures.push(error);
     }
   }
   if (failures.length) {
