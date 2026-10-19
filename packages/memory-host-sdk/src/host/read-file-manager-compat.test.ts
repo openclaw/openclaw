@@ -195,15 +195,20 @@ describe("MemoryIndexManager.readFile", () => {
     expect(result.text).not.toContain("Use from=");
   });
 
-  it("does not advertise line continuation when a single oversized line is cut mid-line", async () => {
+  it("advertises the next line after cutting an oversized line mid-line", async () => {
     const relPath = "memory/oversized-line-with-tail.md";
     await write(relPath, [`1: ${"x".repeat(20_000)}`, "line 2"].join("\n"));
 
     const result = requireMemoryReadSuccess(await read(relPath));
 
-    expect(result).toMatchObject({ truncated: true, lines: 1 });
-    expect(result.nextFrom).toBeUndefined();
-    expect(result.text).not.toContain("Use from=");
+    expect(result).toMatchObject({ truncated: true, lines: 1, nextFrom: 2 });
+    expect(result.text).toContain("Use from=2 to continue.");
+    expect(result.text).toContain("use read on the source file");
+
+    const tail = requireMemoryReadSuccess(
+      await readMemoryFile({ workspaceDir, extraPaths: [], relPath, from: result.nextFrom }),
+    );
+    expect(tail).toMatchObject({ from: 2, lines: 1, text: "line 2" });
   });
 
   it("omits truncation metadata when the full excerpt fits and no more lines remain", async () => {
