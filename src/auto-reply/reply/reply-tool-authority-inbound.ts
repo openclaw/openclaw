@@ -5,6 +5,8 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
+import { getRequesterProfile } from "../requester-profile.js";
 import type { RuntimeMsgContext } from "../templating.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
@@ -39,6 +41,7 @@ export function applyReplyToolAuthorityOverlay(
       senderUsername: overlay.senderUsername,
       senderE164: overlay.senderE164,
       senderIsOwner: overlay.senderIsOwner,
+      gitContributorProfileId: overlay.gitContributorProfileId,
       inputProvenance: overlay.inputProvenance,
       trustedInternalHandoff: overlay.trustedInternalHandoff,
       scheduledToolPolicy: overlay.scheduledToolPolicy,
@@ -87,6 +90,7 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     senderUsername: normalizeOptionalString(ctx.SenderUsername),
     senderE164: normalizeOptionalString(ctx.SenderE164),
     senderIsOwner: params.senderIsOwner,
+    gitContributorProfileId: getRequesterProfile(ctx)?.id ?? readSessionInputProfileId(ctx),
     inputProvenance: ctx.InputProvenance,
     trustedInternalHandoff: undefined,
     scheduledToolPolicy: undefined,

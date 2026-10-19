@@ -188,6 +188,7 @@ export async function spawnSubagentDirect(
         requesterInternalKey,
         parentTarget: requestResolution.resolved.requesterTarget,
         senderIsOwner: ctx.senderIsOwner,
+        gitContributorProfileId: ctx.gitContributorProfileId,
         expectedParentSessionId: ctx.expectedParentSessionId,
         creationPolicy,
         completionOwnerSessionKey: ownership.completionRequesterSessionKey,

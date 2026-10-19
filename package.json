@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.4",
+  "version": "2026.10.5",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "databaseEngines": [
@@ -2346,7 +2346,7 @@
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
     "@openclaw/fs-safe": "0.26.8",
-    "@openclaw/proc-safe": "0.4.1",
+    "@openclaw/proc-safe": "0.4.2",
     "@openclaw/proxyline": "0.4.0",
     "@opentelemetry/semantic-conventions": "1.43.0",
     "@resvg/resvg-js": "2.6.2",

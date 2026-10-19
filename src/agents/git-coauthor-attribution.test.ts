@@ -39,6 +39,41 @@ async function withOpenClawTestState<T>(
 }
 
 describe("Git co-author attribution", () => {
+  it("does not export unrelated shared-main participants into a Discord task's commit", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "shared-discord-credit", updatedAt: 1 });
+      const profiles = [
+        { email: "task-requester@example.test", accountId: 9101, login: "task-requester" },
+        { email: "unrelated-a@example.test", accountId: 9102, login: "unrelated-a" },
+        { email: "unrelated-b@example.test", accountId: 9103, login: "unrelated-b" },
+      ].map(({ email, accountId, login }) => {
+        const profile = ensureProfileForEmail(email, { env: state.env });
+        syncGitHubIdentity(
+          { identity: { accountId, login }, authenticationAlias: { kind: "email", email } },
+          { env: state.env },
+        );
+        return profile;
+      });
+      for (const profile of profiles.slice(1)) {
+        recordSessionParticipant(scope, {
+          identity: { type: "profile", id: profile.id },
+          promptedAt: 1,
+          sessionAgentId: "main",
+        });
+      }
+      const attribution = await resolveGitCoauthorAttribution({
+        ...scope,
+        config: { session: { groupScope: "main" } },
+        requesterProfileId: profiles[0]!.id,
+      });
+      expect(attribution?.logins).toEqual(["task-requester"]);
+      expect(attribution?.trailers).toEqual([
+        "Co-authored-by: task-requester <9101+task-requester@users.noreply.github.com>",
+      ]);
+      expect(await resolveGitCoauthorAttribution({ ...scope, config: {} })).toBeUndefined();
+    });
+  });
   it("resolves credit from the configured templated session store", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:custom-store-credit";

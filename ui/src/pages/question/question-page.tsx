@@ -28,6 +28,8 @@ type QuestionPageRequestError = "connection" | "load" | "unavailable" | null;
 
 type QuestionPageProps = { questionId: string };
 
+const questionIdHandlers = new WeakMap<HTMLElement, () => void>();
+
 function createQuestionPage(
   context: ApplicationContext,
   props: QuestionPageProps,
@@ -74,28 +76,30 @@ function createQuestionPage(
   });
   applyGatewaySnapshot(context.gateway.snapshot);
   onCleanup(() => {
+    questionIdHandlers.delete(host);
     stopGateway();
     stopGatewayEvents();
     operationGeneration += 1;
     clientOwner = null;
     disposeQuestionPromptState(questionState);
   });
-  // Gateway requests, browser title, and return focus follow the current question ID.
-  createEffect(
-    () => props.questionId,
-    (id, previous) => {
-      if (previous === undefined || id === previous) {
+  // Native ID receipts retire operations before another question can dispatch.
+  questionIdHandlers.set(host, () => {
+    const id = questionId();
+    const generation = ++operationGeneration;
+    rememberPanelFocus();
+    // Keep successive native writes in one turn on a single lookup.
+    queueMicrotask(() => {
+      if (operationGeneration !== generation) {
         return;
       }
-      operationGeneration += 1;
-      rememberPanelFocus();
       setRequestError(id ? null : "unavailable");
       setLoading(Boolean(id));
       if (id && clientOwner) {
         void loadQuestion(clientOwner, id);
       }
-    },
-  );
+    });
+  });
   const title = () => `${pageTitle(prompt())} — ${t("approvalPage.brandName")}`;
   createDocumentTitle(title);
   createEffect(title, () => {
@@ -364,7 +368,10 @@ function QuestionPageContent(
 defineSolidBridge<QuestionPageProps>(
   "openclaw-question-page",
   (props, host) => QuestionPageContent(props, host),
-  { properties: { questionId: { default: "", attribute: "question-id" } } },
+  {
+    properties: { questionId: { default: "", attribute: "question-id" } },
+    propertyChanged: (host) => questionIdHandlers.get(host)?.(),
+  },
 );
 
 declare global {

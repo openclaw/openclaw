@@ -107,6 +107,11 @@ describe("format parity", () => {
   });
 
   it.each([
+    [
+      { status: 0, stdout: "Finished in 1ms on 0 files using 4 threads.\n" },
+      { status: 0, stdout: "Finished in 0ms on 0 files using 4 threads.\n" },
+      true,
+    ],
     [{ status: 0, stdout: "" }, { status: 0, stdout: "" }, true],
     [{ status: 0, stdout: "" }, { status: 1, stdout: "a.ts\n" }, false],
     [{ status: 1, stdout: "a.ts" }, { status: 0, stdout: "" }, false],

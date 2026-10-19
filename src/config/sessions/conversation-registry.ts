@@ -252,11 +252,7 @@ export async function registerConversationAddresses(
       await binding.actor.storage!.mutate(
         {
           type: "session.conversation.register",
-          input: {
-            identities: structuredClone(identities),
-            discoveredAt,
-            query: query && structuredClone(query),
-          },
+          input: { identities, discoveredAt, query },
         },
         {
           ...memory.authority,
