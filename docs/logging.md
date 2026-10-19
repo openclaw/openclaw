@@ -348,12 +348,14 @@ results before repeating them.
 
 ### Targeted model transport diagnostics
 
-OpenAI Responses transport failures include a quoted `message` and, when the
-request signal was aborted, `abortName` and `abortMessage`. Messages are kept on
-one line and capped at 300 characters to distinguish idle timeouts, caller
-aborts, and provider errors. These fields read only error messages; they do not
-serialize request or response bodies or headers. Local logs retain error text;
-normal log egress redaction applies when viewing or exporting it.
+OpenAI Responses transport failures retain structured status, code, type, and
+error/cause names. When the active request signal was aborted, `abortReason`
+identifies OpenClaw-owned causes with fixed labels: `idle_timeout`, `no_progress`,
+`first_event_timeout`, `request_deadline`, `session_watchdog`, `restart`,
+`superseded`, or `caller_abort`. Unclassified caller cancellation uses
+`caller_abort`. Provider error messages and arbitrary abort-reason text are never
+logged because they can contain prompt or tool content. Headers and request or
+response bodies are also omitted.
 
 Prompt-cache history warnings identify the first changed message and bounded
 field paths, such as `content[0].thinkingSignature` or `content[0].arguments`.

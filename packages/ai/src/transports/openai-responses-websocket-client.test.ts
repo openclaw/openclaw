@@ -769,8 +769,8 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expectCounts(1, 0);
     expect(transport.closeCount).toBe(1);
     const line = logWarn.mock.calls.find(([, text]) => text.startsWith("[responses] error "))?.[1];
-    expect(line).toContain("abortName=TimeoutError");
-    expect(line).toMatch(/abortMessage="[^"]*(?:timeout|timed out)[^"]*"/iu);
+    expect(line).toContain("abortReason=request_deadline");
+    expect(line).not.toContain("abortMessage=");
 
     transport.sdkOutcomes.push(sdkCompletion("resp_sse"));
     const next = await run(history(user("next", 2)));

@@ -1,24 +1,31 @@
 import type { AssistantMessageEventStreamLike, SimpleStreamOptions } from "@openclaw/llm-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { isResponsesOutputLimitToolCallError } from "../providers/openai-responses-terminal-usage.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
 
-const sseState = vi.hoisted(() => ({ outcomes: [] as SdkResponse[] }));
+const sseState = vi.hoisted(() => ({
+  outcomes: [] as SdkResponse[],
+  signal: undefined as AbortSignal | undefined,
+}));
 
 vi.mock("openai", () => {
   class MockOpenAI {
     responses = {
-      create: () => ({
-        withResponse: async () => {
-          const outcome = sseState.outcomes.shift();
-          if (!outcome) {
-            throw new Error("Unexpected SSE request");
-          }
-          return outcome;
-        },
-      }),
+      create: (_params: unknown, options?: { signal?: AbortSignal }) => {
+        sseState.signal = options?.signal;
+        return {
+          withResponse: async () => {
+            const outcome = sseState.outcomes.shift();
+            if (!outcome) {
+              throw new Error("Unexpected SSE request");
+            }
+            return outcome;
+          },
+        };
+      },
     };
   }
   return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
@@ -101,6 +108,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.useRealTimers();
+  sseState.signal = undefined;
   configureAiTransportHost(initialHost);
 });
 
@@ -235,58 +244,59 @@ it.each(["filtered", "failed", "eof", "aborted"])(
 );
 
 it("logs the idle-timeout reason at warning level when the stream throws a generic abort", async () => {
-  const controller = new AbortController();
+  vi.useFakeTimers();
   queueStream(async function* () {
     yield { type: "response.created", response: { id: "resp_timeout", status: "in_progress" } };
-    controller.abort(new Error("LLM idle timeout (120s): no model progress"));
+    await new Promise<void>((resolve) => {
+      sseState.signal?.addEventListener("abort", () => resolve());
+    });
     throw new Error("Request was aborted");
   });
-  const stream = await run({
-    signal: controller.signal,
-    headers: { Authorization: "Bearer private-key" },
-  });
-  expect((await stream.result()).stopReason).toBe("aborted");
+  const stream = await streamWithIdleTimeout(createOpenAIResponsesTransportStreamFn(), 50)(
+    model,
+    { messages: [], tools: [] },
+    { apiKey: "test-key", transport: "sse", headers: { Authorization: "Bearer private-key" } },
+  );
+  const result = stream.result();
+  await vi.advanceTimersByTimeAsync(50);
+  expect((await result).stopReason).toBe("aborted");
   expect(logWarn).toHaveBeenCalledWith(
     "openai-transport",
-    expect.stringContaining('message="Request was aborted"'),
+    expect.stringContaining("abortReason=idle_timeout"),
     undefined,
   );
   const line = logWarn.mock.calls.find(([, message]) =>
     message.startsWith("[responses] error "),
   )?.[1];
-  expect(line).toContain("abortName=Error");
-  expect(line).toContain('abortMessage="LLM idle timeout (120s): no model progress"');
+  expect(line).toContain("abortReason=idle_timeout");
+  expect(line).not.toContain("message=");
+  expect(line).not.toContain("LLM idle timeout");
   expect(JSON.stringify(logWarn.mock.calls)).not.toContain("private-key");
 });
 
-it("logs bounded single-line provider messages without headers or bodies", async () => {
+it("omits provider error messages, headers, and bodies from transport logs", async () => {
+  const privateText = "synthetic private prompt and tool result";
   queueStream(async function* () {
     yield { type: "response.created", response: { id: "resp_error", status: "in_progress" } };
-    throw Object.assign(
-      new SyntaxError(`Invalid event payload\n\t"unterminated" \u001b[31m ${"x".repeat(400)} tail`),
-      {
-        headers: { Authorization: "Bearer private-key" },
-        request: { body: "private-request" },
-        response: { body: "private-response", headers: { "set-cookie": "private-cookie" } },
-      },
-    );
+    throw Object.assign(new SyntaxError(`${privateText}\n${"x".repeat(400)}`), {
+      status: 503,
+      code: "service_unavailable",
+      headers: { Authorization: "Bearer private-key" },
+      request: { body: "private-request" },
+      response: { body: "private-response", headers: { "set-cookie": "private-cookie" } },
+    });
   });
   expect((await (await run()).result()).stopReason).toBe("error");
   const line = logWarn.mock.calls.find(([, message]) =>
     message.startsWith("[responses] error "),
   )?.[1];
-  expect(line).toContain("name=SyntaxError");
-  expect(line).toContain('message="Invalid event payload \\"unterminated\\"');
-  for (const control of ["\r", "\n", "\t", "\u001b"]) {
-    expect(line).not.toContain(control);
-  }
-  const message = line?.match(/ message=("(?:[^"\\]|\\.)*")/u)?.[1];
-  expect(JSON.parse(message ?? "null")).toHaveLength(300);
-  expect(JSON.parse(message ?? "null")).toMatch(/…$/u);
-  expect(line).not.toContain(" tail");
-  expect(JSON.stringify(logWarn.mock.calls)).not.toMatch(
-    /private-(?:key|request|response|cookie)/u,
-  );
+  expect(line).toContain("name=SyntaxError status=503 code=service_unavailable");
+  expect(line).not.toContain("abortReason=");
+  expect(line).not.toContain("message=");
+  expect(line).not.toContain("\n");
+  const logs = JSON.stringify(logWarn.mock.calls);
+  expect(logs).not.toContain(privateText);
+  expect(logs).not.toMatch(/private-(?:key|request|response|cookie)/u);
 });
 
 it.each([

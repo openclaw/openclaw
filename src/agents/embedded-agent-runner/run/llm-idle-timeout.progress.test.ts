@@ -126,7 +126,10 @@ it("aborts content-free chunks at twice the idle window through composed run sig
     }
     await vi.advanceTimersByTimeAsync(1);
     expect(stream.onTimeout).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: "LLM idle timeout (0s): no model progress" }),
+      expect.objectContaining({
+        name: "LlmNoProgressError",
+        message: "LLM idle timeout (0s): no model progress",
+      }),
     );
     expect(stream.requestSignal?.aborted).toBe(true);
     expect(await stream.completion).toBe(stream.onTimeout.mock.calls[0]?.[0]);

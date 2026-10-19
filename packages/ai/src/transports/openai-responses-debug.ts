@@ -1,7 +1,5 @@
 import type { Model } from "@openclaw/llm-core";
-import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { readTransportDiagnosticLabel } from "../utils/provider-error.js";
 import { resolveModelPayloadDebugMode } from "./model-transport-debug.js";
 import { RESPONSE_FAILED_NO_DETAILS_MESSAGE } from "./openai-responses-contracts.js";
@@ -371,27 +369,32 @@ export function summarizeOpenAITransportError(error: unknown, signal?: AbortSign
         `causeCode=${safeDebugValue(readTransportDiagnosticLabel(cause?.code))}`,
       ]
     : [`type=${typeof error}`];
-  const abortReason: unknown = signal?.aborted ? signal.reason : undefined;
-  const messages: Array<[string, unknown]> = [["message", error]];
   if (signal?.aborted) {
-    parts.push(
-      `abortName=${safeDebugValue(readTransportDiagnosticLabel(isRecord(abortReason) ? abortReason.name : undefined))}`,
-    );
-    messages.push(["abortMessage", abortReason]);
-  }
-  // Read only error prose, never serialize SDK errors with headers or request/response bodies.
-  for (const [field, value] of messages) {
-    const message =
-      value instanceof Error || typeof value === "string"
-        ? coerceErrorMessage(value)
-        : isRecord(value) && typeof value.message === "string"
-          ? value.message
-          : undefined;
-    if (message) {
-      parts.push(
-        `${field}=${JSON.stringify(truncateWithMarker(message.replace(/\s+/gu, " "), 300, { marker: "…", reserve: 1, trimEnd: false }))}`,
-      );
+    const reason = isRecord(signal.reason) ? signal.reason : undefined;
+    let abortReason = reason?.name === "TimeoutError" ? "request_deadline" : "caller_abort";
+    // Only classify the request signal; provider errors can echo message/tool content.
+    switch (reason?.code ?? reason?.name) {
+      case "LlmIdleTimeoutError":
+        abortReason = "idle_timeout";
+        break;
+      case "LlmNoProgressError":
+        abortReason = "no_progress";
+        break;
+      case "FirstStreamEventTimeoutError":
+        abortReason = "first_event_timeout";
+        break;
+      case "OPENCLAW_SESSION_WATCHDOG":
+        abortReason = "session_watchdog";
+        break;
+      case "OPENCLAW_RESTART_ABORT":
+      case "ERR_STALE_GATEWAY_LIFECYCLE":
+        abortReason = "restart";
+        break;
+      case "AGENT_RUN_SUPERSEDED_ABORT":
+        abortReason = "superseded";
+        break;
     }
+    parts.push(`abortReason=${abortReason}`);
   }
   return parts.join(" ");
 }
