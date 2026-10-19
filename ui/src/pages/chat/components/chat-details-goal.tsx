@@ -1,4 +1,4 @@
-import { Show, createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { Show, createEffect, createSignal, onCleanup } from "solid-js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
@@ -8,6 +8,7 @@ import type {
   ChatGoalRecovery,
 } from "../../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/chat/details-goal.css";
 import {
@@ -32,7 +33,7 @@ export type ChatDetailsGoalProps = {
   /** Reads the native owner's failure after submission settles. */
   getGoalSubmitError?: () => string | null | undefined;
   /** The sheet's scroll owner attaches its existing observer to this actual scrollport. */
-  scrollRef?: (element: HTMLDivElement) => void;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
 };
 
 /** The native modal owns focus/dismissal; this form preserves multiline objectives. */
@@ -42,15 +43,14 @@ function GoalEditDialog(props: {
   finish: () => void;
   settled: () => boolean;
 }) {
-  const initial = untrack(() => props.objective);
-  const [draft, setDraft] = createSignal(initial);
+  const [draft, setDraft] = createSignal(() => props.objective);
   const [state, setState] = createSignal<{ pending: boolean; error: string | null }>({
     pending: false,
     error: null,
   });
   let submitting = false;
   let input!: HTMLTextAreaElement;
-  const unchanged = () => !draft().trim() || draft() === initial;
+  const unchanged = () => !draft().trim() || draft() === props.objective;
   const submit = async (event: SubmitEvent) => {
     event.preventDefault();
     if (submitting || unchanged()) {
@@ -215,7 +215,7 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
 
   return (
     <div class="chat-details-goal" aria-busy={props.recovery?.pending ? "true" : "false"}>
-      <div class="chat-details-goal__body" ref={props.scrollRef}>
+      <div class="chat-details-goal__body" ref={[elementRef(props.onScrollPortRef)]}>
         <Show when={props.recovery}>
           <div class="chat-details-goal__recovery" role="status">
             <ChatGoalRecoveryMessage recovery={props.recovery!} />
