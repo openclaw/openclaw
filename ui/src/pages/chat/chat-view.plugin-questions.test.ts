@@ -103,7 +103,7 @@ function createPluginChat(replacement: ControlUiReplacement<"composer">, initial
     provider,
     render,
     reportError,
-    selectReplacement() {
+    selectReplacement: () => {
       selected = true;
       for (const listener of listeners) {
         listener();

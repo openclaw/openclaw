@@ -576,12 +576,17 @@ describe("staged chat attachment pane handoff", () => {
     };
   }
 
-  function retainedSessions(context: ApplicationContext, ...panes: HTMLElement[]) {
+  function retainedSessions(
+    context: ApplicationContext,
+    pane: ReturnType<typeof createTestChatPane>["pane"],
+  ) {
     const host = document.createElement("div");
-    host.append(...panes);
-    for (const pane of panes) {
-      disposals.push(registerChatPane(pane));
-    }
+    const element = Object.assign(pane.element, {
+      paneId: pane.paneId,
+      discardStagedAttachments: pane.discardStagedAttachments,
+    });
+    host.append(element);
+    disposals.push(registerChatPane(element));
     return new ChatPageRetainedSessions(host, {
       context: () => context,
       presented: () => true,
