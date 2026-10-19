@@ -1,4 +1,4 @@
-import { createMemo, For, onCleanup, Show } from "solid-js";
+import { createMemo, For, onCleanup, onSettled, Show } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -89,7 +89,7 @@ export type ViewerFacepileProps = {
   maxVisible?: number;
   totalCount?: number;
   personActivity?: PersonActivityRouting;
-  createLinkRef?: () => (element: HTMLAnchorElement) => void;
+  registerLink?: (element: HTMLAnchorElement) => (() => void) | undefined;
 };
 
 export function ViewerFacepileContent(props: ViewerFacepileProps) {
@@ -139,7 +139,7 @@ export function ViewerFacepileContent(props: ViewerFacepileProps) {
                   user={user()}
                   markAsViewer={!props.staticParticipants}
                   routing={props.personActivity}
-                  createLinkRef={props.createLinkRef}
+                  registerLink={props.registerLink}
                 />
               </span>
             </openclaw-tooltip>
@@ -161,7 +161,7 @@ function FacepilePerson(props: {
   user: FacepileUser;
   markAsViewer: boolean;
   routing?: PersonActivityRouting;
-  createLinkRef?: ViewerFacepileProps["createLinkRef"];
+  registerLink?: ViewerFacepileProps["registerLink"];
 }) {
   const link = createMemo(() =>
     props.user.identity?.type === "profile"
@@ -171,16 +171,20 @@ function FacepilePerson(props: {
   const avatar = <ParticipantAvatar user={props.user} markAsViewer={props.markAsViewer} />;
   return (
     <Show when={link()} fallback={avatar}>
-      {(target) => (
-        <a
-          ref={props.createLinkRef?.()}
-          class="person-activity-avatar-link"
-          href={target().href}
-          onClick={(event) => target().open(event)}
-        >
-          {avatar}
-        </a>
-      )}
+      {(target) => {
+        let anchor!: HTMLAnchorElement;
+        onSettled(() => props.registerLink?.(anchor));
+        return (
+          <a
+            ref={(element) => (anchor = element)}
+            class="person-activity-avatar-link"
+            href={target().href}
+            onClick={(event) => target().open(event)}
+          >
+            {avatar}
+          </a>
+        );
+      }}
     </Show>
   );
 }
@@ -301,7 +305,7 @@ export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
       maxVisible: { default: 3, attribute: "max-visible", type: Number },
       totalCount: { default: undefined, attribute: false },
       personActivity: { default: undefined, attribute: false },
-      createLinkRef: { default: undefined, attribute: false },
+      registerLink: { default: undefined, attribute: false },
     },
   },
 );

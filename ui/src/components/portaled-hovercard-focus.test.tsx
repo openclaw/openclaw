@@ -83,6 +83,11 @@ describe("hovercard controls", () => {
   it("registers session participant inspection and native facepile links through their owning bridge", async () => {
     const container = card();
     const controls = controlsForHovercard(container);
+    const [participants, setParticipants] = createSignal([
+      { identity: { type: "profile" as const, id: "alice" }, label: "Alice" },
+      { identity: { type: "profile" as const, id: "mira" }, label: "Mira" },
+      { identity: { type: "profile" as const, id: "riley" }, label: "Riley" },
+    ]);
     const view = mountSolid(
       () => (
         <HovercardControlsContext value={controls}>
@@ -91,11 +96,7 @@ describe("hovercard controls", () => {
               label: "Review session",
               hasActiveRun: false,
               hasAutomation: false,
-              participants: [
-                { identity: { type: "profile", id: "alice" }, label: "Alice" },
-                { identity: { type: "profile", id: "mira" }, label: "Mira" },
-                { identity: { type: "profile", id: "riley" }, label: "Riley" },
-              ],
+              participants: participants(),
             }}
             personActivity={{ basePath: "", navigate: vi.fn() }}
           />
@@ -141,6 +142,13 @@ describe("hovercard controls", () => {
     expect(controls.read()).toEqual([name, trigger, miraAvatar, rileyAvatar]);
     miraAvatar.focus();
     expect(document.activeElement).toBe(miraAvatar);
+
+    setParticipants((current) => current.filter((person) => person.identity.id !== "mira"));
+    await settleTooltip(tooltip);
+    expect(miraAvatar.isConnected).toBe(false);
+    container.append(miraAvatar);
+    expect(controls.read()).not.toContain(miraAvatar);
+    expect(controls.read()).toContain(rileyAvatar);
 
     view.unmount();
     // Reconnecting the old controls distinguishes release from disconnected-node filtering.

@@ -129,6 +129,8 @@ function AttributionContent(props: {
   auth?: SessionHovercardAvatarAuth;
   routing?: PersonActivityRouting;
 }) {
+  const controls = useContext(HovercardControlsContext);
+  const registerLink = (element: HTMLAnchorElement) => controls?.registerSource(() => [element]);
   const creatorInitials = createMemo(() => {
     const creator = props.attribution?.creator;
     return creator ? sessionOwnerInitials(creator) : "";
@@ -266,7 +268,7 @@ function AttributionContent(props: {
         </PersonAvatarLink>
         <Show when={remaining().length > 0}>
           <ViewerFacepile
-            createLinkRef={createHovercardControlRef}
+            registerLink={registerLink}
             staticParticipants={remaining()}
             totalCount={otherCount()}
             maxVisible={Math.min(remaining().length, MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS)}
