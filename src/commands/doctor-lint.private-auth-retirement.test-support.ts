@@ -60,7 +60,6 @@ export async function verifyDoctorLintPrivateAuthRetirement(
     let auth: DatabaseSync | undefined;
     let blocker: DatabaseSync | undefined;
     let blockerPath: string | undefined;
-    const removalErrors: unknown[] = [];
     let unregister: (() => void) | undefined;
     let restoreAuthClose: (() => void) | undefined;
     let cleanupFork: (() => Promise<boolean>) | undefined;
@@ -130,15 +129,16 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       .mockImplementation(async (...args) => {
         const prepared = await fork(...args);
         cleanupFork = prepared.cleanupAsync;
-        if (windows || !cleanupFailure) {
+        if (!cleanupFailure) {
           return prepared;
         }
         // Native-child payload retirement is outside this host's fs mock.
         return {
           ...prepared,
           async cleanupAsync() {
-            disposalRefused = true;
-            return false;
+            const removed = windows ? await prepared.cleanupAsync() : false;
+            disposalRefused = !removed;
+            return removed;
           },
         };
       });
@@ -155,10 +155,7 @@ export async function verifyDoctorLintPrivateAuthRetirement(
           throw Object.assign(new Error(message), { code: "EPERM" });
         }
       }
-      return remove(target, options).catch((error: unknown) => {
-        removalErrors.push(error);
-        throw error;
-      });
+      return remove(target, options);
     });
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
@@ -204,16 +201,13 @@ export async function verifyDoctorLintPrivateAuthRetirement(
             ),
         ).toEqual([]);
       }
-      if (windows) {
-        expect(removalErrors).toMatchObject(cleanupFailure ? [denied] : []);
-        if (cleanupFailure) {
-          expect([blocker?.isOpen, fs.existsSync(blockerPath!)]).toEqual([true, true]);
-        }
+      if (windows && cleanupFailure) {
+        expect([blocker?.isOpen, fs.existsSync(blockerPath!)]).toEqual([true, true]);
       }
       expect(report.warnings ?? []).toMatchObject(
         cleanupFailure ? [{ requirement: "temporary-snapshot-cleanup", severity: "warning" }] : [],
       );
-      if (!windows && cleanupFailure) {
+      if (cleanupFailure) {
         expect(disposalRefused).toBe(true);
       }
       expect(auth?.isOpen).toBe(readerFailure);

@@ -1,5 +1,4 @@
 import { performance } from "node:perf_hooks";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { ADMIN_SCOPE } from "../../../gateway/method-scopes.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
@@ -31,6 +30,7 @@ import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-con
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import {
   getCurrentSubagentRunOwner,
+  getSubagentActivationRuns,
   waitForSubagentRetirementPublication,
 } from "./subagent-registry-memory.js";
 import {
@@ -187,8 +187,9 @@ export function createSubagentRegistryRestorer(config: {
     assertCurrent: () => void,
     startupTrace?: GatewayStartupTrace,
   ) {
+    const capturedRuns = [...getSubagentActivationRuns(runs)];
     await measureStartup(startupTrace, "sidecars.subagent-reserve", () =>
-      reserveRestoredSubagentControllerSources([...runs.values()]),
+      reserveRestoredSubagentControllerSources(capturedRuns),
     );
     assertCurrent();
     if (runs.size === 0) {
@@ -197,8 +198,6 @@ export function createSubagentRegistryRestorer(config: {
     ensureListener();
     // Session-mode runs have no archive deadline but still need TTL cleanup.
     startSweeper();
-    // Resume only this captured owner set; registration may change the live map while we yield.
-    const capturedRuns = [...runs];
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const assertReadCurrent = () => {
       assertCurrent();
@@ -206,17 +205,10 @@ export function createSubagentRegistryRestorer(config: {
         throw new Error("Restored subagent read lost its Gateway lifecycle");
       }
     };
-    let visited = 0;
     let sessionReadMs = 0;
-    let yieldMs = 0;
     try {
-      for (const [runId, snapshot] of capturedRuns) {
-        if (++visited % 128 === 0) {
-          const beforeYield = performance.now();
-          await yieldToEventLoop();
-          yieldMs += performance.now() - beforeYield;
-          assertCurrent();
-        }
+      for (const snapshot of capturedRuns) {
+        const runId = snapshot.runId;
         const selected = getCurrentSubagentRunOwner(runs, snapshot);
         // Recovery and cancellation prepare their own session reads.
         if (
@@ -402,7 +394,6 @@ export function createSubagentRegistryRestorer(config: {
     } finally {
       startupTrace?.detail("sidecars.subagent-activation", [
         ["registryActivationSessionReadMs", sessionReadMs],
-        ["registryActivationYieldMs", yieldMs],
       ]);
     }
   }

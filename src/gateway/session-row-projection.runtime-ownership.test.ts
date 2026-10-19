@@ -127,6 +127,121 @@ it("rereads native model ownership after its harness plugin config changes", asy
   });
 });
 
+it("keeps archived native sessions searchable after catalog replacement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: { entries: { main: {} }, defaults: { model: "example/fallback" } },
+    };
+    const archivedKey = "agent:main:harness:row-native:archived";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: archivedKey },
+      {
+        sessionId: "archived-native",
+        updatedAt: 1,
+        archivedAt: 1,
+        agentHarnessId: "row-native",
+        modelSelectionLocked: true,
+      },
+    );
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:dashboard:scheduled-target" },
+      { sessionId: "scheduled-target", updatedAt: 2 },
+    );
+    const previousRegistry = captureActivePluginRegistrySnapshot();
+    const registry = createEmptyPluginRegistry();
+    let nativeModel = "original-native";
+    registry.agentHarnesses.push({
+      pluginId: "row-native",
+      source: "test",
+      harness: {
+        id: "row-native",
+        label: "Archived native fixture",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("Presentation must not run a model");
+        },
+        resolveSessionRuntimeOwnershipAsync: async () => ({
+          model: "native",
+          auth: "native",
+          modelRef: { provider: "example", model: nativeModel },
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "row-native", activation: { onAgentHarnesses: ["row-native"] } }],
+    });
+    const catalog = () =>
+      new Map([
+        [
+          "main",
+          createPreparedGatewayModelCatalog({
+            config: cfg,
+            entries: [{ provider: "example", id: nativeModel, name: nativeModel }],
+            pluginRegistry: registry,
+            metadataSnapshot,
+          }),
+        ],
+      ]);
+    const release = retainSessionListForegroundWork();
+    let projection: SessionRowProjection | undefined;
+    try {
+      projection = await createSessionRowProjection({
+        cfg,
+        getModelCatalog: async () => catalog(),
+      });
+      const respond = vi.fn();
+      const list = async (search?: string, archived: boolean | "all" = "all") => {
+        respond.mockClear();
+        await sessionReadHandlers["sessions.list"]!({
+          req: { type: "req", id: "archived-native-search", method: "sessions.list" },
+          params: { agentId: "main", search, archived, limit: 5, includeLastMessage: false },
+          client: null,
+          context: bindSessionRowProjection(requestContext(cfg), () => projection!),
+          isWebchatConnect: () => false,
+          respond,
+        });
+      };
+      await list(undefined, true);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          sessions: expect.arrayContaining([
+            expect.objectContaining({ sessionId: "archived-native", model: "original-native" }),
+          ]),
+        }),
+      );
+      await list("scheduled-target");
+      const expectTarget = () =>
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            sessions: [expect.objectContaining({ sessionId: "scheduled-target" })],
+          }),
+        );
+      expectTarget();
+      nativeModel = "replacement-native";
+      notifyPreparedModelRuntimePublication({ phase: "published" });
+      await projection.ensureMaterialized();
+      await list("scheduled-target");
+      expectTarget();
+      await list("replacement-native");
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          sessions: [
+            expect.objectContaining({ sessionId: "archived-native", model: "replacement-native" }),
+          ],
+        }),
+      );
+    } finally {
+      projection?.dispose();
+      release();
+      restoreActivePluginRegistrySnapshot(previousRegistry);
+    }
+  });
+});
+
 it.for(["change", "failure"] as const)(
   "keeps native ownership changes local to one listed row: %s",
   async (change) => {

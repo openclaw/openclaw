@@ -330,7 +330,6 @@ export async function restoreGatewayOperatorSource(params: {
       ) {
         revoke();
       }
-      assertPolicy();
     }
     assertPolicy();
     await params.prepareCurrent?.();

@@ -132,7 +132,7 @@ export async function recoverRestartAbortedMainSessions(params: {
       const entries = await readSessionEntrySummariesInWorker({
         agentId: target.agentId,
         storePath: target.storePath,
-        mainSessionRecovery: true,
+        mainSessionRecovery: "claims",
       });
       for (const entry of entries) {
         candidates.push({ ...entry, storePath: target.storePath, storeAgentId: target.agentId });

@@ -59,7 +59,7 @@ import {
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
 
-it("keeps retained subagent interruptions out of main-session startup recovery", async () => {
+it("loads only orphan candidates for main-session startup recovery", async () => {
   const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const sessionKey = "agent:main:main";
@@ -67,14 +67,17 @@ it("keeps retained subagent interruptions out of main-session startup recovery",
     { storePath, sessionKey },
     { sessionId: "main-session", updatedAt: 1, abortedLastRun: true },
   );
-  const summaries = await sessionEntryReader.readSessionEntrySummariesInWorker({ storePath });
-  const retained = Array.from({ length: 4_500 }, (_, index) => ({
-    sessionKey: `agent:main:subagent:retained-${index}`,
-    entry: { sessionId: `retained-${index}`, updatedAt: 1, abortedLastRun: true },
-  }));
-  const read = vi
-    .spyOn(sessionEntryReader, "readSessionEntrySummariesInWorker")
-    .mockResolvedValue([...retained, ...summaries]);
+  for (let index = 0; index < 16; index++) {
+    sessionAccessor.replaceSessionEntrySync(
+      { storePath, sessionKey: `agent:main:subagent:retained-${index}` },
+      { sessionId: `retained-${index}`, updatedAt: 1, abortedLastRun: true },
+    );
+    sessionAccessor.replaceSessionEntrySync(
+      { storePath, sessionKey: `agent:main:settled-${index}` },
+      { sessionId: `settled-${index}`, updatedAt: 1, status: "done" },
+    );
+  }
+  const read = vi.spyOn(sessionEntryReader, "readSessionEntrySummariesInWorker");
   const warn = vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation(() => {});
   try {
     expect(
@@ -87,6 +90,8 @@ it("keeps retained subagent interruptions out of main-session startup recovery",
       abortedLastRun: true,
       mainRestartRecovery: { chargedAttempts: 0 },
     });
+    const batches = await Promise.all(read.mock.results.map(({ value }) => value));
+    expect(batches.flat().map((item) => item.sessionKey)).toEqual([sessionKey]);
   } finally {
     read.mockRestore();
     warn.mockRestore();

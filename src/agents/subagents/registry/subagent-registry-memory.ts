@@ -3,6 +3,7 @@ import type { captureOperatorToolGatewayContinuationContext } from "../../../gat
 import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import {
   bindGatewayContextResolver,
+  clearGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -47,14 +48,7 @@ const evictedSubagentRunPayloads = new WeakSet<SubagentRunRecord>();
 export function compactSubagentRunForMemory(entry: SubagentRunRecord): SubagentRunRecord {
   if (
     evictedSubagentRunPayloads.has(entry) ||
-    entry.execution.status !== "terminal" ||
-    typeof entry.cleanupCompletedAt !== "number" ||
-    entry.requesterTurnRunId ||
-    entry.requesterSettleWake ||
-    entry.pauseReason ||
-    entry.killIntent ||
-    entry.killReconciliation ||
-    entry.collectorLaunchCleanupPending ||
+    needsSubagentActivation(entry) ||
     entry.delivery?.status === "pending" ||
     entry.delivery?.status === "in_progress" ||
     entry.delivery?.status === "suspended"
@@ -185,6 +179,7 @@ const childSessionCandidatesByKey = new SubagentRunIndex((entry) => entry.childS
 const runsByChildSessionOwner = new SubagentRunIndex(childSessionOwnerKey);
 const runsByRequesterSessionKey = new SubagentRunIndex((entry) => entry.requesterSessionKey);
 const runsByCollectorGroupKey = new SubagentRunIndex(collectorGroupKey);
+const activationRuns = new Map<string, SubagentRunRecord>();
 const runIndexes = [
   collectorsByChildSessionOwner,
   childSessionCandidatesByKey,
@@ -192,6 +187,23 @@ const runIndexes = [
   runsByRequesterSessionKey,
   runsByCollectorGroupKey,
 ];
+
+function needsSubagentActivation(entry: SubagentRunRecord): boolean {
+  return (
+    entry.execution.status !== "terminal" ||
+    entry.cleanupCompletedAt === undefined ||
+    Boolean(
+      // Collectors retain their spawning turn for cancellation, without owing a requester wake.
+      (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) ||
+      entry.requesterSettleWake ||
+      entry.pauseReason ||
+      entry.killIntent ||
+      entry.killReconciliation ||
+      entry.collectorLaunchCleanupPending ||
+      entry.execution.restartRecovery,
+    )
+  );
+}
 
 function childSessionOwnerKey(entry: {
   childSessionKey: string;
@@ -616,11 +628,17 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     for (const index of runIndexes) {
       index.update(runId, entry, "add");
     }
+    if (needsSubagentActivation(entry)) {
+      activationRuns.set(runId, entry);
+    } else {
+      activationRuns.delete(runId);
+    }
     return this;
   }
 
   override delete(runId: string): boolean {
     this.readLookup.set(runId, undefined);
+    activationRuns.delete(runId);
     const prev = this.get(runId);
     if (prev) {
       for (const index of runIndexes) {
@@ -640,15 +658,26 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       }
     }
     super.clear();
+    clearGatewayContextResolver(this);
     this.readLookup = new SubagentSessionReadLookup();
     for (const index of runIndexes) {
       index.clear();
     }
+    activationRuns.clear();
     publishSubagentRunChanges();
   }
 }
 
 export const subagentRuns = new SubagentRunMap();
+
+/** Row publication owns membership; settled history remains available to readers and retention. */
+export function getSubagentActivationRuns(
+  runs: ReadonlyMap<string, SubagentRunRecord>,
+): Iterable<SubagentRunRecord> {
+  return runs === subagentRuns
+    ? activationRuns.values()
+    : [...runs.values()].filter(needsSubagentActivation);
+}
 
 // Immutable row publications refresh keyed membership; full replacements invalidate it.
 subscribeSubagentRunChanges("projection", ({ runIds: ids }) => {

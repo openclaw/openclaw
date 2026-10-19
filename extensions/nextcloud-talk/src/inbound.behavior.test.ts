@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { OutboundReplyPayload, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { createMessage, requireFirstMockArg } from "./inbound-media.test-fixtures.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
-import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
+import type { CoreConfig } from "./types.js";
 
 const {
   createChannelPairingControllerMock,
@@ -79,14 +80,6 @@ function installRuntime(params?: {
   return runtime;
 }
 
-function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return call[0];
-}
-
 function requireFirstSendMessageCall(): [unknown, unknown, unknown] {
   const [call] = sendMessageNextcloudTalkMock.mock.calls;
   if (!call) {
@@ -116,23 +109,6 @@ function createAccount(
 
 function installPairingController(readStoreForDmPolicy = vi.fn(), issueChallenge = vi.fn()) {
   createChannelPairingControllerMock.mockReturnValue({ readStoreForDmPolicy, issueChallenge });
-}
-
-function createMessage(
-  overrides?: Partial<NextcloudTalkInboundMessage>,
-): NextcloudTalkInboundMessage {
-  return {
-    messageId: "msg-1",
-    roomToken: "room-1",
-    roomName: "Room 1",
-    senderId: "user-1",
-    senderName: "Alice",
-    text: "hello",
-    mediaType: "text/plain",
-    timestamp: Date.now(),
-    isGroupChat: false,
-    ...overrides,
-  };
 }
 
 describe("nextcloud-talk inbound behavior", () => {

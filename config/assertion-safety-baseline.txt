@@ -2486,7 +2486,6 @@ src/worker/worker-process.ts	1
 src/worker/workspace-rsync-receiver.ts	1
 ui/src/app-navigation.ts	1
 ui/src/app-routes.ts	1
-ui/src/app/app-host-route-state.ts	1
 ui/src/app/app-shell-chrome.ts	2
 ui/src/app/app-shell-gateway.ts	1
 ui/src/app/assistant-identity.ts	2

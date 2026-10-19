@@ -136,6 +136,10 @@ scanning unrelated run history. Completed children remain in saved batches when
 their delivery receipts are needed to prevent replaying an already delivered result.
 Binding restored runs to the new Gateway does not emit session activity updates
 for unchanged records. Recovery and cleanup still publish their actual changes.
+Startup activates only runs with unfinished execution, cleanup, or requester
+obligations. Settled history stays available for listing and result reads without
+reserving completion sources or resuming it. Retention still prunes finished Swarm
+groups, including when no runs need activation.
 Durably completed cleanup does not replay interrupted child-session effects on restart.
 The saved interruption still rejects late child results, and pending requester wakes
 continue through their existing settlement owner.
