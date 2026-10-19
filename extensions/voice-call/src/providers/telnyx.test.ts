@@ -79,13 +79,6 @@ function createSignedTelnyxCtx(params: {
   });
 }
 
-function requireJwkX(jwk: JsonWebKey) {
-  if (typeof jwk.x !== "string" || jwk.x.length === 0) {
-    throw new Error("expected Ed25519 JWK export to expose x");
-  }
-  return jwk.x;
-}
-
 describe("TelnyxProvider.verifyWebhook", () => {
   it("fails closed when public key is missing and skipVerification is false", () => {
     expect(createProvider().verifyWebhook(createCtx()).ok).toBe(false);
@@ -103,10 +96,9 @@ describe("TelnyxProvider.verifyWebhook", () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
 
     const jwk = publicKey.export({ format: "jwk" }) as JsonWebKey;
-    expect(jwk.kty).toBe("OKP");
-    expect(jwk.crv).toBe("Ed25519");
-
-    const rawPublicKey = Buffer.from(requireJwkX(jwk), "base64url");
+    expect(jwk).toMatchObject({ kty: "OKP", crv: "Ed25519", x: expect.any(String) });
+    expect(jwk.x).not.toBe("");
+    const rawPublicKey = Buffer.from(expectDefined(jwk.x, "Ed25519 public key"), "base64url");
     const rawPublicKeyBase64 = rawPublicKey.toString("base64");
     const provider = createProvider(rawPublicKeyBase64);
     const rawBody = JSON.stringify({
@@ -152,14 +144,15 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
       "telnyx:req:abc",
     );
 
-    expect(result.events).toHaveLength(1);
-    expect(result.events[0]).toMatchObject({
-      dedupeKey: "telnyx:req:abc",
-      type: "call.initiated",
-      direction: "inbound",
-      from: "+15551111111",
-      to: "+15550000000",
-    });
+    expect(result.events).toMatchObject([
+      {
+        dedupeKey: "telnyx:req:abc",
+        type: "call.initiated",
+        direction: "inbound",
+        from: "+15551111111",
+        to: "+15550000000",
+      },
+    ]);
   });
 
   it("uses raw client_state fallback when client_state is malformed base64", () => {
@@ -168,8 +161,7 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
       client_state: "call-1@@@",
     });
 
-    expect(result.events).toHaveLength(1);
-    expect(result.events[0]?.callId).toBe("call-1@@@");
+    expect(result.events).toMatchObject([{ callId: "call-1@@@" }]);
   });
 
   it("reads transcription text from Telnyx transcription_data payloads", () => {
@@ -182,19 +174,20 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
       },
     });
 
-    expect(result.events).toHaveLength(1);
-    expect(result.events[0]).toMatchObject({
-      type: "call.speech",
-      transcript: "hello this is a test speech",
-      isFinal: false,
-      confidence: 0.977219,
-    });
+    expect(result.events).toMatchObject([
+      {
+        type: "call.speech",
+        transcript: "hello this is a test speech",
+        isFinal: false,
+        confidence: 0.977219,
+      },
+    ]);
   });
 
-  it.each([undefined])("does not emit blank transcription payloads %#", (transcript) => {
+  it("does not emit blank transcription payloads", () => {
     const result = parseEvent("call.transcription", {
       call_control_id: "call-1",
-      transcription_data: { transcript },
+      transcription_data: { transcript: undefined },
     });
 
     expect(result.events).toEqual([]);
@@ -245,13 +238,9 @@ describe("TelnyxProvider Media Streaming (PCMU)", () => {
     // The WebSocket owns stream lifecycle; carrier callbacks must not duplicate it.
     for (const eventType of ["streaming.started", "streaming.stopped"]) {
       const result = parseEvent(eventType, { call_control_id: "call-control-1" }, "key-1");
-      expect(result.events).toHaveLength(0);
-      expect(result.statusCode).toBe(200);
+      expect(result).toMatchObject({ events: [], statusCode: 200 });
     }
   });
-});
-
-describe("TelnyxProvider speak control", () => {
   it("passes custom Telnyx voice ids to the speak action", async () => {
     const release = mockResponse();
     const provider = new TelnyxProvider(PROVIDER_CONFIG);

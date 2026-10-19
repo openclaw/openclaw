@@ -16,36 +16,26 @@ function parseEvent(event: Record<string, unknown>) {
   return new MockProvider().parseWebhookEvent(createWebhookContext(JSON.stringify({ event })));
 }
 
+const callerFacts = {
+  id: "caller-facts",
+  type: "call.initiated",
+  callId: "mock-call",
+  providerCallId: "mock-provider-call",
+  timestamp: 123,
+  direction: "inbound",
+  from: "+15550000001",
+  to: "+15550000002",
+};
+
 describe("MockProvider", () => {
   function parseCallerEvent(overrides: Record<string, unknown> = {}) {
-    return parseEvent({
-      id: "caller-facts",
-      type: "call.initiated",
-      callId: "mock-call",
-      providerCallId: "mock-provider-call",
-      timestamp: 123,
-      direction: "inbound",
-      from: "+15550000001",
-      to: "+15550000002",
-      ...overrides,
-    });
+    return parseEvent({ ...callerFacts, ...overrides });
   }
 
   it("preserves caller facts for call.initiated JSON", () => {
     expect(parseCallerEvent()).toEqual({
       statusCode: 200,
-      events: [
-        {
-          id: "caller-facts",
-          type: "call.initiated",
-          callId: "mock-call",
-          providerCallId: "mock-provider-call",
-          timestamp: 123,
-          direction: "inbound",
-          from: "+15550000001",
-          to: "+15550000002",
-        },
-      ],
+      events: [callerFacts],
     });
   });
 
@@ -58,12 +48,9 @@ describe("MockProvider", () => {
   it("omits malformed optional providerCallId without discarding the event", () => {
     for (const value of [null, 42, {}, []]) {
       const result = parseCallerEvent({ providerCallId: value });
-      expect(result.statusCode).toBe(200);
-      expect(result.events).toHaveLength(1);
-      expect(result.events[0]).toMatchObject({
-        id: "caller-facts",
-        callId: "mock-call",
-        type: "call.initiated",
+      expect(result).toMatchObject({
+        statusCode: 200,
+        events: [{ id: "caller-facts", callId: "mock-call", type: "call.initiated" }],
       });
       expect(result.events[0]?.providerCallId, JSON.stringify({ value })).toBeUndefined();
     }
@@ -71,7 +58,6 @@ describe("MockProvider", () => {
 
   it("simulates machine detection through the webhook event boundary", () => {
     const result = parseEvent({
-      id: "amd",
       type: "call.amd",
       callId: "call-1",
       answeredBy: "machine_end_beep",
@@ -83,7 +69,6 @@ describe("MockProvider", () => {
 
   it("does not emit blank speech payloads", () => {
     const result = parseEvent({
-      id: "evt-blank-speech",
       type: "call.speech",
       callId: "call-blank",
       transcript: undefined,
@@ -92,9 +77,7 @@ describe("MockProvider", () => {
     expect(result.events).toEqual([]);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
   it("expires replay keys after the mock replay window elapses", () => {
     vi.useFakeTimers();
@@ -109,9 +92,11 @@ describe("MockProvider", () => {
     vi.advanceTimersByTime(6 * 60 * 1000);
     const afterExpiry = provider.verifyWebhook(ctx);
 
-    expect(first.isReplay).toBe(false);
-    expect(beforeExpiry.isReplay).toBe(true);
-    expect(afterExpiry.isReplay).toBe(false);
+    expect([first.isReplay, beforeExpiry.isReplay, afterExpiry.isReplay]).toEqual([
+      false,
+      true,
+      false,
+    ]);
     expect(afterExpiry.verifiedRequestKey).toBe(first.verifiedRequestKey);
   });
 

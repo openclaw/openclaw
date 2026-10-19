@@ -67,6 +67,15 @@ function context(overrides: Partial<WebhookContext> = {}): WebhookContext {
   };
 }
 
+function expectTransfer(body: unknown) {
+  expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      url: `https://api.plivo.com/v1/Account/${PROVIDER_CONFIG.authId}/Call/call-uuid/`,
+      init: expect.objectContaining({ method: "POST", body }),
+    }),
+  );
+}
+
 describe("PlivoProvider", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset().mockImplementation(async () => ({
@@ -98,18 +107,12 @@ describe("PlivoProvider", () => {
 
     await provider.playTts({ callId, providerCallId: callUuid, text: "How can I help?" });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: `https://api.plivo.com/v1/Account/${PROVIDER_CONFIG.authId}/Call/call-uuid/`,
-        init: expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({
-            legs: "aleg",
-            aleg_url:
-              "https://voice.openclaw.ai/voice/webhook?provider=plivo&flow=xml-speak&callId=internal-call-id",
-            aleg_method: "POST",
-          }),
-        }),
+    expectTransfer(
+      JSON.stringify({
+        legs: "aleg",
+        aleg_url:
+          "https://voice.openclaw.ai/voice/webhook?provider=plivo&flow=xml-speak&callId=internal-call-id",
+        aleg_method: "POST",
       }),
     );
   });
@@ -119,22 +122,14 @@ describe("PlivoProvider", () => {
     getPlivoPrivateCallState(provider).callIdToWebhookUrl.set(callId, webhookUrl);
 
     await provider.playTts({
-      callId: "internal-call-id",
-      providerCallId: "call-uuid",
+      callId,
+      providerCallId: callUuid,
       text: "How can I help?",
       locale: "en-US",
       listenAfterPlayback: true,
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: `https://api.plivo.com/v1/Account/${PROVIDER_CONFIG.authId}/Call/call-uuid/`,
-        init: expect.objectContaining({
-          method: "POST",
-          body: expect.stringContaining("flow=xml-speak"),
-        }),
-      }),
-    );
+    expectTransfer(expect.stringContaining("flow=xml-speak"));
 
     const result = provider.parseWebhookEvent(
       context({
@@ -151,45 +146,26 @@ describe("PlivoProvider", () => {
     expect(responseBody.indexOf("<GetInput")).toBeLessThan(responseBody.indexOf("<Speak"));
   });
 
-  it("releases all provider call state on terminal callbacks and late replays", () => {
+  it.each([true, false])("releases terminal call state (query override=%s)", (override) => {
     const provider = new PlivoProvider(PROVIDER_CONFIG);
-    seedState(provider);
+    const id = override ? callId : callUuid;
+    seedState(provider, id);
     const terminal = context({
       rawBody: `CallUUID=${callUuid}&RequestUUID=${requestUuid}&CallStatus=completed&Direction=outbound`,
-      url: `https://example.com/voice/webhook?provider=plivo&flow=hangup&callId=${callId}`,
-      query: { provider: "plivo", flow: "hangup", callId },
+      url: override ? `${webhookUrl}?provider=plivo&flow=hangup&callId=${id}` : webhookUrl,
+      query: override ? { provider: "plivo", flow: "hangup", callId: id } : {},
     });
 
-    for (const phase of ["terminal", "late replay"]) {
-      expect(provider.parseWebhookEvent(terminal).events[0], phase).toMatchObject({
+    // Repeat the override callback to retain the late-replay cleanup contract.
+    for (let attempt = 0; attempt < (override ? 2 : 1); attempt++) {
+      expect(provider.parseWebhookEvent(terminal).events[0], `attempt ${attempt}`).toMatchObject({
         type: "call.ended",
-        callId,
+        callId: id,
         providerCallId: callUuid,
         reason: "completed",
       });
-      expectState(provider, false);
+      expectState(provider, false, id);
     }
-  });
-
-  it("releases call-id state for terminal callbacks without a query override", () => {
-    const provider = new PlivoProvider(PROVIDER_CONFIG);
-    seedState(provider, callUuid);
-
-    const event = provider.parseWebhookEvent(
-      context({
-        rawBody: `CallUUID=${callUuid}&RequestUUID=${requestUuid}&CallStatus=completed&Direction=outbound`,
-        url: "https://example.com/voice/webhook",
-        query: {},
-      }),
-    ).events[0];
-
-    expect(event).toMatchObject({
-      type: "call.ended",
-      callId: callUuid,
-      providerCallId: callUuid,
-      reason: "completed",
-    });
-    expectState(provider, false, callUuid);
   });
 
   it("releases all provider call state after repeated explicit hangups", async () => {
