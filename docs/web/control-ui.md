@@ -117,7 +117,7 @@ Sidebar live narration pauses while the browser tab is hidden and resumes from c
 
 **My sessions** and specific-owner selections list that owner’s sessions across configured agents, independently of the chat or workspace you are viewing. Other agent-scoped sidebar lists refresh immediately when you switch agents, even while the selected chat is still loading. Automatic startup and reconnect refreshes continue to wait for that chat to become ready.
 
-Owner-filtered sidebars apply live updates to loaded sessions while ownership and list membership remain unchanged. Ownership changes, new sessions, and broad invalidations still refresh the authoritative list. A completed refresh absorbs any older scheduled fallback read.
+Sidebars apply live updates to loaded sessions without periodic list reads while ownership and list membership remain unchanged. Ownership changes, new sessions, incomplete event coverage, and broad invalidations still refresh the authoritative list. Matching views share the same managed query, and refreshes reuse retained row revisions when available.
 
 In **My sessions**, choosing an agent from the switcher resumes that agent's newest loaded active conversation from your list, or opens its Home when none is loaded. Agent unread indicators and Home activity use the same current list; Home controls keep their separate main-session behavior.
 

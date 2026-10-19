@@ -612,9 +612,8 @@ export function createApplicationGateway(
           lastErrorCode: null,
           lastErrorAuthReason: null,
         });
-        if (isCurrentClient(nextClient)) {
-          connect();
-        }
+        // The protocol reconnects its socket after dropping the gapped frame.
+        // Keep the client so conditional reads retain their raw row bases.
       },
       onEvent: createGatewayEventObserver({
         isAttached: () => client === nextClient,
