@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -33,19 +34,22 @@ afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeService(
-  dataDir: string,
   config: Partial<LogbookConfig> = {},
   deps: Partial<ConstructorParameters<typeof LogbookService>[1]> = {},
 ) {
-  return new LogbookService(resolveLogbookConfig({ captureEnabled: false, ...config }), {
+  const dataDir = realpathSync(tempDirs.make("logbook-service-"));
+  const runtime = deps.runtime ?? createPluginRuntimeMock();
+  const logger = deps.logger ?? { ...quietLogger, warn: vi.fn(), error: vi.fn() };
+  const service = new LogbookService(resolveLogbookConfig({ captureEnabled: false, ...config }), {
     dataDir,
+    runtime,
+    logger,
     workerModuleUrl,
-    runtime: createPluginRuntimeMock(),
     fullConfig: {},
-    logger: quietLogger,
     scheduler: createTestPluginServiceScheduler(),
     ...deps,
   });
+  return { service, dataDir, runtime, logger };
 }
 
 function block<Args extends unknown[], Result>(
@@ -98,11 +102,13 @@ describe("Logbook service disposal", () => {
   ])(
     "publishes synthesized cards with queued retention (prune=$prune, pending=$pending)",
     async ({ prune, pending }) => {
-      const dataDir = tempDirs.make("logbook-publication-retention-");
+      const { dataDir, runtime, logger, service } = makeService({
+        visionModel: "codex/gpt-5.6-sol",
+        analysisIntervalMinutes: 10,
+      });
       const day = dayKeyFor(Date.now());
       const startMs = new Date(`${day}T10:00:00`).getTime();
       const endMs = startMs + 10 * 60_000;
-      const runtime = createPluginRuntimeMock();
       runtime.mediaUnderstanding.extractStructuredWithModel = vi.fn(async () => ({
         text: observationText("10:10:00"),
       }));
@@ -128,12 +134,6 @@ describe("Logbook service disposal", () => {
           cardText("10:10:00", "Retained synthesis", "Published through retention"),
         );
       });
-      const logger = { ...quietLogger, warn: vi.fn(), error: vi.fn() };
-      const service = makeService(
-        dataDir,
-        { visionModel: "codex/gpt-5.6-sol", analysisIntervalMinutes: 10 },
-        { runtime, logger },
-      );
       const peer = await LogbookStore.open(dataDir, workerModuleUrl);
       try {
         const frameTimes = pending
@@ -159,9 +159,7 @@ describe("Logbook service disposal", () => {
         expect(await pruning).toEqual({ status: "fulfilled", value: prune ? 1 : 0 });
         await service.stop();
         const batch = await peer.latestBatch();
-        if (!batch) {
-          throw new Error("Expected the analyzed batch to persist");
-        }
+        assert(batch, "Expected the analyzed batch to persist");
         expect(batch).toMatchObject({
           day,
           startMs,
@@ -181,14 +179,15 @@ describe("Logbook service disposal", () => {
         expect(await peer.countUnbatchedActiveFrames()).toBe(0);
         expect(logger.warn).not.toHaveBeenCalled();
         const cards = await peer.cardsForDay(day);
-        expect(cards).toHaveLength(1);
-        expect(cards[0]).toMatchObject({
-          title: "Retained synthesis",
-          day,
-          startMs,
-          endMs,
-          keyframeId: prune ? undefined : frameId,
-        });
+        expect(cards).toMatchObject([
+          {
+            title: "Retained synthesis",
+            day,
+            startMs,
+            endMs,
+            keyframeId: prune ? undefined : frameId,
+          },
+        ]);
         await peer.close();
         await using reopened = await openStore(dataDir);
         expect(await reopened.cardsForDay(day)).toEqual(cards);
@@ -204,7 +203,7 @@ describe("Logbook service disposal", () => {
   );
 
   it("settles startup storage and asynchronous close before service stop finishes", async () => {
-    const dataDir = tempDirs.make("logbook-opening-");
+    const { dataDir, service } = makeService();
     const store = await LogbookStore.open(dataDir, workerModuleUrl);
     const opened = createDeferred<void>();
     const releaseOpen = createDeferred<void>();
@@ -215,7 +214,6 @@ describe("Logbook service disposal", () => {
     );
     const closeStore = store.close.bind(store);
     vi.spyOn(store, "close").mockImplementationOnce(block(closeStore, closing, releaseClose));
-    const service = makeService(dataDir);
     const starting = service.start();
     await opened.promise;
     const completed = vi.fn();
@@ -233,12 +231,11 @@ describe("Logbook service disposal", () => {
   });
 
   it("closes storage when startup recovery fails without publishing a running service", async () => {
-    const dataDir = tempDirs.make("logbook-startup-failure-");
+    const { service } = makeService();
     const close = vi.spyOn(LogbookStore.prototype, "close");
     vi.spyOn(LogbookStore.prototype, "resetRunningBatches").mockRejectedValueOnce(
       new Error("storage unavailable"),
     );
-    const service = makeService(dataDir);
     try {
       await expect(service.start()).rejects.toThrow("storage unavailable");
       await expect(service.status()).rejects.toThrow("not running");
@@ -249,8 +246,7 @@ describe("Logbook service disposal", () => {
   });
 
   it("owns delayed manual analysis preparation through rejection and stop", async () => {
-    const dataDir = tempDirs.make("logbook-analysis-admission-");
-    const service = makeService(dataDir, { visionModel: "synthetic/vision" });
+    const { service } = makeService({ visionModel: "synthetic/vision" });
     await service.start();
     const entered = createDeferred<void>();
     const reset = createDeferred<number>();
@@ -289,13 +285,19 @@ describe("Logbook service disposal", () => {
     "ask-read",
     "frame-read",
   ])("drains %s before closing SQLite", async (kind) => {
-    const dataDir = realpathSync(tempDirs.make("logbook-service-drain-"));
+    const clock = createGatewaySchedulerClock();
+    const { dataDir, runtime, logger, service } = makeService(
+      {
+        captureEnabled: true,
+        captureIntervalSeconds: kind.startsWith("capture") ? 5 : 600,
+        visionModel: "synthetic/vision",
+      },
+      { scheduler: createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock)) },
+    );
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
-    const runtime = createPluginRuntimeMock();
     const day = dayKeyFor(Date.now());
     const startMs = new Date(`${day}T10:00:00`).getTime();
-    const logger = { ...quietLogger, error: vi.fn(), warn: vi.fn() };
     const nodes = { nodes: [{ nodeId: "synthetic-node", commands: ["screen.snapshot"] }] };
     runtime.nodes.list = vi.fn(async () => {
       if (kind === "capture-list") {
@@ -329,47 +331,26 @@ describe("Logbook service disposal", () => {
     }
     const activeStore = await LogbookStore.open(dataDir, workerModuleUrl);
     vi.spyOn(LogbookStore, "open").mockResolvedValueOnce(activeStore);
+    const hold = <Args extends unknown[], Result>(run: (...args: Args) => Promise<Result>) =>
+      block(run.bind(activeStore), entered, release);
     if (kind === "frame-read") {
       await capture(activeStore, day, Date.now(), "synthetic frame payload");
-      const framePayload = activeStore.framePayload.bind(activeStore);
-      vi.spyOn(activeStore, "framePayload").mockImplementation(
-        block(framePayload, entered, release),
-      );
+      vi.spyOn(activeStore, "framePayload").mockImplementation(hold(activeStore.framePayload));
     }
     if (kind === "capture-write") {
-      const captureFrame = activeStore.captureFrame.bind(activeStore);
-      vi.spyOn(activeStore, "captureFrame").mockImplementation(
-        block(captureFrame, entered, release),
-      );
+      vi.spyOn(activeStore, "captureFrame").mockImplementation(hold(activeStore.captureFrame));
     }
     if (kind === "standup-write") {
-      const saveStandup = activeStore.saveStandup.bind(activeStore);
-      vi.spyOn(activeStore, "saveStandup").mockImplementation(block(saveStandup, entered, release));
+      vi.spyOn(activeStore, "saveStandup").mockImplementation(hold(activeStore.saveStandup));
     }
     if (kind === "status-read") {
-      const latestBatch = activeStore.latestBatch.bind(activeStore);
-      vi.spyOn(activeStore, "latestBatch").mockImplementation(block(latestBatch, entered, release));
+      vi.spyOn(activeStore, "latestBatch").mockImplementation(hold(activeStore.latestBatch));
     }
     if (kind === "ask-read") {
-      const observationsInRange = activeStore.observationsInRange.bind(activeStore);
       vi.spyOn(activeStore, "observationsInRange").mockImplementation(
-        block(observationsInRange, entered, release),
+        hold(activeStore.observationsInRange),
       );
     }
-    const clock = createGatewaySchedulerClock();
-    const service = makeService(
-      dataDir,
-      {
-        captureEnabled: true,
-        captureIntervalSeconds: kind.startsWith("capture") ? 5 : 600,
-        visionModel: "synthetic/vision",
-      },
-      {
-        runtime,
-        logger,
-        scheduler: createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock)),
-      },
-    );
     await service.start();
     const active =
       kind.startsWith("capture") || kind.startsWith("vision")

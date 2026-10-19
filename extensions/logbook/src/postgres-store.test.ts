@@ -20,6 +20,7 @@ const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const DAY = "2026-07-03";
+const window = { day: DAY, startMs: 0, endMs: 10_000 };
 
 describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
   let backend: ReturnType<typeof createSqliteWorkerBackend>;
@@ -36,6 +37,12 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
     );
   const execute: typeof backend.execute = (command) =>
     withEngineStoreAdmission(() => backend.execute(command));
+  const saveStandup = (text: string, day = DAY) =>
+    execute({ type: "saveStandup", input: { day, text } });
+  const observations = (tailLimit?: number) =>
+    execute({ type: "observationsInRange", input: { ...window, tailLimit } });
+  const replace = (drafts: LogbookCardDraft[], span = window) =>
+    execute({ type: "replaceCardsInWindow", input: { ...span, drafts } });
 
   beforeAll(async () => {
     dataDir = tempDirs.make("logbook-postgres-");
@@ -143,32 +150,22 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
 
   it("replaces observations, cards, and standups without duplicate or partial results", () => {
     const batchId = batch([frame(20_000)]);
-    const observation = (text: string) => ({ startMs: 0, endMs: 10_000, text });
-    execute({
-      type: "replaceObservations",
-      input: { batchId, day: DAY, segments: [observation("old")] },
-    });
-    execute({
-      type: "replaceObservations",
-      input: { batchId, day: DAY, segments: [observation("first"), observation("second")] },
-    });
-    expect(
-      execute({ type: "observationsInRange", input: { day: DAY, startMs: 0, endMs: 10_000 } }),
-    ).toEqual([
+    const observe = (...texts: string[]) =>
+      execute({
+        type: "replaceObservations",
+        input: {
+          batchId,
+          day: DAY,
+          segments: texts.map((text) => ({ startMs: 0, endMs: 10_000, text })),
+        },
+      });
+    observe("old");
+    observe("first", "second");
+    expect(observations()).toEqual([
       expect.objectContaining({ batchId, text: "first" }),
       expect.objectContaining({ batchId, text: "second" }),
     ]);
-    expect(
-      execute({
-        type: "observationsInRange",
-        input: { day: DAY, startMs: 0, endMs: 10_000, tailLimit: 1 },
-      }),
-    ).toEqual([expect.objectContaining({ text: "second" })]);
-    const replace = (drafts: LogbookCardDraft[]) =>
-      execute({
-        type: "replaceCardsInWindow",
-        input: { day: DAY, startMs: 0, endMs: 10_000, drafts },
-      });
+    expect(observations(1)).toEqual([expect.objectContaining({ text: "second" })]);
     replace([card({ title: "Old" })]);
     replace([card()]);
     expect(() => replace([card({ title: "Invalid", keyframeId: 999_999 })])).toThrow();
@@ -184,8 +181,8 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
         apps: [{ domain: "example.test", ms: 10_000 }],
       },
     });
-    execute({ type: "saveStandup", input: { day: DAY, text: "Old" } });
-    execute({ type: "saveStandup", input: { day: DAY, text: "Retained" } });
+    saveStandup("Old");
+    saveStandup("Retained");
     expect(execute({ type: "getStandup", input: { day: DAY } })).toMatchObject({
       text: "Retained",
     });
@@ -195,22 +192,15 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
     const day = "2026-07-04";
     const id = frame(-1000, false, day);
     const file = path.join(dataDir, "frames", day, "-1000-false.jpg");
-    execute({
-      type: "replaceCardsInWindow",
-      input: {
-        day,
-        startMs: -1000,
-        endMs: 0,
-        drafts: [card({ day, startMs: -1000, endMs: 0, keyframeId: id })],
-      },
-    });
+    const span = { day, startMs: -1000, endMs: 0 };
+    replace([card({ ...span, keyframeId: id })], span);
     expect(execute({ type: "pruneFrames", input: { olderThanMs: 0 } })).toBe(1);
     expect(existsSync(file)).toBe(false);
     expect(execute({ type: "frameById", input: { id } })).toBeNull();
     expect(execute({ type: "cardsForDay", input: { day } })).toEqual([
       expect.objectContaining({ keyframeId: undefined, title: "Coding" }),
     ]);
-    execute({ type: "saveStandup", input: { day, text: "After pruning" } });
+    saveStandup("After pruning", day);
     await backend.close();
     backend = open();
     expect(execute({ type: "getStandup", input: { day } })).toMatchObject({
