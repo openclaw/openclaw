@@ -4,10 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
-import {
-  loadExactSessionEntry,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.sqlite-entry.js";
+import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { createPluginDoctorStateMigrationContext } from "../infra/state-migrations.plugin-doctor-context.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
@@ -24,14 +21,12 @@ import {
 } from "./doctor-session-sqlite.publication-spies.test-support.js";
 
 async function migration() {
-  const contract = await loadBundledPluginFacade<{
+  const { stateMigrations } = await loadBundledPluginFacade<{
     stateMigrations: PluginDoctorStateMigration[];
   }>({ pluginId: "codex", artifactBasename: "doctor-contract-api.js" });
   return expectDefined(
-    contract.stateMigrations.find(
-      (entry) => entry.id === "codex-app-server-sidecars-to-plugin-state",
-    ),
-    "Codex sidecar migration in its public Doctor contract",
+    stateMigrations.find(({ id }) => id === "codex-app-server-sidecars-to-plugin-state"),
+    "Codex sidecar migration",
   );
 }
 
@@ -119,13 +114,11 @@ it("honors canonical deletion during plugin migration after deferred import", ()
       value: expect.objectContaining({ sessionId: "legacy-kept", state: "active" }),
     });
     expect(
-      bindings.filter(
-        (entry) =>
-          isRecord(entry.value) &&
-          entry.value.sessionId === "legacy-deleted" &&
-          entry.value.state === "active",
+      bindings.some(
+        ({ value }) =>
+          isRecord(value) && value.sessionId === "legacy-deleted" && value.state === "active",
       ),
-    ).toEqual([]);
+    ).toBe(false);
     expectSidecarsArchived(originals);
     expect(await (await migration()).detectLegacyState(params)).toBeNull();
   }));
@@ -140,16 +133,10 @@ it("does not resurrect an imported session because an unrelated configured sourc
       agent: "main",
       mode: "import",
     });
-    const directory = state.path("configured-sessions/main");
-    fs.mkdirSync(directory, { recursive: true });
-    const unrelatedStore = path.join(directory, "sessions.json");
-    const unrelatedSource = JSON.stringify({
-      "agent:main:not-imported": {
-        sessionId: "not-imported",
-        sessionFile: "not-imported.jsonl",
-        updatedAt: 1,
-      },
-    });
+    const unrelatedStore = state.path("configured-sessions/main/sessions.json");
+    fs.mkdirSync(path.dirname(unrelatedStore), { recursive: true });
+    const unrelatedSource =
+      '{"agent:main:not-imported":{"sessionId":"not-imported","sessionFile":"not-imported.jsonl","updatedAt":1}}';
     fs.writeFileSync(unrelatedStore, unrelatedSource);
     expect((await deleteImportedSession(scope)).deleted).toBe(true);
     const params = migrationParams(state, cfg);
@@ -169,16 +156,13 @@ it("does not resurrect an imported session because an unrelated configured sourc
   }));
 
 it("imports retained legacy Codex sidecars with an existing explicit SQLite session store", () =>
-  withCodex(async ({ state, cfg, scope, storePath, originals }) => {
-    await upsertSessionEntryCore(
-      { ...scope, sessionKey: "agent:main:unrelated" },
-      { sessionId: "unrelated", updatedAt: 1 },
-    );
+  withCodex(async ({ state, cfg, scope, storePath, originals, writeEntry }) => {
+    await writeEntry("agent:main:unrelated", { sessionId: "unrelated", updatedAt: 1 });
     const config = {
       ...cfg,
       session: { store: path.join(state.agentDir(), "openclaw-agent.sqlite") },
     };
-    const configuredScope = { ...scope, storePath: config.session?.store ?? scope.storePath };
+    const configuredScope = { ...scope, storePath: config.session.store };
     const entry = (name: string) =>
       loadExactSessionEntry({ ...configuredScope, sessionKey: `agent:main:${name}` })?.entry;
     expect(entry("unrelated")?.sessionId).toBe("unrelated");

@@ -57,17 +57,18 @@ it("settles every receipt sharing an orphan archive after interrupted index publ
       run: async (authority) => {
         let report = await run();
         expect(report.targets.map((target) => target.agentId).toSorted()).toEqual(["main", "ops"]);
-        const receipts = report.targets.map((target) => ({
-          target,
-          receipt: readDeferredPluginSessionImport({
+        const originalTargets = report.targets;
+        const readReceipt = (target: (typeof originalTargets)[number]) =>
+          readDeferredPluginSessionImport({
             cfg,
             env: state.env,
             target,
             sqlitePath: target.sqlitePath,
-          }),
-        }));
-        for (const { receipt } of receipts) {
-          expect(receipt?.sources).toContainEqual(expect.objectContaining({ path: orphan }));
+          });
+        for (const target of originalTargets) {
+          expect(readReceipt(target)?.sources).toContainEqual(
+            expect.objectContaining({ path: orphan }),
+          );
         }
         const settle = () =>
           settleRetainedDoctorSessionSources(report, ["fixture-plugin"], authority, () =>
@@ -92,20 +93,12 @@ it("settles every receipt sharing an orphan archive after interrupted index publ
 
         await expect(settle()).resolves.toBeUndefined();
         expect(report.targets.flatMap((target) => target.issues)).toEqual([]);
-        expect(fs.existsSync(storePath)).toBe(false);
-        expect(fs.existsSync(orphan)).toBe(false);
+        expectMissing(storePath, orphan);
         const targets = listSessionSqliteMigrationManifestPaths(state.env).flatMap(
           (file) => readSessionSqliteMigrationManifest(file)?.targets ?? [],
         );
-        const moves = receipts.map(({ target }) => {
-          expect(
-            readDeferredPluginSessionImport({
-              cfg,
-              env: state.env,
-              target,
-              sqlitePath: target.sqlitePath,
-            }),
-          ).toBeUndefined();
+        const moves = originalTargets.map((target) => {
+          expect(readReceipt(target)).toBeUndefined();
           const archived = targets
             .filter((entry) => entry.agentId === target.agentId && entry.storePath === storePath)
             .flatMap((entry) => entry.completedMoves)
@@ -133,8 +126,10 @@ it("settles every receipt sharing an orphan archive after interrupted index publ
         expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
         const repeated = await run();
         expect(repeated.targets.flatMap((target) => target.issues)).toEqual([]);
-        expect(repeated.totals.importedEntries).toBe(0);
-        expect(repeated.totals.archivedUnreferencedJsonlFiles).toBe(0);
+        expect(repeated.totals).toMatchObject({
+          importedEntries: 0,
+          archivedUnreferencedJsonlFiles: 0,
+        });
       },
     });
   });

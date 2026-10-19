@@ -25,6 +25,7 @@ import {
   migrationManifest,
 } from "./doctor-session-sqlite.fixtures.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import { expectMissing } from "./doctor-session-sqlite.publication-spies.test-support.js";
 import { writeState } from "./doctor-session-sqlite.test-support.js";
 
 it("receipts indexless configured history and archives retired history while a plugin is pending", async () => {
@@ -38,12 +39,7 @@ it("receipts indexless configured history and archives retired history while a p
       const directory = state.sessionsDir(agentId);
       fs.mkdirSync(directory, { recursive: true });
       const bytes = jsonl(
-        {
-          type: "session",
-          version: 3,
-          id: `${agentId}-history`,
-          timestamp: "2026-07-01T00:00:00.000Z",
-        },
+        { type: "session", version: 3, id: `${agentId}-history` },
         messageEvent(`${agentId}-message`, "user", `Preserve ${agentId} history`),
       );
       const source = path.join(
@@ -97,17 +93,13 @@ it("receipts indexless configured history and archives retired history while a p
       expect(fs.readFileSync(move.archivePath, "utf8")).toBe(sources.get(move.sourcePath));
       expect(fs.existsSync(target.storePath)).toBe(false);
     }
-    expect(
-      fs.existsSync(
-        resolveTargetSqlitePath(
-          {
-            agentId: "trajectory-only",
-            storePath: path.join(state.sessionsDir("trajectory-only"), "sessions.json"),
-          },
-          state.env,
-        ),
+    const trajectoryStore = path.join(state.sessionsDir("trajectory-only"), "sessions.json");
+    expectMissing(
+      resolveTargetSqlitePath(
+        { agentId: "trajectory-only", storePath: trajectoryStore },
+        state.env,
       ),
-    ).toBe(false);
+    );
     expect(f.assertReady).not.toThrow();
     const newIndex = JSON.stringify({
       "agent:active:unimported": { sessionId: "unimported", updatedAt: 999 },
@@ -215,7 +207,6 @@ it("holds an existing unconfigured database before importing legacy sessions wit
     const sessionsDir = state.sessionsDir("retained");
     const agentDir = state.agentDir("retained");
     fs.mkdirSync(sessionsDir, { recursive: true });
-    fs.mkdirSync(agentDir, { recursive: true });
     const sqlitePath = path.join(agentDir, "openclaw-agent.sqlite");
     const database = openOpenClawAgentDatabase({
       agentId: "retained",
@@ -230,13 +221,7 @@ it("holds an existing unconfigured database before importing legacy sessions wit
     const transcriptPath = path.join(sessionsDir, "legacy-kept.jsonl");
     fs.writeFileSync(
       storePath,
-      JSON.stringify({
-        "agent:retained:kept": {
-          sessionId: "legacy-kept",
-          sessionFile: "legacy-kept.jsonl",
-          updatedAt: 20,
-        },
-      }),
+      '{"agent:retained:kept":{"sessionId":"legacy-kept","sessionFile":"legacy-kept.jsonl","updatedAt":20}}',
     );
     fs.writeFileSync(
       transcriptPath,
