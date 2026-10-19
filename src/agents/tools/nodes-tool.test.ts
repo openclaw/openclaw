@@ -466,7 +466,7 @@ it("keeps inspected photos private (not auto-attached to replies)", async () => 
     .join("\n");
   expect(texts).toContain('Photo saved to "/tmp/camera.jpg"; not attached or sent to the user.');
   expect(texts).not.toContain("loaded into private model context");
-  expect(result?.details?.media).toMatchObject({ outbound: false });
+  expect((result?.details as { media?: unknown })?.media).toMatchObject({ outbound: false });
   expect(extractToolResultMediaArtifact(result)).toBeUndefined();
 });
 
@@ -479,7 +479,7 @@ it("does not claim photos were loaded into model context when modelHasVision is 
   expect(result?.content).toEqual([
     { type: "text", text: "Library photo saved to /tmp/camera.jpg." },
   ]);
-  expect(result?.details?.media).toMatchObject({ outbound: false });
+  expect((result?.details as { media?: unknown })?.media).toMatchObject({ outbound: false });
   expect(extractToolResultMediaArtifact(result)).toBeUndefined();
 });
 
