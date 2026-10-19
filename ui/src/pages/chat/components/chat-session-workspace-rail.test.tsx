@@ -596,7 +596,9 @@ it("desktop folder falls back from a saved session-only filter without mutating 
 it("mobile restores folder search and root groups without mixing global search results", async () => {
   setupDesktopLayout();
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const listFiles = vi.fn(async (_key: string, options?: { path?: string; search?: string }) => ({
     sessionKey: "agent:main:workspace",
     root: "/workspace",
