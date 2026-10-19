@@ -11,6 +11,7 @@ import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
+  WorkspaceBootstrapEncodingError,
 } from "./workspace-bootstrap-read.js";
 
 const log = createSubsystemLogger("sandbox-workspace");
@@ -55,6 +56,10 @@ export async function copyWorkspaceBootstrapFiles(
           log.warn(
             `Ignoring oversized sandbox seed file ${src}: file exceeds the ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES}-byte limit`,
           );
+          continue;
+        }
+        if (err instanceof WorkspaceBootstrapEncodingError) {
+          log.warn(`Ignoring sandbox seed file ${src}: not valid UTF-8`);
           continue;
         }
         throw err;
